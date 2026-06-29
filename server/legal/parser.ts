@@ -20,22 +20,32 @@ export interface LegalMetadata {
   rawText: string;           // 原始全文
 }
 
-/** Lazy-load pdf-parse to avoid crash when native bindings are missing */
-async function getPdfParser() {
+export async function parsePdf(filePath: string): Promise<{ text: string; pageCount: number } | null> {
   try {
-    const mod = await import('pdf-parse');
-    return (mod as any).default || mod;
+    const buffer = fs.readFileSync(filePath);
+    const pdfModule: any = await import('pdf-parse');
+    const legacyParser = typeof pdfModule.default === 'function'
+      ? pdfModule.default
+      : typeof pdfModule === 'function'
+        ? pdfModule
+        : null;
+    if (legacyParser) {
+      const data = await legacyParser(buffer);
+      return { text: String(data?.text || ''), pageCount: Number(data?.numpages || data?.numPages || 0) };
+    }
+
+    const PDFParse = pdfModule.PDFParse || pdfModule.default?.PDFParse;
+    if (typeof PDFParse !== 'function') return null;
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const data = await parser.getText();
+      return { text: String(data?.text || ''), pageCount: Number(data?.total || data?.numpages || data?.numPages || 0) };
+    } finally {
+      await parser.destroy?.();
+    }
   } catch {
     return null;
   }
-}
-
-export async function parsePdf(filePath: string): Promise<{ text: string; pageCount: number } | null> {
-  const parser = await getPdfParser();
-  if (!parser) return null;
-  const buffer = fs.readFileSync(filePath);
-  const data = await parser(buffer);
-  return { text: data.text, pageCount: data.numpages };
 }
 
 // ── DOCX Parsing ────────────────────────────────────────────────────────

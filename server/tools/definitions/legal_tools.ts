@@ -254,6 +254,20 @@ function extensionFromUrlOrType(url: URL, contentType: string): string {
   return '.bin';
 }
 
+function extensionFromContentDisposition(header: string): string {
+  const match = header.match(/filename\*?=(?:UTF-8''|")?([^";\r\n]+)/i);
+  if (!match) return '';
+  let filename = match[1].trim().replace(/^"|"$/g, '');
+  try { filename = decodeURIComponent(filename); } catch { /* keep raw filename */ }
+  const ext = path.extname(filename).toLowerCase();
+  return (LEGAL_MATERIAL_EXTENSIONS.has(ext) || ['.html', '.json', '.xml'].includes(ext)) ? ext : '';
+}
+
+function sniffDocumentExtension(bytes: Buffer): string {
+  if (bytes.length >= 4 && bytes.slice(0, 4).toString('latin1') === '%PDF') return '.pdf';
+  return '';
+}
+
 function stripHtmlToText(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -1683,20 +1697,27 @@ ${skippedLines}
 // ── legal_process_notice_link ──────────────────────────────────────────
 
 async function processNoticeLinkHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const isDocumentLink = args.documentLink === true || /document|doc|legal/i.test(textArg(args, 'mode') || textArg(args, 'sourceType'));
+  const resultTitle = isDocumentLink ? '文书链接下载与提取结果' : '短信/通知链接处理结果';
   const rawInput = [
     textArg(args, 'url'),
     textArg(args, 'message'),
     textArg(args, 'noticeText'),
+    textArg(args, 'linkText'),
   ].filter(Boolean).join('\n');
   const urlValue = textArg(args, 'url') || extractFirstUrl(rawInput);
   const caseName = textArg(args, 'caseName');
-  const materialTitle = textArg(args, 'title') || '短信/法院通知链接材料';
+  const materialTitle = textArg(args, 'title') || (isDocumentLink ? '链接文书材料' : '短信/法院通知链接材料');
   const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const confirmedForKb = args.confirmedForKb === true || args.importToKb === true;
+  const includeExtractedText = args.includeExtractedText !== false;
+  const extractedTextLimit = Math.max(500, Math.min(Number(args.extractedTextLimit) || 4000, 20000));
 
   if (!urlValue) {
-    return '请提供短信/通知中的 http(s) 链接，或把完整短信粘贴到 message / noticeText 参数。';
+    return isDocumentLink
+      ? '请提供需要下载和提取正文的 http(s) 文书链接，或把包含链接的文本粘贴到 message / linkText 参数。'
+      : '请提供短信/通知中的 http(s) 链接，或把完整短信粘贴到 message / noticeText 参数。';
   }
 
   let target: URL;
@@ -1710,7 +1731,7 @@ async function processNoticeLinkHandler(args: Record<string, any>, context?: any
     return '仅支持 http/https 链接；不读取 file、内网协议或其他本地资源。';
   }
   if (isPrivateOrLocalHost(target.hostname)) {
-    return '出于安全原因，短信/通知链接工具不抓取 localhost、内网 IP 或本地域名。请在授权浏览器中人工打开后导入已确认材料。';
+    return '出于安全原因，链接下载工具不抓取 localhost、内网 IP 或本地域名。请在授权浏览器中人工打开后导入已确认材料。';
   }
 
   const hints = extractNoticeHints(rawInput);
@@ -1722,7 +1743,7 @@ async function processNoticeLinkHandler(args: Record<string, any>, context?: any
     '4. 下载后的 PDF/DOCX/网页摘录，再用 legal_import_materials_to_kb 导入组织知识库。',
   ].join('\n');
 
-  const authFallback = (reason: string) => `# 短信/通知链接处理结果
+  const authFallback = (reason: string) => `# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -1759,8 +1780,9 @@ ${browserSteps}
   clearTimeout(timeout);
 
   const contentType = response.headers.get('content-type') || '';
+  const contentDisposition = response.headers.get('content-disposition') || '';
   const contentLength = Number(response.headers.get('content-length') || 0);
-  const preliminaryExt = extensionFromUrlOrType(target, contentType);
+  const preliminaryExt = extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
   const textLike = /text|html|json|xml/i.test(contentType) || ['.html', '.json', '.xml', '.txt', '.md', '.csv'].includes(preliminaryExt);
 
   if (contentLength > NOTICE_LINK_MAX_BYTES) {
@@ -1773,7 +1795,7 @@ ${browserSteps}
       return authFallback(`页面需要登录/验证或返回异常状态（HTTP ${response.status}）`);
     }
 
-    const ext = extensionFromUrlOrType(target, contentType);
+    const ext = extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
     const intakeDir = ensureLegalIntakeDir(orgId);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const base = safeFileSegment(`${stamp}_${caseName || materialTitle}`, 'notice_link');
@@ -1818,7 +1840,11 @@ ${browserSteps}
       kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
     }
 
-    return `# 短信/通知链接处理结果
+    const excerptSection = includeExtractedText
+      ? `\n## 四、文书内容摘录\n${(extractedText || '未提取到可读文本。').slice(0, extractedTextLimit)}\n`
+      : '';
+
+    return `# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -1834,7 +1860,7 @@ ${kbLine}
 
 ## 三、边界
 - 当前保存的是网页/文本留痕，不等同于法院系统下载的正式 PDF。
-- 如法院页面提供正式 PDF 下载，请用授权浏览器打开并人工下载，再导入知识库或案件材料。`;
+- 如法院页面提供正式 PDF 下载，请用授权浏览器打开并人工下载，再导入知识库或案件材料。${excerptSection}`;
   }
 
   if (!response.ok || noticeNeedsBrowser(response.status, contentType, '')) {
@@ -1846,7 +1872,8 @@ ${kbLine}
     return authFallback(`下载内容过大（${Math.round(bytes.length / 1024 / 1024)}MB），需在授权浏览器中人工下载后导入`);
   }
 
-  const ext = extensionFromUrlOrType(target, contentType);
+  let ext = extensionFromContentDisposition(contentDisposition) || extensionFromUrlOrType(target, contentType);
+  if (ext === '.bin') ext = sniffDocumentExtension(bytes) || ext;
   const intakeDir = ensureLegalIntakeDir(orgId);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const base = safeFileSegment(`${stamp}_${caseName || materialTitle}`, 'notice_link');
@@ -1904,7 +1931,11 @@ ${kbLine}
     kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
-  return `# 短信/通知链接处理结果
+  const excerptSection = includeExtractedText
+    ? `\n## 四、文书内容摘录\n${(parsedText || '未提取到可读文本。若这是扫描件或图片型 PDF，请使用 OCR 后再导入。').slice(0, extractedTextLimit)}\n`
+    : '';
+
+  return `# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -1923,7 +1954,7 @@ ${kbLine}
 
 ## 三、人工确认
 - 请律师核对链接来源、下载文件是否为法院或平台正式文书，以及是否需要补充签收/送达时间记录。
-- 若需提交、签收、撤回、缴费或确认送达，必须由律师或当事人在授权页面人工完成。`;
+- 若需提交、签收、撤回、缴费或确认送达，必须由律师或当事人在授权页面人工完成。${excerptSection}`;
 }
 
 // ── legal_external_source_status ────────────────────────────────────────
@@ -2382,6 +2413,30 @@ export function registerLegalTools(registry: ToolRegistry): void {
       },
     },
     handler: processNoticeLinkHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_download_and_extract_document',
+    description: '文书链接自动下载与正文提取 — 用户发送裁判文书、起诉状、合同、法院通知等 PDF/DOCX/网页链接后，Lumi 自动下载原文件、保存来源留痕、提取正文内容并返回摘要；需要登录/验证码时转授权浏览器协作，不绕过平台限制。',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '需要下载和提取正文的 http(s) 文书链接；未提供时会从 message/linkText 中提取第一个链接' },
+        message: { type: 'string', description: '包含链接的用户消息、短信或网页摘录' },
+        linkText: { type: 'string', description: '包含链接的文本' },
+        caseName: { type: 'string', description: '关联案件名称或简称' },
+        title: { type: 'string', description: '材料标题，默认“链接文书材料”' },
+        includeExtractedText: { type: 'boolean', description: '是否在返回结果中包含正文摘录，默认 true' },
+        extractedTextLimit: { type: 'number', description: '返回正文摘录最大字符数，默认 4000，最高 20000' },
+        confirmedForKb: { type: 'boolean', description: '律师已确认来源、授权和使用权限后设为 true，工具会导入组织知识库' },
+        importToKb: { type: 'boolean', description: 'confirmedForKb 的别名' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '导入人 ID，默认上下文 userId 或 system' },
+      },
+    },
+    handler: (args, context) => processNoticeLinkHandler({ ...args, documentLink: true, mode: 'document' }, context),
     permission: 'user',
     securityLevel: 'safe',
   });
