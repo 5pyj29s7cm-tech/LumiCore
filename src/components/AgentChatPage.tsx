@@ -36,7 +36,7 @@ type ChatAttachment = {
   preview?: string | null;
   mimeType?: string;
   size?: number;
-  kind: 'image' | 'file';
+  kind: 'image' | 'audio' | 'file';
   downloadUrl?: string;
 };
 
@@ -58,7 +58,7 @@ function buildChatHistoryPayload(messages: any[]) {
   return messages.flatMap((m) => {
     const text = getDisplayText(m).trim();
     const attachmentSummary = Array.isArray(m.attachments) && m.attachments.length > 0
-      ? `\n\n[Attachments]\n${m.attachments.map((item: ChatAttachment) => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : ''}`).join('\n')}`
+      ? `\n\n[Attachments]\n${m.attachments.map((item: ChatAttachment) => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : item.kind === 'audio' ? ' (audio)' : ''}`).join('\n')}`
       : '';
     if (!text && !attachmentSummary) return [];
     if (m.type === 'tool') return [];
@@ -74,8 +74,13 @@ function isImageFileName(name: string, mimeType?: string): boolean {
   return Boolean(mimeType?.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(name || '');
 }
 
+function isAudioFileName(name: string, mimeType?: string): boolean {
+  return Boolean(mimeType?.startsWith('audio/')) || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(name || '');
+}
+
 const CHAT_ATTACHMENT_ACCEPT = [
   '.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff',
+  '.mp3,.mpeg,.wav,.m4a,.ogg,.oga,.flac,.aac,.wma,.webm',
   '.txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.pptx,.ppt,.rtf,.ts,.tsx,.js,.jsx,.py,.html,.css,.yaml,.yml,.xml,.log',
 ].join(',');
 
@@ -1100,7 +1105,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         const attachments: ChatAttachment[] = (d.files || []).map((f: any) => {
           const fileName = f.name || f.displayName || f.id || 'attachment';
           const mimeType = f.mimeType || '';
-          const kind = f.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' : 'file';
+          const kind: ChatAttachment['kind'] =
+            f.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
+            f.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
+            'file';
           return {
             id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             fileName,
@@ -1530,6 +1538,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                               <img src={item.downloadUrl} alt={item.fileName} className="h-8 w-8 rounded-lg object-cover" loading="lazy" />
                             ) : item.kind === 'image' ? (
                               <ImageIcon size={16} className="text-celestial-saturn" />
+                            ) : item.kind === 'audio' ? (
+                              <Mic size={16} className="text-celestial-saturn" />
                             ) : (
                               <FileText size={16} className="text-white/45" />
                             )}
@@ -1619,6 +1629,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                       <img src={item.downloadUrl} alt={item.fileName} className="h-8 w-8 rounded-lg object-cover" />
                     ) : item.kind === 'image' ? (
                       <ImageIcon size={16} className="shrink-0 text-celestial-saturn" />
+                    ) : item.kind === 'audio' ? (
+                      <Mic size={16} className="shrink-0 text-celestial-saturn" />
                     ) : (
                       <FileText size={16} className="shrink-0 text-white/45" />
                     )}

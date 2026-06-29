@@ -40,6 +40,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
   ],
   documents: [
     'extract_document_text',
+    'transcribe_audio_to_text_file',
     'read_docx',
     'read_xlsx',
     'read_pdf',
@@ -188,6 +189,16 @@ const ROUTES: RouteDefinition[] = [
     ],
     prefixes: ['mcp_cad-drafting_', 'mcp_picture-drawing-assistant_', 'mcp_pikachu-drawing_'],
     groups: ['design', 'files', 'documents'],
+  },
+  {
+    category: 'audio_transcription',
+    reason: 'audio recording transcription or speech-to-text file request',
+    patterns: [
+      /(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3).*(?:\u8f6c\u5199|\u8f6c\u6587\u5b57|\u6587\u5b57\u7a3f|\u6587\u4ef6)|(?:\u8f6c\u5199|\u8f6c\u6587\u5b57|\u6587\u5b57\u7a3f).*(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/u,
+      /\b(audio|voice|recording|memo)\b.*\b(transcri|speech\s*to\s*text|text\s*file)\b/i,
+      /\b(transcribe|speech\s*to\s*text)\b.*\b(audio|voice|recording|memo)\b/i,
+    ],
+    groups: ['files', 'documents'],
   },
   {
     category: 'documents',

@@ -2,6 +2,7 @@ import { normalizeOperationMode } from './operation_modes';
 import { hasVisionIntent } from './vision_routing';
 
 const TOOL_INTENT_PATTERNS: RegExp[] = [
+  /(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3).*(?:\u8f6c\u5199|\u8f6c\u6587\u5b57|\u6587\u5b57\u7a3f|\u6587\u4ef6)|(?:\u8f6c\u5199|\u8f6c\u6587\u5b57|\u6587\u5b57\u7a3f).*(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)|\b(?:audio|voice|recording|memo)\b.*\b(?:transcri|speech\s*to\s*text|text\s*file)\b/i,
   /\b(open|launch|start|run|execute|call\s+(?:a\s+)?tool|use\s+(?:a\s+)?tool|tool\s+call|search|look\s+up|browse|fetch|research|learn|study|integrate|connect|sleep|dream|rest|consolidate\s+(?:memory|memories)|read\s+(?:file|screen|folder|directory)|scan|screenshot|screen\s*shot|click|type|copy|paste|write|save|create|export|delete|remove|install|uninstall|play|pause|resume|download|upload|sync|build|test|commit|push|deploy|cad|dxf|dwg|ifc|bim|revit|dynamo|draft|drawing)\b/i,
   /\b(?:what(?:'s| is)|show|list|check|inspect|scan|read|see)\b.*\b(?:desktop|screen|active window|foreground window|open windows|running processes|background apps|background processes|system state)\b/i,
   /\b(?:law|regulation|policy|statute|case law|patent|copyright|software copyright|intellectual property|standard|specification|paper|literature|doi|arxiv|pubmed|citation|source|official source|verify|valid|effective|prior art|patentability)\b/i,

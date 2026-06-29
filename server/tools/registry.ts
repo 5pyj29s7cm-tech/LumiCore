@@ -156,6 +156,7 @@ export class ToolRegistry {
     const timeoutMs =
       name === 'computer_use' ? 180_000 :
       name.startsWith('web_login_') || name === 'url_fetch_logged_in' ? 180_000 :
+      name === 'transcribe_audio_to_text_file' ? 180_000 :
       /^(ocr_|floorplan_extract_geometry|cad_generate_dxf)$/i.test(name) ? 90_000 :
       30_000;
     let timedOut = false;

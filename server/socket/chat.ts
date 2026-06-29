@@ -93,7 +93,7 @@ interface ChatIncomingAttachment {
   preview?: string | null;
   mimeType?: string;
   size?: number;
-  kind: 'image' | 'file';
+  kind: 'image' | 'audio' | 'file';
 }
 
 const MAX_CHAT_ATTACHMENTS = 8;
@@ -108,12 +108,19 @@ function isImageAttachment(name: string, mimeType?: string): boolean {
   return Boolean(mimeType?.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(name || '');
 }
 
+function isAudioAttachment(name: string, mimeType?: string): boolean {
+  return Boolean(mimeType?.startsWith('audio/')) || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(name || '');
+}
+
 function normalizeIncomingAttachments(input: unknown): ChatIncomingAttachment[] {
   if (!Array.isArray(input)) return [];
   return input.slice(0, MAX_CHAT_ATTACHMENTS).map((item: any) => {
     const fileName = boundedString(String(item?.fileName ?? item?.name ?? item?.id ?? 'attachment'), 240);
     const mimeType = boundedString(String(item?.mimeType ?? ''), 120);
-    const kind: ChatIncomingAttachment['kind'] = item?.kind === 'image' || isImageAttachment(fileName, mimeType) ? 'image' : 'file';
+    const kind: ChatIncomingAttachment['kind'] =
+      item?.kind === 'image' || isImageAttachment(fileName, mimeType) ? 'image' :
+      item?.kind === 'audio' || isAudioAttachment(fileName, mimeType) ? 'audio' :
+      'file';
     return {
       id: boundedString(item?.id, 160) || undefined,
       fileName,
@@ -141,6 +148,9 @@ function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): stri
     if (item.kind === 'image') {
       lines.push('For visual details, use the ocr_image_file tool with the local path before answering.');
     }
+    if (item.kind === 'audio') {
+      lines.push('This is an audio recording. If the user asks for transcription, speech-to-text, a written transcript, or a text file, use transcribe_audio_to_text_file with the local path.');
+    }
     if (content) {
       lines.push(`Extracted text:\n${content}`);
     } else if (item.path) {
@@ -153,7 +163,7 @@ function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): stri
 function buildStoredAttachmentSummary(userText: string, attachments: ChatIncomingAttachment[]): string {
   if (attachments.length === 0) return userText;
   const summary = attachments
-    .map(item => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : ''}`)
+    .map(item => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : item.kind === 'audio' ? ' (audio)' : ''}`)
     .join('\n');
   return `${userText}\n\n[Attachments]\n${summary}`.trim();
 }

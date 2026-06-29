@@ -21,6 +21,7 @@ const DECLARATIONS = [
   'search_files',
   'grep_files',
   'extract_document_text',
+  'transcribe_audio_to_text_file',
   'read_docx',
   'read_pdf',
   'ocr_image_file',
@@ -187,6 +188,19 @@ describe('tool router', () => {
     expect(route.categories).toContain('music');
     expect(route.toolNames).toContain('mcp_neteasemusic_search_song');
     expect(route.toolNames).not.toContain('mcp_legal-casework_legal_case_folder_workflow');
+    expect(route.toolNames).not.toContain('legal_search_case');
+  });
+
+  it('routes audio transcription requests to transcript file tooling', () => {
+    const route = routeToolsForTurn(
+      'I attached a voice memo. Please transcribe the audio and save it as a text file.',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('audio_transcription');
+    expect(route.toolNames).toContain('transcribe_audio_to_text_file');
+    expect(route.toolNames).toContain('extract_document_text');
+    expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
     expect(route.toolNames).not.toContain('legal_search_case');
   });
 

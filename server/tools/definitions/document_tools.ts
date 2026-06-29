@@ -9,6 +9,7 @@ import { ToolRegistry } from '../registry';
 import { ingestDocument } from '../../agents/rag';
 import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
+import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
@@ -22,6 +23,115 @@ function ensureOutputDir(): string {
 
 function esc(s: string): string {
   return s.replace(/'/g, "''");
+}
+
+function safeOutputBaseName(value: string, fallback = 'audio_transcript'): string {
+  const base = path.basename(String(value || fallback), path.extname(String(value || '')));
+  const safe = base
+    .replace(/[\\/:*?"<>|\x00-\x1F]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 80);
+  return safe || fallback;
+}
+
+function uniqueOutputPath(baseName: string, extension: '.txt' | '.md'): string {
+  const outDir = ensureOutputDir();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let candidate = path.join(outDir, `${baseName}_${stamp}${extension}`);
+  let counter = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(outDir, `${baseName}_${stamp}_${counter}${extension}`);
+    counter += 1;
+  }
+  return candidate;
+}
+
+function formatAudioTranscriptFile(args: Record<string, any>, result: Awaited<ReturnType<typeof transcribeAudioFile>>, sourcePath: string, format: 'txt' | 'md'): string {
+  const title = String(args.title || args.caseName || path.basename(sourcePath)).trim() || path.basename(sourcePath);
+  const createdAt = new Date().toISOString();
+  if (format === 'md') {
+    return [
+      `# ${title}`,
+      '',
+      '- Type: audio transcript',
+      `- Source file: ${sourcePath}`,
+      `- Provider: ${result.provider}/${result.model}`,
+      `- Language: ${result.language}`,
+      `- Created at: ${createdAt}`,
+      result.warnings?.length ? `- Warnings: ${result.warnings.join('; ')}` : '',
+      '',
+      '## Transcript',
+      '',
+      result.text.trim(),
+      '',
+    ].filter(line => line !== '').join('\n');
+  }
+
+  return [
+    title,
+    '',
+    'Type: audio transcript',
+    `Source file: ${sourcePath}`,
+    `Provider: ${result.provider}/${result.model}`,
+    `Language: ${result.language}`,
+    `Created at: ${createdAt}`,
+    result.warnings?.length ? `Warnings: ${result.warnings.join('; ')}` : '',
+    '',
+    '--- Transcript ---',
+    '',
+    result.text.trim(),
+    '',
+  ].filter(line => line !== '').join('\n');
+}
+
+async function transcribeAudioToTextFile(args: Record<string, any>): Promise<string> {
+  const filePath = String(args.filePath || args.audioPath || '').trim().replace(/^["']|["']$/g, '');
+  if (!filePath) throw new Error('filePath is required. Attach an audio file or provide the local audio path.');
+  const resolvedPath = path.resolve(filePath);
+  if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+    throw new Error(`Audio file not found: ${resolvedPath}`);
+  }
+  if (!AUDIO_FILE_EXTS.test(resolvedPath)) {
+    throw new Error('Unsupported audio format. Supported: mp3, wav, m4a, ogg, flac, aac, wma, webm.');
+  }
+
+  try {
+    const result = await transcribeAudioFile(fs.readFileSync(resolvedPath), {
+      fileName: path.basename(resolvedPath),
+      language: String(args.language || 'zh'),
+      preferredProvider: args.preferredProvider || 'auto',
+      allowLocal: args.allowLocal !== false,
+    });
+    const format = /^(md|markdown)$/i.test(String(args.outputFormat || '')) ? 'md' : 'txt';
+    const extension = format === 'md' ? '.md' : '.txt';
+    const baseName = safeOutputBaseName(String(args.filename || args.title || args.caseName || path.basename(resolvedPath)), 'audio_transcript');
+    const outputPath = uniqueOutputPath(baseName, extension);
+    const content = formatAudioTranscriptFile(args, result, resolvedPath, format);
+    fs.writeFileSync(outputPath, content, 'utf-8');
+
+    const excerptLimit = Math.max(300, Math.min(Number(args.excerptLimit) || 1200, 5000));
+    const warnings = result.warnings?.length ? `\n- Provider fallbacks: ${result.warnings.join('; ')}` : '';
+    return [
+      '# Audio transcription result',
+      '',
+      '- Status: completed',
+      `- Source audio: ${resolvedPath}`,
+      `- Text file: ${outputPath}`,
+      `- Provider: ${result.provider}/${result.model}`,
+      `- Language: ${result.language}`,
+      `- Characters: ${result.text.length}`,
+      warnings,
+      '',
+      '## Transcript excerpt',
+      result.text.trim().slice(0, excerptLimit) || '(empty transcript)',
+    ].filter(line => line !== '').join('\n');
+  } catch (err: any) {
+    if (isAudioTranscriptionUnavailable(err)) {
+      throw new Error('No audio transcription provider is configured. Configure OpenAI Whisper, Deepgram, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.');
+    }
+    throw err;
+  }
 }
 
 async function parsePdfText(filePath: string): Promise<string> {
@@ -585,6 +695,30 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       required: ['filePath', 'agentId'],
     },
     handler: ingestDocumentToRag,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'transcribe_audio_to_text_file',
+    description: 'Transcribe an uploaded audio recording or voice memo to a saved text transcript file. Use when the user sends an audio file and asks for transcription, speech-to-text, a written transcript, or a text file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute local path to the uploaded audio file' },
+        audioPath: { type: 'string', description: 'Alias for filePath' },
+        title: { type: 'string', description: 'Transcript title' },
+        caseName: { type: 'string', description: 'Optional legal case or matter name used in the transcript title' },
+        filename: { type: 'string', description: 'Optional output filename base without extension' },
+        outputFormat: { type: 'string', description: 'txt or md. Defaults to txt.' },
+        language: { type: 'string', description: 'Speech language code. Defaults to zh.' },
+        preferredProvider: { type: 'string', description: 'Optional STT provider: auto, qwen, deepgram, whisper, ark, local-whisper' },
+        allowLocal: { type: 'boolean', description: 'Allow local Whisper fallback. Defaults to true.' },
+        excerptLimit: { type: 'number', description: 'Maximum transcript excerpt characters returned in chat. Defaults to 1200.' },
+      },
+      required: ['filePath'],
+    },
+    handler: transcribeAudioToTextFile,
     permission: 'user',
     securityLevel: 'safe',
   });
