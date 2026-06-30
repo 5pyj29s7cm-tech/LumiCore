@@ -618,6 +618,12 @@ function DesktopWidgetPanel({
       if (!res.ok) throw new Error(data.error || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
       const count = Array.isArray(data.files) ? data.files.length : files.length;
       toast.success(lang === 'zh' ? `已投喂 ${count} 个资料` : `Fed ${count} file(s)`);
+      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
+        detail: {
+          domain: workDomain,
+          files: (data.files || []).map((file: any) => ({ id: file.id, name: file.name, displayName: file.displayName })),
+        },
+      }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
     } catch (err: any) {
       toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
@@ -648,6 +654,12 @@ function DesktopWidgetPanel({
           ? `已投喂 ${count} 个资料${skipped ? `，跳过 ${skipped} 个` : ''}`
           : `Fed ${count} file(s)${skipped ? `, skipped ${skipped}` : ''}`,
       );
+      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
+        detail: {
+          domain: workDomain,
+          files: (data.files || []).map((file: any) => ({ id: file.id, name: file.name, displayName: file.displayName })),
+        },
+      }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
     } catch (err: any) {
       toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Feed failed'));

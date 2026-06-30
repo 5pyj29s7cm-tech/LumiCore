@@ -53,6 +53,9 @@ interface SearchResult {
 }
 
 interface UploadedKnowledgeFile {
+  id?: string;
+  name?: string;
+  displayName?: string;
   orgArticleId?: string;
   ingested?: boolean;
   partial?: boolean;
@@ -350,6 +353,13 @@ export function KnowledgeBaseBrowser() {
         `已导入 ${totalCount} 个文件${syncedCount ? `，同步 ${syncedCount} 篇知识` : ''}${partialCount ? `，部分吸收 ${partialCount} 个` : ''}${failedCount ? `，${failedCount} 个待处理` : ''}`,
         `Imported ${totalCount} file(s)${syncedCount ? `, synced ${syncedCount} article(s)` : ''}${partialCount ? `, ${partialCount} partial` : ''}${failedCount ? `, ${failedCount} pending` : ''}`,
       ));
+      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
+        detail: {
+          domain: 'work',
+          files: uploadedFiles.map(file => ({ id: file.id, name: file.name, displayName: file.displayName })),
+        },
+      }));
+      window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
 
       await loadKnowledgeBase();
       const firstArticleId = uploadedFiles.find(file => file.orgArticleId)?.orgArticleId;

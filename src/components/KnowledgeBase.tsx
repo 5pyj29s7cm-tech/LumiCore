@@ -100,6 +100,10 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(domain)}`;
   }, [domain]);
+  const notifyKnowledgeUpdated = useCallback((files?: Array<{ id?: string; name?: string; displayName?: string }>) => {
+    window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', { detail: { domain, files } }));
+    window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+  }, [domain]);
 
   // Fetch data — parallel, no dependency between files and memory tree
   const fetchAll = useCallback(async () => {
@@ -270,6 +274,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
         toast.success(domain === 'work'
           ? (t.kbIngested || 'Synced to organization knowledge')
           : `${t.kbIngested || 'Absorbed into Lumi'}${count ? ` | ${count} chunks` : ''}`);
+        notifyKnowledgeUpdated([{ id }]);
         fetchAll();
       } else {
         const data = await res.json().catch(() => ({}));
@@ -320,6 +325,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
         }
       }
       await fetchAll();
+      notifyKnowledgeUpdated(targets.map(file => ({ id: file.id, name: file.name, displayName: file.displayName })));
       if (failed > 0) {
         toast.warning(isZh ? `已吸收 ${absorbed} 个，${failed} 个需要检查` : `${absorbed} absorbed, ${failed} need review`);
       } else {
@@ -389,6 +395,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
         const partial = (d.files || []).filter((file: any) => file.partial || file.extractionStatus === 'partial').length;
         const needsAttention = (d.files || []).filter((file: any) => file.syncError || ['failed', 'unsupported'].includes(String(file.extractionStatus || ''))).length;
         toast.success(`${t.kbUploadedFiles || 'Uploaded'}: ${uploaded}${absorbed ? ` | ${t.kbIngested || 'Absorbed'}: ${absorbed}` : ''}${partial ? ` | Partial: ${partial}` : ''}${needsAttention ? ` | Needs review: ${needsAttention}` : ''}`);
+        notifyKnowledgeUpdated((d.files || []).map((file: any) => ({ id: file.id, name: file.name, displayName: file.displayName })));
         fetchAll();
       } else toast.error(t.kbUploadFailed || 'Upload failed');
     } catch { toast.error(t.kbUploadFailed || 'Upload failed'); }

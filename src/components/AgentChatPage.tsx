@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Download, MessageCircle, Briefcase, User } from 'lucide-react';
 import Markdown from 'react-markdown';
@@ -22,6 +22,7 @@ import { useVoiceCloning } from '@/hooks/useVoiceCloning';
 import { listVoices } from '@/services/voiceService';
 import WorkflowPanel, { type BackgroundWorkflowTask, type WorkflowStep } from './WorkflowPanel';
 import { WeChatSettings } from './WeChatSettings';
+import type { FileEntry } from './MemoryTree';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -46,6 +47,12 @@ type GeneratedFileLink = {
   path: string;
   url: string;
   kind: 'image' | 'document' | 'deck' | 'sheet' | 'pdf' | 'cad' | 'file';
+};
+
+type KnowledgeUpdateDetail = {
+  domain?: 'personal' | 'work';
+  orgId?: string;
+  files?: Array<{ id?: string; name?: string; displayName?: string }>;
 };
 
 function getDisplayText(message: any): string {
@@ -225,6 +232,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [isListening, setIsListening] = useState(false);
   const [optimizationProgress, setOptimizationProgress] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [knowledgeFiles, setKnowledgeFiles] = useState<FileEntry[]>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
@@ -315,11 +324,75 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       : '';
     return `${path}${separator}domain=${encodeURIComponent(activeDomain)}${orgScope}`;
   }, [activeDomain, activeOrgId]);
+  const refreshKnowledgeFiles = useCallback(async () => {
+    setKnowledgeLoading(true);
+    try {
+      const res = await fetch(scopedFileUrl('/api/files/list'), { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      const list = Array.isArray(data.files) ? data.files as FileEntry[] : [];
+      setKnowledgeFiles([...list].sort((a, b) =>
+        new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime(),
+      ));
+    } catch {
+      // Knowledge status is a convenience surface; chat itself should stay usable.
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }, [scopedFileUrl]);
+  const notifyKnowledgeUpdated = useCallback((files?: Array<{ id?: string; name?: string; displayName?: string }>) => {
+    const detail: KnowledgeUpdateDetail = {
+      domain: activeDomain,
+      orgId: activeOrgId || undefined,
+      files,
+    };
+    window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', { detail }));
+    window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+  }, [activeDomain, activeOrgId]);
+
+  const isKnowledgeReady = useCallback((file: FileEntry) => {
+    const status = String(file.extractionStatus || file.status || '');
+    if (status === 'indexed' || status === 'partial') return true;
+    const targetAgentId = activeDomain === 'work' ? 'org-kb' : 'lumi';
+    return Array.isArray(file.agentIds) && file.agentIds.includes(targetAgentId);
+  }, [activeDomain]);
+
+  const recentKnowledgeFiles = useMemo(() => knowledgeFiles.slice(0, 4), [knowledgeFiles]);
+  const readyKnowledgeCount = useMemo(() => knowledgeFiles.filter(isKnowledgeReady).length, [isKnowledgeReady, knowledgeFiles]);
+  const knowledgeStatusText = knowledgeFiles.length > 0
+    ? ui(`${readyKnowledgeCount}/${knowledgeFiles.length} 个资料可用于对话`, `${readyKnowledgeCount}/${knowledgeFiles.length} knowledge files available`)
+    : knowledgeLoading
+      ? ui('正在同步资料库', 'Syncing knowledge')
+      : ui('暂无资料', 'No knowledge files');
   const requestMeetingMode = useCallback(() => {
     window.dispatchEvent(new CustomEvent('lumi:request-meeting-mode'));
   }, []);
-
   const isFounder = agentId === 'founder' || agentCategory === 'founder' || agentName.includes('Founder') || agentName.includes('创始人');
+
+  useEffect(() => {
+    if (!isOpen || isFounder) return;
+    void refreshKnowledgeFiles();
+
+    const onKnowledgeUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<KnowledgeUpdateDetail>).detail || {};
+      if (detail.domain && detail.domain !== activeDomain) return;
+      if (detail.orgId && activeOrgId && detail.orgId !== activeOrgId) return;
+      void refreshKnowledgeFiles();
+    };
+
+    window.addEventListener('lumi:knowledge-updated', onKnowledgeUpdated);
+    window.addEventListener('lumi:client-state-refresh', onKnowledgeUpdated);
+    return () => {
+      window.removeEventListener('lumi:knowledge-updated', onKnowledgeUpdated);
+      window.removeEventListener('lumi:client-state-refresh', onKnowledgeUpdated);
+    };
+  }, [activeDomain, activeOrgId, isFounder, isOpen, refreshKnowledgeFiles]);
+
+  useEffect(() => {
+    if (!socket || !isOpen || isFounder) return;
+    socket.on('memories:changed', refreshKnowledgeFiles);
+    return () => { socket.off('memories:changed', refreshKnowledgeFiles); };
+  }, [isFounder, isOpen, refreshKnowledgeFiles, socket]);
 
   useEffect(() => { agentNameRef.current = agentName; }, [agentName]);
 
@@ -470,9 +543,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   useEffect(() => {
     if (!agentId || isFounder) return;
 
-    // On agent switch, reset and reload
-    if (agentId !== lastAgentIdRef.current) {
-      lastAgentIdRef.current = agentId;
+    // On agent/domain switch, reset and reload
+    const conversationScopeKey = `${agentId}:${activeDomain}:${activeOrgId || ''}`;
+    if (conversationScopeKey !== lastConversationScopeRef.current) {
+      lastConversationScopeRef.current = conversationScopeKey;
       initialLoadDoneRef.current = false;
       setMessages([]);
     }
@@ -540,7 +614,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const textChatActiveRef = useRef(false);
   const activeChatRequestIdRef = useRef<string | null>(null);
   const initialLoadDoneRef = useRef(false);
-  const lastAgentIdRef = useRef<string>('');
+  const lastConversationScopeRef = useRef<string>('');
 
   useEffect(() => {
     if (isFounder || !socket) return;
@@ -1125,6 +1199,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         setOptimizationProgress(100);
         setTimeout(() => { setIsOptimizing(false); setOptimizationProgress(0); }, 500);
         if (attachments.length > 0) toast.success(ui('已添加到本条消息', 'Attached to this message'));
+        notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
       } else {
         setIsOptimizing(false);
         setOptimizationProgress(0);
@@ -1346,6 +1421,15 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               <span className="text-xs md:text-xs font-bold uppercase tracking-widest text-white/60">
                 Neural Link
               </span>
+              {(knowledgeFiles.length > 0 || knowledgeLoading) && (
+                <div
+                  className="ml-1 hidden min-w-0 items-center gap-1.5 rounded-full border border-emerald-400/15 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-100/75 sm:flex"
+                  title={recentKnowledgeFiles.map(file => file.displayName || file.name || file.id).join('\n') || knowledgeStatusText}
+                >
+                  {knowledgeLoading ? <Loader2 size={11} className="animate-spin" /> : <FileText size={11} />}
+                  <span className="max-w-[180px] truncate">{knowledgeStatusText}</span>
+                </div>
+              )}
               {isSpeaking && (
                 <div className="flex items-center gap-3 ml-2 md:ml-4 scale-75 md:scale-100 origin-left">
                   <div className="flex items-end gap-1 h-4">
@@ -1621,6 +1705,32 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           </div>
 
           <div className="p-6 bg-white/5 border-t border-white/5">
+            {recentKnowledgeFiles.length > 0 && (
+              <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 rounded-2xl border border-emerald-400/12 bg-emerald-400/[0.06] px-3 py-2 text-xs text-emerald-50/70">
+                <div className="flex shrink-0 items-center gap-2 font-semibold text-emerald-100/80">
+                  <FileText size={14} />
+                  <span>{ui('最近资料', 'Recent knowledge')}</span>
+                </div>
+                <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                  {recentKnowledgeFiles.map(file => (
+                    <span
+                      key={file.id}
+                      className={`max-w-[180px] truncate rounded-full border px-2.5 py-1 ${
+                        isKnowledgeReady(file)
+                          ? 'border-emerald-300/15 bg-emerald-300/10 text-emerald-50/75'
+                          : 'border-amber-300/16 bg-amber-300/10 text-amber-50/70'
+                      }`}
+                      title={file.displayName || file.name || file.id}
+                    >
+                      {file.displayName || file.name || file.id}
+                    </span>
+                  ))}
+                </div>
+                <span className="shrink-0 text-[10px] font-black uppercase tracking-wider text-emerald-100/45">
+                  {ui('聊天/语音', 'Chat/Voice')}
+                </span>
+              </div>
+            )}
             {pendingAttachments.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-2">
                 {pendingAttachments.map(item => (
