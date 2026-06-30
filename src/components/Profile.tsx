@@ -215,8 +215,16 @@ function SubscriptionSection({ t }: { t: any }) {
   const pct = cap > 0 ? Math.round((used / cap) * 100) : 0;
   const todayTotal = tokens?.grandTotal ?? 0;
 
-  const planLabel = sub?.planId === 'pro' ? 'Pro' : sub?.planId === 'enterprise' ? 'Enterprise' : 'Free';
-  const planColor = sub?.planId === 'pro' ? 'text-blue-400' : sub?.planId === 'enterprise' ? 'text-purple-400' : 'text-white/40';
+  const planLabels: Record<string, string> = { free: 'Free', light: 'Light', pro: 'Pro', org: 'Org' };
+  const planColors: Record<string, string> = {
+    free: 'text-white/40',
+    light: 'text-blue-400',
+    pro: 'text-purple-400',
+    org: 'text-amber-400',
+  };
+  const planId = sub?.planId || 'free';
+  const planLabel = planLabels[planId] || planId;
+  const planColor = planColors[planId] || 'text-white/40';
 
   return (
     <div className="space-y-4">

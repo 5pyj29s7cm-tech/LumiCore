@@ -1371,6 +1371,7 @@ export function DesktopUI({
     { id: 'avatar-studio', labelKey: 'avatarStudio', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-blue-600', windowId: 'avatar-studio' },
     { id: 'sound', labelKey: 'sound', icon: <Volume2 size={24} />, colorClass: 'from-sky-500 to-indigo-600', windowId: 'sound' },
     { id: 'music', labelKey: 'music', icon: <Music size={24} />, colorClass: 'from-red-500 to-pink-600', windowId: 'music-center' },
+    { id: 'subscription', labelKey: 'subscription', icon: <Crown size={24} />, colorClass: 'from-amber-400 to-orange-600', windowId: 'subscription' },
   ];
 
   const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3090,6 +3091,11 @@ export function DesktopUI({
           respond({ ok: true, action, target: 'plans' });
           return;
         }
+        if (action === 'open_subscription' || action === 'open_activation' || action === 'open_billing') {
+          openSurface('subscription');
+          respond({ ok: true, action, target: 'subscription' });
+          return;
+        }
         if (action === 'open_avatar_studio') {
           openSurface('avatar-studio');
           respond({ ok: true, action, target: 'avatar-studio' });
@@ -3321,7 +3327,7 @@ export function DesktopUI({
     { id: 'mcp', label: t.mcp || 'MCP', icon: <Wrench size={24} />, color: 'from-purple-500 to-violet-600' },
     { id: 'sync', label: t.sync || 'Sync', icon: <RefreshCw size={24} />, color: 'from-blue-500 to-indigo-600' },
     { id: 'reminders', label: t.reminders || 'Reminders', icon: <Calendar size={24} />, color: 'from-amber-500 to-orange-600' },
-    { id: 'plans', label: t.plans || 'Plans', icon: <Calendar size={24} />, color: 'from-celestial-saturn to-orange-600' },
+    { id: 'plans', label: t.learningPlans || (lang === 'zh' ? '学习计划' : 'Learning Plans'), icon: <Calendar size={24} />, color: 'from-celestial-saturn to-orange-600' },
     { id: 'tokens', label: t.tokens || 'Tokens', icon: <Circle size={24} />, color: 'from-celestial-mars to-celestial-saturn' },
     { id: 'profile', label: t.profile || 'Profile', icon: <UserIcon size={24} />, color: 'from-white/30 to-white/10' },
   ];

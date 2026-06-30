@@ -16,6 +16,33 @@ export interface SubscriptionPlan {
   description: string;
 }
 
+export interface CommercialReleaseInfo {
+  appName: string;
+  version: string;
+  channel: 'private-paid' | 'public-free' | 'internal';
+  websiteUrl: string;
+  downloadUrl: string;
+  supportEmail: string;
+  salesContact: string;
+  billingMode: 'manual-activation' | 'online-checkout' | 'free-download';
+  publicDownloadPlanned: boolean;
+  headline: string;
+  note: string;
+  freeBoundary: string[];
+  paidBoundary: string[];
+}
+
+export interface SubscriptionActivationRequest {
+  id: string;
+  userId: string;
+  planId: string;
+  contact: string;
+  note: string;
+  status: 'pending' | 'approved' | 'rejected' | 'fulfilled';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UserSubscription {
   userId: string;
   planId: string;

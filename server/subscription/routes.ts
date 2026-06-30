@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import {
+  createActivationRequest,
   getSubscriptionWithPlan,
+  listActivationRequests,
   setSubscription,
   addTokensUsed,
   checkTokenLimit,
   listAllSubscriptions,
 } from './db';
 import { PLANS, getPlan } from './types';
+import type { CommercialReleaseInfo } from './types';
 
 const router = Router();
 
@@ -21,6 +24,50 @@ function getUserId(req: any): string {
     if (token) return jwt.verify(token, process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local').uid;
   } catch {}
   return 'anonymous';
+}
+
+function normalizeUrl(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+function getCommercialReleaseInfo(): CommercialReleaseInfo {
+  const websiteUrl = normalizeUrl(process.env.LUMI_OFFICIAL_URL || 'https://lumiai.asia');
+  const billingMode: CommercialReleaseInfo['billingMode'] = process.env.LUMI_BILLING_MODE === 'online-checkout'
+    ? 'online-checkout'
+    : process.env.LUMI_BILLING_MODE === 'free-download'
+      ? 'free-download'
+      : 'manual-activation';
+  const channel: CommercialReleaseInfo['channel'] = process.env.LUMI_RELEASE_CHANNEL === 'public-free'
+    ? 'public-free'
+    : process.env.LUMI_RELEASE_CHANNEL === 'internal'
+      ? 'internal'
+      : 'private-paid';
+
+  return {
+    appName: 'Lumi OS',
+    version: process.env.LUMI_APP_VERSION || '3.0.0',
+    channel,
+    websiteUrl,
+    downloadUrl: process.env.LUMI_DOWNLOAD_URL || `${websiteUrl}/download`,
+    supportEmail: process.env.LUMI_SUPPORT_EMAIL || '3565286431@qq.com',
+    salesContact: process.env.LUMI_SALES_CONTACT || 'Cap_William',
+    billingMode,
+    publicDownloadPlanned: process.env.LUMI_PUBLIC_DOWNLOAD_PLANNED !== '0',
+    headline: 'Private paid preview before the official website launch.',
+    note: 'Free users can keep using the core local experience. Paid plans unlock higher quotas, voice cloning, priority model access, and team features.',
+    freeBoundary: [
+      'Core chat and local memory',
+      'Basic voice input/output',
+      'One personal agent',
+      'Community preview features from the public branch',
+    ],
+    paidBoundary: [
+      'Higher monthly token quota',
+      'Voice cloning and avatar studio priority features',
+      'Advanced model/provider access',
+      'Multiple agents, team workspace, and priority support',
+    ],
+  };
 }
 
 // ── GET /subscription/status — current user's plan and usage ──
@@ -52,6 +99,39 @@ router.get('/subscription/status', (req, res) => {
 // ── GET /subscription/plans — list all available plans ──
 router.get('/subscription/plans', (_req, res) => {
   res.json({ plans: Object.values(PLANS) });
+});
+
+// ── GET /subscription/release-info — commercial release metadata ──
+router.get('/subscription/release-info', (_req, res) => {
+  res.json(getCommercialReleaseInfo());
+});
+
+// ── POST /subscription/activation-requests — request paid activation ──
+router.post('/subscription/activation-requests', (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const planId = String(req.body?.planId || '').trim();
+    const contact = String(req.body?.contact || '').trim();
+    const note = String(req.body?.note || '').trim();
+
+    if (!planId || !getPlan(planId)) return res.status(400).json({ error: 'Invalid plan ID' });
+    if (!contact) return res.status(400).json({ error: 'Contact is required' });
+
+    const request = createActivationRequest({ userId, planId, contact, note });
+    res.json({ success: true, request });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /subscription/activation-requests — current user's requests ──
+router.get('/subscription/activation-requests', (req, res) => {
+  try {
+    const userId = getUserId(req);
+    res.json({ requests: listActivationRequests(userId) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── POST /subscription/activate — admin: activate/change user plan ──
@@ -109,6 +189,19 @@ router.get('/subscription/admin', (req, res) => {
         : 0,
     }));
     res.json({ subscriptions: enriched });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /subscription/admin/activation-requests — admin: list activation requests ──
+router.get('/subscription/admin/activation-requests', (req, res) => {
+  try {
+    const adminId = getUserId(req);
+    const db = require('../../db_layer').readDB();
+    const adminUser = db.users.find((u: any) => u.uid === adminId);
+    if (!adminUser || adminUser.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    res.json({ requests: listActivationRequests() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

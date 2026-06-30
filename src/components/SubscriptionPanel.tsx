@@ -1,27 +1,70 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { Crown, Zap, Check, Loader2, Flame, Shield, Brain, Sparkles } from 'lucide-react';
+import {
+  Check,
+  CheckCircle2,
+  Crown,
+  ExternalLink,
+  Loader2,
+  Mail,
+  Send,
+  ShieldCheck,
+} from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { toast } from 'sonner';
 
 interface PlanInfo {
   id: string;
   name: string;
-  tier: string;
+  tier: 'free' | 'light' | 'pro' | 'org';
   monthlyTokens: number;
   llmProviders: string[];
+  sttIncluded?: boolean;
+  ttsIncluded?: boolean;
+  voiceCloneIncluded?: boolean;
+  memoryIncluded?: boolean;
+  agentCount?: number;
+  priority?: boolean;
   priceCNY: number;
   description: string;
 }
 
 interface SubStatus {
   subscription: {
-    planId: string; status: string;
-    tokensUsedThisMonth: number; monthlyTokenCap: number;
-    startedAt: string | null; expiresAt: string | null;
+    planId: string;
+    status: string;
+    tokensUsedThisMonth: number;
+    monthlyTokenCap: number;
+    startedAt: string | null;
+    expiresAt: string | null;
   };
   plan: PlanInfo;
   usage: { used: number; cap: number; remaining: number };
+}
+
+interface ReleaseInfo {
+  appName: string;
+  version: string;
+  channel: 'private-paid' | 'public-free' | 'internal';
+  websiteUrl: string;
+  downloadUrl: string;
+  supportEmail: string;
+  salesContact: string;
+  billingMode: 'manual-activation' | 'online-checkout' | 'free-download';
+  publicDownloadPlanned: boolean;
+  headline: string;
+  note: string;
+  freeBoundary: string[];
+  paidBoundary: string[];
+}
+
+interface ActivationRequest {
+  id: string;
+  planId: string;
+  contact: string;
+  note: string;
+  status: string;
+  createdAt: string;
 }
 
 const COLORS: Record<string, string> = {
@@ -32,7 +75,7 @@ const COLORS: Record<string, string> = {
 };
 
 const ACCENTS: Record<string, string> = {
-  free: 'text-white/40',
+  free: 'text-white/45',
   light: 'text-blue-400',
   pro: 'text-purple-400',
   org: 'text-amber-400',
@@ -44,31 +87,105 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+function fmtPrice(plan: PlanInfo): string {
+  return plan.priceCNY > 0 ? `CNY ${plan.priceCNY}/mo` : 'Free';
+}
+
 export function SubscriptionPanel({ t }: { t: any }) {
   const { user } = useApp();
+  const isZh = typeof navigator !== 'undefined' && navigator.language.toLowerCase().startsWith('zh');
+  const ui = (zh: string, en: string) => (isZh ? zh : en);
+
   const [status, setStatus] = useState<SubStatus | null>(null);
   const [plans, setPlans] = useState<PlanInfo[]>([]);
+  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo | null>(null);
+  const [requests, setRequests] = useState<ActivationRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<'status' | 'plans'>('status');
+  const [tab, setTab] = useState<'status' | 'plans' | 'activate'>('status');
+  const [selectedPlanId, setSelectedPlanId] = useState('pro');
+  const [contact, setContact] = useState(() => (user as any)?.email || (user as any)?.username || '');
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [statusRes, plansRes, releaseRes, requestsRes] = await Promise.all([
+        fetch('/api/subscription/status', { credentials: 'include' }),
+        fetch('/api/subscription/plans', { credentials: 'include' }),
+        fetch('/api/subscription/release-info', { credentials: 'include' }),
+        fetch('/api/subscription/activation-requests', { credentials: 'include' }),
+      ]);
+
+      if (!statusRes.ok) throw new Error(ui('订阅状态加载失败', 'Failed to load subscription status'));
+      const statusData = await statusRes.json();
+      const plansData = plansRes.ok ? await plansRes.json() : null;
+      const releaseData = releaseRes.ok ? await releaseRes.json() : null;
+      const requestsData = requestsRes.ok ? await requestsRes.json() : null;
+
+      setStatus(statusData);
+      setPlans(plansData?.plans || []);
+      setReleaseInfo(releaseData || null);
+      setRequests(requestsData?.requests || []);
+    } catch (e: any) {
+      setError(e?.message || ui('网络异常', 'Network error'));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    Promise.all([
-      fetch('/api/subscription/status', { credentials: 'include' }).then(r => r.ok ? r.json() : null),
-      fetch('/api/subscription/plans', { credentials: 'include' }).then(r => r.ok ? r.json() : null),
-    ]).then(([s, p]) => {
-      if (s) setStatus(s);
-      else setError('Failed to load subscription status');
-      if (p?.plans) setPlans(p.plans);
-    }).catch((e) => {
-      setError(e.message || 'Network error');
-    }).finally(() => setLoading(false));
+    void loadData();
   }, []);
+
+  useEffect(() => {
+    if (!contact && user) setContact((user as any)?.email || (user as any)?.username || '');
+  }, [contact, user]);
+
+  const currentPlan = status?.plan;
+  const currentUsage = status?.usage;
+  const pct = currentUsage && currentUsage.cap > 0 ? Math.round((currentUsage.used / currentUsage.cap) * 100) : 0;
+  const paidPlans = useMemo(() => plans.filter((plan) => plan.priceCNY > 0), [plans]);
+  const selectedPlan = plans.find((plan) => plan.id === selectedPlanId) || paidPlans[0] || currentPlan;
+  const pendingRequest = requests.find((request) => request.status === 'pending');
+
+  const submitActivationRequest = async () => {
+    if (!selectedPlan) return;
+    if (!contact.trim()) {
+      toast.error(ui('请填写联系方式', 'Enter a contact method'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/subscription/activation-requests', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId: selectedPlan.id,
+          contact: contact.trim(),
+          note: note.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || ui('提交失败', 'Request failed'));
+      toast.success(ui('激活申请已提交', 'Activation request submitted'));
+      setNote('');
+      await loadData();
+      setTab('status');
+    } catch (e: any) {
+      toast.error(e?.message || ui('提交失败', 'Request failed'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   if (!user) {
     return (
       <div className="h-full flex items-center justify-center">
-        <p className="text-white/40 text-sm">Login to view subscription.</p>
+        <p className="text-sm text-white/45">{ui('登录后查看订阅与激活状态。', 'Log in to view subscription and activation status.')}</p>
       </div>
     );
   }
@@ -84,74 +201,64 @@ export function SubscriptionPanel({ t }: { t: any }) {
   if (error) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3">
-        <p className="text-red-400 text-sm">{error}</p>
-        <button onClick={() => { setError(null); setLoading(true); window.location.reload(); }} className="text-xs text-white/40 hover:text-white/60 underline">Retry</button>
+        <p className="text-sm text-red-400">{error}</p>
+        <button onClick={() => void loadData()} className="text-xs text-white/45 underline hover:text-white/70">
+          {ui('重试', 'Retry')}
+        </button>
       </div>
     );
   }
-
-  if (!status && plans.length === 0) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center gap-3">
-        <p className="text-white/55 text-sm">No subscription data available.</p>
-        <p className="text-white/45 text-xs">Check that the server is running on port 3000.</p>
-      </div>
-    );
-  }
-
-  const currentPlan = status?.plan;
-  const currentUsage = status?.usage;
-  const pct = currentUsage ? Math.round((currentUsage.used / currentUsage.cap) * 100) : 0;
 
   return (
-    <div className="h-full flex flex-col bg-zinc-950/60 text-white overflow-y-auto">
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-white/5">
+    <div className="h-full overflow-y-auto bg-zinc-950/60 text-white">
+      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/5 bg-zinc-950/90 px-6 py-4 backdrop-blur-xl">
         <Crown size={18} className="text-celestial-saturn" />
-        <h2 className="text-sm font-bold text-white/90">Lumi Subscription</h2>
+        <div>
+          <h2 className="text-sm font-bold text-white/90">{ui('订阅与激活', 'Subscription & Activation')}</h2>
+          <p className="text-xs text-white/40">
+            {releaseInfo ? `${releaseInfo.appName} v${releaseInfo.version} · ${releaseInfo.channel}` : 'Lumi OS'}
+          </p>
+        </div>
         <div className="flex-1" />
-        <div className="flex gap-1 bg-white/5 rounded-lg p-0.5">
-          {(['status', 'plans'] as const).map(t => (
+        <div className="flex gap-1 rounded-lg bg-white/5 p-0.5">
+          {([
+            ['status', ui('状态', 'Status')],
+            ['plans', ui('套餐', 'Plans')],
+            ['activate', ui('激活', 'Activate')],
+          ] as const).map(([id, label]) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1 rounded-md text-xs font-bold uppercase transition-all ${
-                tab === t ? 'bg-white/10 text-white' : 'text-white/55'
+              key={id}
+              onClick={() => setTab(id)}
+              className={`rounded-md px-3 py-1 text-xs font-bold uppercase transition-all ${
+                tab === id ? 'bg-white/10 text-white' : 'text-white/55 hover:text-white/75'
               }`}
             >
-              {t === 'status' ? 'Status' : 'Plans'}
+              {label}
             </button>
           ))}
         </div>
       </div>
 
       {tab === 'status' && currentPlan && (
-        <div className="p-6 space-y-6">
-          {/* Current plan card */}
-          <div className={`p-6 rounded-3xl border ${COLORS[currentPlan.tier] || COLORS.free}`}>
-            <div className="flex justify-between items-start mb-4">
+        <div className="space-y-5 p-6">
+          <div className={`rounded-2xl border p-6 ${COLORS[currentPlan.tier] || COLORS.free}`}>
+            <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <span className={`text-xs font-black uppercase tracking-widest ${ACCENTS[currentPlan.tier] || ACCENTS.free}`}>
                   {currentPlan.tier}
                 </span>
-                <h3 className="text-2xl font-black tracking-tight mt-1">{currentPlan.name}</h3>
+                <h3 className="mt-1 text-2xl font-black tracking-tight">{currentPlan.name}</h3>
               </div>
-              {currentPlan.priceCNY > 0 && (
-                <span className="text-lg font-black">¥{currentPlan.priceCNY}<span className="text-xs font-normal text-white/55">/mo</span></span>
-              )}
-              {currentPlan.priceCNY === 0 && (
-                <span className="text-sm font-bold text-white/55">Free</span>
-              )}
+              <span className="text-sm font-black text-white/80">{fmtPrice(currentPlan)}</span>
             </div>
+            <p className="mb-6 text-xs leading-relaxed text-white/45">{currentPlan.description}</p>
 
-            <p className="text-xs text-white/40 mb-6">{currentPlan.description}</p>
-
-            {/* Token usage bar */}
             <div className="space-y-2">
               <div className="flex justify-between text-xs">
-                <span className="text-white/40 font-bold uppercase tracking-widest">Tokens</span>
-                <span className="text-white/60 font-mono">{fmtTokens(currentUsage?.used || 0)} / {fmtTokens(currentUsage?.cap || 0)}</span>
+                <span className="font-bold uppercase tracking-widest text-white/40">Tokens</span>
+                <span className="font-mono text-white/60">{fmtTokens(currentUsage?.used || 0)} / {fmtTokens(currentUsage?.cap || 0)}</span>
               </div>
-              <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
                 <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(pct, 100)}%` }}
@@ -159,75 +266,173 @@ export function SubscriptionPanel({ t }: { t: any }) {
                 />
               </div>
               <div className="flex justify-between text-xs text-white/45">
-                <span>{pct}% used</span>
-                <span>{fmtTokens(currentUsage?.remaining || 0)} remaining</span>
+                <span>{pct}% {ui('已使用', 'used')}</span>
+                <span>{fmtTokens(currentUsage?.remaining || 0)} {ui('剩余', 'remaining')}</span>
               </div>
             </div>
           </div>
 
-          {/* Features */}
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'LLM Providers', value: currentPlan.llmProviders.join(', ') },
-              { label: 'Monthly Tokens', value: fmtTokens(currentPlan.monthlyTokens) },
-              { label: 'Max Agents', value: String(status?.subscription ? '—' : currentPlan.llmProviders.length) },
-              { label: 'Status', value: status?.subscription?.status || 'active' },
-            ].map((f, i) => (
-              <div key={i} className="p-3 bg-white/5 rounded-xl">
-                <div className="text-xs font-bold text-white/45 uppercase">{f.label}</div>
-                <div className="text-xs font-bold text-white/70 mt-0.5">{f.value}</div>
+          {pendingRequest && (
+            <div className="rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 p-4 text-sm text-celestial-saturn">
+              <div className="flex items-center gap-2 font-bold">
+                <CheckCircle2 size={16} />
+                {ui('已有待处理激活申请', 'Activation request pending')}
               </div>
-            ))}
-          </div>
+              <p className="mt-1 text-xs text-white/50">
+                {ui('目标套餐', 'Target plan')}: {pendingRequest.planId} · {new Date(pendingRequest.createdAt).toLocaleString()}
+              </p>
+            </div>
+          )}
+
+          {releaseInfo && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <a href={releaseInfo.websiteUrl} target="_blank" rel="noreferrer" className="rounded-xl border border-white/10 bg-white/5 p-4 transition-colors hover:bg-white/10">
+                <div className="flex items-center gap-2 text-sm font-bold"><ExternalLink size={15} /> {ui('官网', 'Website')}</div>
+                <p className="mt-1 truncate text-xs text-white/45">{releaseInfo.websiteUrl}</p>
+              </a>
+              <a href={`mailto:${releaseInfo.supportEmail}`} className="rounded-xl border border-white/10 bg-white/5 p-4 transition-colors hover:bg-white/10">
+                <div className="flex items-center gap-2 text-sm font-bold"><Mail size={15} /> {ui('支持', 'Support')}</div>
+                <p className="mt-1 truncate text-xs text-white/45">{releaseInfo.supportEmail}</p>
+              </a>
+            </div>
+          )}
         </div>
       )}
 
       {tab === 'plans' && (
-        <div className="p-6 grid grid-cols-1 gap-4">
-          {plans.map(plan => {
+        <div className="grid gap-4 p-6">
+          {plans.map((plan) => {
             const isCurrent = plan.id === currentPlan?.id;
+            const features = [
+              `${fmtTokens(plan.monthlyTokens)} tokens/mo`,
+              `${plan.agentCount || 1} ${ui('个 Agent', 'agents')}`,
+              plan.voiceCloneIncluded ? ui('声音克隆', 'Voice cloning') : ui('基础语音', 'Basic voice'),
+              plan.priority ? ui('优先队列', 'Priority queue') : ui('标准队列', 'Standard queue'),
+            ];
             return (
               <div
                 key={plan.id}
-                className={`p-5 rounded-2xl border transition-all ${isCurrent ? 'border-celestial-saturn/50 bg-celestial-saturn/5' : 'bg-white/[0.02] border-white/5 hover:border-white/10'}`}
+                className={`rounded-2xl border p-5 transition-all ${isCurrent ? 'border-celestial-saturn/50 bg-celestial-saturn/5' : 'border-white/5 bg-white/[0.02] hover:border-white/10'}`}
               >
-                <div className="flex justify-between items-start mb-3">
+                <div className="mb-3 flex items-start justify-between gap-4">
                   <div>
-                    <span className={`text-[12px] font-black uppercase tracking-widest ${ACCENTS[plan.tier] || ACCENTS.free}`}>
-                      {plan.tier}
-                    </span>
-                    <h4 className="text-sm font-bold mt-0.5">{plan.name}</h4>
+                    <span className={`text-xs font-black uppercase tracking-widest ${ACCENTS[plan.tier] || ACCENTS.free}`}>{plan.tier}</span>
+                    <h4 className="mt-0.5 text-sm font-bold">{plan.name}</h4>
                   </div>
-                  <div className="text-right">
-                    {plan.priceCNY > 0 ? (
-                      <span className="text-sm font-black">¥{plan.priceCNY}<span className="text-[12px] font-normal text-white/55">/mo</span></span>
-                    ) : (
-                      <span className="text-xs font-bold text-white/55">Free</span>
-                    )}
-                  </div>
+                  <div className="text-sm font-black text-white/80">{fmtPrice(plan)}</div>
                 </div>
-
-                <p className="text-xs text-white/55 mb-3">{plan.description}</p>
-
-                <div className="flex flex-wrap gap-1 mb-3">
-                  {plan.llmProviders.map(p => (
-                    <span key={p} className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-white/40 font-bold uppercase">{p}</span>
+                <p className="mb-3 text-xs leading-relaxed text-white/55">{plan.description}</p>
+                <div className="mb-4 flex flex-wrap gap-1">
+                  {plan.llmProviders.map((provider) => (
+                    <span key={provider} className="rounded bg-white/5 px-1.5 py-0.5 text-xs font-bold uppercase text-white/40">{provider}</span>
                   ))}
                 </div>
-
-                {isCurrent ? (
-                  <span className="text-[12px] font-bold text-celestial-saturn uppercase tracking-widest">Current Plan</span>
-                ) : (
-                  <button
-                    onClick={() => toast.info(t.contactAdminUpgrade || 'Contact admin to upgrade: maoxiansheng946@github')}
-                    className="text-[12px] font-bold text-white/55 hover:text-white/60 uppercase tracking-widest transition-colors"
-                  >
-                    Upgrade →
-                  </button>
-                )}
+                <div className="grid gap-2 md:grid-cols-2">
+                  {features.map((feature) => (
+                    <div key={feature} className="flex items-center gap-2 text-xs text-white/55">
+                      <Check size={13} className="text-celestial-saturn" />
+                      {feature}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4">
+                  {isCurrent ? (
+                    <span className="text-xs font-bold uppercase tracking-widest text-celestial-saturn">{ui('当前套餐', 'Current plan')}</span>
+                  ) : (
+                    <button
+                      onClick={() => { setSelectedPlanId(plan.id); setTab('activate'); }}
+                      className="text-xs font-bold uppercase tracking-widest text-white/55 transition-colors hover:text-white"
+                    >
+                      {ui('申请激活', 'Request activation')}
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {tab === 'activate' && (
+        <div className="grid gap-5 p-6 lg:grid-cols-[1fr_1.1fr]">
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-bold">
+                <ShieldCheck size={16} className="text-celestial-saturn" />
+                {ui('官网上线前采用人工激活', 'Manual activation before website launch')}
+              </div>
+              <p className="text-xs leading-relaxed text-white/50">
+                {releaseInfo?.note || ui('Free 可以继续使用基础能力。付费套餐通过人工确认后开通，更高配额和声音克隆等能力会随套餐开放。', 'Free remains usable. Paid plans are activated manually until online checkout is ready.')}
+              </p>
+            </div>
+
+            {releaseInfo && (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                <h4 className="mb-3 text-xs font-black uppercase tracking-widest text-white/50">{ui('付费版开放能力', 'Paid boundary')}</h4>
+                <div className="space-y-2">
+                  {releaseInfo.paidBoundary.map((item) => (
+                    <div key={item} className="flex items-center gap-2 text-xs text-white/60">
+                      <Check size={13} className="text-celestial-saturn" />
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h3 className="mb-4 text-sm font-bold">{ui('提交激活申请', 'Submit activation request')}</h3>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{ui('目标套餐', 'Target plan')}</span>
+                <select
+                  value={selectedPlan?.id || selectedPlanId}
+                  onChange={(event) => setSelectedPlanId(event.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none focus:border-celestial-saturn/50"
+                >
+                  {(paidPlans.length > 0 ? paidPlans : plans).map((plan) => (
+                    <option key={plan.id} value={plan.id}>{plan.name} · {fmtPrice(plan)}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{ui('联系方式', 'Contact')}</span>
+                <input
+                  value={contact}
+                  onChange={(event) => setContact(event.target.value)}
+                  placeholder={ui('微信 / 邮箱 / 手机号', 'WeChat / email / phone')}
+                  className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/25 focus:border-celestial-saturn/50"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{ui('备注', 'Note')}</span>
+                <textarea
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  placeholder={ui('例如：想开通 Pro，用于声音克隆和形象设计室。', 'Example: I want Pro for voice cloning and avatar studio.')}
+                  className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/25 focus:border-celestial-saturn/50"
+                />
+              </label>
+
+              <button
+                onClick={() => void submitActivationRequest()}
+                disabled={submitting || !selectedPlan}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-celestial-saturn px-4 py-3 text-sm font-black text-black transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                {ui('提交申请', 'Submit request')}
+              </button>
+
+              {releaseInfo && (
+                <p className="text-center text-xs text-white/35">
+                  {ui('也可以直接联系', 'Or contact')} {releaseInfo.salesContact} · {releaseInfo.supportEmail}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

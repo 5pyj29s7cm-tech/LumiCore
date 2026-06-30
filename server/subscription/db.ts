@@ -1,5 +1,6 @@
 import { readDB, writeDB } from '../../db_layer';
-import type { UserSubscription, SubscriptionPlan } from './types';
+import { randomUUID } from 'crypto';
+import type { SubscriptionActivationRequest, UserSubscription, SubscriptionPlan } from './types';
 import { getPlan, getDefaultPlan } from './types';
 
 export function getSubscription(userId: string): UserSubscription {
@@ -101,4 +102,35 @@ export function checkTokenLimit(userId: string): { allowed: boolean; used: numbe
 export function listAllSubscriptions(): UserSubscription[] {
   const db = readDB();
   return (db.subscriptions || []) as UserSubscription[];
+}
+
+export function createActivationRequest(input: {
+  userId: string;
+  planId: string;
+  contact: string;
+  note?: string;
+}): SubscriptionActivationRequest {
+  const db = readDB();
+  if (!db.subscriptionActivationRequests) db.subscriptionActivationRequests = [];
+
+  const now = new Date().toISOString();
+  const request: SubscriptionActivationRequest = {
+    id: `act_${randomUUID()}`,
+    userId: input.userId,
+    planId: input.planId,
+    contact: input.contact,
+    note: input.note || '',
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  };
+  db.subscriptionActivationRequests.unshift(request);
+  writeDB(db);
+  return request;
+}
+
+export function listActivationRequests(userId?: string): SubscriptionActivationRequest[] {
+  const db = readDB();
+  const requests = (db.subscriptionActivationRequests || []) as SubscriptionActivationRequest[];
+  return userId ? requests.filter((request) => request.userId === userId) : requests;
 }
