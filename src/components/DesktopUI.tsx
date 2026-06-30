@@ -160,6 +160,14 @@ type ClientRuntimeSnapshot = {
   lastError?: string;
 };
 
+type DesktopWidgetFallbackState = {
+  active: boolean;
+  size?: { width: number; height: number };
+  position?: { x: number; y: number };
+  fullscreen?: boolean;
+  maximized?: boolean;
+};
+
 declare global {
   interface Window {
     lumiElectron?: {
@@ -1201,6 +1209,7 @@ export function DesktopUI({
   const isWallpaperModeRef = useRef(false);
   const chatOpenRef = useRef(false);
   const closeToBackgroundSyncRef = useRef(false);
+  const desktopWidgetFallbackRef = useRef<DesktopWidgetFallbackState | null>(null);
   const wallpaperAutomationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wallpaperWasEnabledBeforeAutomationRef = useRef(false);
   const wallpaperWorkPromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2574,6 +2583,95 @@ export function DesktopUI({
     }
   };
 
+  const applyDesktopWidgetFallback = async () => {
+    const windowApi = await import('@tauri-apps/api/window');
+    const appWindow = windowApi.getCurrentWindow();
+
+    if (!desktopWidgetFallbackRef.current?.active) {
+      const [size, position, fullscreen, maximized] = await Promise.all([
+        appWindow.outerSize().catch(() => undefined),
+        appWindow.outerPosition().catch(() => undefined),
+        appWindow.isFullscreen().catch(() => false),
+        appWindow.isMaximized().catch(() => false),
+      ]);
+      desktopWidgetFallbackRef.current = {
+        active: true,
+        size: size ? { width: size.width, height: size.height } : undefined,
+        position: position ? { x: position.x, y: position.y } : undefined,
+        fullscreen,
+        maximized,
+      };
+    }
+
+    const widgetWidth = 360;
+    const widgetHeight = 520;
+    const margin = 18;
+    const currentMonitor = await windowApi.currentMonitor().catch(() => null);
+    const primaryMonitor = currentMonitor || await windowApi.primaryMonitor().catch(() => null);
+    const scaleFactor = primaryMonitor?.scaleFactor || window.devicePixelRatio || 1;
+    const workArea = primaryMonitor?.workArea;
+    const monitorPosition = workArea?.position || primaryMonitor?.position;
+    const monitorSize = workArea?.size || primaryMonitor?.size;
+    const physicalWidth = widgetWidth * scaleFactor;
+    const physicalHeight = widgetHeight * scaleFactor;
+    const fallbackLeft = Number((window.screen as any).availLeft || 0);
+    const fallbackTop = Number((window.screen as any).availTop || 0);
+    const fallbackWidth = Number(window.screen.availWidth || widgetWidth);
+    const fallbackHeight = Number(window.screen.availHeight || widgetHeight);
+    const physicalX = monitorPosition && monitorSize
+      ? monitorPosition.x + monitorSize.width - physicalWidth - margin * scaleFactor
+      : (fallbackLeft + fallbackWidth - widgetWidth - margin) * scaleFactor;
+    const physicalY = monitorPosition && monitorSize
+      ? monitorPosition.y + monitorSize.height - physicalHeight - margin * scaleFactor
+      : (fallbackTop + fallbackHeight - widgetHeight - margin) * scaleFactor;
+
+    await appWindow.show().catch(() => {});
+    await appWindow.setFullscreen(false).catch(() => {});
+    await appWindow.unmaximize().catch(() => {});
+    await appWindow.setMinSize(new windowApi.LogicalSize(320, 420)).catch(() => {});
+    await appWindow.setResizable(false).catch(() => {});
+    await appWindow.setDecorations(false).catch(() => {});
+    await appWindow.setShadow(true).catch(() => {});
+    await appWindow.setSkipTaskbar(true).catch(() => {});
+    await appWindow.setAlwaysOnTop(true).catch(() => {});
+    await appWindow.setSize(new windowApi.LogicalSize(widgetWidth, widgetHeight));
+    await appWindow.setPosition(new windowApi.PhysicalPosition(Math.round(physicalX), Math.round(physicalY)));
+    await appWindow.setFocus().catch(() => {});
+  };
+
+  const restoreDesktopWidgetFallback = async () => {
+    const fallback = desktopWidgetFallbackRef.current;
+    desktopWidgetFallbackRef.current = null;
+    const windowApi = await import('@tauri-apps/api/window');
+    const appWindow = windowApi.getCurrentWindow();
+
+    await appWindow.show().catch(() => {});
+    await appWindow.setAlwaysOnTop(false).catch(() => {});
+    await appWindow.setSkipTaskbar(false).catch(() => {});
+    await appWindow.setShadow(false).catch(() => {});
+    await appWindow.setResizable(true).catch(() => {});
+    await appWindow.setDecorations(false).catch(() => {});
+    await appWindow.setMinSize(new windowApi.LogicalSize(960, 640)).catch(() => {});
+
+    if (fallback?.fullscreen) {
+      await appWindow.setFullscreen(true).catch(() => {});
+    } else {
+      await appWindow.setFullscreen(false).catch(() => {});
+      if (fallback?.size) {
+        await appWindow.setSize(new windowApi.PhysicalSize(fallback.size.width, fallback.size.height)).catch(() => {});
+      } else {
+        await appWindow.setSize(new windowApi.LogicalSize(1280, 820)).catch(() => {});
+      }
+      if (fallback?.position) {
+        await appWindow.setPosition(new windowApi.PhysicalPosition(fallback.position.x, fallback.position.y)).catch(() => {});
+      }
+      if (fallback?.maximized) {
+        await appWindow.maximize().catch(() => {});
+      }
+    }
+    await appWindow.setFocus().catch(() => {});
+  };
+
   const enterDesktopWidgetMode = async () => {
     try { sounds.playClick(); } catch {}
     setIsControlCenterOpen(false);
@@ -2588,12 +2686,26 @@ export function DesktopUI({
     setActiveTab('home');
     setIsDesktopWidgetMode(true);
     if (isTauri) {
+      let nativeError: any = null;
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('enter_desktop_widget_mode');
+        desktopWidgetFallbackRef.current = null;
+        return;
       } catch (err: any) {
+        nativeError = err;
+      }
+      try {
+        await applyDesktopWidgetFallback();
+      } catch (fallbackErr: any) {
         setIsDesktopWidgetMode(false);
-        toast.error(err?.message || (lang === 'zh' ? '无法进入桌面小组件' : 'Failed to enter widget mode'));
+        const nativeMessage = nativeError?.message || String(nativeError || '');
+        const fallbackMessage = fallbackErr?.message || String(fallbackErr || '');
+        toast.error(
+          lang === 'zh'
+            ? `无法进入桌面小组件：${fallbackMessage || nativeMessage || '窗口控制失败'}`
+            : `Failed to enter widget mode: ${fallbackMessage || nativeMessage || 'window control failed'}`
+        );
       }
     }
   };
@@ -2605,8 +2717,13 @@ export function DesktopUI({
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('exit_desktop_widget_mode');
+        desktopWidgetFallbackRef.current = null;
       } catch (err: any) {
-        toast.error(err?.message || (lang === 'zh' ? '无法展开 Lumi' : 'Failed to expand Lumi'));
+        try {
+          await restoreDesktopWidgetFallback();
+        } catch (fallbackErr: any) {
+          toast.error(fallbackErr?.message || err?.message || (lang === 'zh' ? '无法展开 Lumi' : 'Failed to expand Lumi'));
+        }
       }
     }
     if (nextSurface) {

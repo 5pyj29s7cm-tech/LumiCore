@@ -796,11 +796,19 @@ fn apply_desktop_widget_window(window: &tauri::WebviewWindow) -> Result<(), Stri
             DESKTOP_WIDGET_MIN_HEIGHT,
         )))
         .map_err(|e| e.to_string())?;
-    window.set_resizable(false).map_err(|e| e.to_string())?;
-    window.set_decorations(false).map_err(|e| e.to_string())?;
-    window.set_shadow(true).map_err(|e| e.to_string())?;
+    if let Err(e) = window.set_resizable(false) {
+        eprintln!("[LumiOS] desktop widget set_resizable(false) failed: {}", e);
+    }
+    if let Err(e) = window.set_decorations(false) {
+        eprintln!("[LumiOS] desktop widget set_decorations(false) failed: {}", e);
+    }
+    if let Err(e) = window.set_shadow(true) {
+        eprintln!("[LumiOS] desktop widget set_shadow(true) failed: {}", e);
+    }
     let _ = window.set_skip_taskbar(true);
-    window.set_always_on_top(true).map_err(|e| e.to_string())?;
+    if let Err(e) = window.set_always_on_top(true) {
+        eprintln!("[LumiOS] desktop widget set_always_on_top(true) failed: {}", e);
+    }
     window
         .set_size(tauri::PhysicalSize::new(
             DESKTOP_WIDGET_WIDTH,
@@ -850,8 +858,12 @@ fn exit_desktop_widget_impl(
     let _ = window.set_always_on_top(false);
     let _ = window.set_skip_taskbar(false);
     let _ = window.set_shadow(false);
-    window.set_decorations(false).map_err(|e| e.to_string())?;
-    window.set_resizable(true).map_err(|e| e.to_string())?;
+    if let Err(e) = window.set_decorations(false) {
+        eprintln!("[LumiOS] desktop widget restore decorations failed: {}", e);
+    }
+    if let Err(e) = window.set_resizable(true) {
+        eprintln!("[LumiOS] desktop widget restore resizable failed: {}", e);
+    }
     window
         .set_min_size(Some(tauri::PhysicalSize::new(
             DEFAULT_MAIN_MIN_WIDTH,
