@@ -138,9 +138,42 @@ function runFfmpeg(args: string[], errorPrefix: string) {
   }
 }
 
+function isPcm16Mono16kWav(filePath: string): boolean {
+  let buffer: Buffer;
+  try {
+    buffer = fs.readFileSync(filePath);
+  } catch {
+    return false;
+  }
+
+  if (buffer.length < 44) return false;
+  if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') return false;
+
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString('ascii', offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (chunkId === 'fmt ' && chunkSize >= 16 && dataOffset + 16 <= buffer.length) {
+      const audioFormat = buffer.readUInt16LE(dataOffset);
+      const channels = buffer.readUInt16LE(dataOffset + 2);
+      const sampleRate = buffer.readUInt32LE(dataOffset + 4);
+      const bitsPerSample = buffer.readUInt16LE(dataOffset + 14);
+      return audioFormat === 1 && channels === 1 && sampleRate === 16000 && bitsPerSample === 16;
+    }
+    offset = dataOffset + chunkSize + (chunkSize % 2);
+  }
+
+  return false;
+}
+
 function prepareCloneSampleFile(inputPaths: string[], userId: string): string {
   if (inputPaths.length === 0) {
     throw Object.assign(new Error('At least one sample URL is required'), { statusCode: 400 });
+  }
+
+  if (inputPaths.length === 1 && isPcm16Mono16kWav(inputPaths[0])) {
+    return inputPaths[0];
   }
 
   const jobId = crypto.randomBytes(8).toString('hex');
