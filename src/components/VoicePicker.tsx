@@ -72,7 +72,7 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
       setPlayingId(voice.voiceId);
       const lang = voice.language || 'zh';
       const sampleText = SAMPLE_TEXTS[lang] || SAMPLE_TEXTS.en;
-      const buffer = await synthesizeSpeech(sampleText, voice.voiceId, voice.provider);
+      const buffer = await synthesizeSpeech(sampleText, voice.voiceId, voice.provider, voice.model);
       const blob = new Blob([buffer], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);

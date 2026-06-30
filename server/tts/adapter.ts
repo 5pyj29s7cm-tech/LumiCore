@@ -12,7 +12,7 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
     case 'gptsovits':
       return gptsovits.synthesizeSpeech(text, config.voiceId, config.signal);
     case 'cosyvoice':
-      return cosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume);
+      return cosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
     case 'ark':
       return ark.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume);
     default:

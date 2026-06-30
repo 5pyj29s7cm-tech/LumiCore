@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, MicOff, Phone, Loader2, Volume2, Trash2, Plus, Sparkles, CheckCircle2, XCircle, History, Play, Pause, Cpu, Upload, FileAudio } from 'lucide-react';
 import { useVoiceCloning } from '../hooks/useVoiceCloning';
-import { deleteVoice } from '../services/voiceService';
+import { deleteVoice, synthesizeSpeech } from '../services/voiceService';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
@@ -24,6 +24,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
     startRecording,
     stopRecording,
     removeRecording,
+    clearRecordings,
     addFiles,
     uploadAndClone,
     refreshVoices,
@@ -278,7 +279,7 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
                      <History size={14} />
                      {t.recordings || ui('录音样本', 'Recordings')} ({recordings.length})
                    </h4>
-                   <button onClick={() => recordings.forEach((_, i) => removeRecording(i))} className="text-[12px] font-bold text-red-400 uppercase tracking-widest hover:underline transition-all">{t.vfClearAll || 'Clear All'}</button>
+                   <button onClick={clearRecordings} className="text-[12px] font-bold text-red-400 uppercase tracking-widest hover:underline transition-all">{t.vfClearAll || 'Clear All'}</button>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
@@ -438,13 +439,8 @@ function VoiceCard({ voice, onDelete, isCloned = false }: { voice: any, onDelete
     }
     setIsLoading(true);
     try {
-      const res = await fetch('/api/voice/synthesize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId: voice.voiceId || voice.id, text: '你好，这是我的声音样本。Hello, this is my voice sample.' }),
-      });
-      if (!res.ok) throw new Error('Synthesis failed');
-      const blob = await res.blob();
+      const buffer = await synthesizeSpeech('你好，这是我的声音样本。Hello, this is my voice sample.', voice.voiceId || voice.id, voice.provider, voice.model);
+      const blob = new Blob([buffer], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audioRef.current = audio;

@@ -38,7 +38,7 @@ export async function uploadSamples(files: File[]): Promise<{ urls: string[]; fi
   return data;
 }
 
-export async function cloneVoice(sampleUrls: string[], name: string, provider?: string): Promise<{ voiceId: string; name: string; provider: string }> {
+export async function cloneVoice(sampleUrls: string[], name: string, provider?: string): Promise<{ voiceId: string; name: string; provider: string; model?: string; source?: string }> {
   console.log('[VoiceService] Cloning voice with name:', name, 'urls:', sampleUrls);
   const res = await voiceFetch('/clone', {
     method: 'POST',
@@ -54,6 +54,18 @@ export async function cloneVoice(sampleUrls: string[], name: string, provider?: 
   return data;
 }
 
+export async function designVoice(prompt: string, name: string, provider?: string): Promise<{ voiceId: string; name: string; provider: string; source?: string }> {
+  const res = await voiceFetch('/design', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, name, provider: provider || 'cosyvoice' }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Voice design failed'));
+  }
+  return res.json();
+}
+
 export async function listVoices(): Promise<{ cloned: any[]; premade: any[] }> {
   const res = await voiceFetch('/voices');
   if (!res.ok) throw new Error(await readError(res, 'Failed to fetch voices'));
@@ -65,11 +77,11 @@ export async function deleteVoice(voiceId: string): Promise<void> {
   if (!res.ok) throw new Error(await readError(res, 'Failed to delete voice'));
 }
 
-export async function synthesizeSpeech(text: string, voiceId: string, provider?: string): Promise<ArrayBuffer> {
+export async function synthesizeSpeech(text: string, voiceId: string, provider?: string, model?: string): Promise<ArrayBuffer> {
   const res = await voiceFetch('/synthesize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voiceId, provider }),
+    body: JSON.stringify({ text, voiceId, provider, model }),
   });
   if (!res.ok) throw new Error(await readError(res, 'Speech synthesis failed'));
   return res.arrayBuffer();

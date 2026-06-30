@@ -5,6 +5,7 @@ import { Cpu, Cloud, Mic, CheckCircle, Loader2, ArrowRight, Download, Key, Volum
 import { useT } from '../lib/useT';
 import { toast } from 'sonner';
 import { saveServerKeys } from '../services/settingsKeys';
+import { synthesizeSpeech } from '../services/voiceService';
 
 type Step = 'detect' | 'local-ready' | 'api-setup' | 'voice-test' | 'done';
 
@@ -120,16 +121,9 @@ export function SetupWizard({ onFinish }: Props) {
 
   const handleVoiceTest = () => {
     setVoiceStatus('testing');
-    // Send a short test TTS request
-    fetch('/api/voice/synthesize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'Hello. Your Lumi OS is ready.', voiceId: 'default' }),
-    }).then(r => {
-      setVoiceStatus(r.ok ? 'ok' : 'failed');
-    }).catch(() => {
-      setVoiceStatus('failed');
-    });
+    synthesizeSpeech('Hello. Your Lumi OS is ready.', 'default')
+      .then(() => setVoiceStatus('ok'))
+      .catch(() => setVoiceStatus('failed'));
   };
 
   return (

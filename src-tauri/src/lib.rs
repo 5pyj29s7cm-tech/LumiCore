@@ -36,6 +36,20 @@ struct ResidentState {
     force_quit: bool,
 }
 
+#[derive(Default)]
+struct DesktopWidgetState {
+    enabled: bool,
+    previous_size: Option<tauri::PhysicalSize<u32>>,
+    previous_position: Option<tauri::PhysicalPosition<i32>>,
+    was_fullscreen: bool,
+    was_maximized: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DesktopWidgetMode {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RuntimeResilienceStatus {
     pub platform: String,
@@ -738,6 +752,171 @@ fn set_wallpaper_mode(
 
     println!("[LumiOS] Wallpaper mode: {}", if enabled { "ON (click-through)" } else { "OFF" });
     Ok(())
+}
+
+const DESKTOP_WIDGET_WIDTH: u32 = 360;
+const DESKTOP_WIDGET_HEIGHT: u32 = 520;
+const DESKTOP_WIDGET_MIN_WIDTH: u32 = 320;
+const DESKTOP_WIDGET_MIN_HEIGHT: u32 = 420;
+const DESKTOP_WIDGET_MARGIN: i32 = 18;
+const DEFAULT_MAIN_MIN_WIDTH: u32 = 960;
+const DEFAULT_MAIN_MIN_HEIGHT: u32 = 640;
+
+fn place_window_in_desktop_corner(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let maybe_monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+
+    if let Some(monitor) = maybe_monitor {
+        let monitor_pos = monitor.position();
+        let monitor_size = monitor.size();
+        let max_x = monitor_pos.x + monitor_size.width as i32 - DESKTOP_WIDGET_WIDTH as i32 - DESKTOP_WIDGET_MARGIN;
+        let max_y = monitor_pos.y + monitor_size.height as i32 - DESKTOP_WIDGET_HEIGHT as i32 - DESKTOP_WIDGET_MARGIN;
+        let x = max_x.max(monitor_pos.x + DESKTOP_WIDGET_MARGIN);
+        let y = max_y.max(monitor_pos.y + DESKTOP_WIDGET_MARGIN);
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+    } else {
+        window.center().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn apply_desktop_widget_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let _ = window.show();
+    let _ = window.set_fullscreen(false);
+    let _ = window.unmaximize();
+    window
+        .set_min_size(Some(tauri::PhysicalSize::new(
+            DESKTOP_WIDGET_MIN_WIDTH,
+            DESKTOP_WIDGET_MIN_HEIGHT,
+        )))
+        .map_err(|e| e.to_string())?;
+    window.set_resizable(false).map_err(|e| e.to_string())?;
+    window.set_decorations(false).map_err(|e| e.to_string())?;
+    window.set_shadow(true).map_err(|e| e.to_string())?;
+    let _ = window.set_skip_taskbar(true);
+    window.set_always_on_top(true).map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::PhysicalSize::new(
+            DESKTOP_WIDGET_WIDTH,
+            DESKTOP_WIDGET_HEIGHT,
+        ))
+        .map_err(|e| e.to_string())?;
+    place_window_in_desktop_corner(window)?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+fn enter_desktop_widget_impl(
+    window: &tauri::WebviewWindow,
+    state: &Mutex<DesktopWidgetState>,
+) -> Result<DesktopWidgetMode, String> {
+    {
+        let mut widget = state.lock().map_err(|e| e.to_string())?;
+        if !widget.enabled {
+            widget.previous_size = window.outer_size().ok();
+            widget.previous_position = window.outer_position().ok();
+            widget.was_fullscreen = window.is_fullscreen().unwrap_or(false);
+            widget.was_maximized = window.is_maximized().unwrap_or(false);
+        }
+        widget.enabled = true;
+    }
+
+    apply_desktop_widget_window(window)?;
+    Ok(DesktopWidgetMode { enabled: true })
+}
+
+fn exit_desktop_widget_impl(
+    window: &tauri::WebviewWindow,
+    state: &Mutex<DesktopWidgetState>,
+) -> Result<DesktopWidgetMode, String> {
+    let (previous_size, previous_position, was_fullscreen, was_maximized) = {
+        let mut widget = state.lock().map_err(|e| e.to_string())?;
+        widget.enabled = false;
+        (
+            widget.previous_size.take(),
+            widget.previous_position.take(),
+            widget.was_fullscreen,
+            widget.was_maximized,
+        )
+    };
+
+    let _ = window.show();
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_skip_taskbar(false);
+    let _ = window.set_shadow(false);
+    window.set_decorations(false).map_err(|e| e.to_string())?;
+    window.set_resizable(true).map_err(|e| e.to_string())?;
+    window
+        .set_min_size(Some(tauri::PhysicalSize::new(
+            DEFAULT_MAIN_MIN_WIDTH,
+            DEFAULT_MAIN_MIN_HEIGHT,
+        )))
+        .map_err(|e| e.to_string())?;
+
+    if was_fullscreen {
+        window.set_fullscreen(true).map_err(|e| e.to_string())?;
+    } else {
+        let _ = window.set_fullscreen(false);
+        if let Some(size) = previous_size {
+            let _ = window.set_size(size);
+        } else {
+            let _ = window.set_size(tauri::PhysicalSize::new(1280, 820));
+        }
+        if let Some(position) = previous_position {
+            let _ = window.set_position(position);
+        } else {
+            let _ = window.center();
+        }
+        if was_maximized {
+            let _ = window.maximize();
+        }
+    }
+
+    let _ = window.set_focus();
+    Ok(DesktopWidgetMode { enabled: false })
+}
+
+#[tauri::command]
+fn enter_desktop_widget_mode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Mutex<DesktopWidgetState>>,
+) -> Result<DesktopWidgetMode, String> {
+    enter_desktop_widget_impl(&window, &state)
+}
+
+#[tauri::command]
+fn exit_desktop_widget_mode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Mutex<DesktopWidgetState>>,
+) -> Result<DesktopWidgetMode, String> {
+    exit_desktop_widget_impl(&window, &state)
+}
+
+#[tauri::command]
+fn toggle_desktop_widget_mode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Mutex<DesktopWidgetState>>,
+) -> Result<DesktopWidgetMode, String> {
+    let enabled = state.lock().map_err(|e| e.to_string())?.enabled;
+    if enabled {
+        exit_desktop_widget_impl(&window, &state)
+    } else {
+        enter_desktop_widget_impl(&window, &state)
+    }
+}
+
+#[tauri::command]
+fn get_desktop_widget_mode(
+    state: tauri::State<'_, Mutex<DesktopWidgetState>>,
+) -> Result<DesktopWidgetMode, String> {
+    let enabled = state.lock().map_err(|e| e.to_string())?.enabled;
+    Ok(DesktopWidgetMode { enabled })
 }
 
 #[tauri::command]
@@ -1785,6 +1964,7 @@ pub fn run() {
         .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None, python_config: None }))
         .manage(Mutex::new(WallpaperState { enabled: false }))
         .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
+        .manage(Mutex::new(DesktopWidgetState::default()))
         .invoke_handler(tauri::generate_handler![
             get_system_info,
             get_live_stats,
@@ -1798,6 +1978,10 @@ pub fn run() {
             open_item,
             pick_directory,
             set_wallpaper_mode,
+            enter_desktop_widget_mode,
+            exit_desktop_widget_mode,
+            toggle_desktop_widget_mode,
+            get_desktop_widget_mode,
             minimize_window,
             toggle_maximize_window,
             close_window,

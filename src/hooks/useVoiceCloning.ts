@@ -17,6 +17,40 @@ interface VoiceCloneState {
   error: string | null;
 }
 
+const MAX_SAMPLES = 5;
+const MAX_SAMPLE_SIZE = 10 * 1024 * 1024;
+
+function extensionForMime(type: string): string {
+  const base = (type || '').split(';')[0];
+  switch (base) {
+    case 'audio/wav':
+    case 'audio/wave':
+    case 'audio/x-wav':
+    case 'audio/x-pn-wav':
+      return 'wav';
+    case 'audio/mpeg':
+    case 'audio/mp3':
+      return 'mp3';
+    case 'audio/ogg':
+      return 'ogg';
+    case 'audio/mp4':
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+      return 'm4a';
+    case 'audio/flac':
+    case 'audio/x-flac':
+      return 'flac';
+    default:
+      return 'webm';
+  }
+}
+
+function toSampleFile(blob: Blob, index: number): File {
+  if (blob instanceof File && blob.name) return blob;
+  const type = blob.type || 'audio/webm';
+  return new File([blob], `sample_${index}.${extensionForMime(type)}`, { type });
+}
+
 export function useVoiceCloning() {
   const [state, setState] = useState<VoiceCloneState>({
     isRecording: false,
@@ -127,10 +161,23 @@ export function useVoiceCloning() {
     }));
   }, []);
 
+  const clearRecordings = useCallback(() => {
+    setState(prev => ({ ...prev, recordings: [] }));
+  }, []);
+
   const addFiles = useCallback((files: File[]) => {
     setState(prev => ({
       ...prev,
-      recordings: [...prev.recordings, ...files],
+      recordings: [
+        ...prev.recordings,
+        ...files
+          .filter(file => file.type.startsWith('audio/') || /\.(webm|mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name))
+          .filter(file => file.size <= MAX_SAMPLE_SIZE)
+          .slice(0, Math.max(0, MAX_SAMPLES - prev.recordings.length)),
+      ],
+      error: files.some(file => file.size > MAX_SAMPLE_SIZE)
+        ? 'Some audio files were skipped because they are larger than 10 MB.'
+        : prev.error,
     }));
   }, []);
 
@@ -145,9 +192,7 @@ export function useVoiceCloning() {
     try {
       setState(prev => ({ ...prev, isUploading: true, cloneProgress: 'Uploading samples...', cloneStatus: 'uploading', cloneError: '' }));
 
-      const files = state.recordings.map((blob, i) =>
-        new File([blob], `sample_${i}.webm`, { type: blob.type })
-      );
+      const files = state.recordings.slice(0, MAX_SAMPLES).map(toSampleFile);
 
       console.log('[VoiceClone] Uploading', files.length, 'files...');
       const { urls } = await uploadSamples(files);
@@ -206,6 +251,7 @@ export function useVoiceCloning() {
     startRecording,
     stopRecording,
     removeRecording,
+    clearRecordings,
     addFiles,
     uploadAndClone,
     refreshVoices,

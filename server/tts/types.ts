@@ -30,4 +30,5 @@ export interface VoiceListItem {
   name: string;
   category: 'cloned' | 'premade';
   language?: string;
+  model?: string;
 }

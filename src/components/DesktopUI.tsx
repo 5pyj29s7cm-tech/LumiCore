@@ -24,6 +24,7 @@ import {
   Bluetooth,
   Moon,
   Minimize2,
+  Maximize2,
   Minus,
   Square,
   ChevronRight,
@@ -53,6 +54,7 @@ import {
   Camera,
   Copy,
   Download,
+  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
@@ -98,6 +100,7 @@ import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ToolConfirmDialog } from './ToolConfirmDialog';
 import { appConfirm } from '@/lib/appConfirm';
+import { designVoice, listVoices, synthesizeSpeech } from '@/services/voiceService';
 
 const KnowledgeBase = lazy(() => import('./KnowledgeBase').then(m => ({ default: m.KnowledgeBase })));
 import { PersonalityEditor } from './PersonalityEditor';
@@ -523,6 +526,226 @@ function SensorPrimer({ isOpen, onContinue, t }: { isOpen: boolean; onContinue: 
         </motion.div>
       </div>
     </AnimatePresence>
+  );
+}
+
+function DesktopWidgetPanel({
+  t,
+  lang,
+  selectedPet,
+  equippedAccessories,
+  petReaction,
+  callState,
+  audioLevel,
+  transcript,
+  operationMode,
+  workDomain,
+  wakeEnabled,
+  wakeListening,
+  wakeError,
+  onStartVoice,
+  onEndVoice,
+  onExpand,
+  onHide,
+  onOpenKnowledge,
+  onOpenAvatarStudio,
+}: {
+  t: any;
+  lang: 'en' | 'zh';
+  selectedPet: PetConfig | null;
+  equippedAccessories: string[];
+  petReaction: { animation: string; until: number } | null;
+  callState: string;
+  audioLevel: number;
+  transcript: string;
+  operationMode: OperationMode;
+  workDomain: 'personal' | 'work';
+  wakeEnabled: boolean;
+  wakeListening: boolean;
+  wakeError?: string | null;
+  onStartVoice: () => void;
+  onEndVoice: () => void;
+  onExpand: () => void;
+  onHide: () => void;
+  onOpenKnowledge: () => void;
+  onOpenAvatarStudio: () => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const isCallActive = callState !== 'idle';
+  const statusLabel = isCallActive
+    ? (operationMode === 'meeting' ? (lang === 'zh' ? '会议记录中' : 'Meeting') : callState)
+    : wakeEnabled && wakeListening
+      ? (lang === 'zh' ? '唤醒待命' : 'Wake ready')
+      : (lang === 'zh' ? '待命' : 'Ready');
+
+  const uploadKnowledgeFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0 || uploading) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      Array.from(files).forEach(file => formData.append('files', file));
+      const res = await fetch(`/api/files/upload?domain=${encodeURIComponent(workDomain)}`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
+      const count = Array.isArray(data.files) ? data.files.length : files.length;
+      toast.success(lang === 'zh' ? `已投喂 ${count} 个资料` : `Fed ${count} file(s)`);
+      window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+    } catch (err: any) {
+      toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void uploadKnowledgeFiles(event.dataTransfer.files);
+  };
+
+  return (
+    <div className="fixed inset-0 overflow-hidden bg-transparent p-2 text-white">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => void uploadKnowledgeFiles(event.currentTarget.files)}
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="flex h-full w-full flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#05070b]/92 shadow-[0_18px_55px_rgba(0,0,0,0.58)] backdrop-blur-3xl"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleDrop}
+      >
+        <div data-tauri-drag-region className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3">
+          <div data-tauri-drag-region className="flex min-w-0 items-center gap-2">
+            <div className={`h-2.5 w-2.5 rounded-full ${isCallActive ? 'bg-celestial-saturn shadow-[0_0_14px_rgba(255,204,0,0.8)]' : 'bg-emerald-400/80'}`} />
+            <div data-tauri-drag-region className="min-w-0">
+              <div className="truncate text-xs font-black uppercase tracking-[0.18em] text-white/75">Lumi</div>
+              <div className="truncate text-[10px] font-bold uppercase tracking-[0.12em] text-white/35">{statusLabel}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onExpand}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-white/45 transition-colors hover:bg-white/10 hover:text-white"
+              title={lang === 'zh' ? '展开 Lumi' : 'Expand Lumi'}
+            >
+              <Maximize2 size={15} />
+            </button>
+            <button
+              onClick={onHide}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-white/45 transition-colors hover:bg-white/10 hover:text-white"
+              title={lang === 'zh' ? '隐藏到后台' : 'Hide to background'}
+            >
+              <Minus size={15} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+          <button
+            onClick={onOpenAvatarStudio}
+            className="mx-auto flex h-36 w-36 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] transition-colors hover:bg-white/[0.06]"
+            title={lang === 'zh' ? '打开形象设计室' : 'Open Avatar Studio'}
+          >
+            {selectedPet ? (
+              <PetAvatar
+                pet={selectedPet}
+                animation={
+                  petReaction ? petReaction.animation as any :
+                  callState === 'speaking' ? 'wave' :
+                  callState === 'listening' ? 'idle' :
+                  callState !== 'idle' ? 'jump' : 'idle'
+                }
+                accessoryIds={equippedAccessories}
+                scale={0.58}
+                audioLevel={audioLevel}
+                callState={callState}
+                behavior="playful"
+              />
+            ) : (
+              <div className="relative h-24 w-24">
+                <motion.div
+                  className="absolute inset-0 rounded-full border border-celestial-saturn/30 bg-celestial-saturn/10"
+                  animate={{
+                    scale: isCallActive ? [1, 1.08 + audioLevel * 0.5, 1] : [1, 1.04, 1],
+                    opacity: isCallActive ? [0.45, 0.85, 0.45] : [0.3, 0.55, 0.3],
+                  }}
+                  transition={{ duration: isCallActive ? 0.8 : 2.2, repeat: Infinity }}
+                />
+                <div className="absolute inset-4 rounded-full bg-gradient-to-br from-celestial-mars/80 via-white/80 to-celestial-saturn/90 shadow-[0_0_35px_rgba(255,204,0,0.24)]" />
+                <div className="absolute inset-8 rounded-full bg-black/70" />
+              </div>
+            )}
+          </button>
+
+          <div className="mt-3 flex items-center justify-center">
+            <VoicePicker t={t} direction="down" />
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-cyan-400/18 bg-cyan-400/10 text-cyan-100 transition-colors hover:bg-cyan-400/16 disabled:opacity-60"
+              title={lang === 'zh' ? '投喂资料' : 'Feed files'}
+            >
+              {uploading ? <RefreshCw size={18} className="animate-spin" /> : <Upload size={18} />}
+              <span className="max-w-full truncate px-1 text-[11px] font-black">{lang === 'zh' ? '投喂' : 'Feed'}</span>
+            </button>
+            <button
+              onClick={isCallActive ? onEndVoice : onStartVoice}
+              className={`flex h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border transition-colors ${
+                isCallActive
+                  ? 'border-red-400/30 bg-red-500/16 text-red-100 hover:bg-red-500/22'
+                  : 'border-celestial-saturn/24 bg-celestial-saturn/12 text-celestial-saturn hover:bg-celestial-saturn/18'
+              }`}
+              title={isCallActive ? (lang === 'zh' ? '结束语音' : 'End voice') : (lang === 'zh' ? '语音交互' : 'Voice')}
+            >
+              <Mic size={18} className={isCallActive ? 'animate-pulse' : ''} />
+              <span className="max-w-full truncate px-1 text-[11px] font-black">{isCallActive ? (lang === 'zh' ? '结束' : 'End') : (lang === 'zh' ? '语音' : 'Voice')}</span>
+            </button>
+            <button
+              onClick={onOpenAvatarStudio}
+              className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-fuchsia-400/18 bg-fuchsia-400/10 text-fuchsia-100 transition-colors hover:bg-fuchsia-400/16"
+              title={lang === 'zh' ? '形象设计室' : 'Avatar Studio'}
+            >
+              <Brush size={18} />
+              <span className="max-w-full truncate px-1 text-[11px] font-black">{lang === 'zh' ? '形象' : 'Avatar'}</span>
+            </button>
+          </div>
+
+          <button
+            onClick={onOpenKnowledge}
+            className="mt-2 flex h-10 shrink-0 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] text-xs font-black uppercase tracking-[0.12em] text-white/55 transition-colors hover:bg-white/[0.08] hover:text-white"
+          >
+            <Folder size={14} />
+            {lang === 'zh' ? '资料库' : 'Knowledge'}
+          </button>
+
+          <div className="mt-3 min-h-0 flex-1 overflow-hidden rounded-2xl border border-white/8 bg-black/22 px-3 py-2">
+            {transcript ? (
+              <p className="line-clamp-4 text-xs leading-5 text-white/68">{transcript}</p>
+            ) : wakeError ? (
+              <p className="line-clamp-3 text-xs leading-5 text-red-300/70">Wake: {wakeError}</p>
+            ) : (
+              <p className="text-xs leading-5 text-white/35">
+                {lang === 'zh' ? '可以直接投喂资料，或点语音和 Lumi 说话。' : 'Feed files or start voice with Lumi.'}
+              </p>
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </div>
   );
 }
 
@@ -974,6 +1197,7 @@ export function DesktopUI({
   const [volume, setVolume] = useState(60);
   const [time, setTime] = useState(new Date());
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
+  const [isDesktopWidgetMode, setIsDesktopWidgetMode] = useState(false);
   const isWallpaperModeRef = useRef(false);
   const chatOpenRef = useRef(false);
   const closeToBackgroundSyncRef = useRef(false);
@@ -1044,6 +1268,20 @@ export function DesktopUI({
       await invoke('close_window');
     } catch {}
   };
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    const syncWidgetMode = async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const status = await invoke<{ enabled?: boolean }>('get_desktop_widget_mode');
+        if (!disposed) setIsDesktopWidgetMode(Boolean(status?.enabled));
+      } catch {}
+    };
+    void syncWidgetMode();
+    return () => { disposed = true; };
+  }, [isTauri]);
 
   const [isTrainingOpen, setIsTrainingOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -2336,6 +2574,58 @@ export function DesktopUI({
     }
   };
 
+  const enterDesktopWidgetMode = async () => {
+    try { sounds.playClick(); } catch {}
+    setIsControlCenterOpen(false);
+    setIsNotificationPanelOpen(false);
+    setIsSearchOpen(false);
+    setChatOpen(false);
+    setKnowledgeOpen(false);
+    setOpenWindows([]);
+    setMinimizedWindows([]);
+    setFocusedWindow(null);
+    setWindowOrder([]);
+    setActiveTab('home');
+    setIsDesktopWidgetMode(true);
+    if (isTauri) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('enter_desktop_widget_mode');
+      } catch (err: any) {
+        setIsDesktopWidgetMode(false);
+        toast.error(err?.message || (lang === 'zh' ? '无法进入桌面小组件' : 'Failed to enter widget mode'));
+      }
+    }
+  };
+
+  const exitDesktopWidgetMode = async (nextSurface?: string) => {
+    try { sounds.playClick(); } catch {}
+    setIsDesktopWidgetMode(false);
+    if (isTauri) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('exit_desktop_widget_mode');
+      } catch (err: any) {
+        toast.error(err?.message || (lang === 'zh' ? '无法展开 Lumi' : 'Failed to expand Lumi'));
+      }
+    }
+    if (nextSurface) {
+      window.setTimeout(() => toggleWindow(nextSurface), 120);
+    }
+  };
+
+  const hideDesktopWidgetMode = async () => {
+    try { sounds.playClick(); } catch {}
+    if (isTauri) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('hide_to_background');
+        return;
+      } catch {}
+    }
+    setIsDesktopWidgetMode(false);
+  };
+
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<any>).detail || {};
@@ -2359,6 +2649,10 @@ export function DesktopUI({
       const openSurface = (value: string) => {
         const windowId = normalizeTarget(value);
         if (!windowId) throw new Error('Client action requires a target surface');
+        if (isDesktopWidgetMode) {
+          void exitDesktopWidgetMode(windowId);
+          return;
+        }
 
         if (windowId === 'home') {
           setOpenWindows([]);
@@ -2439,11 +2733,22 @@ export function DesktopUI({
       try {
         if (action === 'refresh_client_state') {
           window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-          respond({ ok: true, action, mode: operationMode, activeTab, openWindows });
+          respond({ ok: true, action, mode: operationMode, activeTab, openWindows, widgetMode: isDesktopWidgetMode });
+          return;
+        }
+        if (action === 'enter_widget_mode' || action === 'show_desktop_widget') {
+          void enterDesktopWidgetMode();
+          respond({ ok: true, action, widgetMode: true });
+          return;
+        }
+        if (action === 'exit_widget_mode' || action === 'expand_from_widget') {
+          void exitDesktopWidgetMode(target || undefined);
+          respond({ ok: true, action, widgetMode: false, target: target || undefined });
           return;
         }
         if (action === 'open_app') {
-          openSurface(target);
+          if (isDesktopWidgetMode) void exitDesktopWidgetMode(target);
+          else openSurface(target);
           respond({ ok: true, action, target });
           return;
         }
@@ -2625,6 +2930,7 @@ export function DesktopUI({
           meetingOpen: meetingNotesOpen,
           musicLayerVisible: musicVisible,
           wallpaperMode: isWallpaperMode,
+          widgetMode: isDesktopWidgetMode,
         },
         voice: {
           state: callState,
@@ -2870,6 +3176,32 @@ export function DesktopUI({
     );
 
   const tutorialLabel = t.showTutorial || (lang === 'zh' ? '教程' : 'Tutorial');
+
+  if (isDesktopWidgetMode) {
+    return (
+      <DesktopWidgetPanel
+        t={t}
+        lang={lang}
+        selectedPet={selectedPet}
+        equippedAccessories={equippedAccessories}
+        petReaction={petReaction}
+        callState={callState}
+        audioLevel={audioLevel}
+        transcript={transcript}
+        operationMode={operationMode}
+        workDomain={workDomain}
+        wakeEnabled={wakeEnabled}
+        wakeListening={wakeWord.isListening}
+        wakeError={wakeWord.error}
+        onStartVoice={startStandardVoiceCall}
+        onEndVoice={endVoiceCallFromUI}
+        onExpand={() => void exitDesktopWidgetMode()}
+        onHide={() => void hideDesktopWidgetMode()}
+        onOpenKnowledge={() => void exitDesktopWidgetMode('knowledge')}
+        onOpenAvatarStudio={() => void exitDesktopWidgetMode('avatar-studio')}
+      />
+    );
+  }
 
   return (
     <div
@@ -3142,6 +3474,13 @@ export function DesktopUI({
 
             {/* Window Controls */}
             <div className="flex items-center gap-1 ml-2">
+              <button
+                onClick={() => void enterDesktopWidgetMode()}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
+                title={lang === 'zh' ? '收起为桌面小组件' : 'Desktop widget'}
+              >
+                <Minimize2 size={14} />
+              </button>
               <button
                 onClick={handleWindowMinimize}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
@@ -4119,31 +4458,28 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    fetch('/api/voice/voices', { credentials: 'include' })
-      .then(r => r.json())
+    listVoices()
       .then(d => setVoices({ cloned: d.cloned || [], premade: d.premade || [] }))
       .catch(() => {});
   }, [voiceRefresh]);
 
-  const handlePlay = async (voiceId: string, text?: string) => {
+  const handlePlay = async (voice: any, text?: string) => {
+    const voiceId = typeof voice === 'string' ? voice : voice.voiceId;
+    const provider = typeof voice === 'string' ? undefined : voice.provider;
+    const model = typeof voice === 'string' ? undefined : voice.model;
     if (playingId === voiceId) {
       audioRef.current?.pause();
       setPlayingId(null);
       return;
     }
     try {
-      const res = await fetch('/api/voice/synthesize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId, text: text || '你好，这是我的声音。Hello, this is my voice.' }),
-      });
-      if (!res.ok) throw new Error('Synthesis failed');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => { setPlayingId(null); URL.revokeObjectURL(url); };
-      await audio.play();
+      const previewBuffer = await synthesizeSpeech(text || '你好，这是我的声音。Hello, this is my voice.', voiceId, provider, model);
+      const previewBlob = new Blob([previewBuffer], { type: 'audio/mp3' });
+      const previewUrl = URL.createObjectURL(previewBlob);
+      const previewAudio = new Audio(previewUrl);
+      audioRef.current = previewAudio;
+      previewAudio.onended = () => { setPlayingId(null); URL.revokeObjectURL(previewUrl); };
+      await previewAudio.play();
       setPlayingId(voiceId);
     } catch { toast.error('Playback failed'); }
   };
@@ -4152,15 +4488,8 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
     if (!designPrompt.trim() || !designName.trim()) return;
     setDesigning(true);
     try {
-      const res = await fetch('/api/voice/design', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: designPrompt.trim(), name: designName.trim() }),
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error((await res.json()).error);
-      const data = await res.json();
-      toast.success(`Voice "${data.name}" created`);
+      const designed = await designVoice(designPrompt.trim(), designName.trim());
+      toast.success(`Voice "${designed.name}" created`);
       setDesignPrompt('');
       setDesignName('');
       setVoiceRefresh(n => n + 1);
@@ -4307,7 +4636,7 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
               <h4 className="text-xs font-black uppercase tracking-[0.3em] text-white/40">{t?.clonedVoices || 'Cloned Voices'}</h4>
               <div className="space-y-2">
                 {voices.cloned.map((v: any) => (
-                  <VoiceCard key={v.voiceId} voice={v} isCloned isPlaying={playingId === v.voiceId} onPlay={() => handlePlay(v.voiceId)} />
+                  <VoiceCard key={v.voiceId} voice={v} isCloned isPlaying={playingId === v.voiceId} onPlay={() => handlePlay(v)} />
                 ))}
               </div>
             </section>
@@ -4316,7 +4645,7 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
             <h4 className="text-xs font-black uppercase tracking-[0.3em] text-white/40">{t?.premadeVoices || 'Premade Voices'}</h4>
             <div className="space-y-2">
               {voices.premade.map((v: any) => (
-                <VoiceCard key={v.voiceId} voice={v} isPlaying={playingId === v.voiceId} onPlay={() => handlePlay(v.voiceId)} />
+                <VoiceCard key={v.voiceId} voice={v} isPlaying={playingId === v.voiceId} onPlay={() => handlePlay(v)} />
               ))}
             </div>
           </section>

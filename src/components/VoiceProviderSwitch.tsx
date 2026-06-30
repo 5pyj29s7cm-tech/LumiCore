@@ -1,13 +1,14 @@
 // STT / TTS provider switch — Local ←→ Cloud
 import { useState, useEffect } from 'react';
 import { Cpu, Cloud } from 'lucide-react';
+import { apiFetch } from '@/services/apiClient';
 
 export function VoiceProviderSwitch({ t }: { t?: any }) {
   const [pref, setPref] = useState<{ stt: string; tts: string }>({ stt: 'auto', tts: 'auto' });
   const [active, setActive] = useState<{ stt: string; tts: string }>({ stt: '?', tts: '?' });
 
   const load = () => {
-    fetch('/api/voice/active-provider', { credentials: 'include' })
+    apiFetch('/api/voice/active-provider')
       .then(r => r.json())
       .then(d => { setPref(d.pref); setActive(d.active); })
       .catch(() => {});
@@ -15,11 +16,10 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
   useEffect(() => { load(); }, []);
 
   const save = async (stt: string, tts: string) => {
-    await fetch('/api/voice/provider', {
+    await apiFetch('/api/voice/provider', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stt, tts }),
-      credentials: 'include',
     });
     load();
   };

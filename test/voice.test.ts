@@ -37,6 +37,31 @@ describe('Voice API', () => {
     };
   }
 
+  function authHeaders() {
+    return { 'Cookie': `token=${token}` };
+  }
+
+  function silentWavBlob(durationSec = 0.1): Blob {
+    const sampleRate = 16000;
+    const samples = Math.max(1, Math.floor(sampleRate * durationSec));
+    const dataSize = samples * 2;
+    const buffer = Buffer.alloc(44 + dataSize);
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataSize, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(1, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(sampleRate * 2, 28);
+    buffer.writeUInt16LE(2, 32);
+    buffer.writeUInt16LE(16, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40);
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+
   it('requires auth for voice list', async () => {
     const res = await fetch(`${url}/api/voice/voices`, {
       signal: AbortSignal.timeout(5000),
@@ -55,6 +80,148 @@ describe('Voice API', () => {
     expect(body).toHaveProperty('premade');
     expect(Array.isArray(body.cloned)).toBe(true);
     expect(Array.isArray(body.premade)).toBe(true);
+  });
+
+  it('uploads common audio file formats for cloning', async () => {
+    const form = new FormData();
+    form.append('samples', new Blob([Buffer.from('fake-audio')], { type: 'audio/mp4' }), 'sample.m4a');
+
+    const res = await fetch(`${url}/api/voice/samples`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.count).toBe(1);
+    expect(body.urls[0]).toContain('/api/voice/samples/');
+  });
+
+  it('rejects cloning samples that do not belong to the authenticated user', async () => {
+    const res = await fetch(`${url}/api/voice/clone`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        sampleUrls: ['/api/voice/samples/other-user/sample.wav'],
+        name: 'Blocked voice',
+        provider: 'cosyvoice',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('fails clearly when explicit URL cloning cannot expose a public sample URL', async () => {
+    const previousPublicBase = process.env.LUMI_PUBLIC_BASE_URL;
+    const previousPublicBaseAlias = process.env.PUBLIC_BASE_URL;
+    const previousCloneMode = process.env.COSYVOICE_CLONE_AUDIO_MODE;
+    delete process.env.LUMI_PUBLIC_BASE_URL;
+    delete process.env.PUBLIC_BASE_URL;
+    process.env.COSYVOICE_CLONE_AUDIO_MODE = 'url';
+
+    try {
+      const form = new FormData();
+      form.append('samples', silentWavBlob(), 'sample.wav');
+      const upload = await fetch(`${url}/api/voice/samples`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: form,
+        signal: AbortSignal.timeout(5000),
+      });
+      const uploaded = await upload.json();
+      expect(upload.status).toBe(200);
+
+      const clone = await fetch(`${url}/api/voice/clone`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          sampleUrls: uploaded.urls,
+          name: 'Local blocked voice',
+          provider: 'cosyvoice',
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await clone.json();
+
+      expect(clone.status).toBe(400);
+      expect(body.requiresPublicBaseUrl).toBe(true);
+    } finally {
+      if (previousPublicBase === undefined) delete process.env.LUMI_PUBLIC_BASE_URL;
+      else process.env.LUMI_PUBLIC_BASE_URL = previousPublicBase;
+      if (previousPublicBaseAlias === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = previousPublicBaseAlias;
+      if (previousCloneMode === undefined) delete process.env.COSYVOICE_CLONE_AUDIO_MODE;
+      else process.env.COSYVOICE_CLONE_AUDIO_MODE = previousCloneMode;
+    }
+  });
+
+  it('uses Qwen data-url cloning by default for local installed users', async () => {
+    const previousPublicBase = process.env.LUMI_PUBLIC_BASE_URL;
+    const previousPublicBaseAlias = process.env.PUBLIC_BASE_URL;
+    const previousCloneMode = process.env.COSYVOICE_CLONE_AUDIO_MODE;
+    const previousDashscopeKey = process.env.DASHSCOPE_API_KEY;
+    const previousFetch = globalThis.fetch;
+    delete process.env.LUMI_PUBLIC_BASE_URL;
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.COSYVOICE_CLONE_AUDIO_MODE;
+    process.env.DASHSCOPE_API_KEY = 'test-dashscope-key';
+    let dashscopeBody: any = null;
+
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const target = typeof input === 'string' ? input : input?.url || String(input);
+      if (target.includes('dashscope.aliyuncs.com/api/v1/services/audio/tts/customization')) {
+        dashscopeBody = JSON.parse(String(init?.body || '{}'));
+        return new Response(JSON.stringify({ output: { voice_id: 'qwen_local_voice_1' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return previousFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const form = new FormData();
+      form.append('samples', silentWavBlob(), 'sample.wav');
+      const upload = await previousFetch(`${url}/api/voice/samples`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: form,
+        signal: AbortSignal.timeout(5000),
+      });
+      const uploaded = await upload.json();
+      expect(upload.status).toBe(200);
+
+      const clone = await previousFetch(`${url}/api/voice/clone`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          sampleUrls: uploaded.urls,
+          name: 'Installed User Voice',
+          provider: 'cosyvoice',
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const body = await clone.json();
+
+      expect(clone.status).toBe(200);
+      expect(body.voiceId).toBe('qwen_local_voice_1');
+      expect(body.model).toBe('qwen3-tts-vc-2026-01-22');
+      expect(dashscopeBody.model).toBe('qwen-voice-enrollment');
+      expect(dashscopeBody.input.audio.data).toMatch(/^data:audio\/wav;base64,/);
+      expect(dashscopeBody.input.target_model).toBe('qwen3-tts-vc-2026-01-22');
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousPublicBase === undefined) delete process.env.LUMI_PUBLIC_BASE_URL;
+      else process.env.LUMI_PUBLIC_BASE_URL = previousPublicBase;
+      if (previousPublicBaseAlias === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = previousPublicBaseAlias;
+      if (previousCloneMode === undefined) delete process.env.COSYVOICE_CLONE_AUDIO_MODE;
+      else process.env.COSYVOICE_CLONE_AUDIO_MODE = previousCloneMode;
+      if (previousDashscopeKey === undefined) delete process.env.DASHSCOPE_API_KEY;
+      else process.env.DASHSCOPE_API_KEY = previousDashscopeKey;
+    }
   });
 
   it('returns active provider info', async () => {
