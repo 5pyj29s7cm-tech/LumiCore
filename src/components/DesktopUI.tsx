@@ -580,12 +580,22 @@ function DesktopWidgetPanel({
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const isCallActive = callState !== 'idle';
+  const widgetPet = selectedPet || getDefaultPets()[0] || null;
+  const widgetAccessories = selectedPet ? equippedAccessories : [];
   const statusLabel = isCallActive
     ? (operationMode === 'meeting' ? (lang === 'zh' ? '会议记录中' : 'Meeting') : callState)
     : wakeEnabled && wakeListening
       ? (lang === 'zh' ? '唤醒待命' : 'Wake ready')
       : (lang === 'zh' ? '待命' : 'Ready');
+  const petAnimation = petReaction ? petReaction.animation as any :
+    callState === 'speaking' ? 'wave' :
+    callState === 'listening' ? 'idle' :
+    callState !== 'idle' ? 'jump' :
+    dragActive || uploading ? 'jump' :
+    'idle';
+  const speechText = transcript || (wakeError ? `Wake: ${wakeError}` : '');
 
   const uploadKnowledgeFiles = async (files: FileList | null) => {
     if (!files || files.length === 0 || uploading) return;
@@ -607,18 +617,33 @@ function DesktopWidgetPanel({
       toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
     } finally {
       setUploading(false);
+      setDragActive(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!dragActive) setDragActive(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setDragActive(false);
     }
   };
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    setDragActive(false);
     void uploadKnowledgeFiles(event.dataTransfer.files);
   };
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-transparent p-2 text-white">
+    <div className="fixed inset-0 overflow-hidden bg-transparent text-white">
       <input
         ref={fileInputRef}
         type="file"
@@ -629,128 +654,131 @@ function DesktopWidgetPanel({
       <motion.div
         initial={{ opacity: 0, scale: 0.96, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="flex h-full w-full flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#05070b]/92 shadow-[0_18px_55px_rgba(0,0,0,0.58)] backdrop-blur-3xl"
-        onDragOver={(event) => event.preventDefault()}
+        className="relative h-full w-full overflow-hidden bg-transparent"
+        onDragEnter={handleDragOver}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        <div data-tauri-drag-region className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3">
-          <div data-tauri-drag-region className="flex min-w-0 items-center gap-2">
-            <div className={`h-2.5 w-2.5 rounded-full ${isCallActive ? 'bg-celestial-saturn shadow-[0_0_14px_rgba(255,204,0,0.8)]' : 'bg-emerald-400/80'}`} />
-            <div data-tauri-drag-region className="min-w-0">
-              <div className="truncate text-xs font-black uppercase tracking-[0.18em] text-white/75">Lumi</div>
-              <div className="truncate text-[10px] font-bold uppercase tracking-[0.12em] text-white/35">{statusLabel}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={onExpand}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-              title={lang === 'zh' ? '展开 Lumi' : 'Expand Lumi'}
+        <AnimatePresence>
+          {dragActive && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              className="absolute inset-4 z-40 flex items-center justify-center rounded-[32px] border border-cyan-300/40 bg-cyan-300/12 text-cyan-100 shadow-[0_0_34px_rgba(34,211,238,0.18)] backdrop-blur-md"
             >
-              <Maximize2 size={15} />
-            </button>
-            <button
-              onClick={onHide}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-              title={lang === 'zh' ? '隐藏到后台' : 'Hide to background'}
-            >
-              <Minus size={15} />
-            </button>
-          </div>
-        </div>
+              <Upload size={30} />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+        <motion.div
+          data-tauri-drag-region
+          className="absolute left-1/2 top-3 z-20 flex -translate-x-1/2 cursor-move items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-1.5 text-[11px] font-black text-white/72 shadow-xl backdrop-blur-xl"
+          animate={{ y: isCallActive ? [0, -2, 0] : 0 }}
+          transition={{ duration: 1.6, repeat: isCallActive ? Infinity : 0 }}
+        >
+          <span className={`h-2 w-2 rounded-full ${isCallActive ? 'bg-celestial-saturn shadow-[0_0_14px_rgba(255,204,0,0.85)]' : 'bg-emerald-400'}`} />
+          <span className="max-w-[128px] truncate">{statusLabel}</span>
+        </motion.div>
+
+        <AnimatePresence>
+          {speechText && (
+            <motion.div
+              initial={{ opacity: 0, y: 8, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.96 }}
+              className={`absolute left-4 right-14 top-12 z-20 rounded-2xl border px-3 py-2 text-xs leading-5 shadow-2xl backdrop-blur-xl ${
+                wakeError && !transcript
+                  ? 'border-red-300/18 bg-red-950/45 text-red-100/78'
+                  : 'border-white/10 bg-black/42 text-white/72'
+              }`}
+            >
+              <p className="line-clamp-2">{speechText}</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="absolute right-2 top-16 z-30 flex flex-col gap-2">
+          <button
+            onClick={onExpand}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/38 text-white/62 shadow-xl backdrop-blur-xl transition-colors hover:bg-white/12 hover:text-white"
+            title={lang === 'zh' ? '展开 Lumi' : 'Expand Lumi'}
+          >
+            <Maximize2 size={16} />
+          </button>
           <button
             onClick={onOpenAvatarStudio}
-            className="mx-auto flex h-36 w-36 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] transition-colors hover:bg-white/[0.06]"
-            title={lang === 'zh' ? '打开形象设计室' : 'Open Avatar Studio'}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-fuchsia-300/16 bg-fuchsia-300/10 text-fuchsia-100/78 shadow-xl backdrop-blur-xl transition-colors hover:bg-fuchsia-300/18 hover:text-white"
+            title={lang === 'zh' ? '形象设计室' : 'Avatar Studio'}
           >
-            {selectedPet ? (
-              <PetAvatar
-                pet={selectedPet}
-                animation={
-                  petReaction ? petReaction.animation as any :
-                  callState === 'speaking' ? 'wave' :
-                  callState === 'listening' ? 'idle' :
-                  callState !== 'idle' ? 'jump' : 'idle'
-                }
-                accessoryIds={equippedAccessories}
-                scale={0.58}
-                audioLevel={audioLevel}
-                callState={callState}
-                behavior="playful"
-              />
-            ) : (
-              <div className="relative h-24 w-24">
-                <motion.div
-                  className="absolute inset-0 rounded-full border border-celestial-saturn/30 bg-celestial-saturn/10"
-                  animate={{
-                    scale: isCallActive ? [1, 1.08 + audioLevel * 0.5, 1] : [1, 1.04, 1],
-                    opacity: isCallActive ? [0.45, 0.85, 0.45] : [0.3, 0.55, 0.3],
-                  }}
-                  transition={{ duration: isCallActive ? 0.8 : 2.2, repeat: Infinity }}
-                />
-                <div className="absolute inset-4 rounded-full bg-gradient-to-br from-celestial-mars/80 via-white/80 to-celestial-saturn/90 shadow-[0_0_35px_rgba(255,204,0,0.24)]" />
-                <div className="absolute inset-8 rounded-full bg-black/70" />
-              </div>
-            )}
+            <Brush size={16} />
           </button>
-
-          <div className="mt-3 flex items-center justify-center">
-            <VoicePicker t={t} direction="down" />
-          </div>
-
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-cyan-400/18 bg-cyan-400/10 text-cyan-100 transition-colors hover:bg-cyan-400/16 disabled:opacity-60"
-              title={lang === 'zh' ? '投喂资料' : 'Feed files'}
-            >
-              {uploading ? <RefreshCw size={18} className="animate-spin" /> : <Upload size={18} />}
-              <span className="max-w-full truncate px-1 text-[11px] font-black">{lang === 'zh' ? '投喂' : 'Feed'}</span>
-            </button>
-            <button
-              onClick={isCallActive ? onEndVoice : onStartVoice}
-              className={`flex h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border transition-colors ${
-                isCallActive
-                  ? 'border-red-400/30 bg-red-500/16 text-red-100 hover:bg-red-500/22'
-                  : 'border-celestial-saturn/24 bg-celestial-saturn/12 text-celestial-saturn hover:bg-celestial-saturn/18'
-              }`}
-              title={isCallActive ? (lang === 'zh' ? '结束语音' : 'End voice') : (lang === 'zh' ? '语音交互' : 'Voice')}
-            >
-              <Mic size={18} className={isCallActive ? 'animate-pulse' : ''} />
-              <span className="max-w-full truncate px-1 text-[11px] font-black">{isCallActive ? (lang === 'zh' ? '结束' : 'End') : (lang === 'zh' ? '语音' : 'Voice')}</span>
-            </button>
-            <button
-              onClick={onOpenAvatarStudio}
-              className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-fuchsia-400/18 bg-fuchsia-400/10 text-fuchsia-100 transition-colors hover:bg-fuchsia-400/16"
-              title={lang === 'zh' ? '形象设计室' : 'Avatar Studio'}
-            >
-              <Brush size={18} />
-              <span className="max-w-full truncate px-1 text-[11px] font-black">{lang === 'zh' ? '形象' : 'Avatar'}</span>
-            </button>
-          </div>
-
           <button
             onClick={onOpenKnowledge}
-            className="mt-2 flex h-10 shrink-0 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] text-xs font-black uppercase tracking-[0.12em] text-white/55 transition-colors hover:bg-white/[0.08] hover:text-white"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-300/16 bg-cyan-300/10 text-cyan-100/78 shadow-xl backdrop-blur-xl transition-colors hover:bg-cyan-300/18 hover:text-white"
+            title={lang === 'zh' ? '资料库' : 'Knowledge'}
           >
-            <Folder size={14} />
-            {lang === 'zh' ? '资料库' : 'Knowledge'}
+            <Folder size={16} />
           </button>
+          <button
+            onClick={onHide}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/38 text-white/55 shadow-xl backdrop-blur-xl transition-colors hover:bg-white/12 hover:text-white"
+            title={lang === 'zh' ? '隐藏到后台' : 'Hide to background'}
+          >
+            <Minus size={16} />
+          </button>
+        </div>
 
-          <div className="mt-3 min-h-0 flex-1 overflow-hidden rounded-2xl border border-white/8 bg-black/22 px-3 py-2">
-            {transcript ? (
-              <p className="line-clamp-4 text-xs leading-5 text-white/68">{transcript}</p>
-            ) : wakeError ? (
-              <p className="line-clamp-3 text-xs leading-5 text-red-300/70">Wake: {wakeError}</p>
-            ) : (
-              <p className="text-xs leading-5 text-white/35">
-                {lang === 'zh' ? '可以直接投喂资料，或点语音和 Lumi 说话。' : 'Feed files or start voice with Lumi.'}
-              </p>
-            )}
-          </div>
+        <button
+          onClick={onOpenAvatarStudio}
+          className="absolute left-1/2 top-[48%] z-10 flex h-52 w-52 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full transition-transform hover:scale-[1.03] active:scale-95"
+          title={widgetPet?.name || (lang === 'zh' ? '形象设计室' : 'Avatar Studio')}
+        >
+          <motion.div
+            className="absolute inset-8 rounded-full bg-cyan-200/8 blur-2xl"
+            animate={{
+              scale: isCallActive ? [1, 1.2 + audioLevel * 0.5, 1] : [1, 1.08, 1],
+              opacity: isCallActive ? [0.25, 0.62, 0.25] : [0.18, 0.3, 0.18],
+            }}
+            transition={{ duration: isCallActive ? 0.8 : 2.6, repeat: Infinity }}
+          />
+          {widgetPet ? (
+            <PetAvatar
+              pet={widgetPet}
+              animation={petAnimation}
+              accessoryIds={widgetAccessories}
+              scale={0.9}
+              audioLevel={audioLevel}
+              callState={callState}
+              behavior="playful"
+            />
+          ) : (
+            <Sparkles size={72} className="text-celestial-saturn/80 drop-shadow-[0_0_22px_rgba(255,204,0,0.35)]" />
+          )}
+        </button>
+
+        <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex h-12 w-12 items-center justify-center rounded-full border border-cyan-300/20 bg-cyan-300/12 text-cyan-100 shadow-xl backdrop-blur-xl transition-colors hover:bg-cyan-300/20 disabled:opacity-60"
+            title={lang === 'zh' ? '投喂资料' : 'Feed files'}
+          >
+            {uploading ? <RefreshCw size={19} className="animate-spin" /> : <Upload size={20} />}
+          </button>
+          <button
+            onClick={isCallActive ? onEndVoice : onStartVoice}
+            className={`flex h-14 w-14 items-center justify-center rounded-full border shadow-2xl backdrop-blur-xl transition-colors ${
+              isCallActive
+                ? 'border-red-300/32 bg-red-500/20 text-red-100 hover:bg-red-500/28'
+                : 'border-celestial-saturn/28 bg-celestial-saturn/16 text-celestial-saturn hover:bg-celestial-saturn/24'
+            }`}
+            title={isCallActive ? (lang === 'zh' ? '结束语音' : 'End voice') : (lang === 'zh' ? '语音交互' : 'Voice')}
+          >
+            <Mic size={22} className={isCallActive ? 'animate-pulse' : ''} />
+          </button>
         </div>
       </motion.div>
     </div>
@@ -2603,8 +2631,8 @@ export function DesktopUI({
       };
     }
 
-    const widgetWidth = 360;
-    const widgetHeight = 520;
+    const widgetWidth = 300;
+    const widgetHeight = 360;
     const margin = 18;
     const currentMonitor = await windowApi.currentMonitor().catch(() => null);
     const primaryMonitor = currentMonitor || await windowApi.primaryMonitor().catch(() => null);
@@ -2628,7 +2656,7 @@ export function DesktopUI({
     await appWindow.show().catch(() => {});
     await appWindow.setFullscreen(false).catch(() => {});
     await appWindow.unmaximize().catch(() => {});
-    await appWindow.setMinSize(new windowApi.LogicalSize(320, 420)).catch(() => {});
+    await appWindow.setMinSize(new windowApi.LogicalSize(260, 300)).catch(() => {});
     await appWindow.setResizable(false).catch(() => {});
     await appWindow.setDecorations(false).catch(() => {});
     await appWindow.setShadow(true).catch(() => {});
