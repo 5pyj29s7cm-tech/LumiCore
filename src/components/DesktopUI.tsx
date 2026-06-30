@@ -1845,15 +1845,16 @@ export function DesktopUI({
   const buildFallbackMeetingReport = useCallback(() => {
     const started = meetingStartedAt ? new Date(meetingStartedAt).toLocaleString() : new Date().toLocaleString();
     const legalCase = getLegalConsultationCase();
+    const legalCaseTitle = legalCase ? getLegalCaseLabel(legalCase) : legalMeetingCaseTitle;
     const actionHints = meetingNotes
       .filter(note => /(todo|action|next|follow|owner|deadline|需要|安排|确认|推进|负责|下周|明天|今天|完成|决定|风险|问题|证据|材料|开庭|上诉|法院|法官)/i.test(note.text))
       .slice(-8)
       .map(note => `- [${formatMeetingTime(note.time)}] ${note.text}`);
-    if (legalCase) {
+    if (legalCaseTitle) {
       return [
         lang === 'zh' ? '# Lumi 律所会谈纪要' : '# Lumi Legal Consultation Memo',
         '',
-        `${lang === 'zh' ? '案件' : 'Case'}: ${getLegalCaseLabel(legalCase)}`,
+        `${lang === 'zh' ? '案件' : 'Case'}: ${legalCaseTitle}`,
         `${lang === 'zh' ? '开始时间' : 'Started'}: ${started}`,
         `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${meetingNotes.length}`,
         '',
@@ -1896,7 +1897,7 @@ export function DesktopUI({
       `## ${lang === 'zh' ? '建议' : 'Suggestion'}`,
       `- ${lang === 'zh' ? '建议人工复核转写，补充负责人、截止时间和最终决策。' : 'Review the transcript manually and add owners, deadlines, and final decisions.'}`,
     ].join('\n');
-  }, [formatMeetingTime, lang, meetingNotes, meetingStartedAt]);
+  }, [formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
   const analyzeMeetingNotes = useCallback(async (endedAt = Date.now()) => {
     if (meetingNotes.length === 0) {
@@ -1910,6 +1911,17 @@ export function DesktopUI({
     setMeetingReportGenerating(true);
     try {
       const legalCase = getLegalConsultationCase();
+      const legalCaseTitle = legalCase ? getLegalCaseLabel(legalCase) : legalMeetingCaseTitle;
+      const legalCaseForAnalysis = legalCaseTitle ? {
+        title: legalCase?.title || legalCaseTitle,
+        caseNumber: legalCase?.caseNumber || '',
+        party: legalCase?.party || '',
+        cause: legalCase?.cause || '',
+        court: legalCase?.court || '',
+        judge: legalCase?.judge || '',
+        stage: legalCase?.stage || '',
+        notes: legalCase?.notes || '',
+      } : null;
       const res = await fetch('/api/meeting/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1921,17 +1933,8 @@ export function DesktopUI({
           startedAt: meetingStartedAt,
           endedAt,
           language: lang,
-          purpose: legalCase ? 'legal_consultation' : 'meeting',
-          legalCase: legalCase ? {
-            title: legalCase.title,
-            caseNumber: legalCase.caseNumber,
-            party: legalCase.party,
-            cause: legalCase.cause,
-            court: legalCase.court,
-            judge: legalCase.judge,
-            stage: legalCase.stage,
-            notes: legalCase.notes,
-          } : undefined,
+          purpose: legalCaseForAnalysis ? 'legal_consultation' : 'meeting',
+          legalCase: legalCaseForAnalysis || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1950,7 +1953,7 @@ export function DesktopUI({
     } finally {
       setMeetingReportGenerating(false);
     }
-  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, meetingNotes, meetingStartedAt]);
+  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
   const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number) => {
     const consultationCaseId = getLegalConsultationCaseId();
@@ -2096,19 +2099,54 @@ export function DesktopUI({
     setPendingOperationMode(null);
   }, [pendingOperationMode, setOperationMode]);
 
-  const openMeetingMode = useCallback(() => {
+  type MeetingModeRequestDetail = {
+    confirmed?: boolean;
+    resetNotes?: boolean;
+    legalCaseTitle?: string;
+    respond?: (payload?: unknown) => void;
+    reject?: (message: string) => void;
+  };
+
+  const openMeetingMode = useCallback((detail: MeetingModeRequestDetail = {}) => {
+    try {
+      if (detail.resetNotes) resetMeetingCapture();
+      if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
+      else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
+
+      if (detail.confirmed) {
+        setOperationMode('meeting');
+        setMeetingNotesOpen(true);
+        detail.respond?.({ ok: true, action: 'start_meeting_mode', mode: 'meeting' });
+        return;
+      }
+
+      if (operationMode === 'meeting') {
+        setMeetingNotesOpen(true);
+        detail.respond?.({ ok: true, action: 'open_meeting_notes', mode: 'meeting' });
+        return;
+      }
+
+      requestOperationModeChange('meeting');
+    } catch (err: any) {
+      detail.reject?.(err?.message || String(err));
+    }
+  }, [operationMode, requestOperationModeChange, resetMeetingCapture, setOperationMode]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      openMeetingMode(((event as CustomEvent).detail || {}) as MeetingModeRequestDetail);
+    };
+    window.addEventListener('lumi:request-meeting-mode', handler);
+    return () => window.removeEventListener('lumi:request-meeting-mode', handler);
+  }, [openMeetingMode]);
+
+  const openMeetingModeWithConfirm = useCallback(() => {
     if (operationMode === 'meeting') {
       setMeetingNotesOpen(true);
       return;
     }
     requestOperationModeChange('meeting');
   }, [operationMode, requestOperationModeChange]);
-
-  useEffect(() => {
-    const handler = () => openMeetingMode();
-    window.addEventListener('lumi:request-meeting-mode', handler);
-    return () => window.removeEventListener('lumi:request-meeting-mode', handler);
-  }, [openMeetingMode]);
 
   // Listen for org navigation events
   useEffect(() => {
@@ -4035,7 +4073,7 @@ export function DesktopUI({
                   lang={lang}
                   active={operationMode === 'meeting'}
                   live={operationMode === 'meeting' && callState !== 'idle'}
-                  onClick={openMeetingMode}
+                  onClick={openMeetingModeWithConfirm}
                 />
                 {/* Reset to sphere button */}
                 <button
@@ -4084,7 +4122,7 @@ export function DesktopUI({
                   lang={lang}
                   active={operationMode === 'meeting'}
                   live={operationMode === 'meeting' && callState !== 'idle'}
-                  onClick={openMeetingMode}
+                  onClick={openMeetingModeWithConfirm}
                 />
               </div>
               {wakeEnabled && wakeWord.isListening && callState === 'idle' && (
@@ -4284,7 +4322,7 @@ export function DesktopUI({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[62] pointer-events-auto bg-black/[0.72] p-3 backdrop-blur-2xl md:p-6"
+            className="fixed inset-0 z-[220] pointer-events-auto bg-black/[0.72] p-3 backdrop-blur-2xl md:p-6"
           >
             <GlassCard className="flex h-full w-full flex-col overflow-hidden rounded-[2rem] border-cyan-400/20 bg-black/[0.86] p-4 shadow-2xl backdrop-blur-2xl md:p-6">
               <div className="flex shrink-0 items-start justify-between gap-3">

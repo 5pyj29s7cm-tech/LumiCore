@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, FileText, HelpCircle, Loader2, Shield, Upload } from 'lucide-react';
 import { toast } from 'sonner';
+import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 
 interface RiskItem {
@@ -13,6 +14,7 @@ interface RiskItem {
 
 export function LegalContractReview() {
   const t = useT();
+  const { workDomain, orgConnection } = useApp();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [contract, setContract] = useState('');
@@ -57,12 +59,13 @@ export function LegalContractReview() {
     setRisks([]);
     setSelectedRisk(null);
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/legal/contract-review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `使用 legal_review_contract 审查以下合同，注意标注风险等级（高/中/低）、法律依据和修改建议：\n\n${contract.slice(0, 10000)}`,
-          stream: false,
+          contract: contract.slice(0, 10000),
+          domain: workDomain,
+          orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
         }),
         credentials: 'include',
       });
@@ -250,13 +253,14 @@ function riskLevelMeta(level: RiskItem['level'], ui: (zh: string, en: string) =>
 function parseRisks(text: string): RiskItem[] {
   const risks: RiskItem[] = [];
   const blocks = text
-    .split(/\n(?=(?:\d+[.、]\s*)?(?:\[?(?:高风险|中风险|低风险|High Risk|Medium Risk|Low Risk)|⚠️|风险))/i)
+    .split(/\n(?=\s*(?:[-*]\s*)?(?:\d+[.、)]\s*)?(?:\[?(?:高风险|中风险|低风险|High Risk|Medium Risk|Low Risk)|风险等级|风险条款|⚠️))/i)
     .map(item => item.trim())
     .filter(Boolean);
 
   for (const block of blocks) {
     const level = inferRiskLevel(block);
-    const clause = extractField(block, ['条款', '问题', 'Clause']) || block.split('\n')[0].replace(/^\d+[.、]\s*/, '').slice(0, 120);
+    const clause = extractField(block, ['条款', '问题', 'Clause'])
+      || block.split('\n')[0].replace(/^\s*(?:[-*]\s*)?(?:\d+[.、)]\s*)?/, '').replace(/^⚠️\s*/, '').slice(0, 120);
     if (clause.length < 6) continue;
     risks.push({
       level,
@@ -265,6 +269,23 @@ function parseRisks(text: string): RiskItem[] {
       suggestion: extractField(block, ['建议', '修改建议', 'Suggestion']) || '',
       statuteRef: extractField(block, ['法条', '依据', 'Law']) || '',
     });
+  }
+
+  if (risks.length === 0) {
+    const lines = text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => /风险|违约|无效|解除|赔偿|管辖|仲裁|责任|瑕疵|Risk/i.test(line))
+      .slice(0, 20);
+    for (const line of lines) {
+      risks.push({
+        level: inferRiskLevel(line),
+        clause: line.replace(/^\s*(?:[-*]\s*)?(?:\d+[.、)]\s*)?/, '').replace(/^⚠️\s*/, '').slice(0, 120),
+        reason: '',
+        suggestion: '',
+        statuteRef: '',
+      });
+    }
   }
 
   return risks.slice(0, 20);

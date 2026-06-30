@@ -271,7 +271,7 @@ export function LegalHub() {
       return;
     }
     setLegalConsultationCaseId(activeCase.id);
-    window.dispatchEvent(new CustomEvent('lumi:client-action', {
+    window.dispatchEvent(new CustomEvent('lumi:request-meeting-mode', {
       detail: {
         action: 'start_meeting_mode',
         confirmed: true,

@@ -145,6 +145,50 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   router.post("/ai/chat", optionalAuth, handleChat);
   router.post("/chat", optionalAuth, handleChat);
 
+  router.post("/legal/contract-review", optionalAuth, asyncHandler(async (req, res) => {
+    const contract = String(req.body?.contract || '').trim();
+    if (!contract) {
+      return res.status(400).json({ error: '请提供合同文本' });
+    }
+
+    const userId = req.user?.uid || 'anonymous';
+    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
+    const orgId = String(req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
+    const args = { contract, orgId };
+    const llmReview = toolRegistry.execute('legal_review_contract', args, {
+      userId,
+      domain,
+      orgId,
+      llmGetters: llm,
+      source: 'legal-contract-review',
+    });
+    llmReview.catch(() => undefined);
+
+    try {
+      const text = await Promise.race([
+        llmReview,
+        new Promise<string>((_, reject) => {
+          setTimeout(() => reject(new Error('合同深度审查超时，已改用本地规则审查')), 15_000);
+        }),
+      ]);
+
+      return res.json({ text, degraded: false });
+    } catch (err: any) {
+      console.warn('[LegalContractReview] Deep review unavailable:', err?.message || err);
+      const fallback = await toolRegistry.execute('legal_review_contract', args, {
+        userId,
+        domain,
+        orgId,
+        source: 'legal-contract-review-fallback',
+      });
+      return res.json({
+        text: `${fallback}\n\n*提示：深度 LLM 审查暂未及时完成，已先返回本地规则审查结果。*`,
+        degraded: true,
+        warning: err?.message || 'Contract review fallback used',
+      });
+    }
+  }));
+
   router.post("/meeting/analyze", optionalAuth, asyncHandler(async (req, res) => {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
