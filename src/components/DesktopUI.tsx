@@ -589,13 +589,18 @@ function DesktopWidgetPanel({
     : wakeEnabled && wakeListening
       ? (lang === 'zh' ? '唤醒待命' : 'Wake ready')
       : (lang === 'zh' ? '待命' : 'Ready');
-  const petAnimation = petReaction ? petReaction.animation as any :
+  const reactionAnimation = petReaction?.animation === 'jump' ? 'wave' : petReaction?.animation;
+  const petAnimation = reactionAnimation ? reactionAnimation as any :
     callState === 'speaking' ? 'wave' :
     callState === 'listening' ? 'idle' :
-    callState !== 'idle' ? 'jump' :
-    dragActive || uploading ? 'jump' :
+    callState !== 'idle' ? 'wave' :
+    dragActive || uploading ? 'wave' :
     'idle';
   const speechText = transcript || (wakeError ? `Wake: ${wakeError}` : '');
+  const showWidgetChrome = isCallActive || dragActive || uploading || Boolean(speechText);
+  const chromeVisibility = showWidgetChrome
+    ? 'opacity-100 pointer-events-auto'
+    : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto';
 
   const uploadKnowledgeFiles = async (files: FileList | null) => {
     if (!files || files.length === 0 || uploading) return;
@@ -664,7 +669,7 @@ function DesktopWidgetPanel({
       <motion.div
         initial={{ opacity: 0, scale: 0.96, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="relative h-full w-full overflow-hidden bg-transparent"
+        className="group relative h-full w-full overflow-hidden bg-transparent"
         onDragEnter={handleDragOver}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -688,9 +693,7 @@ function DesktopWidgetPanel({
 
         <motion.div
           data-tauri-drag-region
-          className="absolute left-1/2 top-2 z-20 flex -translate-x-1/2 cursor-move items-center gap-1.5 rounded-full border border-white/8 bg-black/28 px-2.5 py-1 text-[10px] font-black text-white/65 shadow-lg backdrop-blur-lg"
-          animate={{ y: isCallActive ? [0, -2, 0] : 0 }}
-          transition={{ duration: 1.6, repeat: isCallActive ? Infinity : 0 }}
+          className={`absolute left-1/2 top-2 z-20 flex -translate-x-1/2 cursor-move items-center gap-1.5 rounded-full border border-white/8 bg-black/28 px-2.5 py-1 text-[10px] font-black text-white/65 shadow-lg backdrop-blur-lg transition-opacity duration-200 ${chromeVisibility}`}
         >
           <span className={`h-2 w-2 rounded-full ${isCallActive ? 'bg-celestial-saturn shadow-[0_0_14px_rgba(255,204,0,0.85)]' : 'bg-emerald-400'}`} />
           <span className="max-w-[104px] truncate">{statusLabel}</span>
@@ -713,7 +716,7 @@ function DesktopWidgetPanel({
           )}
         </AnimatePresence>
 
-        <div className="absolute right-1.5 top-12 z-30 flex flex-col gap-1.5">
+        <div className={`absolute right-1.5 top-12 z-30 flex flex-col gap-1.5 transition-opacity duration-200 ${chromeVisibility}`}>
           <button
             data-widget-action="true"
             onClick={onExpand}
@@ -756,10 +759,10 @@ function DesktopWidgetPanel({
           <motion.div
             className="absolute inset-7 rounded-full bg-cyan-200/7 blur-xl"
             animate={{
-              scale: isCallActive ? [1, 1.2 + audioLevel * 0.5, 1] : [1, 1.08, 1],
-              opacity: isCallActive ? [0.25, 0.62, 0.25] : [0.18, 0.3, 0.18],
+              scale: isCallActive ? [1, 1.12 + audioLevel * 0.35, 1] : 1,
+              opacity: isCallActive ? [0.2, 0.5, 0.2] : 0,
             }}
-            transition={{ duration: isCallActive ? 0.8 : 2.6, repeat: Infinity }}
+            transition={{ duration: isCallActive ? 0.9 : 0.2, repeat: isCallActive ? Infinity : 0 }}
           />
           {widgetPet ? (
             <PetAvatar
@@ -769,14 +772,14 @@ function DesktopWidgetPanel({
               scale={0.68}
               audioLevel={audioLevel}
               callState={callState}
-              behavior="playful"
+              behavior="default"
             />
           ) : (
             <Sparkles size={54} className="text-celestial-saturn/80 drop-shadow-[0_0_18px_rgba(255,204,0,0.32)]" />
           )}
         </div>
 
-        <div className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5">
+        <div className={`absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5 transition-opacity duration-200 ${chromeVisibility}`}>
           <button
             data-widget-action="true"
             onClick={() => fileInputRef.current?.click()}
