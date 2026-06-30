@@ -144,7 +144,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
-  const { aiConfig, orgConnection, workDomain } = useApp();
+  const { aiConfig, orgConnection, workDomain, operationMode } = useApp();
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
@@ -152,6 +152,47 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const activeDomainDetail = isWorkChat
     ? ui('当前消息、附件、记忆和工具调用进入组织工作域。', 'Messages, attachments, memories, and tools are scoped to the organization.')
     : ui('当前消息只进入个人域，不写入组织知识和组织记忆。', 'Messages stay in your personal domain and do not write to organization knowledge or memory.');
+  const operationModeMeta = (() => {
+    if (operationMode === 'chat') {
+      return {
+        label: t.modeChat || ui('聊天', 'Chat'),
+        detail: t.modeChatHint || ui('安静交流', 'Quiet chat'),
+        badgeClass: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200',
+        subtleClass: 'border-emerald-400/15 bg-emerald-400/10 text-emerald-100/75',
+        dotClass: 'bg-emerald-300',
+        Icon: MessageCircle,
+      };
+    }
+    if (operationMode === 'autonomous') {
+      return {
+        label: t.modeAutonomy || t.modeAutoExecute || ui('自主', 'Autonomy'),
+        detail: t.modeAutonomyHint || t.modeAutoExecuteHint || ui('自主推进', 'Visible autonomous work'),
+        badgeClass: 'border-cyan-300/30 bg-cyan-400/12 text-cyan-100',
+        subtleClass: 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100/80',
+        dotClass: 'bg-cyan-300 animate-pulse',
+        Icon: Zap,
+      };
+    }
+    if (operationMode === 'meeting') {
+      return {
+        label: t.modeMeeting || ui('会议', 'Meeting'),
+        detail: t.modeMeetingHint || ui('会议记录', 'Live notes'),
+        badgeClass: 'border-blue-300/30 bg-blue-400/12 text-blue-100',
+        subtleClass: 'border-blue-300/20 bg-blue-400/10 text-blue-100/80',
+        dotClass: 'bg-blue-300 animate-pulse',
+        Icon: FileText,
+      };
+    }
+    return {
+      label: t.modeAssistant || ui('助理', 'Assistant'),
+      detail: t.modeAssistantHint || ui('引导执行', 'Guided execution'),
+      badgeClass: 'border-celestial-saturn/30 bg-celestial-saturn/12 text-celestial-saturn',
+      subtleClass: 'border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn/85',
+      dotClass: 'bg-celestial-saturn',
+      Icon: Sparkles,
+    };
+  })();
+  const OperationModeIcon = operationModeMeta.Icon;
   const socket = socketService.connect();
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | undefined>();
   const [voices, setVoices] = useState<any[]>([]);
@@ -1391,9 +1432,19 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-celestial-saturn/20 flex items-center justify-center text-celestial-saturn border border-celestial-saturn/20">
             <Ghost className="w-4 h-4 md:w-5 md:h-5" />
           </div>
-          <div className="text-right sm:text-left">
-            <h2 className="text-base md:text-xl font-bold tracking-tight truncate max-w-[120px] sm:max-w-none flex items-center gap-2">
-              {agentName}
+          <div className="min-w-0 text-right sm:text-left">
+            <div className="flex max-w-[52vw] flex-wrap items-center justify-end gap-1.5 sm:max-w-none sm:justify-start">
+              <h2 className="min-w-0 truncate text-base font-bold tracking-tight md:text-xl">
+                {agentName}
+              </h2>
+              <span
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${operationModeMeta.badgeClass}`}
+                title={operationModeMeta.detail}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${operationModeMeta.dotClass}`} />
+                <OperationModeIcon size={11} />
+                {operationModeMeta.label}
+              </span>
               <span
                 className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
                   isWorkChat
@@ -1405,7 +1456,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 {isWorkChat ? <Briefcase size={11} /> : <User size={11} />}
                 {activeDomainLabel}
               </span>
-            </h2>
+            </div>
             <p className="text-xs md:text-xs uppercase tracking-widest text-white/40 font-bold">{agentCategory}</p>
           </div>
         </div>
@@ -1421,6 +1472,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               <span className="text-xs md:text-xs font-bold uppercase tracking-widest text-white/60">
                 Neural Link
               </span>
+              <div
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${operationModeMeta.subtleClass}`}
+                title={operationModeMeta.detail}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${operationModeMeta.dotClass}`} />
+                <OperationModeIcon size={11} />
+                <span>{operationModeMeta.label}</span>
+              </div>
               {(knowledgeFiles.length > 0 || knowledgeLoading) && (
                 <div
                   className="ml-1 hidden min-w-0 items-center gap-1.5 rounded-full border border-emerald-400/15 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-100/75 sm:flex"
