@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import * as jwt from 'jsonwebtoken';
+import { readDB } from '../../db_layer';
 import {
   createActivationRequest,
   getSubscriptionWithPlan,
@@ -16,12 +18,14 @@ const router = Router();
 // Helper: extract user ID from JWT
 function getUserId(req: any): string {
   try {
-    const jwt = require('jsonwebtoken');
     let token = req.cookies?.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) {
       token = req.headers.authorization.slice(7);
     }
-    if (token) return jwt.verify(token, process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local').uid;
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local') as jwt.JwtPayload;
+      if (typeof decoded?.uid === 'string') return decoded.uid;
+    }
   } catch {}
   return 'anonymous';
 }
@@ -139,7 +143,7 @@ router.post('/subscription/activate', (req, res) => {
   try {
     const adminId = getUserId(req);
     // Admin role check
-    const db = require('../../db_layer').readDB();
+    const db = readDB();
     const adminUser = db.users.find((u: any) => u.uid === adminId);
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: 'Admin access required' });
@@ -177,7 +181,7 @@ router.post('/subscription/activate', (req, res) => {
 router.get('/subscription/admin', (req, res) => {
   try {
     const adminId = getUserId(req);
-    const db = require('../../db_layer').readDB();
+    const db = readDB();
     const adminUser = db.users.find((u: any) => u.uid === adminId);
     if (!adminUser || adminUser.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     const all = listAllSubscriptions();
@@ -198,7 +202,7 @@ router.get('/subscription/admin', (req, res) => {
 router.get('/subscription/admin/activation-requests', (req, res) => {
   try {
     const adminId = getUserId(req);
-    const db = require('../../db_layer').readDB();
+    const db = readDB();
     const adminUser = db.users.find((u: any) => u.uid === adminId);
     if (!adminUser || adminUser.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
     res.json({ requests: listActivationRequests() });

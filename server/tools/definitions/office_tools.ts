@@ -1,7 +1,10 @@
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
+
+const require = createRequire(import.meta.url);
 
 let broadcastFn: ((event: string, data: any) => void) | null = null;
 

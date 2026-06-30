@@ -5,6 +5,8 @@
  * LUMI_PRIVACY=standard (default) → normal operation
  */
 
+import { loadKeys } from './keys';
+
 export type PrivacyMode = 'strict' | 'standard';
 
 const PRIVACY_ENV = 'LUMI_PRIVACY';
@@ -42,7 +44,6 @@ export function requireNotStrict(operation: string): void {
 
 export function listActiveCloudProviders(): string[] {
   try {
-    const { loadKeys } = require('./keys');
     const keys = loadKeys();
     const providers: string[] = [];
     if (keys.OPENAI_API_KEY) providers.push('openai');

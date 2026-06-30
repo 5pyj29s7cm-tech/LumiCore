@@ -8,6 +8,7 @@ import { getTimeOfDay } from '../time/utils';
 import { getMessagesForAgent } from '../conversation/manager';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getKey } from '../config/keys';
+import OpenAI from 'openai';
 
 export interface MusicScene {
   colors: { bg: string; primary: string; secondary: string; accent: string };
@@ -91,7 +92,6 @@ export async function generateMusicScene(
 
     const getDeepSeek = llmGetters?.getDeepSeek || (() => {
       const key = getKey('DEEPSEEK_API_KEY') || process.env.DEEPSEEK_API_KEY || '';
-      const { default: OpenAI } = require('openai');
       return new OpenAI({ apiKey: key, baseURL: 'https://api.deepseek.com' });
     });
 

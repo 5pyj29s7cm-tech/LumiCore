@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDataPath } from './data_path';
+import { resetCircuit } from '../cloud/circuit_breaker';
 
 const KEYS_FILE = getDataPath('keys.json');
 
@@ -144,7 +145,6 @@ export function saveKeys(keys: Partial<KeyStore>): void {
 
   // Reset circuit breakers for affected providers so updated keys take effect immediately
   try {
-    const { resetCircuit } = require('../cloud/circuit_breaker');
     for (const keyName of Object.keys(keys)) {
       const circuits = KEY_TO_CIRCUIT[keyName as keyof KeyStore];
       if (circuits) {

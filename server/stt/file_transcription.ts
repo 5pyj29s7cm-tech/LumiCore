@@ -1,6 +1,5 @@
 import path from 'path';
 import { getKey } from '../config/keys';
-import { getVoicePreference } from '../config/voice_preference';
 import { isCircuitClosed, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { recordLatency } from '../monitor/latency_store';
 import type { STTProvider } from './types';
@@ -103,7 +102,7 @@ export function isSupportedAudioFileName(fileName?: string): boolean {
 
 export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions = {}): AudioFileProvider[] {
   const allowLocal = options.allowLocal !== false;
-  const preferred = options.preferredProvider || getVoicePreference().stt || 'auto';
+  const preferred = options.preferredProvider || 'auto';
   const baseOrder: AudioFileProvider[] = preferred && preferred !== 'auto'
     ? [preferred as AudioFileProvider, ...DEFAULT_AUTO_ORDER]
     : DEFAULT_AUTO_ORDER;
@@ -117,6 +116,17 @@ export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions 
     providers.push(provider);
   }
   return providers;
+}
+
+async function getPreferredAudioFileProvider(options: AudioFileTranscriptionOptions): Promise<STTProvider | 'auto'> {
+  if (options.preferredProvider) return options.preferredProvider;
+  if (options.providerAvailability) return 'auto';
+  try {
+    const { getVoicePreference } = await import('../config/voice_preference');
+    return getVoicePreference().stt || 'auto';
+  } catch {
+    return 'auto';
+  }
 }
 
 function extractQwenText(data: any): string {
@@ -238,7 +248,8 @@ export async function transcribeAudioFile(
   const language = options.language || 'zh';
   const mimeType = getAudioMimeType(fileName);
   const fetchImpl = options.fetchImpl || fetch;
-  const plan = getAudioFileProviderPlan(options);
+  const preferredProvider = await getPreferredAudioFileProvider(options);
+  const plan = getAudioFileProviderPlan({ ...options, preferredProvider });
 
   if (plan.length === 0) {
     throw errorCode(
