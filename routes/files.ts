@@ -70,7 +70,8 @@ function getAuthPayload(req: Request): any | null {
 const tmpDir = path.join(os.tmpdir(), 'lumi-uploads');
 fs.mkdirSync(tmpDir, { recursive: true });
 const MAX_UPLOAD_FILES = Math.max(20, Number(process.env.KNOWLEDGE_UPLOAD_MAX_FILES || 200));
-const upload = multer({ dest: tmpDir, limits: { fileSize: 500 * 1024 * 1024, files: MAX_UPLOAD_FILES } });
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+const upload = multer({ dest: tmpDir, limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_UPLOAD_FILES } });
 
 type KnowledgeStatus = 'ready' | 'indexing' | 'indexed' | 'partial' | 'unsupported' | 'failed';
 type ExtractionMethod = 'text' | 'markdown' | 'rtf' | 'docx' | 'spreadsheet' | 'presentation' | 'pdf' | 'image-vision' | 'image-metadata' | 'audio-transcript' | 'unsupported';
@@ -146,6 +147,14 @@ interface FileScope {
   domain: 'personal' | 'work';
   orgId?: string;
   dir: string;
+}
+
+interface KnowledgeFileInput {
+  sourcePath: string;
+  originalName: string;
+  size?: number;
+  mimeType?: string;
+  move?: boolean;
 }
 
 const MOJIBAKE_TOKENS = [
@@ -664,6 +673,189 @@ function ensureOrgArticleFromFile(
   });
 }
 
+function uniqueKnowledgeDestination(scope: FileScope, originalName: string): string {
+  const uploadName = sanitizeKnowledgeFilename(originalName, 'upload');
+  let dest = path.join(scope.dir, uploadName);
+  let counter = 1;
+  const ext = path.extname(uploadName);
+  const base = path.basename(uploadName, ext);
+  while (fs.existsSync(dest)) {
+    dest = path.join(scope.dir, `${base} (${counter})${ext}`);
+    counter++;
+  }
+  return dest;
+}
+
+function copyOrMoveKnowledgeSource(input: KnowledgeFileInput, dest: string): void {
+  if (!input.move) {
+    fs.copyFileSync(input.sourcePath, dest);
+    return;
+  }
+
+  try {
+    fs.renameSync(input.sourcePath, dest);
+  } catch (err: any) {
+    if (err?.code !== 'EXDEV') throw err;
+    fs.copyFileSync(input.sourcePath, dest);
+    fs.unlinkSync(input.sourcePath);
+  }
+}
+
+async function saveKnowledgeFile(
+  input: KnowledgeFileInput,
+  userId: string,
+  scope: FileScope,
+  db: any,
+): Promise<any> {
+  const dest = uniqueKnowledgeDestination(scope, input.originalName || path.basename(input.sourcePath));
+  copyOrMoveKnowledgeSource(input, dest);
+  const finalName = path.basename(dest);
+  const ext = path.extname(finalName);
+  const stats = fs.statSync(dest);
+  const mimeType = input.mimeType || getDownloadMime(dest) || '';
+
+  const existing = findFileMeta(db, finalName, scope);
+  if (existing) {
+    existing.source = 'upload';
+    existing.domain = scope.domain;
+    existing.orgId = scope.orgId || '';
+    existing.updatedAt = new Date().toISOString();
+  } else {
+    db.knowledgeFiles.push({
+      filename: finalName,
+      displayName: repairFilename(finalName),
+      domain: scope.domain,
+      orgId: scope.orgId || '',
+      source: 'upload',
+      agentIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const isImageUpload = IMAGE_KNOWLEDGE_EXTS.test(ext) || mimeType.startsWith('image/');
+  const isAudioUpload = AUDIO_KNOWLEDGE_EXTS.test(ext) || mimeType.startsWith('audio/');
+  const entry: any = {
+    id: finalName,
+    name: repairFilename(finalName),
+    displayName: repairFilename(finalName),
+    type: 'file',
+    kind: isImageUpload ? 'image' : isAudioUpload ? 'audio' : 'file',
+    mimeType,
+    size: formatSize(input.size || stats.size),
+    rawSize: input.size || stats.size,
+    path: dest,
+    domain: scope.domain,
+    orgId: scope.orgId,
+  };
+  let extraction: KnowledgeExtractionResult = {
+    content: null,
+    method: 'unsupported',
+    status: 'unsupported',
+  };
+  let extractedContent: string | null = null;
+
+  // Extract supported document/media content so Lumi can retrieve it later.
+  if (TEXT_KNOWLEDGE_EXTS.test(ext) || RTF_KNOWLEDGE_EXTS.test(ext) || EXTRACTABLE_KNOWLEDGE_EXTS.test(ext) || IMAGE_KNOWLEDGE_EXTS.test(ext) || AUDIO_KNOWLEDGE_EXTS.test(ext) || isAudioUpload) {
+    extraction = isAudioUpload && !AUDIO_KNOWLEDGE_EXTS.test(ext)
+      ? await extractAudioKnowledge(dest)
+      : await extractKnowledgeFileContent(dest, userId);
+    extractedContent = extraction.content;
+    entry.extractionStatus = extraction.status;
+    entry.extractionMethod = extraction.method;
+    entry.extractionWarning = extraction.warning;
+    entry.extractionError = extraction.error;
+    entry.extractionProvider = extraction.provider;
+    entry.extractionModel = extraction.model;
+    if (extractedContent) {
+      entry.content = extractedContent.slice(0, 50000); // cap at 50KB for chat context
+      entry.preview = extractedContent.slice(0, 1000);
+      entry.extracted = true;
+    }
+  }
+
+  // Personal files are ingested into personal memory; work files become org KB articles.
+  if (scope.domain === 'work') {
+    try {
+      const meta = findFileMeta(db, finalName, scope);
+      if (meta) applyExtractionMeta(meta, extraction, extractedContent);
+      if (extractedContent?.trim()) {
+        const article = ensureOrgArticleFromFile(scope, userId, finalName, extractedContent, meta?.orgArticleId, extraction.sourceMetadata);
+        if (meta) {
+          if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
+          meta.orgArticleId = article?.id;
+          meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
+          if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
+        }
+        entry.orgArticleId = article?.id;
+        entry.ingested = true;
+        entry.partial = extraction.status === 'partial';
+      } else if (meta) {
+        meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
+        entry.syncError = extraction.error || extraction.warning || 'No extractable content found';
+      }
+    } catch (orgErr: any) {
+      console.warn(`[OrgKB] Failed to sync "${finalName}": ${orgErr.message}`);
+      entry.syncError = orgErr.message;
+    }
+  } else if (extractedContent?.trim()) {
+    try {
+      const result = await ingestDocument(userId, 'lumi', finalName, extractedContent, {
+        filePath: dest,
+        domain: scope.domain,
+        orgId: scope.orgId || '',
+        sourceMetadata: extraction.sourceMetadata,
+      });
+      const meta = findFileMeta(db, finalName, scope);
+      if (meta) {
+        if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
+        if (!meta.agentIds.includes('lumi')) meta.agentIds.push('lumi');
+        meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
+        applyExtractionMeta(meta, extraction, extractedContent);
+      }
+      entry.ingested = true;
+      entry.partial = extraction.status === 'partial';
+      console.log(`[AutoIngest] "${finalName}" -> ${result.chunkCount} chunks`);
+    } catch (ingestErr: any) {
+      console.warn(`[AutoIngest] Failed for "${finalName}": ${ingestErr.message}`);
+      const meta = findFileMeta(db, finalName, scope);
+      if (meta) {
+        meta.status = 'failed';
+        meta.extractionError = ingestErr.message;
+      }
+      entry.syncError = ingestErr.message;
+    }
+  } else {
+    const meta = findFileMeta(db, finalName, scope);
+    if (meta) {
+      applyExtractionMeta(meta, extraction, extractedContent);
+      meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
+    }
+  }
+
+  return entry;
+}
+
+function resolveLocalImportPath(value: unknown): string {
+  let raw = String(value || '').trim();
+  if (!raw) {
+    const err: any = new Error('File path is required');
+    err.status = 400;
+    throw err;
+  }
+  if (/^file:\/\//i.test(raw)) {
+    raw = decodeURIComponent(raw.replace(/^file:\/\/\/?/i, ''));
+  }
+  const expanded = raw.replace(/^~(?=$|[\\/])/, os.homedir());
+  const resolved = path.resolve(expanded);
+  if (!fs.existsSync(resolved)) {
+    const err: any = new Error('File not found');
+    err.status = 404;
+    throw err;
+  }
+  return fs.realpathSync.native(resolved);
+}
+
 function sendRouteError(res: Response, err: any, fallbackStatus = 400): void {
   res.status(err?.status || fallbackStatus).json({ error: err?.message || 'Request failed' });
 }
@@ -834,142 +1026,69 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
 
     const saved: any[] = [];
     for (const file of uploadedFiles) {
-      const uploadName = sanitizeKnowledgeFilename(file.originalname, 'upload');
-      let dest = path.join(scope.dir, uploadName);
-      let counter = 1;
-      const ext = path.extname(uploadName);
-      const base = path.basename(uploadName, ext);
-      while (fs.existsSync(dest)) {
-        dest = path.join(scope.dir, `${base} (${counter})${ext}`);
-        counter++;
-      }
-      fs.renameSync(file.path, dest);
-      const finalName = path.basename(dest);
-
-      // Track in DB
-      const existing = findFileMeta(db, finalName, scope);
-      if (existing) {
-        existing.source = 'upload';
-        existing.domain = scope.domain;
-        existing.orgId = scope.orgId || '';
-        existing.updatedAt = new Date().toISOString();
-      } else {
-        db.knowledgeFiles.push({
-          filename: finalName,
-          displayName: repairFilename(finalName),
-          domain: scope.domain,
-          orgId: scope.orgId || '',
-          source: 'upload',
-          agentIds: [],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
-      }
-
-      const isImageUpload = IMAGE_KNOWLEDGE_EXTS.test(ext) || file.mimetype?.startsWith('image/');
-      const isAudioUpload = AUDIO_KNOWLEDGE_EXTS.test(ext) || file.mimetype?.startsWith('audio/');
-      const entry: any = {
-        id: finalName,
-        name: repairFilename(finalName),
-        displayName: repairFilename(finalName),
-        type: 'file',
-        kind: isImageUpload ? 'image' : isAudioUpload ? 'audio' : 'file',
+      saved.push(await saveKnowledgeFile({
+        sourcePath: file.path,
+        originalName: file.originalname,
+        size: file.size,
         mimeType: file.mimetype || '',
-        size: formatSize(file.size),
-        rawSize: file.size,
-        path: dest,
-        domain: scope.domain,
-        orgId: scope.orgId,
-      };
-      let extraction: KnowledgeExtractionResult = {
-        content: null,
-        method: 'unsupported',
-        status: 'unsupported',
-      };
-      let extractedContent: string | null = null;
-
-      // Extract supported document/media content so Lumi can retrieve it later.
-      if (TEXT_KNOWLEDGE_EXTS.test(ext) || RTF_KNOWLEDGE_EXTS.test(ext) || EXTRACTABLE_KNOWLEDGE_EXTS.test(ext) || IMAGE_KNOWLEDGE_EXTS.test(ext) || AUDIO_KNOWLEDGE_EXTS.test(ext) || isAudioUpload) {
-        extraction = isAudioUpload && !AUDIO_KNOWLEDGE_EXTS.test(ext)
-          ? await extractAudioKnowledge(dest)
-          : await extractKnowledgeFileContent(dest, userId);
-        extractedContent = extraction.content;
-        entry.extractionStatus = extraction.status;
-        entry.extractionMethod = extraction.method;
-        entry.extractionWarning = extraction.warning;
-        entry.extractionError = extraction.error;
-        entry.extractionProvider = extraction.provider;
-        entry.extractionModel = extraction.model;
-        if (extractedContent) {
-          entry.content = extractedContent.slice(0, 50000); // cap at 50KB for chat context
-          entry.preview = extractedContent.slice(0, 1000);
-          entry.extracted = true;
-        }
-      }
-
-      // Personal files are ingested into personal memory; work files become org KB articles.
-      if (scope.domain === 'work') {
-        try {
-          const meta = findFileMeta(db, finalName, scope);
-          if (meta) applyExtractionMeta(meta, extraction, extractedContent);
-          if (extractedContent?.trim()) {
-            const article = ensureOrgArticleFromFile(scope, userId, finalName, extractedContent, meta?.orgArticleId, extraction.sourceMetadata);
-            if (meta) {
-              if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
-              meta.orgArticleId = article?.id;
-              meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
-              if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
-            }
-            entry.orgArticleId = article?.id;
-            entry.ingested = true;
-            entry.partial = extraction.status === 'partial';
-          } else if (meta) {
-            meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
-            entry.syncError = extraction.error || extraction.warning || 'No extractable content found';
-          }
-        } catch (orgErr: any) {
-          console.warn(`[OrgKB] Failed to sync "${finalName}": ${orgErr.message}`);
-          entry.syncError = orgErr.message;
-        }
-      } else if (extractedContent?.trim()) {
-        try {
-          const result = await ingestDocument(userId, 'lumi', finalName, extractedContent, {
-            filePath: dest,
-            domain: scope.domain,
-            orgId: scope.orgId || '',
-            sourceMetadata: extraction.sourceMetadata,
-          });
-          const meta = findFileMeta(db, finalName, scope);
-          if (meta) {
-            if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
-            if (!meta.agentIds.includes('lumi')) meta.agentIds.push('lumi');
-            meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
-            applyExtractionMeta(meta, extraction, extractedContent);
-          }
-          entry.ingested = true;
-          entry.partial = extraction.status === 'partial';
-          console.log(`[AutoIngest] "${finalName}" -> ${result.chunkCount} chunks`);
-        } catch (ingestErr: any) {
-          console.warn(`[AutoIngest] Failed for "${finalName}": ${ingestErr.message}`);
-          const meta = findFileMeta(db, finalName, scope);
-          if (meta) {
-            meta.status = 'failed';
-            meta.extractionError = ingestErr.message;
-          }
-          entry.syncError = ingestErr.message;
-        }
-      } else {
-        const meta = findFileMeta(db, finalName, scope);
-        if (meta) {
-          applyExtractionMeta(meta, extraction, extractedContent);
-          meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
-        }
-      }
-
-      saved.push(entry);
+        move: true,
+      }, userId, scope, db));
     }
     writeDB(db);
     res.json({ success: true, files: saved });
+  } catch (err: any) {
+    sendRouteError(res, err);
+  }
+});
+
+// ── POST /files/import-paths — import local files dropped into the desktop widget ──
+router.post('/files/import-paths', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const requestedPaths = Array.isArray(req.body?.paths) ? req.body.paths : [];
+    const uniquePaths: string[] = [...new Set<string>(
+      requestedPaths.map((p: unknown) => String(p || '').trim()).filter(Boolean),
+    )].slice(0, MAX_UPLOAD_FILES);
+    if (uniquePaths.length === 0) {
+      return res.status(400).json({ error: 'No file paths provided' });
+    }
+
+    const userId = getUserId(req);
+    const scope = getFileScope(req);
+    const db = readDB();
+    if (!db.knowledgeFiles) db.knowledgeFiles = [];
+
+    const saved: any[] = [];
+    const skipped: Array<{ path: string; error: string }> = [];
+    for (const rawPath of uniquePaths) {
+      try {
+        const sourcePath = resolveLocalImportPath(rawPath);
+        const stat = fs.statSync(sourcePath);
+        if (!stat.isFile()) {
+          skipped.push({ path: rawPath, error: 'Only files can be imported' });
+          continue;
+        }
+        if (stat.size > MAX_UPLOAD_BYTES) {
+          skipped.push({ path: rawPath, error: 'File is larger than 500 MB' });
+          continue;
+        }
+        saved.push(await saveKnowledgeFile({
+          sourcePath,
+          originalName: path.basename(sourcePath),
+          size: stat.size,
+          mimeType: getDownloadMime(sourcePath) || '',
+          move: false,
+        }, userId, scope, db));
+      } catch (err: any) {
+        skipped.push({ path: rawPath, error: err?.message || String(err) });
+      }
+    }
+
+    if (saved.length === 0) {
+      return res.status(400).json({ error: skipped[0]?.error || 'No files imported', skipped });
+    }
+
+    writeDB(db);
+    res.json({ success: true, files: saved, skipped });
   } catch (err: any) {
     sendRouteError(res, err);
   }

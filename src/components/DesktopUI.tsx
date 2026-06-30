@@ -579,6 +579,7 @@ function DesktopWidgetPanel({
   onOpenAvatarStudio: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nativeDropHandledAtRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const isCallActive = callState !== 'idle';
@@ -602,7 +603,7 @@ function DesktopWidgetPanel({
     ? 'opacity-100 pointer-events-auto'
     : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto';
 
-  const uploadKnowledgeFiles = async (files: FileList | null) => {
+  const uploadKnowledgeFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0 || uploading) return;
     setUploading(true);
     try {
@@ -625,7 +626,71 @@ function DesktopWidgetPanel({
       setDragActive(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  };
+  }, [lang, uploading, workDomain]);
+
+  const uploadKnowledgePaths = useCallback(async (paths: string[]) => {
+    const importPaths = paths.map(p => String(p || '').trim()).filter(Boolean);
+    if (importPaths.length === 0 || uploading) return;
+    setUploading(true);
+    try {
+      const res = await fetch(`/api/files/import-paths?domain=${encodeURIComponent(workDomain)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
+        body: JSON.stringify({ paths: importPaths }),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || (lang === 'zh' ? '资料投喂失败' : 'Feed failed'));
+      const count = Array.isArray(data.files) ? data.files.length : importPaths.length;
+      const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+      toast.success(
+        lang === 'zh'
+          ? `已投喂 ${count} 个资料${skipped ? `，跳过 ${skipped} 个` : ''}`
+          : `Fed ${count} file(s)${skipped ? `, skipped ${skipped}` : ''}`,
+      );
+      window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+    } catch (err: any) {
+      toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Feed failed'));
+    } finally {
+      setUploading(false);
+      setDragActive(false);
+    }
+  }, [lang, uploading, workDomain]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    const setupDropListener = async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        if (cancelled) return;
+        unlisten = await getCurrentWindow().onDragDropEvent((event: any) => {
+          const payload = event?.payload;
+          if (payload?.type === 'over') {
+            setDragActive(true);
+            return;
+          }
+          if (payload?.type === 'drop') {
+            nativeDropHandledAtRef.current = Date.now();
+            setDragActive(false);
+            const paths = Array.isArray(payload.paths) ? payload.paths : [];
+            void uploadKnowledgePaths(paths);
+            return;
+          }
+          setDragActive(false);
+        });
+        if (cancelled) unlisten?.();
+      } catch {}
+    };
+
+    void setupDropListener();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [uploadKnowledgePaths]);
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -644,6 +709,7 @@ function DesktopWidgetPanel({
     event.preventDefault();
     event.stopPropagation();
     setDragActive(false);
+    if (Date.now() - nativeDropHandledAtRef.current < 700) return;
     void uploadKnowledgeFiles(event.dataTransfer.files);
   };
 
