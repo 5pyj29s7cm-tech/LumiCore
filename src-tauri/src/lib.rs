@@ -754,10 +754,10 @@ fn set_wallpaper_mode(
     Ok(())
 }
 
-const DESKTOP_WIDGET_WIDTH: u32 = 300;
-const DESKTOP_WIDGET_HEIGHT: u32 = 360;
-const DESKTOP_WIDGET_MIN_WIDTH: u32 = 260;
-const DESKTOP_WIDGET_MIN_HEIGHT: u32 = 300;
+const DESKTOP_WIDGET_WIDTH: u32 = 240;
+const DESKTOP_WIDGET_HEIGHT: u32 = 285;
+const DESKTOP_WIDGET_MIN_WIDTH: u32 = 210;
+const DESKTOP_WIDGET_MIN_HEIGHT: u32 = 250;
 const DESKTOP_WIDGET_MARGIN: i32 = 18;
 const DEFAULT_MAIN_MIN_WIDTH: u32 = 960;
 const DEFAULT_MAIN_MIN_HEIGHT: u32 = 640;
@@ -802,8 +802,8 @@ fn apply_desktop_widget_window(window: &tauri::WebviewWindow) -> Result<(), Stri
     if let Err(e) = window.set_decorations(false) {
         eprintln!("[LumiOS] desktop widget set_decorations(false) failed: {}", e);
     }
-    if let Err(e) = window.set_shadow(true) {
-        eprintln!("[LumiOS] desktop widget set_shadow(true) failed: {}", e);
+    if let Err(e) = window.set_shadow(false) {
+        eprintln!("[LumiOS] desktop widget set_shadow(false) failed: {}", e);
     }
     let _ = window.set_skip_taskbar(true);
     if let Err(e) = window.set_always_on_top(true) {

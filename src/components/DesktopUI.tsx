@@ -666,7 +666,7 @@ function DesktopWidgetPanel({
               initial={{ opacity: 0, scale: 0.94 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.94 }}
-              className="absolute inset-4 z-40 flex items-center justify-center rounded-[32px] border border-cyan-300/40 bg-cyan-300/12 text-cyan-100 shadow-[0_0_34px_rgba(34,211,238,0.18)] backdrop-blur-md"
+              className="absolute inset-5 z-40 flex items-center justify-center rounded-[28px] border border-cyan-300/35 bg-cyan-300/10 text-cyan-100 shadow-[0_0_24px_rgba(34,211,238,0.16)] backdrop-blur-md"
             >
               <Upload size={30} />
             </motion.div>
@@ -675,12 +675,12 @@ function DesktopWidgetPanel({
 
         <motion.div
           data-tauri-drag-region
-          className="absolute left-1/2 top-3 z-20 flex -translate-x-1/2 cursor-move items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-1.5 text-[11px] font-black text-white/72 shadow-xl backdrop-blur-xl"
+          className="absolute left-1/2 top-2 z-20 flex -translate-x-1/2 cursor-move items-center gap-1.5 rounded-full border border-white/8 bg-black/28 px-2.5 py-1 text-[10px] font-black text-white/65 shadow-lg backdrop-blur-lg"
           animate={{ y: isCallActive ? [0, -2, 0] : 0 }}
           transition={{ duration: 1.6, repeat: isCallActive ? Infinity : 0 }}
         >
           <span className={`h-2 w-2 rounded-full ${isCallActive ? 'bg-celestial-saturn shadow-[0_0_14px_rgba(255,204,0,0.85)]' : 'bg-emerald-400'}`} />
-          <span className="max-w-[128px] truncate">{statusLabel}</span>
+          <span className="max-w-[104px] truncate">{statusLabel}</span>
         </motion.div>
 
         <AnimatePresence>
@@ -689,7 +689,7 @@ function DesktopWidgetPanel({
               initial={{ opacity: 0, y: 8, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.96 }}
-              className={`absolute left-4 right-14 top-12 z-20 rounded-2xl border px-3 py-2 text-xs leading-5 shadow-2xl backdrop-blur-xl ${
+              className={`absolute left-3 right-11 top-10 z-20 rounded-2xl border px-2.5 py-1.5 text-[11px] leading-4 shadow-xl backdrop-blur-lg ${
                 wakeError && !transcript
                   ? 'border-red-300/18 bg-red-950/45 text-red-100/78'
                   : 'border-white/10 bg-black/42 text-white/72'
@@ -700,44 +700,44 @@ function DesktopWidgetPanel({
           )}
         </AnimatePresence>
 
-        <div className="absolute right-2 top-16 z-30 flex flex-col gap-2">
+        <div className="absolute right-1.5 top-12 z-30 flex flex-col gap-1.5">
           <button
             onClick={onExpand}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/38 text-white/62 shadow-xl backdrop-blur-xl transition-colors hover:bg-white/12 hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-black/30 text-white/58 shadow-lg backdrop-blur-lg transition-colors hover:bg-white/12 hover:text-white"
             title={lang === 'zh' ? '展开 Lumi' : 'Expand Lumi'}
           >
-            <Maximize2 size={16} />
+            <Maximize2 size={14} />
           </button>
           <button
             onClick={onOpenAvatarStudio}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-fuchsia-300/16 bg-fuchsia-300/10 text-fuchsia-100/78 shadow-xl backdrop-blur-xl transition-colors hover:bg-fuchsia-300/18 hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-fuchsia-300/14 bg-fuchsia-300/9 text-fuchsia-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-fuchsia-300/18 hover:text-white"
             title={lang === 'zh' ? '形象设计室' : 'Avatar Studio'}
           >
-            <Brush size={16} />
+            <Brush size={14} />
           </button>
           <button
             onClick={onOpenKnowledge}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-300/16 bg-cyan-300/10 text-cyan-100/78 shadow-xl backdrop-blur-xl transition-colors hover:bg-cyan-300/18 hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-cyan-300/14 bg-cyan-300/9 text-cyan-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/18 hover:text-white"
             title={lang === 'zh' ? '资料库' : 'Knowledge'}
           >
-            <Folder size={16} />
+            <Folder size={14} />
           </button>
           <button
             onClick={onHide}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/38 text-white/55 shadow-xl backdrop-blur-xl transition-colors hover:bg-white/12 hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-black/30 text-white/52 shadow-lg backdrop-blur-lg transition-colors hover:bg-white/12 hover:text-white"
             title={lang === 'zh' ? '隐藏到后台' : 'Hide to background'}
           >
-            <Minus size={16} />
+            <Minus size={14} />
           </button>
         </div>
 
         <button
           onClick={onOpenAvatarStudio}
-          className="absolute left-1/2 top-[48%] z-10 flex h-52 w-52 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full transition-transform hover:scale-[1.03] active:scale-95"
+          className="absolute left-1/2 top-[47%] z-10 flex h-40 w-40 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full transition-transform hover:scale-[1.03] active:scale-95"
           title={widgetPet?.name || (lang === 'zh' ? '形象设计室' : 'Avatar Studio')}
         >
           <motion.div
-            className="absolute inset-8 rounded-full bg-cyan-200/8 blur-2xl"
+            className="absolute inset-7 rounded-full bg-cyan-200/7 blur-xl"
             animate={{
               scale: isCallActive ? [1, 1.2 + audioLevel * 0.5, 1] : [1, 1.08, 1],
               opacity: isCallActive ? [0.25, 0.62, 0.25] : [0.18, 0.3, 0.18],
@@ -749,35 +749,35 @@ function DesktopWidgetPanel({
               pet={widgetPet}
               animation={petAnimation}
               accessoryIds={widgetAccessories}
-              scale={0.9}
+              scale={0.68}
               audioLevel={audioLevel}
               callState={callState}
               behavior="playful"
             />
           ) : (
-            <Sparkles size={72} className="text-celestial-saturn/80 drop-shadow-[0_0_22px_rgba(255,204,0,0.35)]" />
+            <Sparkles size={54} className="text-celestial-saturn/80 drop-shadow-[0_0_18px_rgba(255,204,0,0.32)]" />
           )}
         </button>
 
-        <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3">
+        <div className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5">
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-cyan-300/20 bg-cyan-300/12 text-cyan-100 shadow-xl backdrop-blur-xl transition-colors hover:bg-cyan-300/20 disabled:opacity-60"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-cyan-300/18 bg-cyan-300/10 text-cyan-100 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/20 disabled:opacity-60"
             title={lang === 'zh' ? '投喂资料' : 'Feed files'}
           >
-            {uploading ? <RefreshCw size={19} className="animate-spin" /> : <Upload size={20} />}
+            {uploading ? <RefreshCw size={17} className="animate-spin" /> : <Upload size={18} />}
           </button>
           <button
             onClick={isCallActive ? onEndVoice : onStartVoice}
-            className={`flex h-14 w-14 items-center justify-center rounded-full border shadow-2xl backdrop-blur-xl transition-colors ${
+            className={`flex h-12 w-12 items-center justify-center rounded-full border shadow-xl backdrop-blur-lg transition-colors ${
               isCallActive
                 ? 'border-red-300/32 bg-red-500/20 text-red-100 hover:bg-red-500/28'
                 : 'border-celestial-saturn/28 bg-celestial-saturn/16 text-celestial-saturn hover:bg-celestial-saturn/24'
             }`}
             title={isCallActive ? (lang === 'zh' ? '结束语音' : 'End voice') : (lang === 'zh' ? '语音交互' : 'Voice')}
           >
-            <Mic size={22} className={isCallActive ? 'animate-pulse' : ''} />
+            <Mic size={20} className={isCallActive ? 'animate-pulse' : ''} />
           </button>
         </div>
       </motion.div>
@@ -2631,8 +2631,8 @@ export function DesktopUI({
       };
     }
 
-    const widgetWidth = 300;
-    const widgetHeight = 360;
+    const widgetWidth = 240;
+    const widgetHeight = 285;
     const margin = 18;
     const currentMonitor = await windowApi.currentMonitor().catch(() => null);
     const primaryMonitor = currentMonitor || await windowApi.primaryMonitor().catch(() => null);
@@ -2656,10 +2656,10 @@ export function DesktopUI({
     await appWindow.show().catch(() => {});
     await appWindow.setFullscreen(false).catch(() => {});
     await appWindow.unmaximize().catch(() => {});
-    await appWindow.setMinSize(new windowApi.LogicalSize(260, 300)).catch(() => {});
+    await appWindow.setMinSize(new windowApi.LogicalSize(210, 250)).catch(() => {});
     await appWindow.setResizable(false).catch(() => {});
     await appWindow.setDecorations(false).catch(() => {});
-    await appWindow.setShadow(true).catch(() => {});
+    await appWindow.setShadow(false).catch(() => {});
     await appWindow.setSkipTaskbar(true).catch(() => {});
     await appWindow.setAlwaysOnTop(true).catch(() => {});
     await appWindow.setSize(new windowApi.LogicalSize(widgetWidth, widgetHeight));
