@@ -642,6 +642,16 @@ function DesktopWidgetPanel({
     void uploadKnowledgeFiles(event.dataTransfer.files);
   };
 
+  const handleWidgetDragStart = async (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-widget-action="true"]')) return;
+    try {
+      const windowApi = await import('@tauri-apps/api/window');
+      await windowApi.getCurrentWindow().startDragging();
+    } catch {}
+  };
+
   return (
     <div className="fixed inset-0 overflow-hidden bg-transparent text-white">
       <input
@@ -659,7 +669,10 @@ function DesktopWidgetPanel({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
+        onPointerDown={handleWidgetDragStart}
       >
+        <div data-tauri-drag-region className="absolute inset-0 z-0 cursor-grab active:cursor-grabbing" />
+
         <AnimatePresence>
           {dragActive && (
             <motion.div
@@ -702,6 +715,7 @@ function DesktopWidgetPanel({
 
         <div className="absolute right-1.5 top-12 z-30 flex flex-col gap-1.5">
           <button
+            data-widget-action="true"
             onClick={onExpand}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-black/30 text-white/58 shadow-lg backdrop-blur-lg transition-colors hover:bg-white/12 hover:text-white"
             title={lang === 'zh' ? '展开 Lumi' : 'Expand Lumi'}
@@ -709,6 +723,7 @@ function DesktopWidgetPanel({
             <Maximize2 size={14} />
           </button>
           <button
+            data-widget-action="true"
             onClick={onOpenAvatarStudio}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-fuchsia-300/14 bg-fuchsia-300/9 text-fuchsia-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-fuchsia-300/18 hover:text-white"
             title={lang === 'zh' ? '形象设计室' : 'Avatar Studio'}
@@ -716,6 +731,7 @@ function DesktopWidgetPanel({
             <Brush size={14} />
           </button>
           <button
+            data-widget-action="true"
             onClick={onOpenKnowledge}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-cyan-300/14 bg-cyan-300/9 text-cyan-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/18 hover:text-white"
             title={lang === 'zh' ? '资料库' : 'Knowledge'}
@@ -723,6 +739,7 @@ function DesktopWidgetPanel({
             <Folder size={14} />
           </button>
           <button
+            data-widget-action="true"
             onClick={onHide}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-black/30 text-white/52 shadow-lg backdrop-blur-lg transition-colors hover:bg-white/12 hover:text-white"
             title={lang === 'zh' ? '隐藏到后台' : 'Hide to background'}
@@ -731,10 +748,10 @@ function DesktopWidgetPanel({
           </button>
         </div>
 
-        <button
-          onClick={onOpenAvatarStudio}
-          className="absolute left-1/2 top-[47%] z-10 flex h-40 w-40 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full transition-transform hover:scale-[1.03] active:scale-95"
-          title={widgetPet?.name || (lang === 'zh' ? '形象设计室' : 'Avatar Studio')}
+        <div
+          data-tauri-drag-region
+          className="absolute left-1/2 top-[47%] z-10 flex h-40 w-40 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full transition-transform hover:scale-[1.03] active:cursor-grabbing active:scale-95"
+          title={widgetPet?.name || (lang === 'zh' ? '拖动 Lumi' : 'Drag Lumi')}
         >
           <motion.div
             className="absolute inset-7 rounded-full bg-cyan-200/7 blur-xl"
@@ -757,10 +774,11 @@ function DesktopWidgetPanel({
           ) : (
             <Sparkles size={54} className="text-celestial-saturn/80 drop-shadow-[0_0_18px_rgba(255,204,0,0.32)]" />
           )}
-        </button>
+        </div>
 
         <div className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5">
           <button
+            data-widget-action="true"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
             className="flex h-10 w-10 items-center justify-center rounded-full border border-cyan-300/18 bg-cyan-300/10 text-cyan-100 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/20 disabled:opacity-60"
@@ -769,6 +787,7 @@ function DesktopWidgetPanel({
             {uploading ? <RefreshCw size={17} className="animate-spin" /> : <Upload size={18} />}
           </button>
           <button
+            data-widget-action="true"
             onClick={isCallActive ? onEndVoice : onStartVoice}
             className={`flex h-12 w-12 items-center justify-center rounded-full border shadow-xl backdrop-blur-lg transition-colors ${
               isCallActive
