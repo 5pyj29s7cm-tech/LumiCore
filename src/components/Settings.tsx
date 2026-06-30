@@ -232,11 +232,11 @@ export function Settings({
   return (
     <div className="lumi-surface flex h-full overflow-hidden">
       {/* Sidebar — fixed height, scrollable */}
-      <div className="w-56 flex-shrink-0 border-r border-white/[0.08] bg-white/[0.025] flex flex-col min-h-0">
-        <div className="px-4 pt-5 pb-3">
+      <div className="w-44 flex-shrink-0 border-r border-white/[0.08] bg-white/[0.025] flex flex-col min-h-0 md:w-56">
+        <div className="px-3 pt-4 pb-3 md:px-4 md:pt-5">
           <h2 className="text-xs font-black uppercase tracking-widest text-white/60">{t.settings || ui('设置', 'Settings')}</h2>
         </div>
-        <div className="flex-1 px-2 pb-3 space-y-0.5 overflow-y-auto custom-scrollbar min-h-0">
+        <div className="flex-1 px-1.5 pb-3 space-y-0.5 overflow-y-auto custom-scrollbar min-h-0 md:px-2">
           {buildSidebarGroups(t, isZh).map(group => {
             const isCollapsed = collapsedGroups.has(group.label);
             const hasActiveItem = group.items.some(item => item.id === visibleSection);
@@ -289,7 +289,7 @@ export function Settings({
 
       {/* Content — absolute positioned to prevent layout shift during transitions */}
       <div className="flex-1 min-w-0 relative overflow-hidden">
-        <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-5 md:p-6">
+        <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-3 md:p-6">
           <AnimatePresence mode="popLayout">
             <motion.div
               key={visibleSection}

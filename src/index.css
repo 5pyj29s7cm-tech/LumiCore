@@ -486,6 +486,79 @@
   .lumi-field {
     @apply rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/25 focus:border-celestial-saturn/40;
   }
+
+  @media (max-width: 820px), (max-height: 640px) {
+    .os-window {
+      border-radius: 1.25rem;
+    }
+
+    .os-window-header {
+      height: 2.5rem;
+      padding-inline: 0.75rem;
+    }
+
+    .os-window-body {
+      padding: 0.75rem;
+    }
+
+    .desktop-icon {
+      width: 88px;
+      gap: 0.4rem;
+      padding: 0.5rem;
+      border-radius: 1rem;
+    }
+
+    .desktop-icon-img {
+      width: 46px;
+      height: 46px;
+      border-radius: 1rem;
+    }
+
+    .desktop-icon-img svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .desktop-icon-label {
+      font-size: 0.68rem;
+      line-height: 1.12;
+    }
+
+    .lumi-dock {
+      left: 0.5rem !important;
+      right: 0.5rem !important;
+      bottom: 0.75rem !important;
+      height: 3.75rem !important;
+      max-width: calc(100vw - 1rem);
+      justify-content: flex-start;
+      overflow-x: auto;
+      overflow-y: visible;
+      padding-inline: 0.5rem !important;
+      transform: none !important;
+      border-radius: 1.25rem !important;
+      scrollbar-width: none;
+    }
+
+    .lumi-dock::-webkit-scrollbar {
+      display: none;
+    }
+
+    .lumi-dock button {
+      width: 2.75rem;
+      height: 2.75rem;
+      flex: 0 0 auto;
+      border-radius: 1rem;
+    }
+
+    .lumi-dock svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .lumi-surface {
+      border-radius: 1.25rem;
+    }
+  }
 }
 
 @keyframes shake {

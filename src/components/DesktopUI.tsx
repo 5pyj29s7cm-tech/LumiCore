@@ -37,7 +37,6 @@ import {
   Box,
   Wrench,
   MessageSquare,
-  Crown,
   Castle,
   Brush,
   Play,
@@ -195,6 +194,58 @@ interface WindowProps {
   zIndex?: number;
 }
 
+type ViewportSize = {
+  width: number;
+  height: number;
+};
+
+const getViewportSize = (): ViewportSize => {
+  if (typeof window === 'undefined') return { width: 1280, height: 820 };
+  return { width: window.innerWidth, height: window.innerHeight };
+};
+
+function useViewportSize() {
+  const [viewport, setViewport] = useState<ViewportSize>(() => getViewportSize());
+
+  useEffect(() => {
+    let frame = 0;
+    const updateViewport = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => setViewport(getViewportSize()));
+    };
+
+    window.addEventListener('resize', updateViewport);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, []);
+
+  return viewport;
+}
+
+const parseWindowLength = (value: string | number | undefined, fallback: number) => {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+
+const getDesktopIconLayout = (viewport: ViewportSize) => {
+  const compact = viewport.width < 820 || viewport.height < 620;
+  const startX = compact ? 8 : 40;
+  const startY = compact ? 4 : 0;
+  const cellWidth = compact ? 94 : 130;
+  const cellHeight = compact ? 98 : 120;
+  const widgetReserve = viewport.width >= 1280 ? 430 : 0;
+  const availableWidth = Math.max(cellWidth, viewport.width - startX * 2 - widgetReserve);
+  const columns = Math.max(2, Math.min(compact ? 3 : 4, Math.floor(availableWidth / cellWidth)));
+
+  return { compact, startX, startY, cellWidth, cellHeight, columns };
+};
+
 function OSWindow({
   id,
   title,
@@ -216,8 +267,30 @@ function OSWindow({
   const [snapZone, setSnapZone] = useState<'none' | 'left' | 'right'>('none');
   const [isDragging, setIsDragging] = useState(false);
   const constrainRef = React.useRef<HTMLDivElement>(null);
+  const viewport = useViewportSize();
 
   const isSnapped = isMaximized || snapZone !== 'none';
+  const compact = viewport.width < 820 || viewport.height < 640;
+  const safeInset = compact ? 8 : 16;
+  const topInset = compact ? 8 : 48;
+  const bottomInset = compact ? 68 : 96;
+  const availableWidth = Math.max(320, viewport.width - safeInset * 2);
+  const availableHeight = Math.max(300, viewport.height - topInset - bottomInset);
+  const roomyScale = viewport.width >= 1500 && viewport.height >= 850
+    ? Math.min(1.18, viewport.width / 1600)
+    : 1;
+  const requestedWidth = parseWindowLength(width, Math.min(900, availableWidth)) * roomyScale;
+  const requestedHeight = parseWindowLength(height, Math.min(700, availableHeight)) * Math.min(roomyScale, 1.12);
+  const fittedWidth = Math.round(Math.min(requestedWidth, availableWidth));
+  const fittedHeight = Math.round(Math.min(requestedHeight, availableHeight));
+  const normalLeft = Math.max(safeInset, Math.round((viewport.width - fittedWidth) / 2));
+  const normalTop = Math.max(topInset, Math.round(topInset + (availableHeight - fittedHeight) / 2));
+  const snappedWidth = isMaximized || compact ? availableWidth : Math.floor(availableWidth / 2);
+  const snappedLeft = isMaximized || snapZone === 'left'
+    ? safeInset
+    : safeInset + availableWidth - snappedWidth;
+  const resolvedWidth = isSnapped ? snappedWidth : fittedWidth;
+  const resolvedHeight = isSnapped ? availableHeight : fittedHeight;
 
   return (
     <>
@@ -231,8 +304,8 @@ function OSWindow({
         onDragStart={() => setIsDragging(true)}
         onDragEnd={(_e, info) => {
           setIsDragging(false);
-          if (info.point.x < 80) setSnapZone('left');
-          else if (info.point.x > window.innerWidth - 80) setSnapZone('right');
+          if (info.point.x < safeInset + 80) setSnapZone('left');
+          else if (info.point.x > viewport.width - safeInset - 80) setSnapZone('right');
           else setSnapZone('none');
         }}
         initial={{ opacity: 0, scale: 0.85, y: 20, filter: 'blur(0px)' }}
@@ -243,10 +316,10 @@ function OSWindow({
               scale: 1,
               y: 0,
               filter: 'blur(0px)',
-              width: isMaximized ? '100vw' : snapZone !== 'none' ? '50vw' : width,
-              height: isMaximized ? 'calc(100vh - 40px)' : snapZone !== 'none' ? 'calc(100vh - 40px)' : height,
-              top: isSnapped ? '40px' : undefined,
-              left: isMaximized ? '0' : snapZone === 'left' ? '0' : snapZone === 'right' ? '50%' : undefined,
+              width: resolvedWidth,
+              height: resolvedHeight,
+              top: isSnapped ? topInset : normalTop,
+              left: isSnapped ? snappedLeft : normalLeft,
               x: 0,
               transition: { type: 'spring', stiffness: 300, damping: 26, mass: 0.8 },
             }
@@ -258,10 +331,11 @@ function OSWindow({
         style={{
           zIndex: isMinimized ? zIndex - 100 : zIndex,
           position: isSnapped ? 'fixed' : 'absolute',
-          ...(!isSnapped ? { top: '30%', left: '30%' } : {}),
+          maxWidth: `calc(100vw - ${safeInset * 2}px)`,
+          maxHeight: `${availableHeight}px`,
         }}
         onClick={() => !isMinimized && onFocus(id)}
-        className={`os-window pointer-events-auto overflow-hidden ${isMaximized ? 'rounded-none' : 'rounded-3xl'} ${isMinimized ? 'pointer-events-none' : ''} ${isDragging ? 'is-dragging' : ''}`}
+        className={`os-window pointer-events-auto overflow-hidden ${isMaximized ? 'rounded-2xl' : 'rounded-3xl'} ${isActive ? 'ring-1 ring-white/15' : ''} ${isMinimized ? 'pointer-events-none' : ''} ${isDragging ? 'is-dragging' : ''}`}
       >
         <div
           className="os-window-header"
@@ -1341,10 +1415,12 @@ export function DesktopUI({
   const wallpaperAutomationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wallpaperWasEnabledBeforeAutomationRef = useRef(false);
   const wallpaperWorkPromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
+  const desktopIconLayout = useMemo(() => getDesktopIconLayout(viewport), [viewport]);
 
   useEffect(() => {
     isWallpaperModeRef.current = isWallpaperMode;
@@ -1357,11 +1433,11 @@ export function DesktopUI({
   }, [chatOpen]);
 
   const getDefaultDesktopIconPosition = useCallback((index: number) => ({
-    x: 40 + (index % 4) * 130,
-    y: Math.floor(index / 4) * 120,
-  }), []);
+    x: desktopIconLayout.startX + (index % desktopIconLayout.columns) * desktopIconLayout.cellWidth,
+    y: desktopIconLayout.startY + Math.floor(index / desktopIconLayout.columns) * desktopIconLayout.cellHeight,
+  }), [desktopIconLayout]);
 
-  // Desktop icon layout: absolute positioning, 4 columns, fixed spacing
+  // Desktop icon layout: absolute positioning with viewport-aware columns.
   const desktopIcons = [
     { id: 'runtime-log', labelKey: 'runtimeLog', icon: <TerminalIcon size={24} />, colorClass: 'from-teal-500 to-cyan-600', windowId: 'runtime-log' },
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
@@ -1371,8 +1447,11 @@ export function DesktopUI({
     { id: 'avatar-studio', labelKey: 'avatarStudio', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-blue-600', windowId: 'avatar-studio' },
     { id: 'sound', labelKey: 'sound', icon: <Volume2 size={24} />, colorClass: 'from-sky-500 to-indigo-600', windowId: 'sound' },
     { id: 'music', labelKey: 'music', icon: <Music size={24} />, colorClass: 'from-red-500 to-pink-600', windowId: 'music-center' },
-    { id: 'subscription', labelKey: 'subscription', icon: <Crown size={24} />, colorClass: 'from-amber-400 to-orange-600', windowId: 'subscription' },
   ];
+  const desktopIconAreaHeight = Math.max(
+    desktopIconLayout.compact ? 300 : 400,
+    Math.ceil(desktopIcons.length / desktopIconLayout.columns) * desktopIconLayout.cellHeight + desktopIconLayout.startY + 24,
+  );
 
   const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -3805,7 +3884,7 @@ export function DesktopUI({
         </AnimatePresence>
 
         {/* Bottom Taskbar / Dock */}
-        <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}>
+        <div className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}>
           <button 
             onClick={() => setViewMode(viewMode === 'personal' ? 'world' : 'personal')}
             className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
@@ -4085,9 +4164,9 @@ export function DesktopUI({
       </div>
 
       {/* Desktop Grid & Widgets */}
-      <div className={`relative z-10 w-full h-full p-8 md:p-12 lg:p-16 overflow-y-auto custom-scrollbar pt-20 transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
-        <div className="flex flex-col xl:flex-row justify-between items-start gap-12">
-            <div className="relative flex-1 w-full min-h-[400px]" style={{ margin: 0, padding: 0 }}>
+      <div className={`relative z-10 w-full h-full overflow-y-auto custom-scrollbar px-3 pb-24 pt-14 transition-all duration-1000 sm:px-6 sm:pt-16 md:p-12 md:pt-20 lg:p-16 ${isWallpaperMode ? 'opacity-0 blur-sm pointer-events-none' : 'opacity-100'}`}>
+        <div className="flex flex-col xl:flex-row justify-between items-start gap-6 xl:gap-12">
+            <div className="relative flex-1 w-full" style={{ margin: 0, padding: 0, minHeight: desktopIconAreaHeight }}>
               {desktopIcons.map((def, i) => {
                 const { x, y } = getDefaultDesktopIconPosition(i);
                 const label = (t as any)[def.labelKey] || def.labelKey;
