@@ -8,6 +8,7 @@ import { getExternalAppAdapters } from '../../external_apps/adapters';
 import { getAdapterRegistry } from '../../adapters/registry';
 import { getClientState } from '../../client/self_model';
 import { isExternalAppAutomationAllowed, isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate';
+import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 
 function requireDesktopRelay(context?: ToolContext) {
   if (!context?.desktopRelay) {
@@ -772,6 +773,61 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       sendAllowed: false,
       note: 'Lumi prepared a draft only. Sending stays user-confirmed.',
     }, null, 2),
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'wechat_intake_analyze',
+    description: 'Analyze a WeChat/message intake for current-stage work takeover: classify customer/store/account/case/video/design work, extract amounts/deadlines/people, propose next actions, and draft a reply. This never sends messages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'The WeChat/message content to analyze.' },
+        contact: { type: 'string', description: 'Optional sender/contact/group name.' },
+        source: { type: 'string', description: 'Source label such as manual, clipboard, selected_text, or wechat.' },
+        takeoverMode: { type: 'string', description: 'Optional forced category: customer, store, account, legal_case, video_publish, design_delivery, general_work, personal, auto.' },
+        userRules: { type: 'string', description: 'Optional user work rules or boundaries to apply.' },
+      },
+      required: ['message'],
+    },
+    handler: async (args) => JSON.stringify(analyzeWechatIntake({
+      message: String(args.message || ''),
+      contact: args.contact ? String(args.contact) : undefined,
+      source: args.source ? String(args.source) : 'manual',
+      takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
+      userRules: args.userRules ? String(args.userRules) : undefined,
+    }), null, 2),
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'wechat_intake_from_clipboard',
+    description: 'Read the current clipboard as a WeChat/message intake and analyze it for work takeover. This never sends messages or writes clipboard.',
+    parameters: {
+      type: 'object',
+      properties: {
+        contact: { type: 'string', description: 'Optional sender/contact/group name.' },
+        takeoverMode: { type: 'string', description: 'Optional forced category: customer, store, account, legal_case, video_publish, design_delivery, general_work, personal, auto.' },
+        userRules: { type: 'string', description: 'Optional user work rules or boundaries to apply.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const desktopRelay = requireDesktopRelay(context);
+      const clipboardText = String(await desktopRelay('desktop_clipboard_read', {}) || '').trim();
+      if (!clipboardText) {
+        throw new Error('Clipboard is empty. Copy the WeChat message text first, or pass message to wechat_intake_analyze.');
+      }
+      return JSON.stringify(analyzeWechatIntake({
+        message: clipboardText,
+        contact: args.contact ? String(args.contact) : undefined,
+        source: 'clipboard',
+        takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
+        userRules: args.userRules ? String(args.userRules) : undefined,
+      }), null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
   });
