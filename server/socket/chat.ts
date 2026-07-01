@@ -53,6 +53,7 @@ import { guardCompletionClaims, needsCompletionEvidence } from "../work_product/
 import { buildModelSelfAwareness, buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { isSelfIntroDemoRequest, runSelfIntroDemo } from "./self_intro_demo";
+import { isCustomerTakeoverRequest, runCustomerTakeoverWorkflow } from "./customer_takeover_demo";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
@@ -523,6 +524,86 @@ export function registerChatHandler(
           socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
         });
       });
+
+      const customerTakeoverText = visibleUserText || text;
+      if (isCustomerTakeoverRequest(customerTakeoverText)) {
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: "customer_takeover_workflow",
+          detail: "Running customer takeover workflow",
+        });
+
+        let workflowResponseText = '';
+        let workflowToolCalls: ToolExecutionRecord[] = [];
+        try {
+          const workflowResult = await runCustomerTakeoverWorkflow({
+            socket,
+            userText: customerTakeoverText,
+            userId: uid,
+            desktopRelay,
+            speak: async (line) => {
+              emitAgent("agent:chunk", {
+                text: `${line}\n`,
+                agentName: personality.name,
+                source: "customer_takeover_workflow",
+              });
+              return Math.min(7000, Math.max(2300, line.length * 112));
+            },
+            voiceScope: {
+              domain: resolvedDomain === 'work' ? 'work' : 'personal',
+              orgId: resolvedOrgId,
+            },
+            isCancelled: () => abortController.signal.aborted,
+          });
+          workflowResponseText = workflowResult.responseText;
+          workflowToolCalls = workflowResult.toolCalls;
+        } catch (err: any) {
+          console.warn('[ChatHandler] Customer takeover workflow failed:', err?.message || err);
+          workflowResponseText = '我已经准备好客户接管工作流了，不过刚才桌面流程没有完整跑完。你再说“Lumi，按我的规则推进这个客户”，我会重新进入客户接管。';
+        }
+
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          for (const tc of workflowToolCalls) {
+            const tcSummary = tc.error
+              ? `[Tool: ${tc.name}] Error: ${tc.error}`
+              : `[Tool: ${tc.name}] Done`;
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
+          }
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined });
+        }
+
+        try {
+          const db = readDB();
+          db.interactions.push({
+            id: interactionId,
+            userId: uid,
+            agentId: agentId || '',
+            conversationId: conversationId || '',
+            content: storedUserContent,
+            response: workflowResponseText,
+            role: "user",
+            personality: personality.id,
+            timestamp: new Date().toISOString(),
+            cognitiveIntent: 'customer_takeover_workflow',
+            llmWasCalled: false,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          });
+          writeDB(db);
+        } catch (persistErr: any) {
+          console.warn('[ChatHandler] Customer takeover interaction persistence failed:', persistErr?.message || persistErr);
+        }
+
+        emitAgent("agent:response", { text: workflowResponseText, agentName: personality.name, source: "customer_takeover_workflow" });
+        if (conversationId) {
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'customer_takeover_workflow' });
+        }
+        emitAgent("agent:status", { status: "idle", agentName: personality.name });
+        chatSessionMap.delete(sessionKey);
+        return;
+      }
 
       const selfIntroDemoText = visibleUserText || text;
       const selfIntroTargetIsLumi =

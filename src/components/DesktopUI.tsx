@@ -168,6 +168,8 @@ type DesktopWidgetFallbackState = {
   maximized?: boolean;
 };
 
+type CustomerTakeoverStage = 'intake' | 'rules' | 'wechat' | 'result';
+
 declare global {
   interface Window {
     lumiElectron?: {
@@ -1118,6 +1120,122 @@ function Spotlight({ isOpen, onClose, onSelect, apps, t }: { isOpen: boolean; on
   );
 }
 
+function CustomerTakeoverPanel({ stage, onClose }: { stage: CustomerTakeoverStage; onClose: () => void }) {
+  const stageMeta: Record<CustomerTakeoverStage, { eyebrow: string; title: string; desc: string }> = {
+    intake: {
+      eyebrow: 'CUSTOMER INTAKE',
+      title: '微信线索已识别',
+      desc: '客户正在询价，并要求正式报价。Lumi 将按用户规则进入客户推进流程。',
+    },
+    rules: {
+      eyebrow: 'WORK RULES',
+      title: '按授权边界接管',
+      desc: '常规沟通、报价材料、跟进动作自动执行；价格底线、合同风险、最终责任判断再上报。',
+    },
+    wechat: {
+      eyebrow: 'WECHAT DRAFT',
+      title: '客户回复草稿已准备',
+      desc: 'Lumi 已按用户风格生成微信回复，默认等待确认，不自动发送。',
+    },
+    result: {
+      eyebrow: 'RESULT READY',
+      title: '客户已推进到结果',
+      desc: '标准版方案、报价、合同草案和项目启动清单已经形成，后续进入定金和启动流程。',
+    },
+  };
+
+  const meta = stageMeta[stage];
+  const pipeline = [
+    { label: '微信线索识别', value: '已完成', icon: <MessageSquare size={16} /> },
+    { label: '报价方案生成', value: '￥68,000 标准版', icon: <FileText size={16} /> },
+    { label: '客户资料补充', value: '行业与风险点已读取', icon: <Globe size={16} /> },
+    { label: '微信回复草稿', value: '等待确认发送', icon: <Copy size={16} /> },
+  ];
+  const resultItems = [
+    ['客户', '陈总 / 华东区'],
+    ['状态', stage === 'result' ? '已确认标准版方案' : '推进中'],
+    ['金额', '￥68,000'],
+    ['合同草案', stage === 'result' ? '已生成' : '准备中'],
+    ['定金节点', '待客户确认'],
+    ['风险点', '交付周期需写入合同'],
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 24, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 24, scale: 0.97 }}
+      transition={{ duration: 0.28 }}
+      className="fixed inset-0 z-[258] flex items-center justify-center px-4 py-10 pointer-events-none"
+    >
+      <div className="pointer-events-auto w-[min(960px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-cyan-300/20 bg-zinc-950/92 shadow-2xl shadow-cyan-950/30 backdrop-blur-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+          <div>
+            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-cyan-200">{meta.eyebrow}</div>
+            <h3 className="mt-2 text-2xl font-black tracking-tight text-white">{meta.title}</h3>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/55">{meta.desc}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
+            title="Close"
+          >
+            <X size={15} />
+          </button>
+        </div>
+        <div className="grid gap-4 p-5 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="space-y-3">
+            {pipeline.map((item, index) => {
+              const active = stage === 'result' || index <= (stage === 'wechat' ? 3 : stage === 'rules' ? 1 : 0);
+              return (
+                <div
+                  key={item.label}
+                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
+                    active
+                      ? 'border-cyan-300/18 bg-cyan-300/[0.075] text-cyan-50'
+                      : 'border-white/8 bg-white/[0.025] text-white/35'
+                  }`}
+                >
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-cyan-300/12 text-cyan-200' : 'bg-white/5 text-white/30'}`}>
+                    {item.icon}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-black uppercase tracking-[0.16em]">{item.label}</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-white/65">{item.value}</div>
+                  </div>
+                  <div className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-cyan-300 shadow-[0_0_16px_rgba(103,232,249,0.8)]' : 'bg-white/15'}`} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">CUSTOMER RESULT</div>
+                <div className="mt-1 text-lg font-black text-white">客户推进结果</div>
+              </div>
+              <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-emerald-200">
+                {stage === 'result' ? 'READY' : 'RUNNING'}
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {resultItems.map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
+                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</div>
+                  <div className="mt-1 text-sm font-bold text-white/78">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 rounded-lg border border-celestial-saturn/20 bg-celestial-saturn/[0.08] px-3 py-3 text-sm leading-relaxed text-white/65">
+              Lumi 已生成：报价方案、合同草案、微信跟进草稿、项目启动清单。超出授权边界的发送和最终签约仍等待用户确认。
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function ExecutionWorkQueue({ t }: { t: any }) {
   const isZh = t?.langCode !== 'en';
   return (
@@ -1418,6 +1536,7 @@ export function DesktopUI({
   const wallpaperWorkPromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
+  const [customerTakeoverStage, setCustomerTakeoverStage] = useState<CustomerTakeoverStage | null>(null);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
@@ -3159,6 +3278,19 @@ export function DesktopUI({
           })();
           return;
         }
+        if (action === 'customer_takeover_panel' || action === 'demo_customer_takeover') {
+          const stage = String(detail.stage || target || 'intake') as CustomerTakeoverStage;
+          const allowedStages: CustomerTakeoverStage[] = ['intake', 'rules', 'wechat', 'result'];
+          if (!allowedStages.includes(stage)) throw new Error(`Unsupported customer takeover stage: ${stage}`);
+          setCustomerTakeoverStage(stage);
+          respond({ ok: true, action, stage });
+          return;
+        }
+        if (action === 'close_customer_takeover_panel' || action === 'demo_close_customer_takeover') {
+          setCustomerTakeoverStage(null);
+          respond({ ok: true, action });
+          return;
+        }
         if (action === 'close_app') {
           closeSurface(target);
           respond({ ok: true, action, target });
@@ -4539,7 +4671,7 @@ export function DesktopUI({
       </AnimatePresence>
 
       <WorkflowPanel
-        visible={workflowPanelVisible}
+        visible={workflowPanelVisible && !customerTakeoverStage}
         agentStatus={agentStatus}
         steps={workflowSteps}
         t={t}
@@ -4547,6 +4679,14 @@ export function DesktopUI({
         backgroundTasks={backgroundWorkflowTasks}
         onCancelBackgroundTask={cancelBackgroundWorkflowTask}
       />
+      <AnimatePresence>
+        {customerTakeoverStage && (
+          <CustomerTakeoverPanel
+            stage={customerTakeoverStage}
+            onClose={() => setCustomerTakeoverStage(null)}
+          />
+        )}
+      </AnimatePresence>
       <CursorGlow />
       <AnimatePresence>
         {wallpaperWorkPromptVisible && !isWallpaperMode && !chatOpen && (

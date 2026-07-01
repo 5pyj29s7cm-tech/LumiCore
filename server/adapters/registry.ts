@@ -159,6 +159,22 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'Use this for new-user onboarding, product videos, and voice-triggered demonstrations where Lumi introduces herself while operating the real desktop.',
     },
     {
+      id: 'client.customer_takeover_workflow',
+      label: 'Customer Work Takeover',
+      category: 'client',
+      status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
+      actions: ['customer_takeover_workflow', 'customer_takeover_panel', 'close_customer_takeover_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_open', 'desktop_clipboard_write'],
+      surfaces: ['Lumi desktop', 'large customer result panel', 'WeChat', 'WPS or editor', 'browser'],
+      requiresConfirmation: true,
+      setup: hasState ? [] : ['Open Lumi desktop client so the customer takeover workflow can control client surfaces.'],
+      diagnostics: [
+        state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
+        gate.externalAppAutomationEnabled ? 'externalAppAutomation=enabled' : 'externalAppAutomation=disabled',
+      ],
+      safety: 'Runs only after an explicit customer-takeover or customer-advance request. It prepares WeChat drafts and business materials; sending to WeChat is off by default unless configured or confirmed.',
+      notes: 'Use for current-stage customer work takeover where Lumi follows user work rules, uses external software, shows the large result panel, and advances customer work to a visible result.',
+    },
+    {
       id: 'client.interface_map',
       label: 'Lumi Interface Map',
       category: 'client',
