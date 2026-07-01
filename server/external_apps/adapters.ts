@@ -31,9 +31,9 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     id: 'wechat',
     label: 'WeChat and messaging',
     status: 'draft_only',
-    actions: ['wechat_intake_analyze', 'wechat_intake_from_clipboard', 'wechat_prepare_reply', 'wechat_copy_reply_draft'],
+    actions: ['wechat_intake_analyze', 'wechat_intake_from_clipboard', 'work_takeover_task_from_wechat', 'work_takeover_task_from_clipboard', 'wechat_prepare_reply', 'wechat_copy_reply_draft'],
     safety: 'Lumi can prepare and copy a reply draft. Sending messages must stay user-confirmed.',
-    notes: 'Lumi can triage WeChat messages into work takeover tasks, prepare next actions and drafts, and keep sending confirmation-gated.',
+    notes: 'Lumi can triage WeChat messages into persistent work takeover tasks, prepare next actions and drafts, and keep sending confirmation-gated.',
   },
   {
     id: 'cad',
