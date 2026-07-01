@@ -33,6 +33,7 @@ import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, 
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { guardCompletionClaims, needsCompletionEvidence } from "../work_product/completion_guard";
 import { buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
+import { isSelfIntroDemoRequest, runSelfIntroDemo } from "./self_intro_demo";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -553,17 +554,49 @@ async function processVoiceInput(
   const myGeneration = session.bgGeneration;
   let ttsQueue: Promise<void> = Promise.resolve();
 
-  const flushSentence = (sentence: string) => {
+  const estimatePlaybackMs = (audioBuffer: Buffer, text: string): number => {
+    const fallback = Math.min(18000, Math.max(2200, text.length * 185 + 700));
+    try {
+      if (
+        Buffer.isBuffer(audioBuffer) &&
+        audioBuffer.length > 44 &&
+        audioBuffer.toString('ascii', 0, 4) === 'RIFF' &&
+        audioBuffer.toString('ascii', 8, 12) === 'WAVE'
+      ) {
+        const byteRate = audioBuffer.readUInt32LE(28);
+        let offset = 12;
+        while (offset + 8 <= audioBuffer.length) {
+          const chunkId = audioBuffer.toString('ascii', offset, offset + 4);
+          const chunkSize = audioBuffer.readUInt32LE(offset + 4);
+          if (chunkId === 'data' && byteRate > 0) {
+            return Math.min(30000, Math.max(1000, Math.round(chunkSize / byteRate * 1000) + 450));
+          }
+          offset += 8 + chunkSize + (chunkSize % 2);
+        }
+      }
+    } catch {}
+    return fallback;
+  };
+
+  const flushSentence = (sentence: string): Promise<number> => {
     const txt = sentence.trim();
-    if (!txt || txt.length <= 1 || !ttsProvider || !session.currentVoiceId || !session.isActive) return;
-    if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return;
-    if (ttsAbort?.signal.aborted) return;
-    if (session.bgGeneration !== myGeneration) return;
+    if (!txt || txt.length <= 1 || !ttsProvider || !session.currentVoiceId || !session.isActive) return Promise.resolve(0);
+    if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
+    if (ttsAbort?.signal.aborted) return Promise.resolve(0);
+    if (session.bgGeneration !== myGeneration) return Promise.resolve(0);
     sentenceIdx++;
+    let resolvePlayback: (value: number) => void = () => {};
+    const playbackDone = new Promise<number>(resolve => { resolvePlayback = resolve; });
     // Serialize TTS to avoid 429 rate limits
     ttsQueue = ttsQueue.then(async () => {
-      if (ttsAbort?.signal.aborted) return;
-      if (session.bgGeneration !== myGeneration) return;
+      if (ttsAbort?.signal.aborted) {
+        resolvePlayback(0);
+        return;
+      }
+      if (session.bgGeneration !== myGeneration) {
+        resolvePlayback(0);
+        return;
+      }
       session.isSpeaking = true;
       ttsSpeakingCount++;
       try {
@@ -580,8 +613,13 @@ async function processVoiceInput(
           addEchoText(txt);
           const volumeGain = computeVolumeGain();
           socket.emit("audio:response", { buffer: ttsResult.audioBuffer, volumeGain });
+          const playbackMs = estimatePlaybackMs(ttsResult.audioBuffer, txt);
+          setTimeout(() => resolvePlayback(0), playbackMs);
+        } else {
+          resolvePlayback(0);
         }
       } catch (e: any) {
+        resolvePlayback(0);
         if (e?.name === 'AbortError') return;
         logger.warn(`[Audio TTS] ${e.message?.slice(0, 80)}`);
       } finally {
@@ -593,7 +631,41 @@ async function processVoiceInput(
       }
     });
     ttsPromises.push(ttsQueue);
+    return playbackDone;
   };
+
+  if (isSelfIntroDemoRequest(userText)) {
+    try {
+      const demoResult = await runSelfIntroDemo({
+        socket,
+        userText,
+        userId: session.userId,
+        desktopRelay,
+        speak: flushSentence,
+        voiceScope,
+        isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
+      });
+      responseText = demoResult.responseText;
+      toolResults = demoResult.toolCalls;
+    } catch (err: any) {
+      logger.warn(`[Audio] Self-intro demo failed: ${err?.message || err}`);
+      responseText = '我可以介绍自己，不过刚才演示脚本没有完整启动。你再说一次“Lumi，介绍一下你自己”，我会重新演示。';
+      flushSentence(responseText);
+    }
+
+    await Promise.allSettled(ttsPromises);
+    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+    session.isProcessing = false;
+    session.isSpeaking = false;
+    session.pipelineAbortController = null;
+    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
+    socket.emit("audio:status", { status: "listening" });
+    socket.emit("agent:status", { status: "idle" });
+    socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "self_intro_demo" });
+    return;
+  }
 
   // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
   const directlyAppliedMode: OperationMode | null =

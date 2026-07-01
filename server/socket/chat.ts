@@ -52,6 +52,7 @@ import { buildResponseLanguageInstruction } from "../utils/language";
 import { guardCompletionClaims, needsCompletionEvidence } from "../work_product/completion_guard";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
+import { isSelfIntroDemoRequest, runSelfIntroDemo } from "./self_intro_demo";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
@@ -522,6 +523,90 @@ export function registerChatHandler(
           socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
         });
       });
+
+      const selfIntroDemoText = visibleUserText || text;
+      const selfIntroTargetIsLumi =
+        personality.id === 'lumi' ||
+        conversationAgentId === 'lumi' ||
+        /lumi/i.test(selfIntroDemoText);
+      if (selfIntroTargetIsLumi && isSelfIntroDemoRequest(selfIntroDemoText)) {
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: "self_intro_demo",
+          detail: "Running self-introduction desktop demo",
+        });
+
+        let demoResponseText = '';
+        let demoToolCalls: ToolExecutionRecord[] = [];
+        try {
+          const demoResult = await runSelfIntroDemo({
+            socket,
+            userText: selfIntroDemoText,
+            userId: uid,
+            desktopRelay,
+            speak: async (line) => {
+              emitAgent("agent:chunk", {
+                text: `${line}\n`,
+                agentName: personality.name,
+                source: "self_intro_demo",
+              });
+              return Math.min(6400, Math.max(2200, line.length * 115));
+            },
+            voiceScope: {
+              domain: resolvedDomain === 'work' ? 'work' : 'personal',
+              orgId: resolvedOrgId,
+            },
+            isCancelled: () => abortController.signal.aborted,
+          });
+          demoResponseText = demoResult.responseText;
+          demoToolCalls = demoResult.toolCalls;
+        } catch (err: any) {
+          console.warn('[ChatHandler] Self-intro demo failed:', err?.message || err);
+          demoResponseText = '我已经学会自我介绍演示这条流程了，不过刚才桌面演示没有完整跑完。你再说“Lumi，介绍一下你自己”，我会重新进入演示。';
+        }
+
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          for (const tc of demoToolCalls) {
+            const tcSummary = tc.error
+              ? `[Tool: ${tc.name}] Error: ${tc.error}`
+              : `[Tool: ${tc.name}] Done`;
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
+          }
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: demoResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: demoToolCalls.length ? demoToolCalls : undefined });
+        }
+
+        try {
+          const db = readDB();
+          db.interactions.push({
+            id: interactionId,
+            userId: uid,
+            agentId: agentId || '',
+            conversationId: conversationId || '',
+            content: storedUserContent,
+            response: demoResponseText,
+            role: "user",
+            personality: personality.id,
+            timestamp: new Date().toISOString(),
+            cognitiveIntent: 'self_intro_demo',
+            llmWasCalled: false,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          });
+          writeDB(db);
+        } catch (persistErr: any) {
+          console.warn('[ChatHandler] Self-intro interaction persistence failed:', persistErr?.message || persistErr);
+        }
+
+        emitAgent("agent:response", { text: demoResponseText, agentName: personality.name, source: "self_intro_demo" });
+        if (conversationId) {
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'self_intro_demo' });
+        }
+        emitAgent("agent:status", { status: "idle", agentName: personality.name });
+        chatSessionMap.delete(sessionKey);
+        return;
+      }
 
       emitAgent("agent:status", { status: "thinking", agentName: personality.name });
       console.log('[ChatHandler] emitted agent:status thinking');

@@ -35,6 +35,19 @@ export interface ClientCapability {
   stateKeys?: string[];
 }
 
+export interface ClientInterfaceSurface {
+  id: string;
+  label: string;
+  actions: string[];
+  useWhen: string;
+  closeAfterUse?: boolean;
+}
+
+export interface VisibleExecutionHabit {
+  id: string;
+  rule: string;
+}
+
 export interface ClientStateSnapshot {
   platform?: string;
   mode?: ClientMode;
@@ -222,6 +235,31 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     actions: ['open_avatar_studio', 'open_sound_studio', 'open_memory_avatar', 'open_app:avatar-studio', 'open_app:sound', 'open_app:memory-avatar'],
     notes: 'Avatar design, voice/sound configuration, and memory avatar lab surfaces.',
     stateKeys: ['windows'],
+  },
+  {
+    id: 'system.interface_awareness',
+    label: 'Interface awareness',
+    kind: 'system',
+    actions: ['client_get_state', 'client_action', 'adapter_registry_list'],
+    notes: 'Lumi knows her own client interfaces and can choose the right surface for a task: home, chat, knowledge, runtime log, skills, tools, team, avatar, sound, organization, plans, settings, music, meeting, wallpaper, and computer adaptation.',
+    stateKeys: ['windows', 'surfaces', 'tools', 'runtimeLog', 'music', 'meeting', 'org'],
+  },
+  {
+    id: 'system.visible_execution',
+    label: 'Visible task execution',
+    kind: 'system',
+    actions: ['client_get_state', 'client_action', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_active_window', 'desktop_capture_screen'],
+    notes: 'For visible work Lumi should state the task goal, choose the right interface, narrate meaningful steps, use cursor glow before desktop clicks, verify outcomes, report blockers, and close temporary surfaces after they are explained.',
+    requiresConfirmation: true,
+    stateKeys: ['surfaces', 'windows', 'tools', 'permissions'],
+  },
+  {
+    id: 'system.self_intro_demo',
+    label: 'Self-introduction desktop demo',
+    kind: 'system',
+    actions: ['self_intro_demo', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_open', 'desktop_clipboard_write'],
+    notes: 'When the user explicitly asks Lumi to introduce or demonstrate herself, Lumi can run a bounded self-introduction demo: speak in sync with client surfaces, close each surface after explaining it, enter wallpaper mode, open WPS or a fallback editor to create a Lumi intro document, open a browser search, and prepare a Codex collaboration prompt. The Codex prompt is left unsent unless the demo is configured or confirmed to send.',
+    stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
     id: 'workspace.skills',
@@ -428,10 +466,167 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
 ];
 
+const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
+  {
+    id: 'home',
+    label: 'Home / desktop shell',
+    actions: ['focus_home', 'desktop_show_lumi_window'],
+    useWhen: 'Return to Lumi base state, orient the user, or recover from scattered windows.',
+  },
+  {
+    id: 'chat',
+    label: 'Side chat',
+    actions: ['open_chat', 'close_app:chat'],
+    useWhen: 'Hold an ongoing conversation beside other work without taking over the whole client.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'knowledge',
+    label: 'Knowledge base and memory',
+    actions: ['show_knowledge_base', 'open_files'],
+    useWhen: 'Show personal knowledge, imported files, memories, and source-bound context.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'runtime-log',
+    label: 'Runtime log',
+    actions: ['open_runtime_log'],
+    useWhen: 'Show live execution, startup traces, tool progress, errors, or self-repair evidence.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'skills',
+    label: 'Skill hall',
+    actions: ['open_skills'],
+    useWhen: 'Show installed skills, MCP servers, extension points, or repair/install surfaces.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'tools',
+    label: 'Tools catalog',
+    actions: ['open_tools'],
+    useWhen: 'Show what executable tools Lumi can call and how tool status is exposed.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'team',
+    label: 'Agent team',
+    actions: ['open_team'],
+    useWhen: 'Show sub-agents, orchestration, delegation, and multi-agent collaboration.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'avatar-studio',
+    label: 'Avatar studio',
+    actions: ['open_avatar_studio'],
+    useWhen: 'Show Lumi avatar, appearance, embodied presence, or personality-facing surfaces.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'sound',
+    label: 'Sound studio',
+    actions: ['open_sound_studio'],
+    useWhen: 'Show voice, sound, speech, and audio configuration surfaces.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org',
+    label: 'Organization workspace',
+    actions: ['open_organization_workspace'],
+    useWhen: 'Show work-domain knowledge, templates, members, audit, or team organization surfaces.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'plans',
+    label: 'Plans and work queue',
+    actions: ['open_plans', 'open_work_queue'],
+    useWhen: 'Show always-online workflows, queued work, recurring tasks, and autonomy agreements.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    actions: ['open_settings'],
+    useWhen: 'Show provider, voice, permission, startup, autonomy, and advanced configuration.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'music-center',
+    label: 'Music center and mood layer',
+    actions: ['open_music_center', 'show_music_layer', 'hide_music_layer'],
+    useWhen: 'Play music, show media state, lyrics, atmosphere, or sound-driven work context.',
+    closeAfterUse: false,
+  },
+  {
+    id: 'meeting',
+    label: 'Meeting mode and notes',
+    actions: ['start_meeting_mode', 'end_meeting_mode', 'open_meeting_notes'],
+    useWhen: 'Capture meeting transcription, notes, and reports after explicit user intent.',
+    closeAfterUse: false,
+  },
+  {
+    id: 'wallpaper',
+    label: 'Wallpaper mode',
+    actions: ['set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click'],
+    useWhen: 'Make desktop work immersive and visible while Lumi operates external applications.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'computer-adaptation',
+    label: 'Computer adaptation center',
+    actions: ['open_computer_adaptation'],
+    useWhen: 'Show system profile, common apps, permissions, local readiness, and setup recommendations.',
+    closeAfterUse: true,
+  },
+];
+
+const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
+  {
+    id: 'name_goal_and_surface',
+    rule: 'For non-trivial visible work, first state the task goal and where Lumi will work: chat, a Lumi surface, tools/run log, or the external desktop.',
+  },
+  {
+    id: 'know_own_interfaces',
+    rule: 'When asked what Lumi can show or open, use the Interface Map and current client state instead of giving a generic assistant answer.',
+  },
+  {
+    id: 'prefer_native_surfaces',
+    rule: 'For Lumi client UI, prefer client_action and known surface actions; use mouse/keyboard only for external apps or when the user explicitly wants visible desktop operation.',
+  },
+  {
+    id: 'visible_cursor_for_external_apps',
+    rule: 'For external desktop work, inspect the screen or active window, show the cursor glow, move it to the target before clicking, click the center of the real UI element, and verify the result.',
+  },
+  {
+    id: 'wallpaper_for_immersive_work',
+    rule: 'Use wallpaper mode during explicit demonstrations or confirmed visible desktop-control sessions so Lumi feels present on the desktop, then turn it off when done.',
+  },
+  {
+    id: 'close_temporary_surfaces',
+    rule: 'If Lumi opens an internal surface only to explain or inspect it, close that surface after the point is made unless it is the user-requested work surface.',
+  },
+  {
+    id: 'prepare_before_clicking',
+    rule: 'Prefer files, clipboard drafts, explicit adapters, and app-specific commands before blind clicking; only use visual control when it adds clarity or is required.',
+  },
+  {
+    id: 'show_progress_and_blockers',
+    rule: 'Narrate important steps, show tool/run evidence when useful, and if an action fails, say the exact blocker, try one safe fallback, then verify.',
+  },
+];
+
 const stateByUser = new Map<string, ClientStateSnapshot>();
 
 export function getClientCapabilities(): ClientCapability[] {
   return CLIENT_CAPABILITIES;
+}
+
+export function getClientInterfaceSurfaces(): ClientInterfaceSurface[] {
+  return CLIENT_INTERFACE_SURFACES;
+}
+
+export function getVisibleExecutionHabits(): VisibleExecutionHabit[] {
+  return VISIBLE_EXECUTION_HABITS;
 }
 
 export function updateClientState(userId: string, state: ClientStateSnapshot): ClientStateSnapshot {
@@ -581,6 +776,10 @@ export function formatClientSelfPrompt(userId: string): string {
   const capabilityLines = CLIENT_CAPABILITIES.map(cap => (
     `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (confirmation-sensitive)' : ''}`
   ));
+  const interfaceLines = CLIENT_INTERFACE_SURFACES.map(surface => (
+    `- ${surface.label} (${surface.id}): ${surface.useWhen} Actions: ${surface.actions.join(', ')}${surface.closeAfterUse ? ' Close after temporary explanation/inspection.' : ''}`
+  ));
+  const executionHabitLines = VISIBLE_EXECUTION_HABITS.map(habit => `- ${habit.rule}`);
   const adapterLines = adapterRegistry.adapters.map(adapter => (
     `- ${adapter.label} (${adapter.id}) [${adapter.category}/${adapter.status}]: Actions: ${adapter.actions.join(', ')}${adapter.requiresConfirmation ? ' (confirmation-sensitive)' : ''}${adapter.diagnostics?.length ? ` Diagnostics: ${adapter.diagnostics.slice(0, 3).join('; ')}` : ''}`
   ));
@@ -623,6 +822,7 @@ export function formatClientSelfPrompt(userId: string): string {
     'You are Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'Prefer explicit client actions such as open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_settings, and set_wallpaper_mode instead of mouse/keyboard control for Lumi UI.',
+    'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, keep the user oriented, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
     'Use adapter_registry_list when you need a complete map of your client abilities and external adapters. Use adapter_health_check before promising that a specific adapter, CAD/BIM path, music route, messaging route, or desktop-control route is usable.',
     'When the user asks for a capability you do not have, do not simply fail. Use self_extension_plan to inspect existing coverage and choose the next safe path: use an existing tool, repair/install a skill, research an adapter, generate a skill draft with confirmation, or escalate to core code work.',
@@ -641,6 +841,12 @@ export function formatClientSelfPrompt(userId: string): string {
     'If a routed client action, music playback, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',
     'Do not shrink yourself into voice interaction. Voice, chat, Feishu, runtime logs, organization, music, meeting, tools, skills, files, and desktop control are different entrances into the same local Lumi.',
     'Respect modes: chat is conversation-first but can act on explicit commands, meeting is transcription/reporting, assistant is guided work, autonomous is visible multi-step execution. Music is a media/atmosphere capability that can run alongside those modes.',
+    '',
+    '### Interface Map',
+    ...interfaceLines,
+    '',
+    '### Visible Execution Habits',
+    ...executionHabitLines,
     '',
     '### Client Capabilities',
     ...capabilityLines,

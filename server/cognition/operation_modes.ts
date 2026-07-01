@@ -54,7 +54,7 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       'If the user did not specify a work surface and the choice matters, ask one short question instead of guessing.',
       'Choose the least disruptive execution capability for the user request: normal reply, tool, skill, file action, terminal command, mouse/keyboard desktop control, team/sub-agent, or run log inspection.',
       'Open the run log only when the user asks for logs or when debugging client/runtime failures.',
-      'For visible desktop work, explain what you are about to do and use mouse/keyboard tools naturally.',
+      'For visible desktop work, explain what you are about to do, inspect the screen/active window, show and move the cursor before clicks when available, use wallpaper mode for immersive confirmed sessions, and verify the result.',
       'For command/file/network actions, keep the user informed and respect confirmations.',
     ].join('\n'),
     toolPolicy: {
@@ -87,6 +87,7 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       'If the work surface is unclear, ask whether to use chat tools, run logs, or direct desktop control before proceeding.',
       'Work through the task end-to-end when the user gives an actionable request.',
       'Use the appropriate capabilities: desktop mouse/keyboard, terminal, files, skills, tools, MCP, run logs, team agents, and sub-agents.',
+      'For visible desktop work, keep the user oriented: name the task, show/move the cursor before clicks when available, verify results, and report exact blockers.',
       'Keep progress visible, summarize major steps, and do not hide failures.',
       'Dangerous or destructive actions still require confirmation.',
     ].join('\n'),

@@ -70,6 +70,7 @@ import { TokenDashboard } from './TokenDashboard';
 import { SubscriptionPanel } from './SubscriptionPanel';
 import { useContextMenu } from '@/hooks/useContextMenu';
 import { ContextMenu } from './ContextMenu';
+import { CursorGlow } from './CursorGlow';
 import { DesktopOnboarding } from './DesktopOnboarding';
 import { DeviceSyncCenter } from './DeviceSyncCenter';
 import { AgentChatPage } from './AgentChatPage';
@@ -3009,9 +3010,9 @@ export function DesktopUI({
         return value;
       };
 
-      const openSurface = (value: string) => {
-        const windowId = normalizeTarget(value);
-        if (!windowId) throw new Error('Client action requires a target surface');
+        const openSurface = (value: string) => {
+          const windowId = normalizeTarget(value);
+          if (!windowId) throw new Error('Client action requires a target surface');
         if (isDesktopWidgetMode) {
           void exitDesktopWidgetMode(windowId);
           return;
@@ -3019,8 +3020,12 @@ export function DesktopUI({
 
         if (windowId === 'home') {
           setOpenWindows([]);
+          setMinimizedWindows([]);
           setFocusedWindow(null);
           setWindowOrder([]);
+          setKnowledgeOpen(false);
+          setChatOpen(false);
+          setIsNotificationPanelOpen(false);
           setActiveTab('home');
           return;
         }
@@ -3054,8 +3059,33 @@ export function DesktopUI({
         setMinimizedWindows(prev => prev.filter(w => w !== windowId));
         setFocusedWindow(windowId);
         setWindowOrder(prev => [...prev.filter(w => w !== windowId), windowId]);
-        setActiveTab(windowId);
-      };
+          setActiveTab(windowId);
+        };
+
+        const getDemoTargetPoint = (value: string): { x: number; y: number } => {
+          const windowId = normalizeTarget(value);
+          const targetEl = Array.from(document.querySelectorAll<HTMLElement>('[data-lumi-target]'))
+            .find(el => el.dataset.lumiTarget === windowId);
+          if (targetEl) {
+            const rect = targetEl.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+          }
+          const fallback: Record<string, { x: number; y: number }> = {
+            home: { x: 82, y: 24 },
+            org: { x: window.innerWidth / 2, y: 24 },
+            plans: { x: window.innerWidth * 0.72, y: window.innerHeight * 0.42 },
+          };
+          return fallback[windowId] || { x: window.innerWidth / 2, y: window.innerHeight * 0.82 };
+        };
+
+        const animateDemoCursor = async (value: string) => {
+          const point = getDemoTargetPoint(value);
+          window.dispatchEvent(new CustomEvent('cursor-glow:show'));
+          window.dispatchEvent(new CustomEvent('cursor-glow:update', { detail: point }));
+          await new Promise(resolve => window.setTimeout(resolve, 540));
+          window.dispatchEvent(new CustomEvent('cursor-glow:click', { detail: point }));
+          await new Promise(resolve => window.setTimeout(resolve, 220));
+        };
 
       const closeSurface = (value: string) => {
         const windowId = normalizeTarget(value);
@@ -3113,6 +3143,20 @@ export function DesktopUI({
           if (isDesktopWidgetMode) void exitDesktopWidgetMode(target);
           else openSurface(target);
           respond({ ok: true, action, target });
+          return;
+        }
+        if (action === 'demo_open_surface') {
+          const surface = normalizeTarget(target || detail.surface || '');
+          if (!surface) throw new Error('demo_open_surface requires target');
+          void (async () => {
+            try {
+              await animateDemoCursor(surface);
+              openSurface(surface);
+              respond({ ok: true, action, target: surface });
+            } catch (err: any) {
+              reject(err?.message || String(err));
+            }
+          })();
           return;
         }
         if (action === 'close_app') {
@@ -3756,7 +3800,7 @@ export function DesktopUI({
         {/* Top Status Bar */}
         <div className={`absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
           <div className="flex items-center gap-6 flex-1">
-            <button onClick={() => toggleWindow('home')} className="flex items-center gap-2 group transition-all">
+            <button data-lumi-target="home" onClick={() => toggleWindow('home')} className="flex items-center gap-2 group transition-all">
                <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-celestial-mars to-celestial-saturn flex items-center justify-center p-1 group-hover:rotate-12 transition-transform shadow-lg shadow-celestial-saturn/20">
                  <Rocket size={14} className="text-white" />
                </div>
@@ -3935,6 +3979,7 @@ export function DesktopUI({
             </div>
           </button>
           <button
+            data-lumi-target="knowledge"
             onClick={() => setKnowledgeOpen(prev => !prev)}
             className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
               knowledgeOpen
@@ -3954,6 +3999,7 @@ export function DesktopUI({
               return (
               <motion.button
                 key={app.id}
+                data-lumi-target={app.id}
                 layoutId={`dock-${app.id}`}
                 onClick={() => toggleWindow(app.id)}
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
@@ -4216,6 +4262,7 @@ export function DesktopUI({
                 return (
                   <motion.div
                     key={def.id}
+                    data-lumi-target={def.windowId}
                     onDoubleClick={handleClick}
                     onClick={handleClick}
                     onContextMenu={(e: React.MouseEvent) => {
@@ -4500,6 +4547,7 @@ export function DesktopUI({
         backgroundTasks={backgroundWorkflowTasks}
         onCancelBackgroundTask={cancelBackgroundWorkflowTask}
       />
+      <CursorGlow />
       <AnimatePresence>
         {wallpaperWorkPromptVisible && !isWallpaperMode && !chatOpen && (
           <motion.div

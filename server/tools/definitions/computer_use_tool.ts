@@ -33,7 +33,7 @@ export function registerComputerUseTool(registry: ToolRegistry): void {
   registry.register({
     name: 'computer_use',
     description:
-      'Take control of the user desktop to complete a task after confirmation. This tool uses screenshot capture and the configured Vision Model to understand what is on screen, then controls the mouse and keyboard step by step. Supports configured vision providers such as Qwen-VL/DashScope, GPT-4o, Gemini, Doubao Vision, Ollama, LM Studio, or relay models. Use this for opening applications, navigating websites, filling forms, closing dialogs, moving files, managing windows, or other visible desktop interactions. Each iteration takes a screenshot, analyzes it, executes one mouse/keyboard action, and repeats. Default 12 iterations, hard-capped at 15. It does not enter wallpaper mode.',
+      'Take control of the user desktop to complete a task after confirmation. This tool uses screenshot capture and the configured Vision Model to understand what is on screen, enters wallpaper mode when available, shows/moves the visible cursor before clicks, then controls the mouse and keyboard step by step. Supports configured vision providers such as Qwen-VL/DashScope, GPT-4o, Gemini, Doubao Vision, Ollama, LM Studio, or relay models. Use this for opening applications, navigating websites, filling forms, closing dialogs, moving files, managing windows, or other visible desktop interactions. Each iteration takes a screenshot, analyzes it, executes one mouse/keyboard action, verifies through the next screenshot, and repeats. Default 12 iterations, hard-capped at 15; wallpaper/cursor overlay is cleaned up when finished.',
     parameters: {
       type: 'object',
       properties: {

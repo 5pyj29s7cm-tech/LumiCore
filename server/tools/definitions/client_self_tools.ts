@@ -1,5 +1,11 @@
 import { ToolRegistry } from '../registry';
-import { getClientCapabilities, getClientHealthReport, getClientState } from '../../client/self_model';
+import {
+  getClientCapabilities,
+  getClientHealthReport,
+  getClientInterfaceSurfaces,
+  getClientState,
+  getVisibleExecutionHabits,
+} from '../../client/self_model';
 import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
 import { mcpManager } from '../../mcp';
@@ -88,7 +94,7 @@ function getSkillRuntimeFindings() {
 export function registerClientSelfTools(registry: ToolRegistry): void {
   registry.register({
     name: 'client_get_state',
-    description: 'Read Lumi desktop client self-model: available client capabilities and the latest reported UI state.',
+    description: 'Read Lumi desktop client self-model: available capabilities, interface map, visible execution habits, and the latest reported UI state.',
     parameters: {
       type: 'object',
       properties: {},
@@ -97,6 +103,8 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     handler: async (_args, context) => {
       return JSON.stringify({
         capabilities: getClientCapabilities(),
+        interfaceSurfaces: getClientInterfaceSurfaces(),
+        visibleExecutionHabits: getVisibleExecutionHabits(),
         state: getClientState(context?.userId || 'anonymous'),
         health: getClientHealthReport(context?.userId || 'anonymous'),
         skillRuntimeFindings: getSkillRuntimeFindings(),

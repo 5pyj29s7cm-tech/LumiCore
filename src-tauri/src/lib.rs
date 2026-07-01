@@ -25,9 +25,15 @@ struct BackendProcesses {
     python_config: Option<SpawnConfig>,
 }
 
-/// Track whether wallpaper (click-through) mode is active
+/// Track whether wallpaper (click-through) mode is active and where to restore
+/// the main window afterward.
+#[derive(Default)]
 struct WallpaperState {
     enabled: bool,
+    previous_size: Option<tauri::PhysicalSize<u32>>,
+    previous_position: Option<tauri::PhysicalPosition<i32>>,
+    was_fullscreen: bool,
+    was_maximized: bool,
 }
 
 struct ResidentState {
@@ -738,19 +744,99 @@ fn set_wallpaper_mode(
     state: tauri::State<'_, Mutex<WallpaperState>>,
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
-    let mut wallpaper = state.lock().map_err(|e| e.to_string())?;
-    wallpaper.enabled = enabled;
+    let restore = {
+        let mut wallpaper = state.lock().map_err(|e| e.to_string())?;
+        if enabled {
+            if !wallpaper.enabled {
+                wallpaper.previous_size = window.outer_size().ok();
+                wallpaper.previous_position = window.outer_position().ok();
+                wallpaper.was_fullscreen = window.is_fullscreen().unwrap_or(false);
+                wallpaper.was_maximized = window.is_maximized().unwrap_or(false);
+            }
+            wallpaper.enabled = true;
+            None
+        } else {
+            wallpaper.enabled = false;
+            Some((
+                wallpaper.previous_size.take(),
+                wallpaper.previous_position.take(),
+                wallpaper.was_fullscreen,
+                wallpaper.was_maximized,
+            ))
+        }
+    };
 
-    match window.set_ignore_cursor_events(enabled) {
-        Ok(_) => println!("[LumiOS] set_ignore_cursor_events({}) succeeded", enabled),
-        Err(e) => eprintln!("[LumiOS] set_ignore_cursor_events({}) FAILED: {}", enabled, e),
-    }
-    match window.set_always_on_top(enabled) {
-        Ok(_) => println!("[LumiOS] set_always_on_top({}) succeeded", enabled),
-        Err(e) => eprintln!("[LumiOS] set_always_on_top({}) FAILED: {}", enabled, e),
+    if enabled {
+        let _ = window.show();
+        let _ = window.set_fullscreen(false);
+        let _ = window.unmaximize();
+        let _ = window.set_resizable(true);
+        let _ = window.set_decorations(false);
+        let _ = window.set_shadow(false);
+        let _ = window.set_skip_taskbar(true);
+
+        let maybe_monitor = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| window.primary_monitor().ok().flatten());
+        if let Some(monitor) = maybe_monitor {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
+            let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+        } else {
+            let _ = window.maximize();
+        }
+
+        match window.set_always_on_top(true) {
+            Ok(_) => println!("[LumiOS] set_always_on_top(true) succeeded"),
+            Err(e) => eprintln!("[LumiOS] set_always_on_top(true) FAILED: {}", e),
+        }
+        match window.set_ignore_cursor_events(true) {
+            Ok(_) => println!("[LumiOS] set_ignore_cursor_events(true) succeeded"),
+            Err(e) => eprintln!("[LumiOS] set_ignore_cursor_events(true) FAILED: {}", e),
+        }
+    } else {
+        match window.set_ignore_cursor_events(false) {
+            Ok(_) => println!("[LumiOS] set_ignore_cursor_events(false) succeeded"),
+            Err(e) => eprintln!("[LumiOS] set_ignore_cursor_events(false) FAILED: {}", e),
+        }
+        match window.set_always_on_top(false) {
+            Ok(_) => println!("[LumiOS] set_always_on_top(false) succeeded"),
+            Err(e) => eprintln!("[LumiOS] set_always_on_top(false) FAILED: {}", e),
+        }
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.set_resizable(true);
+        let _ = window.set_min_size(Some(tauri::PhysicalSize::new(
+            DEFAULT_MAIN_MIN_WIDTH,
+            DEFAULT_MAIN_MIN_HEIGHT,
+        )));
+
+        if let Some((previous_size, previous_position, was_fullscreen, was_maximized)) = restore {
+            if was_fullscreen {
+                let _ = window.set_fullscreen(true);
+            } else {
+                let _ = window.set_fullscreen(false);
+                if let Some(size) = previous_size {
+                    let _ = window.set_size(size);
+                }
+                if let Some(position) = previous_position {
+                    let _ = window.set_position(position);
+                } else {
+                    let _ = window.center();
+                }
+                if was_maximized {
+                    let _ = window.maximize();
+                }
+            }
+        }
     }
 
-    println!("[LumiOS] Wallpaper mode: {}", if enabled { "ON (click-through)" } else { "OFF" });
+    println!(
+        "[LumiOS] Wallpaper mode: {}",
+        if enabled { "ON (click-through fullscreen)" } else { "OFF" }
+    );
     Ok(())
 }
 
@@ -1241,6 +1327,10 @@ pub struct ActiveWindowInfo {
     pub title: String,
     pub process_name: String,
     pub pid: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1265,13 +1355,29 @@ fn get_active_window_info() -> ActiveWindowInfo {
     let mut process_name = String::new();
     #[allow(unused_mut)]
     let mut pid: u32 = 0;
+    #[allow(unused_mut)]
+    let mut x: i32 = 0;
+    #[allow(unused_mut)]
+    let mut y: i32 = 0;
+    #[allow(unused_mut)]
+    let mut width: i32 = 0;
+    #[allow(unused_mut)]
+    let mut height: i32 = 0;
 
     #[cfg(target_os = "windows")]
     {
+        #[repr(C)]
+        struct RECT {
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+        }
         extern "system" {
             fn GetForegroundWindow() -> isize;
             fn GetWindowTextW(hwnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
             fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
+            fn GetWindowRect(hwnd: isize, lpRect: *mut RECT) -> i32;
         }
         unsafe {
             let hwnd = GetForegroundWindow();
@@ -1280,6 +1386,13 @@ fn get_active_window_info() -> ActiveWindowInfo {
                 let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 512);
                 title = String::from_utf16_lossy(&buf[..len as usize]);
                 GetWindowThreadProcessId(hwnd, &mut pid);
+                let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                if GetWindowRect(hwnd, &mut rect) != 0 {
+                    x = rect.left;
+                    y = rect.top;
+                    width = (rect.right - rect.left).max(0);
+                    height = (rect.bottom - rect.top).max(0);
+                }
             }
         }
         if pid != 0 {
@@ -1318,7 +1431,7 @@ fn get_active_window_info() -> ActiveWindowInfo {
             }
         }
     }
-    ActiveWindowInfo { title, process_name, pid }
+    ActiveWindowInfo { title, process_name, pid, x, y, width, height }
 }
 
 #[tauri::command]
@@ -1974,7 +2087,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None, python_config: None }))
-        .manage(Mutex::new(WallpaperState { enabled: false }))
+        .manage(Mutex::new(WallpaperState::default()))
         .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
         .manage(Mutex::new(DesktopWidgetState::default()))
         .invoke_handler(tauri::generate_handler![

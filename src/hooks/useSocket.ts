@@ -8,6 +8,25 @@ let registeredSocket: Socket | null = null;
 let deviceConnectHandler: (() => void) | null = null;
 let cursorGlowWatchdog: ReturnType<typeof setTimeout> | null = null;
 
+function normalizeCursorGlowPoint(args: Record<string, any>) {
+  const rawX = Number(args.x) || 0;
+  const rawY = Number(args.y) || 0;
+  const screenWidth = Number(args.screenWidth || args.screen_width || args.width || 0);
+  const screenHeight = Number(args.screenHeight || args.screen_height || args.height || 0);
+  const screenX = Number(args.screenX || args.screen_x || 0);
+  const screenY = Number(args.screenY || args.screen_y || 0);
+  const isScreenPoint = args.coordinateSpace === 'screen' || screenWidth > 0 || screenHeight > 0;
+
+  if (!isScreenPoint || screenWidth <= 0 || screenHeight <= 0) {
+    return { x: rawX, y: rawY };
+  }
+
+  return {
+    x: Math.round((rawX - screenX) * (window.innerWidth / screenWidth)),
+    y: Math.round((rawY - screenY) * (window.innerHeight / screenHeight)),
+  };
+}
+
 function registerSharedSocketHandlers(socket: Socket) {
   if (registeredSocket === socket) return;
 
@@ -127,6 +146,11 @@ async function handleDesktopExec(socket: Socket, data: {
         output = openResult.output || `Opened: ${target}`;
         break;
       }
+      case 'desktop_show_lumi_window': {
+        await invoke('show_main_window');
+        output = 'Lumi window focused';
+        break;
+      }
       case 'desktop_run_command': {
         const cmd: string = args.command || '';
         const cwd: string = args.cwd || '';
@@ -240,18 +264,20 @@ async function handleDesktopExec(socket: Socket, data: {
         break;
       }
       case 'desktop_set_wallpaper_mode': {
-        if (args.source !== 'computer_use') {
-          output = 'Wallpaper mode request ignored: only controlled computer_use sessions may toggle it.';
+        const source = String(args.source || '');
+        const allowedSources = new Set(['computer_use', 'self_intro_demo']);
+        if (!allowedSources.has(source)) {
+          output = 'Wallpaper mode request ignored: only controlled desktop sessions may toggle it.';
           break;
         }
         window.dispatchEvent(new CustomEvent('lumi:set-wallpaper-mode', {
           detail: {
             enabled: Boolean(args.enabled),
-            source: args.source,
+            source,
             timeoutMs: Number(args.timeoutMs || 190000),
           },
         }));
-        output = `Wallpaper mode ${args.enabled ? 'enabled' : 'disabled'} for computer_use`;
+        output = `Wallpaper mode ${args.enabled ? 'enabled' : 'disabled'} for ${source}`;
         break;
       }
       case 'desktop_cursor_glow_show': {
@@ -265,7 +291,7 @@ async function handleDesktopExec(socket: Socket, data: {
         break;
       }
       case 'desktop_cursor_glow_update': {
-        window.dispatchEvent(new CustomEvent('cursor-glow:update', { detail: { x: args.x, y: args.y } }));
+        window.dispatchEvent(new CustomEvent('cursor-glow:update', { detail: normalizeCursorGlowPoint(args) }));
         output = `Glow updated: (${args.x}, ${args.y})`;
         break;
       }
@@ -279,7 +305,7 @@ async function handleDesktopExec(socket: Socket, data: {
         break;
       }
       case 'desktop_cursor_glow_click': {
-        window.dispatchEvent(new CustomEvent('cursor-glow:click', { detail: { x: args.x, y: args.y } }));
+        window.dispatchEvent(new CustomEvent('cursor-glow:click', { detail: normalizeCursorGlowPoint(args) }));
         output = 'Glow click animation';
         break;
       }
