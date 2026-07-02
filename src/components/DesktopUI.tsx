@@ -169,6 +169,7 @@ type DesktopWidgetFallbackState = {
 };
 
 type CustomerTakeoverStage = 'intake' | 'rules' | 'wechat' | 'result';
+type DesignDeliveryStage = 'intake' | 'concept' | 'cad' | 'revit' | 'handoff' | 'result';
 
 declare global {
   interface Window {
@@ -1236,6 +1237,135 @@ function CustomerTakeoverPanel({ stage, onClose }: { stage: CustomerTakeoverStag
   );
 }
 
+function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; onClose: () => void }) {
+  const stageMeta: Record<DesignDeliveryStage, { eyebrow: string; title: string; desc: string }> = {
+    intake: {
+      eyebrow: 'DESIGN INTAKE',
+      title: '装修需求已接管',
+      desc: 'Lumi 正在把微信或自然语言里的装修需求拆成户型、风格、预算、交付物、风险和下一步动作。',
+    },
+    concept: {
+      eyebrow: 'CONCEPT PACKAGE',
+      title: '方案与预算已生成',
+      desc: '设计方案、空间拆解、预算材料清单已落到本地文件，可用 WPS 或编辑器直接打开查看。',
+    },
+    cad: {
+      eyebrow: 'CAD HANDOFF',
+      title: 'CAD 初稿与预览已生成',
+      desc: 'Lumi 已创建 DXF 平面布置文件和 SVG 可视化预览，用于进入 CAD 软件继续深化。',
+    },
+    revit: {
+      eyebrow: 'REVIT HANDOFF',
+      title: 'Revit 交接数据已准备',
+      desc: 'Dynamo 建模脚本和空间表已经生成，可作为 Revit 侧创建墙体、房间、标签和材料计划的入口。',
+    },
+    handoff: {
+      eyebrow: 'WECHAT HANDOFF',
+      title: '客户交付话术已准备',
+      desc: 'Lumi 已把交付包摘要整理成微信草稿；默认只复制和填入，不自动发送，除非用户明确授权。',
+    },
+    result: {
+      eyebrow: 'DELIVERY READY',
+      title: '装修设计交付包完成',
+      desc: '方案、预算、CAD、预览图、Revit 交接数据和微信话术已形成一套可推进客户确认的结果。',
+    },
+  };
+
+  const meta = stageMeta[stage];
+  const stageOrder: DesignDeliveryStage[] = ['intake', 'concept', 'cad', 'revit', 'handoff', 'result'];
+  const currentIndex = stageOrder.indexOf(stage);
+  const pipeline = [
+    { key: 'intake' as DesignDeliveryStage, label: '需求识别', value: '客户目标 / 户型 / 预算', icon: <MessageSquare size={16} /> },
+    { key: 'concept' as DesignDeliveryStage, label: '方案预算', value: 'RTF 文件已生成', icon: <FileText size={16} /> },
+    { key: 'cad' as DesignDeliveryStage, label: 'CAD 初稿', value: 'DXF + SVG 预览', icon: <Brush size={16} /> },
+    { key: 'revit' as DesignDeliveryStage, label: 'Revit 交接', value: 'Dynamo + 空间表', icon: <Box size={16} /> },
+    { key: 'handoff' as DesignDeliveryStage, label: '微信交付', value: '草稿等待确认', icon: <Copy size={16} /> },
+  ];
+  const resultItems = [
+    ['项目', '120 平三居室'],
+    ['方案', stage === 'result' ? '已完成' : '生成中'],
+    ['预算', '28 万控制线'],
+    ['CAD', currentIndex >= 2 ? 'DXF + 预览图' : '准备中'],
+    ['Revit', currentIndex >= 3 ? 'Dynamo 交接包' : '准备中'],
+    ['边界', '结构/燃气/签字上报'],
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 24, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 24, scale: 0.97 }}
+      transition={{ duration: 0.28 }}
+      className="fixed inset-0 z-[259] flex items-center justify-center px-4 py-10 pointer-events-none"
+    >
+      <div className="pointer-events-auto w-[min(1040px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-emerald-300/20 bg-zinc-950/93 shadow-2xl shadow-emerald-950/30 backdrop-blur-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+          <div>
+            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-emerald-200">{meta.eyebrow}</div>
+            <h3 className="mt-2 text-2xl font-black tracking-tight text-white">{meta.title}</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/58">{meta.desc}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
+            title="Close"
+          >
+            <X size={15} />
+          </button>
+        </div>
+        <div className="grid gap-4 p-5 lg:grid-cols-[1fr_1.1fr]">
+          <div className="space-y-3">
+            {pipeline.map((item) => {
+              const active = stage === 'result' || stageOrder.indexOf(item.key) <= currentIndex;
+              return (
+                <div
+                  key={item.key}
+                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
+                    active
+                      ? 'border-emerald-300/18 bg-emerald-300/[0.075] text-emerald-50'
+                      : 'border-white/8 bg-white/[0.025] text-white/35'
+                  }`}
+                >
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-emerald-300/12 text-emerald-200' : 'bg-white/5 text-white/30'}`}>
+                    {item.icon}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-black uppercase tracking-[0.16em]">{item.label}</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-white/65">{item.value}</div>
+                  </div>
+                  <div className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-emerald-300 shadow-[0_0_16px_rgba(110,231,183,0.8)]' : 'bg-white/15'}`} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">DESIGN DELIVERY</div>
+                <div className="mt-1 text-lg font-black text-white">本地交付结果</div>
+              </div>
+              <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-cyan-200">
+                {stage === 'result' ? 'READY' : 'RUNNING'}
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {resultItems.map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
+                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</div>
+                  <div className="mt-1 text-sm font-bold text-white/78">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 rounded-lg border border-emerald-300/18 bg-emerald-300/[0.07] px-3 py-3 text-sm leading-relaxed text-white/68">
+              Lumi 当前阶段会把结果落到外部电脑系统：WPS / 编辑器查看方案，浏览器预览平面图，CAD 接收 DXF，Revit 侧接收 Dynamo 脚本和空间表，微信只准备交付草稿。
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function ExecutionWorkQueue({ t }: { t: any }) {
   const isZh = t?.langCode !== 'en';
   return (
@@ -1537,6 +1667,7 @@ export function DesktopUI({
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [customerTakeoverStage, setCustomerTakeoverStage] = useState<CustomerTakeoverStage | null>(null);
+  const [designDeliveryStage, setDesignDeliveryStage] = useState<DesignDeliveryStage | null>(null);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
@@ -3283,11 +3414,26 @@ export function DesktopUI({
           const allowedStages: CustomerTakeoverStage[] = ['intake', 'rules', 'wechat', 'result'];
           if (!allowedStages.includes(stage)) throw new Error(`Unsupported customer takeover stage: ${stage}`);
           setCustomerTakeoverStage(stage);
+          setDesignDeliveryStage(null);
           respond({ ok: true, action, stage });
           return;
         }
         if (action === 'close_customer_takeover_panel' || action === 'demo_close_customer_takeover') {
           setCustomerTakeoverStage(null);
+          respond({ ok: true, action });
+          return;
+        }
+        if (action === 'design_delivery_panel' || action === 'demo_design_delivery') {
+          const stage = String(detail.stage || target || 'intake') as DesignDeliveryStage;
+          const allowedStages: DesignDeliveryStage[] = ['intake', 'concept', 'cad', 'revit', 'handoff', 'result'];
+          if (!allowedStages.includes(stage)) throw new Error(`Unsupported design delivery stage: ${stage}`);
+          setDesignDeliveryStage(stage);
+          setCustomerTakeoverStage(null);
+          respond({ ok: true, action, stage });
+          return;
+        }
+        if (action === 'close_design_delivery_panel' || action === 'demo_close_design_delivery') {
+          setDesignDeliveryStage(null);
           respond({ ok: true, action });
           return;
         }
@@ -4671,7 +4817,7 @@ export function DesktopUI({
       </AnimatePresence>
 
       <WorkflowPanel
-        visible={workflowPanelVisible && !customerTakeoverStage}
+        visible={workflowPanelVisible && !customerTakeoverStage && !designDeliveryStage}
         agentStatus={agentStatus}
         steps={workflowSteps}
         t={t}
@@ -4684,6 +4830,14 @@ export function DesktopUI({
           <CustomerTakeoverPanel
             stage={customerTakeoverStage}
             onClose={() => setCustomerTakeoverStage(null)}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {designDeliveryStage && (
+          <DesignDeliveryPanel
+            stage={designDeliveryStage}
+            onClose={() => setDesignDeliveryStage(null)}
           />
         )}
       </AnimatePresence>

@@ -54,6 +54,7 @@ import { buildModelSelfAwareness, buildVisionRoutingOverlay, hasVisionIntent } f
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { isSelfIntroDemoRequest, runSelfIntroDemo } from "./self_intro_demo";
 import { isCustomerTakeoverRequest, runCustomerTakeoverWorkflow } from "./customer_takeover_demo";
+import { isDesignDeliveryRequest, runDesignDeliveryWorkflow } from "./design_delivery_workflow";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
@@ -524,6 +525,86 @@ export function registerChatHandler(
           socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
         });
       });
+
+      const designDeliveryText = visibleUserText || text;
+      if (isDesignDeliveryRequest(designDeliveryText)) {
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: "design_delivery_workflow",
+          detail: "Running design delivery workflow",
+        });
+
+        let workflowResponseText = '';
+        let workflowToolCalls: ToolExecutionRecord[] = [];
+        try {
+          const workflowResult = await runDesignDeliveryWorkflow({
+            socket,
+            userText: designDeliveryText,
+            userId: uid,
+            desktopRelay,
+            speak: async (line) => {
+              emitAgent("agent:chunk", {
+                text: `${line}\n`,
+                agentName: personality.name,
+                source: "design_delivery_workflow",
+              });
+              return Math.min(7600, Math.max(2600, line.length * 118));
+            },
+            voiceScope: {
+              domain: resolvedDomain === 'work' ? 'work' : 'personal',
+              orgId: resolvedOrgId,
+            },
+            isCancelled: () => abortController.signal.aborted,
+          });
+          workflowResponseText = workflowResult.responseText;
+          workflowToolCalls = workflowResult.toolCalls;
+        } catch (err: any) {
+          console.warn('[ChatHandler] Design delivery workflow failed:', err?.message || err);
+          workflowResponseText = '我已经准备好装修设计交付工作流了，不过刚才桌面流程没有完整跑完。你再说“Lumi，开始装修设计交付”，我会重新生成方案、CAD 和 Revit 交接包。';
+        }
+
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          for (const tc of workflowToolCalls) {
+            const tcSummary = tc.error
+              ? `[Tool: ${tc.name}] Error: ${tc.error}`
+              : `[Tool: ${tc.name}] Done`;
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
+          }
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined });
+        }
+
+        try {
+          const db = readDB();
+          db.interactions.push({
+            id: interactionId,
+            userId: uid,
+            agentId: agentId || '',
+            conversationId: conversationId || '',
+            content: storedUserContent,
+            response: workflowResponseText,
+            role: "user",
+            personality: personality.id,
+            timestamp: new Date().toISOString(),
+            cognitiveIntent: 'design_delivery_workflow',
+            llmWasCalled: false,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          });
+          writeDB(db);
+        } catch (persistErr: any) {
+          console.warn('[ChatHandler] Design delivery interaction persistence failed:', persistErr?.message || persistErr);
+        }
+
+        emitAgent("agent:response", { text: workflowResponseText, agentName: personality.name, source: "design_delivery_workflow" });
+        if (conversationId) {
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'design_delivery_workflow' });
+        }
+        emitAgent("agent:status", { status: "idle", agentName: personality.name });
+        chatSessionMap.delete(sessionKey);
+        return;
+      }
 
       const customerTakeoverText = visibleUserText || text;
       if (isCustomerTakeoverRequest(customerTakeoverText)) {
