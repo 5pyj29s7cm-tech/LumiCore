@@ -179,8 +179,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Renovation Design Delivery Takeover',
       category: 'client',
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
-      actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_open', 'desktop_clipboard_write', 'cad_generate_dxf'],
-      surfaces: ['Lumi desktop', 'large design delivery panel', 'WPS or editor', 'browser preview', 'CAD handoff files', 'Revit/Dynamo handoff', 'WeChat'],
+      actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_open', 'desktop_clipboard_write', 'create_ppt', 'create_pdf', 'cad_generate_dxf'],
+      surfaces: ['Lumi desktop', 'large design delivery panel', 'WPS or editor', 'PPT/PDF report files', 'browser preview', 'CAD handoff files', 'Revit/Dynamo handoff', 'WeChat'],
       requiresConfirmation: true,
       setup: hasState ? [] : ['Open Lumi desktop client so the design delivery workflow can control client surfaces.'],
       diagnostics: [
@@ -188,7 +188,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         gate.externalAppAutomationEnabled ? 'externalAppAutomation=enabled' : 'externalAppAutomation=disabled',
       ],
       safety: 'Runs only after an explicit renovation/design/CAD/Revit delivery request. It prepares local delivery files and WeChat drafts; sending to WeChat is off by default unless configured or confirmed.',
-      notes: 'Use for current-stage industry videos and real design delivery tasks where Lumi turns a design request into external-system artifacts: proposal, budget, CAD DXF, preview, Revit/Dynamo handoff, and client reply draft.',
+      notes: 'Use for current-stage industry videos and real design delivery tasks where Lumi turns a design request into external-system artifacts: proposal, budget, PPTX presentation, PDF report, CAD DXF, preview, Revit/Dynamo handoff, and client reply draft.',
     },
     {
       id: 'client.interface_map',
@@ -455,7 +455,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       surfaces: ['runtime logs', 'CAD handoff files', 'desktop CAD apps', 'large design delivery panel'],
       requiresConfirmation: true,
       safety: 'Generated DXF/IFC/BIM drafts are not production drawings until dimensions and standards are reviewed.',
-      notes: 'Current stable path is file generation plus optional confirmed app opening. Renovation design delivery can package proposal, budget, DXF, preview, and Revit/Dynamo handoff files. Direct AutoCAD/Revit UI control is possible later through computer-use and adapters.',
+      notes: 'Current stable path is file generation plus optional confirmed app opening. Renovation design delivery can package proposal, budget, PPTX/PDF reports, DXF, preview, and Revit/Dynamo handoff files. Direct AutoCAD/Revit UI control is possible later through computer-use and adapters.',
     },
     {
       id: 'cad_bim.local_toolchain',

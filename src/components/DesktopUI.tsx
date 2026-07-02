@@ -1246,8 +1246,8 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
     },
     concept: {
       eyebrow: 'CONCEPT PACKAGE',
-      title: '方案与预算已生成',
-      desc: '设计方案、空间拆解、预算材料清单已落到本地文件，可用 WPS 或编辑器直接打开查看。',
+      title: '方案、预算与汇报文件已生成',
+      desc: '设计方案、预算材料清单、PPTX 汇报版和 PDF 交付版已落到本地文件，可直接打开查看。',
     },
     cad: {
       eyebrow: 'CAD HANDOFF',
@@ -1276,7 +1276,7 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
   const currentIndex = stageOrder.indexOf(stage);
   const pipeline = [
     { key: 'intake' as DesignDeliveryStage, label: '需求识别', value: '客户目标 / 户型 / 预算', icon: <MessageSquare size={16} /> },
-    { key: 'concept' as DesignDeliveryStage, label: '方案预算', value: 'RTF 文件已生成', icon: <FileText size={16} /> },
+    { key: 'concept' as DesignDeliveryStage, label: '方案汇报', value: 'RTF + PPTX + PDF', icon: <FileText size={16} /> },
     { key: 'cad' as DesignDeliveryStage, label: 'CAD 初稿', value: 'DXF + SVG 预览', icon: <Brush size={16} /> },
     { key: 'revit' as DesignDeliveryStage, label: 'Revit 交接', value: 'Dynamo + 空间表', icon: <Box size={16} /> },
     { key: 'handoff' as DesignDeliveryStage, label: '微信交付', value: '草稿等待确认', icon: <Copy size={16} /> },
@@ -1284,10 +1284,10 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
   const resultItems = [
     ['项目', '120 平三居室'],
     ['方案', stage === 'result' ? '已完成' : '生成中'],
+    ['汇报', currentIndex >= 1 ? 'PPTX + PDF' : '准备中'],
     ['预算', '28 万控制线'],
     ['CAD', currentIndex >= 2 ? 'DXF + 预览图' : '准备中'],
     ['Revit', currentIndex >= 3 ? 'Dynamo 交接包' : '准备中'],
-    ['边界', '结构/燃气/签字上报'],
   ];
 
   return (
@@ -1357,7 +1357,7 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
               ))}
             </div>
             <div className="mt-3 rounded-lg border border-emerald-300/18 bg-emerald-300/[0.07] px-3 py-3 text-sm leading-relaxed text-white/68">
-              Lumi 当前阶段会把结果落到外部电脑系统：WPS / 编辑器查看方案，浏览器预览平面图，CAD 接收 DXF，Revit 侧接收 Dynamo 脚本和空间表，微信只准备交付草稿。
+              Lumi 当前阶段会把结果落到外部电脑系统：WPS / 编辑器查看方案，PPTX 用于汇报，PDF 用于客户确认，CAD 接收 DXF，Revit 侧接收 Dynamo 脚本和空间表，微信只准备交付草稿。
             </div>
           </div>
         </div>

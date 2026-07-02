@@ -1,7 +1,9 @@
 import { Socket } from "socket.io";
+import { execFileSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { pathToFileURL } from "url";
 import { readDB } from "../../db_layer";
 import { ToolExecutionRecord } from "../tools/types";
 
@@ -79,6 +81,9 @@ type DesignDeliveryFiles = {
   folder: string;
   proposal: string;
   budget: string;
+  presentation: string;
+  pdf: string;
+  reportHtml: string;
   cadDxf: string;
   cadPreview: string;
   dynamoScript: string;
@@ -425,7 +430,421 @@ function buildCadPreviewSvg(): string {
 </svg>`;
 }
 
-function createDesignDeliveryFiles(): DesignDeliveryFiles {
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function pptTextShape(
+  id: number,
+  name: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  paragraphs: Array<{ text: string; size?: number; color?: string; bold?: boolean; bullet?: boolean }>,
+): string {
+  const paraXml = paragraphs.map((para) => {
+    const color = para.color || 'E2E8F0';
+    const size = Math.round((para.size || 20) * 100);
+    const bullet = para.bullet ? '<a:pPr marL="342900" indent="-171450"><a:buChar char="•"/></a:pPr>' : '<a:pPr/>';
+    const bold = para.bold ? ' b="1"' : '';
+    return `<a:p>${bullet}<a:r><a:rPr lang="zh-CN" sz="${size}"${bold}><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:rPr><a:t>${xmlEscape(para.text)}</a:t></a:r></a:p>`;
+  }).join('');
+  return `
+    <p:sp>
+      <p:nvSpPr>
+        <p:cNvPr id="${id}" name="${xmlEscape(name)}"/>
+        <p:cNvSpPr txBox="1"/>
+        <p:nvPr/>
+      </p:nvSpPr>
+      <p:spPr>
+        <a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+        <a:noFill/>
+        <a:ln><a:noFill/></a:ln>
+      </p:spPr>
+      <p:txBody>
+        <a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0"/>
+        <a:lstStyle/>
+        ${paraXml}
+      </p:txBody>
+    </p:sp>`;
+}
+
+function pptRectShape(id: number, name: string, x: number, y: number, width: number, height: number, fill: string, alpha = 100000): string {
+  return `
+    <p:sp>
+      <p:nvSpPr>
+        <p:cNvPr id="${id}" name="${xmlEscape(name)}"/>
+        <p:cNvSpPr/>
+        <p:nvPr/>
+      </p:nvSpPr>
+      <p:spPr>
+        <a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm>
+        <a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>
+        <a:solidFill><a:srgbClr val="${fill}"><a:alpha val="${alpha}"/></a:srgbClr></a:solidFill>
+        <a:ln><a:noFill/></a:ln>
+      </p:spPr>
+    </p:sp>`;
+}
+
+function buildPptSlideXml(index: number, title: string, subtitle: string, bullets: string[], accent: string): string {
+  const bulletParagraphs = bullets.map(text => ({ text, size: 20, color: 'E2E8F0', bullet: true }));
+  const shapes = [
+    pptRectShape(2, 'Accent', 457200, 520000, 350000, 350000, accent),
+    pptTextShape(3, 'Title', 457200, 760000, 8200000, 900000, [
+      { text: title, size: 34, color: 'FFFFFF', bold: true },
+      { text: subtitle, size: 15, color: 'A7F3D0' },
+    ]),
+    pptRectShape(4, 'Content Panel', 700000, 1900000, 7600000, 3600000, '111827', 86000),
+    pptTextShape(5, 'Bullets', 1000000, 2200000, 7000000, 3000000, bulletParagraphs),
+    pptTextShape(6, 'Footer', 700000, 6200000, 7600000, 260000, [
+      { text: `Lumi design delivery package · slide ${index}`, size: 11, color: '94A3B8' },
+    ]),
+  ].join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+       xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+       xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:bg><p:bgPr><a:solidFill><a:srgbClr val="0F172A"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      ${shapes}
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>`;
+}
+
+function buildPptContentTypes(slideCount: number): string {
+  const slideOverrides = Array.from({ length: slideCount }, (_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+  <Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/>
+  <Override PartName="/ppt/viewProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml"/>
+  <Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/>
+  ${slideOverrides}
+</Types>`;
+}
+
+function buildPptPresentationXml(slideCount: number): string {
+  const slideIds = Array.from({ length: slideCount }, (_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 2}"/>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
+  <p:sldIdLst>${slideIds}</p:sldIdLst>
+  <p:sldSz cx="9144000" cy="5143500" type="screen16x9"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
+  <p:defaultTextStyle/>
+</p:presentation>`;
+}
+
+function buildPptPresentationRels(slideCount: number): string {
+  const slideRels = Array.from({ length: slideCount }, (_, i) => `<Relationship Id="rId${i + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
+  ${slideRels}
+  <Relationship Id="rId${slideCount + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/>
+  <Relationship Id="rId${slideCount + 3}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps" Target="viewProps.xml"/>
+  <Relationship Id="rId${slideCount + 4}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles" Target="tableStyles.xml"/>
+</Relationships>`;
+}
+
+function writeFileEnsured(filePath: string, content: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf8');
+}
+
+function zipDirectory(sourceDir: string, outPath: string): void {
+  if (fs.existsSync(outPath)) fs.rmSync(outPath, { force: true });
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$src = (Get-Item -LiteralPath ${psString(sourceDir)}).FullName
+$dst = ${psString(outPath)}
+if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
+$zip = [System.IO.Compression.ZipFile]::Open($dst, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+  Get-ChildItem -LiteralPath $src -Recurse -File | ForEach-Object {
+    $rel = $_.FullName.Substring($src.Length).TrimStart([char]92, [char]47)
+    $entry = $rel.Replace([char]92, [char]47)
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $entry) | Out-Null
+  }
+} finally {
+  $zip.Dispose()
+}
+`.trim();
+  execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { timeout: 20000 });
+}
+
+function createDesignPresentationPptx(outPath: string): string {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-design-pptx-'));
+  const slides = [
+    {
+      title: 'Lumi 装修设计交付',
+      subtitle: '从客户需求到可交付文件包',
+      bullets: ['识别微信/自然语言需求', '生成方案、预算、CAD 与 Revit 交接包', '默认准备微信草稿，不自动发送'],
+      accent: '22C55E',
+    },
+    {
+      title: '客户需求与空间策略',
+      subtitle: '120 平三居室，现代轻奢，预算 28 万',
+      bullets: ['开放式客餐厅，提高采光和主通道效率', '玄关、餐边柜、卧室收纳一体化', '施工图前复核承重、梁位、管井和水电'],
+      accent: '38BDF8',
+    },
+    {
+      title: 'CAD / Revit 交付物',
+      subtitle: '让外部电脑系统继续工作',
+      bullets: ['DXF 平面布置文件用于 CAD 深化', 'SVG 平面预览用于客户快速确认', 'Dynamo 脚本和空间表用于 Revit 建模交接'],
+      accent: 'A78BFA',
+    },
+    {
+      title: '交付与推进',
+      subtitle: '拿到结果，而不是停在反复确认',
+      bullets: ['PPT 用于汇报和现场修改', 'PDF 用于微信/邮件发送和客户确认', '结构、燃气、报价签字和付款节点上报用户'],
+      accent: 'F59E0B',
+    },
+  ];
+
+  try {
+    writeFileEnsured(path.join(tmpDir, '[Content_Types].xml'), buildPptContentTypes(slides.length));
+    writeFileEnsured(path.join(tmpDir, '_rels', '.rels'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`);
+    writeFileEnsured(path.join(tmpDir, 'docProps', 'core.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+                   xmlns:dc="http://purl.org/dc/elements/1.1/"
+                   xmlns:dcterms="http://purl.org/dc/terms/"
+                   xmlns:dcmitype="http://purl.org/dc/dcmitype/"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>Lumi 装修设计交付方案汇报</dc:title>
+  <dc:creator>Lumi</dc:creator>
+  <cp:lastModifiedBy>Lumi</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:modified>
+</cp:coreProperties>`);
+    writeFileEnsured(path.join(tmpDir, 'docProps', 'app.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+            xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>LumiOS</Application>
+  <PresentationFormat>On-screen Show (16:9)</PresentationFormat>
+  <Slides>${slides.length}</Slides>
+</Properties>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'presentation.xml'), buildPptPresentationXml(slides.length));
+    writeFileEnsured(path.join(tmpDir, 'ppt', '_rels', 'presentation.xml.rels'), buildPptPresentationRels(slides.length));
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'slideMasters', 'slideMaster1.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+  <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+  <p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>
+  <p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>
+</p:sldMaster>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'slideMasters', '_rels', 'slideMaster1.xml.rels'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'slideLayouts', 'slideLayout1.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1">
+  <p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'slideLayouts', '_rels', 'slideLayout1.xml.rels'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'theme', 'theme1.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Lumi">
+  <a:themeElements>
+    <a:clrScheme name="Lumi"><a:dk1><a:srgbClr val="0F172A"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="111827"/></a:dk2><a:lt2><a:srgbClr val="E2E8F0"/></a:lt2><a:accent1><a:srgbClr val="22C55E"/></a:accent1><a:accent2><a:srgbClr val="38BDF8"/></a:accent2><a:accent3><a:srgbClr val="A78BFA"/></a:accent3><a:accent4><a:srgbClr val="F59E0B"/></a:accent4><a:accent5><a:srgbClr val="14B8A6"/></a:accent5><a:accent6><a:srgbClr val="F43F5E"/></a:accent6><a:hlink><a:srgbClr val="38BDF8"/></a:hlink><a:folHlink><a:srgbClr val="A78BFA"/></a:folHlink></a:clrScheme>
+    <a:fontScheme name="Lumi"><a:majorFont><a:latin typeface="Microsoft YaHei"/><a:ea typeface="Microsoft YaHei"/></a:majorFont><a:minorFont><a:latin typeface="Microsoft YaHei"/><a:ea typeface="Microsoft YaHei"/></a:minorFont></a:fontScheme>
+    <a:fmtScheme name="Lumi"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme>
+  </a:themeElements>
+</a:theme>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'presProps.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'viewProps.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:viewPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>`);
+    writeFileEnsured(path.join(tmpDir, 'ppt', 'tableStyles.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`);
+    slides.forEach((slide, index) => {
+      const slideNo = index + 1;
+      writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', `slide${slideNo}.xml`), buildPptSlideXml(slideNo, slide.title, slide.subtitle, slide.bullets, slide.accent));
+      writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', '_rels', `slide${slideNo}.xml.rels`), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+</Relationships>`);
+    });
+    zipDirectory(tmpDir, outPath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+  return outPath;
+}
+
+function buildReportHtml(cadPreviewPath: string): string {
+  const cadPreviewUrl = pathToFileURL(cadPreviewPath).href;
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Lumi 装修设计交付 PDF</title>
+  <style>
+    @page { size: A4; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Microsoft YaHei", "SimHei", Arial, sans-serif; color: #0f172a; background: #f8fafc; }
+    section { page-break-after: always; min-height: 267mm; padding: 18mm 14mm; background: #ffffff; }
+    section:last-child { page-break-after: auto; }
+    .cover { background: linear-gradient(135deg, #0f172a, #064e3b); color: #fff; display: flex; flex-direction: column; justify-content: center; }
+    h1 { font-size: 38px; margin: 0 0 16px; }
+    h2 { font-size: 26px; margin: 0 0 14px; color: #065f46; }
+    p, li { font-size: 15px; line-height: 1.85; }
+    .subtitle { font-size: 20px; color: #a7f3d0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+    .card { border: 1px solid #d1fae5; background: #ecfdf5; border-radius: 10px; padding: 14px; }
+    .label { font-size: 12px; color: #64748b; letter-spacing: 0.08em; text-transform: uppercase; }
+    .value { margin-top: 6px; font-size: 18px; font-weight: 700; }
+    img { max-width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; }
+    .note { margin-top: 18px; padding: 12px; border-left: 4px solid #f59e0b; background: #fffbeb; color: #78350f; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="label">LUMI DESIGN DELIVERY</div>
+    <h1>装修设计交付方案汇报</h1>
+    <div class="subtitle">方案 + 预算 + CAD + Revit 交接 + 微信交付话术</div>
+    <p>本 PDF 用于客户确认和微信/邮件交付，PPTX 用于现场汇报和继续修改。</p>
+  </section>
+  <section>
+    <h2>一、项目判断</h2>
+    <p>客户需求已被 Lumi 拆解为正式设计交付任务：120 平三居室，现代轻奢方向，预算控制线 28 万元。</p>
+    <div class="grid">
+      <div class="card"><div class="label">空间策略</div><div class="value">开放客餐厅 + 收纳一体化</div></div>
+      <div class="card"><div class="label">交付目标</div><div class="value">快速确认方案并进入深化</div></div>
+      <div class="card"><div class="label">文件结果</div><div class="value">PPTX / PDF / RTF / DXF / SVG / CSV</div></div>
+      <div class="card"><div class="label">授权边界</div><div class="value">结构、燃气、签字、付款上报</div></div>
+    </div>
+    <div class="note">正式施工图前必须复核现场精确尺寸、承重墙、梁位、管井和原始水电点位。</div>
+  </section>
+  <section>
+    <h2>二、CAD 平面预览</h2>
+    <p>下图来自同一交付包内的 SVG 预览，对应 DXF 平面布置初稿，可进入 CAD 软件继续深化。</p>
+    <img src="${cadPreviewUrl}" alt="CAD preview" />
+  </section>
+  <section>
+    <h2>三、交付清单</h2>
+    <ul>
+      <li>01-Lumi-装修设计方案.rtf：客户需求、空间策略、交付节奏和风险点。</li>
+      <li>02-Lumi-预算与材料清单.rtf：预算控制线、基础施工、主材、定制和风险预留。</li>
+      <li>03-Lumi-装修设计方案汇报.pptx / .pdf：汇报和发送版本。</li>
+      <li>04-Lumi-CAD-平面布置.dxf：CAD 深化初稿。</li>
+      <li>05-Lumi-Revit-Dynamo建模脚本.py / 空间表.csv：Revit 侧建模交接数据。</li>
+      <li>06-Lumi-微信交付话术.txt：发送前等待用户确认的客户回复草稿。</li>
+    </ul>
+    <p>下一步：客户确认方向后，Lumi 继续推进施工图清单、报价深化和交底版本。</p>
+  </section>
+</body>
+</html>`;
+}
+
+function findChromiumExecutable(): string {
+  const candidates = [
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ].filter(Boolean);
+  return candidates.find(candidate => fs.existsSync(candidate)) || '';
+}
+
+function pdfEscape(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+function writeAsciiFallbackPdf(outPath: string): void {
+  const lines = [
+    'Lumi Renovation Design Delivery PDF',
+    '',
+    'This fallback PDF is generated when Chrome PDF export is unavailable.',
+    'Artifacts included in the same folder:',
+    '- Proposal RTF',
+    '- Budget and material list RTF',
+    '- PPTX presentation',
+    '- CAD DXF and SVG preview',
+    '- Revit/Dynamo handoff script and room schedule',
+    '- WeChat delivery draft',
+  ];
+  const stream = [
+    'BT',
+    '/F1 20 Tf',
+    '72 740 Td',
+    `(${pdfEscape(lines[0])}) Tj`,
+    '/F1 12 Tf',
+    ...lines.slice(1).map(line => `0 -22 Td (${pdfEscape(line)}) Tj`),
+    'ET',
+  ].join('\n');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(stream, 'utf8')} >>\nstream\n${stream}\nendstream`,
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, index) => {
+    offsets.push(Buffer.byteLength(pdf, 'utf8'));
+    pdf += `${index + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach(offset => {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  fs.writeFileSync(outPath, pdf, 'binary');
+}
+
+function createPdfFromHtml(htmlPath: string, pdfPath: string): string {
+  const chrome = findChromiumExecutable();
+  if (chrome) {
+    try {
+      execFileSync(chrome, [
+        '--headless=new',
+        '--disable-gpu',
+        '--no-pdf-header-footer',
+        `--print-to-pdf=${pdfPath}`,
+        pathToFileURL(htmlPath).href,
+      ], { timeout: 35000, stdio: 'ignore' });
+      if (fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 1000) return pdfPath;
+    } catch {}
+  }
+  writeAsciiFallbackPdf(pdfPath);
+  return pdfPath;
+}
+
+export function createDesignDeliveryFiles(): DesignDeliveryFiles {
   const desktopDir = path.join(os.homedir(), 'Desktop');
   const baseDir = fs.existsSync(desktopDir) ? desktopDir : os.tmpdir();
   const folder = path.join(baseDir, 'Lumi-装修设计交付包');
@@ -433,14 +852,20 @@ function createDesignDeliveryFiles(): DesignDeliveryFiles {
 
   const proposal = writeRtf(path.join(folder, '01-Lumi-装修设计方案.rtf'), DESIGN_PROPOSAL_TEXT);
   const budget = writeRtf(path.join(folder, '02-Lumi-预算与材料清单.rtf'), MATERIAL_BUDGET_TEXT);
-  const cadDxf = path.join(folder, '03-Lumi-CAD-平面布置.dxf');
-  const cadPreview = path.join(folder, '03-Lumi-CAD-平面预览.svg');
-  const dynamoScript = path.join(folder, '04-Lumi-Revit-Dynamo建模脚本.py');
-  const revitCsv = path.join(folder, '04-Lumi-Revit-空间表.csv');
-  const wechatDraft = path.join(folder, '05-Lumi-微信交付话术.txt');
+  const presentation = path.join(folder, '03-Lumi-装修设计方案汇报.pptx');
+  const pdf = path.join(folder, '03-Lumi-装修设计方案汇报.pdf');
+  const reportHtml = path.join(folder, '03-Lumi-装修设计方案汇报.html');
+  const cadDxf = path.join(folder, '04-Lumi-CAD-平面布置.dxf');
+  const cadPreview = path.join(folder, '04-Lumi-CAD-平面预览.svg');
+  const dynamoScript = path.join(folder, '05-Lumi-Revit-Dynamo建模脚本.py');
+  const revitCsv = path.join(folder, '05-Lumi-Revit-空间表.csv');
+  const wechatDraft = path.join(folder, '06-Lumi-微信交付话术.txt');
 
   fs.writeFileSync(cadDxf, buildRenovationDxf(), 'utf8');
   fs.writeFileSync(cadPreview, buildCadPreviewSvg(), 'utf8');
+  createDesignPresentationPptx(presentation);
+  fs.writeFileSync(reportHtml, buildReportHtml(cadPreview), 'utf8');
+  createPdfFromHtml(reportHtml, pdf);
   fs.writeFileSync(dynamoScript, DYNAMO_SCRIPT_TEXT, 'utf8');
   fs.writeFileSync(revitCsv, [
     'name,x,y,width,height,finish',
@@ -453,7 +878,7 @@ function createDesignDeliveryFiles(): DesignDeliveryFiles {
   ].join('\n'), 'utf8');
   fs.writeFileSync(wechatDraft, WECHAT_DELIVERY_DRAFT, 'utf8');
 
-  return { folder, proposal, budget, cadDxf, cadPreview, dynamoScript, revitCsv, wechatDraft };
+  return { folder, proposal, budget, presentation, pdf, reportHtml, cadDxf, cadPreview, dynamoScript, revitCsv, wechatDraft };
 }
 
 function buildAppActivateCommand(title: string): string {
@@ -832,12 +1257,14 @@ export async function runDesignDeliveryWorkflow({
 
   const files = createDesignDeliveryFiles();
   const officePatterns = [/wps/i, /winword/i, /word/i, /writer/i, /notepad/i, /记事本/i];
+  const presentationPatterns = [/wps/i, /powerpnt/i, /powerpoint/i, /wpp/i, /演示/i, /presentation/i, /office/i];
   const browserPatterns = [/chrome/i, /edge/i, /firefox/i, /browser/i, /msedge/i, /iexplore/i];
+  const pdfPatterns = [/chrome/i, /edge/i, /firefox/i, /browser/i, /msedge/i, /acrobat/i, /pdf/i, /wps/i];
   const wechatPatterns = [/wechat/i, /weixin/i, /微信/i, /wxwork/i];
 
   try {
     await runStep({
-      text: `${greeting}我会把这条装修需求接管成一个正式的设计交付任务：先识别客户目标，再生成方案、预算、CAD 初稿、Revit 交接包，最后准备微信交付话术。`,
+      text: `${greeting}我会把这条装修需求接管成一个正式的设计交付任务：先识别客户目标，再生成方案、预算、PPT 和 PDF 汇报版、CAD 初稿、Revit 交接包，最后准备微信交付话术。`,
       actions: [
         { tool: 'desktop_show_lumi_window', afterMs: 250 },
         { clientAction: { action: 'design_delivery_panel', stage: 'intake' } },
@@ -870,6 +1297,27 @@ export async function runDesignDeliveryWorkflow({
     await closeActiveWindow(officePatterns);
 
     await runStep({
+      text: '接着我生成客户可直接查看的 PDF 汇报版。这个版本适合发微信、发邮件、让客户确认方向。',
+      actions: [
+        { clientAction: { action: 'design_delivery_panel', stage: 'concept' } },
+        { tool: 'desktop_open', args: { target: files.pdf }, afterMs: 4200 },
+      ],
+      timing: 'after',
+      pauseMs: 6400,
+    });
+    await waitForActiveWindow(pdfPatterns, 5200);
+    await pointActiveWindowRatio(pdfPatterns, 0.52, 0.5, false, { xRatio: 0.52, yRatio: 0.5 });
+    await say('同一份内容我也做了 PPTX 汇报版：PDF 用来交付确认，PPT 用来现场讲解和继续修改。', 6000);
+    await closeActiveWindow(pdfPatterns);
+
+    await runTool('desktop_open', { target: files.presentation }, true);
+    await wait(4200);
+    await waitForActiveWindow(presentationPatterns, 4200);
+    await pointActiveWindowRatio(presentationPatterns, 0.5, 0.46, false, { xRatio: 0.5, yRatio: 0.46 });
+    await say('这里是 PPT 汇报文件。如果这台电脑装了 PowerPoint 或 WPS 演示，就会直接打开；没有关联软件时，文件也已经在交付包里，后续可以交给外部工具继续编辑。', 7200);
+    await closeActiveWindow(presentationPatterns);
+
+    await runStep({
       text: '第二步，我生成 CAD 交付。这里同时有 DXF 文件和可直接预览的平面图，所以即使电脑还没装 CAD，也能先看到空间布局结果。',
       actions: [
         { clientAction: { action: 'design_delivery_panel', stage: 'cad' } },
@@ -900,7 +1348,7 @@ export async function runDesignDeliveryWorkflow({
     await runTool('desktop_open', { target: files.folder }, true);
     await wait(2600);
     await pointActiveWindowRatio([/explorer/i, /文件资源管理器/i], 0.5, 0.46, false, { xRatio: 0.5, yRatio: 0.48 });
-    await say('现在交付包已经成型：方案、预算、CAD、预览图、Revit 空间表、Dynamo 脚本和微信话术都在这里。', 6200);
+    await say('现在交付包已经成型：方案、预算、PPT、PDF、CAD、预览图、Revit 空间表、Dynamo 脚本和微信话术都在这里。', 6600);
     await closeActiveWindow([/explorer/i, /文件资源管理器/i]);
 
     const shouldSendToWeChat = process.env.LUMI_DESIGN_DELIVERY_SEND_WECHAT === '1';
@@ -951,7 +1399,7 @@ export async function runDesignDeliveryWorkflow({
       await runTool('desktop_show_lumi_window', {}, true);
       await wait(500);
       await runClientAction({ action: 'design_delivery_panel', stage: 'result' });
-      await say('装修设计交付包已经完成：方案、预算、CAD DXF、平面预览、Revit 交接数据和微信交付草稿都已生成。下一步不是继续问你要不要做，而是按你的授权边界把客户推进到确认方案和深化交付。', 8600);
+      await say('装修设计交付包已经完成：方案、预算、PPT 汇报版、PDF 交付版、CAD DXF、平面预览、Revit 交接数据和微信交付草稿都已生成。下一步不是继续问你要不要做，而是按你的授权边界把客户推进到确认方案和深化交付。', 9200);
     }
   } finally {
     await exitWallpaperMode();
