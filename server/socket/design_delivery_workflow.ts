@@ -78,6 +78,7 @@ type NativeFileEntry = {
 };
 
 type DesignDeliveryFiles = {
+  project: DesignProjectBrief;
   folder: string;
   proposal: string;
   budget: string;
@@ -91,6 +92,38 @@ type DesignDeliveryFiles = {
   revitCsv: string;
   revitHandoffHtml: string;
   wechatDraft: string;
+  verification: string;
+  verificationResult: DesignDeliveryVerification;
+};
+
+type DesignDeliveryFilePaths = Omit<DesignDeliveryFiles, 'project' | 'verification' | 'verificationResult'>;
+
+type DesignBudgetLine = {
+  label: string;
+  amountWan: number;
+  note: string;
+};
+
+type DesignProjectBrief = {
+  sourceText: string;
+  projectTitle: string;
+  areaSqm: number;
+  layout: string;
+  style: string;
+  budgetWan: number;
+  budgetLabel: string;
+  clientFocus: string[];
+  deliverables: string[];
+  roomLabels: string[];
+  strategy: string[];
+  confirmItems: string[];
+  budgetLines: DesignBudgetLine[];
+};
+
+type DesignDeliveryVerification = {
+  passed: boolean;
+  checkedAt: string;
+  checks: Array<{ label: string; passed: boolean; detail: string }>;
 };
 
 const DESIGN_DELIVERY_PATTERNS = [
@@ -103,107 +136,268 @@ const DESIGN_DELIVERY_PATTERNS = [
   /(?:renovation|interior\s*design|design\s*delivery|cad|dxf|revit|bim).{0,24}(?:take\s*over|handoff|delivery|generate|demo)/i,
 ];
 
-const DESIGN_PROPOSAL_TEXT = [
-  'Lumi 装修设计交付方案',
-  '',
-  '项目：120 平米三居室全案设计交付',
-  '客户目标：用一版可确认、可报价、可继续深化到 CAD / Revit 的方案，快速判断是否进入正式施工图阶段。',
-  '空间定位：现代轻奢，保留开放式客餐厅，提高收纳、动线和采光效率。',
-  '',
-  '一、需求判断',
-  '1. 原始诉求不是普通咨询，而是一个可推进的设计交付任务。',
-  '2. Lumi 需要先把微信里的自然语言需求拆成户型、风格、预算、交付物、风险和下一步动作。',
-  '3. 当前授权范围内，Lumi 可以生成方案、预算清单、CAD 初稿、Revit / Dynamo 交接包和微信交付话术。',
-  '',
-  '二、方案结构',
-  '1. 玄关：通顶鞋柜 + 临时挂衣区，减少入户杂物外露。',
-  '2. 客餐厅：客厅、餐厅、阳台一体化，保留 3.2 米主通道，电视墙增加隐藏收纳。',
-  '3. 厨房：U 型操作台，冰箱外置到餐边柜区，提高厨房内部操作效率。',
-  '4. 主卧：床头背景墙 + 衣柜一体化，预留梳妆台和夜间感应灯。',
-  '5. 次卧：老人房优先无障碍动线，床侧预留 900mm 通行距离。',
-  '6. 书房：保留独立办公区，后期可切换为儿童房。',
-  '',
-  '三、交付节奏',
-  '今天：需求拆解、概念方案、预算框架、CAD 初稿、Revit 交接包。',
-  '第 2 天：客户确认风格和预算后，深化立面、节点和材料。',
-  '第 3-5 天：进入施工图、清单报价和现场交底版本。',
-  '',
-  '四、需要确认',
-  '1. 现场精确尺寸、承重墙、梁位、管井和原始水电点位。',
-  '2. 客户是否接受开放式厨房及烟道、燃气合规要求。',
-  '3. 主材品牌和预算上限是否以 28 万为控制线。',
-].join('\n');
+const DEFAULT_DESIGN_PROJECT_BRIEF: DesignProjectBrief = buildDesignProjectBrief({
+  sourceText: '',
+  areaSqm: 120,
+  layout: '三居室',
+  style: '现代轻奢',
+  budgetWan: 28,
+  clientFocus: ['开放客餐厅', '收纳一体化', '采光和动线效率'],
+  deliverables: ['方案', '预算', 'PPT/PDF', 'CAD DXF', 'Revit/Dynamo', '微信草稿'],
+});
 
-const MATERIAL_BUDGET_TEXT = [
-  'Lumi 装修预算与材料清单',
-  '',
-  '预算控制线：28 万元',
-  '设计交付阶段：概念方案 + CAD 初稿 + Revit / Dynamo 交接包',
-  '',
-  '基础施工：98,000 元',
-  '拆改、砌筑、水电、防水、瓦工、木作基层、油工和安装人工。',
-  '',
-  '主材：126,000 元',
-  '地砖、木地板、墙面材料、门、橱柜、卫浴、灯具和五金。',
-  '',
-  '定制与软装：42,000 元',
-  '玄关柜、餐边柜、主卧衣柜、窗帘、局部灯光和软装搭配。',
-  '',
-  '风险预留：14,000 元',
-  '用于墙体复核、现场尺寸偏差、水电改位、材料涨价和客户新增需求。',
-  '',
-  'Lumi 执行规则：',
-  '1. 常规材料比价、方案整理、交付包生成由 Lumi 接管。',
-  '2. 涉及承重结构、燃气改造、最终报价签字和付款节点，必须向用户上报。',
-  '3. 微信回复默认只准备草稿，不自动发送，除非用户明确授权。',
-].join('\n');
+function normalizeBriefText(text: string): string {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
 
-const WECHAT_DELIVERY_DRAFT = [
-  '您好，我这边已经先把需求整理成一版可推进的设计交付包。',
-  '',
-  '这版里面包括：',
-  '1. 120 平三居的概念方案和空间拆解；',
-  '2. 预算与材料控制清单；',
-  '3. CAD 平面布置初稿和 SVG 预览；',
-  '4. Revit / Dynamo 建模交接脚本和空间表。',
-  '',
-  '目前这版可以先用于确认风格、预算和主要动线。进入正式施工图前，还需要复核现场精确尺寸、承重结构、梁位、管井和原始水电点位。',
-  '',
-  '如果您认可这个方向，我下一步会把它深化成施工图清单和可确认报价。',
-].join('\n');
+function parseChineseRoomCount(raw: string): number | null {
+  const map: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
+  const digit = raw.match(/\d+/)?.[0];
+  if (digit) return Number(digit);
+  const char = raw.match(/[一二两三四五六]/)?.[0];
+  return char ? map[char] || null : null;
+}
 
-const DYNAMO_SCRIPT_TEXT = [
-  '# Lumi Revit / Dynamo handoff script',
-  '# Purpose: create model-ready spaces from the design delivery package.',
-  '# Run inside a reviewed Revit/Dynamo environment after confirming site dimensions.',
-  '',
-  'rooms = [',
-  '    {"name": "玄关", "x": 0, "y": 0, "width": 2200, "height": 2400, "finish": "stone tile"},',
-  '    {"name": "客餐厅", "x": 2200, "y": 0, "width": 5400, "height": 5200, "finish": "wood + tile"},',
-  '    {"name": "厨房", "x": 7600, "y": 0, "width": 2600, "height": 3200, "finish": "anti-slip tile"},',
-  '    {"name": "主卧", "x": 0, "y": 5200, "width": 4200, "height": 3600, "finish": "wood floor"},',
-  '    {"name": "次卧", "x": 4200, "y": 5200, "width": 3200, "height": 3400, "finish": "wood floor"},',
-  '    {"name": "书房", "x": 7400, "y": 5200, "width": 2800, "height": 3000, "finish": "wood floor"},',
-  ']',
-  '',
-  'walls = [',
-  '    {"start": (0, 0), "end": (10200, 0), "type": "exterior_200"},',
-  '    {"start": (10200, 0), "end": (10200, 8800), "type": "exterior_200"},',
-  '    {"start": (10200, 8800), "end": (0, 8800), "type": "exterior_200"},',
-  '    {"start": (0, 8800), "end": (0, 0), "type": "exterior_200"},',
-  '    {"start": (2200, 0), "end": (2200, 5200), "type": "interior_120"},',
-  '    {"start": (7600, 0), "end": (7600, 5200), "type": "interior_120"},',
-  '    {"start": (0, 5200), "end": (10200, 5200), "type": "interior_120"},',
-  ']',
-  '',
-  'materials = {',
-  '    "living": "warm white wall paint + walnut storage",',
-  '    "kitchen": "matte tile + quartz countertop",',
-  '    "bedroom": "wood floor + low-glare lighting",',
-  '}',
-  '',
-  'print("Create Revit levels, room boundaries, walls, room tags, and material schedule from Lumi handoff data.")',
-].join('\n');
+function formatWan(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)} 万`;
+}
+
+function budgetLinesFromTotal(budgetWan: number): DesignBudgetLine[] {
+  const total = Math.max(6, budgetWan || 28);
+  return [
+    { label: '基础施工', amountWan: total * 0.35, note: '拆改、砌筑、水电、防水、瓦工、木作基层、油工和安装人工。' },
+    { label: '主材', amountWan: total * 0.33, note: '地砖、木地板、墙面材料、门、橱柜、卫浴、灯具和五金。' },
+    { label: '定制与收纳', amountWan: total * 0.16, note: '玄关柜、餐边柜、衣柜、局部柜体和功能五金。' },
+    { label: '软装与设备', amountWan: total * 0.11, note: '窗帘、局部灯光、家具软装、电器和氛围配置。' },
+    { label: '风险预留', amountWan: total * 0.05, note: '用于现场尺寸偏差、水电改位、材料涨价和客户新增需求。' },
+  ];
+}
+
+function roomLabelsFromLayout(layout: string): string[] {
+  const count = parseChineseRoomCount(layout) || (layout.includes('别墅') || layout.includes('复式') ? 4 : 3);
+  const rooms = ['玄关', '客餐厅', '厨房', '主卧'];
+  if (count >= 2) rooms.push('次卧');
+  if (count >= 3) rooms.push('书房/儿童房');
+  if (count >= 4) rooms.push('老人房/多功能房');
+  if (/店铺|办公室|工装|商业/.test(layout)) return ['入口接待区', '展示/办公区', '洽谈区', '储物区', '后勤区'];
+  return rooms;
+}
+
+function buildDesignProjectBrief(input: {
+  sourceText: string;
+  areaSqm: number;
+  layout: string;
+  style: string;
+  budgetWan: number;
+  clientFocus: string[];
+  deliverables: string[];
+}): DesignProjectBrief {
+  const layout = input.layout || '三居室';
+  const style = input.style || '现代轻奢';
+  const areaSqm = input.areaSqm || 120;
+  const budgetWan = input.budgetWan || 28;
+  const clientFocus = input.clientFocus.length ? input.clientFocus : ['收纳', '动线', '采光'];
+  const deliverables = input.deliverables.length
+    ? Array.from(new Set(['方案', '预算', 'PPT/PDF', ...input.deliverables]))
+    : ['方案', '预算', 'PPT/PDF', 'CAD DXF', 'Revit/Dynamo', '微信草稿'];
+  const budgetLabel = `${formatWan(budgetWan)}预算控制`;
+  const projectTitle = `${areaSqm} 平 ${layout} ${style}装修设计交付`;
+  const roomLabels = roomLabelsFromLayout(layout);
+  const focusText = clientFocus.join('、');
+  const strategy = [
+    `围绕“${focusText}”先确认空间取舍，再进入造型和材料深化。`,
+    `把 ${layout} 的公共区、安静区和服务区拆开处理，避免只做效果图不解决使用问题。`,
+    `以 ${budgetLabel} 为边界，先保证硬装、水电和主材质量，再给软装和灯光留弹性。`,
+  ];
+  const confirmItems = [
+    '现场精确尺寸、承重墙、梁位、管井和原始水电点位。',
+    '结构、燃气、强弱电和防水相关改动是否满足现场及规范要求。',
+    `客户是否确认 ${style} 方向、${budgetLabel} 和主要交付物：${deliverables.join('、')}。`,
+  ];
+  return {
+    sourceText: input.sourceText,
+    projectTitle,
+    areaSqm,
+    layout,
+    style,
+    budgetWan,
+    budgetLabel,
+    clientFocus,
+    deliverables,
+    roomLabels,
+    strategy,
+    confirmItems,
+    budgetLines: budgetLinesFromTotal(budgetWan),
+  };
+}
+
+function parseDesignProjectBrief(text: string): DesignProjectBrief {
+  const sourceText = normalizeBriefText(text);
+  const area = sourceText.match(/(\d{2,4}(?:\.\d+)?)\s*(?:平米|平|㎡|m2|平方)/i);
+  const areaSqm = area ? Number(area[1]) : DEFAULT_DESIGN_PROJECT_BRIEF.areaSqm;
+  const layoutMatch = sourceText.match(/(一居|两居|二居|三居|四居|五居|六居|[一二两三四五六]\s*室(?:[一二两三四五六]\s*厅)?|别墅|复式|loft|LOFT|公寓|办公室|店铺|工装|商业空间)/);
+  const layout = layoutMatch ? layoutMatch[1].replace(/\s+/g, '') : DEFAULT_DESIGN_PROJECT_BRIEF.layout;
+  const styles = ['现代轻奢', '现代简约', '奶油风', '原木风', '侘寂', '极简', '新中式', '北欧', '法式', '工业风', '美式', '日式', '中古', '轻奢'];
+  const style = styles.find(item => sourceText.includes(item)) || DEFAULT_DESIGN_PROJECT_BRIEF.style;
+  const budgetMatch = sourceText.match(/(?:预算|控制|上限|总价|大概|准备|投入)[^\d]{0,10}(\d+(?:\.\d+)?)\s*(万|w|W|元|块)?/i)
+    || sourceText.match(/(\d+(?:\.\d+)?)\s*(万|w|W)\s*(?:预算|装修|以内|左右|上下)?/i);
+  let budgetWan = DEFAULT_DESIGN_PROJECT_BRIEF.budgetWan;
+  if (budgetMatch) {
+    const value = Number(budgetMatch[1]);
+    const unit = budgetMatch[2] || '万';
+    budgetWan = /元|块/.test(unit) && value > 10000 ? value / 10000 : value;
+  }
+  const focusKeywords = ['收纳', '采光', '动线', '老人', '孩子', '儿童', '宠物', '办公', '书房', '预算', '环保', '快速入住', '出租', '民宿', '品质', '显大', '储物'];
+  const clientFocus = focusKeywords.filter(item => sourceText.includes(item)).slice(0, 6);
+  const deliverables = [
+    /ppt|PPT|汇报/.test(sourceText) ? 'PPT' : '',
+    /pdf|PDF/.test(sourceText) ? 'PDF' : '',
+    /cad|CAD|dxf|DXF|图纸|施工图/.test(sourceText) ? 'CAD DXF' : '',
+    /revit|Revit|Dynamo|BIM|bim/.test(sourceText) ? 'Revit/Dynamo' : '',
+    /报价|预算|清单|材料/.test(sourceText) ? '预算材料清单' : '',
+    /微信|回复|话术|客户/.test(sourceText) ? '微信草稿' : '',
+  ].filter(Boolean);
+  return buildDesignProjectBrief({
+    sourceText,
+    areaSqm,
+    layout,
+    style,
+    budgetWan,
+    clientFocus,
+    deliverables,
+  });
+}
+
+function buildDesignProposalText(project: DesignProjectBrief): string {
+  return [
+    'Lumi 装修设计交付方案',
+    '',
+    `项目：${project.projectTitle}`,
+    `客户目标：用一版可确认、可报价、可继续深化到 CAD / Revit 的方案，快速判断是否进入正式施工图阶段。`,
+    `空间定位：${project.style}，重点解决 ${project.clientFocus.join('、')}。`,
+    project.sourceText ? `原始需求：${project.sourceText.slice(0, 260)}` : '',
+    '',
+    '一、需求判断',
+    '1. 原始诉求不是普通咨询，而是一个可推进的设计交付任务。',
+    `2. Lumi 已把需求拆成：${project.layout}、${project.areaSqm} 平、${project.style}、${project.budgetLabel}、交付物和风险边界。`,
+    `3. 当前授权范围内，Lumi 可以准备：${project.deliverables.join('、')}。`,
+    '',
+    '二、方案结构',
+    ...project.roomLabels.map((room, index) => `${index + 1}. ${room}：${roomStrategy(room, project)}。`),
+    '',
+    '三、空间策略',
+    ...project.strategy.map((item, index) => `${index + 1}. ${item}`),
+    '',
+    '四、交付节奏',
+    '今天：需求拆解、概念方案、预算框架、CAD 初稿、Revit 交接包和微信草稿。',
+    '第 2 天：客户确认风格和预算后，深化立面、节点和材料。',
+    '第 3-5 天：进入施工图、清单报价和现场交底版本。',
+    '',
+    '五、需要确认',
+    ...project.confirmItems.map((item, index) => `${index + 1}. ${item}`),
+  ].filter(Boolean).join('\n');
+}
+
+function roomStrategy(room: string, project: DesignProjectBrief): string {
+  if (/玄关|入口/.test(room)) return '做通顶收纳、临时挂衣和换鞋区，先处理入户杂物';
+  if (/客餐厅|展示|办公/.test(room)) return `围绕 ${project.clientFocus.join('、')} 做主空间，保留清晰通道和视觉轴线`;
+  if (/厨房|后勤/.test(room)) return '优化洗切炒动线，材料优先耐污、防滑、易清洁';
+  if (/主卧/.test(room)) return '保证睡眠区安静和衣物收纳，背景墙不过度堆料';
+  if (/次卧|老人|儿童/.test(room)) return '根据家庭成员切换为老人房、儿童房或客房，保留安全通行距离';
+  if (/书房|多功能/.test(room)) return '预留办公、学习或备用居住场景，减少固定硬装约束';
+  return '先满足核心使用场景，再进入造型和材料深化';
+}
+
+function buildMaterialBudgetText(project: DesignProjectBrief): string {
+  return [
+    'Lumi 装修预算与材料清单',
+    '',
+    `项目：${project.projectTitle}`,
+    `预算控制线：${formatWan(project.budgetWan)}`,
+    `设计交付阶段：${project.deliverables.join(' + ')}`,
+    '',
+    ...project.budgetLines.flatMap(line => [
+      `${line.label}：${formatWan(line.amountWan)}`,
+      line.note,
+      '',
+    ]),
+    '材料建议：',
+    ...materialSuggestions(project).map((item, index) => `${index + 1}. ${item}`),
+    '',
+    'Lumi 执行规则：',
+    '1. 常规材料比价、方案整理、交付包生成由 Lumi 接管。',
+    '2. 涉及承重结构、燃气改造、最终报价签字和付款节点，必须向用户上报。',
+    '3. 微信回复默认只准备草稿，不自动发送，除非用户明确授权。',
+  ].join('\n');
+}
+
+function materialSuggestions(project: DesignProjectBrief): string[] {
+  if (/奶油|原木|日式|北欧/.test(project.style)) {
+    return ['低饱和暖白墙面，搭配木色柜体和柔和灯光。', '公共区优先耐磨地砖或稳定木地板，避免后期维护压力。', '定制柜体控制造型线条，用五金和灯光提升质感。'];
+  }
+  if (/新中式|法式|中古|美式/.test(project.style)) {
+    return ['用局部线条、木饰面或石材建立风格识别，不做全屋堆叠。', '主材色系保持统一，避免预算被复杂造型消耗。', '软装后置确认，先把硬装比例和收口做好。'];
+  }
+  return ['公共区以暖白、浅灰石材和木色为底，降低压迫感。', '厨房、卫生间优先防滑砖和耐污台面，先保证使用寿命。', '局部金属、深色柜体或低饱和彩色做点缀，控制轻奢感不过度堆料。'];
+}
+
+function buildWechatDeliveryDraft(project: DesignProjectBrief): string {
+  return [
+    '您好，我这边已经先把需求整理成一版可推进的设计交付包。',
+    '',
+    `这版是按 ${project.areaSqm} 平 ${project.layout}、${project.style}、${project.budgetLabel} 来整理的，重点先解决 ${project.clientFocus.join('、')}。`,
+    '',
+    '这版里面包括：',
+    ...project.deliverables.map((item, index) => `${index + 1}. ${item}；`),
+    '',
+    '目前这版可以先用于确认风格、预算和主要动线。进入正式施工图前，还需要复核现场精确尺寸、承重结构、梁位、管井和原始水电点位。',
+    '',
+    '如果您认可这个方向，我下一步会把它深化成施工图清单和可确认报价。',
+  ].join('\n');
+}
+
+function buildDynamoScriptText(project: DesignProjectBrief): string {
+  return [
+    '# Lumi Revit / Dynamo handoff script',
+    `# Project: ${project.projectTitle}`,
+    '# Purpose: create model-ready spaces from the design delivery package.',
+    '# Run inside a reviewed Revit/Dynamo environment after confirming site dimensions.',
+    '',
+    'rooms = [',
+    ...project.roomLabels.map((room, index) => {
+      const x = (index % 3) * 3200;
+      const y = Math.floor(index / 3) * 3000;
+      return `    {"name": "${room}", "x": ${x}, "y": ${y}, "width": 3000, "height": 2600, "finish": "${finishForRoom(room, project)}"},`;
+    }),
+    ']',
+    '',
+    'materials = {',
+    `    "style": "${project.style}",`,
+    `    "budget": "${project.budgetLabel}",`,
+    `    "focus": "${project.clientFocus.join(' / ')}",`,
+    '}',
+    '',
+    'print("Create Revit levels, room boundaries, walls, room tags, and material schedule from Lumi handoff data.")',
+  ].join('\n');
+}
+
+function finishForRoom(room: string, project: DesignProjectBrief): string {
+  if (/厨房|后勤|卫生/.test(room)) return 'anti-slip tile';
+  if (/客餐厅|入口|玄关/.test(room)) return /轻奢|法式|新中式/.test(project.style) ? 'stone tile + wall finish' : 'tile + wood finish';
+  return /原木|日式|北欧|奶油/.test(project.style) ? 'wood floor + warm wall paint' : 'wood floor';
+}
+
+function buildRoomScheduleCsv(project: DesignProjectBrief): string {
+  return [
+    'name,x,y,width,height,finish',
+    ...project.roomLabels.map((room, index) => {
+      const x = (index % 3) * 3200;
+      const y = Math.floor(index / 3) * 3000;
+      return `${room},${x},${y},3000,2600,${finishForRoom(room, project)}`;
+    }),
+  ].join('\n');
+}
 
 function normalizeIntentText(text: string): string {
   return text.replace(/\s+/g, '');
@@ -532,7 +726,7 @@ function dxfRect(x: number, y: number, width: number, height: number, layer = 'W
   ];
 }
 
-function buildRenovationDxf(): string {
+function buildRenovationDxf(project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const entities: string[] = [
     ...dxfRect(0, 0, 10200, 8800, 'EXTERIOR_WALL'),
     ...dxfLine(2200, 0, 2200, 5200, 'INTERIOR_WALL'),
@@ -559,7 +753,7 @@ function buildRenovationDxf(): string {
     ...dxfText(1350, 7050, '主卧', 280),
     ...dxfText(5050, 7050, '次卧', 280),
     ...dxfText(8150, 7050, '书房', 280),
-    ...dxfText(300, -520, 'Lumi CAD draft - 10200mm x 8800mm - review site dimensions before production', 180, 'TITLE'),
+    ...dxfText(300, -520, `Lumi CAD draft - ${project.projectTitle} - review site dimensions before production`, 180, 'TITLE'),
   ];
   return [
     '0', 'SECTION',
@@ -575,7 +769,7 @@ function buildRenovationDxf(): string {
   ].join('\n');
 }
 
-function buildCadPreviewSvg(): string {
+function buildCadPreviewSvg(project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="920" viewBox="-300 -680 10800 9800">
   <defs>
@@ -593,8 +787,8 @@ function buildCadPreviewSvg(): string {
     </style>
   </defs>
   <rect class="bg" x="-300" y="-680" width="10800" height="9800" rx="80"/>
-  <text class="label" x="0" y="-220">Lumi 装修 CAD 平面布置预览</text>
-  <text class="small" x="0" y="9060">DXF 同步生成；正式施工图前请复核现场精确尺寸、承重墙、梁位和水电点位。</text>
+  <text class="label" x="0" y="-220">${xmlEscape(project.projectTitle)} CAD 平面布置预览</text>
+  <text class="small" x="0" y="9060">${xmlEscape(project.budgetLabel)}；正式施工图前请复核现场精确尺寸、承重墙、梁位和水电点位。</text>
   <rect class="outer" x="0" y="0" width="10200" height="8800"/>
   <rect class="room" x="0" y="0" width="2200" height="5200"/>
   <rect class="room" x="2200" y="0" width="5400" height="5200"/>
@@ -700,7 +894,7 @@ function pptRectShape(id: number, name: string, x: number, y: number, width: num
 
 type PptVisualKind = 'cover' | 'plan' | 'living' | 'materials' | 'budget' | 'handoff';
 
-function pptVisualShape(kind: PptVisualKind, accent: string): string {
+function pptVisualShape(kind: PptVisualKind, accent: string, project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const panelX = 5050000;
   const panelY = 1220000;
   const panelW = 3500000;
@@ -726,7 +920,7 @@ function pptVisualShape(kind: PptVisualKind, accent: string): string {
       pptRectShape(38, 'Chip wood', panelX + 1700000, panelY + 2760000, 520000, 220000, 'A56A43', 100000),
       pptRectShape(39, 'Chip metal', panelX + 2330000, panelY + 2760000, 520000, 220000, 'C6A15B', 100000),
       pptTextShape(41, 'Hero caption', panelX + 420000, panelY + 3100000, 2600000, 300000, [
-        { text: '平面关系 + 材料方向 + 预算边界', size: 13, color: 'F8FAFC', bold: true },
+        { text: `${project.layout} + ${project.style} + ${project.budgetLabel}`, size: 13, color: 'F8FAFC', bold: true },
       ]),
     ].join('');
   }
@@ -792,20 +986,19 @@ function pptVisualShape(kind: PptVisualKind, accent: string): string {
   }
 
   if (kind === 'budget') {
+    const lines = project.budgetLines;
+    const max = Math.max(...lines.map(line => line.amountWan), 1);
     const bar = (id: number, y: number, w: number, fill: string, text: string) => [
       pptRectShape(id, `Bar track ${id}`, panelX + 420000, y, 2350000, 230000, 'ECE7DD', 100000),
       pptRectShape(id + 10, `Bar ${id}`, panelX + 420000, y, w, 230000, fill, 100000),
       note(id + 20, text, panelX + 450000, y + 28000, 1900000, '2F3A34'),
     ].join('');
+    const widthFor = (amount: number) => Math.max(520000, Math.round(2180000 * amount / max));
     return [
       frame,
-      title('28 万预算拆分'),
-      bar(31, panelY + 840000, 2180000, accent, '基础施工 7.8 万'),
-      bar(32, panelY + 1240000, 1760000, '6BA6A6', '主材 6.3 万'),
-      bar(33, panelY + 1640000, 1540000, '9B8BB4', '定制收纳 5.5 万'),
-      bar(34, panelY + 2040000, 1200000, 'C69C6D', '设备灯具 4.1 万'),
-      bar(35, panelY + 2440000, 900000, '708B78', '软装预留 3.1 万'),
-      note(56, '风险预留 1.2 万：结构、燃气、水电变更需确认', panelX + 420000, panelY + 2980000, 2600000, '8A5A2B'),
+      title(`${project.budgetLabel}拆分`),
+      ...lines.slice(0, 5).map((line, index) => bar(31 + index, panelY + 840000 + index * 400000, widthFor(line.amountWan), ['22C55E', '6BA6A6', '9B8BB4', 'C69C6D', '708B78'][index] || accent, `${line.label} ${formatWan(line.amountWan)}`)),
+      note(56, `${lines[4]?.label || '风险预留'}：结构、燃气、水电变更需确认`, panelX + 420000, panelY + 2980000, 2600000, '8A5A2B'),
     ].join('');
   }
 
@@ -824,7 +1017,7 @@ function pptVisualShape(kind: PptVisualKind, accent: string): string {
   ].join('');
 }
 
-function buildPptSlideXml(index: number, title: string, subtitle: string, bullets: string[], accent: string, visual: PptVisualKind): string {
+function buildPptSlideXml(index: number, title: string, subtitle: string, bullets: string[], accent: string, visual: PptVisualKind, project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const bulletParagraphs = bullets.map(text => ({ text, size: 17, color: '334155', bullet: true }));
   const isCover = visual === 'cover';
   const shapes = [
@@ -838,7 +1031,7 @@ function buildPptSlideXml(index: number, title: string, subtitle: string, bullet
     ]),
     pptRectShape(5, 'Content card', 620000, isCover ? 2460000 : 1820000, 3920000, isCover ? 1500000 : 2500000, 'FFFFFF', 100000),
     pptTextShape(6, 'Bullets', 900000, isCover ? 2740000 : 2120000, 3300000, isCover ? 980000 : 1850000, bulletParagraphs),
-    pptVisualShape(visual, accent),
+    pptVisualShape(visual, accent, project),
     pptTextShape(7, 'Footer', 700000, 6200000, 7600000, 260000, [
       { text: `Lumi design delivery package · ${String(index).padStart(2, '0')}`, size: 10, color: '8B928B' },
     ]),
@@ -932,48 +1125,62 @@ try {
   execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { timeout: 20000 });
 }
 
-function createDesignPresentationPptx(outPath: string): string {
+function createDesignPresentationPptx(outPath: string, project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-design-pptx-'));
   const slides = [
     {
-      title: '120 平三居室装修方案',
-      subtitle: '现代轻奢 / 28 万预算控制 / 可深化到 CAD 与 Revit',
-      bullets: ['客户目标：快速确认方案方向并进入深化设计', '核心策略：客餐厅阳台一体化，提升采光和通行效率', '交付结果：方案、预算、PPT、PDF、CAD 初稿、Revit 交接数据'],
+      title: `${project.areaSqm} 平 ${project.layout}装修方案`,
+      subtitle: `${project.style} / ${project.budgetLabel} / 可深化到 CAD 与 Revit`,
+      bullets: [
+        `客户目标：围绕 ${project.clientFocus.join('、')} 快速确认方案方向`,
+        `核心策略：${project.strategy[0]}`,
+        `交付结果：${project.deliverables.join('、')}`,
+      ],
       accent: '22C55E',
       visual: 'cover' as PptVisualKind,
     },
     {
       title: '平面布局怎么设计',
       subtitle: '先解决动线、收纳、采光，再进入造型',
-      bullets: ['玄关做通顶鞋柜和临时挂衣区，减少入户杂物外露', '客餐厅保留 3.2 米主通道，餐边柜承接冰箱和小电器', '厨房采用 U 型台面，缩短洗、切、炒动线', '主卧、次卧、书房按安静区集中布置，降低客厅干扰'],
+      bullets: project.roomLabels.slice(0, 4).map(room => `${room}：${roomStrategy(room, project)}`),
       accent: '38BDF8',
       visual: 'plan' as PptVisualKind,
     },
     {
       title: '客餐厅效果怎么落地',
       subtitle: '开放感、收纳和预算之间的平衡',
-      bullets: ['电视墙做隐藏收纳，避免只做装饰背景浪费空间', '沙发、餐桌、阳台连成一条视线轴，增强空间尺度感', '餐边柜外置冰箱区，让厨房内部更完整', '灯光用主灯 + 线性灯 + 局部氛围灯，控制轻奢感不过度堆料'],
+      bullets: [
+        `主空间先服务 ${project.clientFocus.slice(0, 3).join('、')}，再进入造型表达`,
+        '电视墙和餐边柜优先承担收纳，避免只做装饰背景浪费空间',
+        '沙发、餐桌和通道形成清晰视线轴，增强空间尺度感',
+        '灯光用主灯、线性灯和局部氛围灯分层，控制风格不过度堆料',
+      ],
       accent: 'A78BFA',
       visual: 'living' as PptVisualKind,
     },
     {
       title: '材料与色彩建议',
-      subtitle: '暖白、浅灰石材、木色、金属线条',
-      bullets: ['公共区以暖白和浅灰为底，降低压迫感', '木地板和木饰面增加温度，避免空间太冷', '局部金属线条和柜体深色点缀，形成轻奢层次', '厨房、卫生间优先防滑砖和耐污台面，先保证使用寿命'],
+      subtitle: `${project.style} 的材料落地方式`,
+      bullets: materialSuggestions(project),
       accent: 'F59E0B',
       visual: 'materials' as PptVisualKind,
     },
     {
       title: '预算怎么控制',
-      subtitle: '28 万控制线，先保功能，再做颜值',
-      bullets: ['基础施工和水电优先，不能靠后期软装掩盖硬装问题', '主材和定制分开控制，避免柜体预算挤压地面墙面品质', '软装和灯具保留弹性，客户确认风格后再深化采购', '结构、燃气、水电移位和最终签字节点必须上报确认'],
+      subtitle: `${project.budgetLabel}，先保功能，再做颜值`,
+      bullets: project.budgetLines.slice(0, 4).map(line => `${line.label}：${formatWan(line.amountWan)}，${line.note}`),
       accent: '14B8A6',
       visual: 'budget' as PptVisualKind,
     },
     {
       title: '交付包与下一步',
       subtitle: '客户确认方向后进入深化图纸和报价',
-      bullets: ['PPT 用于现场讲解，PDF 用于微信发送和客户确认', 'CAD DXF 进入外部 CAD 软件继续标注、调图层、深化施工图', 'Dynamo 脚本和空间表交给 Revit / BIM 侧继续建模', '微信草稿只准备，不默认发送；确认后再推进客户'],
+      bullets: [
+        `${project.deliverables.join('、')} 已进入交付包`,
+        'CAD DXF 进入外部 CAD 软件继续标注、调图层、深化施工图',
+        'Dynamo 脚本和空间表交给 Revit / BIM 侧继续建模',
+        '微信草稿只准备，不默认发送；确认后再推进客户',
+      ],
       accent: 'F59E0B',
       visual: 'handoff' as PptVisualKind,
     },
@@ -993,7 +1200,7 @@ function createDesignPresentationPptx(outPath: string): string {
                    xmlns:dcterms="http://purl.org/dc/terms/"
                    xmlns:dcmitype="http://purl.org/dc/dcmitype/"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>Lumi 装修设计交付方案汇报</dc:title>
+  <dc:title>${xmlEscape(project.projectTitle)} 汇报</dc:title>
   <dc:creator>Lumi</dc:creator>
   <cp:lastModifiedBy>Lumi</cp:lastModifiedBy>
   <dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created>
@@ -1042,7 +1249,7 @@ function createDesignPresentationPptx(outPath: string): string {
     writeFileEnsured(path.join(tmpDir, 'ppt', 'tableStyles.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`);
     slides.forEach((slide, index) => {
       const slideNo = index + 1;
-      writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', `slide${slideNo}.xml`), buildPptSlideXml(slideNo, slide.title, slide.subtitle, slide.bullets, slide.accent, slide.visual));
+      writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', `slide${slideNo}.xml`), buildPptSlideXml(slideNo, slide.title, slide.subtitle, slide.bullets, slide.accent, slide.visual, project));
       writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', '_rels', `slide${slideNo}.xml.rels`), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
@@ -1055,13 +1262,15 @@ function createDesignPresentationPptx(outPath: string): string {
   return outPath;
 }
 
-function buildReportHtml(cadPreviewPath: string): string {
+function buildReportHtml(cadPreviewPath: string, project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const cadPreviewUrl = pathToFileURL(cadPreviewPath).href;
+  const focusText = project.clientFocus.join('、');
+  const deliverableText = project.deliverables.join(' / ');
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>Lumi 装修设计交付 PDF</title>
+  <title>${htmlEscape(project.projectTitle)} PDF</title>
   <style>
     @page { size: A4; margin: 14mm; }
     * { box-sizing: border-box; }
@@ -1084,17 +1293,17 @@ function buildReportHtml(cadPreviewPath: string): string {
 <body>
   <section class="cover">
     <div class="label">LUMI DESIGN DELIVERY</div>
-    <h1>装修设计交付方案汇报</h1>
-    <div class="subtitle">方案 + 预算 + CAD + Revit 交接 + 微信交付话术</div>
+    <h1>${htmlEscape(project.projectTitle)}</h1>
+    <div class="subtitle">${htmlEscape(project.style)} / ${htmlEscape(project.budgetLabel)} / ${htmlEscape(deliverableText)}</div>
     <p>本 PDF 用于客户确认和微信/邮件交付，PPTX 用于现场汇报和继续修改。</p>
   </section>
   <section>
     <h2>一、项目判断</h2>
-    <p>客户需求已被 Lumi 拆解为正式设计交付任务：120 平三居室，现代轻奢方向，预算控制线 28 万元。</p>
+    <p>客户需求已被 Lumi 拆解为正式设计交付任务：${project.areaSqm} 平 ${htmlEscape(project.layout)}，${htmlEscape(project.style)} 方向，${htmlEscape(project.budgetLabel)}。</p>
     <div class="grid">
-      <div class="card"><div class="label">空间策略</div><div class="value">开放客餐厅 + 收纳一体化</div></div>
+      <div class="card"><div class="label">空间策略</div><div class="value">${htmlEscape(focusText)}</div></div>
       <div class="card"><div class="label">交付目标</div><div class="value">快速确认方案并进入深化</div></div>
-      <div class="card"><div class="label">文件结果</div><div class="value">PPTX / PDF / RTF / DXF / SVG / CSV</div></div>
+      <div class="card"><div class="label">文件结果</div><div class="value">${htmlEscape(deliverableText)}</div></div>
       <div class="card"><div class="label">授权边界</div><div class="value">结构、燃气、签字、付款上报</div></div>
     </div>
     <div class="note">正式施工图前必须复核现场精确尺寸、承重墙、梁位、管井和原始水电点位。</div>
@@ -1113,6 +1322,10 @@ function buildReportHtml(cadPreviewPath: string): string {
       <li>04-Lumi-CAD-平面布置.dxf：CAD 深化初稿。</li>
       <li>05-Lumi-Revit-Dynamo建模脚本.py / 空间表.csv：Revit 侧建模交接数据。</li>
       <li>06-Lumi-微信交付话术.txt：发送前等待用户确认的客户回复草稿。</li>
+    </ul>
+    <h2>四、下一步确认</h2>
+    <ul>
+      ${project.confirmItems.map(item => `<li>${htmlEscape(item)}</li>`).join('')}
     </ul>
     <p>下一步：客户确认方向后，Lumi 继续推进施工图清单、报价深化和交底版本。</p>
   </section>
@@ -1163,10 +1376,10 @@ function buildHandoffPageShell(title: string, eyebrow: string, body: string): st
 </html>`;
 }
 
-function buildCadHandoffHtml(cadPreviewPath: string, cadDxfPath: string): string {
+function buildCadHandoffHtml(cadPreviewPath: string, cadDxfPath: string, project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const cadPreviewUrl = pathToFileURL(cadPreviewPath).href;
   const body = `
-    <p>这是 Lumi 生成的 CAD 初稿检查页：左侧是可视化平面预览，右侧是已经落地的 DXF 文件信息。后续可交给 AutoCAD、LibreCAD、中望、浩辰等 CAD 软件继续标注和深化。</p>
+    <p>这是 Lumi 为 ${htmlEscape(project.projectTitle)} 生成的 CAD 初稿检查页：左侧是可视化平面预览，右侧是已经落地的 DXF 文件信息。后续可交给 AutoCAD、LibreCAD、中望、浩辰等 CAD 软件继续标注和深化。</p>
     <div class="grid">
       <div class="panel"><img src="${cadPreviewUrl}" alt="CAD 平面布置预览" /></div>
       <div class="panel">
@@ -1176,6 +1389,7 @@ function buildCadHandoffHtml(cadPreviewPath: string, cadDxfPath: string): string
         <div class="stat">
           <div><b>单位</b>毫米 mm</div>
           <div><b>图层</b>EXTERIOR_WALL / INTERIOR_WALL / DOOR / WINDOW / FURNITURE / TEXT</div>
+          <div><b>项目</b>${project.areaSqm} 平 ${htmlEscape(project.layout)} / ${htmlEscape(project.style)} / ${htmlEscape(project.budgetLabel)}</div>
           <div><b>用途</b>作为 CAD 深化底稿，进入现场量尺复核、尺寸标注和施工图深化。</div>
         </div>
       </div>
@@ -1183,7 +1397,7 @@ function buildCadHandoffHtml(cadPreviewPath: string, cadDxfPath: string): string
   return buildHandoffPageShell('Lumi CAD 初稿已生成', 'CAD HANDOFF CHECK', body);
 }
 
-function buildRevitHandoffHtml(dynamoScriptPath: string, revitCsvPath: string, roomScheduleCsv: string): string {
+function buildRevitHandoffHtml(dynamoScriptPath: string, revitCsvPath: string, roomScheduleCsv: string, project = DEFAULT_DESIGN_PROJECT_BRIEF): string {
   const rows = roomScheduleCsv
     .split(/\r?\n/)
     .slice(1)
@@ -1192,13 +1406,13 @@ function buildRevitHandoffHtml(dynamoScriptPath: string, revitCsvPath: string, r
     .map(cols => `<tr>${cols.map(col => `<td>${htmlEscape(col)}</td>`).join('')}</tr>`)
     .join('');
   const body = `
-    <p>这是 Lumi 准备给 Revit / Dynamo 的建模交接包：Dynamo 脚本负责创建空间数据入口，CSV 空间表负责把房间、坐标、尺寸和材料策略交给 BIM 侧继续建模。</p>
+    <p>这是 Lumi 为 ${htmlEscape(project.projectTitle)} 准备给 Revit / Dynamo 的建模交接包：Dynamo 脚本负责创建空间数据入口，CSV 空间表负责把房间、坐标、尺寸和材料策略交给 BIM 侧继续建模。</p>
     <div class="grid">
       <div class="panel">
         <div class="eyebrow">DYNAMO SCRIPT</div>
         <h2>05-Lumi-Revit-Dynamo建模脚本.py</h2>
         <div class="path">${htmlEscape(dynamoScriptPath)}</div>
-        <pre>${htmlEscape(DYNAMO_SCRIPT_TEXT.slice(0, 1800))}</pre>
+        <pre>${htmlEscape(buildDynamoScriptText(project).slice(0, 1800))}</pre>
       </div>
       <div class="panel">
         <div class="eyebrow">ROOM SCHEDULE</div>
@@ -1291,14 +1505,87 @@ function createPdfFromHtml(htmlPath: string, pdfPath: string): string {
   return pdfPath;
 }
 
-export function createDesignDeliveryFiles(): DesignDeliveryFiles {
+function readTextForVerification(filePath: string): string {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function verifyFileExists(filePath: string, minBytes: number): { passed: boolean; detail: string } {
+  if (!fs.existsSync(filePath)) return { passed: false, detail: '文件不存在' };
+  const size = fs.statSync(filePath).size;
+  return {
+    passed: size >= minBytes,
+    detail: size >= minBytes ? `已生成，${size} bytes` : `文件过小，${size} bytes`,
+  };
+}
+
+function verifyDesignDeliveryFiles(files: DesignDeliveryFilePaths, project: DesignProjectBrief): DesignDeliveryVerification {
+  const checks: DesignDeliveryVerification['checks'] = [];
+  const addFileCheck = (label: string, filePath: string, minBytes: number) => {
+    const result = verifyFileExists(filePath, minBytes);
+    checks.push({ label, passed: result.passed, detail: result.detail });
+  };
+  const addTextCheck = (label: string, filePath: string, includes: string[]) => {
+    const text = readTextForVerification(filePath);
+    const missing = includes.filter(item => item && !text.includes(item));
+    checks.push({
+      label,
+      passed: text.length > 0 && missing.length === 0,
+      detail: missing.length ? `缺少关键内容：${missing.join('、')}` : '关键内容已写入',
+    });
+  };
+
+  addFileCheck('方案 RTF', files.proposal, 600);
+  addFileCheck('预算 RTF', files.budget, 600);
+  addFileCheck('PPTX 汇报文件', files.presentation, 1200);
+  addFileCheck('PDF 交付文件', files.pdf, 800);
+  addFileCheck('CAD DXF 初稿', files.cadDxf, 800);
+  addFileCheck('CAD 预览 SVG', files.cadPreview, 800);
+  addFileCheck('Revit Dynamo 脚本', files.dynamoScript, 300);
+  addFileCheck('Revit 空间表', files.revitCsv, 100);
+  addFileCheck('微信交付草稿', files.wechatDraft, 120);
+  addTextCheck('PDF/HTML 项目内容', files.reportHtml, [project.projectTitle, project.style, project.budgetLabel]);
+  addTextCheck('CAD 项目标题', files.cadDxf, [project.projectTitle]);
+  addTextCheck('Dynamo 项目标题', files.dynamoScript, [project.projectTitle, project.style]);
+  addTextCheck('空间表房间数据', files.revitCsv, project.roomLabels.slice(0, 2));
+  addTextCheck('微信草稿项目内容', files.wechatDraft, [String(project.areaSqm), project.layout, project.style, project.budgetLabel]);
+
+  return {
+    passed: checks.every(check => check.passed),
+    checkedAt: new Date().toISOString(),
+    checks,
+  };
+}
+
+function buildVerificationText(result: DesignDeliveryVerification, project: DesignProjectBrief): string {
+  return [
+    'Lumi 交付验证记录',
+    '',
+    `项目：${project.projectTitle}`,
+    `检查时间：${result.checkedAt}`,
+    `整体结果：${result.passed ? '通过' : '需要复核'}`,
+    '',
+    ...result.checks.map((check, index) => `${index + 1}. ${check.passed ? '通过' : '未通过'}｜${check.label}｜${check.detail}`),
+    '',
+    '仍需人工确认：',
+    ...project.confirmItems.map((item, index) => `${index + 1}. ${item}`),
+  ].join('\n');
+}
+
+export function createDesignDeliveryFiles(input?: string | DesignProjectBrief): DesignDeliveryFiles {
+  const project = typeof input === 'string'
+    ? parseDesignProjectBrief(input)
+    : input || DEFAULT_DESIGN_PROJECT_BRIEF;
   const desktopDir = path.join(os.homedir(), 'Desktop');
   const baseDir = fs.existsSync(desktopDir) ? desktopDir : os.tmpdir();
   const folder = path.join(baseDir, 'Lumi-装修设计交付包');
   fs.mkdirSync(folder, { recursive: true });
 
-  const proposal = writeRtf(path.join(folder, '01-Lumi-装修设计方案.rtf'), DESIGN_PROPOSAL_TEXT);
-  const budget = writeRtf(path.join(folder, '02-Lumi-预算与材料清单.rtf'), MATERIAL_BUDGET_TEXT);
+  const proposal = writeRtf(path.join(folder, '01-Lumi-装修设计方案.rtf'), buildDesignProposalText(project));
+  const budget = writeRtf(path.join(folder, '02-Lumi-预算与材料清单.rtf'), buildMaterialBudgetText(project));
   const presentation = path.join(folder, '03-Lumi-装修设计方案汇报.pptx');
   const pdf = path.join(folder, '03-Lumi-装修设计方案汇报.pdf');
   const reportHtml = path.join(folder, '03-Lumi-装修设计方案汇报.html');
@@ -1309,28 +1596,39 @@ export function createDesignDeliveryFiles(): DesignDeliveryFiles {
   const revitCsv = path.join(folder, '05-Lumi-Revit-空间表.csv');
   const revitHandoffHtml = path.join(folder, '05-Lumi-Revit-交接检查.html');
   const wechatDraft = path.join(folder, '06-Lumi-微信交付话术.txt');
-  const revitRoomScheduleCsv = [
-    'name,x,y,width,height,finish',
-    '玄关,0,0,2200,2400,stone tile',
-    '客餐厅,2200,0,5400,5200,wood + tile',
-    '厨房,7600,0,2600,3200,anti-slip tile',
-    '主卧,0,5200,4200,3600,wood floor',
-    '次卧,4200,5200,3200,3400,wood floor',
-    '书房,7400,5200,2800,3000,wood floor',
-  ].join('\n');
+  const verification = path.join(folder, '07-Lumi-交付验证记录.txt');
+  const revitRoomScheduleCsv = buildRoomScheduleCsv(project);
 
-  fs.writeFileSync(cadDxf, buildRenovationDxf(), 'utf8');
-  fs.writeFileSync(cadPreview, buildCadPreviewSvg(), 'utf8');
-  fs.writeFileSync(cadHandoffHtml, buildCadHandoffHtml(cadPreview, cadDxf), 'utf8');
-  createDesignPresentationPptx(presentation);
-  fs.writeFileSync(reportHtml, buildReportHtml(cadPreview), 'utf8');
+  fs.writeFileSync(cadDxf, buildRenovationDxf(project), 'utf8');
+  fs.writeFileSync(cadPreview, buildCadPreviewSvg(project), 'utf8');
+  fs.writeFileSync(cadHandoffHtml, buildCadHandoffHtml(cadPreview, cadDxf, project), 'utf8');
+  createDesignPresentationPptx(presentation, project);
+  fs.writeFileSync(reportHtml, buildReportHtml(cadPreview, project), 'utf8');
   createPdfFromHtml(reportHtml, pdf);
-  fs.writeFileSync(dynamoScript, DYNAMO_SCRIPT_TEXT, 'utf8');
+  fs.writeFileSync(dynamoScript, buildDynamoScriptText(project), 'utf8');
   fs.writeFileSync(revitCsv, revitRoomScheduleCsv, 'utf8');
-  fs.writeFileSync(revitHandoffHtml, buildRevitHandoffHtml(dynamoScript, revitCsv, revitRoomScheduleCsv), 'utf8');
-  fs.writeFileSync(wechatDraft, WECHAT_DELIVERY_DRAFT, 'utf8');
+  fs.writeFileSync(revitHandoffHtml, buildRevitHandoffHtml(dynamoScript, revitCsv, revitRoomScheduleCsv, project), 'utf8');
+  fs.writeFileSync(wechatDraft, buildWechatDeliveryDraft(project), 'utf8');
 
-  return { folder, proposal, budget, presentation, pdf, reportHtml, cadDxf, cadPreview, cadHandoffHtml, dynamoScript, revitCsv, revitHandoffHtml, wechatDraft };
+  const filePaths: DesignDeliveryFilePaths = {
+    folder,
+    proposal,
+    budget,
+    presentation,
+    pdf,
+    reportHtml,
+    cadDxf,
+    cadPreview,
+    cadHandoffHtml,
+    dynamoScript,
+    revitCsv,
+    revitHandoffHtml,
+    wechatDraft,
+  };
+  const verificationResult = verifyDesignDeliveryFiles(filePaths, project);
+  fs.writeFileSync(verification, buildVerificationText(verificationResult, project), 'utf8');
+
+  return { project, ...filePaths, verification, verificationResult };
 }
 
 export async function runDesignDeliveryWorkflow({
@@ -1619,7 +1917,10 @@ export async function runDesignDeliveryWorkflow({
     detail: 'Running design delivery workflow',
   });
 
-  const files = createDesignDeliveryFiles();
+  const project = parseDesignProjectBrief(userText);
+  const files = createDesignDeliveryFiles(project);
+  const wechatDraftText = buildWechatDeliveryDraft(project);
+  const verificationText = files.verificationResult.passed ? '交付自检已经通过' : '交付自检里还有需要复核的项目';
   const officePatterns = [/wps/i, /winword/i, /word/i, /writer/i, /notepad/i, /记事本/i];
   const presentationPatterns = [/wps/i, /powerpnt/i, /powerpoint/i, /wpp/i, /演示/i, /presentation/i, /office/i];
   const browserPatterns = [/chrome/i, /edge/i, /firefox/i, /browser/i, /msedge/i, /iexplore/i];
@@ -1630,7 +1931,7 @@ export async function runDesignDeliveryWorkflow({
 
   try {
     await runStep({
-      text: `${greeting}我会把这条装修需求接管成一个正式的设计交付任务：先识别客户目标，再生成方案、预算、PPT 和 PDF 汇报版、CAD 初稿、Revit 交接包，最后准备微信交付话术。`,
+      text: `${greeting}我会把这条装修需求接管成正式设计交付任务：${project.areaSqm} 平 ${project.layout}，${project.style}，${project.budgetLabel}，重点处理 ${project.clientFocus.join('、')}。我会生成方案、预算、PPT 和 PDF 汇报版、CAD 初稿、Revit 交接包，最后准备微信交付话术。`,
       actions: [
         { tool: 'desktop_show_lumi_window', afterMs: 250 },
         { clientAction: { action: 'design_delivery_panel', stage: 'intake' } },
@@ -1651,14 +1952,14 @@ export async function runDesignDeliveryWorkflow({
     });
     await waitForActiveWindow(officePatterns, 5200);
     await pointActiveWindowRatio(officePatterns, 0.5, 0.44, false, { xRatio: 0.5, yRatio: 0.45 });
-    await say('方案里已经包含户型判断、空间策略、交付节奏和必须确认的风险点。普通沟通由我推进，承重结构、燃气、水电和最终签字我会上报给你。', 7200);
+    await say(`方案里已经包含 ${project.layout} 的户型判断、空间策略、交付节奏和必须确认的风险点。普通沟通由我推进，承重结构、燃气、水电和最终签字我会上报给你。`, 7200);
     await closeActiveWindow(officePatterns);
 
     await runTool('desktop_open', { target: files.budget }, true);
     await wait(3600);
     await waitForActiveWindow(officePatterns, 4200);
     await pointActiveWindowRatio(officePatterns, 0.48, 0.48, false, { xRatio: 0.5, yRatio: 0.48 });
-    await say('同时我把预算和材料清单也生成出来，预算控制线、施工项、主材、定制和风险预留都已经拆开，客户可以直接拿这个版本讨论是否进入深化。', 7200);
+    await say(`同时我把预算和材料清单也生成出来，按 ${project.budgetLabel} 拆出施工项、主材、定制和风险预留，客户可以直接拿这个版本讨论是否进入深化。`, 7200);
     await closeActiveWindow(officePatterns);
 
     await runStep({
@@ -1715,7 +2016,7 @@ export async function runDesignDeliveryWorkflow({
     await runTool('desktop_open', { target: files.folder }, true);
     await wait(2600);
     await pointActiveWindowRatio([/explorer/i, /文件资源管理器/i], 0.5, 0.46, false, { xRatio: 0.5, yRatio: 0.48 });
-    await say('现在交付包已经成型：方案、预算、PPT、PDF、CAD 初稿、Revit 交接数据和微信话术都在这里。', 7000);
+    await say(`现在交付包已经成型：方案、预算、PPT、PDF、CAD 初稿、Revit 交接数据、微信话术和交付验证记录都在这里。${verificationText}。`, 7600);
     await closeActiveWindow([/explorer/i, /文件资源管理器/i]);
 
     const shouldSendToWeChat = process.env.LUMI_DESIGN_DELIVERY_SEND_WECHAT === '1';
@@ -1725,7 +2026,7 @@ export async function runDesignDeliveryWorkflow({
         : '最后我回到电脑微信，准备交付话术。默认不自动发送，真正发出前仍然等你确认。',
       actions: [
         { clientAction: { action: 'design_delivery_panel', stage: 'handoff' } },
-        { tool: 'desktop_clipboard_write', args: { text: WECHAT_DELIVERY_DRAFT }, afterMs: 500 },
+        { tool: 'desktop_clipboard_write', args: { text: wechatDraftText }, afterMs: 500 },
       ],
       timing: 'after',
       pauseMs: shouldSendToWeChat ? 4300 : 6200,
@@ -1763,7 +2064,7 @@ export async function runDesignDeliveryWorkflow({
       await runTool('desktop_show_lumi_window', {}, true);
       await wait(500);
       await runClientAction({ action: 'design_delivery_panel', stage: 'result' });
-      await say('好了，这一单我已经整理好了。方案、预算、PPT 汇报版、PDF 交付版、CAD 初稿、Revit 交接数据和微信交付草稿都在交付包里。接下来我会按你的授权边界，继续把客户推进到确认方案和深化交付。', 9200);
+      await say(`好了，这一单我已经整理好了。方案、预算、PPT 汇报版、PDF 交付版、CAD 初稿、Revit 交接数据、微信交付草稿和自检记录都在交付包里，${verificationText}。接下来我会按你的授权边界，继续把客户推进到确认方案和深化交付。`, 9400);
       await wait(1200);
     }
   } finally {
@@ -1776,7 +2077,7 @@ export async function runDesignDeliveryWorkflow({
       {
         id: `design-delivery-artifacts-${Date.now()}`,
         name: 'design_delivery_artifacts',
-        arguments: { request: userText, voiceScope, folder: files.folder },
+        arguments: { request: userText, voiceScope, project, folder: files.folder, verification: files.verificationResult },
         result: JSON.stringify(files, null, 2),
       },
       ...toolCalls,

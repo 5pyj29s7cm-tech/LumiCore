@@ -9,6 +9,8 @@ import {
   updateWorkTakeoverTask,
   type WorkTakeoverStatus,
 } from '../../work_takeover/tasks';
+import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
+import { exportWorkTakeoverPacket } from '../../work_takeover/task_packet';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
   return {
@@ -25,6 +27,96 @@ function asStringArray(value: any): string[] | undefined {
     .split(/[\n;；]+/)
     .map(item => item.trim())
     .filter(Boolean);
+}
+
+function compact(value: unknown): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.map(compact).filter(Boolean)));
+}
+
+function planNextActions(plan: ReturnType<typeof planWorkTakeoverExecution>): string[] {
+  return plan.steps.map(step => `${step.title}：${step.goal}`).slice(0, 12);
+}
+
+function executionHistory(task: any, execution: ReturnType<typeof executeWorkTakeoverPlanStep>): any[] {
+  const current = task?.metadata?.workTakeoverExecution?.history;
+  return [...(Array.isArray(current) ? current.slice(-20) : []), execution];
+}
+
+function toolRunHistory(task: any, run: any): any[] {
+  const current = task?.metadata?.workTakeoverToolRuns;
+  return [...(Array.isArray(current) ? current.slice(-30) : []), run];
+}
+
+function recordStepExecution(userId: string, task: any, plan: any, execution: ReturnType<typeof executeWorkTakeoverPlanStep>): any {
+  let updatedTask = updateWorkTakeoverTask(userId, task.id, {
+    status: execution.status === 'blocked'
+      ? 'blocked'
+      : execution.status === 'waiting_confirmation'
+      ? 'waiting_confirmation'
+      : 'in_progress',
+    allowedNow: uniqueStrings([...task.allowedNow, ...plan.safeActions]),
+    confirmationRequired: uniqueStrings([...task.confirmationRequired, ...execution.confirmationRequired]),
+    blockedBy: execution.blockers.length ? uniqueStrings([...task.blockedBy, ...execution.blockers]) : undefined,
+    result: execution.nextInstruction,
+    metadata: {
+      workTakeoverExecution: {
+        lastPlan: plan,
+        lastExecution: execution,
+        history: executionHistory(task, execution),
+        updatedAt: execution.executedAt,
+      },
+    },
+    note: execution.summary,
+  } as any) || task;
+
+  for (const artifact of execution.artifacts) {
+    updatedTask = updateWorkTakeoverTask(userId, task.id, {
+      artifact,
+    } as any) || updatedTask;
+  }
+
+  if (execution.draftReply && !task.drafts.some((draft: any) => draft.text === execution.draftReply)) {
+    updatedTask = updateWorkTakeoverTask(userId, task.id, {
+      draftReply: execution.draftReply,
+    } as any) || updatedTask;
+  }
+
+  return updatedTask;
+}
+
+function recordPacket(userId: string, task: any, plan: any, packet: ReturnType<typeof exportWorkTakeoverPacket>, extraMetadata: Record<string, any> = {}): any {
+  const existingExecution = task?.metadata?.workTakeoverExecution && typeof task.metadata.workTakeoverExecution === 'object'
+    ? task.metadata.workTakeoverExecution
+    : {};
+  const extraExecution = extraMetadata.workTakeoverExecution && typeof extraMetadata.workTakeoverExecution === 'object'
+    ? extraMetadata.workTakeoverExecution
+    : {};
+  const { workTakeoverExecution: _unused, ...restExtraMetadata } = extraMetadata;
+  return updateWorkTakeoverTask(userId, task.id, {
+    status: task.status === 'queued' ? 'in_progress' : task.status,
+    artifact: {
+      type: 'file',
+      label: '工作接管任务包',
+      path: packet.folderPath,
+      content: packet.summary,
+      status: 'prepared',
+    },
+    metadata: {
+      ...restExtraMetadata,
+      workTakeoverExecution: {
+        ...existingExecution,
+        lastPlan: plan,
+        updatedAt: packet.createdAt,
+        ...extraExecution,
+      },
+      workTakeoverPacket: packet,
+    },
+    note: packet.summary,
+  } as any) || task;
 }
 
 export function registerWorkTakeoverTools(registry: ToolRegistry): void {
@@ -283,5 +375,521 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_orchestrate',
+    description: 'Choose and record a reusable execution plan for a persistent work takeover task. This bridges the task hub to capability selection: it inspects the task goal, artifacts, risks, and context, then selects tools/workflows without hard-coding one industry script. It changes Lumi internal task state only and does not perform external side effects.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
+        record: { type: 'boolean', description: 'Whether to write the execution plan back to the task metadata. Defaults to true.' },
+        refreshNextActions: { type: 'boolean', description: 'Replace task nextActions with the plan steps. Defaults to false unless the task has no nextActions.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+
+      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
+        ? String(args.mode) as WorkTakeoverExecutionMode
+        : 'prepare_work';
+      const plan = planWorkTakeoverExecution(task, { mode });
+      const shouldRecord = args.record !== false;
+      let updatedTask = task;
+
+      if (shouldRecord) {
+        const shouldRefreshNextActions = args.refreshNextActions === true || task.nextActions.length === 0;
+        updatedTask = updateWorkTakeoverTask(userId, task.id, {
+          status: plan.blockers.length ? 'blocked' : (task.status === 'queued' ? 'in_progress' : task.status),
+          nextActions: shouldRefreshNextActions ? planNextActions(plan) : undefined,
+          allowedNow: uniqueStrings([...task.allowedNow, ...plan.safeActions]),
+          confirmationRequired: uniqueStrings([...task.confirmationRequired, ...plan.confirmationRequired]),
+          blockedBy: plan.blockers.length ? uniqueStrings([...task.blockedBy, ...plan.blockers]) : undefined,
+          metadata: {
+            workTakeoverExecution: {
+              lastPlan: plan,
+              updatedAt: plan.generatedAt,
+            },
+          },
+          note: `Execution orchestration selected ${plan.capabilities.map(capability => capability.label).join(' / ') || 'basic task handling'}.`,
+        } as any) || task;
+      }
+
+      return JSON.stringify({
+        task: updatedTask,
+        plan,
+        nextStep: plan.nextStep,
+        note: shouldRecord
+          ? 'Execution plan recorded on the task. Use the nextStep and suggestedTools to continue; external side effects remain confirmation-gated.'
+          : 'Execution plan generated without recording. External side effects remain confirmation-gated.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_execute_step',
+    description: 'Execute one safe preparation step from a work takeover execution plan and write the result back to the task. This prepares internal artifacts, drafts, verification notes, and next instructions only; it does not send messages, publish, submit, pay, sign, or operate external software by itself.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task.' },
+        stepId: { type: 'string', description: 'Optional execution step id: understand_context, prepare_artifacts, external_tool_handoff, communication_handoff, verify_and_record.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
+        record: { type: 'boolean', description: 'Whether to write the execution result back to the task. Defaults to true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+
+      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
+        ? String(args.mode) as WorkTakeoverExecutionMode
+        : 'prepare_work';
+      const plan = planWorkTakeoverExecution(task, { mode });
+      const execution = executeWorkTakeoverPlanStep(task, plan, {
+        stepId: args.stepId ? String(args.stepId) : undefined,
+      });
+      const shouldRecord = args.record !== false;
+      let updatedTask = task;
+
+      if (shouldRecord) {
+        updatedTask = recordStepExecution(userId, task, plan, execution);
+      }
+
+      return JSON.stringify({
+        task: updatedTask,
+        plan,
+        execution,
+        note: shouldRecord
+          ? 'Execution step recorded on the task. Continue with the suggested tools if the user confirms any gated action.'
+          : 'Execution step generated without recording. External side effects remain confirmation-gated.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_advance',
+    description: 'Advance a persistent work takeover task by one reusable safe step. It continues the task, orchestrates a plan, selects the next unprepared step from execution history, executes that preparation step, and records the result. If all steps are prepared, it can export a local task packet instead. It does not send, publish, submit, pay, sign, or operate external apps by itself.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
+        exportWhenComplete: { type: 'boolean', description: 'When all plan steps have been prepared, export the local task packet. Defaults to true.' },
+        outputDirectory: { type: 'string', description: 'Optional folder for the packet if exportWhenComplete is true. Defaults to the Desktop.' },
+        record: { type: 'boolean', description: 'Whether to write results back to the task. Defaults to true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+
+      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
+        ? String(args.mode) as WorkTakeoverExecutionMode
+        : 'prepare_work';
+      const plan = planWorkTakeoverExecution(task, { mode });
+      const progress = getWorkTakeoverExecutionProgress(task, plan);
+      const shouldRecord = args.record !== false;
+
+      if (progress.complete && args.exportWhenComplete !== false) {
+        const packet = exportWorkTakeoverPacket(task, {
+          outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+          plan,
+        });
+        let updatedTask = task;
+        if (shouldRecord) {
+          updatedTask = recordPacket(userId, task, plan, packet, {
+            workTakeoverExecution: {
+              lastPlan: plan,
+              progress,
+              updatedAt: packet.createdAt,
+            },
+          });
+        }
+        return JSON.stringify({
+          task: updatedTask,
+          plan,
+          progress,
+          packet,
+          action: 'exported_packet',
+          note: 'All safe preparation steps were already covered, so a local task packet was exported.',
+        }, null, 2);
+      }
+
+      const execution = executeWorkTakeoverPlanStep(task, plan, {
+        stepId: progress.nextStep?.id,
+      });
+      const updatedTask = shouldRecord ? recordStepExecution(userId, task, plan, execution) : task;
+      return JSON.stringify({
+        task: updatedTask,
+        plan,
+        progress,
+        execution,
+        action: 'executed_step',
+        note: shouldRecord
+          ? 'Advanced one work takeover step and recorded the result.'
+          : 'Advanced one work takeover step without recording.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_export_packet',
+    description: 'Export a persistent work takeover task into a local file packet containing task summary, execution plan, artifact checklist, communication drafts, verification/risk checklist, and structured JSON. This materializes task-center work into local files without sending, publishing, submitting, paying, signing, or controlling external apps.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task.' },
+        outputDirectory: { type: 'string', description: 'Optional folder where the packet folder should be created. Defaults to the Desktop.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
+        record: { type: 'boolean', description: 'Whether to write the packet path back to the task. Defaults to true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+
+      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
+        ? String(args.mode) as WorkTakeoverExecutionMode
+        : 'prepare_work';
+      const plan = planWorkTakeoverExecution(task, { mode });
+      const packet = exportWorkTakeoverPacket(task, {
+        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+        plan,
+      });
+      const shouldRecord = args.record !== false;
+      let updatedTask = task;
+
+      if (shouldRecord) {
+        updatedTask = recordPacket(userId, task, plan, packet);
+      }
+
+      return JSON.stringify({
+        task: updatedTask,
+        plan,
+        packet,
+        note: shouldRecord
+          ? 'Task packet exported and recorded on the task. The packet is local only; external side effects remain confirmation-gated.'
+          : 'Task packet exported without recording. The packet is local only; external side effects remain confirmation-gated.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_autorun',
+    description: 'Run a bounded real-loop smoke test for work takeover. It can create a task from a provided WeChat/customer message or continue an existing active task, orchestrate it, safely advance up to maxSteps, stop on blockers or confirmation boundaries, export a local task packet by default, and write the full summary back to the task. It never sends, publishes, submits, pays, signs, or operates external apps by itself.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional existing work takeover task id. If omitted, message/clipboard/active task is used.' },
+        message: { type: 'string', description: 'Optional WeChat/customer message text to create a new task before autorun.' },
+        fromClipboard: { type: 'boolean', description: 'Read message text from desktop clipboard when message is omitted. Requires desktop client relay.' },
+        contact: { type: 'string', description: 'Optional contact/customer name.' },
+        source: { type: 'string', description: 'manual, clipboard, selected_text, wechat, voice, chat.' },
+        takeoverMode: { type: 'string', description: 'Optional forced task category or auto.' },
+        userRules: { type: 'string', description: 'Optional user rules/boundaries to apply.' },
+        title: { type: 'string', description: 'Optional task title if creating from message.' },
+        maxSteps: { type: 'number', description: 'Maximum safe preparation steps to advance. Defaults to 3, max 6.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
+        stopOnConfirmation: { type: 'boolean', description: 'Stop after a step that reaches confirmation boundary. Defaults to true.' },
+        exportPacket: { type: 'boolean', description: 'Export a local task packet at the end. Defaults to true.' },
+        outputDirectory: { type: 'string', description: 'Optional folder for exported packet. Defaults to the Desktop.' },
+        record: { type: 'boolean', description: 'Whether to write autorun results back to the task. Defaults to true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
+        ? String(args.mode) as WorkTakeoverExecutionMode
+        : 'prepare_work';
+      const shouldRecord = args.record !== false;
+      const stopOnConfirmation = args.stopOnConfirmation !== false;
+      const maxSteps = Math.max(1, Math.min(Number(args.maxSteps) || 3, 6));
+
+      let task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : null;
+      let intake: ReturnType<typeof analyzeWechatIntake> | undefined;
+      let createdTask = false;
+      let message = compact(args.message);
+
+      if (!task && args.fromClipboard === true) {
+        if (!context?.desktopRelay) throw new Error('Clipboard autorun requires the Lumi desktop client relay.');
+        message = compact(await context.desktopRelay('desktop_clipboard_read', {}) || '');
+        if (!message) throw new Error('Clipboard is empty. Copy the WeChat/customer message first.');
+      }
+
+      if (!task && message) {
+        intake = analyzeWechatIntake({
+          message,
+          contact: args.contact ? String(args.contact) : undefined,
+          source: args.source ? String(args.source) : (args.fromClipboard ? 'clipboard' : 'manual'),
+          takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
+          userRules: args.userRules ? String(args.userRules) : undefined,
+        });
+        task = createWorkTakeoverTaskFromWechatIntake(userId, intake, {
+          domain,
+          orgId,
+          sourceMessage: message,
+          title: args.title ? String(args.title) : undefined,
+        });
+        createdTask = true;
+      }
+
+      if (!task) {
+        task = listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      }
+      if (!task) throw new Error('No work takeover task found. Provide id, message, fromClipboard, or create a task first.');
+
+      const executions: any[] = [];
+      const stopReasons: string[] = [];
+      let currentTask: any = task;
+      let plan = planWorkTakeoverExecution(currentTask, { mode });
+      let progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+
+      for (let i = 0; i < maxSteps; i++) {
+        plan = planWorkTakeoverExecution(currentTask, { mode });
+        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+        if (progress.complete) {
+          stopReasons.push('safe_steps_complete');
+          break;
+        }
+
+        const execution = executeWorkTakeoverPlanStep(currentTask, plan, {
+          stepId: progress.nextStep?.id,
+        });
+        executions.push(execution);
+
+        if (shouldRecord) {
+          currentTask = recordStepExecution(userId, currentTask, plan, execution);
+        }
+
+        if (execution.status === 'blocked') {
+          stopReasons.push('blocked');
+          break;
+        }
+        if (stopOnConfirmation && execution.status === 'waiting_confirmation') {
+          stopReasons.push('waiting_confirmation');
+          break;
+        }
+      }
+
+      plan = planWorkTakeoverExecution(currentTask, { mode });
+      progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+      let packet: ReturnType<typeof exportWorkTakeoverPacket> | undefined;
+      if (args.exportPacket !== false) {
+        packet = exportWorkTakeoverPacket(currentTask, {
+          outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+          plan,
+        });
+        if (shouldRecord) {
+          currentTask = recordPacket(userId, currentTask, plan, packet, {
+            workTakeoverAutorun: {
+              createdTask,
+              intake,
+              executions,
+              progress,
+              stopReasons,
+              maxSteps,
+              updatedAt: packet.createdAt,
+            },
+          });
+        }
+      } else if (shouldRecord) {
+        currentTask = updateWorkTakeoverTask(userId, currentTask.id, {
+          metadata: {
+            workTakeoverAutorun: {
+              createdTask,
+              intake,
+              executions,
+              progress,
+              stopReasons,
+              maxSteps,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          note: `Autorun completed ${executions.length} safe step(s).`,
+        } as any) || currentTask;
+      }
+
+      const report = {
+        createdTask,
+        taskId: currentTask.id,
+        title: currentTask.title,
+        category: currentTask.category,
+        status: currentTask.status,
+        executedSteps: executions.map(item => ({
+          stepId: item.step.id,
+          title: item.step.title,
+          status: item.status,
+          summary: item.summary,
+        })),
+        stopReasons: stopReasons.length ? stopReasons : ['max_steps_reached'],
+        remainingStepIds: progress.remainingStepIds,
+        confirmationRequired: currentTask.confirmationRequired || [],
+        blockers: currentTask.blockedBy || [],
+        packetPath: packet?.folderPath,
+      };
+
+      return JSON.stringify({
+        intake,
+        task: currentTask,
+        plan,
+        progress,
+        executions,
+        packet,
+        report,
+        note: 'Autorun finished the bounded safe loop. Review report.stopReasons, confirmationRequired, blockers, and packetPath for the next decision.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_run_suggested_tool',
+    description: 'Run one explicitly selected tool from the current work takeover execution plan step, then record the result back to the task. The requested tool must already be suggested by the plan step; task-state tools are intentionally excluded to avoid recursion. The underlying tool keeps its own safety and confirmation behavior.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task.' },
+        stepId: { type: 'string', description: 'Optional execution step id. Defaults to the plan nextStep.' },
+        toolName: { type: 'string', description: 'Name of the suggested tool to run, e.g. work_product_plan, create_docx, create_ppt, cad_generate_dxf, wechat_prepare_reply.' },
+        toolArgs: { type: 'object', description: 'Arguments to pass to the selected tool.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
+        record: { type: 'boolean', description: 'Whether to write the tool result back to the task. Defaults to true.' },
+      },
+      required: ['toolName'],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+
+      const toolName = String(args.toolName || '').trim();
+      if (!toolName) throw new Error('toolName is required.');
+      if (toolName.startsWith('work_takeover_task_')) {
+        throw new Error('Use work_takeover_task_* tools directly; the suggested-tool bridge does not run task-state tools.');
+      }
+
+      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
+        ? String(args.mode) as WorkTakeoverExecutionMode
+        : 'prepare_work';
+      const plan = planWorkTakeoverExecution(task, { mode });
+      const step = args.stepId
+        ? plan.steps.find(item => item.id === String(args.stepId))
+        : plan.nextStep || plan.steps[0];
+      if (!step) throw new Error('No execution step is available for this task.');
+      if (!step.suggestedTools.includes(toolName)) {
+        throw new Error(`Tool "${toolName}" is not suggested for step "${step.id}". Suggested tools: ${step.suggestedTools.join(', ') || 'none'}`);
+      }
+
+      const toolArgs = args.toolArgs && typeof args.toolArgs === 'object' ? args.toolArgs : {};
+      const startedAt = new Date().toISOString();
+      let result = '';
+      try {
+        result = await registry.execute(toolName, toolArgs, {
+          ...(context || {}),
+          source: 'work_takeover_task_run_suggested_tool',
+        });
+      } catch (err: any) {
+        const failure = {
+          id: `wt_tool_run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          toolName,
+          toolArgs,
+          stepId: step.id,
+          status: 'failed',
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          error: String(err?.message || err).slice(0, 4000),
+        };
+        if (args.record !== false) {
+          updateWorkTakeoverTask(userId, task.id, {
+            status: 'blocked',
+            blockedBy: uniqueStrings([...task.blockedBy, `工具 ${toolName} 执行失败：${failure.error}`]),
+            metadata: {
+              workTakeoverToolRuns: toolRunHistory(task, failure),
+            },
+            note: `Suggested tool failed: ${toolName}`,
+          } as any);
+        }
+        throw err;
+      }
+
+      const run = {
+        id: `wt_tool_run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        toolName,
+        toolArgs,
+        stepId: step.id,
+        status: 'completed',
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        result: String(result || '').slice(0, 12000),
+      };
+      const shouldRecord = args.record !== false;
+      let updatedTask = task;
+      if (shouldRecord) {
+        updatedTask = updateWorkTakeoverTask(userId, task.id, {
+          status: task.status === 'queued' ? 'in_progress' : task.status,
+          result: `工具 ${toolName} 已执行。\n${run.result}`,
+          artifact: {
+            type: 'other',
+            label: `工具执行结果：${toolName}`,
+            content: run.result,
+            status: 'prepared',
+          },
+          metadata: {
+            workTakeoverExecution: {
+              lastPlan: plan,
+              updatedAt: run.finishedAt,
+            },
+            workTakeoverToolRuns: toolRunHistory(task, run),
+          },
+          note: `Suggested tool executed: ${toolName}`,
+        } as any) || task;
+      }
+
+      return JSON.stringify({
+        task: updatedTask,
+        plan,
+        step,
+        run,
+        note: shouldRecord
+          ? 'Suggested tool executed and recorded on the task.'
+          : 'Suggested tool executed without recording.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'confirm',
   });
 }
