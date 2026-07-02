@@ -16,6 +16,7 @@ let lmstudio: OpenAI | null = null;
 let lmstudioDetected = false;
 let xiaomi: OpenAI | null = null;
 let kimi: OpenAI | null = null;
+let kimiKey: string | null = null;
 let glm: OpenAI | null = null;
 let relay: OpenAI | null = null;
 
@@ -186,11 +187,16 @@ function getXiaomi() {
 
 function getKimi() {
   const key = process.env.KIMI_API_KEY || getKey('KIMI_API_KEY');
-  if (!kimi && key) {
+  if (key && (!kimi || kimiKey !== key)) {
     kimi = new OpenAI({
       apiKey: key,
       baseURL: process.env.KIMI_BASE_URL || 'https://api.moonshot.cn/v1',
     });
+    kimiKey = key;
+  }
+  if (!key) {
+    kimi = null;
+    kimiKey = null;
   }
   return kimi;
 }

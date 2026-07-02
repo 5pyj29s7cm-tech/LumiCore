@@ -53,6 +53,7 @@ const KEY_TO_CIRCUIT: Partial<Record<keyof KeyStore, string[]>> = {
   ANTHROPIC_API_KEY: ['anthropic'],
   GEMINI_API_KEY: ['gemini'],
   DEEPSEEK_API_KEY: ['deepseek'],
+  KIMI_API_KEY: ['kimi'],
 };
 
 export function loadKeys(): KeyStore {
