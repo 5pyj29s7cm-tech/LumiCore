@@ -684,7 +684,7 @@ fn open_item(target: String, window: tauri::WebviewWindow) -> CommandResult {
     if cfg!(target_os = "windows") && Path::new(&target).is_dir() {
         let mut cmd = Command::new("explorer.exe");
         cmd.arg(&target);
-        return match cmd.spawn() {
+        return match spawn_hidden(&mut cmd) {
             Ok(_) => CommandResult {
                 success: true,
                 output: format!("Opened folder: {}", target),

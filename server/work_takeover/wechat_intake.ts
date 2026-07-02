@@ -73,7 +73,7 @@ const ARTIFACTS_BY_CATEGORY: Record<WechatWorkCategory, string[]> = {
   account: ['账号现状摘要', '内容/投放任务清单', '数据核对项', '对外回复草稿'],
   legal_case: ['立案材料清单', '证据目录', '事实时间线', '风险提示', '待确认事项'],
   video_publish: ['视频发布清单', '标题/封面方向', '脚本或口播摘要', '平台发布确认项'],
-  design_delivery: ['需求摘要', '装修/设计方案清单', 'CAD/Revit交付项', '预算和风险点', '客户回复草稿'],
+  design_delivery: ['需求摘要', '客户可看的装修方案PPT/PDF', '预算与材料清单', 'CAD DXF初稿', 'Revit/Dynamo交接数据', '客户回复草稿'],
   general_work: ['任务摘要', '执行清单', '回复草稿', '待确认事项'],
   personal: ['事项摘要', '回复草稿', '提醒项'],
   unknown: ['消息摘要', '分类建议', '回复草稿'],
@@ -180,7 +180,7 @@ function buildNextActions(category: WechatWorkCategory, urgency: WechatUrgency):
     account: ['识别账号运营目标', '准备内容/投放执行清单', '标记登录、发布和投放确认项'],
     legal_case: ['整理事实时间线', '列出立案材料', '标记证据缺口和法律风险'],
     video_publish: ['整理视频目标和素材需求', '生成标题/封面/发布清单', '标记发布确认项'],
-    design_delivery: ['提取户型、风格、预算和交付要求', '准备设计/CAD/Revit交付清单', '标记尺寸和合同风险'],
+    design_delivery: ['提取户型、风格、预算和交付要求', '生成客户方案PPT/PDF和预算材料清单', '生成CAD DXF初稿并准备Revit/Dynamo交接数据', '标记尺寸、结构、水电、合同和发送风险'],
     general_work: ['拆分任务步骤', '准备执行清单'],
     personal: ['整理事项', '准备简短回复'],
     unknown: ['询问任务归属', '等待用户补充背景'],
@@ -205,7 +205,7 @@ function buildDraftReply(input: WechatIntakeInput, category: WechatWorkCategory,
     case 'video_publish':
       return `${prefix}收到，${urgencyLine}我先整理脚本、标题、封面和发布清单。正式发布和账号操作我会等你确认后再执行。`;
     case 'design_delivery':
-      return `${prefix}收到，${urgencyLine}我先把户型、风格、预算、CAD/Revit交付项和风险点整理出来。涉及正式报价、合同和生产图纸我会先确认。`;
+      return `${prefix}收到，${urgencyLine}我先把户型、风格、预算和交付要求整理成方案包，准备客户可看的PPT/PDF、CAD初稿、Revit交接数据和回复草稿。涉及正式报价、合同、生产图纸和发送动作我会先确认。`;
     case 'personal':
       return `${prefix}收到，我先帮你整理成待办和回复草稿，需要提醒或发送时我再等你确认。`;
     case 'general_work':

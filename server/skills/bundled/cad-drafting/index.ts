@@ -26,7 +26,7 @@ function rect(x: number, y: number, w: number, h: number): string {
   return line(x, y, x + w, y) + line(x + w, y, x + w, y + h) + line(x + w, y + h, x, y + h) + line(x, y + h, x, y);
 }
 
-const server = new McpServer({ name: 'cad-drafting', version: '1.1.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'cad-drafting', version: '1.2.0' }, { capabilities: { tools: {} } });
 
 server.registerTool('cad_space_program', {
   description: 'Create a room/space program with estimated areas, adjacency notes, and drafting assumptions.',
@@ -108,7 +108,7 @@ server.registerTool('cad_drafting_checklist', {
 }));
 
 server.registerTool('cad_renovation_folder_workflow', {
-  description: 'Read a local renovation/floor-plan folder and generate editable DXF drafting bases, a layout draft, MEP point suggestions, proposal notes, and a materials CSV. Does not require AutoCAD; production drawings still require site and professional review.',
+  description: 'Read a local renovation/floor-plan folder and generate editable DXF drafting bases, a layout draft, MEP point suggestions, proposal notes, material data, and design-delivery handoff content. Pair with the client design_delivery_workflow when Lumi should also create a customer-facing PPT/PDF package, open CAD/Revit handoff files, and prepare WeChat delivery drafts.',
   inputSchema: {
     folderPath: z.string().describe('Local folder containing sketches, floor-plan images, measurements, notes, PDFs, Office files, or renovation requirements'),
     projectName: z.string().optional().describe('Project name used in generated documents and CAD titles'),

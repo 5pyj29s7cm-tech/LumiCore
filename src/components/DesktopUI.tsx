@@ -1263,7 +1263,7 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
     result: {
       eyebrow: 'DELIVERY READY',
       title: '装修设计交付包完成',
-      desc: '方案、预算、CAD、预览图、Revit 交接数据和微信话术已形成一套可推进客户确认的结果。',
+      desc: '这一单已经整理好了。方案、预算、CAD、预览图、Revit 交接数据和微信话术都齐了，可以继续推进客户确认。',
     },
   };
 
@@ -1341,7 +1341,7 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
                 <div className="mt-1 text-lg font-black text-white">本地交付结果</div>
               </div>
               <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-cyan-200">
-                {stage === 'result' ? 'READY' : 'RUNNING'}
+                {stage === 'result' ? 'DONE' : 'RUNNING'}
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">

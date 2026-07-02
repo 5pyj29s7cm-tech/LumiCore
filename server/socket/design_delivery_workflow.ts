@@ -86,8 +86,10 @@ type DesignDeliveryFiles = {
   reportHtml: string;
   cadDxf: string;
   cadPreview: string;
+  cadHandoffHtml: string;
   dynamoScript: string;
   revitCsv: string;
+  revitHandoffHtml: string;
   wechatDraft: string;
 };
 
@@ -281,6 +283,200 @@ function psString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+function buildOpenFileWithAppCommand(appPath: string, filePath: string): string {
+  const app = appPath ? psString(appPath) : '$null';
+  const file = psString(filePath);
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+$app = ${app}
+$file = ${file}
+if ($app -and (Test-Path -LiteralPath $app)) {
+  try {
+    Start-Process -FilePath $app -ArgumentList @($file)
+    Write-Output "OPENED_WITH_APP"
+    exit 0
+  } catch {}
+  try {
+    Start-Process -FilePath $app
+    Start-Sleep -Seconds 2
+    Start-Process -FilePath $file
+    Write-Output "OPENED_APP_THEN_FILE"
+    exit 0
+  } catch {}
+}
+try {
+  Start-Process -FilePath $file
+  Write-Output "OPENED_FILE_DEFAULT"
+  exit 0
+} catch {}
+Write-Output "OPEN_ATTEMPTED"
+exit 0
+`.trim();
+  return powershellCommand(script);
+}
+
+function buildOpenRevitHandoffCommand(appPath: string, dynamoScriptPath: string, roomSchedulePath: string): string {
+  const app = appPath ? psString(appPath) : '$null';
+  const script = psString(dynamoScriptPath);
+  const schedule = psString(roomSchedulePath);
+  const command = `
+$ErrorActionPreference = 'SilentlyContinue'
+$app = ${app}
+$script = ${script}
+$schedule = ${schedule}
+if ($app -and (Test-Path -LiteralPath $app)) {
+  try {
+    Start-Process -FilePath $app -ArgumentList @($script)
+    Write-Output "OPENED_REVIT_APP"
+    exit 0
+  } catch {}
+  try {
+    Start-Process -FilePath $app
+    Start-Sleep -Seconds 2
+    Write-Output "OPENED_REVIT_ENTRY"
+    exit 0
+  } catch {}
+}
+try {
+  Start-Process -FilePath $script
+  Start-Sleep -Seconds 1
+  Start-Process -FilePath $schedule
+  Write-Output "OPENED_REVIT_HANDOFF_FILES"
+  exit 0
+} catch {}
+Write-Output "OPEN_REVIT_HANDOFF_ATTEMPTED"
+exit 0
+`.trim();
+  return powershellCommand(command);
+}
+
+function buildOpenWeChatCommand(personalShortcutPath: string, enterpriseShortcutPath: string): string {
+  const personalShortcut = personalShortcutPath ? psString(personalShortcutPath) : '$null';
+  const enterpriseShortcut = enterpriseShortcutPath ? psString(enterpriseShortcutPath) : '$null';
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName Microsoft.VisualBasic
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class LumiWinFocus {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+'@
+$personalShortcut = ${personalShortcut}
+$enterpriseShortcut = ${enterpriseShortcut}
+
+function Focus-ProcessWindow($process, $label) {
+  if (-not $process) { return $false }
+  try {
+    if ($process.MainWindowHandle -and $process.MainWindowHandle -ne 0) {
+      [LumiWinFocus]::ShowWindowAsync($process.MainWindowHandle, 9) | Out-Null
+      Start-Sleep -Milliseconds 250
+      [LumiWinFocus]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+      Start-Sleep -Milliseconds 250
+      try { [Microsoft.VisualBasic.Interaction]::AppActivate($process.Id) | Out-Null } catch {}
+      Write-Output "WECHAT_FOCUSED_WINDOW:$label"
+      return $true
+    }
+  } catch {}
+  return $false
+}
+
+function Focus-PersonalWeChat {
+  $processes = Get-Process | Where-Object { $_.ProcessName -match '^(Weixin|WeChat)$' } | Sort-Object @{ Expression = { if ($_.MainWindowTitle -match '微信|WeChat|Weixin') { 0 } else { 1 } } }, Id
+  foreach ($process in $processes) {
+    if (Focus-ProcessWindow $process $process.ProcessName) { return $true }
+  }
+  return $false
+}
+
+if (Focus-PersonalWeChat) { exit 0 }
+
+$personalTitles = @('微信', 'Weixin', 'WeChat')
+foreach ($title in $personalTitles) {
+  try {
+    if ([Microsoft.VisualBasic.Interaction]::AppActivate($title)) {
+      Write-Output "WECHAT_FOCUSED_EXISTING:$title"
+      exit 0
+    }
+  } catch {}
+}
+
+$personalProcess = Get-Process | Where-Object { $_.ProcessName -match '^(Weixin|WeChat)$' } | Select-Object -First 1
+if ($personalProcess) {
+  try {
+    if ([Microsoft.VisualBasic.Interaction]::AppActivate($personalProcess.Id)) {
+      Write-Output "WECHAT_FOCUSED_PROCESS:$($personalProcess.ProcessName)"
+      exit 0
+    }
+  } catch {}
+}
+
+if ($personalShortcut -and (Test-Path -LiteralPath $personalShortcut)) {
+  try {
+    Start-Process -FilePath $personalShortcut
+    Start-Sleep -Seconds 2
+    if (Focus-PersonalWeChat) {
+      Write-Output "WECHAT_OPENED_PERSONAL_SHORTCUT"
+      exit 0
+    }
+    foreach ($title in $personalTitles) {
+      if ([Microsoft.VisualBasic.Interaction]::AppActivate($title)) {
+        Write-Output "WECHAT_OPENED_PERSONAL_SHORTCUT"
+        exit 0
+      }
+    }
+  } catch {}
+}
+
+$personalCandidates = @(
+  "D:\\Weixin\\Weixin.exe",
+  "$env:ProgramFiles\\Tencent\\Weixin\\Weixin.exe",
+  "$env:ProgramFiles(x86)\\Tencent\\Weixin\\Weixin.exe",
+  "$env:LOCALAPPDATA\\Tencent\\Weixin\\Weixin.exe",
+  "$env:ProgramFiles\\Tencent\\WeChat\\WeChat.exe",
+  "$env:ProgramFiles(x86)\\Tencent\\WeChat\\WeChat.exe",
+  "$env:LOCALAPPDATA\\Tencent\\WeChat\\WeChat.exe",
+  "Weixin.exe",
+  "WeChat.exe"
+)
+foreach ($candidate in $personalCandidates) {
+  try {
+    if ((Test-Path -LiteralPath $candidate) -or $candidate -match '^(Weixin|WeChat)\\.exe$') {
+      Start-Process -FilePath $candidate
+      Start-Sleep -Seconds 2
+      if (Focus-PersonalWeChat) {
+        Write-Output "WECHAT_OPENED_PERSONAL_EXE"
+        exit 0
+      }
+      foreach ($title in $personalTitles) {
+        if ([Microsoft.VisualBasic.Interaction]::AppActivate($title)) {
+          Write-Output "WECHAT_OPENED_PERSONAL_EXE"
+          exit 0
+        }
+      }
+    }
+  } catch {}
+}
+
+if ($enterpriseShortcut -and (Test-Path -LiteralPath $enterpriseShortcut)) {
+  try {
+    Start-Process -FilePath $enterpriseShortcut
+    Start-Sleep -Seconds 2
+    if ([Microsoft.VisualBasic.Interaction]::AppActivate('企业微信')) {
+      Write-Output "WECHAT_OPENED_ENTERPRISE_FALLBACK"
+      exit 0
+    }
+  } catch {}
+}
+
+Write-Output "WECHAT_FOCUS_ATTEMPTED"
+exit 0
+`.trim();
+  return powershellCommand(script);
+}
+
 function rtfUnicodeEscape(text: string): string {
   let escaped = '';
   for (let i = 0; i < text.length; i++) {
@@ -439,6 +635,15 @@ function xmlEscape(value: string): string {
     .replace(/'/g, '&apos;');
 }
 
+function htmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function pptTextShape(
   id: number,
   name: string,
@@ -493,18 +698,149 @@ function pptRectShape(id: number, name: string, x: number, y: number, width: num
     </p:sp>`;
 }
 
-function buildPptSlideXml(index: number, title: string, subtitle: string, bullets: string[], accent: string): string {
-  const bulletParagraphs = bullets.map(text => ({ text, size: 20, color: 'E2E8F0', bullet: true }));
+type PptVisualKind = 'cover' | 'plan' | 'living' | 'materials' | 'budget' | 'handoff';
+
+function pptVisualShape(kind: PptVisualKind, accent: string): string {
+  const panelX = 5050000;
+  const panelY = 1220000;
+  const panelW = 3500000;
+  const panelH = 3550000;
+  const title = (text: string) => pptTextShape(40, 'Visual title', panelX + 260000, panelY + 190000, panelW - 520000, 300000, [
+    { text, size: 15, color: '2F3A34', bold: true },
+  ]);
+  const note = (id: number, text: string, x: number, y: number, w = 850000, color = '475569') => pptTextShape(id, `Visual note ${id}`, x, y, w, 220000, [
+    { text, size: 9, color, bold: true },
+  ]);
+  const frame = pptRectShape(30, 'Visual card', panelX, panelY, panelW, panelH, 'FFFFFF', 100000);
+
+  if (kind === 'cover') {
+    return [
+      pptRectShape(30, 'Hero card', panelX, panelY, panelW, panelH, '20342D', 100000),
+      pptRectShape(31, 'Hero plan base', panelX + 360000, panelY + 560000, 2500000, 1840000, 'F6F0E6', 100000),
+      pptRectShape(32, 'Living', panelX + 880000, panelY + 780000, 1080000, 700000, 'CFE5D8', 100000),
+      pptRectShape(33, 'Kitchen', panelX + 2030000, panelY + 780000, 520000, 700000, 'EBD7B6', 100000),
+      pptRectShape(34, 'Bedroom', panelX + 880000, panelY + 1540000, 760000, 520000, 'D8D5EA', 100000),
+      pptRectShape(35, 'Study', panelX + 1720000, panelY + 1540000, 830000, 520000, 'D7E6EA', 100000),
+      pptRectShape(36, 'Chip warm', panelX + 440000, panelY + 2760000, 520000, 220000, 'F3E7D3', 100000),
+      pptRectShape(37, 'Chip stone', panelX + 1070000, panelY + 2760000, 520000, 220000, 'BFC8C2', 100000),
+      pptRectShape(38, 'Chip wood', panelX + 1700000, panelY + 2760000, 520000, 220000, 'A56A43', 100000),
+      pptRectShape(39, 'Chip metal', panelX + 2330000, panelY + 2760000, 520000, 220000, 'C6A15B', 100000),
+      pptTextShape(41, 'Hero caption', panelX + 420000, panelY + 3100000, 2600000, 300000, [
+        { text: '平面关系 + 材料方向 + 预算边界', size: 13, color: 'F8FAFC', bold: true },
+      ]),
+    ].join('');
+  }
+
+  if (kind === 'plan') {
+    return [
+      frame,
+      title('平面布局示意'),
+      pptRectShape(31, 'Plan border', panelX + 330000, panelY + 720000, 2760000, 2140000, 'EEF1EC', 100000),
+      pptRectShape(32, 'Entrance', panelX + 420000, panelY + 820000, 620000, 1040000, 'E7F3F0', 100000),
+      pptRectShape(33, 'Living Dining', panelX + 1050000, panelY + 820000, 1360000, 1040000, 'D9E8D8', 100000),
+      pptRectShape(34, 'Kitchen', panelX + 2430000, panelY + 820000, 520000, 1040000, 'EFE0C8', 100000),
+      pptRectShape(35, 'Master', panelX + 420000, panelY + 1920000, 960000, 760000, 'E5DDEC', 100000),
+      pptRectShape(36, 'Second Bedroom', panelX + 1410000, panelY + 1920000, 760000, 760000, 'D8E4EA', 100000),
+      pptRectShape(37, 'Study', panelX + 2200000, panelY + 1920000, 750000, 760000, 'E9E3D4', 100000),
+      pptRectShape(38, 'Main aisle', panelX + 1040000, panelY + 1220000, 1440000, 150000, accent, 72000),
+      note(41, '玄关收纳', panelX + 510000, panelY + 1260000),
+      note(42, '客餐厅一体', panelX + 1320000, panelY + 1260000, 1000000),
+      note(43, 'U 型厨房', panelX + 2480000, panelY + 1260000),
+      note(44, '主卧', panelX + 750000, panelY + 2250000),
+      note(45, '次卧', panelX + 1610000, panelY + 2250000),
+      note(46, '书房', panelX + 2420000, panelY + 2250000),
+      note(47, '3.2m 主通道', panelX + 1390000, panelY + 1050000, 960000, '1F7A5A'),
+    ].join('');
+  }
+
+  if (kind === 'living') {
+    return [
+      frame,
+      title('客餐厅设计关系'),
+      pptRectShape(31, 'Floor', panelX + 320000, panelY + 2500000, 2860000, 220000, 'D7C4A8', 100000),
+      pptRectShape(32, 'Back wall', panelX + 420000, panelY + 760000, 2600000, 520000, 'E7E0D5', 100000),
+      pptRectShape(33, 'TV storage', panelX + 620000, panelY + 880000, 800000, 250000, '2F3A34', 100000),
+      pptRectShape(34, 'Vertical cabinet', panelX + 430000, panelY + 1320000, 480000, 1050000, '53665C', 100000),
+      pptRectShape(35, 'Sofa', panelX + 980000, panelY + 2030000, 1050000, 380000, 'A7B7AA', 100000),
+      pptRectShape(36, 'Coffee table', panelX + 2090000, panelY + 2020000, 520000, 260000, 'F7F3EA', 100000),
+      pptRectShape(37, 'Dining table', panelX + 2160000, panelY + 1370000, 720000, 360000, 'C69C6D', 100000),
+      pptRectShape(38, 'Light strip', panelX + 660000, panelY + 700000, 2120000, 65000, accent, 100000),
+      note(41, '电视墙隐藏收纳', panelX + 1500000, panelY + 910000, 1200000),
+      note(42, '餐边柜 + 冰箱区', panelX + 460000, panelY + 2400000, 1200000),
+      note(43, '餐桌靠近厨房', panelX + 2220000, panelY + 1780000, 1000000),
+      note(44, '主通道留白', panelX + 2040000, panelY + 2320000, 1000000),
+    ].join('');
+  }
+
+  if (kind === 'materials') {
+    return [
+      frame,
+      title('材料与色彩'),
+      pptRectShape(31, 'Warm white', panelX + 420000, panelY + 800000, 680000, 760000, 'F6F0E6', 100000),
+      pptRectShape(32, 'Stone', panelX + 1180000, panelY + 800000, 680000, 760000, 'BFC8C2', 100000),
+      pptRectShape(33, 'Wood', panelX + 1940000, panelY + 800000, 680000, 760000, '9E6B45', 100000),
+      pptRectShape(34, 'Charcoal', panelX + 420000, panelY + 1900000, 680000, 760000, '2F3A34', 100000),
+      pptRectShape(35, 'Sage', panelX + 1180000, panelY + 1900000, 680000, 760000, '708B78', 100000),
+      pptRectShape(36, 'Brass', panelX + 1940000, panelY + 1900000, 680000, 760000, 'C6A15B', 100000),
+      note(41, '暖白墙面', panelX + 465000, panelY + 1600000),
+      note(42, '浅灰石材', panelX + 1225000, panelY + 1600000),
+      note(43, '木饰面', panelX + 2020000, panelY + 1600000),
+      note(44, '深色柜体', panelX + 465000, panelY + 2700000),
+      note(45, '低饱和绿', panelX + 1225000, panelY + 2700000),
+      note(46, '金属点缀', panelX + 2020000, panelY + 2700000),
+    ].join('');
+  }
+
+  if (kind === 'budget') {
+    const bar = (id: number, y: number, w: number, fill: string, text: string) => [
+      pptRectShape(id, `Bar track ${id}`, panelX + 420000, y, 2350000, 230000, 'ECE7DD', 100000),
+      pptRectShape(id + 10, `Bar ${id}`, panelX + 420000, y, w, 230000, fill, 100000),
+      note(id + 20, text, panelX + 450000, y + 28000, 1900000, '2F3A34'),
+    ].join('');
+    return [
+      frame,
+      title('28 万预算拆分'),
+      bar(31, panelY + 840000, 2180000, accent, '基础施工 7.8 万'),
+      bar(32, panelY + 1240000, 1760000, '6BA6A6', '主材 6.3 万'),
+      bar(33, panelY + 1640000, 1540000, '9B8BB4', '定制收纳 5.5 万'),
+      bar(34, panelY + 2040000, 1200000, 'C69C6D', '设备灯具 4.1 万'),
+      bar(35, panelY + 2440000, 900000, '708B78', '软装预留 3.1 万'),
+      note(56, '风险预留 1.2 万：结构、燃气、水电变更需确认', panelX + 420000, panelY + 2980000, 2600000, '8A5A2B'),
+    ].join('');
+  }
+
+  return [
+    frame,
+    title('交付包内容'),
+    pptRectShape(31, 'PPT', panelX + 450000, panelY + 820000, 920000, 520000, accent, 100000),
+    pptRectShape(32, 'PDF', panelX + 1540000, panelY + 820000, 920000, 520000, '6BA6A6', 100000),
+    pptRectShape(33, 'CAD', panelX + 450000, panelY + 1660000, 920000, 520000, '9B8BB4', 100000),
+    pptRectShape(34, 'BIM', panelX + 1540000, panelY + 1660000, 920000, 520000, 'C69C6D', 100000),
+    note(41, 'PPT 汇报', panelX + 610000, panelY + 1000000, 800000, 'FFFFFF'),
+    note(42, 'PDF 确认', panelX + 1700000, panelY + 1000000, 800000, 'FFFFFF'),
+    note(43, 'DXF 初稿', panelX + 620000, panelY + 1840000, 800000, 'FFFFFF'),
+    note(44, 'Revit 交接', panelX + 1660000, panelY + 1840000, 900000, 'FFFFFF'),
+    note(45, '微信草稿等待确认，不自动发送', panelX + 620000, panelY + 2660000, 2300000, '2F3A34'),
+  ].join('');
+}
+
+function buildPptSlideXml(index: number, title: string, subtitle: string, bullets: string[], accent: string, visual: PptVisualKind): string {
+  const bulletParagraphs = bullets.map(text => ({ text, size: 17, color: '334155', bullet: true }));
+  const isCover = visual === 'cover';
   const shapes = [
-    pptRectShape(2, 'Accent', 457200, 520000, 350000, 350000, accent),
-    pptTextShape(3, 'Title', 457200, 760000, 8200000, 900000, [
-      { text: title, size: 34, color: 'FFFFFF', bold: true },
-      { text: subtitle, size: 15, color: 'A7F3D0' },
+    pptRectShape(2, 'Top rule', 457200, 420000, 2100000, 90000, accent),
+    pptTextShape(3, 'Deck label', 457200, 560000, 2500000, 260000, [
+      { text: 'LUMI DESIGN PROPOSAL', size: 10, color: '64748B', bold: true },
     ]),
-    pptRectShape(4, 'Content Panel', 700000, 1900000, 7600000, 3600000, '111827', 86000),
-    pptTextShape(5, 'Bullets', 1000000, 2200000, 7000000, 3000000, bulletParagraphs),
-    pptTextShape(6, 'Footer', 700000, 6200000, 7600000, 260000, [
-      { text: `Lumi design delivery package · slide ${index}`, size: 11, color: '94A3B8' },
+    pptTextShape(4, 'Title', 457200, isCover ? 950000 : 780000, 4150000, isCover ? 1260000 : 920000, [
+      { text: title, size: isCover ? 38 : 30, color: '1F2933', bold: true },
+      { text: subtitle, size: isCover ? 17 : 14, color: '66736A' },
+    ]),
+    pptRectShape(5, 'Content card', 620000, isCover ? 2460000 : 1820000, 3920000, isCover ? 1500000 : 2500000, 'FFFFFF', 100000),
+    pptTextShape(6, 'Bullets', 900000, isCover ? 2740000 : 2120000, 3300000, isCover ? 980000 : 1850000, bulletParagraphs),
+    pptVisualShape(visual, accent),
+    pptTextShape(7, 'Footer', 700000, 6200000, 7600000, 260000, [
+      { text: `Lumi design delivery package · ${String(index).padStart(2, '0')}`, size: 10, color: '8B928B' },
     ]),
   ].join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -512,7 +848,7 @@ function buildPptSlideXml(index: number, title: string, subtitle: string, bullet
        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
        xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
-    <p:bg><p:bgPr><a:solidFill><a:srgbClr val="0F172A"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>
+    <p:bg><p:bgPr><a:solidFill><a:srgbClr val="F7F3EA"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>
     <p:spTree>
       <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
       <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
@@ -600,28 +936,46 @@ function createDesignPresentationPptx(outPath: string): string {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-design-pptx-'));
   const slides = [
     {
-      title: 'Lumi 装修设计交付',
-      subtitle: '从客户需求到可交付文件包',
-      bullets: ['识别微信/自然语言需求', '生成方案、预算、CAD 与 Revit 交接包', '默认准备微信草稿，不自动发送'],
+      title: '120 平三居室装修方案',
+      subtitle: '现代轻奢 / 28 万预算控制 / 可深化到 CAD 与 Revit',
+      bullets: ['客户目标：快速确认方案方向并进入深化设计', '核心策略：客餐厅阳台一体化，提升采光和通行效率', '交付结果：方案、预算、PPT、PDF、CAD 初稿、Revit 交接数据'],
       accent: '22C55E',
+      visual: 'cover' as PptVisualKind,
     },
     {
-      title: '客户需求与空间策略',
-      subtitle: '120 平三居室，现代轻奢，预算 28 万',
-      bullets: ['开放式客餐厅，提高采光和主通道效率', '玄关、餐边柜、卧室收纳一体化', '施工图前复核承重、梁位、管井和水电'],
+      title: '平面布局怎么设计',
+      subtitle: '先解决动线、收纳、采光，再进入造型',
+      bullets: ['玄关做通顶鞋柜和临时挂衣区，减少入户杂物外露', '客餐厅保留 3.2 米主通道，餐边柜承接冰箱和小电器', '厨房采用 U 型台面，缩短洗、切、炒动线', '主卧、次卧、书房按安静区集中布置，降低客厅干扰'],
       accent: '38BDF8',
+      visual: 'plan' as PptVisualKind,
     },
     {
-      title: 'CAD / Revit 交付物',
-      subtitle: '让外部电脑系统继续工作',
-      bullets: ['DXF 平面布置文件用于 CAD 深化', 'SVG 平面预览用于客户快速确认', 'Dynamo 脚本和空间表用于 Revit 建模交接'],
+      title: '客餐厅效果怎么落地',
+      subtitle: '开放感、收纳和预算之间的平衡',
+      bullets: ['电视墙做隐藏收纳，避免只做装饰背景浪费空间', '沙发、餐桌、阳台连成一条视线轴，增强空间尺度感', '餐边柜外置冰箱区，让厨房内部更完整', '灯光用主灯 + 线性灯 + 局部氛围灯，控制轻奢感不过度堆料'],
       accent: 'A78BFA',
+      visual: 'living' as PptVisualKind,
     },
     {
-      title: '交付与推进',
-      subtitle: '拿到结果，而不是停在反复确认',
-      bullets: ['PPT 用于汇报和现场修改', 'PDF 用于微信/邮件发送和客户确认', '结构、燃气、报价签字和付款节点上报用户'],
+      title: '材料与色彩建议',
+      subtitle: '暖白、浅灰石材、木色、金属线条',
+      bullets: ['公共区以暖白和浅灰为底，降低压迫感', '木地板和木饰面增加温度，避免空间太冷', '局部金属线条和柜体深色点缀，形成轻奢层次', '厨房、卫生间优先防滑砖和耐污台面，先保证使用寿命'],
       accent: 'F59E0B',
+      visual: 'materials' as PptVisualKind,
+    },
+    {
+      title: '预算怎么控制',
+      subtitle: '28 万控制线，先保功能，再做颜值',
+      bullets: ['基础施工和水电优先，不能靠后期软装掩盖硬装问题', '主材和定制分开控制，避免柜体预算挤压地面墙面品质', '软装和灯具保留弹性，客户确认风格后再深化采购', '结构、燃气、水电移位和最终签字节点必须上报确认'],
+      accent: '14B8A6',
+      visual: 'budget' as PptVisualKind,
+    },
+    {
+      title: '交付包与下一步',
+      subtitle: '客户确认方向后进入深化图纸和报价',
+      bullets: ['PPT 用于现场讲解，PDF 用于微信发送和客户确认', 'CAD DXF 进入外部 CAD 软件继续标注、调图层、深化施工图', 'Dynamo 脚本和空间表交给 Revit / BIM 侧继续建模', '微信草稿只准备，不默认发送；确认后再推进客户'],
+      accent: 'F59E0B',
+      visual: 'handoff' as PptVisualKind,
     },
   ];
 
@@ -688,7 +1042,7 @@ function createDesignPresentationPptx(outPath: string): string {
     writeFileEnsured(path.join(tmpDir, 'ppt', 'tableStyles.xml'), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`);
     slides.forEach((slide, index) => {
       const slideNo = index + 1;
-      writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', `slide${slideNo}.xml`), buildPptSlideXml(slideNo, slide.title, slide.subtitle, slide.bullets, slide.accent));
+      writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', `slide${slideNo}.xml`), buildPptSlideXml(slideNo, slide.title, slide.subtitle, slide.bullets, slide.accent, slide.visual));
       writeFileEnsured(path.join(tmpDir, 'ppt', 'slides', '_rels', `slide${slideNo}.xml.rels`), `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
@@ -764,6 +1118,99 @@ function buildReportHtml(cadPreviewPath: string): string {
   </section>
 </body>
 </html>`;
+}
+
+function buildHandoffPageShell(title: string, eyebrow: string, body: string): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>${htmlEscape(title)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Microsoft YaHei", "SimHei", Arial, sans-serif;
+      color: #e5f4ff;
+      background: #08111f;
+    }
+    main { width: min(1180px, calc(100vw - 56px)); margin: 0 auto; padding: 32px 0 42px; }
+    .eyebrow { color: #67e8f9; font-size: 12px; font-weight: 900; letter-spacing: .22em; text-transform: uppercase; }
+    h1 { margin: 10px 0 10px; font-size: 34px; line-height: 1.16; }
+    p { color: rgba(229, 244, 255, .72); line-height: 1.8; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 18px; align-items: stretch; margin-top: 22px; }
+    .panel { border: 1px solid rgba(103, 232, 249, .18); border-radius: 10px; background: rgba(15, 23, 42, .78); padding: 18px; box-shadow: 0 22px 54px rgba(0, 0, 0, .32); }
+    .path { margin-top: 10px; padding: 11px 12px; border-radius: 8px; background: rgba(15, 23, 42, .9); color: #bae6fd; font-family: Consolas, "Microsoft YaHei", monospace; font-size: 13px; word-break: break-all; }
+    .stat { display: grid; gap: 10px; margin-top: 14px; }
+    .stat div { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 12px; background: rgba(255,255,255,.035); }
+    .stat b { display: block; margin-bottom: 4px; color: #fff; }
+    img { width: 100%; max-height: 680px; object-fit: contain; border-radius: 8px; background: #f8fafc; }
+    pre { margin: 0; max-height: 510px; overflow: auto; white-space: pre-wrap; color: #dbeafe; font-size: 13px; line-height: 1.58; font-family: Consolas, "Microsoft YaHei", monospace; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; color: #e0f2fe; }
+    th, td { border-bottom: 1px solid rgba(255,255,255,.09); padding: 10px 8px; text-align: left; font-size: 13px; }
+    th { color: #67e8f9; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+    @media (max-width: 860px) { main { width: min(100vw - 28px, 720px); } .grid { grid-template-columns: 1fr; } h1 { font-size: 28px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">${htmlEscape(eyebrow)}</div>
+    <h1>${htmlEscape(title)}</h1>
+    ${body}
+  </main>
+</body>
+</html>`;
+}
+
+function buildCadHandoffHtml(cadPreviewPath: string, cadDxfPath: string): string {
+  const cadPreviewUrl = pathToFileURL(cadPreviewPath).href;
+  const body = `
+    <p>这是 Lumi 生成的 CAD 初稿检查页：左侧是可视化平面预览，右侧是已经落地的 DXF 文件信息。后续可交给 AutoCAD、LibreCAD、中望、浩辰等 CAD 软件继续标注和深化。</p>
+    <div class="grid">
+      <div class="panel"><img src="${cadPreviewUrl}" alt="CAD 平面布置预览" /></div>
+      <div class="panel">
+        <div class="eyebrow">DXF READY</div>
+        <h2>04-Lumi-CAD-平面布置.dxf</h2>
+        <div class="path">${htmlEscape(cadDxfPath)}</div>
+        <div class="stat">
+          <div><b>单位</b>毫米 mm</div>
+          <div><b>图层</b>EXTERIOR_WALL / INTERIOR_WALL / DOOR / WINDOW / FURNITURE / TEXT</div>
+          <div><b>用途</b>作为 CAD 深化底稿，进入现场量尺复核、尺寸标注和施工图深化。</div>
+        </div>
+      </div>
+    </div>`;
+  return buildHandoffPageShell('Lumi CAD 初稿已生成', 'CAD HANDOFF CHECK', body);
+}
+
+function buildRevitHandoffHtml(dynamoScriptPath: string, revitCsvPath: string, roomScheduleCsv: string): string {
+  const rows = roomScheduleCsv
+    .split(/\r?\n/)
+    .slice(1)
+    .map(line => line.split(','))
+    .filter(cols => cols.length >= 6)
+    .map(cols => `<tr>${cols.map(col => `<td>${htmlEscape(col)}</td>`).join('')}</tr>`)
+    .join('');
+  const body = `
+    <p>这是 Lumi 准备给 Revit / Dynamo 的建模交接包：Dynamo 脚本负责创建空间数据入口，CSV 空间表负责把房间、坐标、尺寸和材料策略交给 BIM 侧继续建模。</p>
+    <div class="grid">
+      <div class="panel">
+        <div class="eyebrow">DYNAMO SCRIPT</div>
+        <h2>05-Lumi-Revit-Dynamo建模脚本.py</h2>
+        <div class="path">${htmlEscape(dynamoScriptPath)}</div>
+        <pre>${htmlEscape(DYNAMO_SCRIPT_TEXT.slice(0, 1800))}</pre>
+      </div>
+      <div class="panel">
+        <div class="eyebrow">ROOM SCHEDULE</div>
+        <h2>05-Lumi-Revit-空间表.csv</h2>
+        <div class="path">${htmlEscape(revitCsvPath)}</div>
+        <table>
+          <thead><tr><th>房间</th><th>X</th><th>Y</th><th>宽</th><th>高</th><th>材料</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  return buildHandoffPageShell('Lumi Revit 交接包已准备', 'REVIT / DYNAMO HANDOFF', body);
 }
 
 function findChromiumExecutable(): string {
@@ -857,17 +1304,12 @@ export function createDesignDeliveryFiles(): DesignDeliveryFiles {
   const reportHtml = path.join(folder, '03-Lumi-装修设计方案汇报.html');
   const cadDxf = path.join(folder, '04-Lumi-CAD-平面布置.dxf');
   const cadPreview = path.join(folder, '04-Lumi-CAD-平面预览.svg');
+  const cadHandoffHtml = path.join(folder, '04-Lumi-CAD-交付检查.html');
   const dynamoScript = path.join(folder, '05-Lumi-Revit-Dynamo建模脚本.py');
   const revitCsv = path.join(folder, '05-Lumi-Revit-空间表.csv');
+  const revitHandoffHtml = path.join(folder, '05-Lumi-Revit-交接检查.html');
   const wechatDraft = path.join(folder, '06-Lumi-微信交付话术.txt');
-
-  fs.writeFileSync(cadDxf, buildRenovationDxf(), 'utf8');
-  fs.writeFileSync(cadPreview, buildCadPreviewSvg(), 'utf8');
-  createDesignPresentationPptx(presentation);
-  fs.writeFileSync(reportHtml, buildReportHtml(cadPreview), 'utf8');
-  createPdfFromHtml(reportHtml, pdf);
-  fs.writeFileSync(dynamoScript, DYNAMO_SCRIPT_TEXT, 'utf8');
-  fs.writeFileSync(revitCsv, [
+  const revitRoomScheduleCsv = [
     'name,x,y,width,height,finish',
     '玄关,0,0,2200,2400,stone tile',
     '客餐厅,2200,0,5400,5200,wood + tile',
@@ -875,10 +1317,20 @@ export function createDesignDeliveryFiles(): DesignDeliveryFiles {
     '主卧,0,5200,4200,3600,wood floor',
     '次卧,4200,5200,3200,3400,wood floor',
     '书房,7400,5200,2800,3000,wood floor',
-  ].join('\n'), 'utf8');
+  ].join('\n');
+
+  fs.writeFileSync(cadDxf, buildRenovationDxf(), 'utf8');
+  fs.writeFileSync(cadPreview, buildCadPreviewSvg(), 'utf8');
+  fs.writeFileSync(cadHandoffHtml, buildCadHandoffHtml(cadPreview, cadDxf), 'utf8');
+  createDesignPresentationPptx(presentation);
+  fs.writeFileSync(reportHtml, buildReportHtml(cadPreview), 'utf8');
+  createPdfFromHtml(reportHtml, pdf);
+  fs.writeFileSync(dynamoScript, DYNAMO_SCRIPT_TEXT, 'utf8');
+  fs.writeFileSync(revitCsv, revitRoomScheduleCsv, 'utf8');
+  fs.writeFileSync(revitHandoffHtml, buildRevitHandoffHtml(dynamoScript, revitCsv, revitRoomScheduleCsv), 'utf8');
   fs.writeFileSync(wechatDraft, WECHAT_DELIVERY_DRAFT, 'utf8');
 
-  return { folder, proposal, budget, presentation, pdf, reportHtml, cadDxf, cadPreview, dynamoScript, revitCsv, wechatDraft };
+  return { folder, proposal, budget, presentation, pdf, reportHtml, cadDxf, cadPreview, cadHandoffHtml, dynamoScript, revitCsv, revitHandoffHtml, wechatDraft };
 }
 
 export async function runDesignDeliveryWorkflow({
@@ -1172,6 +1624,8 @@ export async function runDesignDeliveryWorkflow({
   const presentationPatterns = [/wps/i, /powerpnt/i, /powerpoint/i, /wpp/i, /演示/i, /presentation/i, /office/i];
   const browserPatterns = [/chrome/i, /edge/i, /firefox/i, /browser/i, /msedge/i, /iexplore/i];
   const pdfPatterns = [/chrome/i, /edge/i, /firefox/i, /browser/i, /msedge/i, /acrobat/i, /pdf/i, /wps/i];
+  const cadPatterns = [/freecad/i, /librecad/i, /autocad/i, /acad/i, /zwcad/i, /gstarcad/i, /cad/i, /中望/i, /浩辰/i, /天正/i];
+  const revitPatterns = [/revit/i, /dynamo/i, /autodesk/i, /freecad/i, /notepad/i, /wps/i, /excel/i, /et/i, /记事本/i];
   const wechatPatterns = [/wechat/i, /weixin/i, /微信/i, /wxwork/i];
 
   try {
@@ -1187,7 +1641,7 @@ export async function runDesignDeliveryWorkflow({
     await enterWallpaperMode();
 
     await runStep({
-      text: `第一步，我先生成正式设计方案。你看到的不是聊天摘要，而是已经落到电脑文件里的交付物，路径在 ${files.folder}。`,
+      text: '第一步，我先生成正式设计方案。你看到的不是聊天摘要，而是已经放到桌面交付包里的真实文件。',
       actions: [
         { clientAction: { action: 'design_delivery_panel', stage: 'concept' } },
         { tool: 'desktop_open', args: { target: files.proposal }, afterMs: 4600 },
@@ -1228,38 +1682,40 @@ export async function runDesignDeliveryWorkflow({
     await say('这里是 PPT 汇报文件。如果这台电脑装了 PowerPoint 或 WPS 演示，就会直接打开；没有关联软件时，文件也已经在交付包里，后续可以交给外部工具继续编辑。', 7200);
     await closeActiveWindow(presentationPatterns);
 
+    const cadShortcut = await findDesktopShortcut([/freecad/i, /librecad/i, /autocad/i, /acad/i, /zwcad/i, /gstarcad/i, /中望/i, /浩辰/i, /天正/i, /(?:^|\\s)cad/i]);
     await runStep({
-      text: '第二步，我生成 CAD 交付。这里同时有 DXF 文件和可直接预览的平面图，所以即使电脑还没装 CAD，也能先看到空间布局结果。',
+      text: '第二步，我打开电脑上的 CAD 软件，把生成好的 DXF 初稿交给外部软件继续深化。',
       actions: [
         { clientAction: { action: 'design_delivery_panel', stage: 'cad' } },
-        { tool: 'desktop_open', args: { target: files.cadPreview }, afterMs: 4200 },
+        { tool: 'desktop_run_command', args: { command: buildOpenFileWithAppCommand(cadShortcut, files.cadDxf) }, afterMs: 5600 },
       ],
       timing: 'after',
       pauseMs: 7200,
     });
-    await waitForActiveWindow(browserPatterns, 5200);
-    await pointActiveWindowRatio(browserPatterns, 0.55, 0.5, false, { xRatio: 0.55, yRatio: 0.5 });
-    await say('这一步展示的是外部文件交付，不是 Lumi 客户端里的假图。DXF 已经在同一个交付包里，可以继续交给 CAD 软件打开、标注和深化。', 7200);
-    await closeActiveWindow(browserPatterns);
+    await waitForActiveWindow(cadPatterns, 8000);
+    await pointActiveWindowRatio(cadPatterns, 0.54, 0.48, false, { xRatio: 0.54, yRatio: 0.48 });
+    await say('CAD 初稿已经生成并交给外部 CAD 软件。这里的重点不是展示一张网页图，而是让图纸进入真实工具链，后面可以继续标注、调整图层、深化施工图。', 8200);
+    await closeActiveWindow(cadPatterns);
 
+    const revitShortcut = await findDesktopShortcut([/revit/i, /dynamo/i, /autodesk/i, /bim/i]);
     await runStep({
-      text: '第三步，我准备 Revit 交接包。当前我生成的是 Dynamo 建模脚本和空间表，让 Revit 侧可以接着创建楼层、房间边界、墙体、房间标签和材料计划。',
+      text: '第三步，我准备 Revit 交接。这里不是打开浏览器，而是把 Dynamo 脚本和空间表交给外部建模工具。',
       actions: [
         { clientAction: { action: 'design_delivery_panel', stage: 'revit' } },
-        { tool: 'desktop_open', args: { target: files.dynamoScript }, afterMs: 3600 },
+        { tool: 'desktop_run_command', args: { command: buildOpenRevitHandoffCommand(revitShortcut, files.dynamoScript, files.revitCsv) }, afterMs: 5200 },
       ],
       timing: 'after',
       pauseMs: 7600,
     });
-    await waitForActiveWindow(officePatterns, 4200);
-    await pointActiveWindowRatio(officePatterns, 0.52, 0.42, false, { xRatio: 0.52, yRatio: 0.42 });
-    await say('如果这台电脑安装了 Revit 或 Dynamo，这个交接脚本就能作为建模入口；没有安装时，我也会先把可交接的数据文件准备好，不让工作停在聊天里。', 7200);
-    await closeActiveWindow(officePatterns);
+    await waitForActiveWindow(revitPatterns, 7000);
+    await pointActiveWindowRatio(revitPatterns, 0.52, 0.42, false, { xRatio: 0.52, yRatio: 0.42 });
+    await say('Revit 交接数据已经准备好：Dynamo 脚本负责建模入口，空间表负责把房间、尺寸和材料策略交给 BIM 侧继续处理。', 7600);
+    await closeActiveWindow(revitPatterns);
 
     await runTool('desktop_open', { target: files.folder }, true);
     await wait(2600);
     await pointActiveWindowRatio([/explorer/i, /文件资源管理器/i], 0.5, 0.46, false, { xRatio: 0.5, yRatio: 0.48 });
-    await say('现在交付包已经成型：方案、预算、PPT、PDF、CAD、预览图、Revit 空间表、Dynamo 脚本和微信话术都在这里。', 6600);
+    await say('现在交付包已经成型：方案、预算、PPT、PDF、CAD 初稿、Revit 交接数据和微信话术都在这里。', 7000);
     await closeActiveWindow([/explorer/i, /文件资源管理器/i]);
 
     const shouldSendToWeChat = process.env.LUMI_DESIGN_DELIVERY_SEND_WECHAT === '1';
@@ -1275,18 +1731,14 @@ export async function runDesignDeliveryWorkflow({
       pauseMs: shouldSendToWeChat ? 4300 : 6200,
     });
 
-    const wechatShortcut = await findDesktopShortcut([/微信/i, /wechat/i, /weixin/i]);
-    if (wechatShortcut) {
-      await runTool('desktop_open', { target: wechatShortcut }, true);
-      await wait(3600);
-    } else {
-      await runTool('desktop_open', { target: 'WeChat' }, true);
-      await wait(3200);
-    }
+    const personalWechatShortcut = await findDesktopShortcut([/^(?!.*企业).*微信/i, /^wechat/i, /^weixin/i]);
+    const enterpriseWechatShortcut = await findDesktopShortcut([/企业微信/i, /wxwork/i]);
+    await runTool('desktop_run_command', { command: buildOpenWeChatCommand(personalWechatShortcut, enterpriseWechatShortcut) }, true);
+    await wait(2600);
 
     let active = await waitForActiveWindow(wechatPatterns, 4800);
     if (!active) {
-      await runTool('desktop_open', { target: 'WeChat' }, true);
+      await runTool('desktop_run_command', { command: buildOpenWeChatCommand(personalWechatShortcut, enterpriseWechatShortcut) }, true);
       await wait(3200);
       active = await waitForActiveWindow(wechatPatterns, 3600);
     }
@@ -1311,7 +1763,8 @@ export async function runDesignDeliveryWorkflow({
       await runTool('desktop_show_lumi_window', {}, true);
       await wait(500);
       await runClientAction({ action: 'design_delivery_panel', stage: 'result' });
-      await say('装修设计交付包已经完成：方案、预算、PPT 汇报版、PDF 交付版、CAD DXF、平面预览、Revit 交接数据和微信交付草稿都已生成。下一步不是继续问你要不要做，而是按你的授权边界把客户推进到确认方案和深化交付。', 9200);
+      await say('好了，这一单我已经整理好了。方案、预算、PPT 汇报版、PDF 交付版、CAD 初稿、Revit 交接数据和微信交付草稿都在交付包里。接下来我会按你的授权边界，继续把客户推进到确认方案和深化交付。', 9200);
+      await wait(1200);
     }
   } finally {
     await exitWallpaperMode();
