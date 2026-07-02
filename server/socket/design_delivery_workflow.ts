@@ -881,94 +881,6 @@ export function createDesignDeliveryFiles(): DesignDeliveryFiles {
   return { folder, proposal, budget, presentation, pdf, reportHtml, cadDxf, cadPreview, dynamoScript, revitCsv, wechatDraft };
 }
 
-function buildAppActivateCommand(title: string): string {
-  const script = `
-$title = ${psString(title)}
-Add-Type -AssemblyName Microsoft.VisualBasic
-$ok = [Microsoft.VisualBasic.Interaction]::AppActivate($title)
-Write-Output "APP_ACTIVATE:$ok"
-`.trim();
-  return powershellCommand(script);
-}
-
-function buildOpenWpsWriterCommand(shortcutPath: string, documentPath: string): string {
-  const shortcut = shortcutPath ? psString(shortcutPath) : '$null';
-  const document = psString(documentPath);
-  const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-$shortcut = ${shortcut}
-$document = ${document}
-if ($shortcut -and (Test-Path -LiteralPath $shortcut)) {
-  Start-Process -FilePath $shortcut -ArgumentList @($document)
-  Start-Sleep -Seconds 2
-  Write-Output "OPENED_WPS_SHORTCUT:$shortcut"
-  exit 0
-}
-$candidates = @(
-  "$env:ProgramFiles\\Kingsoft\\WPS Office\\ksolaunch.exe",
-  "$env:ProgramFiles(x86)\\Kingsoft\\WPS Office\\ksolaunch.exe",
-  "$env:LOCALAPPDATA\\Kingsoft\\WPS Office\\ksolaunch.exe",
-  "wps.exe",
-  "winword.exe",
-  "notepad.exe"
-)
-foreach ($candidate in $candidates) {
-  try {
-    Start-Process -FilePath $candidate -ArgumentList @($document)
-    Write-Output "OPENED_OFFICE:$candidate"
-    exit 0
-  } catch {}
-}
-Start-Process -FilePath "notepad.exe" -ArgumentList @($document)
-Write-Output "OPENED_NOTEPAD_FALLBACK"
-exit 0
-`.trim();
-  return powershellCommand(script);
-}
-
-function buildOpenWeChatCommand(shortcutPath: string): string {
-  const shortcut = shortcutPath ? psString(shortcutPath) : '$null';
-  const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-$shortcut = ${shortcut}
-if ($shortcut -and (Test-Path -LiteralPath $shortcut)) {
-  Start-Process -FilePath $shortcut
-  Start-Sleep -Seconds 2
-}
-$process = Get-Process | Where-Object { $_.ProcessName -match '^(WeChat|Weixin|微信|WXWork)$' } | Select-Object -First 1
-if (-not $process) {
-  $candidates = @(
-    "$env:ProgramFiles\\Tencent\\WeChat\\WeChat.exe",
-    "$env:ProgramFiles(x86)\\Tencent\\WeChat\\WeChat.exe",
-    "$env:LOCALAPPDATA\\Tencent\\WeChat\\WeChat.exe",
-    "WeChat.exe",
-    "Weixin.exe"
-  )
-  foreach ($candidate in $candidates) {
-    try {
-      Start-Process -FilePath $candidate
-      Start-Sleep -Seconds 2
-      break
-    } catch {}
-  }
-}
-Add-Type -AssemblyName Microsoft.VisualBasic
-$titles = @('微信', 'WeChat', 'Weixin')
-foreach ($title in $titles) {
-  try {
-    $ok = [Microsoft.VisualBasic.Interaction]::AppActivate($title)
-    if ($ok) {
-      Write-Output "WECHAT_FOCUSED:$title"
-      exit 0
-    }
-  } catch {}
-}
-Write-Output "WECHAT_FOCUS_ATTEMPTED"
-exit 0
-`.trim();
-  return powershellCommand(script);
-}
-
 export async function runDesignDeliveryWorkflow({
   socket,
   userText,
@@ -1274,12 +1186,11 @@ export async function runDesignDeliveryWorkflow({
 
     await enterWallpaperMode();
 
-    const wpsShortcut = await findDesktopShortcut([/wps/i, /金山/i, /文字/i, /writer/i]);
     await runStep({
       text: `第一步，我先生成正式设计方案。你看到的不是聊天摘要，而是已经落到电脑文件里的交付物，路径在 ${files.folder}。`,
       actions: [
         { clientAction: { action: 'design_delivery_panel', stage: 'concept' } },
-        { tool: 'desktop_run_command', args: { command: buildOpenWpsWriterCommand(wpsShortcut, files.proposal) }, afterMs: 4600 },
+        { tool: 'desktop_open', args: { target: files.proposal }, afterMs: 4600 },
       ],
       timing: 'after',
       pauseMs: 6900,
@@ -1289,7 +1200,7 @@ export async function runDesignDeliveryWorkflow({
     await say('方案里已经包含户型判断、空间策略、交付节奏和必须确认的风险点。普通沟通由我推进，承重结构、燃气、水电和最终签字我会上报给你。', 7200);
     await closeActiveWindow(officePatterns);
 
-    await runTool('desktop_run_command', { command: buildOpenWpsWriterCommand(wpsShortcut, files.budget) }, true);
+    await runTool('desktop_open', { target: files.budget }, true);
     await wait(3600);
     await waitForActiveWindow(officePatterns, 4200);
     await pointActiveWindowRatio(officePatterns, 0.48, 0.48, false, { xRatio: 0.5, yRatio: 0.48 });
@@ -1368,9 +1279,10 @@ export async function runDesignDeliveryWorkflow({
     if (wechatShortcut) {
       await runTool('desktop_open', { target: wechatShortcut }, true);
       await wait(3600);
+    } else {
+      await runTool('desktop_open', { target: 'WeChat' }, true);
+      await wait(3200);
     }
-    await runTool('desktop_run_command', { command: buildOpenWeChatCommand(wechatShortcut) }, true);
-    await wait(2800);
 
     let active = await waitForActiveWindow(wechatPatterns, 4800);
     if (!active) {
