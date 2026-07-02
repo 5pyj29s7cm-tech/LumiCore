@@ -199,11 +199,11 @@ function buildDraftReply(input: WechatIntakeInput, category: WechatWorkCategory,
     case 'store':
       return `${prefix}收到，${urgencyLine}我先核对订单、库存、售后状态和风险点，再给你一版客服回复。涉及退款、赔付或公开回复的动作我会先确认。`;
     case 'account':
-      return `${prefix}收到，${urgencyLine}我先把账号目标、素材、数据和发布/投放动作拆出来。涉及登录、发布和投放预算的动作我会先确认。`;
+      return `${prefix}收到，${urgencyLine}我先把账号目标、素材、数据和发布/投放动作拆出来。已登录的窗口我可以直接接着用；首次登录、切号、发布和投放预算我会先确认。`;
     case 'legal_case':
       return `${prefix}收到，${urgencyLine}我先整理事实时间线、证据目录和立案材料清单。涉及提交、签名、付款或正式法律意见的部分我会先确认。`;
     case 'video_publish':
-      return `${prefix}收到，${urgencyLine}我先整理脚本、标题、封面和发布清单。正式发布和账号操作我会等你确认后再执行。`;
+      return `${prefix}收到，${urgencyLine}我先整理脚本、标题、封面和发布清单。已登录账号可继续准备发布；正式发布、首次登录和切号我会等你确认后再执行。`;
     case 'design_delivery':
       return `${prefix}收到，${urgencyLine}我先把户型、风格、预算和交付要求整理成方案包，准备客户可看的PPT/PDF、CAD初稿、Revit交接数据和回复草稿。涉及正式报价、合同、生产图纸和发送动作我会先确认。`;
     case 'personal':
@@ -249,11 +249,12 @@ export function analyzeWechatIntake(input: WechatIntakeInput): WechatIntakeResul
     '分类任务类型',
     '生成回复草稿',
     '准备材料清单',
+    '打开或恢复已经登录的微信、浏览器、店铺后台或创作平台窗口',
     '复制草稿到剪贴板（需要确认工具）',
   ];
   const confirmationRequired = [
     '发送微信消息',
-    '登录或切换外部账号',
+    '首次登录、扫码、验证码、人脸/短信验证、切换外部账号或授权第三方',
     '提交立案/发布/下单/付款/签约',
     '对外承诺最终价格、交付周期或法律意见',
   ];
@@ -281,7 +282,7 @@ export function analyzeWechatIntake(input: WechatIntakeInput): WechatIntakeResul
     allowedNow,
     confirmationRequired,
     blockedBy,
-    safety: 'Lumi can triage, draft, prepare files, and copy drafts. Sending messages or making external commitments remains confirmation-gated.',
+    safety: 'Lumi can triage, draft, prepare files, copy drafts, and restore already logged-in app/browser sessions. First-time login, QR/OTP/biometric verification, account switching, sending messages, publishing, payment, signing, submitting, or making external commitments remains confirmation-gated.',
   };
 }
 

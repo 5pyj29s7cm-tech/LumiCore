@@ -55,6 +55,7 @@ import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { isSelfIntroDemoRequest, runSelfIntroDemo } from "./self_intro_demo";
 import { isCustomerTakeoverRequest, runCustomerTakeoverWorkflow } from "./customer_takeover_demo";
 import { isDesignDeliveryRequest, runDesignDeliveryWorkflow } from "./design_delivery_workflow";
+import { isEcommerceGrowthRequest, runEcommerceGrowthWorkflow } from "./ecommerce_growth_workflow";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
@@ -600,6 +601,86 @@ export function registerChatHandler(
         emitAgent("agent:response", { text: workflowResponseText, agentName: personality.name, source: "design_delivery_workflow" });
         if (conversationId) {
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'design_delivery_workflow' });
+        }
+        emitAgent("agent:status", { status: "idle", agentName: personality.name });
+        chatSessionMap.delete(sessionKey);
+        return;
+      }
+
+      const ecommerceGrowthText = visibleUserText || text;
+      if (isEcommerceGrowthRequest(ecommerceGrowthText)) {
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: "ecommerce_growth_workflow",
+          detail: "Running ecommerce growth workflow",
+        });
+
+        let workflowResponseText = '';
+        let workflowToolCalls: ToolExecutionRecord[] = [];
+        try {
+          const workflowResult = await runEcommerceGrowthWorkflow({
+            socket,
+            userText: ecommerceGrowthText,
+            userId: uid,
+            desktopRelay,
+            speak: async (line) => {
+              emitAgent("agent:chunk", {
+                text: `${line}\n`,
+                agentName: personality.name,
+                source: "ecommerce_growth_workflow",
+              });
+              return Math.min(8200, Math.max(2600, line.length * 118));
+            },
+            voiceScope: {
+              domain: resolvedDomain === 'work' ? 'work' : 'personal',
+              orgId: resolvedOrgId,
+            },
+            isCancelled: () => abortController.signal.aborted,
+          });
+          workflowResponseText = workflowResult.responseText;
+          workflowToolCalls = workflowResult.toolCalls;
+        } catch (err: any) {
+          console.warn('[ChatHandler] Ecommerce growth workflow failed:', err?.message || err);
+          workflowResponseText = '我可以进入电商增长接管流程，不过刚才桌面流程没有完整跑完。你再说“Lumi，接管这个店铺账号，生成短视频内容和发布草稿”，我会重新生成店铺诊断、内容矩阵、外部工具提示词、发布草稿和微信客服话术。';
+        }
+
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          for (const tc of workflowToolCalls) {
+            const tcSummary = tc.error
+              ? `[Tool: ${tc.name}] Error: ${tc.error}`
+              : `[Tool: ${tc.name}] Done`;
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
+          }
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined });
+        }
+
+        try {
+          const db = readDB();
+          db.interactions.push({
+            id: interactionId,
+            userId: uid,
+            agentId: agentId || '',
+            conversationId: conversationId || '',
+            content: storedUserContent,
+            response: workflowResponseText,
+            role: "user",
+            personality: personality.id,
+            timestamp: new Date().toISOString(),
+            cognitiveIntent: 'ecommerce_growth_workflow',
+            llmWasCalled: false,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          });
+          writeDB(db);
+        } catch (persistErr: any) {
+          console.warn('[ChatHandler] Ecommerce growth interaction persistence failed:', persistErr?.message || persistErr);
+        }
+
+        emitAgent("agent:response", { text: workflowResponseText, agentName: personality.name, source: "ecommerce_growth_workflow" });
+        if (conversationId) {
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'ecommerce_growth_workflow' });
         }
         emitAgent("agent:status", { status: "idle", agentName: personality.name });
         chatSessionMap.delete(sessionKey);

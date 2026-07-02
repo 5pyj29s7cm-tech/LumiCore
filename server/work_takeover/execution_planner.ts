@@ -121,17 +121,26 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'messaging.reply_handoff',
     label: '微信/消息回复草稿',
     kind: 'messaging',
-    tools: ['wechat_prepare_reply', 'wechat_copy_reply_draft', 'desktop_clipboard_write', 'desktop_open'],
-    confirmationRequired: ['发送消息、切换账号、对外承诺最终条件前需要确认'],
+    tools: ['wechat_prepare_reply', 'wechat_copy_reply_draft', 'desktop_clipboard_write', 'desktop_active_window', 'desktop_open', 'desktop_run_command'],
+    confirmationRequired: ['发送消息、首次登录、扫码/验证码、切换账号、对外承诺最终条件前需要确认'],
     keywords: ['微信', 'WeChat', 'weixin', '消息', '回复', '草稿', '客户回复', '跟进', '对接'],
     categoryHints: ['customer', 'store', 'account', 'legal_case', 'video_publish', 'design_delivery', 'general_work'],
+  },
+  {
+    id: 'account.session_reuse',
+    label: '已登录账号会话复用',
+    kind: 'external_app',
+    tools: ['desktop_active_window', 'desktop_capture_screen', 'desktop_open', 'desktop_run_command', 'web_login_profile_list', 'browser_open_task'],
+    confirmationRequired: ['首次登录、扫码、验证码、人脸/短信验证、切换账号、授权第三方或保存凭据前需要用户确认或接管'],
+    keywords: ['已登录', '登录', '账号', '账户', '任务栏', '后台', '微信', 'WeChat', 'Weixin', '抖音', '抖店', '小红书', '视频号', '店铺后台', '商家后台', '创作者中心'],
+    categoryHints: ['customer', 'store', 'account', 'video_publish', 'design_delivery'],
   },
   {
     id: 'browser.account_platform_work',
     label: '浏览器/平台账号操作',
     kind: 'external_app',
     tools: ['browser_open_task', 'web_login_profile_list', 'web_login_run', 'desktop_open', 'work_product_verify'],
-    confirmationRequired: ['登录、发布、投放、下单、付款或提交表单前需要确认'],
+    confirmationRequired: ['首次登录、切换账号、发布、投放、下单、付款或提交表单前需要确认；已登录会话可在可见窗口中复用'],
     keywords: ['账号', '发布', '平台', '浏览器', '小红书', '抖音', '视频号', '投放', '店铺', '订单', '库存', '上架', '下架'],
     categoryHints: ['store', 'account', 'video_publish'],
   },
@@ -300,7 +309,7 @@ function buildSteps(task: WorkTakeoverTask, capabilities: WorkTakeoverCapability
     makeStep(
       'external_tool_handoff',
       '交给外部工具或桌面软件',
-      '在确认边界内打开或交接到浏览器、CAD、办公软件、平台账号等外部工具。',
+      '在确认边界内打开或交接到浏览器、CAD、办公软件、平台账号等外部工具；优先恢复已登录会话和任务栏中已运行的窗口，遇到扫码、验证码、首次登录或切换账号就停下。',
       external,
       artifactLabels.filter(label => /CAD|DXF|Revit|Dynamo|平台|账号|发布|店铺|订单|图纸/i.test(label)),
     ),
@@ -353,6 +362,7 @@ function buildVerificationChecklist(task: WorkTakeoverTask, capabilities: WorkTa
   if (capabilities.some(capability => capability.id === 'presentation.client_deck')) checklist.push('PPT/PDF 内容是客户任务内容，不是 Lumi 自我介绍话术。');
   if (capabilities.some(capability => capability.id === 'cad_bim.design_handoff')) checklist.push('CAD/Revit 结果以可审阅草稿或交接数据呈现，生产图纸仍需尺寸和专业复核。');
   if (capabilities.some(capability => capability.id === 'messaging.reply_handoff')) checklist.push('回复草稿已准备，但未自动发送。');
+  if (capabilities.some(capability => capability.id === 'account.session_reuse')) checklist.push('已优先复用已登录账号窗口或浏览器会话；首次登录、扫码、验证码、切换账号和授权未自动完成。');
   if (capabilities.some(capability => capability.kind === 'external_app')) checklist.push('外部软件或平台操作完成后需要读取窗口/文件状态确认结果。');
   return unique(checklist);
 }
@@ -363,6 +373,7 @@ function buildHandoffPrompt(task: WorkTakeoverTask, plan: Omit<WorkTakeoverExecu
     `接管任务：${task.title}`,
     `目标：${plan.objective}`,
     `原则：不要播放固定脚本；根据当前任务内容、交付物、已安装工具和确认边界组织步骤。`,
+    `账号原则：优先恢复任务栏/后台已有窗口和已登录浏览器会话；不要代替用户完成密码、扫码、验证码、人脸/短信验证、账号切换或授权。`,
     artifacts.length ? `要准备的交付物：${artifacts.join('；')}` : '',
     plan.nextStep ? `下一步：${plan.nextStep.title} - ${plan.nextStep.goal}` : '',
     plan.nextStep?.suggestedTools.length ? `优先工具：${plan.nextStep.suggestedTools.join(', ')}` : '',

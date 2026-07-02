@@ -168,6 +168,7 @@ type DesktopWidgetFallbackState = {
 
 type CustomerTakeoverStage = 'intake' | 'rules' | 'wechat' | 'result';
 type DesignDeliveryStage = 'intake' | 'concept' | 'cad' | 'revit' | 'handoff' | 'result';
+type EcommerceGrowthStage = 'intake' | 'diagnosis' | 'content' | 'tools' | 'publish' | 'result';
 
 declare global {
   interface Window {
@@ -1117,6 +1118,135 @@ function Spotlight({ isOpen, onClose, onSelect, apps, t }: { isOpen: boolean; on
   );
 }
 
+function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage; onClose: () => void }) {
+  const stageMeta: Record<EcommerceGrowthStage, { eyebrow: string; title: string; desc: string }> = {
+    intake: {
+      eyebrow: 'ECOMMERCE INTAKE',
+      title: '电商接管任务已识别',
+      desc: 'Lumi 正在把店铺、商品、账号和内容制作需求拆成可交付结果：诊断、内容矩阵、外部工具提示词、发布草稿和客服承接。',
+    },
+    diagnosis: {
+      eyebrow: 'STORE DIAGNOSIS',
+      title: '店铺增长作战室已生成',
+      desc: '作战室和体检报告已经落到桌面交付包，展示目标人群、运营目标、确认边界和下一步动作。',
+    },
+    content: {
+      eyebrow: 'CONTENT FACTORY',
+      title: '短视频和图文资产已准备',
+      desc: '内容矩阵、60 秒短视频脚本、图文种草结构和素材建议已生成，可交给 WPS、Excel 或运营同事继续处理。',
+    },
+    tools: {
+      eyebrow: 'EXTERNAL TOOL CHAIN',
+      title: '外部工具调度已开始',
+      desc: '图片交给即梦或 Canva，视频交给可灵或剪映，发布进入创作平台和店铺后台，Lumi 负责拆任务、传提示词、回收结果。',
+    },
+    publish: {
+      eyebrow: 'PUBLISH BOUNDARY',
+      title: '发布草稿已准备，等待确认',
+      desc: '标题、正文、标签、置顶评论和客服话术已准备，但真实发布、投流扣费、价格库存修改和发送微信默认都停在确认前。',
+    },
+    result: {
+      eyebrow: 'RESULT READY',
+      title: '电商增长交付包完成',
+      desc: '店铺体检、内容矩阵、图文/视频提示词、发布页、客服话术、运营战报和验证记录已经形成可检查结果。',
+    },
+  };
+
+  const stageOrder: EcommerceGrowthStage[] = ['intake', 'diagnosis', 'content', 'tools', 'publish', 'result'];
+  const currentIndex = stageOrder.indexOf(stage);
+  const meta = stageMeta[stage];
+  const pipeline = [
+    { key: 'intake' as EcommerceGrowthStage, label: '任务识别', value: '店铺 / 商品 / 账号', icon: <MessageSquare size={16} /> },
+    { key: 'diagnosis' as EcommerceGrowthStage, label: '店铺体检', value: '作战室 + 诊断报告', icon: <Activity size={16} /> },
+    { key: 'content' as EcommerceGrowthStage, label: '内容生产', value: '矩阵 + 脚本 + 图文', icon: <FileText size={16} /> },
+    { key: 'tools' as EcommerceGrowthStage, label: '外部工具', value: '即梦 / 可灵 / 剪映', icon: <Globe size={16} /> },
+    { key: 'publish' as EcommerceGrowthStage, label: '发布承接', value: '草稿等待确认', icon: <Upload size={16} /> },
+  ];
+  const resultItems = [
+    ['店铺诊断', currentIndex >= 1 ? '已生成' : '准备中'],
+    ['内容矩阵', currentIndex >= 2 ? '6 条选题' : '准备中'],
+    ['视频脚本', currentIndex >= 2 ? '60 秒分镜' : '准备中'],
+    ['图片提示词', currentIndex >= 3 ? '4 组提示词' : '准备中'],
+    ['发布草稿', currentIndex >= 4 ? '停在确认前' : '准备中'],
+    ['微信/客服', stage === 'result' ? '草稿已准备' : '默认不发送'],
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 24, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 24, scale: 0.97 }}
+      transition={{ duration: 0.28 }}
+      className="fixed inset-0 z-[260] flex items-center justify-center px-4 py-10 pointer-events-none"
+    >
+      <div className="pointer-events-auto w-[min(1060px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-fuchsia-300/18 bg-zinc-950/93 shadow-2xl shadow-fuchsia-950/25 backdrop-blur-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+          <div>
+            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-fuchsia-200">{meta.eyebrow}</div>
+            <h3 className="mt-2 text-2xl font-black tracking-tight text-white">{meta.title}</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/58">{meta.desc}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
+            title="Close"
+          >
+            <X size={15} />
+          </button>
+        </div>
+        <div className="grid gap-4 p-5 lg:grid-cols-[1fr_1.1fr]">
+          <div className="space-y-3">
+            {pipeline.map((item) => {
+              const active = stage === 'result' || stageOrder.indexOf(item.key) <= currentIndex;
+              return (
+                <div
+                  key={item.key}
+                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
+                    active
+                      ? 'border-fuchsia-300/18 bg-fuchsia-300/[0.075] text-fuchsia-50'
+                      : 'border-white/8 bg-white/[0.025] text-white/35'
+                  }`}
+                >
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-fuchsia-300/12 text-fuchsia-200' : 'bg-white/5 text-white/30'}`}>
+                    {item.icon}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-black uppercase tracking-[0.16em]">{item.label}</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-white/65">{item.value}</div>
+                  </div>
+                  <div className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-fuchsia-300 shadow-[0_0_16px_rgba(240,171,252,0.75)]' : 'bg-white/15'}`} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">GROWTH RESULT</div>
+                <div className="mt-1 text-lg font-black text-white">电商增长交付结果</div>
+              </div>
+              <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-emerald-200">
+                {stage === 'result' ? 'READY' : 'RUNNING'}
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {resultItems.map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
+                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</div>
+                  <div className="mt-1 text-sm font-bold text-white/78">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 rounded-lg border border-cyan-300/20 bg-cyan-300/[0.08] px-3 py-3 text-sm leading-relaxed text-white/65">
+              Lumi 已准备：店铺体检、短视频内容矩阵、图文种草包、图片/视频外部工具提示词、发布草稿、微信/客服接管话术和验证记录。真实发布、投流、改价改库存、发送消息仍等待确认。
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function CustomerTakeoverPanel({ stage, onClose }: { stage: CustomerTakeoverStage; onClose: () => void }) {
   const stageMeta: Record<CustomerTakeoverStage, { eyebrow: string; title: string; desc: string }> = {
     intake: {
@@ -1664,6 +1794,7 @@ export function DesktopUI({
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [customerTakeoverStage, setCustomerTakeoverStage] = useState<CustomerTakeoverStage | null>(null);
   const [designDeliveryStage, setDesignDeliveryStage] = useState<DesignDeliveryStage | null>(null);
+  const [ecommerceGrowthStage, setEcommerceGrowthStage] = useState<EcommerceGrowthStage | null>(null);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
@@ -3411,6 +3542,7 @@ export function DesktopUI({
           if (!allowedStages.includes(stage)) throw new Error(`Unsupported customer takeover stage: ${stage}`);
           setCustomerTakeoverStage(stage);
           setDesignDeliveryStage(null);
+          setEcommerceGrowthStage(null);
           respond({ ok: true, action, stage });
           return;
         }
@@ -3425,11 +3557,27 @@ export function DesktopUI({
           if (!allowedStages.includes(stage)) throw new Error(`Unsupported design delivery stage: ${stage}`);
           setDesignDeliveryStage(stage);
           setCustomerTakeoverStage(null);
+          setEcommerceGrowthStage(null);
           respond({ ok: true, action, stage });
           return;
         }
         if (action === 'close_design_delivery_panel' || action === 'demo_close_design_delivery') {
           setDesignDeliveryStage(null);
+          respond({ ok: true, action });
+          return;
+        }
+        if (action === 'ecommerce_growth_panel' || action === 'demo_ecommerce_growth') {
+          const stage = String(detail.stage || target || 'intake') as EcommerceGrowthStage;
+          const allowedStages: EcommerceGrowthStage[] = ['intake', 'diagnosis', 'content', 'tools', 'publish', 'result'];
+          if (!allowedStages.includes(stage)) throw new Error(`Unsupported ecommerce growth stage: ${stage}`);
+          setEcommerceGrowthStage(stage);
+          setCustomerTakeoverStage(null);
+          setDesignDeliveryStage(null);
+          respond({ ok: true, action, stage });
+          return;
+        }
+        if (action === 'close_ecommerce_growth_panel' || action === 'demo_close_ecommerce_growth') {
+          setEcommerceGrowthStage(null);
           respond({ ok: true, action });
           return;
         }
@@ -4776,7 +4924,7 @@ export function DesktopUI({
       </AnimatePresence>
 
       <WorkflowPanel
-        visible={workflowPanelVisible && !customerTakeoverStage && !designDeliveryStage}
+        visible={workflowPanelVisible && !customerTakeoverStage && !designDeliveryStage && !ecommerceGrowthStage}
         agentStatus={agentStatus}
         steps={workflowSteps}
         t={t}
@@ -4797,6 +4945,14 @@ export function DesktopUI({
           <DesignDeliveryPanel
             stage={designDeliveryStage}
             onClose={() => setDesignDeliveryStage(null)}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {ecommerceGrowthStage && (
+          <EcommerceGrowthPanel
+            stage={ecommerceGrowthStage}
+            onClose={() => setEcommerceGrowthStage(null)}
           />
         )}
       </AnimatePresence>
