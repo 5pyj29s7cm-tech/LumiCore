@@ -1575,13 +1575,18 @@ function buildVerificationText(result: DesignDeliveryVerification, project: Desi
   ].join('\n');
 }
 
-export function createDesignDeliveryFiles(input?: string | DesignProjectBrief): DesignDeliveryFiles {
+export function createDesignDeliveryFiles(
+  input?: string | DesignProjectBrief,
+  options: { outputDirectory?: string; folderName?: string } = {},
+): DesignDeliveryFiles {
   const project = typeof input === 'string'
     ? parseDesignProjectBrief(input)
     : input || DEFAULT_DESIGN_PROJECT_BRIEF;
   const desktopDir = path.join(os.homedir(), 'Desktop');
-  const baseDir = fs.existsSync(desktopDir) ? desktopDir : os.tmpdir();
-  const folder = path.join(baseDir, 'Lumi-装修设计交付包');
+  const baseDir = options.outputDirectory
+    ? path.resolve(options.outputDirectory.replace(/^~(?=$|[\\/])/, os.homedir()))
+    : fs.existsSync(desktopDir) ? desktopDir : os.tmpdir();
+  const folder = path.join(baseDir, options.folderName || 'Lumi-装修设计交付包');
   fs.mkdirSync(folder, { recursive: true });
 
   const proposal = writeRtf(path.join(folder, '01-Lumi-装修设计方案.rtf'), buildDesignProposalText(project));

@@ -1,4 +1,5 @@
 import { ToolRegistry } from '../registry';
+import fs from 'fs';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import {
   continueWorkTakeoverTask,
@@ -11,6 +12,7 @@ import {
 } from '../../work_takeover/tasks';
 import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
 import { exportWorkTakeoverPacket } from '../../work_takeover/task_packet';
+import { createDesignDeliveryFiles } from '../../socket/design_delivery_workflow';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
   return {
@@ -117,6 +119,101 @@ function recordPacket(userId: string, task: any, plan: any, packet: ReturnType<t
     },
     note: packet.summary,
   } as any) || task;
+}
+
+function taskDesignDeliverySource(task: any): string {
+  return [
+    task.sourceMessage,
+    task.summary,
+    task.title,
+    ...(Array.isArray(task.nextActions) ? task.nextActions : []),
+    ...(Array.isArray(task.artifacts) ? task.artifacts.map((artifact: any) => artifact?.label || artifact?.content || '') : []),
+  ].map(compact).filter(Boolean).join('\n');
+}
+
+function readOptionalText(filePath: string): string {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function recordDesignDeliveryPackage(userId: string, task: any, outputDirectory?: string, regenerate = false): { task: any; files: ReturnType<typeof createDesignDeliveryFiles>; reused: boolean } {
+  const existing = task?.metadata?.workTakeoverDesignDelivery?.files;
+  if (!regenerate && existing?.folder && fs.existsSync(existing.folder)) {
+    return {
+      task,
+      files: existing as ReturnType<typeof createDesignDeliveryFiles>,
+      reused: true,
+    };
+  }
+
+  const files = createDesignDeliveryFiles(taskDesignDeliverySource(task), {
+    outputDirectory,
+  });
+  const verificationText = readOptionalText(files.verification);
+  const wechatDraftText = readOptionalText(files.wechatDraft);
+  const verificationPassed = files.verificationResult.passed;
+  const result = [
+    `已生成装修设计交付包：${files.folder}`,
+    `项目：${files.project.projectTitle}`,
+    `交付自检：${verificationPassed ? '通过' : '需要复核'}`,
+    files.verificationResult.checks
+      .filter(check => !check.passed)
+      .map(check => `${check.label}：${check.detail}`)
+      .join('；'),
+    '下一步：用户确认发送口径、预算边界、现场尺寸/结构/水电复核后，再进入外部 CAD/Revit 深化或微信发送。',
+  ].map(compact).filter(Boolean).join('\n');
+
+  let updatedTask = updateWorkTakeoverTask(userId, task.id, {
+    status: 'waiting_confirmation',
+    result,
+    allowedNow: uniqueStrings([
+      ...task.allowedNow,
+      '生成本地装修设计交付包',
+      '准备客户微信回复草稿',
+      '记录交付自检结果',
+    ]),
+    confirmationRequired: uniqueStrings([
+      ...task.confirmationRequired,
+      '发送客户微信消息',
+      '打开外部 CAD/Revit 并修改生产图纸',
+      '承诺最终报价、工期、合同或施工结果',
+    ]),
+    metadata: {
+      workTakeoverDesignDelivery: {
+        files,
+        verificationText,
+        preparedAt: new Date().toISOString(),
+      },
+    },
+    note: `装修设计交付包已生成，自检${verificationPassed ? '通过' : '需要复核'}。`,
+    ...(wechatDraftText && !task.drafts?.some((draft: any) => draft.text === wechatDraftText) ? { draftReply: wechatDraftText } : {}),
+  } as any) || task;
+
+  const artifacts = [
+    { type: 'file', label: '装修设计交付包', path: files.folder, content: result },
+    { type: 'document', label: '装修设计方案 RTF', path: files.proposal },
+    { type: 'quote', label: '预算与材料清单 RTF', path: files.budget },
+    { type: 'document', label: '客户方案 PPTX', path: files.presentation },
+    { type: 'document', label: '客户方案 PDF', path: files.pdf },
+    { type: 'cad', label: 'CAD DXF 初稿', path: files.cadDxf },
+    { type: 'cad', label: 'Revit/Dynamo 交接数据', path: files.dynamoScript },
+    { type: 'draft', label: '微信交付草稿', path: files.wechatDraft, content: wechatDraftText },
+    { type: 'checklist', label: '交付验证记录', path: files.verification, content: verificationText },
+  ];
+
+  for (const artifact of artifacts) {
+    updatedTask = updateWorkTakeoverTask(userId, updatedTask.id, {
+      artifact: {
+        ...artifact,
+        status: artifact.type === 'checklist' && !verificationPassed ? 'needs_review' : 'prepared',
+      },
+    } as any) || updatedTask;
+  }
+
+  return { task: updatedTask, files, reused: false };
 }
 
 export function registerWorkTakeoverTools(registry: ToolRegistry): void {
@@ -603,8 +700,50 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
   });
 
   registry.register({
+    name: 'work_takeover_task_prepare_design_delivery',
+    description: 'For a design_delivery takeover task, generate the real local renovation/design delivery package from the task message and record PPT/PDF, budget, CAD DXF, Revit/Dynamo handoff data, WeChat draft, and verification results back to the task center. This writes local files only; it does not open external apps or send messages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional design delivery task id. If omitted, uses the highest-priority active design_delivery task.' },
+        outputDirectory: { type: 'string', description: 'Optional folder where the design delivery package should be created. Defaults to the Desktop.' },
+        regenerate: { type: 'boolean', description: 'Regenerate even when a design delivery package is already recorded. Defaults to false.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', category: 'design_delivery', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Design delivery task not found: ${args.id}` : 'No active design_delivery task found.');
+      if (task.category !== 'design_delivery') {
+        throw new Error(`Task ${task.id} is ${task.category}, not design_delivery.`);
+      }
+
+      const prepared = recordDesignDeliveryPackage(
+        userId,
+        task,
+        args.outputDirectory ? String(args.outputDirectory) : undefined,
+        args.regenerate === true,
+      );
+
+      return JSON.stringify({
+        task: prepared.task,
+        files: prepared.files,
+        reused: prepared.reused,
+        note: prepared.reused
+          ? 'Existing design delivery package was reused and remains recorded on the task.'
+          : 'Design delivery package generated locally and recorded on the task. External app operation and message sending remain confirmation-gated.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
     name: 'work_takeover_task_autorun',
-    description: 'Run a bounded real-loop smoke test for work takeover. It can create a task from a provided WeChat/customer message or continue an existing active task, orchestrate it, safely advance up to maxSteps, stop on blockers or confirmation boundaries, export a local task packet by default, and write the full summary back to the task. It never sends, publishes, submits, pays, signs, or operates external apps by itself.',
+    description: 'Run a bounded real-loop smoke test for work takeover. It can create a task from a provided WeChat/customer message or continue an existing active task, orchestrate it, safely advance up to maxSteps, prepare a real local design delivery package for design_delivery tasks, stop on blockers or confirmation boundaries, export a local task packet by default, and write the full summary back to the task. It never sends, publishes, submits, pays, signs, or operates external apps by itself.',
     parameters: {
       type: 'object',
       properties: {
@@ -619,6 +758,8 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         maxSteps: { type: 'number', description: 'Maximum safe preparation steps to advance. Defaults to 3, max 6.' },
         mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
         stopOnConfirmation: { type: 'boolean', description: 'Stop after a step that reaches confirmation boundary. Defaults to true.' },
+        prepareDesignDeliveryPackage: { type: 'boolean', description: 'For design_delivery tasks, generate the real local renovation/design package and record verification. Defaults to true.' },
+        regenerateDesignDeliveryPackage: { type: 'boolean', description: 'Regenerate the design package even if one is already recorded. Defaults to false.' },
         exportPacket: { type: 'boolean', description: 'Export a local task packet at the end. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional folder for exported packet. Defaults to the Desktop.' },
         record: { type: 'boolean', description: 'Whether to write autorun results back to the task. Defaults to true.' },
@@ -705,6 +846,20 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       plan = planWorkTakeoverExecution(currentTask, { mode });
       progress = getWorkTakeoverExecutionProgress(currentTask, plan);
       let packet: ReturnType<typeof exportWorkTakeoverPacket> | undefined;
+      let designDeliveryPackage: ReturnType<typeof recordDesignDeliveryPackage> | undefined;
+      if (args.prepareDesignDeliveryPackage !== false && currentTask.category === 'design_delivery') {
+        designDeliveryPackage = recordDesignDeliveryPackage(
+          userId,
+          currentTask,
+          args.outputDirectory ? String(args.outputDirectory) : undefined,
+          args.regenerateDesignDeliveryPackage === true,
+        );
+        currentTask = designDeliveryPackage.task;
+        stopReasons.push(designDeliveryPackage.reused ? 'design_delivery_package_reused' : 'design_delivery_package_prepared');
+        plan = planWorkTakeoverExecution(currentTask, { mode });
+        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+      }
+
       if (args.exportPacket !== false) {
         packet = exportWorkTakeoverPacket(currentTask, {
           outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
@@ -756,6 +911,11 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         remainingStepIds: progress.remainingStepIds,
         confirmationRequired: currentTask.confirmationRequired || [],
         blockers: currentTask.blockedBy || [],
+        designDeliveryPackage: designDeliveryPackage ? {
+          reused: designDeliveryPackage.reused,
+          folder: designDeliveryPackage.files.folder,
+          verificationPassed: designDeliveryPackage.files.verificationResult.passed,
+        } : undefined,
         packetPath: packet?.folderPath,
       };
 
