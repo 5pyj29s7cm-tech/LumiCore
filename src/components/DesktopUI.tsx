@@ -68,8 +68,6 @@ import { SkillCenter } from './SkillCenter';
 import { NotificationCenter } from './NotificationCenter';
 import { TokenDashboard } from './TokenDashboard';
 import { SubscriptionPanel } from './SubscriptionPanel';
-import { useContextMenu } from '@/hooks/useContextMenu';
-import { ContextMenu } from './ContextMenu';
 import { CursorGlow } from './CursorGlow';
 import { DesktopOnboarding } from './DesktopOnboarding';
 import { DeviceSyncCenter } from './DeviceSyncCenter';
@@ -510,14 +508,12 @@ interface DesktopIconProps {
   icon: React.ReactNode;
   colorClass: string;
   onClick: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
 }
 
-function DesktopIcon({ label, icon, colorClass, onClick, onContextMenu }: DesktopIconProps) {
+function DesktopIcon({ label, icon, colorClass, onClick }: DesktopIconProps) {
   return (
     <div
       onDoubleClick={onClick}
-      onContextMenu={onContextMenu}
       className="desktop-icon group cursor-pointer"
       role="button"
       tabIndex={0}
@@ -3708,41 +3704,6 @@ export function DesktopUI({
     workflowSteps,
   ]);
 
-  const handleContextAction = (action: string, context: any) => {
-    switch (action) {
-      case 'refresh':
-        window.location.reload();
-        break;
-      case 'change_wallpaper':
-        wallpaperInputRef.current?.click();
-        break;
-      case 'reset_wallpaper':
-        setWallpaper('celestial');
-        setWallpaperUrl('');
-        localStorage.removeItem('lumi_wallpaper_type');
-        localStorage.removeItem('lumi_wallpaper_url');
-        break;
-      case 'display_settings':
-        toggleWindow('settings');
-        setSettingsSection('general');
-        break;
-      case 'open_terminal':
-        toggleWindow('terminal');
-        break;
-      case 'open':
-        if (context?.targetId === 'files') {
-          setKnowledgeOpen(true);
-          setActiveTab('knowledge');
-        }
-        else if (context?.targetId) toggleWindow(context.targetId);
-        break;
-      case 'properties':
-        break;
-    }
-  };
-
-  const { menu, menuItems: contextItems, showMenu: showContextMenu, execute: executeContextMenu } = useContextMenu();
-
   const appIcons = [
     { id: 'chat', label: t.chat || 'Chat', icon: <MessageSquare size={24} />, color: 'from-green-500 to-emerald-600' },
     { id: 'personality', label: t.personality || 'Personality Lab', icon: <UserIcon size={24} />, color: 'from-violet-500 to-fuchsia-600' },
@@ -3867,6 +3828,12 @@ export function DesktopUI({
 
   const tutorialLabel = t.showTutorial || (lang === 'zh' ? '教程' : 'Tutorial');
 
+  const handleShellContextMenu = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('input, textarea, [contenteditable="true"], [role="textbox"]')) return;
+    e.preventDefault();
+  }, []);
+
   if (isDesktopWidgetMode) {
     return (
       <DesktopWidgetPanel
@@ -3896,6 +3863,7 @@ export function DesktopUI({
   return (
     <div
       data-mode="dark"
+      onContextMenu={handleShellContextMenu}
       className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${
       isWallpaperMode ? 'bg-transparent pointer-events-none' :
       theme === 'celestial' ? 'bg-[#010103]' :
@@ -3913,10 +3881,6 @@ export function DesktopUI({
       }}
     >
       <input ref={wallpaperInputRef} type="file" accept="image/*" onChange={handleWallpaperUpload} className="hidden" />
-      <ContextMenu menu={menu} items={contextItems} onAction={(action) => {
-        const result = executeContextMenu(action);
-        handleContextAction(result.action, result.context);
-      }} />
       <ControlCenter
         isOpen={isControlCenterOpen}
         onClose={() => setIsControlCenterOpen(false)}
@@ -4543,11 +4507,6 @@ export function DesktopUI({
                     data-lumi-target={def.windowId}
                     onDoubleClick={handleClick}
                     onClick={handleClick}
-                    onContextMenu={(e: React.MouseEvent) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      showContextMenu(e.clientX, e.clientY, { type: 'icon', targetId: def.windowId });
-                    }}
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     style={{ position: 'absolute', left: x, top: y }}
