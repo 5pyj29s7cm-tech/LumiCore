@@ -12,6 +12,7 @@ import {
 } from '../../work_takeover/tasks';
 import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
 import { exportWorkTakeoverPacket } from '../../work_takeover/task_packet';
+import { verifyWorkTakeoverResult, type WorkTakeoverExpectedSurface } from '../../work_takeover/result_verifier';
 import { createDesignDeliveryFiles } from '../../socket/design_delivery_workflow';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
@@ -693,6 +694,110 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         note: shouldRecord
           ? 'Task packet exported and recorded on the task. The packet is local only; external side effects remain confirmation-gated.'
           : 'Task packet exported without recording. The packet is local only; external side effects remain confirmation-gated.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_task_verify_result',
+    description: 'Verify a work takeover task after visible work or tool execution. It checks task context, confirmation boundaries, drafts, file paths, and current desktop/window/process state, then writes a verification record back to the task center. Use this before claiming a real workflow is complete.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task.' },
+        expectedSurfaces: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Expected visible surfaces, e.g. wechat, browser, office, spreadsheet, cad, bim, video_editor, store_platform, creator_platform, file_explorer, lumi.',
+        },
+        filePaths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Additional exact local file/folder paths that should exist.',
+        },
+        draftRequired: { type: 'boolean', description: 'Whether a communication draft must be present.' },
+        requireActiveWindow: { type: 'boolean', description: 'Whether reading any active window is required even when no expectedSurfaces are provided.' },
+        record: { type: 'boolean', description: 'Whether to write verification back to the task. Defaults to true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+
+      let activeWindowRaw = '';
+      let runningProcessesRaw = '';
+      if (context?.desktopRelay) {
+        try {
+          activeWindowRaw = await context.desktopRelay('desktop_active_window', {});
+        } catch {}
+        try {
+          runningProcessesRaw = await context.desktopRelay('desktop_running_processes', { top: 80 });
+        } catch {}
+      }
+
+      const expectedSurfaces = (asStringArray(args.expectedSurfaces) || [])
+        .map(surface => surface as WorkTakeoverExpectedSurface)
+        .filter(Boolean);
+      const filePaths = asStringArray(args.filePaths) || [];
+      const verification = verifyWorkTakeoverResult(task, {
+        activeWindowRaw,
+        runningProcessesRaw,
+        expectedSurfaces,
+        filePaths,
+        draftRequired: args.draftRequired === true,
+        requireActiveWindow: args.requireActiveWindow === true,
+      });
+
+      let updatedTask = task;
+      if (args.record !== false) {
+        const status: WorkTakeoverStatus = verification.status === 'blocked'
+          ? 'blocked'
+          : verification.status === 'needs_review'
+          ? 'waiting_confirmation'
+          : task.status === 'queued'
+          ? 'in_progress'
+          : task.status;
+        updatedTask = updateWorkTakeoverTask(userId, task.id, {
+          status,
+          result: verification.summary,
+          blockedBy: verification.status === 'blocked'
+            ? uniqueStrings([...task.blockedBy, ...verification.blockers])
+            : undefined,
+          artifact: {
+            type: 'checklist',
+            label: '任务结果验证记录',
+            content: [
+              verification.summary,
+              '',
+              ...verification.checks.map(item => `- ${item.passed ? '通过' : '待复核'}｜${item.label}：${item.detail}`),
+              verification.activeWindow
+                ? `\n活动窗口：${verification.activeWindow.processName} ${verification.activeWindow.title}`
+                : '\n活动窗口：未读取',
+              verification.detectedSurfaces.length
+                ? `检测到的外部表面：${verification.detectedSurfaces.join('、')}`
+                : '检测到的外部表面：暂无',
+            ].join('\n'),
+            status: verification.passed ? 'prepared' : 'needs_review',
+          },
+          metadata: {
+            workTakeoverVerification: verification,
+          },
+          note: verification.summary,
+        } as any) || task;
+      }
+
+      return JSON.stringify({
+        task: updatedTask,
+        verification,
+        note: args.record === false
+          ? 'Verification generated without recording.'
+          : 'Verification recorded on the work takeover task.',
       }, null, 2);
     },
     permission: 'user',

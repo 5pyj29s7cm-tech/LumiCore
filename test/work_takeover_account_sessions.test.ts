@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { analyzeWechatIntake } from '../server/work_takeover/wechat_intake';
 import { planWorkTakeoverExecution } from '../server/work_takeover/execution_planner';
+import { verifyWorkTakeoverResult } from '../server/work_takeover/result_verifier';
 import type { WorkTakeoverTask } from '../server/work_takeover/tasks';
 
 function makeTask(overrides: Partial<WorkTakeoverTask> = {}): WorkTakeoverTask {
@@ -57,6 +61,9 @@ describe('work takeover account session reuse', () => {
 
     expect(plan.capabilities.map(capability => capability.id)).toContain('account.session_reuse');
     expect(plan.confirmationRequired.join('；')).toContain('首次登录');
+    expect(plan.contextSignals.join('；')).toContain('industryStandard=账号运营接管');
+    expect(plan.handoffPrompt).toContain('行业接管标准：账号运营接管');
+    expect(plan.handoffPrompt).toContain('外部系统优先');
     expect(plan.handoffPrompt).toContain('优先恢复任务栏/后台已有窗口');
     expect(plan.verificationChecklist.join('；')).toContain('已优先复用已登录账号窗口');
 
@@ -66,5 +73,46 @@ describe('work takeover account session reuse', () => {
       'desktop_active_window',
       'web_login_profile_list',
     ]));
+  });
+
+  it('verifies real desktop result signals before claiming success', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_wt_verify_'));
+    try {
+      const reportPath = path.join(dir, '账号运营清单.txt');
+      fs.writeFileSync(reportPath, '内容/投放任务清单', 'utf8');
+      const task = makeTask({
+        result: '已准备账号运营清单和微信草稿。',
+        drafts: [{
+          id: 'draft_1',
+          channel: 'wechat',
+          text: '收到，我先准备账号运营清单。',
+          status: 'draft',
+          createdAt: '2026-07-03T00:00:00.000Z',
+          updatedAt: '2026-07-03T00:00:00.000Z',
+        }],
+        artifacts: [{
+          id: 'artifact_1',
+          type: 'document',
+          label: '账号运营清单',
+          path: reportPath,
+          status: 'prepared',
+          createdAt: '2026-07-03T00:00:00.000Z',
+          updatedAt: '2026-07-03T00:00:00.000Z',
+        }],
+      });
+
+      const verification = verifyWorkTakeoverResult(task, {
+        activeWindowRaw: JSON.stringify({ title: '微信', process_name: 'Weixin', pid: 51208 }),
+        runningProcessesRaw: JSON.stringify([{ name: 'Weixin', pid: 51208 }]),
+        expectedSurfaces: ['wechat'],
+        draftRequired: true,
+      });
+
+      expect(verification.passed).toBe(true);
+      expect(verification.detectedSurfaces).toContain('wechat');
+      expect(verification.checks.every(check => check.passed)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
