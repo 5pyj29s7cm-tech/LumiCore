@@ -288,6 +288,7 @@ export function createWorkTakeoverTaskFromWechatIntake(
       intakeId: intake.intakeId,
       confidence: intake.confidence,
       extracted: intake.extracted,
+      industryParameters: intake.parameters,
       safety: intake.safety,
     },
   });

@@ -1,5 +1,6 @@
 import type { WechatWorkCategory } from './wechat_intake';
 import { getIndustryWorkStandard } from './industry_standards';
+import type { WorkTakeoverIndustryParameters } from './industry_parameters';
 import type { WorkTakeoverArtifact, WorkTakeoverDraft, WorkTakeoverTask } from './tasks';
 
 export type WorkTakeoverExecutionMode = 'plan_only' | 'prepare_work' | 'visible_external_work';
@@ -149,10 +150,10 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'video.content_publish_pack',
     label: '视频内容生成与发布准备',
     kind: 'automation',
-    tools: ['short_video_script', 'content_topic_pipeline', 'content_calendar_builder', 'create_docx', 'browser_open_task'],
+    tools: ['work_takeover_task_prepare_ecommerce_growth', 'short_video_script', 'content_topic_pipeline', 'content_calendar_builder', 'create_docx', 'browser_open_task'],
     confirmationRequired: ['正式发布、账号操作、投放预算前需要确认'],
     keywords: ['视频', '脚本', '标题', '封面', '字幕', '剪辑', '发布', '口播'],
-    categoryHints: ['video_publish', 'account'],
+    categoryHints: ['store', 'video_publish', 'account'],
   },
   {
     id: 'legal.case_filing_pack',
@@ -255,10 +256,17 @@ function capabilityTools(capabilities: WorkTakeoverCapabilitySelection[]): strin
 
 function artifactsForTask(task: WorkTakeoverTask): string[] {
   const standard = getIndustryWorkStandard(task.category);
+  const params = industryParams(task);
   return unique([
     ...task.artifacts.map(artifact => artifact.label),
     ...standard.deliverables,
+    ...(params?.requiredArtifactLabels || []),
   ]);
+}
+
+function industryParams(task: WorkTakeoverTask): WorkTakeoverIndustryParameters | undefined {
+  const params = task.metadata?.industryParameters;
+  return params && typeof params === 'object' ? params as WorkTakeoverIndustryParameters : undefined;
 }
 
 function findCapabilities(capabilities: WorkTakeoverCapabilitySelection[], kinds: WorkTakeoverCapabilitySelection['kind'][]): WorkTakeoverCapabilitySelection[] {
@@ -339,10 +347,13 @@ function buildSteps(task: WorkTakeoverTask, capabilities: WorkTakeoverCapability
 
 function buildContextSignals(task: WorkTakeoverTask): string[] {
   const standard = getIndustryWorkStandard(task.category);
+  const params = industryParams(task);
   const signals = [
     `category=${task.category}`,
     `industryStandard=${standard.label}`,
     `externalSurfaces=${standard.externalSurfaces.slice(0, 6).join(', ')}`,
+    params?.summaryLines?.length ? `industryParams=${params.summaryLines.slice(0, 8).join(' | ')}` : '',
+    params?.expectedContentTerms?.length ? `contentTerms=${params.expectedContentTerms.slice(0, 10).join(', ')}` : '',
     task.recommendedWorkflow ? `workflow=${task.recommendedWorkflow}` : '',
     task.contact ? `contact=${task.contact}` : '',
     task.urgency ? `urgency=${task.urgency}` : '',
@@ -363,6 +374,7 @@ function inferBlockers(task: WorkTakeoverTask): string[] {
 
 function buildVerificationChecklist(task: WorkTakeoverTask, capabilities: WorkTakeoverCapabilitySelection[]): string[] {
   const standard = getIndustryWorkStandard(task.category);
+  const params = industryParams(task);
   const checklist = [
     '任务中心已有摘要、下一步动作、风险和确认边界。',
     '所有生成的文件/草稿/清单都已记录到任务 artifacts 或 result。',
@@ -370,6 +382,8 @@ function buildVerificationChecklist(task: WorkTakeoverTask, capabilities: WorkTa
     '可见桌面动作有截图、活动窗口或进程证据；光标点击前先移动到真实目标。',
     '对外发送、提交、付款、签约、发布和最终承诺没有越过确认边界。',
     ...standard.verificationFocus,
+    ...(params?.expectedContentTerms?.length ? [`交付内容需要命中任务参数关键词：${params.expectedContentTerms.slice(0, 10).join('、')}`] : []),
+    ...(params?.requiredArtifactLabels?.length ? [`必须记录参数化交付物：${params.requiredArtifactLabels.slice(0, 10).join('、')}`] : []),
   ];
   if (capabilities.some(capability => capability.id === 'presentation.client_deck')) checklist.push('PPT/PDF 内容是客户任务内容，不是 Lumi 自我介绍话术。');
   if (capabilities.some(capability => capability.id === 'cad_bim.design_handoff')) checklist.push('CAD/Revit 结果以可审阅草稿或交接数据呈现，生产图纸仍需尺寸和专业复核。');
@@ -382,10 +396,12 @@ function buildVerificationChecklist(task: WorkTakeoverTask, capabilities: WorkTa
 function buildHandoffPrompt(task: WorkTakeoverTask, plan: Omit<WorkTakeoverExecutionPlan, 'handoffPrompt'>): string {
   const artifacts = artifactsForTask(task);
   const standard = getIndustryWorkStandard(task.category);
+  const params = industryParams(task);
   return [
     `接管任务：${task.title}`,
     `目标：${plan.objective}`,
     `行业接管标准：${standard.label} - ${standard.objective}`,
+    params?.summaryLines?.length ? `任务参数：${params.summaryLines.join('；')}` : '',
     `外部系统优先：${standard.externalSurfaces.join('；')}`,
     `原则：不要播放固定脚本；根据当前任务内容、交付物、已安装工具和确认边界组织步骤。`,
     `账号原则：优先恢复任务栏/后台已有窗口和已登录浏览器会话；不要代替用户完成密码、扫码、验证码、人脸/短信验证、账号切换或授权。`,
@@ -577,6 +593,7 @@ export function planWorkTakeoverExecution(
 ): WorkTakeoverExecutionPlan {
   const mode = options.mode || 'prepare_work';
   const standard = getIndustryWorkStandard(task.category);
+  const params = industryParams(task);
   const capabilities = inferCapabilities(task);
   const blockers = inferBlockers(task);
   const steps = buildSteps(task, capabilities, blockers);
@@ -593,6 +610,7 @@ export function planWorkTakeoverExecution(
   const confirmationRequired = unique([
     ...task.confirmationRequired,
     ...standard.confirmationBoundaries.map(item => `${standard.label}边界：${item}`),
+    ...(params?.confirmationBoundaries || []),
     ...capabilities.flatMap(capability => capability.confirmationRequired),
   ]);
 

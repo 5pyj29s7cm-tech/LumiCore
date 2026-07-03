@@ -67,6 +67,7 @@ function mdTable(rows: Array<[string, string]>): string {
 }
 
 function renderTaskSummary(task: WorkTakeoverTask, plan: WorkTakeoverExecutionPlan): string {
+  const industryParameters = task.metadata?.industryParameters;
   return [
     `# ${task.title}`,
     '',
@@ -89,6 +90,12 @@ function renderTaskSummary(task: WorkTakeoverTask, plan: WorkTakeoverExecutionPl
     '',
     task.sourceMessage || '暂无原始消息。',
     '',
+    '## 行业任务参数',
+    '',
+    industryParameters && typeof industryParameters === 'object'
+      ? renderIndustryParameters(industryParameters)
+      : '暂无结构化行业参数。',
+    '',
     '## 当前可做',
     '',
     mdList(plan.safeActions),
@@ -100,6 +107,23 @@ function renderTaskSummary(task: WorkTakeoverTask, plan: WorkTakeoverExecutionPl
     '## 当前阻塞',
     '',
     mdList(plan.blockers, '暂无阻塞'),
+  ].join('\n');
+}
+
+function renderIndustryParameters(params: any): string {
+  const lines = Array.isArray(params.summaryLines) ? params.summaryLines : [];
+  const required = Array.isArray(params.requiredArtifactLabels) ? params.requiredArtifactLabels : [];
+  const terms = Array.isArray(params.expectedContentTerms) ? params.expectedContentTerms : [];
+  return [
+    lines.length ? mdList(lines) : '暂无摘要参数。',
+    '',
+    '### 交付要求',
+    '',
+    mdList(required, '暂无参数化交付要求'),
+    '',
+    '### 验收关键词',
+    '',
+    mdList(terms, '暂无验收关键词'),
   ].join('\n');
 }
 
@@ -246,4 +270,3 @@ export function exportWorkTakeoverPacket(
     summary: `已生成工作接管任务包：${folderPath}`,
   };
 }
-

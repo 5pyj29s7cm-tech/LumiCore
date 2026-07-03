@@ -1,3 +1,5 @@
+import { parseWorkTakeoverIndustryParameters, type WorkTakeoverIndustryParameters } from './industry_parameters';
+
 export type WechatWorkCategory =
   | 'customer'
   | 'store'
@@ -34,6 +36,7 @@ export interface WechatIntakeResult {
     people: string[];
     topics: string[];
   };
+  parameters: WorkTakeoverIndustryParameters;
   recommendedWorkflow: string;
   nextActions: string[];
   draftReply: string;
@@ -46,8 +49,8 @@ export interface WechatIntakeResult {
 
 const CATEGORY_KEYWORDS: Record<Exclude<WechatWorkCategory, 'unknown'>, string[]> = {
   customer: ['客户', '线索', '报价', '价格', '方案', '合同', '定金', '成交', '交付', '预算', '询价', '合作', '项目'],
-  store: ['店铺', '订单', '库存', '发货', '售后', '退款', '评价', '差评', '客服', '商品', '上架', '下架'],
-  account: ['账号', '账户', '登录', '粉丝', '投放', '数据', '素材', '广告', '小红书', '抖音', '视频号', '矩阵', '运营'],
+  store: ['店铺', '抖店', '小店', '订单', '库存', '发货', '售后', '退款', '评价', '差评', '客服', '商品', '上架', '下架'],
+  account: ['账号', '账户', '登录', '粉丝', '投放', '数据', '素材', '广告', '小红书', '抖音', '视频号', '抖店', '矩阵', '运营'],
   legal_case: ['立案', '起诉', '法院', '律师', '诉讼', '证据', '仲裁', '被告', '原告', '案由', '材料', '保全'],
   video_publish: ['视频', '剪辑', '发布', '标题', '封面', '脚本', '字幕', '口播', '账号发布', '投流', '审核'],
   design_delivery: ['装修', '户型', 'CAD', 'Revit', '施工图', '效果图', '平面图', '方案图', '量房', '设计', '预算表'],
@@ -225,6 +228,10 @@ function normalizeRules(rules?: string | string[]): string[] {
     .slice(0, 12);
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map(compactText).filter(Boolean)));
+}
+
 export function analyzeWechatIntake(input: WechatIntakeInput): WechatIntakeResult {
   const message = compactText(input.message || '');
   if (!message) {
@@ -244,6 +251,7 @@ export function analyzeWechatIntake(input: WechatIntakeInput): WechatIntakeResul
   const topics = extractTopics(message, category);
   const urgency = detectUrgency(message, deadlines);
   const rules = normalizeRules(input.userRules);
+  const parameters = parseWorkTakeoverIndustryParameters(message, category);
   const allowedNow = [
     '读取用户提供或剪贴板中的消息内容',
     '分类任务类型',
@@ -272,15 +280,23 @@ export function analyzeWechatIntake(input: WechatIntakeInput): WechatIntakeResul
     urgency,
     summary: summarize(message, category),
     extracted: { amounts, deadlines, people, topics },
+    parameters,
     recommendedWorkflow: WORKFLOW_BY_CATEGORY[category],
     nextActions: [
       ...buildNextActions(category, urgency),
+      ...parameters.summaryLines.slice(0, 4).map(line => `按任务参数：${line}`),
       ...rules.map(rule => `按用户规则：${rule}`),
     ].slice(0, 12),
     draftReply: buildDraftReply(input, category, urgency),
-    artifactsToPrepare: ARTIFACTS_BY_CATEGORY[category],
+    artifactsToPrepare: uniqueStrings([
+      ...ARTIFACTS_BY_CATEGORY[category],
+      ...parameters.requiredArtifactLabels,
+    ]),
     allowedNow,
-    confirmationRequired,
+    confirmationRequired: uniqueStrings([
+      ...confirmationRequired,
+      ...parameters.confirmationBoundaries,
+    ]),
     blockedBy,
     safety: 'Lumi can triage, draft, prepare files, copy drafts, and restore already logged-in app/browser sessions. First-time login, QR/OTP/biometric verification, account switching, sending messages, publishing, payment, signing, submitting, or making external commitments remains confirmation-gated.',
   };
