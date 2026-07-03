@@ -50,6 +50,20 @@ export type LoginRunOptions = {
   waitForManualMs?: number;
 };
 
+export type WebLoginLearnOptions = LoginRunOptions & {
+  url: string;
+  id?: string;
+  label?: string;
+  username?: string;
+  password?: string;
+  matchHosts?: string[];
+  usernameSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
+  successUrlPattern?: string;
+  notes?: string;
+};
+
 const STORE_FILE = getDataPath('web_login/profiles.json');
 const SECRET_FILE = getDataPath('web_login/secret.key');
 const SESSION_ROOT = getDataPath('web_login/sessions/.keep');
@@ -64,6 +78,16 @@ const COMMON_USERNAME_SELECTORS = [
   'input[id*="user" i]',
   'input[name*="account" i]',
   'input[id*="account" i]',
+  'input[name*="login" i]',
+  'input[id*="login" i]',
+  'input[name*="phone" i]',
+  'input[id*="phone" i]',
+  'input[placeholder*="账号"]',
+  'input[placeholder*="帐号"]',
+  'input[placeholder*="手机"]',
+  'input[placeholder*="邮箱"]',
+  'input[placeholder*="用户名"]',
+  'input[placeholder*="登录"]',
   'input[type="text"]',
 ];
 
@@ -73,10 +97,14 @@ const COMMON_SUBMIT_SELECTORS = [
   'button:has-text("登录")',
   'button:has-text("登 录")',
   'button:has-text("Login")',
+  'button:has-text("Log in")',
   'button:has-text("Sign in")',
+  'button:has-text("Sign In")',
   'button:has-text("Continue")',
   'button:has-text("继续")',
   'button:has-text("下一步")',
+  'input[value*="登录"]',
+  'input[value*="Login"]',
 ];
 
 function ensureStore(): void {
@@ -231,6 +259,10 @@ export function findWebLoginProfileForUrl(targetUrl: string, scope?: WebLoginSco
     .find(profile => profile.matchHosts.some(match => host === match || host.endsWith(`.${match}`)));
 }
 
+function defaultProfileIdForUrl(targetUrl: string): string {
+  return toSlug(normalizeUrl(targetUrl).hostname);
+}
+
 function findBrowserExecutable(): string {
   const candidates = [
     process.env.LUMI_BROWSER_EXECUTABLE || '',
@@ -261,16 +293,28 @@ async function openContext(profile: WebLoginProfile, scope?: WebLoginScope, head
   });
 }
 
-async function firstVisible(page: Page, selectors: string[]): Promise<Locator | null> {
+async function firstVisibleMatch(page: Page, selectors: string[]): Promise<{ locator: Locator; selector: string } | null> {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
     try {
-      if (await locator.count() > 0 && await locator.isVisible({ timeout: 600 })) return locator;
+      if (await locator.count() > 0 && await locator.isVisible({ timeout: 600 })) return { locator, selector };
     } catch {
       // Try next selector.
     }
   }
   return null;
+}
+
+async function visibleMatch(page: Page, preferredSelector: string | undefined, fallbackSelectors: string[]): Promise<{ locator: Locator; selector: string } | null> {
+  if (preferredSelector) {
+    const preferred = await firstVisibleMatch(page, [preferredSelector]);
+    if (preferred) return preferred;
+  }
+  return firstVisibleMatch(page, fallbackSelectors);
+}
+
+async function firstVisible(page: Page, selectors: string[]): Promise<Locator | null> {
+  return (await firstVisibleMatch(page, selectors))?.locator || null;
 }
 
 async function loginLooksComplete(page: Page, profile: WebLoginProfile): Promise<boolean> {
@@ -282,7 +326,11 @@ async function loginLooksComplete(page: Page, profile: WebLoginProfile): Promise
     }
   }
   const password = await firstVisible(page, ['input[type="password"]']);
-  return !password;
+  if (password) return false;
+  const username = await firstVisible(page, COMMON_USERNAME_SELECTORS);
+  const submit = await firstVisible(page, COMMON_SUBMIT_SELECTORS);
+  if (username && submit) return false;
+  return true;
 }
 
 async function waitForLoginCompletion(page: Page, profile: WebLoginProfile, waitMs: number): Promise<boolean> {
@@ -294,60 +342,92 @@ async function waitForLoginCompletion(page: Page, profile: WebLoginProfile, wait
   return loginLooksComplete(page, profile);
 }
 
-async function fillLoginForm(page: Page, profile: WebLoginProfile, autoSubmit: boolean): Promise<{ filledUsername: boolean; filledPassword: boolean; submitted: boolean }> {
+async function hasAutofilledValue(locator: Locator | null): Promise<boolean> {
+  if (!locator) return false;
+  try {
+    return Boolean((await locator.inputValue({ timeout: 800 })).trim());
+  } catch {
+    return false;
+  }
+}
+
+async function fillLoginForm(page: Page, profile: WebLoginProfile, autoSubmit: boolean): Promise<{
+  filledUsername: boolean;
+  filledPassword: boolean;
+  submitted: boolean;
+  usedBrowserAutofill: boolean;
+  usernameSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
+}> {
   const password = decryptSecret(profile.passwordCipher);
   let filledUsername = false;
   let filledPassword = false;
   let submitted = false;
+  let usedBrowserAutofill = false;
+  let usernameSelector: string | undefined;
+  let passwordSelector: string | undefined;
+  let submitSelector: string | undefined;
 
-  if (profile.username) {
-    const usernameLocator = profile.usernameSelector
-      ? page.locator(profile.usernameSelector).first()
-      : await firstVisible(page, COMMON_USERNAME_SELECTORS);
-    if (usernameLocator) {
-      await usernameLocator.fill(profile.username, { timeout: 5000 });
+  const usernameMatch = await visibleMatch(page, profile.usernameSelector, COMMON_USERNAME_SELECTORS);
+  if (usernameMatch) {
+    usernameSelector = usernameMatch.selector;
+    if (profile.username) {
+      await usernameMatch.locator.fill(profile.username, { timeout: 5000 });
       filledUsername = true;
+    } else if (await hasAutofilledValue(usernameMatch.locator)) {
+      filledUsername = true;
+      usedBrowserAutofill = true;
     }
   }
 
-  const passwordLocator = profile.passwordSelector
-    ? page.locator(profile.passwordSelector).first()
-    : await firstVisible(page, ['input[type="password"]']);
-  if (password && passwordLocator) {
-    await passwordLocator.fill(password, { timeout: 5000 });
-    filledPassword = true;
+  const passwordMatch = await visibleMatch(page, profile.passwordSelector, ['input[type="password"]']);
+  if (passwordMatch) {
+    passwordSelector = passwordMatch.selector;
+    if (password) {
+      await passwordMatch.locator.fill(password, { timeout: 5000 });
+      filledPassword = true;
+    } else if (await hasAutofilledValue(passwordMatch.locator)) {
+      filledPassword = true;
+      usedBrowserAutofill = true;
+    }
   }
 
   if (autoSubmit && (filledUsername || filledPassword)) {
-    const submitLocator = profile.submitSelector
-      ? page.locator(profile.submitSelector).first()
-      : await firstVisible(page, COMMON_SUBMIT_SELECTORS);
-    if (submitLocator) {
+    const submitMatch = await visibleMatch(page, profile.submitSelector, COMMON_SUBMIT_SELECTORS);
+    submitSelector = submitMatch?.selector;
+    if (submitMatch) {
       await Promise.allSettled([
         page.waitForLoadState('domcontentloaded', { timeout: 12000 }),
-        submitLocator.click({ timeout: 5000 }),
+        submitMatch.locator.click({ timeout: 5000 }),
       ]);
       submitted = true;
-    } else if (passwordLocator) {
-      await passwordLocator.press('Enter');
+    } else if (passwordMatch) {
+      await passwordMatch.locator.press('Enter');
       submitted = true;
     }
   }
 
-  return { filledUsername, filledPassword, submitted };
+  return { filledUsername, filledPassword, submitted, usedBrowserAutofill, usernameSelector, passwordSelector, submitSelector };
 }
 
-function updateProfileLoginStatus(profile: WebLoginProfile, status: string): void {
+function updateProfileLoginStatus(
+  profile: WebLoginProfile,
+  status: string,
+  patch: Partial<Pick<WebLoginProfile, 'usernameSelector' | 'passwordSelector' | 'submitSelector'>> = {},
+): WebLoginProfile | undefined {
   const profiles = readProfiles();
   const idx = profiles.findIndex(item => item.id === profile.id && item.ownerUid === profile.ownerUid && item.domain === profile.domain && item.orgId === profile.orgId);
-  if (idx < 0) return;
+  if (idx < 0) return undefined;
   profiles[idx] = {
     ...profiles[idx],
+    ...patch,
     lastLoginAt: new Date().toISOString(),
     lastLoginStatus: status,
     updatedAt: new Date().toISOString(),
   };
   writeProfiles(profiles);
+  return profiles[idx];
 }
 
 export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScope) {
@@ -365,21 +445,78 @@ export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScop
     const fill = await fillLoginForm(page, profile, options.autoSubmit !== false);
     const ok = await waitForLoginCompletion(page, profile, waitMs);
     const status = ok ? 'logged_in' : 'manual_required';
-    updateProfileLoginStatus(profile, status);
+    const updatedProfile = updateProfileLoginStatus(profile, status, {
+      usernameSelector: profile.usernameSelector || fill.usernameSelector || '',
+      passwordSelector: profile.passwordSelector || fill.passwordSelector || '',
+      submitSelector: profile.submitSelector || fill.submitSelector || '',
+    }) || profile;
     return {
       status,
-      profile: publicProfile({ ...profile, lastLoginStatus: status, lastLoginAt: new Date().toISOString() }),
+      profile: publicProfile(updatedProfile),
       url: page.url(),
       filledUsername: fill.filledUsername,
       filledPassword: fill.filledPassword,
       submitted: fill.submitted,
+      usedBrowserAutofill: fill.usedBrowserAutofill,
+      learnedSelectors: {
+        usernameSelector: updatedProfile.usernameSelector || '',
+        passwordSelector: updatedProfile.passwordSelector || '',
+        submitSelector: updatedProfile.submitSelector || '',
+      },
       note: ok
         ? 'Login/session is available in the persistent browser profile.'
-        : 'Manual action may be required: captcha, 2FA, passkey, or non-standard login form. Complete it in the opened browser and run again.',
+        : 'Manual action may be required: captcha, QR login, 2FA, passkey, or non-standard login form. Complete it in the opened browser and run again.',
     };
   } finally {
     await context.close();
   }
+}
+
+export async function learnWebLoginSite(options: WebLoginLearnOptions, scope?: WebLoginScope) {
+  const loginUrl = normalizeUrl(options.url).toString();
+  const existing = options.profileId ? getProfile(options.profileId, scope) : findWebLoginProfileForUrl(loginUrl, scope);
+  const profile = saveWebLoginProfile({
+    id: options.id || options.profileId || existing?.id || defaultProfileIdForUrl(loginUrl),
+    label: options.label || existing?.label || normalizeUrl(loginUrl).hostname,
+    loginUrl,
+    matchHosts: options.matchHosts || existing?.matchHosts,
+    username: options.username ?? existing?.username,
+    password: options.password,
+    usernameSelector: options.usernameSelector ?? existing?.usernameSelector,
+    passwordSelector: options.passwordSelector ?? existing?.passwordSelector,
+    submitSelector: options.submitSelector ?? existing?.submitSelector,
+    successUrlPattern: options.successUrlPattern ?? existing?.successUrlPattern,
+    notes: [
+      existing?.notes,
+      options.notes,
+      'Generic Lumi web login profile. Lumi may reuse encrypted credentials, browser autofill, cookies, and the local persistent session after user authorization.',
+    ].filter(Boolean).join(' '),
+  }, scope);
+  const run = await runWebLogin({
+    profileId: profile.id,
+    url: loginUrl,
+    headless: options.headless === true,
+    autoSubmit: options.autoSubmit !== false,
+    waitForManualMs: options.waitForManualMs,
+  }, scope);
+  return {
+    ...run,
+    learned: {
+      profileId: profile.id,
+      matchHosts: profile.matchHosts,
+      encryptedPasswordStored: Boolean(options.password || profile.hasPassword),
+      persistentSessionStored: true,
+      browserAutofillSupported: true,
+      scope: {
+        domain: scopeDefaults(scope).domain,
+        ownerUid: scopeDefaults(scope).ownerUid,
+        orgId: scopeDefaults(scope).orgId,
+      },
+    },
+    note: run.status === 'logged_in'
+      ? 'Lumi learned this website login profile and saved the local session for future work.'
+      : 'Lumi created the login profile, but the site still needs manual completion such as captcha, QR login, 2FA, passkey, or account approval.',
+  };
 }
 
 function extractPlainText(raw: string, maxChars: number): string {

@@ -31,6 +31,9 @@ const DECLARATIONS = [
   'url_fetch_logged_in',
   'web_login_site_presets',
   'web_login_profile_save_from_preset',
+  'web_login_profile_save',
+  'web_login_learn_site',
+  'web_login_profile_list',
   'web_login_run',
   'legal_search_case',
   'legal_search_statute',
@@ -164,6 +167,22 @@ describe('tool router', () => {
       'web_login_run',
       'url_fetch_logged_in',
       'legal_search_case',
+    ]));
+  });
+
+  it('routes generic website login learning to authenticated browser tools', () => {
+    const route = routeToolsForTurn(
+      '帮我学习这个店铺后台网页登录，记住账号密码，下次可以自动登录继续操作',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('authenticated_web');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'web_login_profile_save',
+      'web_login_learn_site',
+      'web_login_profile_list',
+      'web_login_run',
+      'url_fetch_logged_in',
     ]));
   });
 

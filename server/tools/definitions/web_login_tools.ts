@@ -2,6 +2,7 @@ import { ToolRegistry } from '../registry';
 import {
   deleteWebLoginProfile,
   fetchWithWebLogin,
+  learnWebLoginSite,
   listWebLoginProfiles,
   runWebLogin,
   saveWebLoginProfile,
@@ -20,7 +21,7 @@ function scopeFromContext(context?: { userId?: string; domain?: string; orgId?: 
 export function registerWebLoginTools(registry: ToolRegistry): void {
   registry.register({
     name: 'web_login_site_presets',
-    description: 'List built-in website login presets, focused on authorized legal research and filing sites such as 法信、中国裁判文书网、人民法院案例库、企查查、法蝉、Alpha.',
+    description: 'List built-in website login presets. Presets cover legal research and filing sites such as 法信、中国裁判文书网、人民法院案例库、企查查、法蝉、Alpha; arbitrary websites should use web_login_profile_save or web_login_learn_site.',
     parameters: {
       type: 'object',
       properties: {
@@ -30,7 +31,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify({
       presets: listWebLoginSitePresets(args.category),
-      note: 'Use web_login_profile_save_from_preset to create a local authorized login profile from one of these presets.',
+      note: 'Use web_login_profile_save_from_preset to create a local authorized login profile from one of these presets. Use web_login_learn_site for any other website.',
     }, null, 2),
     permission: 'user',
     securityLevel: 'safe',
@@ -142,6 +143,55 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       }, scopeFromContext(context)),
       note: 'Saved. Run web_login_run to create or refresh the browser session.',
     }, null, 2),
+    permission: 'user',
+    securityLevel: 'confirm',
+  });
+
+  registry.register({
+    name: 'web_login_learn_site',
+    description: [
+      'Learn an authorized login flow for any website, not just built-in presets.',
+      'Creates or updates a generic login profile, saves encrypted credentials when provided, opens a real Chrome/Edge persistent session, and records reusable session/selector signals.',
+      'If the browser or website has remembered credentials, Lumi can detect autofilled fields and submit; captcha, QR login, 2FA, passkeys, account switching, and third-party authorization remain manual confirmation boundaries.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Login or target URL to learn, must start with http:// or https://.' },
+        profileId: { type: 'string', description: 'Optional existing profile id to update.' },
+        id: { type: 'string', description: 'Optional stable profile id for a new profile. Defaults to the host name.' },
+        label: { type: 'string', description: 'Human label, e.g. 抖店后台 / Google AI Studio / Company CRM.' },
+        matchHosts: { type: 'array', items: { type: 'string' }, description: 'Hostnames that should reuse this profile.' },
+        username: { type: 'string', description: 'Optional username/email/phone to store for this profile.' },
+        password: { type: 'string', description: 'Optional password to encrypt locally. Omit for browser/session-only learning.' },
+        usernameSelector: { type: 'string', description: 'Optional CSS selector for username field.' },
+        passwordSelector: { type: 'string', description: 'Optional CSS selector for password field.' },
+        submitSelector: { type: 'string', description: 'Optional CSS selector for submit button.' },
+        successUrlPattern: { type: 'string', description: 'Optional RegExp tested against URL to decide login success.' },
+        notes: { type: 'string', description: 'Operator notes, setup caveats, account ownership, or 2FA instructions.' },
+        headless: { type: 'boolean', description: 'Run without showing browser. Defaults false so the user can complete verification.' },
+        autoSubmit: { type: 'boolean', description: 'Submit after filling or detecting autofilled credentials. Defaults true.' },
+        waitForManualMs: { type: 'number', description: 'How long to wait for manual captcha/QR/2FA completion, default 45000, max 180000.' },
+      },
+      required: ['url'],
+    },
+    handler: async (args, context) => JSON.stringify(await learnWebLoginSite({
+      url: String(args.url || ''),
+      profileId: args.profileId,
+      id: args.id,
+      label: args.label,
+      matchHosts: Array.isArray(args.matchHosts) ? args.matchHosts.map(String) : undefined,
+      username: args.username,
+      password: args.password,
+      usernameSelector: args.usernameSelector,
+      passwordSelector: args.passwordSelector,
+      submitSelector: args.submitSelector,
+      successUrlPattern: args.successUrlPattern,
+      notes: args.notes,
+      headless: args.headless === true,
+      autoSubmit: args.autoSubmit !== false,
+      waitForManualMs: Number(args.waitForManualMs) || undefined,
+    }, scopeFromContext(context)), null, 2),
     permission: 'user',
     securityLevel: 'confirm',
   });

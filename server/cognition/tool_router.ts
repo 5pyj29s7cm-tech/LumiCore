@@ -61,6 +61,8 @@ const TOOL_GROUPS: Record<string, string[]> = {
   authenticatedWeb: [
     'web_login_site_presets',
     'web_login_profile_save_from_preset',
+    'web_login_profile_save',
+    'web_login_learn_site',
     'web_login_profile_list',
     'web_login_run',
     'url_fetch_logged_in',
@@ -209,6 +211,15 @@ const ROUTES: RouteDefinition[] = [
     ],
     prefixes: ['mcp_demo-ppt-creation_', 'mcp_wps-ppt-creator_', 'mcp_ai-research-ppt-outline_', 'mcp_pdftools_'],
     groups: ['files', 'documents', 'web'],
+  },
+  {
+    category: 'authenticated_web',
+    reason: 'website login, saved account, or authenticated browser session request',
+    patterns: [
+      /网页登录|自动登录|登录|账号|帐号|账户|保存密码|记住密码|已登录|登录会话|浏览器会话|店铺后台|商家后台|创作者中心|平台账号|扫码|验证码|二次验证|2FA/u,
+      /\b(login|log\s*in|sign\s*in|account|password|credential|session|authenticated|auth|2fa|otp|captcha|dashboard|seller\s*center|creator\s*center)\b/i,
+    ],
+    groups: ['web', 'authenticatedWeb'],
   },
   {
     category: 'web_research',
