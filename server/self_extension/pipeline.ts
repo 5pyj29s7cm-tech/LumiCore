@@ -2,6 +2,7 @@ import { getAdapterRegistry } from '../adapters/registry';
 import { getMarketplaceSkills } from '../marketplace/registry';
 import { mcpManager } from '../mcp/client';
 import { ToolDefinition } from '../tools/types';
+import { listCapabilityLearningRecords } from './capability_memory';
 
 export interface SelfExtensionPlanOptions {
   userId?: string;
@@ -16,11 +17,25 @@ export interface SelfExtensionPlan {
   domain: string;
   generatedAt: string;
   readiness: 'use_existing' | 'install_or_repair_skill' | 'generate_skill_draft' | 'research_adapter' | 'core_change_needed';
+  resolution: {
+    decision:
+      | 'reuse_learned_route'
+      | 'use_existing_coverage'
+      | 'repair_or_install_skill'
+      | 'research_adapter'
+      | 'generate_skill_draft'
+      | 'core_change_needed';
+    primarySource: 'learned_capability' | 'adapter' | 'tool' | 'installed_skill' | 'marketplace_skill' | 'planned_adapter' | 'none';
+    reason: string;
+    preferredTools: string[];
+    shouldCreateNewCapability: boolean;
+  };
   existingCoverage: {
     adapters: Array<{ id: string; label: string; status: string; actions: string[]; notes?: string }>;
     tools: Array<{ name: string; securityLevel: string; description: string }>;
     installedSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
     marketplaceSkills: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
+    learnedCapabilities: Array<{ id: string; domain: string; goal: string; status: string; route: string; preferredTools: string[]; summary: string }>;
   };
   gap: {
     missing: string[];
@@ -109,10 +124,25 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
       requiresSetup: skill.requiresSetup || skill.requiresApiKey || false,
       setupNote: skill.setupNote,
     }));
+  const learnedCapabilities = listCapabilityLearningRecords({
+    userId: options.userId || 'anonymous',
+    domain,
+    goal,
+    limit: 8,
+  }).map(record => ({
+    id: record.id,
+    domain: record.domain,
+    goal: record.goal,
+    status: record.status,
+    route: record.selectedRoute.label,
+    preferredTools: record.nextUse.preferredTools,
+    summary: record.experiment.summary,
+  }));
 
   const coverageReady = matchingAdapters.some(adapter => ['ready', 'available', 'draft_only'].includes(adapter.status))
     || matchingTools.some(tool => tool.securityLevel === 'safe' || tool.securityLevel === 'confirm')
-    || matchingLocalSkills.some(skill => !skill.broken);
+    || matchingLocalSkills.some(skill => !skill.broken)
+    || learnedCapabilities.some(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
   const repairableSkill = matchingLocalSkills.some(skill => skill.broken);
   const installableSkill = matchingMarketplace.some(skill => !skill.installed);
   const plannedAdapter = matchingAdapters.some(adapter => adapter.status === 'planned');
@@ -124,17 +154,29 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
       : plannedAdapter || shouldResearch(domain, goal) ? 'research_adapter'
       : canGenerateSkill(domain, goal) ? 'generate_skill_draft'
       : 'core_change_needed';
+  const resolution = buildResolution(readiness, {
+    matchingTools,
+    matchingAdapters,
+    matchingLocalSkills,
+    matchingMarketplace,
+    learnedCapabilities,
+    repairableSkill,
+    installableSkill,
+    plannedAdapter,
+  });
 
   return {
     goal,
     domain,
     generatedAt: new Date().toISOString(),
     readiness,
+    resolution,
     existingCoverage: {
       adapters: matchingAdapters,
       tools: matchingTools,
       installedSkills: matchingLocalSkills,
       marketplaceSkills: matchingMarketplace,
+      learnedCapabilities,
     },
     gap: buildGap(goal, domain, readiness, {
       coverageReady,
@@ -148,9 +190,11 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
       matchingAdapters,
       matchingLocalSkills,
       matchingMarketplace,
+      learnedCapabilities,
       highRisk,
     }),
     safety: [
+      'Check learned capability routes, adapters, tools, installed skills, and marketplace skills before creating anything new.',
       'Use existing explicit tools and client actions before generating new tools.',
       'Use capability_research before connecting a new external ecosystem, GitHub project, MCP server, CAD/BIM bridge, or online AI service.',
       'generate_skill, install_skill, client_repair_skill, desktop control, external app automation, messaging, provider changes, and file writes remain confirmation-sensitive.',
@@ -193,6 +237,107 @@ function buildGap(
   };
 }
 
+function buildResolution(
+  readiness: SelfExtensionPlan['readiness'],
+  facts: {
+    matchingTools: Array<{ name: string; securityLevel: string; description: string }>;
+    matchingAdapters: Array<{ id: string; label: string; status: string; actions: string[]; notes?: string }>;
+    matchingLocalSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
+    matchingMarketplace: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
+    learnedCapabilities: SelfExtensionPlan['existingCoverage']['learnedCapabilities'];
+    repairableSkill: boolean;
+    installableSkill: boolean;
+    plannedAdapter: boolean;
+  },
+): SelfExtensionPlan['resolution'] {
+  const learned = facts.learnedCapabilities.find(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+  if (learned) {
+    return {
+      decision: 'reuse_learned_route',
+      primarySource: 'learned_capability',
+      reason: `A persisted learned route already covers this request: ${learned.route}.`,
+      preferredTools: learned.preferredTools,
+      shouldCreateNewCapability: false,
+    };
+  }
+
+  const readyAdapter = facts.matchingAdapters.find(adapter => ['ready', 'available', 'draft_only'].includes(adapter.status));
+  if (readyAdapter) {
+    return {
+      decision: 'use_existing_coverage',
+      primarySource: 'adapter',
+      reason: `A matching adapter already exists: ${readyAdapter.label}.`,
+      preferredTools: readyAdapter.actions,
+      shouldCreateNewCapability: false,
+    };
+  }
+
+  const readyTool = facts.matchingTools.find(tool => tool.securityLevel === 'safe' || tool.securityLevel === 'confirm');
+  if (readyTool) {
+    return {
+      decision: 'use_existing_coverage',
+      primarySource: 'tool',
+      reason: `A matching tool already exists: ${readyTool.name}.`,
+      preferredTools: [readyTool.name],
+      shouldCreateNewCapability: false,
+    };
+  }
+
+  const installedSkill = facts.matchingLocalSkills.find(skill => !skill.broken);
+  if (installedSkill) {
+    return {
+      decision: 'use_existing_coverage',
+      primarySource: 'installed_skill',
+      reason: `A matching installed skill already exists: ${installedSkill.name}.`,
+      preferredTools: [],
+      shouldCreateNewCapability: false,
+    };
+  }
+
+  if (facts.repairableSkill || facts.installableSkill) {
+    const marketplaceSkill = facts.matchingMarketplace.find(skill => !skill.installed);
+    return {
+      decision: 'repair_or_install_skill',
+      primarySource: facts.repairableSkill ? 'installed_skill' : 'marketplace_skill',
+      reason: facts.repairableSkill
+        ? 'A matching skill exists but needs repair before Lumi should invent a new route.'
+        : `A matching skill can be installed or set up${marketplaceSkill ? `: ${marketplaceSkill.name}` : ''}.`,
+      preferredTools: facts.repairableSkill ? ['client_repair_skill'] : ['install_skill'],
+      shouldCreateNewCapability: false,
+    };
+  }
+
+  if (facts.plannedAdapter || readiness === 'research_adapter') {
+    return {
+      decision: 'research_adapter',
+      primarySource: facts.plannedAdapter ? 'planned_adapter' : 'none',
+      reason: facts.plannedAdapter
+        ? 'A planned adapter exists, so Lumi should research/finish that route before creating a parallel one.'
+        : 'No existing route covers this request; research an integration candidate before installing or executing anything.',
+      preferredTools: ['capability_research'],
+      shouldCreateNewCapability: true,
+    };
+  }
+
+  if (readiness === 'generate_skill_draft') {
+    return {
+      decision: 'generate_skill_draft',
+      primarySource: 'none',
+      reason: 'No existing route covers this repeatable workflow; a reusable skill draft is appropriate after confirmation.',
+      preferredTools: ['generate_skill'],
+      shouldCreateNewCapability: true,
+    };
+  }
+
+  return {
+    decision: 'core_change_needed',
+    primarySource: 'none',
+    reason: 'The request appears to need core client/server work rather than another tool wrapper.',
+    preferredTools: [],
+    shouldCreateNewCapability: true,
+  };
+}
+
 function buildPipeline(
   goal: string,
   domain: string,
@@ -202,6 +347,7 @@ function buildPipeline(
     matchingAdapters: Array<{ id: string; label: string; status: string; actions: string[]; notes?: string }>;
     matchingLocalSkills: Array<{ name: string; description: string; broken?: boolean; toolCount?: number }>;
     matchingMarketplace: Array<{ id: string; name: string; installed: boolean; requiresSetup?: boolean; setupNote?: string }>;
+    learnedCapabilities: SelfExtensionPlan['existingCoverage']['learnedCapabilities'];
     highRisk: boolean;
   },
 ): SelfExtensionPlan['pipeline'] {
@@ -214,6 +360,17 @@ function buildPipeline(
       notes: 'Confirm what Lumi already has before inventing a new tool.',
     },
   ];
+
+  const learned = facts.learnedCapabilities.find(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+  if (learned) {
+    pipeline.push({
+      step: 'Reuse learned capability route',
+      status: facts.highRisk ? 'confirm_first' : 'available_now',
+      tool: learned.preferredTools[0] || 'capability_learning_list',
+      args: { goal, domain },
+      notes: `Lumi already learned this interface route: ${learned.route}. Prefer it before generating tools or modifying core code.`,
+    });
+  }
 
   if (domain === 'usage_monitoring') {
     pipeline.push({

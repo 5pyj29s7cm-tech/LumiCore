@@ -20,6 +20,7 @@ import {
   prepareWorkTakeoverIndustryPackage,
   type WorkTakeoverIndustryPackageResult,
 } from '../../work_takeover/industry_packages';
+import { runWorkTakeoverCapabilityReuseProbe } from '../../work_takeover/capability_reuse_probe';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
   return {
@@ -206,7 +207,7 @@ function buildRealSmokeControlRoutes(
     });
   }
 
-  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf', 'cad_generate_autocad_draw_script'])) {
+  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'])) {
     routes.push({
       id: 'external_design_apps',
       label: 'WPS/CAD/Revit 可见交付路线',
@@ -220,8 +221,9 @@ function buildRealSmokeControlRoutes(
         'desktop_ui_type',
         'cad_generate_dxf',
         'cad_generate_autocad_draw_script',
+        'cad_run_autocad_draw_script',
       ],
-      reason: '用于把本地方案包、PPT/PDF、CAD DXF、AutoCAD 一笔一笔可视绘图脚本和 Revit/Dynamo 交接数据交给外部软件继续深化。',
+      reason: '用于把本地方案包、PPT/PDF、CAD DXF、AutoCAD 一笔一笔可视绘图脚本与执行验证、Revit/Dynamo 交接数据交给外部软件继续深化。',
       confirmationRequired: confirmationForCapabilities(plan, ['cad_bim.design_handoff', 'presentation.client_deck'], [
         '打开外部 CAD/Revit 修改生产图纸、承诺尺寸/结构/水电/报价/施工结果前需要确认',
       ]),
@@ -1374,6 +1376,64 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         report,
         note: 'Autorun finished the bounded safe loop. Review report.stopReasons, confirmationRequired, blockers, and packetPath for the next decision.',
       }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'work_takeover_capability_reuse_probe',
+    description: 'Run a safe capability-reuse pressure test for a real work takeover task. It creates or continues a task from a customer/WeChat message, builds the normal execution plan, audits every selected capability with self_extension_plan to verify Lumi is reusing learned routes/adapters/tools/skills instead of growing duplicate code, optionally advances a few safe local steps, prepares supported local industry packages, exports a task packet, verifies the result, and writes a concise diagnostic back to the task center. It never sends messages, publishes, pays, submits, logs into accounts, switches accounts, or controls external apps.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional existing work takeover task id. If omitted, message/clipboard/active task is used.' },
+        message: { type: 'string', description: 'Optional customer/WeChat message text to create a new task before the probe.' },
+        fromClipboard: { type: 'boolean', description: 'Read message text from desktop clipboard when message is omitted. Requires desktop client relay.' },
+        contact: { type: 'string', description: 'Optional contact/customer name.' },
+        source: { type: 'string', description: 'manual, clipboard, selected_text, wechat, voice, chat.' },
+        takeoverMode: { type: 'string', description: 'Optional forced task category or auto.' },
+        userRules: { type: 'string', description: 'Optional user rules/boundaries to apply.' },
+        title: { type: 'string', description: 'Optional task title if creating from message.' },
+        maxSteps: { type: 'number', description: 'Maximum safe preparation steps to advance. Defaults to 2, max 5.' },
+        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work. Defaults to prepare_work.' },
+        runSafeLoop: { type: 'boolean', description: 'Advance bounded safe local steps. Defaults true.' },
+        stopOnConfirmation: { type: 'boolean', description: 'Stop after a step reaches a confirmation boundary. Defaults true.' },
+        prepareIndustryPackage: { type: 'boolean', description: 'Generate or reuse the matching local industry package when the category has an adapter. Defaults true.' },
+        regenerateIndustryPackage: { type: 'boolean', description: 'Regenerate the industry package even if one is already recorded. Defaults false.' },
+        exportPacket: { type: 'boolean', description: 'Export a local task packet at the end. Defaults true.' },
+        outputDirectory: { type: 'string', description: 'Optional folder for exported package/packet. Defaults to the Desktop.' },
+        record: { type: 'boolean', description: 'Whether to write the probe result back to the task. Defaults true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const result = await runWorkTakeoverCapabilityReuseProbe({
+        userId,
+        domain,
+        orgId,
+        id: args.id ? String(args.id) : undefined,
+        message: args.message ? String(args.message) : undefined,
+        fromClipboard: args.fromClipboard === true,
+        contact: args.contact ? String(args.contact) : undefined,
+        source: args.source ? String(args.source) : undefined,
+        takeoverMode: args.takeoverMode ? String(args.takeoverMode) : undefined,
+        userRules: args.userRules ? String(args.userRules) : undefined,
+        title: args.title ? String(args.title) : undefined,
+        maxSteps: args.maxSteps,
+        mode: args.mode ? String(args.mode) as WorkTakeoverExecutionMode : undefined,
+        runSafeLoop: args.runSafeLoop !== false,
+        stopOnConfirmation: args.stopOnConfirmation !== false,
+        prepareIndustryPackage: args.prepareIndustryPackage !== false,
+        regenerateIndustryPackage: args.regenerateIndustryPackage === true,
+        exportPacket: args.exportPacket !== false,
+        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+        record: args.record !== false,
+        tools: registry.list(),
+        desktopRelay: context?.desktopRelay,
+      });
+      return JSON.stringify(result, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',

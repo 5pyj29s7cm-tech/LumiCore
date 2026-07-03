@@ -1,4 +1,6 @@
 import { buildSelfExtensionPlan } from '../../self_extension/pipeline';
+import { runCapabilityGapAutofix } from '../../self_extension/autofix';
+import { listCapabilityLearningRecords, summarizeCapabilityRecord } from '../../self_extension/capability_memory';
 import { getClientState } from '../../client/self_model';
 import { ToolRegistry } from '../registry';
 
@@ -35,6 +37,83 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         tools: registry.list(),
       });
       return JSON.stringify(plan, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'capability_gap_autofix',
+    description: [
+      'Turn a missing or weak Lumi capability into a reusable learned route.',
+      'It first reuses existing learned routes, tools, adapters, and skills when they already cover the request.',
+      'Only when coverage is absent or failure evidence shows the current path is brittle, it selects the best interface pattern, prepares or runs a minimal verification experiment when safe, persists one reusable route into Lumi capability memory, and returns the next-use rule.',
+      'Use this when Lumi notices it is falling back to brittle scripts, raw mouse control, or repeated manual coding for an external software/workflow.',
+      'External execution, third-party install, messaging, publishing, payments, and core code changes remain confirmation-gated.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'Capability gap to fix, e.g. "AutoCAD should draw stroke by stroke through script/API instead of mouse".' },
+        domain: { type: 'string', description: 'Optional domain hint, e.g. cad_bim, messaging, design, browser, client_control.' },
+        context: { type: 'string', description: 'Optional task context or user expectation.' },
+        observedFailure: { type: 'string', description: 'What went wrong or felt too manual/scripted.' },
+        outputDirectory: { type: 'string', description: 'Optional folder for generated minimal experiment artifacts.' },
+        allowExternalExecution: { type: 'boolean', description: 'Allow the minimal experiment to launch/control external software. Defaults false.' },
+        allowResearch: { type: 'boolean', description: 'Allow research-needed status and research suggestions. Defaults true.' },
+        allowSkillDraft: { type: 'boolean', description: 'Reserved for future auto skill draft generation; defaults false.' },
+        record: { type: 'boolean', description: 'Persist the learned route to Lumi capability memory. Defaults true.' },
+      },
+      required: ['goal'],
+    },
+    handler: async (args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const result = await runCapabilityGapAutofix({
+        userId,
+        goal: String(args.goal || ''),
+        domain: args.domain ? String(args.domain) : undefined,
+        context: args.context ? String(args.context) : undefined,
+        observedFailure: args.observedFailure ? String(args.observedFailure) : undefined,
+        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+        allowExternalExecution: args.allowExternalExecution === true,
+        allowResearch: args.allowResearch !== false,
+        allowSkillDraft: args.allowSkillDraft === true,
+        record: args.record !== false,
+        clientState: getClientState(userId) as Record<string, any> | null,
+        tools: registry.list(),
+        executeTool: (name, toolArgs) => registry.execute(name, toolArgs, context),
+      });
+      return JSON.stringify(result, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'confirm',
+  });
+
+  registry.register({
+    name: 'capability_learning_list',
+    description: 'List Lumi capability learning records created or updated by capability_gap_autofix. Use this before generating new skills or core code to see what routes Lumi has actually learned and what minimal experiments verified them.',
+    parameters: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Optional domain filter.' },
+        goal: { type: 'string', description: 'Optional goal/query filter.' },
+        status: { type: 'string', description: 'Optional learned/experiment_prepared/experiment_passed/needs_research/blocked filter.' },
+        limit: { type: 'number', description: 'Maximum records to return. Defaults to 20.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const records = listCapabilityLearningRecords({
+        userId: context?.userId || 'anonymous',
+        domain: args.domain ? String(args.domain) : undefined,
+        goal: args.goal ? String(args.goal) : undefined,
+        status: args.status ? String(args.status) as any : undefined,
+        limit: args.limit,
+      });
+      return JSON.stringify({
+        records,
+        summaries: records.map(summarizeCapabilityRecord),
+      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',

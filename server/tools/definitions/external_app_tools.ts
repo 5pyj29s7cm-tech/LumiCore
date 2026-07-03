@@ -973,7 +973,13 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
   return ops.slice(0, 2500);
 }
 
-function resolveAutocadScriptPaths(args: Record<string, any>, title: string): { basePath: string; lispPath: string; scriptPath: string; powershellPath: string } {
+function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
+  basePath: string;
+  lispPath: string;
+  scriptPath: string;
+  powershellPath: string;
+  markerPath: string;
+} {
   const outputPath = String(args.outputPath || '').trim();
   const outputDirectory = String(args.outputDirectory || '').trim();
   const directory = outputDirectory
@@ -983,7 +989,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): { 
     ? (path.isAbsolute(outputPath) ? expandHomePath(outputPath) : path.resolve(directory, outputPath))
     : path.join(directory, `${title}_autocad_draw_${Date.now()}`);
   const basePath = rawBase.replace(/\.(lsp|scr|ps1|dxf)$/i, '');
-  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`]) {
+  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`, `${basePath}_completed.txt`]) {
     assertWritableCadPath(filePath);
   }
   fs.mkdirSync(path.dirname(basePath), { recursive: true });
@@ -992,10 +998,11 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): { 
     lispPath: `${basePath}.lsp`,
     scriptPath: `${basePath}.scr`,
     powershellPath: `${basePath}_run_autocad.ps1`,
+    markerPath: `${basePath}_completed.txt`,
   };
 }
 
-function buildAutocadLisp(args: Record<string, any>, operations: AutocadDrawOperation[], title: string, delayMs: number): string {
+function buildAutocadLisp(args: Record<string, any>, operations: AutocadDrawOperation[], title: string, delayMs: number, markerPath?: string): string {
   const layers = Array.from(new Set(operations.map(op => op.layer))).sort();
   const delay = Math.max(0, Math.min(Number(delayMs) || 0, 5000));
   const layerColor = (layer: string): number => {
@@ -1045,6 +1052,12 @@ function buildAutocadLisp(args: Record<string, any>, operations: AutocadDrawOper
   });
 
   lines.push(
+    markerPath
+      ? `  (setq lumi-marker (open "${lispString(markerPath.replace(/\\/g, '/'))}" "w"))`
+      : '',
+    markerPath
+      ? `  (if lumi-marker (progn (write-line "completed=${operations.length}" lumi-marker) (write-line "title=${lispString(title)}" lumi-marker) (close lumi-marker)))`
+      : '',
     '  (command "_.ZOOM" "_E")',
     '  (setvar "CMDECHO" oldcmd)',
     `  (princ "\\nLumi finished ${operations.length} visible CAD operation(s). Review dimensions before production use.")`,
@@ -1071,10 +1084,44 @@ function buildAutocadRunPowerShell(scriptPath: string, preferredExecutable?: str
   return [
     '$ErrorActionPreference = "Stop"',
     `$scriptPath = ${JSON.stringify(scriptPath)}`,
-    `$acad = ${JSON.stringify(exe)}`,
+    `$preferredAcad = ${JSON.stringify(exe)}`,
+    '$candidates = @()',
+    'if ($preferredAcad) { $candidates += $preferredAcad }',
+    '$cmd = Get-Command acad.exe -ErrorAction SilentlyContinue',
+    'if ($cmd) { $candidates += $cmd.Source }',
+    '$candidates += @(',
+    '  "$env:ProgramFiles\\Autodesk\\AutoCAD*\\acad.exe",',
+    '  "${env:ProgramFiles(x86)}\\Autodesk\\AutoCAD*\\acad.exe"',
+    ')',
+    '$acad = $null',
+    'foreach ($candidate in $candidates) {',
+    '  foreach ($path in (Resolve-Path $candidate -ErrorAction SilentlyContinue)) {',
+    '    if (Test-Path $path.Path) { $acad = $path.Path; break }',
+    '  }',
+    '  if ($acad) { break }',
+    '}',
+    'if (-not $acad) { throw "AutoCAD acad.exe was not found. Pass autocadExecutable or install AutoCAD." }',
     'Start-Process -FilePath $acad -ArgumentList @("/b", $scriptPath)',
+    'Write-Output "started=$acad script=$scriptPath"',
     '',
   ].join('\n');
+}
+
+function autocadRunnerPathForScript(scriptPath: string): string {
+  return scriptPath.replace(/\.(scr|lsp)$/i, '') + '_run_autocad.ps1';
+}
+
+function autocadMarkerPathForScript(scriptPath: string): string {
+  return scriptPath.replace(/\.(scr|lsp)$/i, '') + '_completed.txt';
+}
+
+async function waitForFile(filePath: string, waitSeconds: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, Math.min(waitSeconds, 300)) * 1000;
+  while (Date.now() <= deadline) {
+    if (fs.existsSync(filePath)) return true;
+    await new Promise(resolve => setTimeout(resolve, 750));
+  }
+  return fs.existsSync(filePath);
 }
 
 export function registerExternalAppTools(registry: ToolRegistry): void {
@@ -1320,12 +1367,13 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const operations = collectAutocadDrawOperations(args);
       if (!operations.length) throw new Error('No drawable AutoCAD operations were generated. Provide width/height plus walls, rooms, doors, windows, or labels.');
 
-      const lisp = buildAutocadLisp(args, operations, title, delay);
+      const lisp = buildAutocadLisp(args, operations, title, delay, paths.markerPath);
       const script = buildAutocadScript(paths.lispPath);
       const runner = buildAutocadRunPowerShell(paths.scriptPath, args.autocadExecutable ? String(args.autocadExecutable) : undefined);
       fs.writeFileSync(paths.lispPath, lisp, 'utf-8');
       fs.writeFileSync(paths.scriptPath, script, 'utf-8');
       fs.writeFileSync(paths.powershellPath, runner, 'utf-8');
+      try { fs.rmSync(paths.markerPath, { force: true }); } catch {}
 
       let launchResult: string | undefined;
       if (args.launchAutoCAD) {
@@ -1357,11 +1405,101 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         lispPath: paths.lispPath,
         scriptPath: paths.scriptPath,
         powershellRunnerPath: paths.powershellPath,
+        completionMarkerPath: paths.markerPath,
         launchCommand: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
         launchAutoCAD: Boolean(args.launchAutoCAD),
         launchResult,
         preview: operations.slice(0, 20).map((op, index) => ({ index: index + 1, ...op })),
         note: 'Generated AutoCAD visible drawing playback. In AutoCAD, run SCRIPT and choose the .scr file, or run the PowerShell runner if acad.exe is available. Lumi still needs confirmed dimensions and professional review before production drawings.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'confirm',
+  });
+
+  registry.register({
+    name: 'cad_run_autocad_draw_script',
+    description: 'Execute a generated AutoCAD .scr draw script through AutoCAD /b, then verify whether the stroke-by-stroke drawing run completed using a completion marker file plus optional desktop process/window observations. Use after cad_generate_autocad_draw_script when Lumi should actually drive AutoCAD, not merely open the app. This does not certify production drawings; it verifies script execution/handoff.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptPath: { type: 'string', description: 'Path to the generated AutoCAD .scr file.' },
+        lispPath: { type: 'string', description: 'Optional generated .lsp path for diagnostics.' },
+        completionMarkerPath: { type: 'string', description: 'Optional marker path written by generated LISP when drawing completes. Defaults beside script.' },
+        autocadExecutable: { type: 'string', description: 'Optional exact acad.exe path/name. Defaults to acad.exe and common Autodesk install paths.' },
+        waitSeconds: { type: 'number', description: 'Seconds to wait for the completion marker after launching. Defaults to 20, max 300.' },
+        launch: { type: 'boolean', description: 'Actually launch AutoCAD. Defaults to true. Set false to only prepare the runner/command.' },
+        requireCompletionMarker: { type: 'boolean', description: 'If true, mark the run blocked when completion marker is not observed. Defaults to false.' },
+        recordRunner: { type: 'boolean', description: 'Write or refresh the PowerShell runner beside the script. Defaults to true.' },
+      },
+      required: ['scriptPath'],
+    },
+    handler: async (args, context) => {
+      const scriptPath = path.resolve(expandHomePath(String(args.scriptPath || '').trim()));
+      if (!scriptPath || !/\.scr$/i.test(scriptPath)) throw new Error('scriptPath must point to a generated .scr file.');
+      if (!fs.existsSync(scriptPath)) throw new Error(`AutoCAD script not found: ${scriptPath}`);
+      const lispPath = args.lispPath ? path.resolve(expandHomePath(String(args.lispPath))) : '';
+      if (lispPath && !fs.existsSync(lispPath)) throw new Error(`AutoCAD LISP file not found: ${lispPath}`);
+
+      const markerPath = args.completionMarkerPath
+        ? path.resolve(expandHomePath(String(args.completionMarkerPath)))
+        : autocadMarkerPathForScript(scriptPath);
+      const runnerPath = autocadRunnerPathForScript(scriptPath);
+      const waitSeconds = Math.max(0, Math.min(Number(args.waitSeconds) || 20, 300));
+      if (args.recordRunner !== false) {
+        assertWritableCadPath(runnerPath);
+        fs.writeFileSync(runnerPath, buildAutocadRunPowerShell(scriptPath, args.autocadExecutable ? String(args.autocadExecutable) : undefined), 'utf-8');
+      }
+
+      const launchCommand = `powershell -NoProfile -ExecutionPolicy Bypass -File "${runnerPath}"`;
+      let launchResult: string | undefined;
+      let activeWindowRaw = '';
+      let runningProcessesRaw = '';
+      let markerCompleted = fs.existsSync(markerPath);
+      const shouldLaunch = args.launch !== false;
+
+      if (shouldLaunch) {
+        requireExternalAutomation();
+        const desktopRelay = requireDesktopRelay(context);
+        try { fs.rmSync(markerPath, { force: true }); } catch {}
+        launchResult = await desktopRelay('desktop_run_command', { command: launchCommand });
+        markerCompleted = await waitForFile(markerPath, waitSeconds);
+        try {
+          activeWindowRaw = await desktopRelay('desktop_active_window', {});
+        } catch {}
+        try {
+          runningProcessesRaw = await desktopRelay('desktop_running_processes', { top: 120 });
+        } catch {}
+      }
+
+      const processEvidence = `${activeWindowRaw}\n${runningProcessesRaw}`;
+      const autocadObserved = /acad|autocad|AutoCAD|acad\.exe/i.test(processEvidence);
+      const status =
+        markerCompleted ? 'completed' :
+        args.requireCompletionMarker === true ? 'blocked' :
+        shouldLaunch && (launchResult || autocadObserved) ? 'launched_needs_review' :
+        shouldLaunch ? 'needs_review' :
+        'ready_to_launch';
+
+      return JSON.stringify({
+        status,
+        scriptPath,
+        lispPath: lispPath || undefined,
+        completionMarkerPath: markerPath,
+        completionMarkerExists: markerCompleted,
+        powershellRunnerPath: runnerPath,
+        launchCommand,
+        launch: shouldLaunch,
+        launchResult,
+        waitSeconds,
+        autocadObserved,
+        activeWindowRaw: activeWindowRaw || undefined,
+        runningProcessesRaw: runningProcessesRaw || undefined,
+        note: markerCompleted
+          ? 'AutoCAD draw script completed and wrote the marker file.'
+          : shouldLaunch
+          ? 'AutoCAD script was launched or attempted. Completion marker was not observed yet; inspect AutoCAD/window state before claiming the drawing is complete.'
+          : 'Runner is ready. Launch is disabled, so no AutoCAD execution was attempted.',
       }, null, 2);
     },
     permission: 'user',

@@ -45,6 +45,7 @@ describe('AutoCAD visible draw script', () => {
       expect(fs.existsSync(result.lispPath)).toBe(true);
       expect(fs.existsSync(result.scriptPath)).toBe(true);
       expect(fs.existsSync(result.powershellRunnerPath)).toBe(true);
+      expect(result.completionMarkerPath).toContain('_completed.txt');
 
       const lisp = fs.readFileSync(result.lispPath, 'utf-8');
       const script = fs.readFileSync(result.scriptPath, 'utf-8');
@@ -52,9 +53,24 @@ describe('AutoCAD visible draw script', () => {
       expect(lisp).toContain('_.LINE');
       expect(lisp).toContain('_.ARC');
       expect(lisp).toContain('_.DELAY');
+      expect(lisp).toContain('_completed.txt');
       expect(lisp).toContain('客厅');
       expect(script).toContain('LUMIDRAW');
       expect(script.replace(/\\/g, '/')).toContain(result.lispPath.replace(/\\/g, '/'));
+
+      const runRaw = await registry.execute('cad_run_autocad_draw_script', {
+        scriptPath: result.scriptPath,
+        lispPath: result.lispPath,
+        completionMarkerPath: result.completionMarkerPath,
+        launch: false,
+      }, {
+        requestConfirmation: async () => true,
+      } as any);
+      const runResult = JSON.parse(runRaw);
+      expect(runResult.status).toBe('ready_to_launch');
+      expect(runResult.launchCommand).toContain(runResult.powershellRunnerPath);
+      expect(fs.existsSync(runResult.powershellRunnerPath)).toBe(true);
+      expect(fs.readFileSync(runResult.powershellRunnerPath, 'utf-8')).toContain(path.basename(result.scriptPath));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -7,6 +7,7 @@ import { getAdapterRegistry } from '../adapters/registry';
 import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getActionConstitutionPolicy } from '../tools/action_constitution';
 import { formatDesktopAwarenessForPrompt } from './desktop_awareness';
+import { listCapabilityLearningRecords } from '../self_extension/capability_memory';
 
 export type ClientMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 export type ClientCapabilityKind =
@@ -283,8 +284,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.design_delivery_workflow',
     label: 'Renovation design delivery takeover',
     kind: 'system',
-    actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_generate_autocad_draw_script'],
-    notes: 'In this stage, when the user asks Lumi to take over a renovation/design delivery task, Lumi can generate a local desktop delivery package: proposal, budget/material list, customer-facing PPTX/PDF design deck with layout/material/budget visuals, CAD DXF draft, AutoCAD stroke-by-stroke drawing playback scripts, Revit/Dynamo handoff files, and a WeChat delivery draft. Lumi should open real external tools where available: WPS/Office for documents, desktop CAD software such as AutoCAD/FreeCAD for DXF or visible draw scripts, Dynamo/Revit entry points or handoff files for BIM, and an already logged-in personal WeChat window before falling back to enterprise WeChat. Production drawings still require confirmed site dimensions, structure, utilities, and user sign-off. The durable ability is the delivery standard and tool handoff logic, not a one-off video script.',
+    actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'],
+    notes: 'In this stage, when the user asks Lumi to take over a renovation/design delivery task, Lumi can generate a local desktop delivery package: proposal, budget/material list, customer-facing PPTX/PDF design deck with layout/material/budget visuals, CAD DXF draft, AutoCAD stroke-by-stroke drawing playback scripts, execute those scripts through AutoCAD /b with completion-marker verification, Revit/Dynamo handoff files, and a WeChat delivery draft. Lumi should open real external tools where available: WPS/Office for documents, desktop CAD software such as AutoCAD/FreeCAD for DXF or visible draw scripts, Dynamo/Revit entry points or handoff files for BIM, and an already logged-in personal WeChat window before falling back to enterprise WeChat. Production drawings still require confirmed site dimensions, structure, utilities, and user sign-off. The durable ability is the delivery standard and tool handoff logic, not a one-off video script.',
     requiresConfirmation: true,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
@@ -301,8 +302,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.work_takeover_tasks',
     label: 'Work takeover task hub',
     kind: 'system',
-    actions: ['work_takeover_task_create', 'work_takeover_task_from_wechat', 'work_takeover_task_from_clipboard', 'work_takeover_task_list', 'work_takeover_task_get', 'work_takeover_task_update', 'work_takeover_task_continue', 'work_takeover_task_orchestrate', 'work_takeover_task_execute_step', 'work_takeover_task_advance', 'work_takeover_task_autorun', 'work_takeover_real_smoke_run', 'work_takeover_task_prepare_industry_package', 'work_takeover_task_verify_result', 'work_takeover_task_export_packet', 'work_takeover_task_run_suggested_tool'],
-    notes: 'Persistent task hub for current-stage work takeover. Lumi core stays thin: turn WeChat messages or user instructions into tracked tasks with industry parameters, orchestrate safe steps, choose an industry package adapter/skill, verify outputs, and stop at confirmation boundaries. Use work_takeover_real_smoke_run when the user says “接管这条微信先跑一遍”, wants a true closed-loop test, or needs proof that the flow is not a fixed script: it creates/continues the task, selects external-control routes such as Playwright browser, Windows UIA/screen perception, WeChat session reuse, or WPS/CAD/Revit handoff, advances bounded safe steps, prepares files through the industry adapter, verifies content/files/drafts/desktop evidence, exports a local packet, and writes a concise human report back. Use work_takeover_task_orchestrate to bridge a persisted task into a reusable execution plan without turning an industry demo into a fixed script. Use work_takeover_task_execute_step and work_takeover_task_advance to safely prepare and record one step at a time. Use work_takeover_task_autorun for the older bounded loop when route selection and full verification are not needed. Use work_takeover_task_prepare_industry_package when a persisted task needs real local industry deliverables; it routes to ecommerce/short-video/account, renovation/CAD/Revit, and future skill-backed packages. Use work_takeover_task_verify_result after visible desktop or external tool work to check active window/processes, screenshot evidence, local paths, artifact content terms, drafts, confirmation boundaries, and task-center state before claiming success. Use work_takeover_task_export_packet to materialize the task into local files. Use work_takeover_task_run_suggested_tool only when a specific plan-suggested tool and arguments are ready; the underlying tool keeps its own confirmation behavior.',
+    actions: ['work_takeover_task_create', 'work_takeover_task_from_wechat', 'work_takeover_task_from_clipboard', 'work_takeover_task_list', 'work_takeover_task_get', 'work_takeover_task_update', 'work_takeover_task_continue', 'work_takeover_task_orchestrate', 'work_takeover_task_execute_step', 'work_takeover_task_advance', 'work_takeover_task_autorun', 'work_takeover_capability_reuse_probe', 'work_takeover_real_smoke_run', 'work_takeover_task_prepare_industry_package', 'work_takeover_task_verify_result', 'work_takeover_task_export_packet', 'work_takeover_task_run_suggested_tool'],
+    notes: 'Persistent task hub for current-stage work takeover. Lumi core stays thin: turn WeChat messages or user instructions into tracked tasks with industry parameters, orchestrate safe steps, choose an industry package adapter/skill, verify outputs, and stop at confirmation boundaries. Use work_takeover_capability_reuse_probe when the user asks whether Lumi is duplicating capabilities, whether the flow is stable, or wants a real task pressure test before adding more code: it audits each selected task capability through self_extension_plan, proves whether Lumi is reusing learned routes/adapters/tools/skills, advances a few safe local steps, prepares supported local packages, verifies output, and writes a concise diagnostic. Use work_takeover_real_smoke_run when the user says “接管这条微信先跑一遍”, wants a true closed-loop test, or needs proof that the flow is not a fixed script: it creates/continues the task, selects external-control routes such as Playwright browser, Windows UIA/screen perception, WeChat session reuse, or WPS/CAD/Revit handoff, advances bounded safe steps, prepares files through the industry adapter, verifies content/files/drafts/desktop evidence, exports a local packet, and writes a concise human report back. Use work_takeover_task_orchestrate to bridge a persisted task into a reusable execution plan without turning an industry demo into a fixed script. Use work_takeover_task_execute_step and work_takeover_task_advance to safely prepare and record one step at a time. Use work_takeover_task_autorun for the older bounded loop when route selection and full verification are not needed. Use work_takeover_task_prepare_industry_package when a persisted task needs real local industry deliverables; it routes to ecommerce/short-video/account, renovation/CAD/Revit, and future skill-backed packages. Use work_takeover_task_verify_result after visible desktop or external tool work to check active window/processes, screenshot evidence, local paths, artifact content terms, drafts, confirmation boundaries, and task-center state before claiming success. Use work_takeover_task_export_packet to materialize the task into local files. Use work_takeover_task_run_suggested_tool only when a specific plan-suggested tool and arguments are ready; the underlying tool keeps its own confirmation behavior.',
     requiresConfirmation: false,
     stateKeys: ['tools', 'permissions'],
   },
@@ -341,10 +342,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'system.capability_learning',
-    label: 'Capability research and integration scouting',
+    label: 'Capability learning and integration scouting',
     kind: 'system',
-    actions: ['capability_research', 'web_search', 'url_fetch', 'open_skills'],
-    notes: 'Lumi can research GitHub/MCP/library ecosystems, evaluate fit, license risk, runtime requirements, and propose safe integration routes before installing or executing anything.',
+    actions: ['capability_gap_autofix', 'capability_learning_list', 'self_extension_plan', 'capability_research', 'web_search', 'url_fetch', 'open_skills'],
+    notes: 'Lumi can consolidate capability gaps without duplicating herself: inspect learned routes, existing tools/adapters/skills, then only create a new learned route when coverage is absent or a real execution failure shows the current path is brittle. Research remains available for new ecosystems before installing or executing anything.',
     stateKeys: ['tools', 'permissions'],
   },
   {
@@ -426,8 +427,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.self_extension',
     label: 'Self extension pipeline',
     kind: 'system',
-    actions: ['self_extension_plan', 'capability_research', 'generate_skill', 'install_skill', 'client_repair_skill'],
-    notes: 'When a capability is missing, Lumi should inspect existing coverage, research candidates, draft a safe skill/adapter plan, and only generate/install/repair with confirmation.',
+    actions: ['self_extension_plan', 'capability_gap_autofix', 'capability_learning_list', 'capability_research', 'generate_skill', 'install_skill', 'client_repair_skill'],
+    notes: 'When a capability seems missing, Lumi should first inspect learned routes, adapters, tools, installed skills, and marketplace skills. Use capability_gap_autofix only when there is no sufficient coverage or when a brittle/manual path has real failure evidence; then prepare or run a minimal verification experiment and persist one reusable route.',
     requiresConfirmation: true,
     stateKeys: ['tools', 'permissions', 'runtime'],
   },
@@ -477,8 +478,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'external.cad',
     label: 'CAD drafting adapter',
     kind: 'external_app',
-    actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'design_delivery_workflow', 'desktop_open', 'desktop_run_command'],
-    notes: 'Lumi can extract CAD-ready geometry from plan images, generate structured DXF draft files with doors/windows/dimensions, generate AutoCAD LISP/SCRIPT playback so entities appear stroke by stroke, include CAD drafts in renovation design delivery packages, and hand the result to detected desktop CAD software such as AutoCAD/FreeCAD-compatible tools when available. Lumi should not substitute a browser preview for CAD handoff when a real CAD application is available. Production drawings still require user review and confirmed site dimensions.',
+    actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script', 'design_delivery_workflow', 'desktop_open', 'desktop_run_command'],
+    notes: 'Lumi can extract CAD-ready geometry from plan images, generate structured DXF draft files with doors/windows/dimensions, generate AutoCAD LISP/SCRIPT playback so entities appear stroke by stroke, execute the script through AutoCAD /b, and verify completion with a marker file plus desktop process/window evidence. Lumi should not substitute a browser preview for CAD handoff when a real CAD application is available. Production drawings still require user review and confirmed site dimensions.',
     requiresConfirmation: true,
     stateKeys: ['permissions', 'tools'],
   },
@@ -810,6 +811,26 @@ export function getClientHealthReport(userId: string): ClientHealthReport {
   };
 }
 
+function formatLearnedCapabilityRoutes(userId: string): string[] {
+  try {
+    const records = listCapabilityLearningRecords({ userId, limit: 8 })
+      .filter(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
+    if (!records.length) {
+      return ['- No persisted learned capability routes yet. When a capability gap appears, use capability_gap_autofix to create one.'];
+    }
+    return records.map(record => [
+      `- ${record.selectedRoute.label} (${record.domain}/${record.status})`,
+      `Goal: ${record.goal}`,
+      record.nextUse.preferredTools.length ? `Preferred tools: ${record.nextUse.preferredTools.slice(0, 7).join(', ')}` : '',
+      `First step: ${record.nextUse.firstStep}`,
+      record.selectedRoute.avoid.length ? `Avoid: ${record.selectedRoute.avoid.slice(0, 3).join('; ')}` : '',
+      record.experiment.summary ? `Experiment: ${record.experiment.summary}` : '',
+    ].filter(Boolean).join(' | '));
+  } catch {
+    return ['- Learned capability routes unavailable until the local database is initialized.'];
+  }
+}
+
 export function formatClientSelfPrompt(userId: string): string {
   const state = getClientState(userId);
   const health = getClientHealthReport(userId);
@@ -822,6 +843,7 @@ export function formatClientSelfPrompt(userId: string): string {
   const musicProfile = getCachedMusicProfile(userId);
   const adapterRegistry = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
   const desktopAwareness = formatDesktopAwarenessForPrompt();
+  const learnedCapabilityLines = formatLearnedCapabilityRoutes(userId);
   const capabilityLines = CLIENT_CAPABILITIES.map(cap => (
     `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (confirmation-sensitive)' : ''}`
   ));
@@ -874,10 +896,11 @@ export function formatClientSelfPrompt(userId: string): string {
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
     'Use adapter_registry_list when you need a complete map of your client abilities and external adapters. Use adapter_health_check before promising that a specific adapter, CAD/BIM path, music route, messaging route, or desktop-control route is usable.',
-    'When the user asks for a capability you do not have, do not simply fail. Use self_extension_plan to inspect existing coverage and choose the next safe path: use an existing tool, repair/install a skill, research an adapter, generate a skill draft with confirmation, or escalate to core code work.',
+    'When the user asks for a capability you do not have, do not simply fail or wait for a developer to hard-code another tool. First use self_extension_plan or capability_learning_list to inspect learned routes, adapters, tools, installed skills, and marketplace skills. If the plan says existing coverage can handle it, use that route. Use capability_gap_autofix only when coverage is absent or a brittle/manual path has real failure evidence, then report what was actually verified.',
     'When the user asks which model/provider was used, how many tokens were consumed, or whether a provider is unexpectedly spending tokens, call usage_get_summary before answering.',
     'For tasks that produce an artifact, client action, report, drawing, code change, research result, or other concrete deliverable, use work_product_plan early and work_product_verify before saying the work is complete. Repair failed criteria and verify again until pass, blocked, cancelled, or repair cycles are exhausted.',
     'For customer, account, store, case-filing, video-publishing, or design-delivery takeover tasks in this stage, treat the request as current-stage work takeover: open the appropriate result panel, operate external software visibly when useful, create concrete files/drafts, and keep irreversible sends, signatures, filings, payments, or final commitments behind confirmation.',
+    'When the user asks whether Lumi is duplicating capabilities, whether a real task flow is stable, or says to pressure-test an existing takeover task before adding more code, use work_takeover_capability_reuse_probe first. It should audit the selected task capabilities through self_extension_plan, prove whether existing learned routes/adapters/tools/skills are reused, advance only safe local steps, verify output, and report duplication risk without generating new capability records.',
     'When the user asks Lumi to handle, reply to, classify, or take over a WeChat/customer message and says things like “接管这条微信先跑一遍”, “真实闭环测试”, “先跑出结果”, or wants to say less, use work_takeover_real_smoke_run first. It should create or continue the task, choose external-control routes, advance safe steps, prepare supported industry packages, verify files/content/drafts/desktop evidence, export a local packet, and report only what is done, blocked, and awaiting confirmation. Use work_takeover_task_autorun for the older bounded loop when full route selection and verification are not needed. Use work_takeover_task_from_wechat/from_clipboard for manual creation, then continue/orchestrate/advance when they want more control. Run a specific suggested tool only when arguments and confirmation boundaries are clear.',
     'When the user says continue that customer, next step, that WeChat task, the previous takeover task, or asks what work Lumi is managing, use work_takeover_task_advance to move the persisted task forward by one safe step before answering from memory or jumping into an industry workflow. Use work_takeover_task_run_suggested_tool for one explicit plan-suggested tool call, work_takeover_task_verify_result after visible/external work before claiming success, and work_takeover_task_export_packet when the task should leave the task center as files.',
     'For work takeover status reports, do not recite every tool call or generated sentence. Report only: what is done, what concrete result exists, what is blocked, and what needs the user to confirm next.',
@@ -885,7 +908,7 @@ export function formatClientSelfPrompt(userId: string): string {
     'For 24-hour availability: Lumi can stay ready only while the desktop client/server is running. Use launch-at-login and close-to-background for resident desktop behavior; autonomous background work still requires auto processing plus time, idle, token, and confirmed-workflow gates.',
     'Rest is part of your local life. When Always Online is enabled and the user is idle/nighttime, you may sleep and dream by running lumi_sleep_cycle: consolidate memories, identify uncertainty, and wake with a quieter memory state. Never delete original memories or mutate core identity during dreams.',
     'Do not create autonomous background work from ambient context alone. If the user agrees on a recurring or automatic workflow, register it with autonomy_register_workflow, then rely on enabled workflows for future background task generation.',
-    'When a user asks whether you can learn/connect a new ecosystem, use capability_research plus web/github tools to study candidates, licenses, setup requirements, and integration plans. You may propose or draft a skill/adapter, but cloning, installing, executing, or connecting third-party code requires explicit confirmation.',
+    'When a user asks whether you can learn/connect a new ecosystem, first check capability_learning_list and self_extension_plan. If existing coverage or a learned route exists, reuse it. If not, use capability_gap_autofix for a safe learning route or capability_research plus web/github tools to study candidates, licenses, setup requirements, and integration plans. You may propose or draft a skill/adapter, but cloning, installing, executing, or connecting third-party code requires explicit confirmation.',
     'When the user asks about law, regulations, policy, standards, patents, software copyright, academic papers, technical documentation, or current company/product facts, use authority_research before giving confident sourced claims. Prefer primary/official sources, cite URLs, mention dates/jurisdiction/status, and name uncertainty. Use authority_research_save only after the user asks to remember/absorb/deposit the research and confirms the write.',
     'For external apps such as WeChat, CAD, browsers, and other AI tools: use explicit adapters first. Prepare drafts/files/plans before controlling UI. Never claim a message was sent or a production drawing was finalized unless an explicit confirmed integration did it.',
     'Respect the global Memory Firewall: store personal, organization, meeting, LAP, community, and external-app memories with their source and privacy boundaries. Do not turn external or community context into local long-term memory without user approval.',
@@ -900,6 +923,9 @@ export function formatClientSelfPrompt(userId: string): string {
     '',
     '### Visible Execution Habits',
     ...executionHabitLines,
+    '',
+    '### Learned Capability Routes',
+    ...learnedCapabilityLines,
     '',
     '### Client Capabilities',
     ...capabilityLines,

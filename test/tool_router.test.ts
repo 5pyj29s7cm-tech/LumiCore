@@ -71,13 +71,22 @@ const DECLARATIONS = [
   'mcp_cad-drafting_cad_renovation_folder_workflow',
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
+  'cad_run_autocad_draw_script',
   'generate_image',
   'git_status',
   'git_commit',
   'list_skills',
   'generate_skill',
+  'self_extension_plan',
   'adapter_registry_list',
+  'capability_gap_autofix',
+  'capability_learning_list',
   'client_get_state',
+  'work_takeover_capability_reuse_probe',
+  'work_takeover_real_smoke_run',
+  'work_takeover_task_prepare_industry_package',
+  'work_takeover_task_verify_result',
+  'work_takeover_task_export_packet',
 ].map(name => declaration(name));
 
 describe('tool router', () => {
@@ -268,6 +277,7 @@ describe('tool router', () => {
       'mcp_cad-drafting_cad_space_program',
       'cad_generate_dxf',
       'cad_generate_autocad_draw_script',
+      'cad_run_autocad_draw_script',
       'read_file',
       'extract_document_text',
       'ocr_image_file',
@@ -282,7 +292,23 @@ describe('tool router', () => {
     expect(route.toolNames).toEqual(expect.arrayContaining([
       'list_skills',
       'generate_skill',
+      'capability_gap_autofix',
       'client_get_state',
+    ]));
+  });
+
+  it('routes capability reuse pressure tests to work takeover and self-extension tools', () => {
+    const route = routeToolsForTurn(
+      '拿这条客户微信做真实任务压测，看看 Lumi 会不会重复长能力，能不能复用已有能力稳定跑一遍',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toEqual(expect.arrayContaining(['work_takeover', 'skills_agents']));
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'work_takeover_capability_reuse_probe',
+      'work_takeover_real_smoke_run',
+      'self_extension_plan',
+      'capability_learning_list',
     ]));
   });
 

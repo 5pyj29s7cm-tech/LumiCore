@@ -113,7 +113,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'cad_bim.design_handoff',
     label: 'CAD/BIM 交付物',
     kind: 'external_app',
-    tools: ['work_takeover_task_prepare_industry_package', 'floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'desktop_open', 'desktop_run_command', 'work_product_verify'],
+    tools: ['work_takeover_task_prepare_industry_package', 'floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script', 'desktop_open', 'desktop_run_command', 'work_product_verify'],
     confirmationRequired: ['生产图纸、尺寸、结构、水电和施工承诺需要确认'],
     keywords: ['CAD', 'cad', 'DXF', 'dxf', '图纸', '平面图', '施工图', 'Revit', 'revit', 'Dynamo', 'BIM', '户型'],
     categoryHints: ['design_delivery'],
