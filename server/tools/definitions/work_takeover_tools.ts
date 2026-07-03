@@ -206,7 +206,7 @@ function buildRealSmokeControlRoutes(
     });
   }
 
-  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf'])) {
+  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf', 'cad_generate_autocad_draw_script'])) {
     routes.push({
       id: 'external_design_apps',
       label: 'WPS/CAD/Revit 可见交付路线',
@@ -219,8 +219,9 @@ function buildRealSmokeControlRoutes(
         'desktop_ui_click',
         'desktop_ui_type',
         'cad_generate_dxf',
+        'cad_generate_autocad_draw_script',
       ],
-      reason: '用于把本地方案包、PPT/PDF、CAD DXF 和 Revit/Dynamo 交接数据交给外部软件继续深化。',
+      reason: '用于把本地方案包、PPT/PDF、CAD DXF、AutoCAD 一笔一笔可视绘图脚本和 Revit/Dynamo 交接数据交给外部软件继续深化。',
       confirmationRequired: confirmationForCapabilities(plan, ['cad_bim.design_handoff', 'presentation.client_deck'], [
         '打开外部 CAD/Revit 修改生产图纸、承诺尺寸/结构/水电/报价/施工结果前需要确认',
       ]),

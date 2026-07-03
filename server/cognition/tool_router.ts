@@ -107,6 +107,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'generate_image_dalle',
     'edit_image',
     'cad_generate_dxf',
+    'cad_generate_autocad_draw_script',
     'floorplan_extract_geometry',
     'ocr_image_file',
   ],

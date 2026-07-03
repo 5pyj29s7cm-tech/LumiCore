@@ -704,6 +704,379 @@ function resolveCadOutputPath(args: Record<string, any>, title: string): string 
   return finalPath;
 }
 
+type AutocadDrawOperation =
+  | { kind: 'line'; layer: string; x1: number; y1: number; x2: number; y2: number; label?: string }
+  | { kind: 'circle'; layer: string; x: number; y: number; r: number; label?: string }
+  | { kind: 'arc'; layer: string; cx: number; cy: number; r: number; start: number; end: number; label?: string }
+  | { kind: 'text'; layer: string; x: number; y: number; text: string; height: number; label?: string };
+
+function cadNumber(value: number): string {
+  const fixed = Number(value).toFixed(3).replace(/\.?0+$/g, '');
+  return fixed === '-0' ? '0' : fixed;
+}
+
+function lispString(value: any): string {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, ' ')
+    .slice(0, 180);
+}
+
+function lispPoint(x: number, y: number): string {
+  return `(list ${cadNumber(x)} ${cadNumber(y)} 0.0)`;
+}
+
+function pushLineOp(ops: AutocadDrawOperation[], layer: string, x1: any, y1: any, x2: any, y2: any, label?: string) {
+  const a = maybeNumber(x1);
+  const b = maybeNumber(y1);
+  const c = maybeNumber(x2);
+  const d = maybeNumber(y2);
+  if (a === null || b === null || c === null || d === null || (a === c && b === d)) return;
+  ops.push({ kind: 'line', layer: safeLayer(layer, 'CUT'), x1: a, y1: b, x2: c, y2: d, label });
+}
+
+function pushRectOps(ops: AutocadDrawOperation[], x: number, y: number, width: number, height: number, layer = 'CUT', label?: string) {
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return;
+  pushLineOp(ops, layer, x, y, x + width, y, label);
+  pushLineOp(ops, layer, x + width, y, x + width, y + height, label);
+  pushLineOp(ops, layer, x + width, y + height, x, y + height, label);
+  pushLineOp(ops, layer, x, y + height, x, y, label);
+}
+
+function pushPolylineOps(ops: AutocadDrawOperation[], points: Array<{ x: number; y: number }>, layer = 'POLYLINE', closed = false, label?: string) {
+  if (points.length < 2) return;
+  for (let i = 0; i < points.length - 1; i++) {
+    pushLineOp(ops, layer, points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, label);
+  }
+  if (closed) {
+    const first = points[0];
+    const last = points[points.length - 1];
+    pushLineOp(ops, layer, last.x, last.y, first.x, first.y, label);
+  }
+}
+
+function pushWallOps(ops: AutocadDrawOperation[], wall: Record<string, any>, fallbackThickness = 0) {
+  const x1 = maybeNumber(wall?.x1 ?? wall?.from?.x);
+  const y1 = maybeNumber(wall?.y1 ?? wall?.from?.y);
+  const x2 = maybeNumber(wall?.x2 ?? wall?.to?.x);
+  const y2 = maybeNumber(wall?.y2 ?? wall?.to?.y);
+  if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+  const layer = safeLayer(wall?.layer, 'WALL');
+  const thickness = asFiniteNumber(wall?.thickness, fallbackThickness);
+  if (!Number.isFinite(thickness) || thickness <= 0) {
+    pushLineOp(ops, layer, x1, y1, x2, y2, wall?.label || 'wall');
+    return;
+  }
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len <= 0) return;
+  const nx = (-dy / len) * (thickness / 2);
+  const ny = (dx / len) * (thickness / 2);
+  pushPolylineOps(ops, [
+    { x: x1 + nx, y: y1 + ny },
+    { x: x2 + nx, y: y2 + ny },
+    { x: x2 - nx, y: y2 - ny },
+    { x: x1 - nx, y: y1 - ny },
+  ], layer, true, wall?.label || 'wall');
+}
+
+function pushTextOp(ops: AutocadDrawOperation[], x: any, y: any, text: any, height = 220, layer = 'TEXT', label?: string) {
+  const px = maybeNumber(x);
+  const py = maybeNumber(y);
+  const value = String(text || '').trim();
+  if (px === null || py === null || !value) return;
+  ops.push({ kind: 'text', layer: safeLayer(layer, 'TEXT'), x: px, y: py, text: value, height: Math.max(1, asFiniteNumber(height, 220)), label });
+}
+
+function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOperation[] {
+  const width = Math.max(1, Number(args.width) || 100);
+  const height = Math.max(1, Number(args.height) || 60);
+  const walls = Array.isArray(args.walls) ? args.walls : Array.isArray(args.lines) ? args.lines : [];
+  const rooms = Array.isArray(args.rooms) ? args.rooms : [];
+  const labels = Array.isArray(args.labels) ? args.labels : [];
+  const doors = Array.isArray(args.doors) ? args.doors : [];
+  const windows = Array.isArray(args.windows) ? args.windows : [];
+  const dimensions = Array.isArray(args.dimensions) ? args.dimensions : [];
+  const furniture = Array.isArray(args.furniture) ? args.furniture : [];
+  const columns = Array.isArray(args.columns) ? args.columns : [];
+  const polylines = Array.isArray(args.polylines) ? args.polylines : [];
+  const holes = Array.isArray(args.holes) ? args.holes : [];
+  const wallThickness = asFiniteNumber(args.wallThickness, 0);
+  const ops: AutocadDrawOperation[] = [];
+
+  pushRectOps(ops, 0, 0, width, height, 'OUTLINE', 'outline');
+
+  for (const polyline of polylines.slice(0, 240)) {
+    const points = pointList(polyline?.points || polyline);
+    pushPolylineOps(ops, points, safeLayer(polyline?.layer, 'POLYLINE'), Boolean(polyline?.closed), polyline?.label || 'polyline');
+  }
+
+  for (const wall of walls.slice(0, 500)) pushWallOps(ops, wall, wallThickness);
+
+  for (const room of rooms.slice(0, 120)) {
+    const points = pointList(room?.points || room?.polygon);
+    if (points.length >= 3) {
+      pushPolylineOps(ops, points, safeLayer(room?.layer, 'ROOM'), true, room?.name || 'room');
+      const first = points[0];
+      pushTextOp(ops, room?.labelX ?? first.x + 120, room?.labelY ?? first.y + 240, room?.name, room?.textHeight || 220, 'TEXT', 'room label');
+      continue;
+    }
+    const x = maybeNumber(room?.x);
+    const y = maybeNumber(room?.y);
+    const w = maybeNumber(room?.width ?? room?.w);
+    const h = maybeNumber(room?.height ?? room?.h);
+    if (x !== null && y !== null && w !== null && h !== null && w > 0 && h > 0) {
+      pushRectOps(ops, x, y, w, h, safeLayer(room?.layer, 'ROOM'), room?.name || 'room');
+      pushTextOp(ops, x + 120, y + Math.min(h / 2, 600), room?.name, room?.textHeight || 220, 'TEXT', 'room label');
+    }
+  }
+
+  for (const hole of holes.slice(0, 40)) {
+    const x = maybeNumber(hole?.x);
+    const y = maybeNumber(hole?.y);
+    const r = maybeNumber(hole?.r ?? hole?.radius);
+    if (x !== null && y !== null && r !== null && r > 0) ops.push({ kind: 'circle', layer: safeLayer(hole?.layer, 'HOLE'), x, y, r, label: hole?.label || 'hole' });
+  }
+
+  for (const column of columns.slice(0, 120)) {
+    const x = maybeNumber(column?.x);
+    const y = maybeNumber(column?.y);
+    if (x === null || y === null) continue;
+    const r = maybeNumber(column?.r ?? column?.radius);
+    if (r !== null && r > 0) ops.push({ kind: 'circle', layer: safeLayer(column?.layer, 'COLUMN'), x, y, r, label: column?.label || 'column' });
+    else {
+      const w = Math.max(1, asFiniteNumber(column?.width ?? column?.w, 300));
+      const h = Math.max(1, asFiniteNumber(column?.height ?? column?.h, w));
+      pushRectOps(ops, x - w / 2, y - h / 2, w, h, safeLayer(column?.layer, 'COLUMN'), column?.label || 'column');
+    }
+  }
+
+  for (const windowItem of windows.slice(0, 160)) {
+    let x1 = maybeNumber(windowItem?.x1 ?? windowItem?.from?.x);
+    let y1 = maybeNumber(windowItem?.y1 ?? windowItem?.from?.y);
+    let x2 = maybeNumber(windowItem?.x2 ?? windowItem?.to?.x);
+    let y2 = maybeNumber(windowItem?.y2 ?? windowItem?.to?.y);
+    const winWidth = Math.max(1, asFiniteNumber(windowItem?.width ?? windowItem?.w, 120));
+    if (x1 === null || y1 === null || x2 === null || y2 === null) {
+      const x = maybeNumber(windowItem?.x);
+      const y = maybeNumber(windowItem?.y);
+      const length = maybeNumber(windowItem?.length ?? windowItem?.l);
+      if (x === null || y === null || length === null) continue;
+      const angle = orientationToDegrees(windowItem?.angle ?? windowItem?.orientation, 0) * Math.PI / 180;
+      x1 = x;
+      y1 = y;
+      x2 = x + Math.cos(angle) * length;
+      y2 = y + Math.sin(angle) * length;
+    }
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len <= 0) continue;
+    const nx = (-dy / len) * (winWidth / 2);
+    const ny = (dx / len) * (winWidth / 2);
+    const layer = safeLayer(windowItem?.layer, 'WINDOW');
+    pushLineOp(ops, layer, x1 + nx, y1 + ny, x2 + nx, y2 + ny, windowItem?.label || 'window');
+    pushLineOp(ops, layer, x1, y1, x2, y2, windowItem?.label || 'window');
+    pushLineOp(ops, layer, x1 - nx, y1 - ny, x2 - nx, y2 - ny, windowItem?.label || 'window');
+  }
+
+  for (const door of doors.slice(0, 160)) {
+    const hingeX = maybeNumber(door?.hingeX ?? door?.x ?? door?.x1);
+    const hingeY = maybeNumber(door?.hingeY ?? door?.y ?? door?.y1);
+    if (hingeX === null || hingeY === null) continue;
+    const doorWidth = Math.max(1, asFiniteNumber(door?.width ?? door?.w, 900));
+    const angle = orientationToDegrees(door?.angle ?? door?.orientation, 0);
+    const swingRaw = String(door?.swing || door?.hand || '').toLowerCase();
+    const sign = /left|ccw|out|\u5de6|\u5916/.test(swingRaw) ? 1 : -1;
+    const leafX = maybeNumber(door?.leafX) ?? hingeX + Math.cos(angle * Math.PI / 180) * doorWidth;
+    const leafY = maybeNumber(door?.leafY) ?? hingeY + Math.sin(angle * Math.PI / 180) * doorWidth;
+    const openAngle = Math.max(20, Math.min(135, asFiniteNumber(door?.openAngle, 90)));
+    pushLineOp(ops, safeLayer(door?.layer, 'DOOR'), hingeX, hingeY, leafX, leafY, door?.label || 'door leaf');
+    ops.push({
+      kind: 'arc',
+      layer: safeLayer(door?.swingLayer, 'DOOR_SWING'),
+      cx: hingeX,
+      cy: hingeY,
+      r: doorWidth,
+      start: normalizeDegrees(angle),
+      end: normalizeDegrees(angle + sign * openAngle),
+      label: door?.label || 'door swing',
+    });
+    pushTextOp(ops, hingeX + 80, hingeY + 80, door?.label || door?.name, door?.textHeight || 180, 'TEXT', 'door label');
+  }
+
+  for (const item of furniture.slice(0, 240)) {
+    const x = maybeNumber(item?.x);
+    const y = maybeNumber(item?.y);
+    if (x === null || y === null) continue;
+    const r = maybeNumber(item?.r ?? item?.radius);
+    const layer = safeLayer(item?.layer, 'FURNITURE');
+    if (r !== null && r > 0) ops.push({ kind: 'circle', layer, x, y, r, label: item?.label || item?.type || 'furniture' });
+    else pushRectOps(ops, x, y, Math.max(1, asFiniteNumber(item?.width ?? item?.w, 800)), Math.max(1, asFiniteNumber(item?.height ?? item?.h, 600)), layer, item?.label || item?.type || 'furniture');
+    pushTextOp(ops, x + 60, y + 220, item?.label || item?.name || item?.type, item?.textHeight || 180, 'TEXT', 'furniture label');
+  }
+
+  for (const dimension of dimensions.slice(0, 240)) {
+    const x1 = maybeNumber(dimension?.x1 ?? dimension?.from?.x);
+    const y1 = maybeNumber(dimension?.y1 ?? dimension?.from?.y);
+    const x2 = maybeNumber(dimension?.x2 ?? dimension?.to?.x);
+    const y2 = maybeNumber(dimension?.y2 ?? dimension?.to?.y);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len <= 0) continue;
+    const offset = asFiniteNumber(dimension?.offset, 450);
+    const tick = asFiniteNumber(dimension?.tick, 120);
+    const nx = (-dy / len) * offset;
+    const ny = (dx / len) * offset;
+    const tx = (-dy / len) * tick;
+    const ty = (dx / len) * tick;
+    const ax = x1 + nx;
+    const ay = y1 + ny;
+    const bx = x2 + nx;
+    const by = y2 + ny;
+    pushLineOp(ops, 'DIM', x1, y1, ax, ay, 'dimension extension');
+    pushLineOp(ops, 'DIM', x2, y2, bx, by, 'dimension extension');
+    pushLineOp(ops, 'DIM', ax, ay, bx, by, 'dimension line');
+    pushLineOp(ops, 'DIM', ax - tx, ay - ty, ax + tx, ay + ty, 'dimension tick');
+    pushLineOp(ops, 'DIM', bx - tx, by - ty, bx + tx, by + ty, 'dimension tick');
+    pushTextOp(ops, (ax + bx) / 2, (ay + by) / 2, dimension?.text || dimension?.label || `${Math.round(len)}`, dimension?.textHeight || 180, 'DIM_TEXT', 'dimension text');
+  }
+
+  for (const label of labels.slice(0, 160)) {
+    pushTextOp(ops, label?.x, label?.y, label?.text || label?.name, label?.height || 220, safeLayer(label?.layer, 'TEXT'), 'label');
+  }
+
+  if (args.titleBlock !== false) {
+    const blockW = Math.max(1800, width * 0.28);
+    const blockH = Math.max(900, height * 0.12);
+    const x = Math.max(0, width - blockW);
+    const y = Math.max(0, height + Math.max(400, blockH * 0.2));
+    pushRectOps(ops, x, y, blockW, blockH, 'TITLE', 'title block');
+    pushTextOp(ops, x + 120, y + blockH - 220, args.title || 'Lumi CAD Draft', 220, 'TITLE_TEXT', 'title');
+    pushTextOp(ops, x + 120, y + blockH - 500, `Unit: ${args.unit || 'unit'}`, 160, 'TITLE_TEXT', 'unit');
+    pushTextOp(ops, x + 120, y + blockH - 760, args.precisionNote || args.note || 'Draft generated by Lumi. Verify site dimensions before production.', 140, 'TITLE_TEXT', 'precision note');
+  }
+
+  if (args.northArrow) {
+    const x = asFiniteNumber(args.northArrow?.x, width - 700);
+    const y = asFiniteNumber(args.northArrow?.y, 700);
+    pushLineOp(ops, 'ANNOTATION', x, y, x, y + 500, 'north arrow');
+    pushLineOp(ops, 'ANNOTATION', x, y + 500, x - 120, y + 330, 'north arrow');
+    pushLineOp(ops, 'ANNOTATION', x, y + 500, x + 120, y + 330, 'north arrow');
+    pushTextOp(ops, x + 80, y + 520, 'N', 180, 'ANNOTATION', 'north label');
+  }
+
+  return ops.slice(0, 2500);
+}
+
+function resolveAutocadScriptPaths(args: Record<string, any>, title: string): { basePath: string; lispPath: string; scriptPath: string; powershellPath: string } {
+  const outputPath = String(args.outputPath || '').trim();
+  const outputDirectory = String(args.outputDirectory || '').trim();
+  const directory = outputDirectory
+    ? path.resolve(expandHomePath(outputDirectory))
+    : getDataPath('cad');
+  const rawBase = outputPath
+    ? (path.isAbsolute(outputPath) ? expandHomePath(outputPath) : path.resolve(directory, outputPath))
+    : path.join(directory, `${title}_autocad_draw_${Date.now()}`);
+  const basePath = rawBase.replace(/\.(lsp|scr|ps1|dxf)$/i, '');
+  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`]) {
+    assertWritableCadPath(filePath);
+  }
+  fs.mkdirSync(path.dirname(basePath), { recursive: true });
+  return {
+    basePath,
+    lispPath: `${basePath}.lsp`,
+    scriptPath: `${basePath}.scr`,
+    powershellPath: `${basePath}_run_autocad.ps1`,
+  };
+}
+
+function buildAutocadLisp(args: Record<string, any>, operations: AutocadDrawOperation[], title: string, delayMs: number): string {
+  const layers = Array.from(new Set(operations.map(op => op.layer))).sort();
+  const delay = Math.max(0, Math.min(Number(delayMs) || 0, 5000));
+  const layerColor = (layer: string): number => {
+    if (/WALL|OUTLINE/i.test(layer)) return 7;
+    if (/ROOM/i.test(layer)) return 4;
+    if (/DOOR/i.test(layer)) return 3;
+    if (/WINDOW/i.test(layer)) return 5;
+    if (/DIM/i.test(layer)) return 6;
+    if (/TEXT|TITLE|ANNOTATION/i.test(layer)) return 2;
+    return 8;
+  };
+  const lines: string[] = [
+    '; Generated by Lumi. Run SCRIPT on the .scr file, or load this LISP and run LUMIDRAW.',
+    '; This is a visible drafting playback, not a production drawing certification.',
+    '(vl-load-com)',
+    '(defun lumi-layer (name color /)',
+    '  (if (not (tblsearch "LAYER" name))',
+    '    (command "_.-LAYER" "_M" name "_C" (itoa color) name "")',
+    '  )',
+    '  (setvar "CLAYER" name)',
+    ')',
+    `(defun lumi-delay () (if (> ${delay} 0) (command "_.DELAY" "${delay}")))`,
+    '(defun c:LUMIDRAW (/ oldcmd)',
+    '  (setq oldcmd (getvar "CMDECHO"))',
+    '  (setvar "CMDECHO" 1)',
+    `  (princ "\\nLumi is drawing ${lispString(title)} stroke by stroke...")`,
+    ...layers.map(layer => `  (lumi-layer "${lispString(layer)}" ${layerColor(layer)})`),
+  ];
+
+  operations.forEach((op, index) => {
+    lines.push(`  ; ${index + 1}. ${op.label ? lispString(op.label) : op.kind}`);
+    lines.push(`  (lumi-layer "${lispString(op.layer)}" ${layerColor(op.layer)})`);
+    if (op.kind === 'line') {
+      lines.push(`  (command "_.LINE" ${lispPoint(op.x1, op.y1)} ${lispPoint(op.x2, op.y2)} "")`);
+    } else if (op.kind === 'circle') {
+      lines.push(`  (command "_.CIRCLE" ${lispPoint(op.x, op.y)} "${cadNumber(op.r)}")`);
+    } else if (op.kind === 'arc') {
+      const startX = op.cx + Math.cos(op.start * Math.PI / 180) * op.r;
+      const startY = op.cy + Math.sin(op.start * Math.PI / 180) * op.r;
+      const endX = op.cx + Math.cos(op.end * Math.PI / 180) * op.r;
+      const endY = op.cy + Math.sin(op.end * Math.PI / 180) * op.r;
+      lines.push(`  (command "_.ARC" "_C" ${lispPoint(op.cx, op.cy)} ${lispPoint(startX, startY)} ${lispPoint(endX, endY)})`);
+    } else if (op.kind === 'text') {
+      lines.push(`  (command "_.TEXT" ${lispPoint(op.x, op.y)} "${cadNumber(op.height)}" "0" "${lispString(op.text)}")`);
+    }
+    lines.push('  (lumi-delay)');
+  });
+
+  lines.push(
+    '  (command "_.ZOOM" "_E")',
+    '  (setvar "CMDECHO" oldcmd)',
+    `  (princ "\\nLumi finished ${operations.length} visible CAD operation(s). Review dimensions before production use.")`,
+    '  (princ)',
+    ')',
+    '(princ "\\nType LUMIDRAW to draw the generated plan stroke by stroke.")',
+    '(princ)',
+    '',
+  );
+  return lines.join('\n');
+}
+
+function buildAutocadScript(lispPath: string): string {
+  const normalized = lispPath.replace(/\\/g, '/');
+  return [
+    `(load "${normalized}")`,
+    'LUMIDRAW',
+    '',
+  ].join('\n');
+}
+
+function buildAutocadRunPowerShell(scriptPath: string, preferredExecutable?: string): string {
+  const exe = String(preferredExecutable || 'acad.exe').trim() || 'acad.exe';
+  return [
+    '$ErrorActionPreference = "Stop"',
+    `$scriptPath = ${JSON.stringify(scriptPath)}`,
+    `$acad = ${JSON.stringify(exe)}`,
+    'Start-Process -FilePath $acad -ArgumentList @("/b", $scriptPath)',
+    '',
+  ].join('\n');
+}
+
 export function registerExternalAppTools(registry: ToolRegistry): void {
   registry.register({
     name: 'external_app_list_adapters',
@@ -861,6 +1234,134 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         openResult: opened,
         sendAllowed: !isMessagingSendConfirmationRequired(),
         note: 'The draft is ready on the clipboard. Lumi did not send the message.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'confirm',
+  });
+
+  registry.register({
+    name: 'cad_generate_autocad_draw_script',
+    description: 'Generate AutoCAD LISP and SCRIPT files that visibly draw a CAD plan stroke by stroke inside AutoCAD with configurable delay between lines/arcs/text. Use this when the user wants to see Lumi drawing in AutoCAD step by step instead of only opening a finished DXF. It creates precise CAD commands from structured walls, rooms, polylines, doors, windows, columns, furniture, dimensions, labels, title block, and north arrow data. The script is a drafting playback and still requires review before production drawings.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Drawing title / output filename.' },
+        width: { type: 'number', description: 'Outer width in chosen units.' },
+        height: { type: 'number', description: 'Outer height in chosen units.' },
+        unit: { type: 'string', description: 'Unit label, e.g. mm, cm, inch.' },
+        cornerRadius: { type: 'number', description: 'Reserved for compatibility with cad_generate_dxf; visible script draws rectangular outlines.' },
+        wallThickness: { type: 'number', description: 'Default wall thickness for wall segments when individual wall.thickness is omitted.' },
+        precisionNote: { type: 'string', description: 'Short note about source accuracy, scale assumptions, or missing dimensions.' },
+        northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
+        titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
+        outputDirectory: { type: 'string', description: 'Optional directory to save the .lsp, .scr, and runner .ps1 files.' },
+        outputPath: { type: 'string', description: 'Optional exact output base path. Extensions .lsp/.scr/.ps1 are generated from it.' },
+        strokeDelayMs: { type: 'number', description: 'Delay in milliseconds after each visible operation. Defaults to 250, max 5000.' },
+        autocadExecutable: { type: 'string', description: 'Optional AutoCAD executable path/name for the generated PowerShell runner. Defaults to acad.exe.' },
+        launchAutoCAD: { type: 'boolean', description: 'Optionally launch AutoCAD with the generated .scr via desktop_run_command. Requires desktop relay and external app automation.' },
+        walls: {
+          type: 'array',
+          description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
+          items: { type: 'object' },
+        },
+        polylines: {
+          type: 'array',
+          description: 'Optional open/closed polylines: {points:[{x,y}],closed,layer}. Script draws each segment one by one.',
+          items: { type: 'object' },
+        },
+        rooms: {
+          type: 'array',
+          description: 'Optional rooms: rectangles {name,x,y,width,height} or polygons {name,points:[{x,y}],labelX,labelY}.',
+          items: { type: 'object' },
+        },
+        doors: {
+          type: 'array',
+          description: 'Optional doors: {x,y,width,angle,swing,label} or {hingeX,hingeY,width,angle,openAngle}. Draws leaf and swing arc.',
+          items: { type: 'object' },
+        },
+        windows: {
+          type: 'array',
+          description: 'Optional windows: {x1,y1,x2,y2,width,label} or {x,y,length,angle,width}.',
+          items: { type: 'object' },
+        },
+        dimensions: {
+          type: 'array',
+          description: 'Optional dimension lines: {x1,y1,x2,y2,text,offset}.',
+          items: { type: 'object' },
+        },
+        furniture: {
+          type: 'array',
+          description: 'Optional furniture symbols: {type,label,x,y,width,height} or circular {x,y,r,label}.',
+          items: { type: 'object' },
+        },
+        columns: {
+          type: 'array',
+          description: 'Optional structural columns: {x,y,width,height} or {x,y,r}.',
+          items: { type: 'object' },
+        },
+        labels: {
+          type: 'array',
+          description: 'Optional text labels: {text,x,y,height,layer}.',
+          items: { type: 'object' },
+        },
+        holes: {
+          type: 'array',
+          description: 'Optional holes as objects with x, y, and r/radius.',
+          items: { type: 'object' },
+        },
+      },
+      required: ['width', 'height'],
+    },
+    handler: async (args, context) => {
+      const title = safeFileName(String(args.title || 'lumi_autocad_draw'));
+      const delay = Math.max(0, Math.min(Number(args.strokeDelayMs) || 250, 5000));
+      const paths = resolveAutocadScriptPaths(args, title);
+      const operations = collectAutocadDrawOperations(args);
+      if (!operations.length) throw new Error('No drawable AutoCAD operations were generated. Provide width/height plus walls, rooms, doors, windows, or labels.');
+
+      const lisp = buildAutocadLisp(args, operations, title, delay);
+      const script = buildAutocadScript(paths.lispPath);
+      const runner = buildAutocadRunPowerShell(paths.scriptPath, args.autocadExecutable ? String(args.autocadExecutable) : undefined);
+      fs.writeFileSync(paths.lispPath, lisp, 'utf-8');
+      fs.writeFileSync(paths.scriptPath, script, 'utf-8');
+      fs.writeFileSync(paths.powershellPath, runner, 'utf-8');
+
+      let launchResult: string | undefined;
+      if (args.launchAutoCAD) {
+        requireExternalAutomation();
+        const desktopRelay = requireDesktopRelay(context);
+        launchResult = await desktopRelay('desktop_run_command', {
+          command: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
+        });
+      }
+
+      const layerCounts = operations.reduce((acc: Record<string, number>, op) => {
+        acc[op.layer] = (acc[op.layer] || 0) + 1;
+        return acc;
+      }, {});
+      const typeCounts = operations.reduce((acc: Record<string, number>, op) => {
+        acc[op.kind] = (acc[op.kind] || 0) + 1;
+        return acc;
+      }, {});
+
+      return JSON.stringify({
+        title,
+        unit: args.unit || 'unit',
+        width: Number(args.width) || 100,
+        height: Number(args.height) || 60,
+        strokeDelayMs: delay,
+        operationCount: operations.length,
+        typeCounts,
+        layerCounts,
+        lispPath: paths.lispPath,
+        scriptPath: paths.scriptPath,
+        powershellRunnerPath: paths.powershellPath,
+        launchCommand: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
+        launchAutoCAD: Boolean(args.launchAutoCAD),
+        launchResult,
+        preview: operations.slice(0, 20).map((op, index) => ({ index: index + 1, ...op })),
+        note: 'Generated AutoCAD visible drawing playback. In AutoCAD, run SCRIPT and choose the .scr file, or run the PowerShell runner if acad.exe is available. Lumi still needs confirmed dimensions and professional review before production drawings.',
       }, null, 2);
     },
     permission: 'user',
