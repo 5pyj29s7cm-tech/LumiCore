@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execSync } from 'child_process';
 import { ToolRegistry } from '../registry';
 import { parseDocument, extractLegalMetadata } from '../../legal/parser';
 import {
@@ -10,7 +11,8 @@ import {
 } from '../../legal/kb';
 import {
   searchWenshu, searchFLK, searchMOHURDTemplates,
-  searchCompany, searchEnforcementRecords, listLegalSourceCapabilities,
+  searchCompany, searchCompanySources, searchEnforcementRecords, listLegalSourceCapabilities,
+  searchLegalAuthorityDatabase, type ExternalLegalSearchKind,
 } from '../../legal/sources';
 import { generateEmbedding } from '../../memory/store';
 import { makeLLMCall, type NormalizedMessage } from '../../llm/providers';
@@ -225,6 +227,283 @@ function ensureLegalIntakeDir(orgId: string): string {
   const dir = path.join(process.cwd(), 'data', 'legal_intake', safeFileSegment(orgId || 'default', 'default'));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function ensureLegalDeliveryRoot(orgId: string): string {
+  const dir = path.join(process.cwd(), 'data', 'legal_delivery', safeFileSegment(orgId || 'default', 'default'));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function ensureLegalExternalWorkspaceRoot(orgId: string): string {
+  const dir = path.join(process.cwd(), 'data', 'legal_external_workspaces', safeFileSegment(orgId || 'default', 'default'));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function uniqueLegalFolder(baseDir: string, caseName: string, suffix: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const base = safeFileSegment(`${stamp}_${caseName || 'legal'}_${suffix}`, `${stamp}_legal_${suffix}`);
+  let candidate = path.join(baseDir, base);
+  let counter = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(baseDir, `${base}_${counter}`);
+    counter += 1;
+  }
+  fs.mkdirSync(candidate, { recursive: true });
+  return candidate;
+}
+
+function resolveWritableOutputDir(input: string, fallbackRoot: string, caseName: string, suffix: string): string {
+  if (input) {
+    const resolved = path.resolve(expandLocalPath(input));
+    fs.mkdirSync(resolved, { recursive: true });
+    return resolved;
+  }
+  return uniqueLegalFolder(fallbackRoot, caseName, suffix);
+}
+
+function psEscape(value: string): string {
+  return String(value).replace(/'/g, "''");
+}
+
+function markdownTitle(markdown: string, fallback: string): string {
+  const line = markdown.split(/\r?\n/).find(item => /^#\s+/.test(item));
+  return line ? line.replace(/^#\s+/, '').trim() : fallback;
+}
+
+function stripMarkdownTableDivider(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function normalizeFormalDocumentType(input: string): string {
+  const raw = String(input || '').trim();
+  if (/起诉|complaint/i.test(raw)) return '起诉状';
+  if (/要素式/i.test(raw)) return '要素式诉状';
+  if (/答辩|defense|answer/i.test(raw)) return '答辩状';
+  if (/质证/i.test(raw)) return '质证意见';
+  if (/证据目录/i.test(raw)) return '证据目录';
+  if (/代理词|argument/i.test(raw)) return '代理词';
+  if (/法律意见|opinion/i.test(raw)) return '法律意见书';
+  if (/合同/i.test(raw)) return '合同文本';
+  if (/标书|投标/i.test(raw)) return '投标书';
+  return raw || '法律文书';
+}
+
+function normalizeMarkdownBody(content: string, title: string): string {
+  const lines = String(content || '').replace(/\r/g, '').split('\n');
+  if (lines[0]?.trim() === `# ${title}`) return lines.slice(1).join('\n').trim();
+  return lines.join('\n').trim();
+}
+
+function buildFormalLegalMarkdown(args: Record<string, any>, content: string): string {
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const documentType = normalizeFormalDocumentType(textArg(args, 'documentType') || textArg(args, 'type'));
+  const lawFirmName = textArg(args, 'lawFirmName') || '［律所名称］';
+  const lawyerName = textArg(args, 'lawyerName') || '［承办律师］';
+  const title = textArg(args, 'title') || `${caseName}${documentType}`;
+  const body = normalizeMarkdownBody(sanitizeLegalWorkProductOutput(content), title);
+  const reviewStatus = args.markDraft === false ? '律师确认稿' : '律师复核稿';
+
+  return [
+    `# ${title}`,
+    '',
+    `- 文书类型：${documentType}`,
+    `- 案件名称：${caseName}`,
+    `- 案由/类型：${textArg(args, 'caseType') || '待确认'}`,
+    `- 我方身份：${textArg(args, 'role') || '待确认'}`,
+    `- 拟提交/使用法院：${textArg(args, 'court') || '待确认'}`,
+    `- 律所：${lawFirmName}`,
+    `- 承办律师：${lawyerName}`,
+    `- 生成时间：${new Date().toISOString()}`,
+    `- 状态：${reviewStatus}，不得未经律师确认直接提交、签发或发送。`,
+    '',
+    '## 正文',
+    '',
+    body || '［正文待补充］',
+    '',
+    '## 律师复核清单',
+    '',
+    '- 核对当事人身份信息、送达地址、统一社会信用代码、联系方式。',
+    '- 核对诉讼请求、抗辩目标、金额、利息、违约金、保全和管辖。',
+    '- 核对所有事实是否有证据对应；不能对应的事实标注“待补证”。',
+    '- 核对所有法条、司法解释和案例引用是否真实、现行有效、可用于本案。',
+    '- 核对附件、页码、份数、签字盖章、授权范围、法院平台填写项。',
+    '',
+    '## 使用边界',
+    '',
+    '本文件由 Lumi 生成，仅作为律师工作底稿或复核稿。正式对外提交、签署、盖章、缴费、确认送达、撤回或承诺性操作，必须由律师或当事人亲自确认。',
+    '',
+  ].join('\n');
+}
+
+function formatCitationReportMarkdown(args: Record<string, any>, text: string, sourceLabel: string): string {
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const orgId = textArg(args, 'orgId') || undefined;
+  const checks = verifyMultipleCitations(text, orgId);
+  const statuteChecks = checks.filter(item => item.type === 'statute');
+  const caseChecks = checks.filter(item => item.type === 'case');
+  const missing = checks.filter(item => !item.exists);
+  const repealed = checks.filter(item => item.isEffective === false);
+  const valid = checks.filter(item => item.exists && item.isEffective !== false);
+
+  const rows = checks.length
+    ? checks.map((item, index) =>
+      `| ${index + 1} | ${item.type === 'statute' ? '法条' : '案例'} | ${item.citation.replace(/\|/g, ' ')} | ${item.exists ? '存在' : '未确认'} | ${item.isEffective === null ? '不适用/待人工核验' : item.isEffective ? '现行有效' : '已废止'} | ${(item.source || 'N/A').replace(/\|/g, ' ')} | ${item.detail.replace(/\|/g, ' ')} |`,
+    ).join('\n')
+    : '| 1 | 无 | 未检测到《XX法》或案号格式引用 | 待补充 | 待核验 | N/A | 建议在正式文书中补充引用来源 |';
+
+  return [
+    `# ${caseName} 引用核验报告`,
+    '',
+    `- 来源材料：${sourceLabel}`,
+    `- 生成时间：${new Date().toISOString()}`,
+    `- 核验范围：法条引用、案号引用、是否存在、是否已废止、本地知识库是否收录。`,
+    `- 核验边界：本报告不能替代律师最终检索；未在本地库命中的案例需到人民法院案例库/裁判文书网/法蝉/Alpha 等授权来源人工复核。`,
+    '',
+    '## 统计',
+    '',
+    `- 引用总数：${checks.length}`,
+    `- 法条引用：${statuteChecks.length}`,
+    `- 案例引用：${caseChecks.length}`,
+    `- 已确认或可继续使用：${valid.length}`,
+    `- 未确认存在：${missing.length}`,
+    `- 已废止/失效风险：${repealed.length}`,
+    '',
+    '## 明细',
+    '',
+    '| 序号 | 类型 | 引用 | 存在性 | 有效性 | 来源 | 说明 |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    rows,
+    '',
+    '## 处理建议',
+    '',
+    '- 已废止法条不得直接作为现行法律依据，应替换为现行有效法律或司法解释。',
+    '- 未确认案例不得写成“已有裁判支持”，应先完成来源登记和律师复核。',
+    '- 最终文书应保留来源名称、发布日期/裁判日期、案号、法院层级、链接或下载文件路径。',
+    '',
+  ].join('\n');
+}
+
+async function writeDocxFromMarkdown(markdown: string, filePath: string): Promise<void> {
+  const {
+    Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
+    Table, TableRow, TableCell, WidthType,
+  } = await import('docx');
+
+  const children: any[] = [];
+  const lines = markdown.replace(/\r/g, '').split('\n');
+  const tableBuffer: string[][] = [];
+
+  const flushTable = () => {
+    if (tableBuffer.length < 2) {
+      tableBuffer.length = 0;
+      return;
+    }
+    const header = tableBuffer[0];
+    const rows = tableBuffer.slice(1).filter(row => row.some(cell => cell.trim()));
+    if (rows.length === 0) {
+      tableBuffer.length = 0;
+      return;
+    }
+    const colCount = Math.max(1, header.length);
+    const cellWidth = Math.floor(9000 / colCount);
+    children.push(new Table({
+      width: { size: 9000, type: WidthType.DXA },
+      rows: [
+        new TableRow({
+          children: header.map(cell => new TableCell({
+            width: { size: cellWidth, type: WidthType.DXA },
+            children: [new Paragraph({ children: [new TextRun({ text: cell.trim(), bold: true })] })],
+          })),
+        }),
+        ...rows.map(row => new TableRow({
+          children: header.map((_, index) => new TableCell({
+            width: { size: cellWidth, type: WidthType.DXA },
+            children: [new Paragraph({ children: [new TextRun(row[index]?.trim() || '')] })],
+          })),
+        })),
+      ],
+    }));
+    children.push(new Paragraph({ text: '' }));
+    tableBuffer.length = 0;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\|.*\|$/.test(trimmed) && !stripMarkdownTableDivider(trimmed)) {
+      tableBuffer.push(trimmed.slice(1, -1).split('|').map(cell => cell.trim()));
+      continue;
+    }
+    if (stripMarkdownTableDivider(trimmed)) continue;
+    flushTable();
+
+    if (/^#\s+/.test(trimmed)) {
+      children.push(new Paragraph({
+        text: trimmed.replace(/^#\s+/, ''),
+        heading: HeadingLevel.TITLE,
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 300 },
+      }));
+    } else if (/^##\s+/.test(trimmed)) {
+      children.push(new Paragraph({
+        text: trimmed.replace(/^##\s+/, ''),
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 240, after: 120 },
+      }));
+    } else if (/^###\s+/.test(trimmed)) {
+      children.push(new Paragraph({
+        text: trimmed.replace(/^###\s+/, ''),
+        heading: HeadingLevel.HEADING_2,
+        spacing: { before: 200, after: 100 },
+      }));
+    } else if (/^[-*]\s+/.test(trimmed)) {
+      children.push(new Paragraph({
+        children: [new TextRun(trimmed.replace(/^[-*]\s+/, ''))],
+        bullet: { level: 0 },
+        spacing: { after: 80 },
+      }));
+    } else {
+      children.push(new Paragraph({
+        children: [new TextRun(trimmed || ' ')],
+        spacing: { after: trimmed ? 100 : 40 },
+      }));
+    }
+  }
+  flushTable();
+
+  const doc = new Document({ sections: [{ properties: {}, children }] });
+  const buffer = await Packer.toBuffer(doc);
+  fs.writeFileSync(filePath, buffer);
+}
+
+function tryConvertDocxToPdf(docxPath: string): { ok: boolean; pdfPath?: string; error?: string } {
+  const pdfPath = docxPath.replace(/\.docx$/i, '.pdf');
+  const script = `
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$doc = $word.Documents.Open('${psEscape(docxPath)}')
+$doc.SaveAs([ref]'${psEscape(pdfPath)}', [ref]17)
+$doc.Close()
+$word.Quit()
+Write-Output '${psEscape(pdfPath)}'
+`;
+  const tmpFile = path.join(os.tmpdir(), `lumi_legal_docx2pdf_${Date.now()}.ps1`);
+  fs.writeFileSync(tmpFile, `\uFEFF${script}`, 'utf-8');
+  try {
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`, {
+      timeout: 45000,
+      encoding: 'utf-8',
+      windowsHide: true,
+    });
+    return fs.existsSync(pdfPath)
+      ? { ok: true, pdfPath }
+      : { ok: false, error: 'Microsoft Word conversion finished but PDF was not created.' };
+  } catch (err: any) {
+    return { ok: false, error: err?.stderr || err?.message || String(err) };
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
 }
 
 function isPrivateOrLocalHost(hostname: string): boolean {
@@ -561,15 +840,30 @@ async function searchStatuteHandler(args: Record<string, any>): Promise<string> 
 
   const orgId = args.orgId || 'default';
   const results = await searchStatutes(orgId, query);
+  const externalResults = await searchLegalAuthorityDatabase({
+    query,
+    type: 'law',
+    sourceIds: [
+      ...listArg(args, 'sourceIds'),
+      ...listArg(args, 'sources'),
+      ...listArg(args, 'platforms'),
+    ],
+    includeOfficialWeb: args.includeOfficialWeb === true,
+    limit: Number(args.limit) || 5,
+  });
 
-  if (results.length === 0) {
+  if (results.length === 0 && externalResults.length === 0) {
     return `未找到与"${query}"相关的法条。建议通过国家法律法规数据库 (flk.npc.gov.cn) 核实。`;
   }
 
   const lines = results.map((r, i) =>
     `${i + 1}. **${r.title}** ${r.isEffective ? '✓ 现行有效' : '✗ 已废止'}\n   ${r.chunk.slice(0, 200)}`,
   );
-  return lines.join('\n\n') + '\n\n*来源: 国家法律法规数据库 (flk.npc.gov.cn) 及本地法条库*';
+  const externalLines = externalResults.map((r, i) =>
+    `${results.length + i + 1}. **${r.title}** ${r.effectiveStatus || '待律师复核'}\n   来源: ${r.sourceName}${r.url ? ` | ${r.url}` : ''}\n   ${r.summary.slice(0, 200)}`,
+  );
+  return [...lines, ...externalLines].join('\n\n')
+    + '\n\n*来源: 本地法条库、已配置授权法律数据库；未配置 API 的平台需通过网页登录协作核验。*';
 }
 
 // ── legal_generate_bid ──────────────────────────────────────────────────
@@ -1959,6 +2253,169 @@ ${kbLine}
 
 // ── legal_external_source_status ────────────────────────────────────────
 
+function mdCell(value: unknown): string {
+  return String(value ?? '').replace(/\|/g, ' ').replace(/\n+/g, ' ').trim() || '待登记';
+}
+
+function normalizeExternalLegalKind(value: string): ExternalLegalSearchKind {
+  if (/案例|判例|裁判|case|judgment/i.test(value)) return 'case';
+  if (/法条|法规|法律|statute|law/i.test(value)) return 'law';
+  return 'mixed';
+}
+
+async function searchExternalAuthoritiesHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const query = textArg(args, 'query') || textArg(args, 'facts') || textArg(args, 'issue') || textArg(args, 'caseType');
+  if (!query) return '请提供 query（检索词、争议焦点、案由或案件事实）。';
+
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || '外部法律数据库检索';
+  const sourceIds = [
+    ...listArg(args, 'sourceIds'),
+    ...listArg(args, 'sources'),
+    ...listArg(args, 'platforms'),
+  ];
+  const type = normalizeExternalLegalKind(textArg(args, 'type') || textArg(args, 'kind'));
+  const limit = Math.max(1, Math.min(Number(args.limit) || 5, 20));
+  const includeOfficialWeb = args.includeOfficialWeb === true;
+
+  const results = await searchLegalAuthorityDatabase({
+    query,
+    type,
+    sourceIds,
+    limit,
+    includeOfficialWeb,
+  });
+  const capabilities = listLegalSourceCapabilities()
+    .filter(source => ['pkulaw', 'farui', 'people-court-case-library', 'china-judgments-online'].includes(source.id));
+
+  const resultRows = results.length
+    ? results.map((item, index) =>
+      `| ${index + 1} | ${mdCell(item.sourceName)} | ${mdCell(item.title)} | ${mdCell(item.caseNumber || item.effectiveStatus)} | ${mdCell(item.publishDate || item.court)} | ${mdCell(item.url || item.summary)} | 律师复核 |`,
+    ).join('\n')
+    : '| 1 | 未命中 | 未通过已配置 API 返回结果 | 待补充 | 待补充 | 请配置授权 API 或使用网页登录协作 | 律师复核 |';
+
+  const statusRows = capabilities.map(source =>
+    `| ${mdCell(source.label)} | ${source.accessMode} | ${source.configured ? '已配置/可用' : '未配置或网页登录'} | ${source.canAutoQuery ? '可以' : '不承诺'} | ${mdCell(source.nextAction)} |`,
+  ).join('\n');
+
+  const report = `# ${caseName} 外部法律数据库检索
+
+## 一、检索条件
+- 检索词：${query}
+- 检索类型：${type}
+- 指定数据源：${sourceIds.join('；') || '自动选择已配置 API'}
+- 官方网页兜底：${includeOfficialWeb ? '启用' : '未启用'}
+
+## 二、API 查询结果
+| 序号 | 数据源 | 标题 | 案号/效力 | 日期/法院 | 链接或摘要 | 复核状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+${resultRows}
+
+## 三、接入状态
+| 数据源 | 模式 | 状态 | 自动查询 | 下一步 |
+| --- | --- | --- | --- | --- |
+${statusRows}
+
+## 四、边界
+- 仅调用已配置且授权的 API/网关；未配置的数据源不承诺自动查询。
+- 人民法院案例库、裁判文书网、法蝉、Alpha 默认仍按授权网页登录协作和材料导入处理。
+- 所有法条效力、案例适用性和引用表述必须由律师最终复核。`;
+
+  let kbLine = '- 知识库：未导入。律师确认来源和授权范围后，可设置 confirmedForKb=true 入库。';
+  if (args.confirmedForKb === true && results.length > 0) {
+    const article = createLegalArticle(orgId, userId, {
+      title: `${caseName} 外部法律数据库检索`,
+      content: report,
+      articleType: 'research_note',
+      category: 'legal_research',
+      tags: [
+        'legal:external-api',
+        `query:${query.slice(0, 40)}`,
+        ...Array.from(new Set(results.map(item => `source:${item.sourceId}`))),
+      ],
+      metadata: {
+        articleType: 'research_note',
+      },
+    });
+    const chunks = await indexLegalArticle(orgId, article.id);
+    kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
+  }
+
+  return `${report}\n\n## 五、入库状态\n${kbLine}`;
+}
+
+async function companyDatabaseLookupHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const name = textArg(args, 'name') || textArg(args, 'companyName') || textArg(args, 'subjectName');
+  if (!name) return '请提供 name 或 companyName（公司/被执行主体名称）。';
+
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || `${name} 主体信息查询`;
+  const sourceIds = [
+    ...listArg(args, 'sourceIds'),
+    ...listArg(args, 'sources'),
+    ...listArg(args, 'platforms'),
+  ];
+
+  const companies = await searchCompanySources(name, sourceIds);
+  const capabilities = listLegalSourceCapabilities()
+    .filter(source => ['qichacha', 'tianyancha', 'national-enterprise-credit'].includes(source.id));
+
+  const companyRows = companies.length
+    ? companies.map((company, index) =>
+      `| ${index + 1} | ${mdCell(company.sourceName)} | ${mdCell(company.name)} | ${mdCell(company.legalPerson)} | ${mdCell(company.registeredCapital)} | ${mdCell(company.status)} | ${mdCell(company.unifiedCode)} | ${mdCell(company.url)} |`,
+    ).join('\n')
+    : '| 1 | 未命中 | 未通过已配置 API 查询到主体信息 | 待补充 | 待补充 | 待补充 | 待补充 | 使用授权网页登录协作 |';
+
+  const statusRows = capabilities.map(source =>
+    `| ${mdCell(source.label)} | ${source.accessMode} | ${source.configured ? '已配置/可用' : '未配置或网页登录'} | ${source.canAutoQuery ? '可以' : '不承诺'} | ${mdCell(source.nextAction)} |`,
+  ).join('\n');
+
+  const report = `# ${caseName} 企业/被执行主体数据库查询
+
+## 一、查询对象
+- 主体名称：${name}
+- 指定数据源：${sourceIds.join('；') || '企查查、天眼查优先，官方网页兜底'}
+
+## 二、API 查询结果
+| 序号 | 数据源 | 主体名称 | 法定代表人 | 注册资本 | 状态 | 统一社会信用代码 | 来源链接 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+${companyRows}
+
+## 三、接入状态
+| 数据源 | 模式 | 状态 | 自动查询 | 下一步 |
+| --- | --- | --- | --- | --- |
+${statusRows}
+
+## 四、下一步
+- 若 API 未命中或未配置，请使用 web_login_profile_save_from_preset {"presetId":"qichacha"} 或 {"presetId":"national-enterprise-credit"} 打开授权网页核验。
+- 律师确认股东、涉诉、被执行、失信和限制高消费信息后，再用 legal_import_materials_to_kb 导入组织知识库。
+- Lumi 不绕过验证码、付费墙、账号权限、平台频控或下载限制。`;
+
+  let kbLine = '- 知识库：未导入。律师确认来源和使用权限后，可设置 confirmedForKb=true 入库。';
+  if (args.confirmedForKb === true && companies.length > 0) {
+    const article = createLegalArticle(orgId, userId, {
+      title: `${caseName} 企业主体信息`,
+      content: report,
+      articleType: 'company_report',
+      category: 'legal_company_report',
+      tags: [
+        'legal:company-api',
+        `company:${name}`,
+        ...Array.from(new Set(companies.map(company => `source:${company.sourceName || 'company-api'}`))),
+      ],
+      metadata: {
+        articleType: 'company_report',
+      },
+    });
+    const chunks = await indexLegalArticle(orgId, article.id);
+    kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
+  }
+
+  return `${report}\n\n## 五、入库状态\n${kbLine}`;
+}
+
 async function externalSourceStatusHandler(): Promise<string> {
   const rows = listLegalSourceCapabilities().map(source =>
     `| ${source.label} | ${source.accessMode} | ${source.configured ? '已配置/可用' : '未配置或网页登录'} | ${source.canAutoQuery ? '可以' : '不承诺'} | ${source.boundary} | ${source.nextAction} |`,
@@ -2036,6 +2493,310 @@ ${queries.map((q, index) => `${index + 1}. ${q}`).join('\n')}
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 |
 `;
+}
+
+// ── legal_generate_citation_verification_report ─────────────────────────
+
+async function readLegalTextForReport(args: Record<string, any>): Promise<{ text: string; title: string; source: string }> {
+  const content = textArg(args, 'text') || textArg(args, 'content');
+  if (content) {
+    return {
+      text: content,
+      title: textArg(args, 'title') || textArg(args, 'caseName') || '粘贴文本',
+      source: 'pasted_text',
+    };
+  }
+
+  const filePath = textArg(args, 'filePath');
+  if (filePath) {
+    const resolved = path.resolve(expandLocalPath(filePath));
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error(`待核验文件不存在：${resolved}`);
+    }
+    const parsed = await parseDocument(resolved);
+    if (!parsed?.text?.trim()) throw new Error(`无法从文件中提取文本：${resolved}`);
+    return {
+      text: parsed.text,
+      title: textArg(args, 'title') || path.basename(resolved),
+      source: resolved,
+    };
+  }
+
+  throw new Error('请提供 text/content 或 filePath，用于生成引用核验报告。');
+}
+
+async function generateCitationVerificationReportHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const input = await readLegalTextForReport({ ...args, orgId });
+  const caseName = textArg(args, 'caseName') || input.title || '未命名案件';
+  const outputDir = resolveWritableOutputDir(
+    textArg(args, 'outputDir'),
+    ensureLegalDeliveryRoot(orgId),
+    caseName,
+    'citation_report',
+  );
+  const report = formatCitationReportMarkdown({ ...args, caseName, orgId }, input.text, input.source);
+  const reportPath = path.join(outputDir, 'citation-verification-report.md');
+  fs.writeFileSync(reportPath, report, 'utf-8');
+
+  let kbLine = '- 知识库：未导入。';
+  if (args.importToKb === true || args.confirmedForKb === true) {
+    const article = createLegalArticle(orgId, userId, {
+      title: `${caseName} 引用核验报告`,
+      content: report,
+      articleType: 'research_note',
+      category: 'legal_research_note',
+      tags: ['legal:citation-verification', `caseName:${caseName}`],
+    });
+    const indexed = await indexLegalArticle(orgId, article.id);
+    kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
+  }
+
+  const checks = verifyMultipleCitations(input.text, orgId);
+  const repealed = checks.filter(item => item.isEffective === false).length;
+  const missing = checks.filter(item => !item.exists).length;
+
+  return [
+    '# 引用核验报告已生成',
+    '',
+    `- 案件：${caseName}`,
+    `- 来源：${input.source}`,
+    `- 报告文件：${reportPath}`,
+    `- 引用总数：${checks.length}`,
+    `- 已废止/失效风险：${repealed}`,
+    `- 未确认存在：${missing}`,
+    kbLine,
+    '',
+    '## 下一步',
+    '- 已废止法条请替换为现行有效法律或司法解释。',
+    '- 未在本地库命中的案号，请到人民法院案例库、裁判文书网或授权商业库人工复核。',
+  ].join('\n');
+}
+
+// ── legal_finalize_delivery_package ─────────────────────────────────────
+
+async function finalizeDeliveryPackageHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const content = textArg(args, 'content') || textArg(args, 'packetText') || textArg(args, 'documentText');
+  if (!content) return '请提供 content / packetText / documentText，用于生成正式交付包。';
+
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const caseName = textArg(args, 'caseName') || markdownTitle(content, '未命名案件');
+  const documentType = normalizeFormalDocumentType(textArg(args, 'documentType') || textArg(args, 'type'));
+  const outputDir = resolveWritableOutputDir(
+    textArg(args, 'outputDir'),
+    ensureLegalDeliveryRoot(orgId),
+    caseName,
+    'delivery_package',
+  );
+
+  const formalMarkdown = buildFormalLegalMarkdown({ ...args, caseName, documentType }, content);
+  const citationReport = formatCitationReportMarkdown({ ...args, caseName, orgId }, formalMarkdown, 'formal_delivery_document');
+  const sourceRegister = [
+    `# ${caseName} 来源登记表`,
+    '',
+    '| 来源类型 | 来源名称/平台 | 标题/案号 | 链接/文件路径 | 取得时间 | 用途 | 复核状态 |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    '| 法律法规 | 国家法律法规数据库/本地法条库 | 待登记 | 待登记 | 待登记 | 核验现行有效法律 | 律师复核 |',
+    '| 类案案例 | 人民法院案例库/裁判文书网/法蝉/Alpha | 待登记 | 待登记 | 待登记 | 类案补强 | 律师复核 |',
+    '| 证据材料 | 本地案件材料/当事人提供 | 待登记 | 待登记 | 待登记 | 证明待证事实 | 原件核对 |',
+    '| 外部主体信息 | 企查查/国家企业信用/执行信息公开网 | 待登记 | 待登记 | 待登记 | 主体与财产线索核验 | 律师复核 |',
+    '',
+    '边界：未登记来源的法条、案例、网页摘录和主体信息，不应作为最终对外文书中的确定性依据。',
+    '',
+  ].join('\n');
+  const manifest = [
+    `# ${caseName} 正式交付包`,
+    '',
+    `- 文书类型：${documentType}`,
+    `- 生成时间：${new Date().toISOString()}`,
+    `- 输出目录：${outputDir}`,
+    `- 状态：律师复核稿`,
+    '',
+    '## 文件清单',
+    '- 01_formal-document.md：正式文书复核稿',
+    '- 02_citation-verification-report.md：法条/案例引用核验报告',
+    '- 03_source-register.md：来源登记表',
+    '- 04_filing-and-signature-checklist.md：提交、签署、盖章、送达确认清单',
+    '',
+    '## 边界',
+    '- Lumi 只生成本地文件和复核清单，不自动提交、签名、盖章、缴费、发送或确认送达。',
+    '- 若需 PDF，请在安装 Microsoft Word 的 Windows 环境中设置 includePdf=true 生成，或由律师确认后另行导出。',
+    '',
+  ].join('\n');
+  const filingChecklist = [
+    `# ${caseName} 提交与签署确认清单`,
+    '',
+    '- 当事人身份、主体资格、授权委托手续是否齐全。',
+    '- 诉讼请求/抗辩目标、金额、利息、违约金、保全、诉讼费是否复核。',
+    '- 管辖法院、案由、法院平台字段是否与材料一致。',
+    '- 证据目录、证明目的、页码、份数、原件核对状态是否一致。',
+    '- 律师签字、律所盖章、当事人签章、特别授权范围是否确认。',
+    '- 网上立案、缴费、送达确认、撤回、和解等动作必须人工完成。',
+    '',
+  ].join('\n');
+
+  const formalPath = path.join(outputDir, '01_formal-document.md');
+  const reportPath = path.join(outputDir, '02_citation-verification-report.md');
+  const sourcePath = path.join(outputDir, '03_source-register.md');
+  const checklistPath = path.join(outputDir, '04_filing-and-signature-checklist.md');
+  const manifestPath = path.join(outputDir, '00_manifest.md');
+  fs.writeFileSync(manifestPath, manifest, 'utf-8');
+  fs.writeFileSync(formalPath, formalMarkdown, 'utf-8');
+  fs.writeFileSync(reportPath, citationReport, 'utf-8');
+  fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
+  fs.writeFileSync(checklistPath, filingChecklist, 'utf-8');
+
+  const docxLines: string[] = [];
+  if (args.includeDocx !== false) {
+    const docxPath = path.join(outputDir, `${safeFileSegment(`${caseName}_${documentType}`, 'formal-document')}.docx`);
+    await writeDocxFromMarkdown(formalMarkdown, docxPath);
+    docxLines.push(`- DOCX：${docxPath}`);
+    if (args.includePdf === true) {
+      const pdf = tryConvertDocxToPdf(docxPath);
+      docxLines.push(pdf.ok ? `- PDF：${pdf.pdfPath}` : `- PDF：未生成（${String(pdf.error || '').slice(0, 300)}）`);
+    }
+  }
+
+  const checks = verifyMultipleCitations(formalMarkdown, orgId);
+  const riskCount = checks.filter(item => !item.exists || item.isEffective === false).length;
+
+  return [
+    '# 正式交付包已生成',
+    '',
+    `- 案件：${caseName}`,
+    `- 文书类型：${documentType}`,
+    `- 输出目录：${outputDir}`,
+    `- 交付清单：${manifestPath}`,
+    `- 正式文书复核稿：${formalPath}`,
+    `- 引用核验报告：${reportPath}`,
+    `- 来源登记表：${sourcePath}`,
+    `- 提交确认清单：${checklistPath}`,
+    ...docxLines,
+    `- 引用风险项：${riskCount}`,
+    '',
+    '## 人工边界',
+    'Lumi 已生成本地交付文件，但没有自动提交、签发、盖章、缴费、发送或确认送达。正式使用前必须由律师复核。',
+  ].join('\n');
+}
+
+// ── legal_prepare_external_browser_workspace ────────────────────────────
+
+function pickExternalLegalSources(args: Record<string, any>): typeof EXTERNAL_LEGAL_SOURCES {
+  const rawSources = [
+    ...listArg(args, 'sourceIds'),
+    ...listArg(args, 'sources'),
+    ...listArg(args, 'platforms'),
+  ].map(item => item.toLowerCase());
+  const action = `${textArg(args, 'action')} ${textArg(args, 'purpose')} ${textArg(args, 'caseType')}`;
+  let selected = EXTERNAL_LEGAL_SOURCES.filter(source => {
+    const haystack = `${source.label} ${source.presetId} ${source.url}`.toLowerCase();
+    return rawSources.length > 0 && rawSources.some(item => haystack.includes(item));
+  });
+
+  if (selected.length === 0) {
+    selected = EXTERNAL_LEGAL_SOURCES.filter(source =>
+      ['people-court-case-library', 'china-judgments-online', 'fachan', 'alpha-lawyer'].includes(source.presetId),
+    );
+  }
+  if (/公司|企业|被执行|股权|工商|企查查|信用/i.test(action) || listArg(args, 'companyNames').length > 0) {
+    for (const source of EXTERNAL_LEGAL_SOURCES.filter(item => ['qichacha', 'national-enterprise-credit'].includes(item.presetId))) {
+      if (!selected.includes(source)) selected.push(source);
+    }
+  }
+  if (/立案|法院在线|提交|filing/i.test(action)) {
+    const filing = EXTERNAL_LEGAL_SOURCES.find(item => item.presetId === 'court-online-service');
+    if (filing && !selected.includes(filing)) selected.push(filing);
+  }
+  return selected;
+}
+
+async function prepareExternalBrowserWorkspaceHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const caseName = textArg(args, 'caseName') || '外部检索';
+  const caseType = textArg(args, 'caseType') || '民事纠纷';
+  const issues = listArg(args, 'issues');
+  const facts = textArg(args, 'facts');
+  const companyNames = listArg(args, 'companyNames');
+  const selectedSources = pickExternalLegalSources(args);
+  const queries = [
+    ...listArg(args, 'queries'),
+    ...buildSearchQueries({ ...args, caseType, facts, issues }),
+  ].filter((item, index, arr) => item && arr.indexOf(item) === index).slice(0, 18);
+  const outputDir = resolveWritableOutputDir(
+    textArg(args, 'outputDir'),
+    ensureLegalExternalWorkspaceRoot(orgId),
+    caseName,
+    'browser_workspace',
+  );
+
+  const commands = selectedSources
+    .filter(source => source.presetId)
+    .map(source => [
+      `# ${source.label}`,
+      `web_login_profile_save_from_preset {"presetId":"${source.presetId}"}`,
+      `web_login_run {"profileId":"${source.presetId}","headless":false}`,
+    ].join('\n'))
+    .join('\n\n');
+  const runbook = [
+    `# ${caseName} 外部网页登录工作区`,
+    '',
+    `- 案由/类型：${caseType}`,
+    `- 争议焦点：${issues.join('；') || '待补充'}`,
+    `- 企业/被执行人：${companyNames.join('；') || '待补充'}`,
+    `- 生成时间：${new Date().toISOString()}`,
+    '',
+    '## 工作边界',
+    '- 当前是“授权网页登录协作”，不是平台数据库接入。',
+    '- Lumi 可打开可见浏览器、复用授权会话、整理检索词和来源登记表。',
+    '- Lumi 不绕过验证码、二维码、人脸、短信验证、付费墙、账号权限、频控或下载限制。',
+    '- 律师确认后的下载文件、网页摘录和来源登记，可再导入组织知识库。',
+    '',
+    '## 建议检索词',
+    queries.map((query, index) => `${index + 1}. ${query}`).join('\n') || '1. 待补充检索词',
+    '',
+    '## 站点与用途',
+    selectedSources.map(source => `- ${source.label}：${source.use}\n  ${source.url}`).join('\n'),
+    '',
+    '## 浏览器动作',
+    commands || '无需登录预设；使用普通浏览器打开官网并人工确认。',
+    '',
+  ].join('\n');
+  const sourceRegisterCsv = [
+    'source,query,title_or_case_number,court_level,date,url,key_excerpt,favorable_point,unfavorable_or_distinguish,reviewer,status',
+    '待登记,待登记,待登记,待登记,待登记,待登记,待登记,待登记,待登记,待登记,待复核',
+  ].join('\n');
+  const commandsMd = [
+    '# web_login commands',
+    '',
+    commands || 'No preset command generated.',
+    '',
+    'After the lawyer confirms a source, import it with legal_import_materials_to_kb.',
+    '',
+  ].join('\n');
+
+  const runbookPath = path.join(outputDir, '00_browser-workspace.md');
+  const registerPath = path.join(outputDir, '01_source-register.csv');
+  const commandsPath = path.join(outputDir, '02_web-login-commands.md');
+  fs.writeFileSync(runbookPath, runbook, 'utf-8');
+  fs.writeFileSync(registerPath, sourceRegisterCsv, 'utf-8');
+  fs.writeFileSync(commandsPath, commandsMd, 'utf-8');
+
+  return [
+    '# 外部网页登录工作区已生成',
+    '',
+    `- 案件：${caseName}`,
+    `- 输出目录：${outputDir}`,
+    `- 操作手册：${runbookPath}`,
+    `- 来源登记表：${registerPath}`,
+    `- 登录命令：${commandsPath}`,
+    `- 站点数量：${selectedSources.length}`,
+    '',
+    '## 可执行命令',
+    commands || '无网页登录预设。',
+    '',
+    '边界：不自动抓取、不批量同步、不绕过平台限制；登录、验证码、下载权限和最终引用均由律师确认。',
+  ].join('\n');
 }
 
 // ── legal_verify_citation ───────────────────────────────────────────────
@@ -2143,6 +2904,10 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         query: { type: 'string', description: '法条名称或关键词，如"民法典合同编"或"劳动合同法"' },
+        sourceIds: { type: 'array', items: { type: 'string' }, description: '可选外部授权库，如 pkulaw、farui、national-law-regulations' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        includeOfficialWeb: { type: 'boolean', description: '是否同时尝试国家法律法规数据库公开网页检索，默认 false' },
+        limit: { type: 'number', description: '外部授权库返回数量上限，默认 5' },
         orgId: { type: 'string', description: '组织ID' },
       },
       required: ['query'],
@@ -2454,6 +3219,56 @@ export function registerLegalTools(registry: ToolRegistry): void {
   });
 
   registry.register({
+    name: 'legal_search_external_authorities',
+    description: '外部法律数据库 API 检索 — 调用已配置授权网关（如北大法宝、通义法睿）检索法规、法条、案例和裁判规则；未配置时明确降级到授权网页登录协作，不抓取平台数据库。',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '检索词、争议焦点、案由、法条名称或案件事实摘要' },
+        type: { type: 'string', description: '检索类型：law/case/mixed，或中文“法规/案例/综合”' },
+        kind: { type: 'string', description: 'type 的别名' },
+        sourceIds: { type: 'array', items: { type: 'string' }, description: '指定数据源，如 pkulaw、farui、national-law-regulations' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        platforms: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        includeOfficialWeb: { type: 'boolean', description: '是否同时尝试国家法律法规数据库公开网页检索，默认 false' },
+        limit: { type: 'number', description: '返回结果数量上限，默认 5，最高 20' },
+        caseName: { type: 'string', description: '关联案件名称或简称' },
+        confirmedForKb: { type: 'boolean', description: '律师确认来源和授权后设为 true，可将检索报告导入组织知识库' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
+      },
+      required: ['query'],
+    },
+    handler: searchExternalAuthoritiesHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_company_database_lookup',
+    description: '企业主体数据库 API 查询 — 调用已配置的企查查/天眼查官方 API 查询公司、股东和被执行主体基础信息；未配置时输出网页登录协作和材料入库步骤。',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '公司、被执行人或主体名称' },
+        companyName: { type: 'string', description: 'name 的别名' },
+        subjectName: { type: 'string', description: 'name 的别名' },
+        sourceIds: { type: 'array', items: { type: 'string' }, description: '指定数据源，如 qichacha、tianyancha' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        platforms: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        caseName: { type: 'string', description: '关联案件名称或简称' },
+        confirmedForKb: { type: 'boolean', description: '律师确认来源和授权后设为 true，可将报告导入组织知识库' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
+      },
+      required: ['name'],
+    },
+    handler: companyDatabaseLookupHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
     name: 'legal_external_research_plan',
     description: '半自动外部检索行动单 — 生成法条、人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务的检索顺序、网页登录预设和来源登记表。',
     parameters: {
@@ -2466,6 +3281,82 @@ export function registerLegalTools(registry: ToolRegistry): void {
       },
     },
     handler: externalResearchPlanHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_generate_citation_verification_report',
+    description: '引用核验报告 — 对文书全文或文件中的法条、案号引用生成可落盘的核验报告，统计现行有效、已废止、未确认存在的风险项，并可导入组织知识库。',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '需要核验的文书全文、代理词、法律意见或合同审查结果' },
+        content: { type: 'string', description: 'text 的别名' },
+        filePath: { type: 'string', description: '需要核验的本地文件路径，支持 PDF/DOCX/TXT/MD 等法律材料格式' },
+        caseName: { type: 'string', description: '案件名称或简称' },
+        title: { type: 'string', description: '报告标题或来源材料标题' },
+        outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_delivery/{orgId}' },
+        importToKb: { type: 'boolean', description: '律师确认后是否导入组织知识库，默认 false' },
+        confirmedForKb: { type: 'boolean', description: 'importToKb 的确认别名' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
+      },
+    },
+    handler: generateCitationVerificationReportHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_finalize_delivery_package',
+    description: '正式文书交付包 — 将代理词、起诉状、答辩状、法律意见书、证据目录等草稿整理为律所交付包，生成正式 Markdown、DOCX、引用核验报告、来源登记表和提交签署清单。不会自动签发、提交、缴费或送达。',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: '需要整理成正式交付包的文书草稿或工作底稿' },
+        packetText: { type: 'string', description: 'content 的别名，用于诉讼文书包结果' },
+        documentText: { type: 'string', description: 'content 的别名，用于单份文书结果' },
+        caseName: { type: 'string', description: '案件名称或简称' },
+        documentType: { type: 'string', description: '文书类型：起诉状/答辩状/质证意见/代理词/法律意见书/证据目录/合同文本/投标书等' },
+        role: { type: 'string', description: '我方身份' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        court: { type: 'string', description: '拟提交或使用法院' },
+        lawFirmName: { type: 'string', description: '律所名称，未提供时使用占位符' },
+        lawyerName: { type: 'string', description: '承办律师，未提供时使用占位符' },
+        outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_delivery/{orgId}' },
+        includeDocx: { type: 'boolean', description: '是否生成 DOCX，默认 true' },
+        includePdf: { type: 'boolean', description: '是否尝试用 Microsoft Word 转 PDF，默认 false' },
+        markDraft: { type: 'boolean', description: '是否标记为律师复核稿，默认 true' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+      },
+    },
+    handler: finalizeDeliveryPackageHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_prepare_external_browser_workspace',
+    description: '外部网页登录工作区 — 为人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务等生成可见浏览器登录命令、检索词、来源登记表和授权边界说明。',
+    parameters: {
+      type: 'object',
+      properties: {
+        caseName: { type: 'string', description: '案件名称或简称' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        facts: { type: 'string', description: '案件事实摘要' },
+        issues: { type: 'array', items: { type: 'string' }, description: '争议焦点列表' },
+        queries: { type: 'array', items: { type: 'string' }, description: '额外检索词' },
+        companyNames: { type: 'array', items: { type: 'string' }, description: '需要查询的公司或被执行人名称' },
+        sourceIds: { type: 'array', items: { type: 'string' }, description: '指定数据源/preset，如 people-court-case-library、china-judgments-online、fachan、alpha-lawyer、qichacha、national-enterprise-credit、court-online-service' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        platforms: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        action: { type: 'string', description: '检索目的：类案检索/立案/企业查询/合同审查等' },
+        outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_external_workspaces/{orgId}' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+      },
+    },
+    handler: prepareExternalBrowserWorkspaceHandler,
     permission: 'user',
     securityLevel: 'safe',
   });

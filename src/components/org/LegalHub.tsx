@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Scale, FileText, Search, Crosshair, Shield, Brain, CheckCircle, Upload,
-  Calendar, ClipboardList, Plus, FolderOpen, Gavel, AlertTriangle, RefreshCw, Loader2,
+  Calendar, ClipboardList, Plus, FolderOpen, Gavel, AlertTriangle, RefreshCw, Loader2, Database,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LegalBidWorkbench } from './LegalBidWorkbench';
 import { LegalCaseSearch } from './LegalCaseSearch';
 import { LegalAssetTrace } from './LegalAssetTrace';
 import { LegalContractReview } from './LegalContractReview';
+import { LegalDataSourcesSettings } from './LegalDataSourcesSettings';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import {
@@ -24,7 +25,7 @@ import {
   type LegalCaseStage,
 } from '../../lib/legalCaseStore';
 
-type LegalView = 'workspace' | 'packet' | 'external-research' | 'bid' | 'case-search' | 'asset-trace' | 'contract-review' | 'strategy' | 'verify' | 'import';
+type LegalView = 'workspace' | 'packet' | 'external-research' | 'data-sources' | 'bid' | 'case-search' | 'asset-trace' | 'contract-review' | 'strategy' | 'verify' | 'import';
 
 interface NavItem {
   id: LegalView;
@@ -114,6 +115,7 @@ export function LegalHub() {
     { id: 'workspace', label: ui('案件工作台', 'Case Workspace'), icon: <FolderOpen size={16} /> },
     { id: 'packet', label: ui('文书包', 'Packet'), icon: <ClipboardList size={16} /> },
     { id: 'external-research', label: ui('外部检索', 'Research'), icon: <Search size={16} /> },
+    { id: 'data-sources', label: ui('数据源', 'Data Sources'), icon: <Database size={16} /> },
     { id: 'bid', label: t.legalBidWorkbench, icon: <FileText size={16} /> },
     { id: 'case-search', label: t.legalCaseSearch, icon: <Search size={16} /> },
     { id: 'asset-trace', label: t.legalAssetTrace, icon: <Crosshair size={16} /> },
@@ -321,6 +323,7 @@ export function LegalHub() {
       );
       case 'packet': return <LegalPacketView caseFile={activeCase} onAddMaterial={addMaterial} />;
       case 'external-research': return <LegalExternalResearchView caseFile={activeCase} onAddMaterial={addMaterial} />;
+      case 'data-sources': return <LegalDataSourcesPanel />;
       case 'bid': return <LegalBidWorkbench onSwitchView={setView} />;
       case 'case-search': return <LegalCaseSearch />;
       case 'asset-trace': return <LegalAssetTrace />;
@@ -872,6 +875,14 @@ function LegalActionButton({ icon, title, desc, onClick }: { icon: React.ReactNo
       <div className="text-sm font-bold text-white/82">{title}</div>
       <div className="mt-1 text-xs leading-5 text-white/35">{desc}</div>
     </button>
+  );
+}
+
+function LegalDataSourcesPanel() {
+  return (
+    <div className="custom-scrollbar h-full overflow-y-auto p-5">
+      <LegalDataSourcesSettings />
+    </div>
   );
 }
 

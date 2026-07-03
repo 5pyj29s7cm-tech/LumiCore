@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -152,6 +152,99 @@ describe('semi-automated legal workflows', () => {
     expect(output).toMatch(/来源登记表|来源.*登记/);
   });
 
+  it('writes formal legal delivery packages with DOCX and citation reports', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        caseName: '正式交付测试案',
+        documentType: '代理词',
+        caseType: '买卖合同纠纷',
+        role: '原告',
+        court: '上海市黄浦区人民法院',
+        lawFirmName: '测试律师事务所',
+        lawyerName: '测试律师',
+        outputDir: dir,
+        includeDocx: true,
+        includePdf: false,
+        content: [
+          '# 代理词草稿',
+          '根据《合同法》第六十条和《民法典》第五百八十五条，结合（2025）沪0101民初123号案件材料，形成如下意见。',
+          '一、双方存在买卖合同关系。',
+          '二、被告应支付货款并承担违约责任。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包已生成');
+      expect(output).toContain('引用核验报告');
+      expect(fs.existsSync(path.join(dir, '00_manifest.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '03_source-register.md'))).toBe(true);
+      expect(fs.readdirSync(dir).some(file => file.endsWith('.docx'))).toBe(true);
+
+      const report = fs.readFileSync(path.join(dir, '02_citation-verification-report.md'), 'utf-8');
+      expect(report).toContain('引用核验报告');
+      expect(report).toMatch(/合同法|已废止/);
+      expect(report).toContain('律师最终检索');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes standalone citation verification reports', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_citation_'));
+
+    try {
+      const output = await registry.execute('legal_generate_citation_verification_report', {
+        caseName: '引用核验测试案',
+        outputDir: dir,
+        text: '本案拟引用《合同法》第六十条、《民法典》第五百八十五条及（2025）沪0101民初123号。',
+      });
+
+      expect(output).toContain('引用核验报告已生成');
+      expect(output).toContain('已废止/失效风险');
+      const reportPath = path.join(dir, 'citation-verification-report.md');
+      expect(fs.existsSync(reportPath)).toBe(true);
+      const report = fs.readFileSync(reportPath, 'utf-8');
+      expect(report).toContain('引用总数');
+      expect(report).toMatch(/合同法|已废止/);
+      expect(report).toContain('未确认案例');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes external browser workspaces with source registers', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_browser_'));
+
+    try {
+      const output = await registry.execute('legal_prepare_external_browser_workspace', {
+        caseName: '外部检索测试案',
+        caseType: '买卖合同纠纷',
+        issues: ['付款条件是否成就', '违约金是否过高'],
+        companyNames: ['Beta Retail Co.'],
+        sourceIds: ['people-court-case-library', 'china-judgments-online', 'fachan', 'alpha-lawyer', 'qichacha'],
+        outputDir: dir,
+      });
+
+      expect(output).toContain('外部网页登录工作区已生成');
+      expect(output).toContain('web_login_run');
+      expect(output).toContain('不自动抓取');
+      expect(fs.existsSync(path.join(dir, '00_browser-workspace.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '01_source-register.csv'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '02_web-login-commands.md'))).toBe(true);
+      const commands = fs.readFileSync(path.join(dir, '02_web-login-commands.md'), 'utf-8');
+      expect(commands).toContain('people-court-case-library');
+      expect(commands).toContain('qichacha');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('imports local legal materials into the organization knowledge base', async () => {
     const registry = createLegalRegistry();
     const KB = await import('../server/org/kb');
@@ -213,6 +306,99 @@ describe('semi-automated legal workflows', () => {
     expect(output).toMatch(/授权网页登录协作|网页登录/);
     expect(output).toMatch(/不绕过验证码|不绕过/);
     expect(output).not.toMatch(/已接入.*法蝉|已接入.*Alpha|自动抓取.*已完成|批量同步.*已完成/);
+  });
+
+  it('queries configured external legal authority APIs', async () => {
+    const registry = createLegalRegistry();
+    const original = {
+      PKULAW_API_KEY: process.env.PKULAW_API_KEY,
+      PKULAW_BASE_URL: process.env.PKULAW_BASE_URL,
+    };
+    const query = `authority-api-test-${Date.now()}`;
+    process.env.PKULAW_API_KEY = 'test-pkulaw-key';
+    process.env.PKULAW_BASE_URL = 'https://pkulaw.local/search';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({
+        items: [{
+          title: 'Contract dispute authority',
+          caseNumber: '(2026) Test Case No.1',
+          court: 'Supreme Test Court',
+          summary: 'A controlled mocked authority result.',
+          url: 'https://pkulaw.local/case/1',
+        }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    try {
+      const output = await registry.execute('legal_search_external_authorities', {
+        query,
+        type: 'case',
+        sourceIds: ['pkulaw'],
+        limit: 1,
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(output).toContain('Contract dispute authority');
+      expect(output).toContain('(2026) Test Case No.1');
+      expect(output).toContain('pkulaw');
+      expect(output).toMatch(/授权|API|复核/);
+    } finally {
+      fetchMock.mockRestore();
+      if (original.PKULAW_API_KEY === undefined) delete process.env.PKULAW_API_KEY;
+      else process.env.PKULAW_API_KEY = original.PKULAW_API_KEY;
+      if (original.PKULAW_BASE_URL === undefined) delete process.env.PKULAW_BASE_URL;
+      else process.env.PKULAW_BASE_URL = original.PKULAW_BASE_URL;
+    }
+  });
+
+  it('queries configured company database APIs', async () => {
+    const registry = createLegalRegistry();
+    const original = {
+      TIANYANCHA_API_KEY: process.env.TIANYANCHA_API_KEY,
+      TIANYANCHA_BASE_URL: process.env.TIANYANCHA_BASE_URL,
+    };
+    const companyName = `Demo Tech Co ${Date.now()}`;
+    process.env.TIANYANCHA_API_KEY = 'test-tyc-key';
+    process.env.TIANYANCHA_BASE_URL = 'https://tianyancha.local/company';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({
+        error_code: 0,
+        result: {
+          name: companyName,
+          legalPersonName: 'Jane Test',
+          regCapital: '1000万人民币',
+          regStatus: '存续',
+          creditCode: '91310000TESTCODE',
+          businessScope: 'software services',
+          id: 123456,
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    try {
+      const output = await registry.execute('legal_company_database_lookup', {
+        name: companyName,
+        sourceIds: ['tianyancha'],
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(output).toContain(companyName);
+      expect(output).toContain('Jane Test');
+      expect(output).toContain('91310000TESTCODE');
+      expect(output).toMatch(/天眼查|API|网页登录/);
+    } finally {
+      fetchMock.mockRestore();
+      if (original.TIANYANCHA_API_KEY === undefined) delete process.env.TIANYANCHA_API_KEY;
+      else process.env.TIANYANCHA_API_KEY = original.TIANYANCHA_API_KEY;
+      if (original.TIANYANCHA_BASE_URL === undefined) delete process.env.TIANYANCHA_BASE_URL;
+      else process.env.TIANYANCHA_BASE_URL = original.TIANYANCHA_BASE_URL;
+    }
   });
 
   it('keeps triad reasoning as underlying logic rather than a standalone UI tab', () => {

@@ -25,6 +25,7 @@ const DECLARATIONS = [
   'read_docx',
   'read_pdf',
   'ocr_image_file',
+  'create_docx',
   'write_file',
   'web_search',
   'url_fetch',
@@ -59,7 +60,12 @@ const DECLARATIONS = [
   'legal_generate_argument_or_opinion',
   'legal_import_materials_to_kb',
   'legal_external_source_status',
+  'legal_search_external_authorities',
+  'legal_company_database_lookup',
   'legal_external_research_plan',
+  'legal_generate_citation_verification_report',
+  'legal_finalize_delivery_package',
+  'legal_prepare_external_browser_workspace',
   'legal_verify_citation',
   'legal_import_judgment',
   'authority_research',
@@ -189,6 +195,37 @@ describe('tool router', () => {
       'web_login_run',
       'url_fetch_logged_in',
       'legal_search_case',
+    ]));
+  });
+
+  it('routes formal legal delivery, citation reports, and browser workspaces', () => {
+    const route = routeToolsForTurn(
+      '把这份代理词做成正式DOCX交付包，生成引用核验报告和法蝉/Alpha网页登录工作区',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('legal');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_finalize_delivery_package',
+      'legal_generate_citation_verification_report',
+      'legal_prepare_external_browser_workspace',
+      'web_login_run',
+      'create_docx',
+    ]));
+  });
+
+  it('routes legal database API and company lookup requests', () => {
+    const route = routeToolsForTurn(
+      'Use pkulaw and farui to search legal database cases, then use tianyancha and qichacha for company litigation risk.',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('legal');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_search_external_authorities',
+      'legal_company_database_lookup',
+      'legal_external_source_status',
+      'legal_trace_assets',
     ]));
   });
 
