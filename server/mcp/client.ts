@@ -99,6 +99,14 @@ const DEFAULT_CONFIG_FILE: MCPConfigFile = {
       transport: 'stdio',
       description: 'Git repository inspection tools.',
     },
+    playwright: {
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@latest'],
+      enabled: false,
+      source: 'external',
+      transport: 'stdio',
+      description: 'Playwright MCP structured browser automation for real websites and authenticated browser tasks.',
+    },
   },
   remoteDevices: {},
 };

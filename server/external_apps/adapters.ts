@@ -23,9 +23,9 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     id: 'browser',
     label: 'Browser and web work',
     status: 'ready',
-    actions: ['browser_open_task', 'web_search', 'url_fetch', 'web_login_site_presets', 'web_login_profile_save_from_preset', 'web_login_profile_save', 'web_login_learn_site', 'web_login_profile_list', 'web_login_run', 'url_fetch_logged_in'],
+    actions: ['browser_open_task', 'web_search', 'url_fetch', 'web_login_site_presets', 'web_login_profile_save_from_preset', 'web_login_profile_save', 'web_login_learn_site', 'web_login_profile_list', 'web_login_run', 'url_fetch_logged_in', 'external_control_candidates', 'external_control_configure_candidate', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click'],
     safety: 'Opening a URL is allowed; account actions, purchases, posts, and submissions still need user confirmation.',
-    notes: 'Use this adapter for research, opening project pages, learning authorized website logins, and continuing work in saved browser sessions.',
+    notes: 'Use this adapter for research, opening project pages, learning authorized website logins, continuing work in saved browser sessions, and configuring Playwright MCP for structured browser control.',
   },
   {
     id: 'wechat',
@@ -47,9 +47,9 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     id: 'ai_apps',
     label: 'Other local AI agents',
     status: 'requires_setup',
-    actions: ['external_app_list_adapters', 'capability_research', 'computer_use'],
+    actions: ['external_app_list_adapters', 'external_control_candidates', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'capability_research', 'computer_use'],
     safety: 'Use explicit tool or MCP integrations when available. Full UI control needs desktop automation confirmation.',
-    notes: 'Lumi can research integration candidates, then coordinate other AI tools through browser, files, clipboard, MCP, or confirmed computer-use sessions.',
+    notes: 'Lumi can research integration candidates, inspect and operate native app controls through Windows UIA, then coordinate other AI tools through browser, files, clipboard, MCP, or confirmed computer-use sessions.',
   },
 ];
 

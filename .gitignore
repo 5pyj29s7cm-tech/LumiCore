@@ -6,6 +6,7 @@ desktop-resources/
 coverage/
 logs/
 .codex-run/
+.playwright-mcp/
 .DS_Store
 *.log
 .env*

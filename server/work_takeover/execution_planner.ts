@@ -132,7 +132,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'account.session_reuse',
     label: '已登录账号会话复用',
     kind: 'external_app',
-    tools: ['desktop_active_window', 'desktop_capture_screen', 'desktop_open', 'desktop_run_command', 'web_login_profile_list', 'web_login_learn_site', 'web_login_run', 'browser_open_task'],
+    tools: ['desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen', 'desktop_open', 'desktop_run_command', 'web_login_profile_list', 'web_login_learn_site', 'web_login_run', 'browser_open_task'],
     confirmationRequired: ['首次登录、扫码、验证码、人脸/短信验证、切换账号、授权第三方或保存凭据前需要用户确认或接管'],
     keywords: ['已登录', '登录', '账号', '账户', '任务栏', '后台', '微信', 'WeChat', 'Weixin', '抖音', '抖店', '小红书', '视频号', '店铺后台', '商家后台', '创作者中心'],
     categoryHints: ['customer', 'store', 'account', 'video_publish', 'design_delivery'],
@@ -141,7 +141,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'browser.account_platform_work',
     label: '浏览器/平台账号操作',
     kind: 'external_app',
-    tools: ['browser_open_task', 'web_login_profile_list', 'web_login_profile_save', 'web_login_learn_site', 'web_login_run', 'desktop_open', 'work_product_verify'],
+    tools: ['browser_open_task', 'external_control_candidates', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click', 'web_login_profile_list', 'web_login_profile_save', 'web_login_learn_site', 'web_login_run', 'desktop_open', 'work_product_verify'],
     confirmationRequired: ['首次登录、切换账号、发布、投放、下单、付款或提交表单前需要确认；已登录会话可在可见窗口中复用'],
     keywords: ['账号', '发布', '平台', '浏览器', '小红书', '抖音', '视频号', '投放', '店铺', '订单', '库存', '上架', '下架'],
     categoryHints: ['store', 'account', 'video_publish'],
@@ -168,7 +168,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'result.visible_execution',
     label: '可见桌面执行和结果验证',
     kind: 'verification',
-    tools: ['desktop_capture_screen', 'desktop_active_window', 'computer_use', 'work_product_verify', 'work_takeover_task_verify_result', 'work_takeover_task_update'],
+    tools: ['desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen', 'desktop_active_window', 'computer_use', 'work_product_verify', 'work_takeover_task_verify_result', 'work_takeover_task_update'],
     confirmationRequired: ['外部软件写入、发送、提交、付款等动作按工具规则确认'],
     keywords: ['打开', '操作', '桌面', '验证', '结果', '交付', '文件', '外部软件'],
     always: true,
@@ -389,7 +389,7 @@ function buildVerificationChecklist(task: WorkTakeoverTask, capabilities: WorkTa
   if (capabilities.some(capability => capability.id === 'cad_bim.design_handoff')) checklist.push('CAD/Revit 结果以可审阅草稿或交接数据呈现，生产图纸仍需尺寸和专业复核。');
   if (capabilities.some(capability => capability.id === 'messaging.reply_handoff')) checklist.push('回复草稿已准备，但未自动发送。');
   if (capabilities.some(capability => capability.id === 'account.session_reuse')) checklist.push('已优先复用已登录账号窗口或浏览器会话；首次登录、扫码、验证码、切换账号和授权未自动完成。');
-  if (capabilities.some(capability => capability.kind === 'external_app')) checklist.push('外部软件或平台操作完成后需要读取窗口/文件状态确认结果。');
+  if (capabilities.some(capability => capability.kind === 'external_app')) checklist.push('外部软件或平台操作前优先读取 UI 控件树或 Playwright 浏览器快照；完成后读取窗口/文件状态确认结果。');
   return unique(checklist);
 }
 

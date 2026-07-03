@@ -28,6 +28,7 @@ import { registerBiometricTools } from './biometric_tools';
 import { registerLegalTools } from './legal_tools';
 import { registerClientSelfTools } from './client_self_tools';
 import { registerExternalAppTools } from './external_app_tools';
+import { registerExternalControlTools } from './external_control_tools';
 import { registerAutonomyTools } from './autonomy_tools';
 import { registerCapabilityResearchTools } from './capability_research_tools';
 import { registerSleepTools } from './sleep_tools';
@@ -77,6 +78,7 @@ export function registerAllTools(
   registerLegalTools(registry);
   registerClientSelfTools(registry);
   registerExternalAppTools(registry);
+  registerExternalControlTools(registry);
   registerAutonomyTools(registry);
   registerCapabilityResearchTools(registry);
   registerSleepTools(registry);

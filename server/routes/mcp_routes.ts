@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
-import { mcpManager, getMCPConfig, updateMCPConfig } from "../mcp";
+import { mcpManager, getMCPConfig, updateMCPConfig, recoverServerTools } from "../mcp";
 
 export function mountMcpRoutes(router: Router) {
   router.get("/mcp", requireAuth, (_req, res) => {
@@ -34,7 +34,8 @@ export function mountMcpRoutes(router: Router) {
   router.post("/mcp/restart/:name", async (req, res) => {
     try {
       const tools = await mcpManager.restartServer(req.params.name);
-      res.json({ tools });
+      const registered = await recoverServerTools(req.params.name, tools);
+      res.json({ tools, registered });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

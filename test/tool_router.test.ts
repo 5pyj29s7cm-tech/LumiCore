@@ -35,6 +35,17 @@ const DECLARATIONS = [
   'web_login_learn_site',
   'web_login_profile_list',
   'web_login_run',
+  'external_control_candidates',
+  'external_control_configure_candidate',
+  'desktop_ui_snapshot',
+  'desktop_ui_focus',
+  'desktop_ui_click',
+  'desktop_ui_invoke',
+  'desktop_ui_type',
+  'mcp_playwright_browser_snapshot',
+  'mcp_playwright_browser_navigate',
+  'mcp_playwright_browser_click',
+  'mcp_playwright_browser_fill_form',
   'legal_search_case',
   'legal_search_statute',
   'legal_generate_bid',
@@ -64,6 +75,7 @@ const DECLARATIONS = [
   'git_commit',
   'list_skills',
   'generate_skill',
+  'adapter_registry_list',
   'client_get_state',
 ].map(name => declaration(name));
 
@@ -183,6 +195,26 @@ describe('tool router', () => {
       'web_login_profile_list',
       'web_login_run',
       'url_fetch_logged_in',
+      'mcp_playwright_browser_snapshot',
+      'mcp_playwright_browser_fill_form',
+    ]));
+  });
+
+  it('routes external software control upgrades to UIA and MCP setup tools', () => {
+    const route = routeToolsForTurn(
+      '提升 Lumi 控制外部软件的通用能力，接入 Playwright MCP 和 Windows UIA 控件树',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toEqual(expect.arrayContaining(['skills_agents', 'system']));
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'external_control_candidates',
+      'external_control_configure_candidate',
+      'desktop_ui_snapshot',
+      'desktop_ui_click',
+      'desktop_ui_type',
+      'adapter_registry_list',
+      'mcp_playwright_browser_snapshot',
     ]));
   });
 
