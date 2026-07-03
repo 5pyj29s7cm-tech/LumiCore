@@ -86,6 +86,8 @@ describe('work takeover industry parameterization', () => {
     expect(plan.contextSignals.join('；')).toContain('空气炸锅');
     expect(plan.verificationChecklist.join('；')).toContain('任务参数关键词');
     expect(plan.capabilities.map(capability => capability.id)).toContain('video.content_publish_pack');
+    expect(plan.capabilities.flatMap(capability => capability.tools)).toContain('work_takeover_task_prepare_industry_package');
+    expect(plan.capabilities.flatMap(capability => capability.tools)).not.toContain('work_takeover_task_prepare_ecommerce_growth');
   });
 
   it('creates and verifies a parameterized ecommerce growth package', () => {

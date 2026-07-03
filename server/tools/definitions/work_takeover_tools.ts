@@ -1,5 +1,4 @@
 import { ToolRegistry } from '../registry';
-import fs from 'fs';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import {
   continueWorkTakeoverTask,
@@ -13,9 +12,14 @@ import {
 import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
 import { exportWorkTakeoverPacket } from '../../work_takeover/task_packet';
 import { verifyWorkTakeoverResult, type WorkTakeoverExpectedSurface } from '../../work_takeover/result_verifier';
-import { createDesignDeliveryFiles } from '../../socket/design_delivery_workflow';
-import { createEcommerceGrowthFiles } from '../../socket/ecommerce_growth_workflow';
-import { parseWorkTakeoverIndustryParameters, type WorkTakeoverIndustryParameters } from '../../work_takeover/industry_parameters';
+import { parseWorkTakeoverIndustryParameters } from '../../work_takeover/industry_parameters';
+import {
+  getTaskIndustryParameters,
+  isEcommerceGrowthCategory,
+  packageKindForCategory,
+  prepareWorkTakeoverIndustryPackage,
+  type WorkTakeoverIndustryPackageResult,
+} from '../../work_takeover/industry_packages';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
   return {
@@ -122,208 +126,6 @@ function recordPacket(userId: string, task: any, plan: any, packet: ReturnType<t
     },
     note: packet.summary,
   } as any) || task;
-}
-
-function taskDesignDeliverySource(task: any): string {
-  return [
-    task.sourceMessage,
-    task.summary,
-    task.title,
-    ...(Array.isArray(task.nextActions) ? task.nextActions : []),
-    ...(Array.isArray(task.artifacts) ? task.artifacts.map((artifact: any) => artifact?.label || artifact?.content || '') : []),
-  ].map(compact).filter(Boolean).join('\n');
-}
-
-function readOptionalText(filePath: string): string {
-  try {
-    return fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-function industryParameters(task: any): WorkTakeoverIndustryParameters | undefined {
-  const params = task?.metadata?.industryParameters;
-  return params && typeof params === 'object' ? params as WorkTakeoverIndustryParameters : undefined;
-}
-
-function taskIndustrySource(task: any): string {
-  const params = industryParameters(task);
-  return [
-    task.sourceMessage,
-    task.summary,
-    task.title,
-    params?.summaryLines?.join('；'),
-    ...(Array.isArray(task.nextActions) ? task.nextActions : []),
-    ...(Array.isArray(task.artifacts) ? task.artifacts.map((artifact: any) => artifact?.label || artifact?.content || '') : []),
-  ].map(compact).filter(Boolean).join('\n');
-}
-
-function recordDesignDeliveryPackage(userId: string, task: any, outputDirectory?: string, regenerate = false): { task: any; files: ReturnType<typeof createDesignDeliveryFiles>; reused: boolean } {
-  const existing = task?.metadata?.workTakeoverDesignDelivery?.files;
-  if (!regenerate && existing?.folder && fs.existsSync(existing.folder)) {
-    return {
-      task,
-      files: existing as ReturnType<typeof createDesignDeliveryFiles>,
-      reused: true,
-    };
-  }
-
-  const files = createDesignDeliveryFiles(taskDesignDeliverySource(task), {
-    outputDirectory,
-  });
-  const verificationText = readOptionalText(files.verification);
-  const wechatDraftText = readOptionalText(files.wechatDraft);
-  const verificationPassed = files.verificationResult.passed;
-  const result = [
-    `已生成装修设计交付包：${files.folder}`,
-    `项目：${files.project.projectTitle}`,
-    `交付自检：${verificationPassed ? '通过' : '需要复核'}`,
-    files.verificationResult.checks
-      .filter(check => !check.passed)
-      .map(check => `${check.label}：${check.detail}`)
-      .join('；'),
-    '下一步：用户确认发送口径、预算边界、现场尺寸/结构/水电复核后，再进入外部 CAD/Revit 深化或微信发送。',
-  ].map(compact).filter(Boolean).join('\n');
-
-  let updatedTask = updateWorkTakeoverTask(userId, task.id, {
-    status: 'waiting_confirmation',
-    result,
-    allowedNow: uniqueStrings([
-      ...task.allowedNow,
-      '生成本地装修设计交付包',
-      '准备客户微信回复草稿',
-      '记录交付自检结果',
-    ]),
-    confirmationRequired: uniqueStrings([
-      ...task.confirmationRequired,
-      '发送客户微信消息',
-      '打开外部 CAD/Revit 并修改生产图纸',
-      '承诺最终报价、工期、合同或施工结果',
-    ]),
-    metadata: {
-      workTakeoverDesignDelivery: {
-        files,
-        verificationText,
-        preparedAt: new Date().toISOString(),
-      },
-    },
-    note: `装修设计交付包已生成，自检${verificationPassed ? '通过' : '需要复核'}。`,
-    ...(wechatDraftText && !task.drafts?.some((draft: any) => draft.text === wechatDraftText) ? { draftReply: wechatDraftText } : {}),
-  } as any) || task;
-
-  const artifacts = [
-    { type: 'file', label: '装修设计交付包', path: files.folder, content: result },
-    { type: 'document', label: '装修设计方案 RTF', path: files.proposal },
-    { type: 'quote', label: '预算与材料清单 RTF', path: files.budget },
-    { type: 'document', label: '客户方案 PPTX', path: files.presentation },
-    { type: 'document', label: '客户方案 PDF', path: files.pdf },
-    { type: 'cad', label: 'CAD DXF 初稿', path: files.cadDxf },
-    { type: 'cad', label: 'Revit/Dynamo 交接数据', path: files.dynamoScript },
-    { type: 'draft', label: '微信交付草稿', path: files.wechatDraft, content: wechatDraftText },
-    { type: 'checklist', label: '交付验证记录', path: files.verification, content: verificationText },
-  ];
-
-  for (const artifact of artifacts) {
-    updatedTask = updateWorkTakeoverTask(userId, updatedTask.id, {
-      artifact: {
-        ...artifact,
-        status: artifact.type === 'checklist' && !verificationPassed ? 'needs_review' : 'prepared',
-      },
-    } as any) || updatedTask;
-  }
-
-  return { task: updatedTask, files, reused: false };
-}
-
-function isEcommerceGrowthCategory(category: string): boolean {
-  return ['store', 'account', 'video_publish'].includes(category);
-}
-
-function recordEcommerceGrowthPackage(userId: string, task: any, outputDirectory?: string, regenerate = false): { task: any; files: ReturnType<typeof createEcommerceGrowthFiles>; reused: boolean } {
-  const existing = task?.metadata?.workTakeoverEcommerceGrowth?.files;
-  if (!regenerate && existing?.folder && fs.existsSync(existing.folder)) {
-    return {
-      task,
-      files: existing as ReturnType<typeof createEcommerceGrowthFiles>,
-      reused: true,
-    };
-  }
-
-  const files = createEcommerceGrowthFiles(taskIndustrySource(task), {
-    outputDirectory,
-  });
-  const verificationText = readOptionalText(files.verification);
-  const customerServiceText = readOptionalText(files.customerServiceRtf);
-  const verificationPassed = files.verificationResult.passed;
-  const result = [
-    `已生成电商/短视频接管交付包：${files.folder}`,
-    `商品：${files.brief.productName}`,
-    `平台：${files.brief.platform}`,
-    `目标：${files.brief.target}`,
-    `交付自检：${verificationPassed ? '通过' : '需要复核'}`,
-    files.verificationResult.checks
-      .filter(check => !check.passed)
-      .map(check => `${check.label}：${check.detail}`)
-      .join('；'),
-    '下一步：用户确认发布口径、账号状态、投放预算和客服发送后，再进入外部平台发布或微信发送。',
-  ].map(compact).filter(Boolean).join('\n');
-
-  let updatedTask = updateWorkTakeoverTask(userId, task.id, {
-    status: 'waiting_confirmation',
-    result,
-    allowedNow: uniqueStrings([
-      ...task.allowedNow,
-      '生成本地电商/短视频交付包',
-      '准备发布草稿、图文提示词、视频脚本和客服回复草稿',
-      '记录交付自检结果',
-    ]),
-    confirmationRequired: uniqueStrings([
-      ...task.confirmationRequired,
-      '正式发布内容',
-      '投放扣费或预算消耗',
-      '修改价格、库存、商品状态或店铺设置',
-      '发送客户/客服/微信消息',
-      '首次登录、扫码、验证码、切号或外部平台授权',
-    ]),
-    metadata: {
-      workTakeoverEcommerceGrowth: {
-        files,
-        verificationText,
-        preparedAt: new Date().toISOString(),
-      },
-    },
-    note: `电商/短视频接管交付包已生成，自检${verificationPassed ? '通过' : '需要复核'}。`,
-    ...(customerServiceText && !task.drafts?.some((draft: any) => draft.text === customerServiceText) ? { draftReply: customerServiceText } : {}),
-  } as any) || task;
-
-  const artifacts = [
-    { type: 'file', label: '电商/短视频接管交付包', path: files.folder, content: result },
-    { type: 'document', label: '店铺体检报告', path: files.storeAuditHtml },
-    { type: 'document', label: '内容矩阵 CSV', path: files.contentMatrixCsv },
-    { type: 'document', label: '内容矩阵 HTML', path: files.contentMatrixHtml },
-    { type: 'video', label: '短视频脚本与分镜', path: files.videoScriptRtf },
-    { type: 'document', label: '图文种草笔记包', path: files.imageNotesRtf },
-    { type: 'document', label: '图片生成提示词', path: files.imagePromptsTxt },
-    { type: 'video', label: '视频生成提示词', path: files.videoPromptsTxt },
-    { type: 'document', label: '发布草稿/发布确认项', path: files.publishPageHtml },
-    { type: 'draft', label: '微信/客服回复草稿', path: files.customerServiceRtf, content: customerServiceText },
-    { type: 'document', label: '今日运营战报', path: files.battleReportHtml },
-    { type: 'document', label: '外部工具调度台', path: files.toolConsoleHtml },
-    { type: 'checklist', label: '电商交付验证记录', path: files.verification, content: verificationText },
-    { type: 'file', label: '店铺/账号任务参数', path: files.taskJson },
-  ];
-
-  for (const artifact of artifacts) {
-    updatedTask = updateWorkTakeoverTask(userId, updatedTask.id, {
-      artifact: {
-        ...artifact,
-        status: artifact.type === 'checklist' && !verificationPassed ? 'needs_review' : 'prepared',
-      },
-    } as any) || updatedTask;
-  }
-
-  return { task: updatedTask, files, reused: false };
 }
 
 export function registerWorkTakeoverTools(registry: ToolRegistry): void {
@@ -873,7 +675,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         } catch {}
       }
 
-      const params = industryParameters(task);
+      const params = getTaskIndustryParameters(task);
       const expectedSurfaces = (asStringArray(args.expectedSurfaces) || params?.expectedSurfaces || [])
         .map(surface => surface as WorkTakeoverExpectedSurface)
         .filter(Boolean);
@@ -949,6 +751,48 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
   });
 
   registry.register({
+    name: 'work_takeover_task_prepare_industry_package',
+    description: 'Prepare the real local industry package for the current work takeover task through the industry-package adapter layer. Lumi core only routes the task; ecommerce, short-video, account, renovation/CAD/Revit, and future legal/customer packages are selected by task category and implemented outside the core task loop. This writes local files and task records only; sending, publishing, login, payment, filing, signing, and external commitments remain confirmation-gated.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task with a supported industry package.' },
+        kind: { type: 'string', description: 'Optional package kind: auto, ecommerce_growth, or design_delivery. Defaults to auto from task category.' },
+        outputDirectory: { type: 'string', description: 'Optional folder where the package should be created. Defaults to the Desktop.' },
+        regenerate: { type: 'boolean', description: 'Regenerate even when a package is already recorded. Defaults to false.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const { userId, domain, orgId } = contextUser(context);
+      const task = args.id
+        ? getWorkTakeoverTask(userId, String(args.id))
+        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 20 })
+          .find(item => Boolean(packageKindForCategory(item.category))) || null;
+      if (!task) throw new Error(args.id ? `Work takeover task not found or unsupported: ${args.id}` : 'No active task with a supported industry package found.');
+
+      const kind = ['ecommerce_growth', 'design_delivery', 'auto'].includes(String(args.kind || 'auto'))
+        ? String(args.kind || 'auto') as any
+        : 'auto';
+      const prepared = prepareWorkTakeoverIndustryPackage(userId, task, {
+        kind,
+        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+        regenerate: args.regenerate === true,
+      });
+
+      return JSON.stringify({
+        task: prepared.task,
+        kind: prepared.kind,
+        files: prepared.files,
+        reused: prepared.reused,
+        note: prepared.note,
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
     name: 'work_takeover_task_prepare_ecommerce_growth',
     description: 'For store/account/video_publish takeover tasks, generate a real local ecommerce/short-video/account-growth delivery package from the task parameters and message: store audit, content matrix, short-video script, image/video prompts, publish draft, customer-service/WeChat draft, operation report, tool console, and verification record. This writes local files only; it does not publish, spend budget, change store data, log in, or send messages.',
     parameters: {
@@ -971,20 +815,17 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         throw new Error(`Task ${task.id} is ${task.category}, not store/account/video_publish.`);
       }
 
-      const prepared = recordEcommerceGrowthPackage(
-        userId,
-        task,
-        args.outputDirectory ? String(args.outputDirectory) : undefined,
-        args.regenerate === true,
-      );
+      const prepared = prepareWorkTakeoverIndustryPackage(userId, task, {
+        kind: 'ecommerce_growth',
+        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+        regenerate: args.regenerate === true,
+      });
 
       return JSON.stringify({
         task: prepared.task,
         files: prepared.files,
         reused: prepared.reused,
-        note: prepared.reused
-          ? 'Existing ecommerce growth package was reused and remains recorded on the task.'
-          : 'Ecommerce growth package generated locally and recorded on the task. Publishing, ad spend, store changes, login, and message sending remain confirmation-gated.',
+        note: prepared.note,
       }, null, 2);
     },
     permission: 'user',
@@ -1013,20 +854,17 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         throw new Error(`Task ${task.id} is ${task.category}, not design_delivery.`);
       }
 
-      const prepared = recordDesignDeliveryPackage(
-        userId,
-        task,
-        args.outputDirectory ? String(args.outputDirectory) : undefined,
-        args.regenerate === true,
-      );
+      const prepared = prepareWorkTakeoverIndustryPackage(userId, task, {
+        kind: 'design_delivery',
+        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+        regenerate: args.regenerate === true,
+      });
 
       return JSON.stringify({
         task: prepared.task,
         files: prepared.files,
         reused: prepared.reused,
-        note: prepared.reused
-          ? 'Existing design delivery package was reused and remains recorded on the task.'
-          : 'Design delivery package generated locally and recorded on the task. External app operation and message sending remain confirmation-gated.',
+        note: prepared.note,
       }, null, 2);
     },
     permission: 'user',
@@ -1140,15 +978,14 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       plan = planWorkTakeoverExecution(currentTask, { mode });
       progress = getWorkTakeoverExecutionProgress(currentTask, plan);
       let packet: ReturnType<typeof exportWorkTakeoverPacket> | undefined;
-      let designDeliveryPackage: ReturnType<typeof recordDesignDeliveryPackage> | undefined;
-      let ecommerceGrowthPackage: ReturnType<typeof recordEcommerceGrowthPackage> | undefined;
+      let designDeliveryPackage: WorkTakeoverIndustryPackageResult | undefined;
+      let ecommerceGrowthPackage: WorkTakeoverIndustryPackageResult | undefined;
       if (args.prepareDesignDeliveryPackage !== false && currentTask.category === 'design_delivery') {
-        designDeliveryPackage = recordDesignDeliveryPackage(
-          userId,
-          currentTask,
-          args.outputDirectory ? String(args.outputDirectory) : undefined,
-          args.regenerateDesignDeliveryPackage === true,
-        );
+        designDeliveryPackage = prepareWorkTakeoverIndustryPackage(userId, currentTask, {
+          kind: 'design_delivery',
+          outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+          regenerate: args.regenerateDesignDeliveryPackage === true,
+        });
         currentTask = designDeliveryPackage.task;
         stopReasons.push(designDeliveryPackage.reused ? 'design_delivery_package_reused' : 'design_delivery_package_prepared');
         plan = planWorkTakeoverExecution(currentTask, { mode });
@@ -1156,12 +993,11 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       }
 
       if (args.prepareEcommerceGrowthPackage !== false && isEcommerceGrowthCategory(currentTask.category)) {
-        ecommerceGrowthPackage = recordEcommerceGrowthPackage(
-          userId,
-          currentTask,
-          args.outputDirectory ? String(args.outputDirectory) : undefined,
-          args.regenerateEcommerceGrowthPackage === true,
-        );
+        ecommerceGrowthPackage = prepareWorkTakeoverIndustryPackage(userId, currentTask, {
+          kind: 'ecommerce_growth',
+          outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
+          regenerate: args.regenerateEcommerceGrowthPackage === true,
+        });
         currentTask = ecommerceGrowthPackage.task;
         stopReasons.push(ecommerceGrowthPackage.reused ? 'ecommerce_growth_package_reused' : 'ecommerce_growth_package_prepared');
         plan = planWorkTakeoverExecution(currentTask, { mode });
