@@ -702,7 +702,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'work_takeover_task_verify_result',
-    description: 'Verify a work takeover task after visible work or tool execution. It checks task context, confirmation boundaries, drafts, file paths, and current desktop/window/process state, then writes a verification record back to the task center. Use this before claiming a real workflow is complete.',
+    description: 'Verify a work takeover task after visible work or tool execution. It checks task context, confirmation boundaries, drafts, file paths, artifact content quality, and current desktop/window/process/screenshot state, then writes a verification record back to the task center. Use this before claiming a real workflow is complete.',
     parameters: {
       type: 'object',
       properties: {
@@ -719,6 +719,19 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         },
         draftRequired: { type: 'boolean', description: 'Whether a communication draft must be present.' },
         requireActiveWindow: { type: 'boolean', description: 'Whether reading any active window is required even when no expectedSurfaces are provided.' },
+        requireScreenEvidence: { type: 'boolean', description: 'Whether a fresh screenshot must be captured and readable. Defaults to true.' },
+        requiredArtifactLabels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Artifact labels that must be recorded on the task, such as PPT, CAD DXF, WeChat draft, publish checklist.',
+        },
+        expectedContentTerms: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Domain words that should appear in generated artifacts/result/drafts, e.g. product name, customer need, style, budget, platform, case facts.',
+        },
+        minMatchedContentTerms: { type: 'number', description: 'Minimum expectedContentTerms/category terms that must be found. Defaults to 2 when terms exist.' },
+        minFileBytes: { type: 'number', description: 'Minimum bytes for local artifact files to avoid accepting empty shells. Defaults to 16.' },
         record: { type: 'boolean', description: 'Whether to write verification back to the task. Defaults to true.' },
       },
       required: [],
@@ -732,6 +745,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
 
       let activeWindowRaw = '';
       let runningProcessesRaw = '';
+      let screenRaw = '';
       if (context?.desktopRelay) {
         try {
           activeWindowRaw = await context.desktopRelay('desktop_active_window', {});
@@ -739,19 +753,30 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         try {
           runningProcessesRaw = await context.desktopRelay('desktop_running_processes', { top: 80 });
         } catch {}
+        try {
+          screenRaw = await context.desktopRelay('desktop_capture_screen', { quality: 35 });
+        } catch {}
       }
 
       const expectedSurfaces = (asStringArray(args.expectedSurfaces) || [])
         .map(surface => surface as WorkTakeoverExpectedSurface)
         .filter(Boolean);
       const filePaths = asStringArray(args.filePaths) || [];
+      const requiredArtifactLabels = asStringArray(args.requiredArtifactLabels) || [];
+      const expectedContentTerms = asStringArray(args.expectedContentTerms) || [];
       const verification = verifyWorkTakeoverResult(task, {
         activeWindowRaw,
         runningProcessesRaw,
+        screenRaw,
         expectedSurfaces,
         filePaths,
         draftRequired: args.draftRequired === true,
         requireActiveWindow: args.requireActiveWindow === true,
+        requireScreenEvidence: args.requireScreenEvidence !== false,
+        requiredArtifactLabels,
+        expectedContentTerms,
+        minMatchedContentTerms: args.minMatchedContentTerms,
+        minFileBytes: args.minFileBytes,
       });
 
       let updatedTask = task;
@@ -779,6 +804,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
               verification.activeWindow
                 ? `\n活动窗口：${verification.activeWindow.processName} ${verification.activeWindow.title}`
                 : '\n活动窗口：未读取',
+              verification.screen?.captured
+                ? `屏幕截图：${verification.screen.width || '?'}x${verification.screen.height || '?'} ${verification.screen.format || ''}`.trim()
+                : '屏幕截图：未读取',
               verification.detectedSurfaces.length
                 ? `检测到的外部表面：${verification.detectedSurfaces.join('、')}`
                 : '检测到的外部表面：暂无',

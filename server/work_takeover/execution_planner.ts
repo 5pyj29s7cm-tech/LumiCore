@@ -167,7 +167,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
     id: 'result.visible_execution',
     label: '可见桌面执行和结果验证',
     kind: 'verification',
-    tools: ['desktop_capture_screen', 'desktop_active_window', 'work_product_verify', 'work_takeover_task_verify_result', 'work_takeover_task_update'],
+    tools: ['desktop_capture_screen', 'desktop_active_window', 'computer_use', 'work_product_verify', 'work_takeover_task_verify_result', 'work_takeover_task_update'],
     confirmationRequired: ['外部软件写入、发送、提交、付款等动作按工具规则确认'],
     keywords: ['打开', '操作', '桌面', '验证', '结果', '交付', '文件', '外部软件'],
     always: true,
@@ -366,6 +366,8 @@ function buildVerificationChecklist(task: WorkTakeoverTask, capabilities: WorkTa
   const checklist = [
     '任务中心已有摘要、下一步动作、风险和确认边界。',
     '所有生成的文件/草稿/清单都已记录到任务 artifacts 或 result。',
+    '交付物不是空壳：文件大小、内容关键词、客户/行业主题和任务目标能够互相对应。',
+    '可见桌面动作有截图、活动窗口或进程证据；光标点击前先移动到真实目标。',
     '对外发送、提交、付款、签约、发布和最终承诺没有越过确认边界。',
     ...standard.verificationFocus,
   ];
@@ -387,6 +389,8 @@ function buildHandoffPrompt(task: WorkTakeoverTask, plan: Omit<WorkTakeoverExecu
     `外部系统优先：${standard.externalSurfaces.join('；')}`,
     `原则：不要播放固定脚本；根据当前任务内容、交付物、已安装工具和确认边界组织步骤。`,
     `账号原则：优先恢复任务栏/后台已有窗口和已登录浏览器会话；不要代替用户完成密码、扫码、验证码、人脸/短信验证、账号切换或授权。`,
+    `桌面原则：先看屏幕/活动窗口，再移动可见光标到真实目标，点击后用截图、窗口、进程或文件结果验证。`,
+    `汇报原则：只说已完成什么、卡在哪里、下一步需要确认什么；不要逐条复述工具调用和固定话术。`,
     artifacts.length ? `要准备的交付物：${artifacts.join('；')}` : '',
     plan.nextStep ? `下一步：${plan.nextStep.title} - ${plan.nextStep.goal}` : '',
     plan.nextStep?.suggestedTools.length ? `优先工具：${plan.nextStep.suggestedTools.join(', ')}` : '',
@@ -540,10 +544,10 @@ export function executeWorkTakeoverPlanStep(
   const draftReply = buildDraftForStep(task, plan, step);
   const suggestedToolCalls = toolReasons(step);
   const summary = status === 'blocked'
-    ? `步骤“${step.title}”暂时阻塞：${blockers.join('；')}`
+    ? `卡住了：${blockers.slice(0, 2).join('；')}`
     : status === 'waiting_confirmation'
-    ? `步骤“${step.title}”已经准备好，下一步涉及确认边界：${confirmationRequired.slice(0, 4).join('；')}`
-    : `步骤“${step.title}”已经完成安全准备。`;
+    ? `已准备好：${step.title}。下一步需要确认：${confirmationRequired.slice(0, 3).join('；')}`
+    : `已完成：${step.title}。`;
 
   return {
     executionId: `wt_exec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -560,9 +564,9 @@ export function executeWorkTakeoverPlanStep(
     blockers,
     nextInstruction: [
       summary,
-      suggestedToolCalls.length ? `建议继续工具：${suggestedToolCalls.map(call => call.name).join(', ')}` : '',
-      confirmationRequired.length ? `需要确认：${confirmationRequired.join('；')}` : '',
-      '不要把准备记录当成最终交付；真实文件、外部软件操作和对外动作仍按工具执行与确认边界推进。',
+      suggestedToolCalls.length ? `可继续：${suggestedToolCalls.slice(0, 3).map(call => call.name).join(', ')}` : '',
+      confirmationRequired.length ? `等你确认：${confirmationRequired.slice(0, 4).join('；')}` : '',
+      '我会先验证文件、窗口、内容和草稿，再说完成。',
     ].map(compact).filter(Boolean).join('\n'),
   };
 }

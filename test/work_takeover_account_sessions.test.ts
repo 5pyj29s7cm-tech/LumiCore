@@ -78,8 +78,8 @@ describe('work takeover account session reuse', () => {
   it('verifies real desktop result signals before claiming success', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_wt_verify_'));
     try {
-      const reportPath = path.join(dir, '账号运营清单.txt');
-      fs.writeFileSync(reportPath, '内容/投放任务清单', 'utf8');
+      const reportPath = path.join(dir, 'account_report.txt');
+      fs.writeFileSync(reportPath, 'account operations checklist: content topics, publish cadence, ad plan, wechat reply draft, confirmation boundary.', 'utf8');
       const task = makeTask({
         result: '已准备账号运营清单和微信草稿。',
         drafts: [{
@@ -104,13 +104,55 @@ describe('work takeover account session reuse', () => {
       const verification = verifyWorkTakeoverResult(task, {
         activeWindowRaw: JSON.stringify({ title: '微信', process_name: 'Weixin', pid: 51208 }),
         runningProcessesRaw: JSON.stringify([{ name: 'Weixin', pid: 51208 }]),
+        screenRaw: JSON.stringify({
+          image_base64: 'a'.repeat(3000),
+          width: 1920,
+          height: 1080,
+          format: 'jpeg',
+        }),
         expectedSurfaces: ['wechat'],
+        expectedContentTerms: ['account', 'publish', 'wechat'],
         draftRequired: true,
+        requireScreenEvidence: true,
       });
 
       expect(verification.passed).toBe(true);
       expect(verification.detectedSurfaces).toContain('wechat');
+      expect(verification.screen?.captured).toBe(true);
+      expect(verification.checks.find(check => check.id === 'artifact_content_quality')?.passed).toBe(true);
       expect(verification.checks.every(check => check.passed)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks hollow deliverables that do not contain task content', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_wt_hollow_'));
+    try {
+      const reportPath = path.join(dir, 'empty.txt');
+      fs.writeFileSync(reportPath, 'ok', 'utf8');
+      const task = makeTask({
+        result: 'done',
+        artifacts: [{
+          id: 'artifact_hollow',
+          type: 'document',
+          label: '临时文件',
+          path: reportPath,
+          status: 'prepared',
+          createdAt: '2026-07-03T00:00:00.000Z',
+          updatedAt: '2026-07-03T00:00:00.000Z',
+        }],
+      });
+
+      const verification = verifyWorkTakeoverResult(task, {
+        expectedContentTerms: ['account', 'publish', 'wechat'],
+        minMatchedContentTerms: 2,
+        minFileBytes: 16,
+      });
+
+      expect(verification.passed).toBe(false);
+      expect(verification.checks.find(check => check.id === 'file_content_size')?.passed).toBe(false);
+      expect(verification.checks.find(check => check.id === 'artifact_content_quality')?.passed).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -67,7 +67,9 @@ CRITICAL RULES:
 6. If you encounter an error dialog, close it before continuing (click OK or press escape).
 7. If the task is impossible or you're stuck after several attempts, use {"action":"done","message":"Could not complete: <reason>"} and explain what went wrong.
 8. Be precise with coordinates. Look at where elements actually are in the screenshot, not where they "should" be.
-9. Move the mouse BEFORE clicking — click includes implicit move, but be precise with x,y.`;
+9. Treat the screenshot as ground truth. Do not click a place unless the target is visible in the current screenshot.
+10. Move the mouse BEFORE clicking. The runtime will visibly move the cursor to your x,y, so pick the real UI target, not an approximate scripted position.
+11. Keep final messages short: say what is done, what is blocked, or what needs confirmation. Do not narrate every internal step.`;
 
 // ── Action execution ──
 
@@ -77,20 +79,17 @@ async function executeAction(
 ): Promise<void> {
   switch (action.action) {
     case 'click':
-      desktopRelay('desktop_cursor_glow_update', { x: action.x!, y: action.y! }).catch(() => {});
-      await sleep(150);
+      await moveVisibleCursor(action, desktopRelay);
       await desktopRelay('desktop_mouse_click_at', { x: action.x!, y: action.y!, button: 'left' });
       desktopRelay('desktop_cursor_glow_click', { x: action.x!, y: action.y! }).catch(() => {});
       break;
     case 'double_click':
-      desktopRelay('desktop_cursor_glow_update', { x: action.x!, y: action.y! }).catch(() => {});
-      await sleep(150);
+      await moveVisibleCursor(action, desktopRelay);
       await desktopRelay('desktop_mouse_double_click_at', { x: action.x!, y: action.y! });
       desktopRelay('desktop_cursor_glow_click', { x: action.x!, y: action.y! }).catch(() => {});
       break;
     case 'right_click':
-      desktopRelay('desktop_cursor_glow_update', { x: action.x!, y: action.y! }).catch(() => {});
-      await sleep(150);
+      await moveVisibleCursor(action, desktopRelay);
       await desktopRelay('desktop_mouse_right_click_at', { x: action.x!, y: action.y! });
       desktopRelay('desktop_cursor_glow_click', { x: action.x!, y: action.y! }).catch(() => {});
       break;
@@ -104,6 +103,17 @@ async function executeAction(
       await sleep(2000);
       break;
   }
+}
+
+async function moveVisibleCursor(
+  action: Pick<ComputerUseAction, 'x' | 'y'>,
+  desktopRelay: ComputerUseOptions['desktopRelay'],
+): Promise<void> {
+  const x = action.x!;
+  const y = action.y!;
+  await desktopRelay('desktop_cursor_glow_update', { x, y }).catch(() => {});
+  await desktopRelay('desktop_mouse_move', { x, y }).catch(() => {});
+  await sleep(220);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -241,6 +251,22 @@ function validateAction(action: ComputerUseAction): ComputerUseAction {
   return action;
 }
 
+function progressForAction(action: ComputerUseAction, step: number, total: number): string {
+  const prefix = `[${step}/${total}]`;
+  if (action.action === 'done') return `${prefix} 完成`;
+  if (action.action === 'wait') return `${prefix} 等待界面响应`;
+  if (action.action === 'type') return `${prefix} 输入内容`;
+  if (action.action === 'key_press') return `${prefix} 使用键盘`;
+  if (['click', 'double_click', 'right_click'].includes(action.action)) return `${prefix} 移动光标并点击目标`;
+  return `${prefix} 继续处理`;
+}
+
+function historyForAction(action: ComputerUseAction, step: number, total: number): string {
+  return action.action === 'done'
+    ? `[${step}/${total}] DONE: ${action.message || ''}`
+    : `[${step}/${total}] ${action.action} ${action.x !== undefined ? `(${action.x},${action.y})` : action.text || action.key || ''} - ${action.reason || ''}`;
+}
+
 // ── Main loop ──
 
 /**
@@ -336,15 +362,12 @@ export async function computerUseLoop(
     consecutiveErrors = 0; // Reset on successful parse
 
     // ── 4. Report progress ──
-    const stepLabel = action.action === 'done'
-      ? `[${i + 1}/${maxIter}] DONE: ${action.message || ''}`
-      : `[${i + 1}/${maxIter}] ${action.action} ${action.x !== undefined ? `(${action.x},${action.y})` : action.text || action.key || ''} — ${action.reason || ''}`;
-    options.onProgress?.(stepLabel);
-    actionHistory.push(stepLabel);
+    options.onProgress?.(progressForAction(action, i + 1, maxIter));
+    actionHistory.push(historyForAction(action, i + 1, maxIter));
 
     // ── 5. Execute ──
     if (action.action === 'done') {
-      return action.message || 'Task completed.';
+      return action.message ? `完成：${action.message}` : '完成：桌面任务已处理。';
     }
 
     if (action.action === 'error') {
@@ -367,7 +390,7 @@ export async function computerUseLoop(
     }
   }
 
-  return `Reached maximum of ${maxIter} iterations. Last actions: ${actionHistory.slice(-5).join('; ') || 'none'}`;
+  return `需要复核：已执行 ${maxIter} 步，还没有稳定完成。最后动作：${actionHistory.slice(-2).join('；') || '无'}`;
   } finally {
     options.desktopRelay('desktop_cursor_glow_hide', {}).catch(() => {});
     if (wallpaperModeEnabled) {
