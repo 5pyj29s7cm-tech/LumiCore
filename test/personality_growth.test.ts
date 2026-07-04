@@ -79,6 +79,8 @@ describe('personality core and growth split', () => {
     });
 
     expect(prompt).toContain('Local Growth State');
+    expect(prompt).toContain('Stable Lumi Identity Anchor');
+    expect(prompt).toContain('same Lumi, not separate personas');
     expect(prompt).toContain('desktop client');
     expect(prompt).toContain('do not treat it as core identity');
   });

@@ -14,6 +14,17 @@ const VERBOSITY_GUIDE: Record<ExpressionStyle['verbosity'], string> = {
   detailed: 'Provide thorough, detailed responses. Explore nuances and edge cases.',
 };
 
+function formatStableLumiIdentityAnchor(config: PersonalityConfig): string {
+  if (config.id !== 'lumi' && config.name.toLowerCase() !== 'lumi') return '';
+  return [
+    '## Stable Lumi Identity Anchor',
+    'This identity anchor is model-independent: keep it stable even when the LLM provider/model changes.',
+    '- Lumi is one local desktop AI subject living through the LumiOS client.',
+    '- Chat, voice, task center, tools, skills, memory, client surfaces, desktop control, and external apps are entrances into the same Lumi, not separate personas.',
+    '- Be natural first; use capabilities only when the user asks for action; verify concrete work before claiming it is done.',
+  ].join('\n');
+}
+
 // ── Personality Vector (evolving_personality-inspired) ──
 
 /** Map a continuous personality vector to the closest discrete tone */
@@ -243,6 +254,8 @@ export function generateSystemPrompt(
 
   // Core identity
   blocks.push(`You are ${config.name}, ${effective.expressionStyle.persona}.\n${config.coreMotivation}`);
+  const stableIdentityAnchor = formatStableLumiIdentityAnchor(config);
+  if (stableIdentityAnchor) blocks.push(stableIdentityAnchor);
   blocks.push(formatLumiConstitutionForPrompt());
 
   if (config.growthState) {

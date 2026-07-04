@@ -21,6 +21,10 @@ import { shouldExposeAgentWork } from "../cognition/tool_intent";
 import { resolveWorkSurfaceRoute } from "../cognition/work_surface";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
+import { buildLumiTurnFlow } from "../cognition/turn_flow";
+import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
+import { persistLumiLearningTurn } from "../cognition/learning_interface";
 
 export function registerTaskHandler(
   socket: Socket,
@@ -91,9 +95,26 @@ export function registerTaskHandler(
     let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-chat';
 
     // ── Load persisted conversation history (survives page reload) ──
+    const turnFlow = buildLumiTurnFlow({
+      userId: uid,
+      text: data.text,
+      channel: 'chat',
+      source: 'task',
+      category: 'command',
+      surface: 'work',
+      operationMode: 'assistant',
+      targetIsLumi: personality.id === 'lumi',
+    });
     const workSurfaceRoute = resolveWorkSurfaceRoute(data.text);
     const visionIntent = hasVisionIntent(data.text);
     let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid);
+    effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
+    effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
+      userId: uid,
+      text: data.text,
+      flow: turnFlow,
+      toolRegistry,
+    });
     if (workSurfaceRoute.promptOverlay) {
       effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
     }
@@ -117,6 +138,10 @@ export function registerTaskHandler(
       const topicCtx = getTopicContext(convForHistory.id);
       if (topicCtx) effectiveSystemPrompt += topicCtx;
     }
+    effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
+      channel: 'task',
+      flow: turnFlow,
+    });
 
     const messages: NormalizedMessage[] = [
       { role: 'system', content: effectiveSystemPrompt },
@@ -267,6 +292,24 @@ export function registerTaskHandler(
           updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
         }
         saveEmotionalState(uid, updatedState);
+        try {
+          const learning = persistLumiLearningTurn({
+            userId: uid,
+            userText: data.text,
+            assistantText: orchestratedText,
+            channel: 'task',
+            flow: turnFlow,
+            toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+            domain: 'personal',
+            sourceInteractionId: interactionId,
+            agentId: '',
+          });
+          if (learning.shouldPersist) {
+            console.log(`[LumiLearningInterface] task-orchestrated persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+          }
+        } catch (learnErr: any) {
+          console.warn('[LumiLearningInterface] task-orchestrated persistence failed:', learnErr?.message || learnErr);
+        }
         return;
       }
 
@@ -372,6 +415,26 @@ export function registerTaskHandler(
         conversationId: conv.id,
       } as any);
       writeDB(db);
+
+      try {
+        const learning = persistLumiLearningTurn({
+          userId: uid,
+          userText: data.text,
+          assistantText: result.text,
+          channel: 'task',
+          flow: turnFlow,
+          toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+          toolRecords: result.toolCalls,
+          domain: 'personal',
+          sourceInteractionId: interactionId,
+          agentId: '',
+        });
+        if (learning.shouldPersist) {
+          console.log(`[LumiLearningInterface] task persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+        }
+      } catch (learnErr: any) {
+        console.warn('[LumiLearningInterface] task persistence failed:', learnErr?.message || learnErr);
+      }
 
       // Async memory extraction
       const locationTag = sensory.locationTag || undefined;

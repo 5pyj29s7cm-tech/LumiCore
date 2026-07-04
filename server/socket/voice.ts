@@ -25,6 +25,8 @@ import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from
 import { getOperationModeConfig, parseStoredOperationMode, OperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay, buildLumiTurnFlow } from "../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
+import { persistLumiLearningTurn } from "../cognition/learning_interface";
 import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
@@ -466,7 +468,11 @@ async function processVoiceInput(
     domain: voiceScope.domain,
     orgId: voiceScope.orgId,
   });
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + turnFlowOverlay + runtimeCapabilityOverlay;
+  const operatingKernelOverlay = '\n\n' + buildLumiOperatingKernelPrompt({
+    channel: 'voice',
+    flow: turnFlow,
+  });
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + turnFlowOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -1166,6 +1172,27 @@ async function processVoiceInput(
       } catch { /* best-effort */ }
     }
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
+
+    try {
+      const learning = persistLumiLearningTurn({
+        userId: session.userId,
+        userText,
+        assistantText: responseText,
+        channel: 'voice',
+        flow: turnFlow,
+        toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+        toolRecords: toolResults,
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+        sourceInteractionId: `voice_${Date.now()}`,
+        agentId: session.agentId,
+      });
+      if (learning.shouldPersist) {
+        logger.info(`[LumiLearningInterface] voice persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+      }
+    } catch (learnErr: any) {
+      logger.warn(`[LumiLearningInterface] voice persistence failed: ${learnErr?.message || learnErr}`);
+    }
 
   } catch (err: any) {
     if (err?.name === 'AbortError') {

@@ -13,6 +13,8 @@ import { getOperationModeConfig, parseStoredOperationMode } from "../cognition/o
 import { formatToolRouteForPrompt, mergeToolPolicyWithRoute, routeToolsForTurn } from "../cognition/tool_router";
 import { buildInteractionModeOverlay, buildLumiTurnFlow, resolveTurnSurface } from "../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
+import { persistLumiLearningTurn } from "../cognition/learning_interface";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
@@ -715,6 +717,10 @@ export function registerChatHandler(
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
       }
+      effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
+        channel: 'chat',
+        flow: turnFlow,
+      });
 
       // Keep this late so English system/tool context cannot pull the reply language.
       effectiveSystemPrompt += '\n\n' + buildResponseLanguageInstruction(text);
@@ -1675,6 +1681,27 @@ export function registerChatHandler(
         socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
       }
       emitAgent("agent:status", { status: "idle" });
+
+      try {
+        const learning = persistLumiLearningTurn({
+          userId: uid,
+          userText: text,
+          assistantText: responseText,
+          channel: 'chat',
+          flow: turnFlow,
+          toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+          toolRecords: allToolRecords,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          sourceInteractionId: interactionId,
+          agentId: agentId || '',
+        });
+        if (learning.shouldPersist) {
+          console.log(`[LumiLearningInterface] chat persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+        }
+      } catch (learnErr: any) {
+        console.warn('[LumiLearningInterface] chat persistence failed:', learnErr?.message || learnErr);
+      }
 
       // Clean up abort session
       chatSessionMap.delete(sessionKey);
