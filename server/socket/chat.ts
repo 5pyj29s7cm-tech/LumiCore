@@ -9,10 +9,10 @@ import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } 
 import { LLMUsage, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { runWithTools } from "../llm/adapter";
-import { getOperationModeConfig, parseStoredOperationMode } from "../cognition/operation_modes";
-import { formatToolRouteForPrompt, mergeToolPolicyWithRoute, routeToolsForTurn } from "../cognition/tool_router";
+import { parseStoredOperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
+import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -681,51 +681,22 @@ export function registerChatHandler(
 
       // Inject operation mode prompt overlay
       const effectiveOperationMode = turnFlow.effectiveOperationMode;
-      const allowToolUseForTurn = turnFlow.allowToolUseForTurn;
       const selfRepairTurn = turnFlow.selfRepairTurn;
       const clientActionOnlyTurn = turnFlow.clientActionOnlyTurn;
       const workSurfaceRoute = turnFlow.workSurfaceRoute;
       const visionIntent = turnFlow.visionIntent;
-      const opModeConfig = getOperationModeConfig(effectiveOperationMode);
-      const clientActionToolPolicy = clientActionOnlyTurn
-        ? { allowedTools: ['client_get_state', 'client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 }
-        : null;
-      const selfRepairToolPolicy = selfRepairTurn
-        ? {
-            allowedTools: ['*'],
-            requireConfirmation: [
-              'desktop_run_command',
-              'run_command',
-              'write_file',
-              'file_delete',
-              'delete_file',
-              'rm',
-              'unlink',
-              'format',
-              'rmdir',
-              'uninstall',
-              'computer_use',
-            ],
-            forbiddenTools: [],
-            maxIterations: 8,
-          }
-        : null;
-      const baseRoutedToolPolicy = isSanctuary
-        ? { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 }
-        : selfRepairToolPolicy
-            ? selfRepairToolPolicy
-          : clientActionToolPolicy
-            ? clientActionToolPolicy
-            : (workSurfaceRoute.toolPolicy || opModeConfig?.toolPolicy || personality.toolPolicy);
-      const toolRoute = allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn && !isSanctuary
-        ? routeToolsForTurn(turnFlow.routeText || text, toolRegistry.getToolDeclarations())
-        : null;
-      const routedToolPolicy = toolRoute && baseRoutedToolPolicy
-        ? mergeToolPolicyWithRoute(baseRoutedToolPolicy, toolRoute)
-        : baseRoutedToolPolicy;
+      const executionDecision = buildLumiExecutionDecision({
+        flow: turnFlow,
+        text,
+        toolDeclarations: toolRegistry.getToolDeclarations(),
+        personalityToolPolicy: personality.toolPolicy,
+        isSanctuary,
+      });
+      const toolRoute = executionDecision.toolRoute;
+      const routedToolPolicy = executionDecision.toolPolicy;
       const exposeAgentWork = turnFlow.exposeAgentWork;
       effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid);
-      console.log('[ChatHandler] tool gate:', allowToolUseForTurn ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
+      console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
       if (toolRoute) {
         socket.emit('agent:tool_route', {
           categories: toolRoute.categories,
@@ -739,9 +710,7 @@ export function registerChatHandler(
       if (workSurfaceRoute.promptOverlay) {
         effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
       }
-      if (toolRoute) {
-        effectiveSystemPrompt += '\n\n' + formatToolRouteForPrompt(toolRoute);
-      }
+      effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
       const visionRoutingOverlay = effectiveOperationMode !== 'meeting' ? buildVisionRoutingOverlay(uid, text) : '';
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
@@ -1049,7 +1018,7 @@ export function registerChatHandler(
           source: eventSource,
           category: cognition.intent.category,
           complexity: backgroundComplexity,
-          allowToolUse: allowToolUseForTurn,
+          allowToolUse: executionDecision.allowToolUse,
           clientActionOnly: clientActionOnlyTurn,
           selfRepair: selfRepairTurn,
           sanctuary: isSanctuary,
@@ -1293,7 +1262,7 @@ export function registerChatHandler(
         }
       }
 
-      if (!responseText && !prefersSequentialWorkflow && allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn && !isSanctuary && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
+      if (!responseText && !prefersSequentialWorkflow && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
         // Path B: Orchestrator — decompose tasks into sub-tasks for worker agents
         // (Skipped for sanctuary agents — they stay in their territory)
         try {
@@ -1351,7 +1320,7 @@ export function registerChatHandler(
       }
 
       // Path B2: NL Task Chainer — for office workflows that chain tools (search→read→create etc.)
-      if (!responseText && allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(text)) {
+      if (!responseText && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(text)) {
         // Pre-flight: auto-install any matching uninstalled/outdated skills
         await autoInstallForTask(text, { emit: (event, data) => socket.emit(event, data) });
 
@@ -1421,7 +1390,7 @@ export function registerChatHandler(
         ];
 
         try {
-          console.log('[ChatHandler] Calling Path C with provider:', activeProvider, 'model:', activeModel, 'tools:', allowToolUseForTurn && !isSanctuary ? 'enabled' : 'off');
+          console.log('[ChatHandler] Calling Path C with provider:', activeProvider, 'model:', activeModel, 'tools:', executionDecision.allowToolUse ? 'enabled' : 'off');
           const streamChunks: string[] = [];
           const onChunk: StreamCallback = (chunk) => {
             streamChunks.push(chunk);
@@ -1431,7 +1400,7 @@ export function registerChatHandler(
           };
 
           // Sanctuary agents get zero tool access — they can only talk
-          if (!allowToolUseForTurn || isSanctuary) {
+          if (!executionDecision.allowToolUse) {
             const response = await makeLLMCallStreaming(
               messages,
               [],
@@ -1578,7 +1547,7 @@ export function registerChatHandler(
               const fallbackMessage = `主推理服务 ${activeProvider}/${activeModel} 不可用，Lumi 将临时降级到 Gemini。`;
               socket.emit('agent:notification', { type: 'llm_fallback', level: 'warning', message: fallbackMessage });
               pushNotification(uid, { type: 'llm_fallback', title: 'LLM 降级提醒', message: fallbackMessage });
-              if (!allowToolUseForTurn || isSanctuary) {
+              if (!executionDecision.allowToolUse) {
                 const fallbackChunks: string[] = [];
                 const fallback = await makeLLMCallStreaming(
                   messages,

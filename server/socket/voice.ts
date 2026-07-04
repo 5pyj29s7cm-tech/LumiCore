@@ -22,9 +22,10 @@ import { queryMemories, addMemory } from "../memory/store";
 import { matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
-import { getOperationModeConfig, parseStoredOperationMode, OperationMode } from "../cognition/operation_modes";
+import { parseStoredOperationMode, OperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
+import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -415,53 +416,39 @@ async function processVoiceInput(
   });
   const turnFlow = turnDispatch.flow;
   const effectiveOperationMode = turnFlow.effectiveOperationMode;
-  const allowToolUseForTurn = turnFlow.allowToolUseForTurn;
   const selfRepairTurn = turnFlow.selfRepairTurn;
   const clientActionOnlyTurn = turnFlow.clientActionOnlyTurn;
   const workSurfaceRoute = turnFlow.workSurfaceRoute;
   const visionIntent = turnFlow.visionIntent;
-  const effectiveOpModeConfig = getOperationModeConfig(effectiveOperationMode);
-  const clientActionToolPolicy = clientActionOnlyTurn
-    ? { allowedTools: ['client_get_state', 'client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 }
-    : null;
-  const selfRepairToolPolicy = selfRepairTurn
-    ? {
-        allowedTools: ['*'],
-        requireConfirmation: [
-          'desktop_run_command',
-          'run_command',
-          'write_file',
-          'file_delete',
-          'delete_file',
-          'rm',
-          'unlink',
-          'format',
-          'rmdir',
-          'uninstall',
-          'computer_use',
-        ],
-        forbiddenTools: [],
-        maxIterations: 8,
-      }
-    : null;
   const exposeAgentWork = turnFlow.exposeAgentWork;
-  const routedToolPolicy = selfRepairToolPolicy
-    ? selfRepairToolPolicy
-    : clientActionToolPolicy
-      ? clientActionToolPolicy
-      : allowToolUseForTurn
-        ? (workSurfaceRoute.toolPolicy || effectiveOpModeConfig?.toolPolicy)
-        : { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 };
-  logger.info(`[Audio] tool gate: ${allowToolUseForTurn ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn}`);
+  const executionDecision = buildLumiExecutionDecision({
+    flow: turnFlow,
+    text: userText,
+    toolDeclarations: toolRegistry.getToolDeclarations(),
+    personalityToolPolicy: personality.toolPolicy,
+  });
+  const routedToolPolicy = executionDecision.toolPolicy;
+  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
+  if (executionDecision.toolRoute) {
+    socket.emit('agent:tool_route', {
+      categories: executionDecision.toolRoute.categories,
+      reasons: executionDecision.toolRoute.reasons,
+      toolNames: executionDecision.toolRoute.toolNames,
+      totalAvailable: executionDecision.toolRoute.totalAvailable,
+      truncated: executionDecision.toolRoute.truncated,
+      source: 'voice',
+    });
+  }
   const opModeOverlay = '\n\n' + buildInteractionModeOverlay(turnFlow);
   const workSurfaceOverlay = workSurfaceRoute.promptOverlay ? '\n\n' + workSurfaceRoute.promptOverlay : '';
   const visionRoutingOverlay = visionIntent && effectiveOperationMode !== 'meeting' ? '\n\n' + buildVisionRoutingOverlay(session.userId, userText) : '';
-  const interactionOverlay = allowToolUseForTurn
+  const interactionOverlay = executionDecision.allowToolUse
     ? toolVoiceOverlay
     : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, assemble a team, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
   const clientSelfPrompt = '\n\n' + formatClientSelfPrompt(session.userId);
   const dispatchOverlay = '\n\n' + turnDispatch.promptOverlay;
+  const executionOverlay = '\n\n' + executionDecision.promptOverlay;
   const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
     userId: session.userId,
@@ -475,7 +462,7 @@ async function processVoiceInput(
     channel: 'voice',
     flow: turnFlow,
   });
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -484,7 +471,7 @@ async function processVoiceInput(
     || userLLMPrefs.model
     || 'deepseek-chat';
 
-  const maxIterations = routedToolPolicy?.maxIterations || personality.toolPolicy.maxIterations || 5;
+  const maxIterations = executionDecision.maxIterations || personality.toolPolicy.maxIterations || 5;
 
   const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -1017,7 +1004,7 @@ async function processVoiceInput(
     // ── Orchestrator: complex/moderate tasks → multi-agent decomposition ──
     let usedOrchestrator = false;
     const complexity = classifyComplexity(userText, { userId: session.userId, personalityId: session.personalityId });
-    if (allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn && !(workSurfaceRoute.artifactFirst && !workSurfaceRoute.directDesktop) && (complexity === 'complex' || complexity === 'moderate')) {
+    if (executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && !(workSurfaceRoute.artifactFirst && !workSurfaceRoute.directDesktop) && (complexity === 'complex' || complexity === 'moderate')) {
       try {
         socket.emit("agent:status", { status: "thinking", agentName: "Lumi", phase: exposeAgentWork ? 'orchestrator' : 'background' });
         const voiceLeadIn = exposeAgentWork
@@ -1092,7 +1079,7 @@ async function processVoiceInput(
       if (pipelineAbort?.signal.aborted) break;
 
       logger.info(`[Audio] LLM iter ${iter + 1}/${maxIterations}: provider=${provider} model=${effectiveModel}`);
-      const toolDeclarations = allowToolUseForTurn
+      const toolDeclarations = executionDecision.allowToolUse
         ? toolRegistry.getToolDeclarations().filter((declaration) => {
             const name = declaration.function.name;
             const forbidden = new Set(routedToolPolicy?.forbiddenTools || []);

@@ -21,6 +21,7 @@ import { shouldExposeAgentWork } from "../cognition/tool_intent";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
+import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -107,9 +108,26 @@ export function registerTaskHandler(
     const turnFlow = turnDispatch.flow;
     const workSurfaceRoute = turnFlow.workSurfaceRoute;
     const visionIntent = turnFlow.visionIntent;
+    const executionDecision = buildLumiExecutionDecision({
+      flow: turnFlow,
+      text: data.text,
+      toolDeclarations: toolRegistry.getToolDeclarations(),
+      personalityToolPolicy: personality.toolPolicy,
+    });
+    if (executionDecision.toolRoute) {
+      socket.emit('agent:tool_route', {
+        categories: executionDecision.toolRoute.categories,
+        reasons: executionDecision.toolRoute.reasons,
+        toolNames: executionDecision.toolRoute.toolNames,
+        totalAvailable: executionDecision.toolRoute.totalAvailable,
+        truncated: executionDecision.toolRoute.truncated,
+        source: 'task',
+      });
+    }
     let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid);
     effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
     effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
+    effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
     effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
       userId: uid,
       text: data.text,
@@ -368,7 +386,7 @@ export function registerTaskHandler(
             error: record.error,
           });
         },
-        25,
+        executionDecision.maxIterations || 25,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         (chunk) => {
           if (!cancelled) {
@@ -376,7 +394,7 @@ export function registerTaskHandler(
             socket.emit("agent:chunk", { text: chunk, agentName: personality.name });
           }
         },
-        { userId: uid, desktopRelay, requestConfirmation, toolPolicy: workSurfaceRoute.toolPolicy || personality.toolPolicy, isCancelled: () => cancelled, llmGetters },
+        { userId: uid, desktopRelay, requestConfirmation, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
