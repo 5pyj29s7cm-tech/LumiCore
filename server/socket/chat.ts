@@ -13,6 +13,7 @@ import { parseStoredOperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -52,7 +53,6 @@ import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflo
 import { buildProfessionOverlay } from "../autonomy/professions";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildResponseLanguageInstruction } from "../utils/language";
-import { guardCompletionClaims } from "../work_product/completion_guard";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
@@ -1185,13 +1185,14 @@ export function registerChatHandler(
                 }
 
                 let finalText = orchResult.responseText || '后台子 agent 已完成任务，但没有返回详细文本。';
-                const guarded = guardCompletionClaims({
-                  task: text,
-                  response: finalText,
-                  toolCalls: backgroundToolRecords,
+                const finalizedBackground = finalizeLumiResponse({
+                  taskText: text,
+                  responseText: finalText,
+                  toolRecords: backgroundToolRecords,
                   source: 'background_delegation',
+                  flow: turnFlow,
                 });
-                if (guarded.blocked) finalText = guarded.text;
+                if (finalizedBackground.blocked) finalText = finalizedBackground.text;
 
                 const completionText = `后台子 agent 完成了：${text.slice(0, 80)}\n\n${finalText}`;
                 const completedTask = completeBackgroundTask(backgroundTaskId, completionText);
@@ -1645,16 +1646,17 @@ export function registerChatHandler(
         }
       }
 
-      const completionGuard = guardCompletionClaims({
-        task: text,
-        response: responseText,
-        toolCalls: allToolRecords,
+      const finalResponse = finalizeLumiResponse({
+        taskText: text,
+        responseText,
+        toolRecords: allToolRecords,
         source: 'chat',
+        flow: turnFlow,
       });
-      if (completionGuard.blocked) {
-        console.warn('[ChatHandler] Completion claim blocked:', completionGuard.reason);
-        responseText = completionGuard.text;
-        emitAgent("agent:notification", { type: 'work_product_guard', level: 'warning', message: completionGuard.reason });
+      if (finalResponse.blocked) {
+        console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
+        responseText = finalResponse.text;
+        if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
       }
 
       // Save to conversation via conversation manager (reuse conversationId from setup)

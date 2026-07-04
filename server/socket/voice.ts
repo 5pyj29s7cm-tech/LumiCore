@@ -26,6 +26,7 @@ import { parseStoredOperationMode, OperationMode } from "../cognition/operation_
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -35,7 +36,6 @@ import { formatClientSelfPrompt } from "../client/self_model";
 import { getIdleState } from "../context/activity_stream";
 import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
-import { guardCompletionClaims } from "../work_product/completion_guard";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 
 interface AudioSession {
@@ -1165,17 +1165,18 @@ async function processVoiceInput(
     }
     } // end if (!usedOrchestrator)
 
-    const completionGuard = guardCompletionClaims({
-      task: userText,
-      response: responseText,
-      toolCalls: toolResults,
+    const finalResponse = finalizeLumiResponse({
+      taskText: userText,
+      responseText,
+      toolRecords: toolResults,
       source: 'voice',
+      flow: turnFlow,
     });
-    if (completionGuard.blocked) {
-      logger.warn(`[Audio] Completion claim blocked: ${completionGuard.reason}`);
-      responseText = completionGuard.text;
+    if (finalResponse.blocked) {
+      logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
+      responseText = finalResponse.text;
       sentenceBuffer = '';
-      socket.emit("agent:notification", { type: 'work_product_guard', level: 'warning', message: completionGuard.reason });
+      if (finalResponse.notification) socket.emit("agent:notification", finalResponse.notification);
     }
 
     // Flush remaining text

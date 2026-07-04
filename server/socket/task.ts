@@ -22,6 +22,7 @@ import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -233,7 +234,16 @@ export function registerTaskHandler(
 
       if (cognition.directToolExecuted && cognition.responseText) {
         console.log(`[Cognition] Task handled directly: ${cognition.intent.category}/${cognition.intent.subIntent}`);
-        socket.emit("agent:response", { text: cognition.responseText, agentName: personality.name });
+        const finalDirect = finalizeLumiResponse({
+          taskText: data.text,
+          responseText: cognition.responseText,
+          toolRecords: [],
+          source: 'task',
+          flow: turnFlow,
+        });
+        const directResponseText = finalDirect.text;
+        if (finalDirect.blocked && finalDirect.notification) socket.emit("agent:notification", finalDirect.notification);
+        socket.emit("agent:response", { text: directResponseText, agentName: personality.name });
         socket.emit("agent:status", { status: "idle" });
 
         // Still log the interaction
@@ -241,7 +251,7 @@ export function registerTaskHandler(
         db.interactions.push({
           id: interactionId,
           content: data.text,
-          response: cognition.responseText,
+          response: directResponseText,
           role: "user",
           personality: personality.id,
           timestamp: new Date().toISOString(),
@@ -250,7 +260,7 @@ export function registerTaskHandler(
           llmWasCalled: false,
         } as any);
         writeDB(db);
-        persistTaskLearning(cognition.responseText, { logLabel: 'task direct cognition' });
+        persistTaskLearning(directResponseText, { logLabel: 'task direct cognition' });
         socket.off('agent:task_cancel', onCancel);
         return;
       }
@@ -314,6 +324,17 @@ export function registerTaskHandler(
       }
 
       if (orchestratedText) {
+        const finalOrchestrated = finalizeLumiResponse({
+          taskText: data.text,
+          responseText: orchestratedText,
+          toolRecords: [],
+          source: 'task',
+          flow: turnFlow,
+        });
+        if (finalOrchestrated.blocked) {
+          orchestratedText = finalOrchestrated.text;
+          if (finalOrchestrated.notification) socket.emit("agent:notification", finalOrchestrated.notification);
+        }
         // Orchestrator handled the task — emit result and skip normal LLM path
         socket.emit("agent:response", { text: orchestratedText, agentName: personality.name });
         socket.emit("agent:status", { status: "idle" });
@@ -420,10 +441,22 @@ export function registerTaskHandler(
         return;
       }
 
+      let finalTaskText = result.text;
+      const finalTaskResponse = finalizeLumiResponse({
+        taskText: data.text,
+        responseText: finalTaskText,
+        toolRecords: result.toolCalls,
+        source: 'task',
+        flow: turnFlow,
+      });
+      if (finalTaskResponse.blocked) {
+        finalTaskText = finalTaskResponse.text;
+        if (finalTaskResponse.notification) socket.emit("agent:notification", finalTaskResponse.notification);
+      }
       const holoTask = canOutputHolographic(sensory)
-        ? textToHolographicOutput(result.text)
+        ? textToHolographicOutput(finalTaskText)
         : undefined;
-      socket.emit("agent:response", { text: result.text, agentName: personality.name, holographic: holoTask });
+      socket.emit("agent:response", { text: finalTaskText, agentName: personality.name, holographic: holoTask });
       socket.emit("agent:status", { status: "idle" });
 
       // Log with conversation linkage
@@ -438,7 +471,7 @@ export function registerTaskHandler(
       db.interactions.push({
         id: interactionId,
         content: data.text,
-        response: result.text,
+        response: finalTaskText,
         role: "user",
         personality: personality.id,
         timestamp: new Date().toISOString(),
@@ -448,14 +481,14 @@ export function registerTaskHandler(
       } as any);
       writeDB(db);
 
-      persistTaskLearning(result.text, { toolRecords: result.toolCalls, logLabel: 'task' });
+      persistTaskLearning(finalTaskText, { toolRecords: result.toolCalls, logLabel: 'task' });
 
       // Async memory extraction
       const locationTag = sensory.locationTag || undefined;
       extractMemories(
         {
           userMessage: data.text,
-          assistantResponse: result.text,
+          assistantResponse: finalTaskText,
           existingMemories: relevantMemories.map(m => m.content),
           provider: activeProvider,
           model: activeModel,
@@ -518,11 +551,11 @@ export function registerTaskHandler(
       // ── Persist messages via conversation manager for cross-session continuity ──
       if (convForHistory) {
         addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id });
-        if (result.text) {
-          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: result.text, personality: personality.id });
+        if (finalTaskText) {
+          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id });
         }
         try {
-          const topics = extractTopics(data.text + ' ' + result.text);
+          const topics = extractTopics(data.text + ' ' + finalTaskText);
           for (const topic of topics) trackTopic(convForHistory.id, topic);
         } catch {}
         socket.emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task' });
