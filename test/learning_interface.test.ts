@@ -1,4 +1,6 @@
 import './helpers';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 describe('Lumi learning interface', () => {
@@ -72,5 +74,31 @@ describe('Lumi learning interface', () => {
     expect(durable.shouldPersist).toBe(true);
     expect(durable.memoryCandidates.some(item => item.content.includes('自然顺畅'))).toBe(true);
     expect(durable.capabilityCandidate?.route.id).toBe('lumi.natural_autonomy_flow');
+  });
+
+  it('keeps chat and voice early-return paths wired into post-turn learning', () => {
+    const chatSource = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    const voiceSource = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const taskSource = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
+
+    expect(chatSource).toContain('const persistChatLearning');
+    expect(chatSource).toContain("channel: 'workflow'");
+    expect(chatSource).toContain('workflow quick path');
+    expect(chatSource).toContain('chat quick command');
+    expect(chatSource).toContain('background delegation');
+    expect(chatSource.match(/persistChatLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(6);
+
+    expect(voiceSource).toContain('const persistVoiceLearning');
+    expect(voiceSource).toContain("channel: 'workflow'");
+    expect(voiceSource).toContain('voice quick command');
+    expect(voiceSource).toContain('voice cognition direct');
+    expect(voiceSource).toContain('voice music shortcut');
+    expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
+
+    expect(taskSource).toContain('const persistTaskLearning');
+    expect(taskSource).toContain('task direct cognition');
+    expect(taskSource).toContain('task orchestrated');
+    expect(taskSource).toContain('task cancelled');
+    expect(taskSource.match(/persistTaskLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(4);
   });
 });

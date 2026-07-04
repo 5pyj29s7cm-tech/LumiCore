@@ -25,6 +25,7 @@ import { buildLumiTurnFlow } from "../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiLearningTurn } from "../cognition/learning_interface";
+import type { ToolExecutionRecord } from "../tools/types";
 
 export function registerTaskHandler(
   socket: Socket,
@@ -148,6 +149,34 @@ export function registerTaskHandler(
       ...voiceHistory,
       { role: 'user', content: data.text },
     ];
+    const persistTaskLearning = (
+      assistantText: string,
+      options: {
+        toolRecords?: ToolExecutionRecord[];
+        sourceInteractionId?: string;
+        logLabel?: string;
+      } = {},
+    ) => {
+      try {
+        const learning = persistLumiLearningTurn({
+          userId: uid,
+          userText: data.text,
+          assistantText,
+          channel: 'task',
+          flow: turnFlow,
+          toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+          toolRecords: options.toolRecords || [],
+          domain: 'personal',
+          sourceInteractionId: options.sourceInteractionId || interactionId,
+          agentId: '',
+        });
+        if (learning.shouldPersist) {
+          console.log(`[LumiLearningInterface] ${options.logLabel || 'task'} persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+        }
+      } catch (learnErr: any) {
+        console.warn(`[LumiLearningInterface] ${options.logLabel || 'task'} persistence failed:`, learnErr?.message || learnErr);
+      }
+    };
 
     let cognition: CognitiveResult | undefined;
     let cancelled = false;
@@ -207,6 +236,7 @@ export function registerTaskHandler(
           llmWasCalled: false,
         } as any);
         writeDB(db);
+        persistTaskLearning(cognition.responseText, { logLabel: 'task direct cognition' });
         socket.off('agent:task_cancel', onCancel);
         return;
       }
@@ -292,24 +322,7 @@ export function registerTaskHandler(
           updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
         }
         saveEmotionalState(uid, updatedState);
-        try {
-          const learning = persistLumiLearningTurn({
-            userId: uid,
-            userText: data.text,
-            assistantText: orchestratedText,
-            channel: 'task',
-            flow: turnFlow,
-            toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-            domain: 'personal',
-            sourceInteractionId: interactionId,
-            agentId: '',
-          });
-          if (learning.shouldPersist) {
-            console.log(`[LumiLearningInterface] task-orchestrated persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-          }
-        } catch (learnErr: any) {
-          console.warn('[LumiLearningInterface] task-orchestrated persistence failed:', learnErr?.message || learnErr);
-        }
+        persistTaskLearning(orchestratedText, { logLabel: 'task orchestrated' });
         return;
       }
 
@@ -385,6 +398,11 @@ export function registerTaskHandler(
       if (cancelled) {
         socket.emit("agent:response", { text: result.text || '任务已取消。', agentName: personality.name });
         socket.emit("agent:status", { status: "idle" });
+        persistTaskLearning(result.text || 'Task cancelled.', {
+          toolRecords: result.toolCalls,
+          sourceInteractionId: `${interactionId}_cancelled`,
+          logLabel: 'task cancelled',
+        });
         return;
       }
 
@@ -416,25 +434,7 @@ export function registerTaskHandler(
       } as any);
       writeDB(db);
 
-      try {
-        const learning = persistLumiLearningTurn({
-          userId: uid,
-          userText: data.text,
-          assistantText: result.text,
-          channel: 'task',
-          flow: turnFlow,
-          toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-          toolRecords: result.toolCalls,
-          domain: 'personal',
-          sourceInteractionId: interactionId,
-          agentId: '',
-        });
-        if (learning.shouldPersist) {
-          console.log(`[LumiLearningInterface] task persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-        }
-      } catch (learnErr: any) {
-        console.warn('[LumiLearningInterface] task persistence failed:', learnErr?.message || learnErr);
-      }
+      persistTaskLearning(result.text, { toolRecords: result.toolCalls, logLabel: 'task' });
 
       // Async memory extraction
       const locationTag = sensory.locationTag || undefined;

@@ -555,6 +555,36 @@ async function processVoiceInput(
   })();
   let responseText = '';
   let toolResults: ToolExecutionRecord[] = [];
+  const persistVoiceLearning = (
+    assistantText: string,
+    options: {
+      channel?: 'voice' | 'workflow';
+      toolRecords?: ToolExecutionRecord[];
+      sourceInteractionId?: string;
+      logLabel?: string;
+    } = {},
+  ) => {
+    try {
+      const learning = persistLumiLearningTurn({
+        userId: session.userId,
+        userText,
+        assistantText,
+        channel: options.channel || 'voice',
+        flow: turnFlow,
+        toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+        toolRecords: options.toolRecords || [],
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+        sourceInteractionId: options.sourceInteractionId || `voice_${Date.now()}`,
+        agentId: session.agentId,
+      });
+      if (learning.shouldPersist) {
+        logger.info(`[LumiLearningInterface] ${options.logLabel || options.channel || 'voice'} persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+      }
+    } catch (learnErr: any) {
+      logger.warn(`[LumiLearningInterface] ${options.logLabel || options.channel || 'voice'} persistence failed: ${learnErr?.message || learnErr}`);
+    }
+  };
   let sentenceBuffer = '';
   let sentenceIdx = 0;
   const ttsPromises: Promise<void>[] = [];
@@ -677,6 +707,12 @@ async function processVoiceInput(
     socket.emit("audio:status", { status: "listening" });
     socket.emit("agent:status", { status: "idle" });
     socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: specialWorkflow.source });
+    persistVoiceLearning(responseText, {
+      channel: 'workflow',
+      toolRecords: toolResults,
+      sourceInteractionId: `voice_workflow_${Date.now()}`,
+      logLabel: specialWorkflow.source,
+    });
     return;
   }
 
@@ -723,6 +759,10 @@ async function processVoiceInput(
       socket.emit("audio:status", { status: "listening" });
       socket.emit("agent:status", { status: "idle" });
       socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "voice_mode" });
+      persistVoiceLearning(responseText, {
+        sourceInteractionId: `voice_mode_${Date.now()}`,
+        logLabel: 'voice mode switch',
+      });
       return;
     }
   }
@@ -738,6 +778,7 @@ async function processVoiceInput(
       let quickResponseText = quickResult.responseText;
       let quickToolResult = '';
       let quickToolError: string | undefined;
+      let quickToolRecord: ToolExecutionRecord | null = null;
       if (quickResult.toolCall && session.isActive) {
         const correlationId = `qc-${Date.now()}`;
         try {
@@ -761,6 +802,13 @@ async function processVoiceInput(
         if (quickResult.formatToolResult) {
           quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
         }
+        quickToolRecord = {
+          id: correlationId,
+          name: quickResult.toolCall.name,
+          arguments: quickResult.toolCall.arguments,
+          result: quickToolResult,
+          error: quickToolError,
+        };
       }
       flushSentence(quickResponseText);
       await Promise.allSettled(ttsPromises);
@@ -775,6 +823,11 @@ async function processVoiceInput(
       socket.emit("audio:status", { status: "listening" });
       socket.emit("agent:status", { status: "idle" });
       socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "quick_command" });
+      persistVoiceLearning(responseText, {
+        toolRecords: quickToolRecord ? [quickToolRecord] : [],
+        sourceInteractionId: `voice_quick_${Date.now()}`,
+        logLabel: 'voice quick command',
+      });
       return;
     }
   } catch (qcErr: any) {
@@ -802,6 +855,10 @@ async function processVoiceInput(
     socket.emit("audio:status", { status: "listening" });
     socket.emit("agent:status", { status: "idle" });
     socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "music_profile" });
+    persistVoiceLearning(responseText, {
+      sourceInteractionId: `voice_music_profile_${Date.now()}`,
+      logLabel: 'voice music profile',
+    });
     return;
   }
 
@@ -824,6 +881,10 @@ async function processVoiceInput(
     socket.emit("audio:status", { status: "listening" });
     socket.emit("agent:status", { status: "idle" });
     socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "music_voice_ack" });
+    persistVoiceLearning(responseText, {
+      sourceInteractionId: `voice_music_ack_${Date.now()}`,
+      logLabel: 'voice music ack',
+    });
 
     const musicUserId = session.userId;
     void (async () => {
@@ -889,6 +950,10 @@ async function processVoiceInput(
       socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening" });
       socket.emit("agent:status", { status: "idle" });
+      persistVoiceLearning(responseText, {
+        sourceInteractionId: `voice_cognition_direct_${Date.now()}`,
+        logLabel: 'voice cognition direct',
+      });
       return;
     }
 
@@ -922,6 +987,10 @@ async function processVoiceInput(
         socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
         socket.emit("audio:status", { status: "listening" });
         socket.emit("agent:status", { status: "idle" });
+        persistVoiceLearning(responseText, {
+          sourceInteractionId: `voice_music_shortcut_${Date.now()}`,
+          logLabel: 'voice music shortcut',
+        });
         return;
       } catch (musicErr: any) {
         logger.warn('[Audio] Music intent shortcut failed:', musicErr.message);
@@ -938,6 +1007,10 @@ async function processVoiceInput(
         socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
         socket.emit("audio:status", { status: "listening" });
         socket.emit("agent:status", { status: "idle" });
+        persistVoiceLearning(responseText, {
+          sourceInteractionId: `voice_music_shortcut_error_${Date.now()}`,
+          logLabel: 'voice music shortcut error',
+        });
         return;
       }
     }
@@ -1173,26 +1246,7 @@ async function processVoiceInput(
     }
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
 
-    try {
-      const learning = persistLumiLearningTurn({
-        userId: session.userId,
-        userText,
-        assistantText: responseText,
-        channel: 'voice',
-        flow: turnFlow,
-        toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-        toolRecords: toolResults,
-        domain: voiceScope.domain,
-        orgId: voiceScope.orgId,
-        sourceInteractionId: `voice_${Date.now()}`,
-        agentId: session.agentId,
-      });
-      if (learning.shouldPersist) {
-        logger.info(`[LumiLearningInterface] voice persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-      }
-    } catch (learnErr: any) {
-      logger.warn(`[LumiLearningInterface] voice persistence failed: ${learnErr?.message || learnErr}`);
-    }
+    persistVoiceLearning(responseText, { toolRecords: toolResults, logLabel: 'voice' });
 
   } catch (err: any) {
     if (err?.name === 'AbortError') {

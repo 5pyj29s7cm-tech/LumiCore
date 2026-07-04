@@ -525,6 +525,36 @@ export function registerChatHandler(
       };
 
       const isDirectDesktopTool = (toolName: string) => toolName.startsWith('desktop_');
+      const persistChatLearning = (
+        assistantText: string,
+        options: {
+          channel?: 'chat' | 'workflow';
+          toolRecords?: ToolExecutionRecord[];
+          sourceInteractionId?: string;
+          logLabel?: string;
+        } = {},
+      ) => {
+        try {
+          const learning = persistLumiLearningTurn({
+            userId: uid,
+            userText: text,
+            assistantText,
+            channel: options.channel || 'chat',
+            flow: turnFlow,
+            toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
+            toolRecords: options.toolRecords || [],
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            sourceInteractionId: options.sourceInteractionId || interactionId,
+            agentId: agentId || '',
+          });
+          if (learning.shouldPersist) {
+            console.log(`[LumiLearningInterface] ${options.logLabel || options.channel || 'chat'} persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
+          }
+        } catch (learnErr: any) {
+          console.warn(`[LumiLearningInterface] ${options.logLabel || options.channel || 'chat'} persistence failed:`, learnErr?.message || learnErr);
+        }
+      };
 
       // ── Desktop relay: enables 15 tools (mouse/keyboard/clipboard/screenshot/etc) in chat ──
       const desktopRelay = ((toolName: string, args: Record<string, any>): Promise<string> => {
@@ -642,6 +672,12 @@ export function registerChatHandler(
         if (conversationId) {
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: specialWorkflow.source });
         }
+        persistChatLearning(workflowResponseText, {
+          channel: 'workflow',
+          toolRecords: workflowToolCalls,
+          sourceInteractionId: `${interactionId}_workflow`,
+          logLabel: specialWorkflow.source,
+        });
         emitAgent("agent:status", { status: "idle", agentName: personality.name });
         chatSessionMap.delete(sessionKey);
         return;
@@ -788,6 +824,11 @@ export function registerChatHandler(
       if (workflowQuickResult) {
         emitAgent("agent:status", { status: "responding" });
         emitAgent("agent:response", { text: workflowQuickResult, agentName: personality.name });
+        persistChatLearning(workflowQuickResult, {
+          channel: 'workflow',
+          sourceInteractionId: `${interactionId}_workflow_quick`,
+          logLabel: 'workflow quick path',
+        });
         emitAgent("agent:status", { status: "idle" });
         return;
       }
@@ -804,6 +845,7 @@ export function registerChatHandler(
           let quickResponseText = quickResult.responseText;
           let quickToolResult = '';
           let quickToolError: string | undefined;
+          const quickToolRecords: ToolExecutionRecord[] = [];
           if (quickResult.toolCall) {
             const toolCid = `qc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const shouldEmitQuickTool = !isDirectDesktopTool(quickResult.toolCall.name);
@@ -839,6 +881,13 @@ export function registerChatHandler(
             if (quickResult.formatToolResult) {
               quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
             }
+            quickToolRecords.push({
+              id: toolCid,
+              name: quickResult.toolCall.name,
+              arguments: quickResult.toolCall.arguments,
+              result: quickToolResult,
+              error: quickToolError,
+            });
           }
           emitAgent("agent:response", { text: quickResponseText, agentName: personality.name });
           if (conversationId) {
@@ -849,6 +898,11 @@ export function registerChatHandler(
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
             socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
           }
+          persistChatLearning(quickResponseText, {
+            toolRecords: quickToolRecords,
+            sourceInteractionId: `${interactionId}_quick`,
+            logLabel: 'chat quick command',
+          });
           emitAgent("agent:status", { status: "idle" });
           // Track topics for quick commands too
           if (conversationId) {
@@ -881,6 +935,10 @@ export function registerChatHandler(
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: profileResponse, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
         }
+        persistChatLearning(profileResponse, {
+          sourceInteractionId: `${interactionId}_music_profile`,
+          logLabel: 'music profile',
+        });
         emitAgent("agent:status", { status: "idle" });
         chatSessionMap.delete(sessionKey);
         return;
@@ -1095,6 +1153,11 @@ export function registerChatHandler(
                   orgId: resolvedOrgId,
                 } as any);
                 writeDB(db);
+                persistChatLearning(content, {
+                  toolRecords: toolCalls || [],
+                  sourceInteractionId: `bg-${interactionId}`,
+                  logLabel: 'background delegation',
+                });
               } catch (persistErr: any) {
                 console.warn('[BackgroundDelegation] Persist failed:', persistErr?.message || persistErr);
               }
@@ -1682,26 +1745,7 @@ export function registerChatHandler(
       }
       emitAgent("agent:status", { status: "idle" });
 
-      try {
-        const learning = persistLumiLearningTurn({
-          userId: uid,
-          userText: text,
-          assistantText: responseText,
-          channel: 'chat',
-          flow: turnFlow,
-          toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-          toolRecords: allToolRecords,
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          sourceInteractionId: interactionId,
-          agentId: agentId || '',
-        });
-        if (learning.shouldPersist) {
-          console.log(`[LumiLearningInterface] chat persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-        }
-      } catch (learnErr: any) {
-        console.warn('[LumiLearningInterface] chat persistence failed:', learnErr?.message || learnErr);
-      }
+      persistChatLearning(responseText, { toolRecords: allToolRecords, logLabel: 'chat' });
 
       // Clean up abort session
       chatSessionMap.delete(sessionKey);
