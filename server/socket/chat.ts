@@ -14,7 +14,7 @@ import { formatToolRouteForPrompt, mergeToolPolicyWithRoute, routeToolsForTurn }
 import { buildInteractionModeOverlay, buildLumiTurnFlow, resolveTurnSurface } from "../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
-import { persistLumiLearningTurn } from "../cognition/learning_interface";
+import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
@@ -534,26 +534,22 @@ export function registerChatHandler(
           logLabel?: string;
         } = {},
       ) => {
-        try {
-          const learning = persistLumiLearningTurn({
+        persistLumiPostTurnLearning(
+          {
             userId: uid,
             userText: text,
-            assistantText,
-            channel: options.channel || 'chat',
+            defaultChannel: 'chat',
             flow: turnFlow,
-            toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-            toolRecords: options.toolRecords || [],
+            getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
             domain: resolvedDomain,
             orgId: resolvedOrgId,
-            sourceInteractionId: options.sourceInteractionId || interactionId,
+            defaultSourceInteractionId: interactionId,
             agentId: agentId || '',
-          });
-          if (learning.shouldPersist) {
-            console.log(`[LumiLearningInterface] ${options.logLabel || options.channel || 'chat'} persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-          }
-        } catch (learnErr: any) {
-          console.warn(`[LumiLearningInterface] ${options.logLabel || options.channel || 'chat'} persistence failed:`, learnErr?.message || learnErr);
-        }
+            log: { info: console.log, warn: console.warn },
+          },
+          assistantText,
+          options,
+        );
       };
 
       // ── Desktop relay: enables 15 tools (mouse/keyboard/clipboard/screenshot/etc) in chat ──

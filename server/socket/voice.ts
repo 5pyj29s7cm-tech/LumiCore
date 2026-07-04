@@ -26,7 +26,7 @@ import { getOperationModeConfig, parseStoredOperationMode, OperationMode } from 
 import { buildInteractionModeOverlay, buildLumiTurnFlow } from "../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
-import { persistLumiLearningTurn } from "../cognition/learning_interface";
+import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
@@ -564,26 +564,22 @@ async function processVoiceInput(
       logLabel?: string;
     } = {},
   ) => {
-    try {
-      const learning = persistLumiLearningTurn({
+    persistLumiPostTurnLearning(
+      {
         userId: session.userId,
         userText,
-        assistantText,
-        channel: options.channel || 'voice',
+        defaultChannel: 'voice',
         flow: turnFlow,
-        toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-        toolRecords: options.toolRecords || [],
+        getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
         domain: voiceScope.domain,
         orgId: voiceScope.orgId,
-        sourceInteractionId: options.sourceInteractionId || `voice_${Date.now()}`,
+        defaultSourceInteractionId: `voice_${Date.now()}`,
         agentId: session.agentId,
-      });
-      if (learning.shouldPersist) {
-        logger.info(`[LumiLearningInterface] ${options.logLabel || options.channel || 'voice'} persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-      }
-    } catch (learnErr: any) {
-      logger.warn(`[LumiLearningInterface] ${options.logLabel || options.channel || 'voice'} persistence failed: ${learnErr?.message || learnErr}`);
-    }
+        log: { info: logger.info.bind(logger), warn: logger.warn.bind(logger) },
+      },
+      assistantText,
+      options,
+    );
   };
   let sentenceBuffer = '';
   let sentenceIdx = 0;

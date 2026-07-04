@@ -24,7 +24,7 @@ import { buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_
 import { buildLumiTurnFlow } from "../cognition/turn_flow";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
-import { persistLumiLearningTurn } from "../cognition/learning_interface";
+import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import type { ToolExecutionRecord } from "../tools/types";
 
 export function registerTaskHandler(
@@ -157,25 +157,21 @@ export function registerTaskHandler(
         logLabel?: string;
       } = {},
     ) => {
-      try {
-        const learning = persistLumiLearningTurn({
+      persistLumiPostTurnLearning(
+        {
           userId: uid,
           userText: data.text,
-          assistantText,
-          channel: 'task',
+          defaultChannel: 'task',
           flow: turnFlow,
-          toolNames: toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-          toolRecords: options.toolRecords || [],
+          getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
           domain: 'personal',
-          sourceInteractionId: options.sourceInteractionId || interactionId,
+          defaultSourceInteractionId: interactionId,
           agentId: '',
-        });
-        if (learning.shouldPersist) {
-          console.log(`[LumiLearningInterface] ${options.logLabel || 'task'} persisted memories=${learning.storedMemories} capability=${learning.capabilityRecord?.id || 'none'} reasons=${learning.reasons.join(',')}`);
-        }
-      } catch (learnErr: any) {
-        console.warn(`[LumiLearningInterface] ${options.logLabel || 'task'} persistence failed:`, learnErr?.message || learnErr);
-      }
+          log: { info: console.log, warn: console.warn },
+        },
+        assistantText,
+        options,
+      );
     };
 
     let cognition: CognitiveResult | undefined;

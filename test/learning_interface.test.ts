@@ -76,12 +76,65 @@ describe('Lumi learning interface', () => {
     expect(durable.capabilityCandidate?.route.id).toBe('lumi.natural_autonomy_flow');
   });
 
+  it('persists through the shared post-turn adapter and isolates adapter errors', async () => {
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const { persistLumiPostTurnLearning } = await import('../server/cognition/post_turn_learning');
+
+    const userText = 'Lumi 以后一定要记住，大模型只是学习接口，不要换模型就遗忘。';
+    const flow = buildLumiTurnFlow({
+      userId: 'post_turn_learning_user',
+      text: userText,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    const outcome = persistLumiPostTurnLearning(
+      {
+        userId: 'post_turn_learning_user',
+        userText,
+        defaultChannel: 'chat',
+        flow,
+        getToolNames: () => ['self_extension_plan', 'capability_gap_autofix'],
+        defaultSourceInteractionId: 'post_turn_learning_1',
+        log: { info: () => {}, warn: () => {} },
+      },
+      '明白，我会沉淀到 LumiOS 本地层。',
+      { logLabel: 'unit post turn' },
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.result?.shouldPersist).toBe(true);
+
+    const failed = persistLumiPostTurnLearning(
+      {
+        userId: 'post_turn_learning_user',
+        userText,
+        defaultChannel: 'chat',
+        flow,
+        getToolNames: () => { throw new Error('tool registry unavailable'); },
+        log: { info: () => {}, warn: () => {} },
+      },
+      '这次学习适配器失败也不能打断主流程。',
+      { logLabel: 'unit post turn failure' },
+    );
+
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toContain('tool registry unavailable');
+  });
+
   it('keeps chat and voice early-return paths wired into post-turn learning', () => {
     const chatSource = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
     const taskSource = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
+    const postTurnSource = readFileSync(path.join(process.cwd(), 'server/cognition/post_turn_learning.ts'), 'utf8');
+
+    expect(postTurnSource).toContain('export function persistLumiPostTurnLearning');
+    expect(postTurnSource).toContain('persistLumiLearningTurn');
 
     expect(chatSource).toContain('const persistChatLearning');
+    expect(chatSource).toContain('persistLumiPostTurnLearning');
     expect(chatSource).toContain("channel: 'workflow'");
     expect(chatSource).toContain('workflow quick path');
     expect(chatSource).toContain('chat quick command');
@@ -89,6 +142,7 @@ describe('Lumi learning interface', () => {
     expect(chatSource.match(/persistChatLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(6);
 
     expect(voiceSource).toContain('const persistVoiceLearning');
+    expect(voiceSource).toContain('persistLumiPostTurnLearning');
     expect(voiceSource).toContain("channel: 'workflow'");
     expect(voiceSource).toContain('voice quick command');
     expect(voiceSource).toContain('voice cognition direct');
@@ -96,6 +150,7 @@ describe('Lumi learning interface', () => {
     expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
 
     expect(taskSource).toContain('const persistTaskLearning');
+    expect(taskSource).toContain('persistLumiPostTurnLearning');
     expect(taskSource).toContain('task direct cognition');
     expect(taskSource).toContain('task orchestrated');
     expect(taskSource).toContain('task cancelled');
