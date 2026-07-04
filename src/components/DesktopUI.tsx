@@ -169,6 +169,35 @@ type DesktopWidgetFallbackState = {
 type CustomerTakeoverStage = 'intake' | 'rules' | 'wechat' | 'result';
 type DesignDeliveryStage = 'intake' | 'concept' | 'cad' | 'revit' | 'handoff' | 'result';
 type EcommerceGrowthStage = 'intake' | 'diagnosis' | 'content' | 'tools' | 'publish' | 'result';
+type CustomerTakeoverBrief = {
+  customer: string;
+  quote: string;
+  amount: string;
+  period: string;
+  risk: string;
+  status: string;
+};
+
+const DEFAULT_CUSTOMER_TAKEOVER_BRIEF: CustomerTakeoverBrief = {
+  customer: '当前客户 / 当前线索',
+  quote: '报价口径待确认',
+  amount: '待确认',
+  period: '待确认',
+  risk: '价格、合同、交付周期和发送动作等待确认',
+  status: '推进中',
+};
+
+function normalizeCustomerTakeoverBrief(input: any): CustomerTakeoverBrief {
+  const source = input && typeof input === 'object' ? input : {};
+  return {
+    customer: String(source.customer || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.customer),
+    quote: String(source.quote || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.quote),
+    amount: String(source.amount || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.amount),
+    period: String(source.period || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.period),
+    risk: String(source.risk || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.risk),
+    status: String(source.status || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.status),
+  };
+}
 
 declare global {
   interface Window {
@@ -1247,7 +1276,7 @@ function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage;
   );
 }
 
-function CustomerTakeoverPanel({ stage, onClose }: { stage: CustomerTakeoverStage; onClose: () => void }) {
+function CustomerTakeoverPanel({ stage, brief, onClose }: { stage: CustomerTakeoverStage; brief: CustomerTakeoverBrief; onClose: () => void }) {
   const stageMeta: Record<CustomerTakeoverStage, { eyebrow: string; title: string; desc: string }> = {
     intake: {
       eyebrow: 'CUSTOMER INTAKE',
@@ -1274,17 +1303,17 @@ function CustomerTakeoverPanel({ stage, onClose }: { stage: CustomerTakeoverStag
   const meta = stageMeta[stage];
   const pipeline = [
     { label: '微信线索识别', value: '已完成', icon: <MessageSquare size={16} /> },
-    { label: '报价方案生成', value: '￥68,000 标准版', icon: <FileText size={16} /> },
+    { label: '报价方案生成', value: brief.quote, icon: <FileText size={16} /> },
     { label: '客户资料补充', value: '行业与风险点已读取', icon: <Globe size={16} /> },
     { label: '微信回复草稿', value: '等待确认发送', icon: <Copy size={16} /> },
   ];
   const resultItems = [
-    ['客户', '陈总 / 华东区'],
-    ['状态', stage === 'result' ? '已确认标准版方案' : '推进中'],
-    ['金额', '￥68,000'],
+    ['客户', brief.customer],
+    ['状态', stage === 'result' ? brief.status : '推进中'],
+    ['金额', brief.amount],
     ['合同草案', stage === 'result' ? '已生成' : '准备中'],
-    ['定金节点', '待客户确认'],
-    ['风险点', '交付周期需写入合同'],
+    ['周期', brief.period],
+    ['风险点', brief.risk],
   ];
 
   return (
@@ -1793,6 +1822,7 @@ export function DesktopUI({
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [customerTakeoverStage, setCustomerTakeoverStage] = useState<CustomerTakeoverStage | null>(null);
+  const [customerTakeoverBrief, setCustomerTakeoverBrief] = useState<CustomerTakeoverBrief>(DEFAULT_CUSTOMER_TAKEOVER_BRIEF);
   const [designDeliveryStage, setDesignDeliveryStage] = useState<DesignDeliveryStage | null>(null);
   const [ecommerceGrowthStage, setEcommerceGrowthStage] = useState<EcommerceGrowthStage | null>(null);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
@@ -3540,6 +3570,7 @@ export function DesktopUI({
           const stage = String(detail.stage || target || 'intake') as CustomerTakeoverStage;
           const allowedStages: CustomerTakeoverStage[] = ['intake', 'rules', 'wechat', 'result'];
           if (!allowedStages.includes(stage)) throw new Error(`Unsupported customer takeover stage: ${stage}`);
+          setCustomerTakeoverBrief(normalizeCustomerTakeoverBrief(detail.brief || detail.customerBrief || detail.payload));
           setCustomerTakeoverStage(stage);
           setDesignDeliveryStage(null);
           setEcommerceGrowthStage(null);
@@ -3548,6 +3579,7 @@ export function DesktopUI({
         }
         if (action === 'close_customer_takeover_panel' || action === 'demo_close_customer_takeover') {
           setCustomerTakeoverStage(null);
+          setCustomerTakeoverBrief(DEFAULT_CUSTOMER_TAKEOVER_BRIEF);
           respond({ ok: true, action });
           return;
         }
@@ -4936,7 +4968,11 @@ export function DesktopUI({
         {customerTakeoverStage && (
           <CustomerTakeoverPanel
             stage={customerTakeoverStage}
-            onClose={() => setCustomerTakeoverStage(null)}
+            brief={customerTakeoverBrief}
+            onClose={() => {
+              setCustomerTakeoverStage(null);
+              setCustomerTakeoverBrief(DEFAULT_CUSTOMER_TAKEOVER_BRIEF);
+            }}
           />
         )}
       </AnimatePresence>

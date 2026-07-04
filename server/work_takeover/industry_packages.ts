@@ -4,11 +4,19 @@ import {
   type WorkTakeoverArtifact,
   type WorkTakeoverTask,
 } from './tasks';
-import { createDesignDeliveryFiles } from '../socket/design_delivery_workflow';
-import { createEcommerceGrowthFiles } from '../socket/ecommerce_growth_workflow';
 import type { WorkTakeoverIndustryParameters } from './industry_parameters';
+import {
+  getIndustryPackageAdapter,
+  isEcommerceGrowthCategory,
+  packageKindForCategory,
+  type WorkTakeoverIndustryPackageKind,
+} from './industry_package_adapters';
 
-export type WorkTakeoverIndustryPackageKind = 'ecommerce_growth' | 'design_delivery';
+export {
+  isEcommerceGrowthCategory,
+  packageKindForCategory,
+  type WorkTakeoverIndustryPackageKind,
+} from './industry_package_adapters';
 
 export interface WorkTakeoverIndustryPackageResult {
   kind: WorkTakeoverIndustryPackageKind;
@@ -61,16 +69,6 @@ function taskDesignDeliverySource(task: any): string {
   ].map(compact).filter(Boolean).join('\n');
 }
 
-export function isEcommerceGrowthCategory(category: string): boolean {
-  return ['store', 'account', 'video_publish'].includes(category);
-}
-
-export function packageKindForCategory(category: string): WorkTakeoverIndustryPackageKind | null {
-  if (category === 'design_delivery') return 'design_delivery';
-  if (isEcommerceGrowthCategory(category)) return 'ecommerce_growth';
-  return null;
-}
-
 function addArtifacts(
   userId: string,
   task: WorkTakeoverTask,
@@ -106,7 +104,7 @@ function recordDesignDeliveryPackage(
     };
   }
 
-  const files = createDesignDeliveryFiles(taskDesignDeliverySource(task), { outputDirectory });
+  const files = getIndustryPackageAdapter('design_delivery').createFiles(taskDesignDeliverySource(task), { outputDirectory });
   const verificationText = readOptionalText(files.verification);
   const wechatDraftText = readOptionalText(files.wechatDraft);
   const verificationPassed = files.verificationResult.passed;
@@ -185,7 +183,7 @@ function recordEcommerceGrowthPackage(
     };
   }
 
-  const files = createEcommerceGrowthFiles(taskIndustrySource(task), { outputDirectory });
+  const files = getIndustryPackageAdapter('ecommerce_growth').createFiles(taskIndustrySource(task), { outputDirectory });
   const verificationText = readOptionalText(files.verification);
   const customerServiceText = readOptionalText(files.customerServiceRtf);
   const verificationPassed = files.verificationResult.passed;

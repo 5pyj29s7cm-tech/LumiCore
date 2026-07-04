@@ -33,10 +33,7 @@ import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, 
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { guardCompletionClaims, needsCompletionEvidence } from "../work_product/completion_guard";
 import { buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
-import { isSelfIntroDemoRequest, runSelfIntroDemo } from "./self_intro_demo";
-import { isCustomerTakeoverRequest, runCustomerTakeoverWorkflow } from "./customer_takeover_demo";
-import { isDesignDeliveryRequest, runDesignDeliveryWorkflow } from "./design_delivery_workflow";
-import { isEcommerceGrowthRequest, runEcommerceGrowthWorkflow } from "./ecommerce_growth_workflow";
+import { matchSkillWorkflow } from "../skills/workflow_registry";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -637,9 +634,10 @@ async function processVoiceInput(
     return playbackDone;
   };
 
-  if (isDesignDeliveryRequest(userText)) {
+  const specialWorkflow = matchSkillWorkflow(userText, { targetIsLumi: true });
+  if (specialWorkflow) {
     try {
-      const workflowResult = await runDesignDeliveryWorkflow({
+      const workflowResult = await specialWorkflow.run({
         socket,
         userText,
         userId: session.userId,
@@ -651,8 +649,8 @@ async function processVoiceInput(
       responseText = workflowResult.responseText;
       toolResults = workflowResult.toolCalls;
     } catch (err: any) {
-      logger.warn(`[Audio] Design delivery workflow failed: ${err?.message || err}`);
-      responseText = '我可以进入装修设计交付工作流，不过刚才桌面流程没有完整启动。你再说一次“Lumi，开始装修设计交付”，我会重新生成方案、CAD 和 Revit 交接包。';
+      logger.warn(`[Audio] ${specialWorkflow.logLabel} failed: ${err?.message || err}`);
+      responseText = specialWorkflow.fallbackText;
       flushSentence(responseText);
     }
 
@@ -666,106 +664,7 @@ async function processVoiceInput(
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit("audio:status", { status: "listening" });
     socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "design_delivery_workflow" });
-    return;
-  }
-
-  if (isEcommerceGrowthRequest(userText)) {
-    try {
-      const workflowResult = await runEcommerceGrowthWorkflow({
-        socket,
-        userText,
-        userId: session.userId,
-        desktopRelay,
-        speak: flushSentence,
-        voiceScope,
-        isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
-      });
-      responseText = workflowResult.responseText;
-      toolResults = workflowResult.toolCalls;
-    } catch (err: any) {
-      logger.warn(`[Audio] Ecommerce growth workflow failed: ${err?.message || err}`);
-      responseText = '我可以进入电商增长接管流程，不过刚才桌面流程没有完整启动。你再说一次“Lumi，接管这个店铺账号，生成短视频内容和发布草稿”，我会重新生成店铺诊断、内容矩阵、外部工具提示词、发布草稿和微信客服话术。';
-      flushSentence(responseText);
-    }
-
-    await Promise.allSettled(ttsPromises);
-    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
-    session.isProcessing = false;
-    session.isSpeaking = false;
-    session.pipelineAbortController = null;
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
-    socket.emit("audio:status", { status: "listening" });
-    socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "ecommerce_growth_workflow" });
-    return;
-  }
-
-  if (isCustomerTakeoverRequest(userText)) {
-    try {
-      const workflowResult = await runCustomerTakeoverWorkflow({
-        socket,
-        userText,
-        userId: session.userId,
-        desktopRelay,
-        speak: flushSentence,
-        voiceScope,
-        isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
-      });
-      responseText = workflowResult.responseText;
-      toolResults = workflowResult.toolCalls;
-    } catch (err: any) {
-      logger.warn(`[Audio] Customer takeover workflow failed: ${err?.message || err}`);
-      responseText = '我可以进入客户接管工作流，不过刚才桌面流程没有完整启动。你再说一次“Lumi，按我的规则推进这个客户”，我会重新接管。';
-      flushSentence(responseText);
-    }
-
-    await Promise.allSettled(ttsPromises);
-    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
-    session.isProcessing = false;
-    session.isSpeaking = false;
-    session.pipelineAbortController = null;
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
-    socket.emit("audio:status", { status: "listening" });
-    socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "customer_takeover_workflow" });
-    return;
-  }
-
-  if (isSelfIntroDemoRequest(userText)) {
-    try {
-      const demoResult = await runSelfIntroDemo({
-        socket,
-        userText,
-        userId: session.userId,
-        desktopRelay,
-        speak: flushSentence,
-        voiceScope,
-        isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
-      });
-      responseText = demoResult.responseText;
-      toolResults = demoResult.toolCalls;
-    } catch (err: any) {
-      logger.warn(`[Audio] Self-intro demo failed: ${err?.message || err}`);
-      responseText = '我可以介绍自己，不过刚才演示脚本没有完整启动。你再说一次“Lumi，介绍一下你自己”，我会重新演示。';
-      flushSentence(responseText);
-    }
-
-    await Promise.allSettled(ttsPromises);
-    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
-    session.isProcessing = false;
-    session.isSpeaking = false;
-    session.pipelineAbortController = null;
-    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
-    socket.emit("audio:status", { status: "listening" });
-    socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "self_intro_demo" });
+    socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: specialWorkflow.source });
     return;
   }
 

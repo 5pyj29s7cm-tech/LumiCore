@@ -5,7 +5,7 @@ import path from 'path';
 import { analyzeWechatIntake } from '../server/work_takeover/wechat_intake';
 import { planWorkTakeoverExecution } from '../server/work_takeover/execution_planner';
 import { verifyWorkTakeoverResult } from '../server/work_takeover/result_verifier';
-import { createEcommerceGrowthFiles } from '../server/socket/ecommerce_growth_workflow';
+import { createEcommerceGrowthFiles } from '../server/skills/bundled/ecommerce-ops/workflows/ecommerce_growth_workflow';
 import type { WorkTakeoverTask } from '../server/work_takeover/tasks';
 
 function makeTaskFromIntake(message: string): WorkTakeoverTask {
