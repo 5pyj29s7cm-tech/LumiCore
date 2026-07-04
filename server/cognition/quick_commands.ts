@@ -6,19 +6,28 @@
  */
 
 import { readDB } from '../../db_layer';
+import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface } from '../work_takeover/continuity';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
   responseText: string;
   /** Optional tool call to execute alongside the response */
   toolCall?: { name: string; arguments: Record<string, any> };
+  /** Optional formatter for commands whose reply depends on the tool result */
+  formatToolResult?: (raw: string, error?: string) => string;
   /** Whether this input was matched as a quick command */
   matched: boolean;
 }
 
 interface QuickPattern {
   patterns: RegExp[];
-  handler: (match: RegExpMatchArray, userId: string) => QuickCommandResult | Promise<QuickCommandResult>;
+  handler: (match: RegExpMatchArray, userId: string, options?: QuickCommandOptions) => QuickCommandResult | Promise<QuickCommandResult>;
+}
+
+export interface QuickCommandOptions {
+  domain?: string;
+  orgId?: string;
+  surface?: WorkTakeoverTurnSurface;
 }
 
 const patterns: QuickPattern[] = [
@@ -260,6 +269,28 @@ const patterns: QuickPattern[] = [
     },
   },
 
+  // ── Work takeover continuity ──
+  {
+    patterns: [
+      /^(继续|继续做|继续推进|继续执行|继续处理|接着|接着做|往下|往下走|下一步|下一步呢|接下来呢|做下一步|跑下一步|再跑一步|然后呢|然后|开始吧|来吧|做完了吗|好了没|好了吗|完成了吗|跑完了吗|结果呢|结果怎么样|进度呢|状态呢|状态怎么样|卡在哪|哪里卡了|哪里卡住了|为什么没做完|怎么回事|好|好的|可以|行|嗯|嗯嗯|ok|okay|收到|继续吧|继续一下|推进一下)[。！？.!?]*$/i,
+      /(刚刚|刚才|上一个|上一条|这个任务|这个事|那件事|它|这个).*(继续|下一步|接着|推进|执行|处理|跑|做|做完|完成|结果|进度|状态|卡|失败|成功|怎么回事)/u,
+    ],
+    handler: (match, userId, options) => {
+      const command = getWorkTakeoverContinuationQuickCommand(match.input || '', userId, {
+        domain: options?.domain,
+        orgId: options?.orgId,
+        surface: options?.surface,
+      });
+      if (!command) return { responseText: '', matched: false };
+      return {
+        responseText: command.responseText,
+        toolCall: command.toolCall,
+        formatToolResult: command.formatToolResult,
+        matched: true,
+      };
+    },
+  },
+
   // ── Simple Yes/No ──
   {
     patterns: [/^(好的|ok|okay|好|嗯|知道了|收到|明白了|懂了|got\s*it|alright|fine)[。！？.!?]*$/i],
@@ -291,6 +322,7 @@ const patterns: QuickPattern[] = [
 export async function matchQuickCommand(
   text: string,
   userId: string,
+  options?: QuickCommandOptions,
 ): Promise<QuickCommandResult | null> {
   const clean = text.trim();
 
@@ -298,8 +330,8 @@ export async function matchQuickCommand(
     for (const regex of pattern.patterns) {
       const match = clean.match(regex);
       if (match) {
-        const result = await pattern.handler(match, userId);
-        return result;
+        const result = await pattern.handler(match, userId, options);
+        if (result?.matched) return result;
       }
     }
   }

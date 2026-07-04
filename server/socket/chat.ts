@@ -10,9 +10,9 @@ import { LLMUsage, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { runWithTools } from "../llm/adapter";
 import { getOperationModeConfig, parseStoredOperationMode } from "../cognition/operation_modes";
-import { hasClientActionOnlyIntent, isDiagnosticOrRepairRequest, shouldAllowToolUseForTurn, shouldExposeAgentWork } from "../cognition/tool_intent";
-import { resolveWorkSurfaceRoute } from "../cognition/work_surface";
 import { formatToolRouteForPrompt, mergeToolPolicyWithRoute, routeToolsForTurn } from "../cognition/tool_router";
+import { buildInteractionModeOverlay, buildLumiTurnFlow, resolveTurnSurface } from "../cognition/turn_flow";
+import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
@@ -49,10 +49,10 @@ import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflo
 import { buildProfessionOverlay } from "../autonomy/professions";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildResponseLanguageInstruction } from "../utils/language";
-import { guardCompletionClaims, needsCompletionEvidence } from "../work_product/completion_guard";
-import { buildModelSelfAwareness, buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
+import { guardCompletionClaims } from "../work_product/completion_guard";
+import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
-import { estimateSkillWorkflowChatSpeechMs, matchSkillWorkflow } from "../skills/workflow_registry";
+import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
@@ -261,6 +261,12 @@ export function registerChatHandler(
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
     const requestId = typeof data.requestId === 'string' ? data.requestId.slice(0, 120) : undefined;
     const eventSource = source || 'chat';
+    const turnSurface = resolveTurnSurface({
+      channel: 'chat',
+      source: eventSource,
+      category,
+      domain: typeof data.domain === 'string' ? data.domain : undefined,
+    });
     const toolResultPreviewLimit = 500;
     const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
@@ -398,6 +404,15 @@ export function registerChatHandler(
       }
       console.log('[ChatHandler] conversationId:', conversationId, 'mode:', conversationMode);
 
+      const operationMode = (() => {
+        try {
+          const db = readDB();
+          const setting = (db.settings || []).find((s: any) => s.key === `op_mode_${uid}`);
+          if (setting) return parseStoredOperationMode(setting.value);
+        } catch {}
+        return 'assistant';
+      })();
+
       const sensory = sensoryFn(uid);
       console.log('[ChatHandler] sensory loaded');
       const { config: personality, systemPrompt: systemInstruction } = personalityRegistry.buildSystemPrompt(
@@ -442,6 +457,31 @@ export function registerChatHandler(
         }
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
+
+      const turnFlow = buildLumiTurnFlow({
+        userId: uid,
+        text: visibleUserText || text,
+        channel: 'chat',
+        source: eventSource,
+        category,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        surface: turnSurface,
+        operationMode,
+        targetIsLumi:
+          personality.id === 'lumi' ||
+          conversationAgentId === 'lumi' ||
+          /lumi/i.test(visibleUserText || text),
+      });
+      effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
+      effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
+        userId: uid,
+        text: visibleUserText || text,
+        flow: turnFlow,
+        toolRegistry,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+      });
 
       // Inject company knowledge base context when in work domain
       if (kbContext) {
@@ -525,12 +565,7 @@ export function registerChatHandler(
       });
 
       const specialWorkflowText = visibleUserText || text;
-      const specialWorkflow = matchSkillWorkflow(specialWorkflowText, {
-        targetIsLumi:
-          personality.id === 'lumi' ||
-          conversationAgentId === 'lumi' ||
-          /lumi/i.test(specialWorkflowText),
-      });
+      const specialWorkflow = turnFlow.specialWorkflow;
       if (specialWorkflow) {
         emitAgent("agent:status", {
           status: "thinking",
@@ -613,23 +648,14 @@ export function registerChatHandler(
       emitAgent("agent:status", { status: "thinking", agentName: personality.name });
       console.log('[ChatHandler] emitted agent:status thinking');
 
-      // Read user's operation mode from DB
-      const operationMode = (() => {
-        try {
-          const db = readDB();
-          const setting = (db.settings || []).find((s: any) => s.key === `op_mode_${uid}`);
-          if (setting) return parseStoredOperationMode(setting.value);
-        } catch {}
-        return 'assistant';
-      })();
-
       // Inject operation mode prompt overlay
-      const opModeConfig = getOperationModeConfig(operationMode);
-      const allowToolUseForTurn = shouldAllowToolUseForTurn(text, source, operationMode);
-      const selfRepairTurn = isDiagnosticOrRepairRequest(text);
-      const clientActionOnlyTurn = !selfRepairTurn && hasClientActionOnlyIntent(text) && (operationMode === 'chat' || operationMode === 'meeting');
-      const workSurfaceRoute = resolveWorkSurfaceRoute(text);
-      const visionIntent = hasVisionIntent(text);
+      const effectiveOperationMode = turnFlow.effectiveOperationMode;
+      const allowToolUseForTurn = turnFlow.allowToolUseForTurn;
+      const selfRepairTurn = turnFlow.selfRepairTurn;
+      const clientActionOnlyTurn = turnFlow.clientActionOnlyTurn;
+      const workSurfaceRoute = turnFlow.workSurfaceRoute;
+      const visionIntent = turnFlow.visionIntent;
+      const opModeConfig = getOperationModeConfig(effectiveOperationMode);
       const clientActionToolPolicy = clientActionOnlyTurn
         ? { allowedTools: ['client_get_state', 'client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 }
         : null;
@@ -656,19 +682,19 @@ export function registerChatHandler(
       const baseRoutedToolPolicy = isSanctuary
         ? { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 }
         : selfRepairToolPolicy
-          ? selfRepairToolPolicy
+            ? selfRepairToolPolicy
           : clientActionToolPolicy
             ? clientActionToolPolicy
-            : (workSurfaceRoute.toolPolicy || opModeConfig?.toolPolicy);
+            : (workSurfaceRoute.toolPolicy || opModeConfig?.toolPolicy || personality.toolPolicy);
       const toolRoute = allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn && !isSanctuary
-        ? routeToolsForTurn(text, toolRegistry.getToolDeclarations())
+        ? routeToolsForTurn(turnFlow.routeText || text, toolRegistry.getToolDeclarations())
         : null;
       const routedToolPolicy = toolRoute && baseRoutedToolPolicy
         ? mergeToolPolicyWithRoute(baseRoutedToolPolicy, toolRoute)
         : baseRoutedToolPolicy;
-      const exposeAgentWork = shouldExposeAgentWork(text);
+      const exposeAgentWork = turnFlow.exposeAgentWork;
       effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid);
-      console.log('[ChatHandler] tool gate:', allowToolUseForTurn ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
+      console.log('[ChatHandler] tool gate:', allowToolUseForTurn ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
       if (toolRoute) {
         socket.emit('agent:tool_route', {
           categories: toolRoute.categories,
@@ -678,22 +704,14 @@ export function registerChatHandler(
           truncated: toolRoute.truncated,
         });
       }
-      if (clientActionOnlyTurn) {
-        effectiveSystemPrompt += '\n\n## Client Mode Control\nThe user is asking Lumi to change a client mode or open a client-native surface. You may only use client_get_state and client_action. Do not use file, terminal, desktop mouse/keyboard, web, team, or external-app tools. Music is a playback/atmosphere capability, not a top-level work mode: open the music center or mood layer without switching client mode. For meeting/autonomous mode, use the client action confirmation flow when required.';
-      } else if (selfRepairTurn) {
-        effectiveSystemPrompt += '\n\n## Client Self-Repair Turn\nThe user is reporting that Lumi or one of its client workflows is failing. Do not only apologize or repeat the raw error. Use client_get_state first when tools are available, inspect relevant status/log/config surfaces, apply one safe recovery or retry when the cause is clear, verify the result, and then give a concise report. Reads and status checks are allowed; writes, desktop control, external app automation, and system changes still require confirmation.';
-      } else if (opModeConfig && (allowToolUseForTurn || operationMode === 'meeting')) {
-        effectiveSystemPrompt += '\n\n' + opModeConfig.promptOverlay;
-      } else {
-        effectiveSystemPrompt += '\n\n## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
-      }
+      effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(turnFlow);
       if (workSurfaceRoute.promptOverlay) {
         effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
       }
       if (toolRoute) {
         effectiveSystemPrompt += '\n\n' + formatToolRouteForPrompt(toolRoute);
       }
-      const visionRoutingOverlay = operationMode !== 'meeting' ? buildVisionRoutingOverlay(uid, text) : '';
+      const visionRoutingOverlay = effectiveOperationMode !== 'meeting' ? buildVisionRoutingOverlay(uid, text) : '';
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
       }
@@ -770,9 +788,16 @@ export function registerChatHandler(
 
       // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
       try {
-        const quickResult = await matchQuickCommand(text, uid);
+        const quickResult = await matchQuickCommand(text, uid, {
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          surface: turnSurface,
+        });
         if (quickResult?.matched) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
+          let quickResponseText = quickResult.responseText;
+          let quickToolResult = '';
+          let quickToolError: string | undefined;
           if (quickResult.toolCall) {
             const toolCid = `qc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const shouldEmitQuickTool = !isDirectDesktopTool(quickResult.toolCall.name);
@@ -785,6 +810,7 @@ export function registerChatHandler(
             }
             try {
               const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, desktopRelay, llmGetters });
+              quickToolResult = tcResult || '';
               if (shouldEmitQuickTool) {
                 emitToolLifecycle({
                   correlationId: toolCid,
@@ -794,6 +820,7 @@ export function registerChatHandler(
                 });
               }
             } catch (toolErr: any) {
+              quickToolError = toolErr.message || String(toolErr);
               if (shouldEmitQuickTool) {
                 emitToolLifecycle({
                   correlationId: toolCid,
@@ -803,14 +830,17 @@ export function registerChatHandler(
                 });
               }
             }
+            if (quickResult.formatToolResult) {
+              quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
+            }
           }
-          emitAgent("agent:response", { text: quickResult.responseText, agentName: personality.name });
+          emitAgent("agent:response", { text: quickResponseText, agentName: personality.name });
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
             if (quickResult.toolCall) {
               addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: `[Tool: ${quickResult.toolCall.name}] Called`, domain: resolvedDomain, orgId: resolvedOrgId });
             }
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResult.responseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
             socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
           }
           emitAgent("agent:status", { status: "idle" });
@@ -902,7 +932,7 @@ export function registerChatHandler(
       let responseText = '';
       let llmWasCalled = false;
       const allToolRecords: ToolExecutionRecord[] = [];
-      const deferCompletionStream = needsCompletionEvidence(text);
+      const deferCompletionStream = turnFlow.completionEvidenceNeeded;
       const prefersSequentialWorkflow =
         shouldChainTask(text) &&
         workSurfaceRoute.artifactFirst &&
@@ -1321,7 +1351,7 @@ export function registerChatHandler(
           : (history ? history.flatMap(normalizeChatHistoryRecord) : []);
 
         // Tell Lumi which model is currently active without hiding routed vision capacity.
-        const selfAwareness = buildModelSelfAwareness(activeProvider, activeModel, uid, { visionAware: visionIntent && operationMode !== 'meeting' });
+        const selfAwareness = buildModelSelfAwareness(activeProvider, activeModel, uid, { visionAware: visionIntent && effectiveOperationMode !== 'meeting' });
         const messages: NormalizedMessage[] = [
           { role: 'system', content: effectiveSystemPrompt + selfAwareness },
           ...conversationHistory,
@@ -1425,7 +1455,7 @@ export function registerChatHandler(
                 emitAgent("agent:chunk", { text: `[${step}]\n`, agentName: "Lumi" });
               },
               ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-              ...(operationMode === 'assistant' || operationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? {
+              ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? {
                 requestConfirmation: async (toolName: string, args: Record<string, any>): Promise<boolean> => {
                   return new Promise((resolve) => {
                     const cid = crypto.randomUUID();
@@ -1543,7 +1573,7 @@ export function registerChatHandler(
                     });
                   },
                   ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-                  ...(operationMode === 'assistant' || operationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? {
+                  ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? {
                     requestConfirmation: async (toolName: string, args: Record<string, any>): Promise<boolean> => {
                       return new Promise((resolve) => {
                         const cid = crypto.randomUUID();

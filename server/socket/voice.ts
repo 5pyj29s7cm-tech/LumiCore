@@ -23,17 +23,16 @@ import { matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { getOperationModeConfig, parseStoredOperationMode, OperationMode } from "../cognition/operation_modes";
-import { hasClientActionOnlyIntent, hasExplicitToolIntent, isDiagnosticOrRepairRequest, shouldAllowToolUseForTurn, shouldExposeAgentWork } from "../cognition/tool_intent";
-import { resolveWorkSurfaceRoute } from "../cognition/work_surface";
+import { buildInteractionModeOverlay, buildLumiTurnFlow } from "../cognition/turn_flow";
+import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { getIdleState } from "../context/activity_stream";
 import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
-import { guardCompletionClaims, needsCompletionEvidence } from "../work_product/completion_guard";
-import { buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
-import { matchSkillWorkflow } from "../skills/workflow_registry";
+import { guardCompletionClaims } from "../work_product/completion_guard";
+import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -161,14 +160,6 @@ function isPureModeSwitchRequest(text: string, mode: OperationMode | null): bool
   const normalized = text.replace(/\s+/g, '').toLowerCase();
   return /^(lumi|露米)?(请|帮我|给我|麻烦)?(切换|切到|切成|换到|进入|打开|开启|启动|设为|设置为|切回|回到|switch|change|enter|start|open)(到|成)?(会议|聊天|助手|自主|自主执行|自动执行|meeting|chat|assistant|autonomy|autonomous|autoexecute)(模式|mode)?[。.!！?？]*$/i.test(normalized);
 }
-function shouldAutoPromoteVoiceWork(text: string, operationMode: OperationMode, requestedMode: OperationMode | null): boolean {
-  if (operationMode !== 'chat' || requestedMode) return false;
-  if (isMusicPlaybackRequest(text) || isMusicAdjustmentRequest(text)) return false;
-  if (/[?？]\s*$/.test(text) || /是不是|为什么|怎么回事|有没有|找到了吗|听见了吗/.test(text)) return false;
-  if (!hasExplicitToolIntent(text)) return false;
-  return /桌面|文件|文件夹|目录|草稿图|图纸|平面图|施工图|设计图|cad|CAD|DXF|运行日志|日志|生成|创建|画一|画个|按照.*画|找|搜索|打开|执行|运行|去干活|开始干活|开始处理|继续处理|继续做|接着做/.test(text);
-}
-
 function saveOperationModePreference(userId: string, mode: OperationMode): void {
   try {
     const db = readDB();
@@ -407,15 +398,25 @@ async function processVoiceInput(
     return 'assistant';
   })();
   const requestedMode = detectVoiceClientModeSwitch(userText);
-  const autoPromoteToAssistant = shouldAutoPromoteVoiceWork(userText, operationMode, requestedMode);
-  const effectiveOperationMode: OperationMode = requestedMode || (autoPromoteToAssistant ? 'assistant' : operationMode);
-
+  const turnFlow = buildLumiTurnFlow({
+    userId: session.userId,
+    text: userText,
+    channel: 'voice',
+    source: 'voice',
+    domain: voiceScope.domain,
+    orgId: voiceScope.orgId,
+    surface: 'voice',
+    operationMode,
+    requestedMode,
+    targetIsLumi: true,
+  });
+  const effectiveOperationMode = turnFlow.effectiveOperationMode;
+  const allowToolUseForTurn = turnFlow.allowToolUseForTurn;
+  const selfRepairTurn = turnFlow.selfRepairTurn;
+  const clientActionOnlyTurn = turnFlow.clientActionOnlyTurn;
+  const workSurfaceRoute = turnFlow.workSurfaceRoute;
+  const visionIntent = turnFlow.visionIntent;
   const effectiveOpModeConfig = getOperationModeConfig(effectiveOperationMode);
-  const allowToolUseForTurn = autoPromoteToAssistant || shouldAllowToolUseForTurn(userText, undefined, effectiveOperationMode);
-  const selfRepairTurn = isDiagnosticOrRepairRequest(userText);
-  const clientActionOnlyTurn = !selfRepairTurn && hasClientActionOnlyIntent(userText) && (effectiveOperationMode === 'chat' || effectiveOperationMode === 'meeting');
-  const workSurfaceRoute = resolveWorkSurfaceRoute(userText);
-  const visionIntent = hasVisionIntent(userText);
   const clientActionToolPolicy = clientActionOnlyTurn
     ? { allowedTools: ['client_get_state', 'client_action'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 }
     : null;
@@ -439,7 +440,7 @@ async function processVoiceInput(
         maxIterations: 8,
       }
     : null;
-  const exposeAgentWork = shouldExposeAgentWork(userText);
+  const exposeAgentWork = turnFlow.exposeAgentWork;
   const routedToolPolicy = selfRepairToolPolicy
     ? selfRepairToolPolicy
     : clientActionToolPolicy
@@ -447,12 +448,8 @@ async function processVoiceInput(
       : allowToolUseForTurn
         ? (workSurfaceRoute.toolPolicy || effectiveOpModeConfig?.toolPolicy)
         : { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 };
-  logger.info(`[Audio] tool gate: ${allowToolUseForTurn ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn}`);
-  const opModeOverlay = clientActionOnlyTurn
-    ? '\n\n## Client Mode Control\nThe user is asking Lumi to change client mode or open a client-native surface. You may only use client_get_state and client_action. Do not use file, terminal, desktop mouse/keyboard, web, team, or external-app tools. Music is a playback/atmosphere capability, not a top-level work mode: open the music center or mood layer without switching client mode. For meeting/autonomous mode, use the client action confirmation flow when required.'
-    : selfRepairTurn
-    ? '\n\n## Client Self-Repair Turn\nThe user is reporting that Lumi or one of its client workflows is failing. Do not only apologize or repeat the raw error. Use client_get_state first when tools are available, inspect relevant status/log/config surfaces, apply one safe recovery or retry when the cause is clear, verify the result, and then give a concise spoken report. Reads and status checks are allowed; writes, desktop control, external app automation, and system changes still require confirmation.'
-    : (effectiveOpModeConfig && (allowToolUseForTurn || effectiveOperationMode === 'meeting') ? '\n\n' + effectiveOpModeConfig.promptOverlay : '');
+  logger.info(`[Audio] tool gate: ${allowToolUseForTurn ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn}`);
+  const opModeOverlay = '\n\n' + buildInteractionModeOverlay(turnFlow);
   const workSurfaceOverlay = workSurfaceRoute.promptOverlay ? '\n\n' + workSurfaceRoute.promptOverlay : '';
   const visionRoutingOverlay = visionIntent && effectiveOperationMode !== 'meeting' ? '\n\n' + buildVisionRoutingOverlay(session.userId, userText) : '';
   const interactionOverlay = allowToolUseForTurn
@@ -460,7 +457,16 @@ async function processVoiceInput(
     : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, assemble a team, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
   const clientSelfPrompt = '\n\n' + formatClientSelfPrompt(session.userId);
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext;
+  const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
+  const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
+    userId: session.userId,
+    text: userText,
+    flow: turnFlow,
+    toolRegistry,
+    domain: voiceScope.domain,
+    orgId: voiceScope.orgId,
+  });
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + turnFlowOverlay + runtimeCapabilityOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -547,7 +553,7 @@ async function processVoiceInput(
   let sentenceIdx = 0;
   const ttsPromises: Promise<void>[] = [];
   let previousToolSig: string | null = null;
-  const deferCompletionSpeech = needsCompletionEvidence(userText);
+  const deferCompletionSpeech = turnFlow.completionEvidenceNeeded;
 
   // ── Generation gating: only latest command gets TTS output ──
   session.bgGeneration++;
@@ -634,7 +640,7 @@ async function processVoiceInput(
     return playbackDone;
   };
 
-  const specialWorkflow = matchSkillWorkflow(userText, { targetIsLumi: true });
+  const specialWorkflow = turnFlow.specialWorkflow;
   if (specialWorkflow) {
     try {
       const workflowResult = await specialWorkflow.run({
@@ -670,7 +676,7 @@ async function processVoiceInput(
 
   // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
   const directlyAppliedMode: OperationMode | null =
-    autoPromoteToAssistant ? 'assistant'
+    turnFlow.autoPromoteToAssistant ? 'assistant'
     : requestedMode && ['meeting', 'chat', 'assistant', 'autonomous'].includes(requestedMode) ? requestedMode
     : null;
   if (directlyAppliedMode) {
@@ -716,13 +722,21 @@ async function processVoiceInput(
   }
 
   try {
-    const quickResult = await matchQuickCommand(userText, session.userId);
+    const quickResult = await matchQuickCommand(userText, session.userId, {
+      domain: voiceScope.domain,
+      orgId: voiceScope.orgId,
+      surface: 'voice',
+    });
     if (quickResult?.matched) {
       logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
+      let quickResponseText = quickResult.responseText;
+      let quickToolResult = '';
+      let quickToolError: string | undefined;
       if (quickResult.toolCall && session.isActive) {
         const correlationId = `qc-${Date.now()}`;
         try {
           const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, toolContext);
+          quickToolResult = tcResult || '';
           socket.emit("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,
@@ -736,11 +750,15 @@ async function processVoiceInput(
             arguments: quickResult.toolCall.arguments,
             error: toolErr.message,
           });
+          quickToolError = toolErr.message || String(toolErr);
+        }
+        if (quickResult.formatToolResult) {
+          quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
         }
       }
-      flushSentence(quickResult.responseText);
+      flushSentence(quickResponseText);
       await Promise.allSettled(ttsPromises);
-      responseText = quickResult.responseText;
+      responseText = quickResponseText;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: quickResult.toolCall ? [quickResult.toolCall] : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
