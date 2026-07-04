@@ -1,7 +1,7 @@
 import type { LumiTurnChannel, LumiTurnFlow } from './turn_flow';
 
 export interface LumiOperatingKernelInput {
-  channel: LumiTurnChannel | 'task';
+  channel: LumiTurnChannel;
   flow?: LumiTurnFlow;
 }
 
@@ -16,7 +16,7 @@ function flowAnchor(flow?: LumiTurnFlow): string {
     : `none, signal=${flow.workTakeover.intent || 'none'}/${flow.workTakeover.strength}`;
 
   return [
-    `Current turn: surface=${flow.surface}; mode=${flow.operationMode}->${flow.effectiveOperationMode}; tools=${flow.allowToolUseForTurn ? 'available' : 'chat-only'}.`,
+    `Current turn: channel=${flow.channel}; surface=${flow.surface}; mode=${flow.operationMode}->${flow.effectiveOperationMode}; tools=${flow.allowToolUseForTurn ? 'available' : 'chat-only'}.`,
     `Task anchor: ${taskAnchor}.`,
     `Governance: verify=${flow.executionGovernance.verificationIntent}; delegation=${flow.executionGovernance.delegationIntent}; capabilityLearning=${flow.executionGovernance.capabilityLearningIntent}.`,
   ].join('\n');

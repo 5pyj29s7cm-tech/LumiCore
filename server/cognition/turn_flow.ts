@@ -18,7 +18,7 @@ import {
   type WorkTakeoverTurnSurface,
 } from '../work_takeover/continuity';
 
-export type LumiTurnChannel = 'chat' | 'voice';
+export type LumiTurnChannel = 'chat' | 'voice' | 'task';
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
 export type LumiDelegationIntent = 'none' | 'explicit_background' | 'consider_background' | 'foreground_owned';
 export type LumiCapabilityLearningIntent = 'none' | 'inspect_reuse' | 'learn_missing' | 'stabilize_existing';
@@ -38,6 +38,7 @@ export interface LumiTurnFlowInput {
 }
 
 export interface LumiTurnFlow {
+  channel: LumiTurnChannel;
   surface: WorkTakeoverTurnSurface;
   operationMode: OperationMode;
   effectiveOperationMode: OperationMode;
@@ -87,6 +88,8 @@ export function resolveTurnSurface(input: {
 }): WorkTakeoverTurnSurface {
   if (input.explicitSurface) return input.explicitSurface;
   if (input.channel === 'voice') return 'voice';
+  if (input.channel === 'task') return 'work';
+  if (input.domain === 'work') return 'work';
   const source = String(input.source || '');
   const category = String(input.category || '');
   if (source === 'org-chat' || WORK_SOURCE_RE.test(source) || category === 'organization') return 'work';
@@ -123,7 +126,7 @@ function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): 
 
   return [
     '## Lumi Turn Flow',
-    `Surface: ${flow.surface}. Mode: ${flow.operationMode} -> ${flow.effectiveOperationMode}. Tool access: ${flow.allowToolUseForTurn ? 'available' : 'chat-only'}.`,
+    `Channel: ${flow.channel}. Surface: ${flow.surface}. Mode: ${flow.operationMode} -> ${flow.effectiveOperationMode}. Tool access: ${flow.allowToolUseForTurn ? 'available' : 'chat-only'}.`,
     focus.length ? `Current capability focus: ${focus.join(', ')}.` : 'Current capability focus: natural conversation unless the user asks for action.',
     'Decision order for this turn:',
     '1. Stay as Lumi first: understand the user, the surface, the unfinished task pointer, and the current screen/work context before choosing a capability.',
@@ -313,13 +316,15 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     surface,
   });
   const autoPromoteToAssistant = shouldAutoPromoteWorkTurn(input.text, operationMode, requestedMode, input.channel);
-  const effectiveOperationMode = requestedMode || (autoPromoteToAssistant || workTakeover.shouldResumeTask ? 'assistant' : operationMode);
+  const taskEntryTurn = input.channel === 'task';
+  const effectiveOperationMode = requestedMode || (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask ? 'assistant' : operationMode);
   const selfRepairTurn = isDiagnosticOrRepairRequest(input.text);
   const clientActionOnlyTurn = !selfRepairTurn && hasClientActionOnlyIntent(input.text) && (effectiveOperationMode === 'chat' || effectiveOperationMode === 'meeting');
   const visionIntent = hasVisionIntent(input.text);
   const workSurfaceRoute = resolveWorkSurfaceRoute(input.text);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
   const allowToolUseForTurn =
+    taskEntryTurn ||
     autoPromoteToAssistant ||
     workTakeover.shouldResumeTask ||
     explicitBackgroundDelegation ||
@@ -337,6 +342,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   });
 
   const flowWithoutPrompt: Omit<LumiTurnFlow, 'promptOverlay'> = {
+    channel: input.channel,
     surface,
     operationMode,
     effectiveOperationMode,

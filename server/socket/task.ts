@@ -18,10 +18,9 @@ import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggre
 import { getMessagesByTokenBudget, addMessage, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
 import { shouldExposeAgentWork } from "../cognition/tool_intent";
-import { resolveWorkSurfaceRoute } from "../cognition/work_surface";
 import { formatClientSelfPrompt } from "../client/self_model";
-import { buildVisionRoutingOverlay, hasVisionIntent } from "../cognition/vision_routing";
-import { buildLumiTurnFlow } from "../cognition/turn_flow";
+import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
+import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -96,19 +95,20 @@ export function registerTaskHandler(
     let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-chat';
 
     // ── Load persisted conversation history (survives page reload) ──
-    const turnFlow = buildLumiTurnFlow({
+    const turnDispatch = buildLumiTurnDispatch({
       userId: uid,
       text: data.text,
-      channel: 'chat',
+      channel: 'task',
       source: 'task',
       category: 'command',
-      surface: 'work',
       operationMode: 'assistant',
       targetIsLumi: personality.id === 'lumi',
     });
-    const workSurfaceRoute = resolveWorkSurfaceRoute(data.text);
-    const visionIntent = hasVisionIntent(data.text);
+    const turnFlow = turnDispatch.flow;
+    const workSurfaceRoute = turnFlow.workSurfaceRoute;
+    const visionIntent = turnFlow.visionIntent;
     let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid);
+    effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
     effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
     effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
       userId: uid,

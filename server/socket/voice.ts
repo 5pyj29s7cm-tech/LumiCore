@@ -23,7 +23,8 @@ import { matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { getOperationModeConfig, parseStoredOperationMode, OperationMode } from "../cognition/operation_modes";
-import { buildInteractionModeOverlay, buildLumiTurnFlow } from "../cognition/turn_flow";
+import { buildInteractionModeOverlay } from "../cognition/turn_flow";
+import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -400,7 +401,7 @@ async function processVoiceInput(
     return 'assistant';
   })();
   const requestedMode = detectVoiceClientModeSwitch(userText);
-  const turnFlow = buildLumiTurnFlow({
+  const turnDispatch = buildLumiTurnDispatch({
     userId: session.userId,
     text: userText,
     channel: 'voice',
@@ -412,6 +413,7 @@ async function processVoiceInput(
     requestedMode,
     targetIsLumi: true,
   });
+  const turnFlow = turnDispatch.flow;
   const effectiveOperationMode = turnFlow.effectiveOperationMode;
   const allowToolUseForTurn = turnFlow.allowToolUseForTurn;
   const selfRepairTurn = turnFlow.selfRepairTurn;
@@ -459,6 +461,7 @@ async function processVoiceInput(
     : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, assemble a team, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
   const clientSelfPrompt = '\n\n' + formatClientSelfPrompt(session.userId);
+  const dispatchOverlay = '\n\n' + turnDispatch.promptOverlay;
   const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
     userId: session.userId,
@@ -472,7 +475,7 @@ async function processVoiceInput(
     channel: 'voice',
     flow: turnFlow,
   });
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + turnFlowOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';

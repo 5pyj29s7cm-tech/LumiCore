@@ -11,7 +11,8 @@ import { toolRegistry } from "../tools/registry";
 import { runWithTools } from "../llm/adapter";
 import { getOperationModeConfig, parseStoredOperationMode } from "../cognition/operation_modes";
 import { formatToolRouteForPrompt, mergeToolPolicyWithRoute, routeToolsForTurn } from "../cognition/tool_router";
-import { buildInteractionModeOverlay, buildLumiTurnFlow, resolveTurnSurface } from "../cognition/turn_flow";
+import { buildInteractionModeOverlay } from "../cognition/turn_flow";
+import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -263,12 +264,6 @@ export function registerChatHandler(
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
     const requestId = typeof data.requestId === 'string' ? data.requestId.slice(0, 120) : undefined;
     const eventSource = source || 'chat';
-    const turnSurface = resolveTurnSurface({
-      channel: 'chat',
-      source: eventSource,
-      category,
-      domain: typeof data.domain === 'string' ? data.domain : undefined,
-    });
     const toolResultPreviewLimit = 500;
     const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
     const emitAgent = (event: string, payload: Record<string, any> = {}) => {
@@ -460,7 +455,7 @@ export function registerChatHandler(
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
 
-      const turnFlow = buildLumiTurnFlow({
+      const turnDispatch = buildLumiTurnDispatch({
         userId: uid,
         text: visibleUserText || text,
         channel: 'chat',
@@ -468,13 +463,15 @@ export function registerChatHandler(
         category,
         domain: resolvedDomain,
         orgId: resolvedOrgId,
-        surface: turnSurface,
         operationMode,
         targetIsLumi:
           personality.id === 'lumi' ||
           conversationAgentId === 'lumi' ||
           /lumi/i.test(visibleUserText || text),
       });
+      const turnFlow = turnDispatch.flow;
+      const turnSurface = turnDispatch.surface;
+      effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
       effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
       effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
         userId: uid,
