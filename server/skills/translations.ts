@@ -195,7 +195,7 @@ const BUILTIN_ZH_TRANSLATIONS: Record<string, TranslationEntry> = {
   },
   'skill-stockbot': {
     displayName: '股票助手',
-    description: 'A 股行情、K 线图、资金流和市场数据辅助分析工具。',
+    description: 'A 股行情、K 线、板块、新闻、交易计划和模拟盘记录工具。用于学习和演练，不提供投资建议、不连接券商下单。',
   },
   'skill-timer': {
     displayName: '计时提醒',

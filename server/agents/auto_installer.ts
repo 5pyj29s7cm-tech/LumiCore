@@ -23,7 +23,7 @@ export interface InstallResult {
 }
 
 const SKILL_KEYWORD_MAP: Array<{ keywords: RegExp[]; skillId: string; category: string }> = [
-  { keywords: [/股票|行情|股价|A股|涨停|跌停|K线|大盘|板块|同花顺|炒股|上证|深证|创业板|沪深|PE|市值|换手率|涨了|跌了|什么价/i], skillId: 'skill-stockbot', category: 'Finance' },
+  { keywords: [/股票|行情|股价|A股|涨停|跌停|K线|大盘|板块|同花顺|炒股|上证|深证|创业板|沪深|PE|市值|换手率|涨了|跌了|什么价|买入|卖出|仓位|止损|止盈|交易计划|模拟盘|纸上交易|持仓|股票池|投资组合|证券/i], skillId: 'skill-stockbot', category: 'Finance' },
   { keywords: [/视频.*剪|剪.*视频|字幕|配音|剪辑|moviepy|ffmpeg/i], skillId: 'skill-video-editor', category: 'Creative' },
   { keywords: [/AI.*画|画.*AI|文生图|生成.*图|图片.*生成|comfyui|stable.diffusion/i], skillId: 'skill-pixelle', category: 'Creative' },
   { keywords: [/nanobanana|nano.banana|香蕉|硅基流动|siliconflow|纳米香蕉|轻量.*生图|快速.*生图/i], skillId: 'skill-nanobanana', category: 'Creative' },

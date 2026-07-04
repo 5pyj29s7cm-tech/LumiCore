@@ -73,6 +73,10 @@ const DECLARATIONS = [
   'mcp_legal-casework_legal_case_folder_workflow',
   'mcp_legal-casework_legal_document_outline',
   'mcp_neteasemusic_search_song',
+  'mcp_stockbot_stock_quote',
+  'mcp_stockbot_stock_trade_plan',
+  'mcp_stockbot_paper_trade',
+  'mcp_stockbot_paper_portfolio',
   'mcp_cad-drafting_cad_space_program',
   'mcp_cad-drafting_cad_renovation_folder_workflow',
   'cad_generate_dxf',
@@ -286,6 +290,23 @@ describe('tool router', () => {
     expect(route.categories).toContain('music');
     expect(route.toolNames).toContain('mcp_neteasemusic_search_song');
     expect(route.toolNames).not.toContain('mcp_legal-casework_legal_case_folder_workflow');
+    expect(route.toolNames).not.toContain('legal_search_case');
+  });
+
+  it('routes stock trading and paper portfolio requests to stockbot tools', () => {
+    const route = routeToolsForTurn(
+      'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('market_finance');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'mcp_stockbot_stock_quote',
+      'mcp_stockbot_stock_trade_plan',
+      'mcp_stockbot_paper_trade',
+      'mcp_stockbot_paper_portfolio',
+    ]));
+    expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
     expect(route.toolNames).not.toContain('legal_search_case');
   });
 

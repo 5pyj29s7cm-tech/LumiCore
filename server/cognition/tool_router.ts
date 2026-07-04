@@ -286,6 +286,16 @@ const ROUTES: RouteDefinition[] = [
     groups: ['web', 'authenticatedWeb'],
   },
   {
+    category: 'market_finance',
+    reason: 'stock market quote, trading plan, or paper trading request',
+    patterns: [
+      /股票|A股|行情|股价|K线|大盘|板块|涨停|跌停|上证|深证|创业板|沪深|换手率|市盈率|PE|PB|市值|炒股|买入|卖出|仓位|止损|止盈|交易计划|模拟盘|纸上交易|持仓|股票池|投资组合|证券/u,
+      /\b(stock|share|equity|quote|kline|candlestick|market\s*index|sector|portfolio|paper\s*trade|trading\s*plan|stop\s*loss|take\s*profit|position\s*sizing|A-share|A\s*stock)\b/i,
+    ],
+    prefixes: ['mcp_stockbot_'],
+    groups: ['web'],
+  },
+  {
     category: 'code_git',
     reason: 'coding, testing, git, commit, or deployment request',
     patterns: [
