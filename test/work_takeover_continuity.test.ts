@@ -57,6 +57,43 @@ describe('work takeover continuity', () => {
     expect(getWorkTakeoverContinuationQuickCommand('下一步呢', 'continuity_chat_user', { surface: 'chat' })).toBeNull();
   });
 
+  it('binds short chat follow-ups to the failed task recovery point', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    await initDatabase();
+
+    const task = createWorkTakeoverTask({
+      userId: 'continuity_failed_resume_user',
+      category: 'general_work',
+      title: '打开 Codex 并输入预设消息',
+      nextActions: ['恢复 Codex 窗口', '定位输入框', '输入消息'],
+      source: 'manual',
+      status: 'in_progress',
+      metadata: {
+        workTakeoverExecution: {
+          lastTurn: { status: 'failed', capabilityLane: 'desktop_control' },
+          lastFailure: { tool: 'desktop_ui_click', error: 'input box was not focused' },
+          resumeHint: 'Resume task from the missed Codex input box focus.',
+        },
+      },
+    });
+
+    const context = buildWorkTakeoverContinuityContext('continuity_failed_resume_user', '继续', {
+      surface: 'chat',
+    });
+
+    expect(context.shouldResumeTask).toBe(true);
+    expect(context.strength).toBe('direct');
+    expect(context.latestTask?.id).toBe(task.id);
+    expect(context.promptOverlay).toContain('recovery pressure');
+    expect(context.promptOverlay).toContain('failedTool=desktop_ui_click');
+
+    const command = getWorkTakeoverContinuationQuickCommand('怎么样了', 'continuity_failed_resume_user', { surface: 'chat' });
+    expect(command?.toolCall.name).toBe('work_takeover_task_continue');
+    expect(command?.toolCall.arguments.id).toBe(task.id);
+  });
+
   it('lets voice chat continue unless the wording is clearly work-directed', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');

@@ -14,6 +14,7 @@ import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
+import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
@@ -699,6 +700,12 @@ export function registerChatHandler(
         execution: executionDecision,
         text: visibleUserText || text,
       });
+      const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
+        channel: 'chat',
+        text: visibleUserText || text,
+        flow: turnFlow,
+        capabilitySelection,
+      });
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
       const exposeAgentWork = turnFlow.exposeAgentWork;
@@ -720,12 +727,23 @@ export function registerChatHandler(
         preferredTools: capabilitySelection.preferredTools,
         source: eventSource,
       });
+      if (desktopExecutionPolicy.applies) {
+        emitAgent('agent:desktop_execution_policy', {
+          reason: desktopExecutionPolicy.reason,
+          evidenceTools: desktopExecutionPolicy.evidenceTools,
+          verificationTools: desktopExecutionPolicy.verificationTools,
+          source: eventSource,
+        });
+      }
       effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(turnFlow);
       if (workSurfaceRoute.promptOverlay) {
         effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
       }
       effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
       effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
+      if (desktopExecutionPolicy.promptOverlay) {
+        effectiveSystemPrompt += '\n\n' + desktopExecutionPolicy.promptOverlay;
+      }
       const visionRoutingOverlay = effectiveOperationMode !== 'meeting' ? buildVisionRoutingOverlay(uid, text) : '';
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;

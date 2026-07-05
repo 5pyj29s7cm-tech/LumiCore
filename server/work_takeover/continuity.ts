@@ -26,13 +26,12 @@ export interface WorkTakeoverContinuationCommand {
 }
 
 const MUSIC_CONTINUATION_RE = /继续播放|继续.*音乐|继续.*歌|resume\s+(music|song|playback)/i;
-
-const STATUS_RE = /^(做完了吗|好了没|好了吗|完成了吗|跑完了吗|结束了吗|结果呢|结果怎么样|进度呢|现在什么进度|状态呢|状态怎么样|成功了吗|失败了吗|有没有成功|卡在哪|哪里卡了|哪里卡住了|为什么没做完|为什么失败|怎么回事)[。！？.!?]*$/u;
-const ACTION_RE = /^(继续|继续做|继续推进|继续执行|继续处理|接着|接着做|往下|往下走|下一步|下一步呢|接下来呢|做下一步|跑下一步|再跑一步|然后呢|然后|开始吧|来吧|继续吧|继续一下|推进一下)[。！？.!?]*$/u;
+const STATUS_RE = /^(做完了吗|好了没|好了嘛|完成了吗|跑完了吗|结束了吗|结果呢|结果怎么样|进度呢|现在什么进度|状态呢|状态怎么样|怎么样了|现在怎么样|成功了吗|失败了吗|有没有成功|卡在哪|哪里卡了|哪里卡住了|为什么没做完|为什么失败|怎么回事)[。！？?!?]*$/u;
+const ACTION_RE = /^(继续|继续做|继续推进|继续执行|继续处理|接着|接着做|往下|往下走|下一步|下一步呢|接下来呢|做下一步|跑下一步|再跑一步|然后呢|然后|开始吧|来吧|继续吧|继续一下|推进一下)[。！？?!?]*$/u;
 const STRONG_ACTION_RE = /继续(?:做|推进|执行|处理)|接着做|做下一步|跑下一步|再跑一步|继续一下|推进一下/u;
 const REFERENTIAL_STATUS_RE = /(刚刚|刚才|上一个|上一条|这个任务|这个事|那件事|它|这个).*(做完|完成|结果|进度|状态|卡|失败|成功|怎么回事)/u;
 const REFERENTIAL_ACTION_RE = /(刚刚|刚才|上一个|上一条|这个任务|这个事|那件事|它|这个).*(继续|下一步|接着|推进|执行|处理|跑|做)/u;
-const AFFIRMATIVE_RE = /^(好|好的|可以|行|嗯|嗯嗯|ok|okay|收到|继续吧)[。！？.!?]*$/i;
+const AFFIRMATIVE_RE = /^(好|好的|可以|行|嗯|嗯嗯|嗯哼|ok|okay|收到|继续吧)[。！？?!?]*$/i;
 const WORK_CONTEXT_RE = /任务|工作|客户|微信|接管|任务中心|交付|方案|报价|店铺|账号|发布|立案|装修|设计|cad|revit|短视频|电商|自动化/u;
 const WORK_STATUS_RE = /做完|完成|结果|进度|状态|卡|失败|成功|怎么回事|验证|检查/u;
 const WORK_ACTION_RE = /继续|下一步|接着|推进|执行|处理|跑|做|开始/u;
@@ -51,6 +50,32 @@ function normalizeText(text: string): string {
 
 function unique<T>(values: T[]): T[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function executionState(task?: WorkTakeoverTask | null): Record<string, any> | null {
+  const state = task?.metadata?.workTakeoverExecution;
+  return state && typeof state === 'object' ? state as Record<string, any> : null;
+}
+
+function hasRecoveryPressure(task?: WorkTakeoverTask | null): boolean {
+  if (!task) return false;
+  const state = executionState(task);
+  const lastStatus = compact(state?.lastTurn?.status).toLowerCase();
+  return Boolean(
+    task.status === 'blocked'
+      || task.status === 'waiting_confirmation'
+      || compact(state?.lastFailure?.error)
+      || compact(state?.resumeHint)
+      || ['failed', 'blocked', 'waiting_confirmation'].includes(lastStatus),
+  );
+}
+
+function isShortFollowUp(clean: string, original: string): boolean {
+  return STATUS_RE.test(clean)
+    || ACTION_RE.test(clean)
+    || EN_WORK_STATUS_RE.test(original)
+    || EN_WORK_ACTION_RE.test(original)
+    || AFFIRMATIVE_RE.test(clean);
 }
 
 export function classifyWorkTakeoverContinuation(
@@ -76,6 +101,14 @@ function classifyWorkTakeoverContinuationSignal(
   const hasWorkContext = WORK_CONTEXT_RE.test(clean);
   const hasEnglishWorkContext = EN_WORK_CONTEXT_RE.test(text);
   const isWorkSurface = normalizedSurface === 'work';
+  const recoveryPressure = hasRecoveryPressure(latestTask);
+
+  if (recoveryPressure && latestTask && isShortFollowUp(clean, text)) {
+    const intent: WorkTakeoverContinuationIntent = STATUS_RE.test(clean) || EN_WORK_STATUS_RE.test(text)
+      ? 'status'
+      : 'advance';
+    return { intent, strength: 'direct' };
+  }
 
   if (EN_WORK_STATUS_RE.test(text) && (hasEnglishWorkContext || isWorkSurface)) {
     return { intent: 'status', strength: 'direct' };
@@ -113,7 +146,7 @@ function classifyWorkTakeoverContinuationSignal(
   if (latestTask?.status === 'waiting_confirmation' && AFFIRMATIVE_RE.test(clean)) {
     return {
       intent: 'advance',
-      strength: isWorkSurface ? 'direct' : 'hint',
+      strength: isWorkSurface || recoveryPressure ? 'direct' : 'hint',
     };
   }
 
@@ -166,15 +199,15 @@ function nextPlannedStep(task: WorkTakeoverTask): string {
 }
 
 function lastExecutionLine(task: WorkTakeoverTask): string {
-  const execution = task.metadata?.workTakeoverExecution;
-  if (!execution || typeof execution !== 'object') return '';
-  const lastTurn = execution.lastTurn;
-  const lastFailure = execution.lastFailure;
+  const execution = executionState(task);
+  if (!execution) return '';
+  const lastTurn = execution.lastTurn || {};
+  const lastFailure = execution.lastFailure || {};
   const parts = [
-    lastTurn?.capabilityLane ? `lane=${compact(lastTurn.capabilityLane)}` : '',
-    lastTurn?.status ? `status=${compact(lastTurn.status)}` : '',
-    lastFailure?.tool ? `failedTool=${compact(lastFailure.tool)}` : '',
-    lastFailure?.error ? `error=${compact(lastFailure.error).slice(0, 120)}` : '',
+    lastTurn.capabilityLane ? `lane=${compact(lastTurn.capabilityLane)}` : '',
+    lastTurn.status ? `status=${compact(lastTurn.status)}` : '',
+    lastFailure.tool ? `failedTool=${compact(lastFailure.tool)}` : '',
+    lastFailure.error ? `error=${compact(lastFailure.error).slice(0, 120)}` : '',
     execution.resumeHint ? `resume=${compact(execution.resumeHint).slice(0, 180)}` : '',
   ].filter(Boolean);
   return parts.length ? `Last execution: ${parts.join(' | ')}` : '';
@@ -226,9 +259,12 @@ export function buildWorkTakeoverContinuityContext(
         surface === 'work'
           ? 'This turn comes from a work surface. Unfinished work takeover tasks are likely relevant, but still respect the user wording.'
           : 'The user has unfinished work takeover tasks, but this turn may still be ordinary chat. Do not hijack casual conversation.',
-        'Treat explicit task follow-ups like “继续这个任务 / 下一步 / 刚刚那个客户任务 / 做完了吗 / 卡在哪” as references to the latest active task. For ambiguous chat like “继续聊 / 好的 / 然后呢”, decide from context or ask one short clarification.',
+        'Treat explicit task follow-ups like "继续这个任务 / 下一步 / 刚刚那个客户任务 / 做完了吗 / 卡在哪里" as references to the latest active task. For ambiguous chat like "继续聊 / 好的 / 然后呢", decide from context or ask one short clarification.',
         `Latest task id: ${latestTask?.id || 'none'}.`,
         `Continuation signal: ${intent || 'none'} / ${strength}.`,
+        hasRecoveryPressure(latestTask)
+          ? 'Latest task has recovery pressure from a blocker, failed tool, waiting confirmation, or resume hint. Short follow-ups should return to that exact failure point instead of starting a new chat.'
+          : '',
         'Rules:',
         '- Do not create a new task for a follow-up or pronoun-only turn unless the user clearly starts new work.',
         '- For direct continue/next-step turns, use work_takeover_task_advance or work_takeover_task_autorun with the active task id, then report only what changed, blockers, and the next confirmation.',
@@ -237,7 +273,7 @@ export function buildWorkTakeoverContinuityContext(
         '- Keep the answer human and compact; do not recite every internal step or fixed workflow language.',
         'Active tasks:',
         ...activeTasks.map(taskLine),
-      ].join('\n')
+      ].filter(Boolean).join('\n')
     : '';
 
   return {

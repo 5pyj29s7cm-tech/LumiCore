@@ -23,6 +23,7 @@ import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
+import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
@@ -122,6 +123,12 @@ export function registerTaskHandler(
       execution: executionDecision,
       text: data.text,
     });
+    const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
+      channel: 'task',
+      text: data.text,
+      flow: turnFlow,
+      capabilitySelection,
+    });
     if (executionDecision.toolRoute) {
       socket.emit('agent:tool_route', {
         categories: executionDecision.toolRoute.categories,
@@ -139,11 +146,22 @@ export function registerTaskHandler(
       preferredTools: capabilitySelection.preferredTools,
       source: 'task',
     });
+    if (desktopExecutionPolicy.applies) {
+      socket.emit('agent:desktop_execution_policy', {
+        reason: desktopExecutionPolicy.reason,
+        evidenceTools: desktopExecutionPolicy.evidenceTools,
+        verificationTools: desktopExecutionPolicy.verificationTools,
+        source: 'task',
+      });
+    }
     let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid);
     effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
     effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
     effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
     effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
+    if (desktopExecutionPolicy.promptOverlay) {
+      effectiveSystemPrompt += '\n\n' + desktopExecutionPolicy.promptOverlay;
+    }
     effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
       userId: uid,
       text: data.text,
