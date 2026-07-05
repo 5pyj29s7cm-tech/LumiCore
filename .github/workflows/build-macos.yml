@@ -1,0 +1,50 @@
+name: Build macOS Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_local_voice:
+        description: 'Bundle large offline voice resources'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Download Node.js binary
+        run: node scripts/download-node-binary.mjs
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build macOS installer
+        env:
+          LUMI_DESKTOP_WITH_LOCAL_VOICE: ${{ inputs.include_local_voice == 'true' && '1' || '0' }}
+        run: npm run tauri:build
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumi-os-macos
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: error
