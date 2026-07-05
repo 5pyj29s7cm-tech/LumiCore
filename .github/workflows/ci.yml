@@ -10,10 +10,10 @@ jobs:
     name: TypeScript type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
       - run: npm ci
       - run: npx tsc --noEmit
@@ -22,10 +22,10 @@ jobs:
     name: Rust backend check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
       - run: npm ci
       - name: Build frontend dist
@@ -52,10 +52,10 @@ jobs:
     name: Unit tests (vitest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
       - run: npm ci
       - run: npm test
@@ -64,10 +64,10 @@ jobs:
     name: Frontend Vite build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
       - run: npm ci
       - run: npm run build:desktop-ui
@@ -86,16 +86,16 @@ jobs:
           - target: windows-x64
             runner: windows-latest
           - target: macos-arm64
-            runner: macos-latest
+            runner: macos-15
           - target: linux-x64
             runner: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
 
       - name: Install Linux system deps
@@ -144,7 +144,7 @@ jobs:
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lumi-os-${{ matrix.target }}
           path: src-tauri/target/release/bundle/nsis/*.exe
@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload macOS installer
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lumi-os-${{ matrix.target }}
           path: src-tauri/target/release/bundle/dmg/*.dmg
@@ -160,7 +160,7 @@ jobs:
 
       - name: Upload Linux installers
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lumi-os-${{ matrix.target }}
           path: |
@@ -177,7 +177,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: lumi-os-*
           path: artifacts

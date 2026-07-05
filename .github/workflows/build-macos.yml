@@ -15,13 +15,13 @@ on:
 jobs:
   build-macos:
     name: Build macOS DMG
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
 
       - run: npm ci
@@ -41,7 +41,7 @@ jobs:
         run: npm run tauri:build
 
       - name: Upload macOS installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lumi-os-macos
           path: |
