@@ -76,6 +76,93 @@ function shouldRouteTools(flow: LumiTurnFlow, isSanctuary?: boolean): boolean {
   return true;
 }
 
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function addAvailable(out: Set<string>, available: Set<string>, names: string[]): void {
+  for (const name of names) {
+    if (available.has(name)) out.add(name);
+  }
+}
+
+function enhanceToolRouteForFlow(
+  route: ToolRoute,
+  flow: LumiTurnFlow,
+  declarations: ToolDeclaration[],
+): ToolRoute {
+  const available = new Set(declarations.map(declaration => declaration.function.name));
+  const additions = new Set<string>();
+  const categories = [...route.categories];
+  const reasons = [...route.reasons];
+
+  if (flow.channel === 'task' || flow.workTakeover.shouldResumeTask) {
+    addAvailable(additions, available, [
+      'work_takeover_task_get',
+      'work_takeover_task_continue',
+      'work_takeover_task_advance',
+      'work_takeover_task_autorun',
+      'work_takeover_task_verify_result',
+      'work_takeover_task_export_packet',
+      'work_takeover_task_run_suggested_tool',
+    ]);
+    categories.push(flow.channel === 'task' ? 'task_center' : 'work_takeover');
+    reasons.push(flow.channel === 'task' ? 'task center turns need task-state tools' : 'active work takeover turns need continuation tools');
+  }
+
+  if (flow.executionGovernance.capabilityLearningIntent !== 'none') {
+    addAvailable(additions, available, [
+      'capability_learning_list',
+      'self_extension_plan',
+      'capability_gap_autofix',
+      'list_skills',
+      'adapter_registry_list',
+      'external_app_list_adapters',
+      'external_control_candidates',
+    ]);
+    categories.push('capability_learning');
+    reasons.push('capability learning turns must inspect and reuse existing skills/adapters before adding new code');
+  }
+
+  if (flow.workSurfaceRoute.directDesktop) {
+    addAvailable(additions, available, [
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_click',
+      'desktop_ui_type',
+      'desktop_ui_invoke',
+      'computer_use',
+    ]);
+    categories.push('desktop_control');
+    reasons.push('direct desktop/software turns need visible UI control tools');
+  }
+
+  if (flow.workSurfaceRoute.artifactFirst) {
+    addAvailable(additions, available, [
+      'work_product_plan',
+      'work_product_verify',
+      'create_docx',
+      'create_ppt',
+      'create_pdf',
+      'write_file',
+    ]);
+    categories.push('artifact_work');
+    reasons.push('artifact-first turns need production and verification tools');
+  }
+
+  const merged = unique([...Array.from(additions), ...route.toolNames]);
+  if (merged.length === route.toolNames.length && route.categories.length === categories.length) return route;
+
+  const truncated = route.truncated || merged.length > route.maxTools;
+  return {
+    ...route,
+    toolNames: merged.slice(0, route.maxTools),
+    categories: unique(categories),
+    reasons: unique(reasons),
+    truncated,
+  };
+}
+
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
   const allowToolUse = input.flow.allowToolUseForTurn && !input.isSanctuary;
   const selfRepairToolPolicy = input.flow.selfRepairTurn ? SELF_REPAIR_TOOL_POLICY : null;
@@ -89,8 +176,11 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         : allowToolUse
           ? fallbackPolicy(input.flow, input.personalityToolPolicy)
           : NO_TOOLS_POLICY;
-  const toolRoute = shouldRouteTools(input.flow, input.isSanctuary)
+  const rawToolRoute = shouldRouteTools(input.flow, input.isSanctuary)
     ? routeToolsForTurn(input.flow.routeText || input.text, input.toolDeclarations)
+    : null;
+  const toolRoute = rawToolRoute
+    ? enhanceToolRouteForFlow(rawToolRoute, input.flow, input.toolDeclarations)
     : null;
   const toolPolicy = toolRoute
     ? mergeToolPolicyWithRoute(baseToolPolicy, toolRoute)

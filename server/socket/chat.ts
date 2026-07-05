@@ -13,6 +13,7 @@ import { parseStoredOperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
@@ -692,11 +693,16 @@ export function registerChatHandler(
         personalityToolPolicy: personality.toolPolicy,
         isSanctuary,
       });
+      const capabilitySelection = buildLumiCapabilitySelection({
+        dispatch: turnDispatch,
+        execution: executionDecision,
+        text: visibleUserText || text,
+      });
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
       const exposeAgentWork = turnFlow.exposeAgentWork;
       effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid);
-      console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
+      console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
       if (toolRoute) {
         socket.emit('agent:tool_route', {
           categories: toolRoute.categories,
@@ -706,11 +712,19 @@ export function registerChatHandler(
           truncated: toolRoute.truncated,
         });
       }
+      emitAgent('agent:capability_selection', {
+        lane: capabilitySelection.lane,
+        primary: capabilitySelection.primary,
+        reasons: capabilitySelection.reasons,
+        preferredTools: capabilitySelection.preferredTools,
+        source: eventSource,
+      });
       effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(turnFlow);
       if (workSurfaceRoute.promptOverlay) {
         effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
       }
       effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
+      effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
       const visionRoutingOverlay = effectiveOperationMode !== 'meeting' ? buildVisionRoutingOverlay(uid, text) : '';
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;

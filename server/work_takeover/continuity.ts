@@ -37,6 +37,10 @@ const WORK_CONTEXT_RE = /任务|工作|客户|微信|接管|任务中心|交付|
 const WORK_STATUS_RE = /做完|完成|结果|进度|状态|卡|失败|成功|怎么回事|验证|检查/u;
 const WORK_ACTION_RE = /继续|下一步|接着|推进|执行|处理|跑|做|开始/u;
 
+const EN_WORK_CONTEXT_RE = /\b(task|work|customer|client|wechat|message|takeover|delivery|package|store|account|seller|creator|publish|filing|case|renovation|design|cad|revit|short\s*video|ecommerce)\b/i;
+const EN_WORK_STATUS_RE = /\b(status|progress|done|finished|complete|completed|result|blocked|failed|success|verify|check|what\s+happened)\b/i;
+const EN_WORK_ACTION_RE = /\b(continue|resume|advance|next\s+step|keep\s+going|go\s+on|run\s+next|proceed|carry\s+on|push\s+forward)\b/i;
+
 function compact(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 }
@@ -70,7 +74,21 @@ function classifyWorkTakeoverContinuationSignal(
   if (!clean || MUSIC_CONTINUATION_RE.test(clean)) return { intent: null, strength: 'none' };
 
   const hasWorkContext = WORK_CONTEXT_RE.test(clean);
+  const hasEnglishWorkContext = EN_WORK_CONTEXT_RE.test(text);
   const isWorkSurface = normalizedSurface === 'work';
+
+  if (EN_WORK_STATUS_RE.test(text) && (hasEnglishWorkContext || isWorkSurface)) {
+    return { intent: 'status', strength: 'direct' };
+  }
+  if (EN_WORK_ACTION_RE.test(text) && (hasEnglishWorkContext || isWorkSurface)) {
+    return { intent: 'advance', strength: 'direct' };
+  }
+  if (EN_WORK_STATUS_RE.test(text) && latestTask) {
+    return { intent: 'status', strength: isWorkSurface ? 'direct' : 'hint' };
+  }
+  if (EN_WORK_ACTION_RE.test(text) && latestTask) {
+    return { intent: 'advance', strength: isWorkSurface ? 'direct' : 'hint' };
+  }
 
   if (REFERENTIAL_STATUS_RE.test(clean)) return { intent: 'status', strength: 'direct' };
   if (REFERENTIAL_ACTION_RE.test(clean)) return { intent: 'advance', strength: 'direct' };

@@ -22,6 +22,7 @@ import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
@@ -115,6 +116,11 @@ export function registerTaskHandler(
       toolDeclarations: toolRegistry.getToolDeclarations(),
       personalityToolPolicy: personality.toolPolicy,
     });
+    const capabilitySelection = buildLumiCapabilitySelection({
+      dispatch: turnDispatch,
+      execution: executionDecision,
+      text: data.text,
+    });
     if (executionDecision.toolRoute) {
       socket.emit('agent:tool_route', {
         categories: executionDecision.toolRoute.categories,
@@ -125,10 +131,18 @@ export function registerTaskHandler(
         source: 'task',
       });
     }
+    socket.emit('agent:capability_selection', {
+      lane: capabilitySelection.lane,
+      primary: capabilitySelection.primary,
+      reasons: capabilitySelection.reasons,
+      preferredTools: capabilitySelection.preferredTools,
+      source: 'task',
+    });
     let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid);
     effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
     effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
     effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
+    effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
     effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
       userId: uid,
       text: data.text,

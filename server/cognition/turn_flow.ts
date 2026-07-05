@@ -168,7 +168,11 @@ function classifyCapabilityLearningIntent(
   text: string,
   input: Pick<LumiTurnFlowInput, 'targetIsLumi'>,
 ): Pick<LumiExecutionGovernance, 'capabilityLearningIntent' | 'capabilityLearningReason' | 'shouldInspectCapabilitiesFirst'> {
-  const inCapabilityContext = input.targetIsLumi || CAPABILITY_CONTEXT_RE.test(text);
+  const englishCapabilityContext = /\b(lumi|capabilit(?:y|ies)|skill|tool|adapter|workflow|mcp|agent|desktop|browser|login|client|task\s*center)\b/i.test(text);
+  const englishReuseAudit = /\b(duplicate|reuse|reusable|hard-?coded|script|built-?in|demo|already|existing|fragmented|same\s+path)\b/i.test(text);
+  const englishCapabilityAction = /\b(learn|stabili[sz]e|remember|optimi[sz]e|improve|wire|integrate|make\s+real|make\s+reusable|fix|repair)\b/i.test(text);
+  const englishCapabilityGap = /\b(can'?t|cannot|fail(?:s|ed)?|broken|unstable|missing|brittle|bad|not\s+working|crash(?:ed)?|stuck|forgot)\b/i.test(text);
+  const inCapabilityContext = input.targetIsLumi || CAPABILITY_CONTEXT_RE.test(text) || englishCapabilityContext;
   if (!inCapabilityContext) {
     return {
       capabilityLearningIntent: 'none',
@@ -177,7 +181,7 @@ function classifyCapabilityLearningIntent(
     };
   }
 
-  if (CAPABILITY_REUSE_AUDIT_RE.test(text)) {
+  if (CAPABILITY_REUSE_AUDIT_RE.test(text) || (englishCapabilityContext && englishReuseAudit)) {
     return {
       capabilityLearningIntent: 'inspect_reuse',
       capabilityLearningReason: 'user is asking about duplication, scripts, hard-coding, or reuse',
@@ -185,7 +189,7 @@ function classifyCapabilityLearningIntent(
     };
   }
 
-  if (CAPABILITY_ACTION_RE.test(text) && CAPABILITY_GAP_RE.test(text)) {
+  if ((CAPABILITY_ACTION_RE.test(text) || englishCapabilityAction) && (CAPABILITY_GAP_RE.test(text) || englishCapabilityGap)) {
     return {
       capabilityLearningIntent: 'learn_missing',
       capabilityLearningReason: 'user described a brittle or missing capability that should become reusable',
@@ -193,7 +197,7 @@ function classifyCapabilityLearningIntent(
     };
   }
 
-  if (CAPABILITY_ACTION_RE.test(text)) {
+  if (CAPABILITY_ACTION_RE.test(text) || englishCapabilityAction) {
     return {
       capabilityLearningIntent: 'stabilize_existing',
       capabilityLearningReason: 'user wants an existing Lumi capability made stable or reusable',

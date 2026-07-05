@@ -26,6 +26,7 @@ import { parseStoredOperationMode, OperationMode } from "../cognition/operation_
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
@@ -427,8 +428,13 @@ async function processVoiceInput(
     toolDeclarations: toolRegistry.getToolDeclarations(),
     personalityToolPolicy: personality.toolPolicy,
   });
+  const capabilitySelection = buildLumiCapabilitySelection({
+    dispatch: turnDispatch,
+    execution: executionDecision,
+    text: userText,
+  });
   const routedToolPolicy = executionDecision.toolPolicy;
-  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
+  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
   if (executionDecision.toolRoute) {
     socket.emit('agent:tool_route', {
       categories: executionDecision.toolRoute.categories,
@@ -439,6 +445,13 @@ async function processVoiceInput(
       source: 'voice',
     });
   }
+  socket.emit('agent:capability_selection', {
+    lane: capabilitySelection.lane,
+    primary: capabilitySelection.primary,
+    reasons: capabilitySelection.reasons,
+    preferredTools: capabilitySelection.preferredTools,
+    source: 'voice',
+  });
   const opModeOverlay = '\n\n' + buildInteractionModeOverlay(turnFlow);
   const workSurfaceOverlay = workSurfaceRoute.promptOverlay ? '\n\n' + workSurfaceRoute.promptOverlay : '';
   const visionRoutingOverlay = visionIntent && effectiveOperationMode !== 'meeting' ? '\n\n' + buildVisionRoutingOverlay(session.userId, userText) : '';
@@ -449,6 +462,7 @@ async function processVoiceInput(
   const clientSelfPrompt = '\n\n' + formatClientSelfPrompt(session.userId);
   const dispatchOverlay = '\n\n' + turnDispatch.promptOverlay;
   const executionOverlay = '\n\n' + executionDecision.promptOverlay;
+  const capabilitySelectionOverlay = '\n\n' + capabilitySelection.promptOverlay;
   const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
     userId: session.userId,
@@ -462,7 +476,7 @@ async function processVoiceInput(
     channel: 'voice',
     flow: turnFlow,
   });
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
