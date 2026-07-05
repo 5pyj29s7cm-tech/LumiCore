@@ -146,6 +146,55 @@ export interface ClientHealthReport {
   };
 }
 
+export type ClientActionVerificationStatus = 'verified' | 'pending' | 'failed' | 'not_applicable';
+
+export interface ClientStateDigest {
+  mode: string;
+  activeTab: string;
+  focusedWindow: string;
+  openWindows: string[];
+  openSurfaces: string[];
+  voice: string;
+  music: string;
+  meetingActive: boolean;
+  runtimeStatus: string;
+  stateAgeSeconds: number | null;
+  socketId: string;
+}
+
+export interface ClientActionExpectation {
+  action: string;
+  target?: string;
+  mode?: string;
+  expectedState: string[];
+  requiresConfirmation: boolean;
+  verification: string;
+  naturalCompletion: string;
+  naturalPending: string;
+}
+
+export interface ClientActionVerification {
+  status: ClientActionVerificationStatus;
+  matched: string[];
+  missing: string[];
+  expectation: ClientActionExpectation;
+  before: ClientStateDigest | null;
+  after: ClientStateDigest | null;
+  relayOk: boolean | null;
+  relayReason?: string;
+  message: string;
+}
+
+export interface ClientSelfAwarenessReport {
+  level: 'live' | 'stale' | 'missing';
+  bodySummary: string;
+  currentState: ClientStateDigest | null;
+  knows: string[];
+  gaps: string[];
+  habits: string[];
+  nextBestActions: string[];
+}
+
 const CLIENT_CAPABILITIES: ClientCapability[] = [
   {
     id: 'mode.chat',
@@ -811,6 +860,369 @@ export function getClientHealthReport(userId: string): ClientHealthReport {
   };
 }
 
+export function normalizeClientActionTarget(value?: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const normalized = raw.toLowerCase();
+  const aliases: Record<string, string> = {
+    music: 'music-center',
+    media: 'music-center',
+    memory: 'knowledge',
+    files: 'knowledge',
+    file: 'knowledge',
+    sync: 'devices',
+    computer: 'kernel',
+    adaptation: 'kernel',
+    'computer-adaptation': 'kernel',
+    log: 'runtime-log',
+    logs: 'runtime-log',
+    runtime: 'runtime-log',
+    organization: 'org',
+    settings: 'settings',
+  };
+  return aliases[normalized] || normalized;
+}
+
+export function getClientStateDigest(state: ClientStateSnapshot | null | undefined): ClientStateDigest | null {
+  if (!state) return null;
+  const openWindows = [...(state.windows?.open || [])];
+  const openSurfaces: string[] = [];
+  if (state.activeTab) openSurfaces.push(`tab:${state.activeTab}`);
+  if (state.surfaces?.knowledgeOpen) openSurfaces.push('knowledge');
+  if (state.surfaces?.chatOpen) openSurfaces.push('chat');
+  if (state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) openSurfaces.push('runtime-log');
+  if (state.surfaces?.meetingOpen || state.meeting?.active) openSurfaces.push('meeting');
+  if (state.surfaces?.musicLayerVisible || state.music?.layerVisible) openSurfaces.push('music-layer');
+  if (state.surfaces?.wallpaperMode) openSurfaces.push('wallpaper');
+  for (const win of openWindows) {
+    if (!openSurfaces.includes(win)) openSurfaces.push(win);
+  }
+  const stateAgeSeconds = state.updatedAt ? Math.max(0, Math.round((Date.now() - state.updatedAt) / 1000)) : null;
+  return {
+    mode: state.mode || 'unknown',
+    activeTab: state.activeTab || 'unknown',
+    focusedWindow: state.windows?.focused || 'none',
+    openWindows,
+    openSurfaces,
+    voice: `${state.voice?.state || 'idle'}${state.voice?.muted ? '/muted' : ''}`,
+    music: state.music?.isPlaying
+      ? `playing${state.music.trackName ? `:${state.music.trackName}` : ''}`
+      : state.music?.trackName
+        ? `loaded:${state.music.trackName}`
+        : 'idle',
+    meetingActive: Boolean(state.meeting?.active),
+    runtimeStatus: state.runtimeLog?.status || (state.runtime?.lastError ? 'attention' : 'ready'),
+    stateAgeSeconds,
+    socketId: state.socketId || 'unknown',
+  };
+}
+
+export function getClientActionExpectation(args: Record<string, any> = {}): ClientActionExpectation {
+  const action = String(args.action || '').trim();
+  const mode = String(args.mode || '').trim();
+  const section = String(args.section || '').trim();
+  const enabled = Boolean(args.enabled);
+  let target = normalizeClientActionTarget(args.target);
+  let expectedState: string[] = [];
+  let verification = 'Check the latest client state after the action before claiming success.';
+  let naturalCompletion = 'Done.';
+  let naturalPending = 'The command was sent, but the latest client state has not confirmed the change yet.';
+
+  const setSurface = (surface: string, label?: string) => {
+    target = normalizeClientActionTarget(surface);
+    expectedState = [`surface:${target}:open`];
+    verification = `The ${label || target} surface should be visible or active in client state.`;
+    naturalCompletion = `${label || target} is open.`;
+    naturalPending = `${label || target} was requested, but I still need a fresh client state to confirm it is open.`;
+  };
+
+  switch (action) {
+    case 'refresh_client_state':
+      expectedState = ['state:fresh'];
+      verification = 'A fresh client state report should arrive from the desktop client.';
+      naturalCompletion = 'Client state is refreshed.';
+      naturalPending = 'I asked the client to refresh state, but no fresh state has arrived yet.';
+      break;
+    case 'focus_home':
+      setSurface('home', 'home');
+      break;
+    case 'open_app':
+      setSurface(target || 'home', target || 'home');
+      break;
+    case 'close_app':
+      expectedState = target ? [`surface:${target}:closed`] : [];
+      verification = target ? `The ${target} surface should no longer be open.` : 'A target surface is required for close_app.';
+      naturalCompletion = target ? `${target} is closed.` : 'The close request completed.';
+      naturalPending = target ? `${target} was asked to close, but I still need fresh state to confirm it.` : 'The close request was sent.';
+      break;
+    case 'set_mode':
+    case 'set_client_mode':
+      expectedState = mode ? [`mode:${mode}`] : [];
+      verification = mode ? `Client mode should become ${mode}.` : 'A target mode is required.';
+      naturalCompletion = mode ? `Mode is now ${mode}.` : 'Mode change requested.';
+      naturalPending = mode ? `I asked to switch to ${mode}, but the latest state has not confirmed it yet.` : 'Mode change requested.';
+      break;
+    case 'open_music_center':
+      setSurface('music-center', 'Music Center');
+      break;
+    case 'show_music_layer':
+      expectedState = ['surface:music-layer:open'];
+      verification = 'The music layer should be visible.';
+      naturalCompletion = 'Music layer is visible.';
+      naturalPending = 'I asked to show the music layer, but I still need fresh state to confirm it.';
+      break;
+    case 'hide_music_layer':
+      expectedState = ['surface:music-layer:closed'];
+      verification = 'The music layer should be hidden.';
+      naturalCompletion = 'Music layer is hidden.';
+      naturalPending = 'I asked to hide the music layer, but I still need fresh state to confirm it.';
+      break;
+    case 'start_meeting_mode':
+      expectedState = ['mode:meeting', 'surface:meeting:open'];
+      verification = 'Client mode should be meeting and meeting capture/notes should be active.';
+      naturalCompletion = 'Meeting mode is active.';
+      naturalPending = 'I asked to start meeting mode, but the latest state has not confirmed it yet.';
+      break;
+    case 'end_meeting_mode':
+      expectedState = ['mode:not:meeting'];
+      verification = 'Client mode should leave meeting mode; report generation may continue afterward.';
+      naturalCompletion = 'Meeting mode is ending and report generation may continue.';
+      naturalPending = 'I asked to end meeting mode, but the latest state has not confirmed it yet.';
+      break;
+    case 'open_meeting_notes':
+      setSurface('meeting', 'meeting notes');
+      break;
+    case 'open_runtime_log':
+      setSurface('runtime-log', 'runtime log');
+      break;
+    case 'show_knowledge_base':
+    case 'open_files':
+      setSurface('knowledge', 'knowledge base');
+      break;
+    case 'open_organization_workspace':
+      setSurface('org', 'organization workspace');
+      break;
+    case 'open_settings':
+      setSurface(section === 'computer' ? 'kernel' : 'settings', section === 'computer' ? 'computer adaptation center' : 'settings');
+      break;
+    case 'open_computer_adaptation':
+      setSurface('kernel', 'computer adaptation center');
+      break;
+    case 'open_avatar_studio':
+      setSurface('avatar-studio', 'avatar studio');
+      break;
+    case 'open_sound_studio':
+      setSurface('sound', 'sound studio');
+      break;
+    case 'open_memory_avatar':
+      setSurface('memory-avatar', 'memory avatar');
+      break;
+    case 'open_skills':
+      setSurface('skills', 'skills');
+      break;
+    case 'open_tools':
+      setSurface('tools', 'tools');
+      break;
+    case 'open_team':
+      setSurface('team', 'team');
+      break;
+    case 'open_chat':
+      setSurface('chat', 'chat');
+      break;
+    case 'open_plans':
+    case 'open_work_queue':
+      setSurface('plans', 'plans');
+      break;
+    case 'set_wallpaper_mode':
+      expectedState = [`surface:wallpaper:${enabled ? 'open' : 'closed'}`];
+      verification = `Wallpaper mode should be ${enabled ? 'enabled' : 'disabled'} in client state.`;
+      naturalCompletion = `Wallpaper mode is ${enabled ? 'enabled' : 'disabled'}.`;
+      naturalPending = `I asked to ${enabled ? 'enable' : 'disable'} wallpaper mode, but state has not confirmed it yet.`;
+      break;
+    default:
+      expectedState = [];
+      verification = 'No built-in state expectation is known for this client action.';
+      naturalCompletion = 'The client action completed.';
+      naturalPending = 'The client action was sent, but I need its action result or fresh state before claiming success.';
+      break;
+  }
+
+  return {
+    action,
+    target: target || undefined,
+    mode: mode || undefined,
+    expectedState,
+    requiresConfirmation: isConfirmationSensitiveClientAction(action, mode),
+    verification,
+    naturalCompletion,
+    naturalPending,
+  };
+}
+
+export function verifyClientActionResult(
+  args: Record<string, any> = {},
+  before: ClientStateSnapshot | null,
+  after: ClientStateSnapshot | null,
+  relayResult?: any,
+): ClientActionVerification {
+  const expectation = getClientActionExpectation(args);
+  const relayOk = extractRelayOk(relayResult);
+  const relayReason = extractRelayReason(relayResult);
+  const matched: string[] = [];
+  const missing: string[] = [];
+
+  if (relayOk === false) {
+    return {
+      status: 'failed',
+      matched,
+      missing: expectation.expectedState,
+      expectation,
+      before: getClientStateDigest(before),
+      after: getClientStateDigest(after),
+      relayOk,
+      relayReason,
+      message: relayReason || 'The client action reported failure.',
+    };
+  }
+
+  for (const expected of expectation.expectedState) {
+    if (clientStateMatchesExpectation(expected, before, after)) matched.push(expected);
+    else missing.push(expected);
+  }
+
+  const status: ClientActionVerificationStatus = expectation.expectedState.length === 0
+    ? (relayOk === true ? 'not_applicable' : 'pending')
+    : missing.length === 0
+      ? 'verified'
+      : after
+        ? 'pending'
+        : 'pending';
+
+  return {
+    status,
+    matched,
+    missing,
+    expectation,
+    before: getClientStateDigest(before),
+    after: getClientStateDigest(after),
+    relayOk,
+    relayReason,
+    message: status === 'verified' || status === 'not_applicable'
+      ? expectation.naturalCompletion
+      : relayReason || expectation.naturalPending,
+  };
+}
+
+export function getClientSelfAwarenessReport(userId: string): ClientSelfAwarenessReport {
+  const state = getClientState(userId);
+  const health = getClientHealthReport(userId);
+  const digest = getClientStateDigest(state);
+  const stale = health.stateAgeSeconds != null && health.stateAgeSeconds > 30;
+  const level: ClientSelfAwarenessReport['level'] = !state ? 'missing' : stale ? 'stale' : 'live';
+  const gaps: string[] = [];
+  if (!state) gaps.push('No live client state has arrived yet.');
+  if (stale) gaps.push(`Client state is ${health.stateAgeSeconds}s old; refresh before acting.`);
+  if (health.findings.length) gaps.push(...health.findings.slice(0, 3).map(f => `${f.area}: ${f.message}`));
+
+  const bodySummary = digest
+    ? `mode=${digest.mode}; active=${digest.activeTab}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
+    : `no live client body; health=${health.level}`;
+
+  return {
+    level,
+    bodySummary,
+    currentState: digest,
+    knows: [
+      'client surfaces and their native client_action routes',
+      'current mode, active tab, windows, focused window, voice/music/meeting/runtime state when the desktop reports it',
+      'which client actions need confirmation and which external/irreversible actions must stop for the user',
+      'how to recover safely by refreshing state or opening the right recovery surface',
+    ],
+    gaps: gaps.length ? gaps : ['No current self-awareness gaps reported by client health.'],
+    habits: [
+      'Before changing a Lumi client surface or mode, read client_get_state unless the current tool result already contains fresh state.',
+      'After client_action, trust verified state or explicit failure, not intention alone.',
+      'For external apps, inspect the active window/screen and use adapters before mouse/keyboard control.',
+      'Report only done, blocked, and needs-confirmation items for takeover work.',
+    ],
+    nextBestActions: state && !stale
+      ? ['Use client_action for Lumi UI changes and verify the returned status.', 'Use desktop_ui_snapshot or desktop_capture_screen for external app claims.']
+      : ['Call client_self_repair(refresh_client_state).', 'Ask the user to open/reconnect the Lumi desktop client if no state arrives.'],
+  };
+}
+
+function isConfirmationSensitiveClientAction(action: string, mode?: string): boolean {
+  if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return true;
+  return (action === 'set_mode' || action === 'set_client_mode') && (mode === 'meeting' || mode === 'autonomous');
+}
+
+function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: string): boolean {
+  if (!state) return false;
+  const target = normalizeClientActionTarget(surface);
+  const openWindows = state.windows?.open || [];
+  if (target === 'home') return state.activeTab === 'home';
+  if (target === 'org') return state.activeTab === 'org' || openWindows.includes('org') || state.windows?.focused === 'org';
+  if (target === 'knowledge') return Boolean(state.surfaces?.knowledgeOpen) || openWindows.includes('knowledge');
+  if (target === 'chat') return Boolean(state.surfaces?.chatOpen) || openWindows.includes('chat');
+  if (target === 'runtime-log') return Boolean(state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) || openWindows.includes('runtime-log');
+  if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
+  if (target === 'music-layer') return Boolean(state.surfaces?.musicLayerVisible || state.music?.layerVisible);
+  if (target === 'wallpaper') return Boolean(state.surfaces?.wallpaperMode);
+  return state.activeTab === target || openWindows.includes(target) || state.windows?.focused === target;
+}
+
+function clientStateMatchesExpectation(
+  expected: string,
+  before: ClientStateSnapshot | null,
+  after: ClientStateSnapshot | null,
+): boolean {
+  if (expected === 'state:fresh') {
+    if (!after?.updatedAt) return false;
+    return !before?.updatedAt || after.updatedAt > before.updatedAt;
+  }
+  if (expected.startsWith('mode:not:')) return after?.mode !== expected.slice('mode:not:'.length);
+  if (expected.startsWith('mode:')) return after?.mode === expected.slice('mode:'.length);
+  const surfaceMatch = expected.match(/^surface:(.+):(open|closed)$/);
+  if (surfaceMatch) {
+    const [, surface, desired] = surfaceMatch;
+    const isOpen = surfaceIsOpen(after, surface);
+    return desired === 'open' ? isOpen : !isOpen;
+  }
+  return false;
+}
+
+function extractRelayOk(result: any): boolean | null {
+  const parsed = parseRelayObject(result);
+  if (parsed && typeof parsed.ok === 'boolean') return parsed.ok;
+  if (typeof result === 'string') {
+    const lower = result.toLowerCase();
+    if (/\b(failed|error|ignored|timed out|timeout)\b/.test(lower)) return false;
+    if (/\b(ok|opened|closed|enabled|disabled|completed|done|success)\b/.test(lower)) return true;
+  }
+  return null;
+}
+
+function extractRelayReason(result: any): string | undefined {
+  const parsed = parseRelayObject(result);
+  if (parsed) {
+    const reason = parsed.reason || parsed.error || parsed.message;
+    return reason == null ? undefined : String(reason);
+  }
+  return typeof result === 'string' ? result : undefined;
+}
+
+function parseRelayObject(result: any): Record<string, any> | null {
+  if (!result) return null;
+  if (typeof result === 'object') return result as Record<string, any>;
+  if (typeof result !== 'string') return null;
+  try {
+    const parsed = JSON.parse(result);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function formatLearnedCapabilityRoutes(userId: string): string[] {
   try {
     const records = listCapabilityLearningRecords({ userId, limit: 8 })
@@ -834,6 +1246,7 @@ function formatLearnedCapabilityRoutes(userId: string): string[] {
 export function formatClientSelfPrompt(userId: string): string {
   const state = getClientState(userId);
   const health = getClientHealthReport(userId);
+  const awareness = getClientSelfAwarenessReport(userId);
   const stateAge = state?.updatedAt ? Math.round((Date.now() - state.updatedAt) / 1000) : null;
   const gate = getGateConfig();
   const workflows = listAutonomousWorkflows(userId);
@@ -887,11 +1300,19 @@ export function formatClientSelfPrompt(userId: string): string {
       ? health.findings.slice(0, 8).map(f => `- [${f.level}/${f.area}] ${f.message}${f.evidence ? ` (${f.evidence})` : ''}`)
       : ['- No current health findings.']),
   ];
+  const awarenessLines = [
+    `- Level: ${awareness.level}`,
+    `- Body summary: ${awareness.bodySummary}`,
+    ...awareness.habits.map(habit => `- Habit: ${habit}`),
+    ...awareness.gaps.slice(0, 4).map(gap => `- Gap: ${gap}`),
+    ...awareness.nextBestActions.slice(0, 3).map(action => `- Next: ${action}`),
+  ];
 
   return [
     '## Lumi Client Self Model',
     'You are Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
+    'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
     'Prefer explicit client actions such as open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_settings, and set_wallpaper_mode instead of mouse/keyboard control for Lumi UI.',
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
@@ -923,6 +1344,15 @@ export function formatClientSelfPrompt(userId: string): string {
     '',
     '### Visible Execution Habits',
     ...executionHabitLines,
+    '',
+    '### Present-Moment Client Awareness',
+    ...awarenessLines,
+    '',
+    '### Client Action Verification Contract',
+    '- client_action returns the routed action result plus before/after client state digests and a verification status.',
+    '- verified means the requested surface/mode/state is visible in the latest client state.',
+    '- pending means the request was sent but state did not confirm it yet; do not phrase it as fully complete.',
+    '- failed means the client rejected the action or reported an explicit failure; diagnose or use one safe recovery action.',
     '',
     '### Learned Capability Routes',
     ...learnedCapabilityLines,

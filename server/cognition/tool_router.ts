@@ -1,5 +1,6 @@
 import { ToolPolicy } from '../personality/types';
 import { ToolRegistry } from '../tools/registry';
+import { mcpManager } from '../mcp/client';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -10,6 +11,7 @@ export interface ToolRoute {
   totalAvailable: number;
   maxTools: number;
   truncated: boolean;
+  unavailableMcpServers?: string[];
 }
 
 interface RouteDefinition {
@@ -401,6 +403,27 @@ function addNamePattern(out: Set<string>, names: string[], pattern: RegExp): voi
   }
 }
 
+function getMcpServerName(toolName: string): string | null {
+  const match = toolName.match(/^mcp_(.+?)_/);
+  return match?.[1] || null;
+}
+
+function getConnectedMcpGate(options?: {
+  connectedMcpServers?: string[];
+  enableMcpHealthGate?: boolean;
+}): Set<string> | null {
+  if (options?.enableMcpHealthGate === false) return null;
+  if (options?.connectedMcpServers) return new Set(options.connectedMcpServers);
+  try {
+    const connected = mcpManager.getConnectedServers();
+    // In isolated tests or before MCP startup, no runtime signal exists. Do not
+    // hide synthetic MCP declarations unless the caller provided an explicit gate.
+    return connected.length ? new Set(connected) : null;
+  } catch {
+    return null;
+  }
+}
+
 function scoreDeclaration(text: string, declaration: ToolDeclaration): number {
   const needle = `${declaration.function.name} ${declaration.function.description || ''}`.toLowerCase();
   const lower = text.toLowerCase();
@@ -416,7 +439,11 @@ function scoreDeclaration(text: string, declaration: ToolDeclaration): number {
 export function routeToolsForTurn(
   userText: string,
   declarations: ToolDeclaration[],
-  options?: { maxTools?: number },
+  options?: {
+    maxTools?: number;
+    connectedMcpServers?: string[];
+    enableMcpHealthGate?: boolean;
+  },
 ): ToolRoute {
   const maxTools = Math.max(8, Math.min(options?.maxTools ?? 64, 80));
   const text = String(userText || '').trim();
@@ -452,7 +479,23 @@ export function routeToolsForTurn(
     }
   }
 
-  const ordered = availableNames.filter(name => selected.has(name));
+  const orderedBeforeHealthGate = availableNames.filter(name => selected.has(name));
+  const connectedMcpGate = getConnectedMcpGate(options);
+  const unavailableMcpServers: string[] = [];
+  const ordered = connectedMcpGate
+    ? orderedBeforeHealthGate.filter(name => {
+        const serverName = getMcpServerName(name);
+        if (!serverName) return true;
+        if (connectedMcpGate.has(serverName)) return true;
+        unavailableMcpServers.push(serverName);
+        return false;
+      })
+    : orderedBeforeHealthGate;
+
+  if (unavailableMcpServers.length) {
+    reasons.push(`MCP health gate skipped unavailable servers: ${unique(unavailableMcpServers).join(', ')}`);
+  }
+
   const truncated = ordered.length > maxTools;
   return {
     toolNames: ordered.slice(0, maxTools),
@@ -461,6 +504,7 @@ export function routeToolsForTurn(
     totalAvailable: declarations.length,
     maxTools,
     truncated,
+    unavailableMcpServers: unique(unavailableMcpServers),
   };
 }
 
@@ -485,8 +529,11 @@ export function formatToolRouteForPrompt(route: ToolRoute): string {
     `This turn exposes ${route.toolNames.length}/${route.totalAvailable} tools to reduce tool noise.`,
     `Selected categories: ${categories}.`,
     `Routing reason: ${reasons}.`,
+    route.unavailableMcpServers?.length
+      ? `MCP health gate skipped unavailable servers: ${route.unavailableMcpServers.join(', ')}. Use a connected fallback or repair/configure the skill before relying on it.`
+      : '',
     route.toolNames.length > 0
       ? `Use only the exposed tools. Prefer the most specific skill tool when one directly matches the task.`
       : 'No tool matched strongly. Answer naturally or ask one clarification question instead of inventing tool work.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }

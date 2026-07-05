@@ -25,6 +25,23 @@ function marketplaceAgentScope(user?: AuthUser) {
   };
 }
 
+export function resolveMarketplaceSkillDirName(input: {
+  skillId?: string;
+  skillName?: string;
+  installPath?: string;
+}): string {
+  const fromId = String(input.skillId || '').trim().replace(/^skill-/i, '');
+  const fromPath = input.installPath
+    ? String(input.installPath).split(/[\\/]+/).filter(Boolean).pop() || ''
+    : '';
+  const fromName = String(input.skillName || '').trim();
+  const preferred = [fromId, fromPath, fromName]
+    .map(value => value.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''))
+    .find(Boolean);
+  if (!preferred) return 'skill';
+  return preferred;
+}
+
 export function mountMarketplaceRoutes(
   router: Router,
   jwtSecret: string,
@@ -164,7 +181,11 @@ export function mountMarketplaceRoutes(
           return res.json({ success: true, name: skillName, agentId, message: `External agent "${skillName}" added to Team. Test the connection there before orchestration.` });
         }
 
-        const skillDirName = skillName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+        const skillDirName = resolveMarketplaceSkillDirName({
+          skillId,
+          skillName,
+          installPath: bundledSkill?.installPath || reqInstallPath,
+        });
         io.emit('skill:installing', { skillId, name: skillName, stage: 'copying' });
         try {
           const skillDir = mcpManager.installSkill(skillDirName, reqInstallPath);
@@ -189,7 +210,10 @@ export function mountMarketplaceRoutes(
 
       // Community skills: copy from bundled dir too (they are implemented there now)
       if (installSource === 'community') {
-        const skillDirName = skillId.replace('skill-', '');
+        const skillDirName = resolveMarketplaceSkillDirName({
+          skillId,
+          skillName,
+        });
         const comSkill = getSkillById(skillId, undefined, scope);
         const bundledPath = path.join(__dirname, '..', 'skills', 'bundled', skillDirName);
         const communityPath = comSkill?.installPath && fs.existsSync(comSkill.installPath)

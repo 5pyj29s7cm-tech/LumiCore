@@ -127,6 +127,19 @@ function toPortableSkillPath(filePath: string): string {
   return filePath;
 }
 
+function packagePath(baseDir: string, packageName: string): string {
+  return path.join(baseDir, ...packageName.split('/'));
+}
+
+function packageExists(nodeModulesDir: string, packageName: string): boolean {
+  return fs.existsSync(path.join(packagePath(nodeModulesDir, packageName), 'package.json'));
+}
+
+function isNpxCommand(command: string): boolean {
+  const base = path.basename(command).toLowerCase();
+  return base === 'npx' || base === 'npx.cmd' || base === 'npx.ps1';
+}
+
 interface CrashTracker {
   consecutiveCrashes: number;
   lastCrashTime: string;
@@ -285,7 +298,7 @@ class MCPClientManager {
     }
 
     this.copyDirSync(sourceDir, destDir);
-    this.installDepsInDir(destDir);
+    this.prepareLocalSkillDependencies(destDir);
     this.patchInstalledMetadata(destDir);
     // Also stamp the installed version from source
     const srcPkg = this.readPkg(sourceDir);
@@ -396,7 +409,7 @@ class MCPClientManager {
 
     if (exists) {
       this.repairGeneratedSkillSource(skillDir, pkg);
-      await this.installDepsSync(skillDir);
+      await this.prepareLocalSkillDependenciesSync(skillDir);
       if (!serverConfig) {
         this.registerLocalSkill(name, skillDir, pkg);
       }
@@ -704,6 +717,67 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     });
   }
 
+  private resolveRuntimeNodeModulesDir(): string | null {
+    const candidates = [
+      path.join(process.cwd(), 'node_modules'),
+      path.join(path.dirname(process.execPath), 'node_modules'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  private resolveRuntimeTsxCli(): string | null {
+    const nodeModules = this.resolveRuntimeNodeModulesDir();
+    const candidates = [
+      nodeModules ? path.join(nodeModules, 'tsx', 'dist', 'cli.mjs') : '',
+      path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  private dependenciesAvailableIn(skillDir: string, nodeModulesDir: string): boolean {
+    const pkg = this.readPkg(skillDir);
+    const dependencies = pkg.dependencies && typeof pkg.dependencies === 'object'
+      ? Object.keys(pkg.dependencies)
+      : [];
+    return dependencies.every(dep => packageExists(nodeModulesDir, dep));
+  }
+
+  private ensureRuntimeNodeModulesLink(skillDir: string): boolean {
+    const runtimeNodeModules = this.resolveRuntimeNodeModulesDir();
+    if (!runtimeNodeModules) return false;
+    if (!this.dependenciesAvailableIn(skillDir, runtimeNodeModules)) return false;
+
+    const localNodeModules = path.join(skillDir, 'node_modules');
+    if (fs.existsSync(localNodeModules)) {
+      return this.dependenciesAvailableIn(skillDir, localNodeModules);
+    }
+
+    try {
+      fs.symlinkSync(runtimeNodeModules, localNodeModules, process.platform === 'win32' ? 'junction' : 'dir');
+      console.log(`[MCP] Linked runtime node_modules for ${path.basename(skillDir)}`);
+      return true;
+    } catch (err: any) {
+      console.warn(`[MCP] Could not link runtime node_modules for ${path.basename(skillDir)}: ${err?.message || err}`);
+      return false;
+    }
+  }
+
+  private prepareLocalSkillDependencies(dir: string): void {
+    if (this.ensureRuntimeNodeModulesLink(dir)) return;
+    this.installDepsInDir(dir);
+  }
+
+  private async prepareLocalSkillDependenciesSync(dir: string): Promise<void> {
+    if (this.ensureRuntimeNodeModulesLink(dir)) return;
+    await this.installDepsSync(dir);
+  }
+
   private readPkg(dir: string): any {
     const pkgPath = path.join(dir, 'package.json');
     try { return JSON.parse(fs.readFileSync(pkgPath, 'utf-8')); } catch { return {}; }
@@ -833,6 +907,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       const skillDir = path.join(SKILLS_DIR, entry.name);
       const indexPath = path.join(skillDir, 'index.ts');
       if (!fs.existsSync(indexPath)) continue;
+      this.ensureRuntimeNodeModulesLink(skillDir);
 
       if (!config[entry.name]) {
         let pkg: any = {};
@@ -908,6 +983,13 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         },
       );
     } else if (config.command) {
+      const expandedCommand = expandPortablePath(config.command);
+      const expandedArgs = (config.args || []).map(arg => expandPortablePath(arg));
+      const tsxCli = isNpxCommand(expandedCommand) && expandedArgs[0] === 'tsx'
+        ? this.resolveRuntimeTsxCli()
+        : null;
+      const command = tsxCli ? process.execPath : expandedCommand;
+      const args = tsxCli ? [tsxCli, ...expandedArgs.slice(1)] : expandedArgs;
       // Expand ${VAR_NAME} placeholders in env values using process.env + stored keys
       const storedKeys: Record<string, string> = {};
       try {
@@ -920,8 +1002,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         }
       }
       transport = new StdioClientTransport({
-        command: expandPortablePath(config.command),
-        args: (config.args || []).map(arg => expandPortablePath(arg)),
+        command,
+        args,
         env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : (config.env || undefined),
       });
     } else {

@@ -1,10 +1,14 @@
 import { ToolRegistry } from '../registry';
 import {
+  getClientActionExpectation,
   getClientCapabilities,
   getClientHealthReport,
   getClientInterfaceSurfaces,
+  getClientSelfAwarenessReport,
   getClientState,
+  getClientStateDigest,
   getVisibleExecutionHabits,
+  verifyClientActionResult,
 } from '../../client/self_model';
 import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
@@ -62,6 +66,30 @@ const RECOVERY_SURFACE_TARGETS: Record<string, string> = {
   voice: 'settings',
 };
 
+const ACTIONS_WITH_INTERNAL_REFRESH = new Set(['refresh_client_state']);
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function parseRelayOutput(output: string): any {
+  if (!output) return output;
+  try {
+    return JSON.parse(output);
+  } catch {
+    return output;
+  }
+}
+
+async function waitForClientStateAfter(userId: string, previousUpdatedAt: number, timeoutMs = 1200) {
+  const start = Date.now();
+  let latest = getClientState(userId);
+  while (Date.now() - start < timeoutMs) {
+    latest = getClientState(userId);
+    if (latest?.updatedAt && latest.updatedAt > previousUpdatedAt) return latest;
+    await delay(80);
+  }
+  return latest;
+}
+
 function getSkillRuntimeFindings() {
   const health = mcpManager.getServerHealth();
   const connected = new Set(mcpManager.getConnectedServers());
@@ -101,15 +129,19 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (_args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const state = getClientState(userId);
       return JSON.stringify({
+        selfAwareness: getClientSelfAwarenessReport(userId),
         capabilities: getClientCapabilities(),
         interfaceSurfaces: getClientInterfaceSurfaces(),
         visibleExecutionHabits: getVisibleExecutionHabits(),
-        state: getClientState(context?.userId || 'anonymous'),
-        health: getClientHealthReport(context?.userId || 'anonymous'),
+        state,
+        stateDigest: getClientStateDigest(state),
+        health: getClientHealthReport(userId),
         skillRuntimeFindings: getSkillRuntimeFindings(),
         autonomyGate: getGateConfig(),
-        autonomyWorkflows: listAutonomousWorkflows(context?.userId || 'anonymous'),
+        autonomyWorkflows: listAutonomousWorkflows(userId),
       }, null, 2);
     },
     permission: 'user',
@@ -164,8 +196,9 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       if (!context?.desktopRelay) {
         throw new Error('Client actions require the Lumi desktop client relay.');
       }
+      const userId = context?.userId || 'anonymous';
       const userConfirmed = Boolean(context.userConfirmed || args.confirmed);
-      return context.desktopRelay('client_action', {
+      const payload = {
         action: args.action,
         target: args.target || '',
         mode: args.mode || '',
@@ -173,7 +206,39 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         enabled: Boolean(args.enabled),
         section: args.section || '',
         confirmed: userConfirmed,
-      });
+      };
+      const before = getClientState(userId);
+      const expectation = getClientActionExpectation(payload);
+      const previousUpdatedAt = before?.updatedAt || 0;
+      const rawRelayOutput = await context.desktopRelay('client_action', payload);
+      const relayResult = parseRelayOutput(rawRelayOutput);
+      let refreshResult: any = null;
+
+      if (!ACTIONS_WITH_INTERNAL_REFRESH.has(String(args.action || ''))) {
+        await delay(140);
+        try {
+          const rawRefresh = await context.desktopRelay('client_action', { action: 'refresh_client_state' });
+          refreshResult = parseRelayOutput(rawRefresh);
+        } catch (err: any) {
+          refreshResult = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      const after = await waitForClientStateAfter(userId, previousUpdatedAt);
+      const verification = verifyClientActionResult(payload, before, after, relayResult);
+      return JSON.stringify({
+        ok: verification.status === 'verified' || verification.status === 'not_applicable',
+        action: payload.action,
+        target: payload.target || expectation.target || '',
+        mode: payload.mode || expectation.mode || '',
+        expectation,
+        relayResult,
+        refreshResult,
+        verification,
+        before: getClientStateDigest(before),
+        after: getClientStateDigest(after),
+        say: verification.message,
+      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',

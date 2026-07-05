@@ -310,6 +310,36 @@ describe('tool router', () => {
     expect(route.toolNames).not.toContain('legal_search_case');
   });
 
+  it('filters unavailable MCP tools when a health gate is provided', () => {
+    const route = routeToolsForTurn(
+      'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
+      DECLARATIONS,
+      { connectedMcpServers: [] },
+    );
+
+    expect(route.categories).toContain('market_finance');
+    expect(route.toolNames).not.toContain('mcp_stockbot_stock_quote');
+    expect(route.toolNames).not.toContain('mcp_stockbot_stock_trade_plan');
+    expect(route.toolNames).not.toContain('mcp_stockbot_paper_trade');
+    expect(route.unavailableMcpServers).toContain('stockbot');
+    expect(route.reasons.join('\n')).toContain('MCP health gate skipped unavailable servers');
+  });
+
+  it('keeps connected MCP tools when the health gate marks their server connected', () => {
+    const route = routeToolsForTurn(
+      'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
+      DECLARATIONS,
+      { connectedMcpServers: ['stockbot'] },
+    );
+
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'mcp_stockbot_stock_quote',
+      'mcp_stockbot_stock_trade_plan',
+      'mcp_stockbot_paper_trade',
+    ]));
+    expect(route.unavailableMcpServers).not.toContain('stockbot');
+  });
+
   it('routes audio transcription requests to transcript file tooling', () => {
     const route = routeToolsForTurn(
       'I attached a voice memo. Please transcribe the audio and save it as a text file.',

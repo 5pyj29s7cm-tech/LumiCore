@@ -1,5 +1,6 @@
 import type { ToolRegistry } from '../tools/registry';
 import { getAdapterRegistry } from '../adapters/registry';
+import { mcpManager } from '../mcp/client';
 import { listSkillWorkflows } from '../skills/workflow_registry';
 import { getActiveWorkTakeoverTasksForContinuity } from '../work_takeover/continuity';
 import type { LumiTurnFlow } from './turn_flow';
@@ -39,6 +40,45 @@ function groupTools(toolNames: string[]): string[] {
   return Array.from(counts.entries())
     .sort((a, b) => b[1] - a[1])
     .map(([name, count]) => `${name}=${count}`);
+}
+
+function getMcpServerName(toolName: string): string | null {
+  const match = toolName.match(/^mcp_(.+?)_/);
+  return match?.[1] || null;
+}
+
+function mcpHealthGateLines(toolNames: string[]): string[] {
+  try {
+    const config = mcpManager.getConfig();
+    const health = mcpManager.getServerHealth();
+    const connected = new Set(mcpManager.getConnectedServers());
+    const enabledNames = Object.entries(config)
+      .filter(([, cfg]) => Boolean(cfg.enabled))
+      .map(([name]) => name);
+    const unavailableEnabled = enabledNames
+      .filter(name => !connected.has(name))
+      .map(name => {
+        const cfg = config[name];
+        const status = health[name]?.status || 'disconnected';
+        const keyHint = cfg.requiresApiKey && cfg.apiKeyEnv ? `, needs ${cfg.apiKeyEnv}` : '';
+        return `${name}(${status}${keyHint})`;
+      });
+    const declaredMcpServers = Array.from(new Set(toolNames.map(getMcpServerName).filter(Boolean) as string[]));
+    const staleDeclared = connected.size
+      ? declaredMcpServers.filter(name => !connected.has(name))
+      : [];
+    return [
+      `MCP health gate: connected=${connected.size}/${enabledNames.length} enabled.`,
+      unavailableEnabled.length
+        ? `Unavailable enabled MCP/skills: ${unavailableEnabled.slice(0, 8).join(', ')}${unavailableEnabled.length > 8 ? ', ...' : ''}.`
+        : 'Unavailable enabled MCP/skills: none.',
+      staleDeclared.length
+        ? `Do not prefer stale MCP tool declarations from: ${staleDeclared.slice(0, 8).join(', ')}. Use connected fallback, client_repair_skill, open_skills, or ask for missing API/setup.`
+        : 'Prefer connected MCP tools; repair/configure before relying on disconnected skills.',
+    ];
+  } catch (err: any) {
+    return [`MCP health gate unavailable: ${String(err?.message || err || 'unknown error')}.`];
+  }
 }
 
 function relevantAdapters(flow: LumiTurnFlow, userId: string): string[] {
@@ -104,6 +144,7 @@ export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityCo
   const adapterLines = relevantAdapters(input.flow, input.userId);
   const workflows = skillLines(input.flow);
   const toolGroups = groupTools(toolNames);
+  const mcpLines = mcpHealthGateLines(toolNames);
 
   return [
     '## Lumi Runtime Capability Context',
@@ -111,6 +152,7 @@ export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityCo
     `Input surface=${input.flow.surface}; mode=${input.flow.operationMode}->${input.flow.effectiveOperationMode}; tools=${input.flow.allowToolUseForTurn ? 'available' : 'not for this turn'}; taskSignal=${input.flow.workTakeover.intent || 'none'}/${input.flow.workTakeover.strength}.`,
     `Execution governance: verify=${input.flow.executionGovernance.verificationIntent}; delegation=${input.flow.executionGovernance.delegationIntent}; capabilityLearning=${input.flow.executionGovernance.capabilityLearningIntent}; inspectCapabilitiesFirst=${input.flow.executionGovernance.shouldInspectCapabilitiesFirst ? 'yes' : 'no'}.`,
     `Tool groups available: ${toolGroups.join(', ') || 'none'}.`,
+    ...mcpLines,
     `Skill workflows known: ${workflows.join(', ') || 'none'}.`,
     taskLines.length
       ? ['Active task pointers:', ...taskLines.map(line => `- ${line}`)].join('\n')

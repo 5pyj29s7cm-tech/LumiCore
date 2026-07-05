@@ -1,7 +1,7 @@
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, rm, copyFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +29,21 @@ if (!target) {
 const { os: osName, arch, ext } = target;
 const base = `node-v${NODE_VERSION}-${osName}-${arch}`;
 const url = `https://nodejs.org/dist/v${NODE_VERSION}/${base}.${ext}`;
+const nodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node';
+const nodeBinaryPath = path.join(outDir, nodeBinaryName);
+
+if (existsSync(nodeBinaryPath)) {
+  try {
+    const version = execFileSync(nodeBinaryPath, ['--version'], { encoding: 'utf8' }).trim().replace(/^v/, '');
+    if (version === NODE_VERSION) {
+      console.log(`[download-node] Reusing ${nodeBinaryName} ${version} in dist-server/`);
+      process.exit(0);
+    }
+    console.log(`[download-node] Replacing ${nodeBinaryName} ${version}; expected ${NODE_VERSION}.`);
+  } catch {
+    console.log(`[download-node] Existing ${nodeBinaryName} is not runnable; replacing it.`);
+  }
+}
 
 console.log(`[download-node] Downloading Node.js ${NODE_VERSION} for ${key}...`);
 console.log(`[download-node] ${url}`);

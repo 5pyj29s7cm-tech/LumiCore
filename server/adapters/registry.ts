@@ -74,6 +74,7 @@ interface SkillStats {
   enabled: number;
   broken: number;
   unhealthy: number;
+  unavailableEnabled: number;
   connectedNames: string[];
   issueNames: string[];
 }
@@ -274,7 +275,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       id: 'workspace.skills_mcp',
       label: 'Skills and MCP Runtime',
       category: 'ai',
-      status: skillStats.unhealthy || skillStats.broken
+      status: skillStats.unhealthy || skillStats.broken || skillStats.unavailableEnabled
         ? 'attention'
         : skillStats.connected > 0 || skillStats.total > 0
           ? 'ready'
@@ -289,6 +290,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         `connected=${skillStats.connected}`,
         skillStats.broken ? `broken=${skillStats.broken}` : '',
         skillStats.unhealthy ? `unhealthy=${skillStats.unhealthy}` : '',
+        skillStats.unavailableEnabled ? `unavailableEnabled=${skillStats.unavailableEnabled}` : '',
         skillStats.issueNames.length ? `issues=${skillStats.issueNames.slice(0, 5).join(', ')}` : '',
       ].filter(Boolean),
       notes: 'Skills are Lumi expansion points. Repair/install actions need confirmation.',
@@ -705,15 +707,20 @@ function getSkillStats(): SkillStats {
     const config = mcpManager.getConfig();
     const local = mcpManager.listLocalSkills();
     const connected = mcpManager.getConnectedServers();
+    const connectedSet = new Set(connected);
     const health = mcpManager.getServerHealth();
     const enabled = Object.values(config).filter((item: any) => item?.enabled).length;
     const brokenSkills = local.filter((skill: any) => skill?.broken);
     const unhealthyNames = Object.entries(health)
       .filter(([, item]) => ['crashed', 'failed', 'restarting'].includes(item.status))
       .map(([name]) => name);
+    const unavailableEnabledNames = Object.entries(config)
+      .filter(([name, item]: [string, any]) => item?.enabled && !connectedSet.has(name))
+      .map(([name]) => name);
     const issueNames = Array.from(new Set([
       ...brokenSkills.map((skill: any) => String(skill.name || 'unknown')),
       ...unhealthyNames,
+      ...unavailableEnabledNames,
     ])).filter(Boolean);
 
     return {
@@ -722,6 +729,7 @@ function getSkillStats(): SkillStats {
       enabled,
       broken: brokenSkills.length,
       unhealthy: unhealthyNames.length,
+      unavailableEnabled: unavailableEnabledNames.length,
       connectedNames: connected,
       issueNames,
     };
@@ -732,6 +740,7 @@ function getSkillStats(): SkillStats {
       enabled: 0,
       broken: 0,
       unhealthy: 1,
+      unavailableEnabled: 0,
       connectedNames: [],
       issueNames: [String(error?.message || error || 'mcp inspection failed')],
     };

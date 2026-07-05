@@ -81,6 +81,8 @@ describe('Lumi runtime capability context', () => {
     expect(prompt).toContain('verify=');
     expect(prompt).toContain('delegation=');
     expect(prompt).toContain('capabilityLearning=');
+    expect(prompt).toContain('MCP health gate:');
+    expect(prompt).toContain('Prefer connected MCP tools');
     expect(prompt).toContain('Skill workflows known');
     expect(prompt).toContain(task.id);
     expect(prompt).toContain('Relevant adapters/external systems');

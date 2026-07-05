@@ -7,7 +7,7 @@
     "frontendDist": "../dist/desktop",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build:desktop-ui && npm run build:server && npm run prepare:desktop",
+    "beforeBuildCommand": "npm run build:desktop-ui && npm run build:server && npm run prepare:node && npm run prepare:desktop",
     "beforeBundleCommand": "node scripts/copy-webview2-dll.mjs"
   },
   "app": {

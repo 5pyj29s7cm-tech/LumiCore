@@ -9,7 +9,26 @@ const outDir = path.join(root, 'desktop-resources');
 const includeLocalVoice = process.env.LUMI_DESKTOP_WITH_LOCAL_VOICE === '1';
 
 const runtimeNodeModules = ['sqlite3', 'bindings', 'file-uri-to-path', 'sharp', 'detect-libc', 'semver'];
-const runtimePackageTrees = ['@music163/ncm-cli', 'playwright-core'];
+const runtimePackageTrees = [
+  'tsx',
+  '@modelcontextprotocol/sdk',
+  'zod',
+  'jszip',
+  'mammoth',
+  'pdf-parse',
+  'xlsx',
+  'pdf-lib',
+  '@music163/ncm-cli',
+  'playwright-core',
+];
+const optionalRuntimePackageTrees = [
+  'mailparser',
+  'cheerio',
+  'fetcher-mcp',
+  'mcp-crawl4ai',
+  '@minimax/mcp-js',
+  '@e2b/mcp-server',
+];
 const runtimeScopedNodeModules = {
   '@img': [
     'colour',
@@ -38,6 +57,14 @@ function shouldCopy(src) {
   if (ignoredNames.has(name)) return false;
   if (name === '.env' || name.startsWith('.env.')) return false;
   if (name.endsWith('.pyc') || name.endsWith('.pyo') || name.endsWith('.log')) return false;
+  return true;
+}
+
+function shouldCopyServerRuntime(src) {
+  if (!shouldCopy(src)) return false;
+  const normalized = src.split(path.sep).join('/');
+  // Runtime MCP config is user/machine state. Ship config.example.json instead.
+  if (normalized.endsWith('/server/mcp/config.json')) return false;
   return true;
 }
 
@@ -137,6 +164,10 @@ async function prepareServer() {
 
   await fs.mkdir(dest, { recursive: true });
   const nodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node';
+  const nodeBinaryPath = path.join(src, nodeBinaryName);
+  if (!existsSync(nodeBinaryPath)) {
+    throw new Error(`Missing ${nodeBinaryName} in dist-server. Run npm run prepare:node before packaging the desktop app.`);
+  }
   await copyIfExists(path.join(src, nodeBinaryName), path.join(dest, nodeBinaryName));
   await copyIfExists(path.join(src, 'entry.cjs'), path.join(dest, 'entry.cjs'));
   await copyIfExists(path.join(src, 'server.mjs'), path.join(dest, 'server.mjs'));
@@ -150,9 +181,9 @@ async function prepareServer() {
   const distServerDir = path.join(src, 'server');
   const projectServerDir = path.join(root, 'server');
   if (existsSync(distServerDir)) {
-    await copyDir(distServerDir, path.join(dest, 'server'));
+    await copyDir(distServerDir, path.join(dest, 'server'), shouldCopyServerRuntime);
   } else if (existsSync(projectServerDir)) {
-    await copyDir(projectServerDir, path.join(dest, 'server'));
+    await copyDir(projectServerDir, path.join(dest, 'server'), shouldCopyServerRuntime);
   }
 
   for (const moduleName of runtimeNodeModules) {
@@ -173,6 +204,10 @@ async function prepareServer() {
 
   for (const packageName of runtimePackageTrees) {
     await copyPackageDependencyTree(packageName, runtimePackageSearchEntries);
+  }
+
+  for (const packageName of optionalRuntimePackageTrees) {
+    await copyPackageDependencyTree(packageName, runtimePackageSearchEntries, new Set(), true);
   }
 }
 
