@@ -86,9 +86,10 @@ Run this gate before handing a desktop build to testers or users:
 1. Start from a clean `main` checkout.
 2. Run `npm run release:verify`.
 3. Run `npm run tauri:build`.
-4. Run `npm run release:manifest`.
-5. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
-6. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
+4. On Windows, run `npm run smoke:installer:win`.
+5. Run `npm run release:manifest`.
+6. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
+7. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
 
 The automated packaged smoke test must prove:
 
@@ -99,6 +100,14 @@ The automated packaged smoke test must prove:
 - A temporary new-user profile can open the marketplace.
 - A bundled marketplace skill can be installed into `~/lumi_skills`.
 - The installed bundled skill connects as an MCP server.
+
+The Windows installer smoke test must prove:
+
+- The NSIS installer can silently install to an isolated temporary directory.
+- The installed `lumi-os.exe` starts the bundled backend.
+- A temporary new-user profile can install a bundled skill.
+- The installed bundled skill connects as an MCP server.
+- The silent uninstaller can remove the temporary install.
 
 Manual clean Windows user gate:
 

@@ -28,6 +28,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke:packaged": "node scripts/smoke-packaged-first-run.mjs",
+    "smoke:installer:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-windows-installer.ps1",
     "release:manifest": "node scripts/write-release-manifest.mjs",
     "release:verify": "npm run lint && npm run test -- --run && npm run build:desktop && npm run smoke:packaged",
     "tauri": "tauri",
