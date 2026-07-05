@@ -31,6 +31,7 @@ import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
+import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
@@ -1191,6 +1192,24 @@ async function processVoiceInput(
       responseText = finalResponse.text;
       sentenceBuffer = '';
       if (finalResponse.notification) socket.emit("agent:notification", finalResponse.notification);
+    }
+
+    const executionWriteback = persistWorkTakeoverTurnExecution({
+      userId: session.userId,
+      userText,
+      assistantText: responseText,
+      source: 'voice',
+      domain: voiceScope.domain,
+      orgId: voiceScope.orgId,
+      flow: turnFlow,
+      capabilitySelection,
+      toolRecords: toolResults,
+    });
+    if (executionWriteback.recorded) {
+      socket.emit('agent:task_execution_writeback', {
+        ...executionWriteback,
+        source: 'voice',
+      });
     }
 
     // Flush remaining text

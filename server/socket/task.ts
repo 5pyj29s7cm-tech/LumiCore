@@ -27,6 +27,7 @@ import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
+import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import type { ToolExecutionRecord } from "../tools/types";
 
 export function registerTaskHandler(
@@ -206,6 +207,29 @@ export function registerTaskHandler(
         options,
       );
     };
+    const persistTaskExecutionWriteback = (
+      assistantText: string,
+      toolRecords: ToolExecutionRecord[] = [],
+      sourceInteractionId: string = interactionId,
+    ) => {
+      const executionWriteback = persistWorkTakeoverTurnExecution({
+        userId: uid,
+        userText: data.text,
+        assistantText,
+        source: 'task',
+        interactionId: sourceInteractionId,
+        flow: turnFlow,
+        capabilitySelection,
+        toolRecords,
+      });
+      if (executionWriteback.recorded) {
+        socket.emit('agent:task_execution_writeback', {
+          ...executionWriteback,
+          source: 'task',
+        });
+      }
+      return executionWriteback;
+    };
 
     let cognition: CognitiveResult | undefined;
     let cancelled = false;
@@ -274,6 +298,7 @@ export function registerTaskHandler(
           llmWasCalled: false,
         } as any);
         writeDB(db);
+        persistTaskExecutionWriteback(directResponseText, [], `${interactionId}_direct`);
         persistTaskLearning(directResponseText, { logLabel: 'task direct cognition' });
         socket.off('agent:task_cancel', onCancel);
         return;
@@ -371,6 +396,7 @@ export function registerTaskHandler(
           updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
         }
         saveEmotionalState(uid, updatedState);
+        persistTaskExecutionWriteback(orchestratedText, [], `${interactionId}_orchestrated`);
         persistTaskLearning(orchestratedText, { logLabel: 'task orchestrated' });
         return;
       }
@@ -447,6 +473,7 @@ export function registerTaskHandler(
       if (cancelled) {
         socket.emit("agent:response", { text: result.text || '任务已取消。', agentName: personality.name });
         socket.emit("agent:status", { status: "idle" });
+        persistTaskExecutionWriteback(result.text || 'Task cancelled.', result.toolCalls, `${interactionId}_cancelled`);
         persistTaskLearning(result.text || 'Task cancelled.', {
           toolRecords: result.toolCalls,
           sourceInteractionId: `${interactionId}_cancelled`,
@@ -495,6 +522,7 @@ export function registerTaskHandler(
       } as any);
       writeDB(db);
 
+      persistTaskExecutionWriteback(finalTaskText, result.toolCalls);
       persistTaskLearning(finalTaskText, { toolRecords: result.toolCalls, logLabel: 'task' });
 
       // Async memory extraction

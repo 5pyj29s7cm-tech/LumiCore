@@ -165,12 +165,30 @@ function nextPlannedStep(task: WorkTakeoverTask): string {
   }
 }
 
+function lastExecutionLine(task: WorkTakeoverTask): string {
+  const execution = task.metadata?.workTakeoverExecution;
+  if (!execution || typeof execution !== 'object') return '';
+  const lastTurn = execution.lastTurn;
+  const lastFailure = execution.lastFailure;
+  const parts = [
+    lastTurn?.capabilityLane ? `lane=${compact(lastTurn.capabilityLane)}` : '',
+    lastTurn?.status ? `status=${compact(lastTurn.status)}` : '',
+    lastFailure?.tool ? `failedTool=${compact(lastFailure.tool)}` : '',
+    lastFailure?.error ? `error=${compact(lastFailure.error).slice(0, 120)}` : '',
+    execution.resumeHint ? `resume=${compact(execution.resumeHint).slice(0, 180)}` : '',
+  ].filter(Boolean);
+  return parts.length ? `Last execution: ${parts.join(' | ')}` : '';
+}
+
 function taskLine(task: WorkTakeoverTask, index: number): string {
   const artifacts = task.artifacts
     .filter(artifact => artifact.status === 'prepared' || artifact.status === 'needs_review')
     .map(artifact => artifact.label)
     .slice(0, 3);
-  const blockers = task.blockedBy.slice(0, 2);
+  const lastExecution = lastExecutionLine(task);
+  const blockers = lastExecution
+    ? [...task.blockedBy.slice(0, 1), lastExecution]
+    : task.blockedBy.slice(0, 2);
   const confirmations = task.confirmationRequired.slice(0, 2);
   const nextStep = nextPlannedStep(task);
   return [

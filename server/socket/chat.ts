@@ -18,6 +18,7 @@ import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
+import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
@@ -1671,6 +1672,22 @@ export function registerChatHandler(
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
         responseText = finalResponse.text;
         if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
+      }
+
+      const executionWriteback = persistWorkTakeoverTurnExecution({
+        userId: uid,
+        userText: text,
+        assistantText: responseText,
+        source: 'chat',
+        interactionId,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        flow: turnFlow,
+        capabilitySelection,
+        toolRecords: allToolRecords,
+      });
+      if (executionWriteback.recorded) {
+        emitAgent('agent:task_execution_writeback', executionWriteback);
       }
 
       // Save to conversation via conversation manager (reuse conversationId from setup)
