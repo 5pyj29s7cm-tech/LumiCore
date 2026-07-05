@@ -8,6 +8,7 @@ import { mcpManager, getMCPConfig, updateMCPConfig, SKILLS_DIR } from "../mcp";
 import { generateSkill } from "../skills/generator";
 import { getRecentWorkflows } from "../skills/worklog";
 import { getDataPath } from "../config/data_path";
+import { loadKeys } from "../config/keys";
 import { requireAuth } from "../middleware/auth";
 import { createAgentForSkill } from "../agents/skill_agent";
 
@@ -77,6 +78,9 @@ export function mountSkillRoutes(
           consecutiveCrashes: serverHealth?.consecutiveCrashes || 0,
           lastCrashTime: serverHealth?.lastCrashTime,
           lastSuccessfulConnect: serverHealth?.lastSuccessfulConnect,
+          requiresApiKey: config.requiresApiKey || false,
+          apiKeyEnv: config.apiKeyEnv,
+          apiKeyUrl: config.apiKeyUrl,
         };
       });
       res.json({ skills: allSkills });
@@ -237,7 +241,20 @@ export function mountSkillRoutes(
     try {
       const config = getMCPConfig();
       if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
-      config[req.params.name].enabled = true;
+      const skillConfig = config[req.params.name];
+      if (skillConfig.requiresApiKey && skillConfig.apiKeyEnv) {
+        const stored = loadKeys()[skillConfig.apiKeyEnv]?.trim();
+        const fromEnv = process.env[skillConfig.apiKeyEnv]?.trim();
+        if (!stored && !fromEnv) {
+          return res.status(400).json({
+            error: `Configure ${skillConfig.apiKeyEnv} before enabling this skill.`,
+            requiresApiKey: true,
+            apiKeyEnv: skillConfig.apiKeyEnv,
+            apiKeyUrl: skillConfig.apiKeyUrl,
+          });
+        }
+      }
+      skillConfig.enabled = true;
       updateMCPConfig(config);
       try { await mcpManager.restartServer(req.params.name); } catch {} // start the process
       res.json({ success: true });

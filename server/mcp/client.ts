@@ -148,7 +148,7 @@ interface CrashTracker {
   restartTimer: ReturnType<typeof setTimeout> | null;
 }
 
-class MCPClientManager {
+export class MCPClientManager {
   private servers: Map<string, ConnectedServer> = new Map();
   private configPath: string;
   private legacyConfigPath: string;
@@ -590,30 +590,31 @@ class MCPClientManager {
     };
     fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
 
-    // npm install — the dep gets resolved into node_modules/{packageName}
-    await this.installDepsSync(skillDir);
+    // npm install; the dependency gets resolved into node_modules/{packageName}
+    try {
+      await this.installDepsSync(skillDir);
 
-    // Read the installed package's package.json for lumi config
-    const depPkgPath = path.join(skillDir, 'node_modules', ...packageName.split('/'), 'package.json');
-    let depPkg: any = {};
-    try { depPkg = JSON.parse(fs.readFileSync(depPkgPath, 'utf-8')); } catch {}
+      // Read the installed package's package.json for lumi config
+      const depPkgPath = path.join(skillDir, 'node_modules', ...packageName.split('/'), 'package.json');
+      let depPkg: any = {};
+      try { depPkg = JSON.parse(fs.readFileSync(depPkgPath, 'utf-8')); } catch {}
 
-    const lumi = depPkg.lumi || {};
+      const lumi = depPkg.lumi || {};
 
-    if (lumi.runCommand) {
-      // External MCP with its own run command — use directly
-      workspacePkg.lumi.runCommand = lumi.runCommand;
-      workspacePkg.lumi.runArgs = lumi.runArgs || [];
-      workspacePkg.lumi.toolCount = lumi.toolCount || 0;
-      workspacePkg.lumi.requiresApiKey = lumi.requiresApiKey || false;
-      workspacePkg.lumi.apiKeyEnv = lumi.apiKeyEnv;
-      workspacePkg.lumi.apiKeyUrl = lumi.apiKeyUrl;
-      workspacePkg.lumi.description = depPkg.description || lumi.description || packageName;
-      fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
-      this.registerLocalSkill(skillName, skillDir, workspacePkg);
-    } else if (depPkg.main || depPkg.exports || fs.existsSync(path.join(path.dirname(depPkgPath), 'index.mjs'))) {
-      // Standard MCP package: create a tsx wrapper index.ts
-      const wrapper = `// Auto-generated wrapper for npm package: ${packageName}
+      if (lumi.runCommand) {
+        // External MCP with its own run command; use directly
+        workspacePkg.lumi.runCommand = lumi.runCommand;
+        workspacePkg.lumi.runArgs = lumi.runArgs || [];
+        workspacePkg.lumi.toolCount = lumi.toolCount || 0;
+        workspacePkg.lumi.requiresApiKey = lumi.requiresApiKey || false;
+        workspacePkg.lumi.apiKeyEnv = lumi.apiKeyEnv;
+        workspacePkg.lumi.apiKeyUrl = lumi.apiKeyUrl;
+        workspacePkg.lumi.description = depPkg.description || lumi.description || packageName;
+        fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
+        this.registerLocalSkill(skillName, skillDir, workspacePkg);
+      } else if (depPkg.main || depPkg.exports || fs.existsSync(path.join(path.dirname(depPkgPath), 'index.mjs'))) {
+        // Standard MCP package: create a tsx wrapper index.ts
+        const wrapper = `// Auto-generated wrapper for npm package: ${packageName}
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
@@ -636,16 +637,20 @@ async function main() {
 }
 main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1); });
 `;
-      fs.writeFileSync(path.join(skillDir, 'index.ts'), wrapper);
-      workspacePkg.lumi.toolCount = lumi.toolCount || 1;
-      workspacePkg.lumi.description = depPkg.description || lumi.description || packageName;
-      workspacePkg.dependencies = workspacePkg.dependencies || {};
-      workspacePkg.dependencies['@modelcontextprotocol/sdk'] = '^1.0.0';
-      fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
-      await this.installDepsSync(skillDir);
-      this.registerLocalSkill(skillName, skillDir, workspacePkg);
-    } else {
-      throw new Error(`npm package "${packageName}" does not have a lumi MCP config (lumi.runCommand or main entry). Not a valid Lumi skill package.`);
+        fs.writeFileSync(path.join(skillDir, 'index.ts'), wrapper);
+        workspacePkg.lumi.toolCount = lumi.toolCount || 1;
+        workspacePkg.lumi.description = depPkg.description || lumi.description || packageName;
+        workspacePkg.dependencies = workspacePkg.dependencies || {};
+        workspacePkg.dependencies['@modelcontextprotocol/sdk'] = '^1.0.0';
+        fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(workspacePkg, null, 2));
+        await this.installDepsSync(skillDir);
+        this.registerLocalSkill(skillName, skillDir, workspacePkg);
+      } else {
+        throw new Error(`npm package "${packageName}" does not have a lumi MCP config (lumi.runCommand or main entry). Not a valid Lumi skill package.`);
+      }
+    } catch (err) {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      throw err;
     }
 
     return skillDir;
@@ -672,30 +677,35 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       }
     }
 
-    console.log(`[MCP] Cloning ${repoUrl} → ${skillDir}`);
-    await new Promise<void>((resolve, reject) => {
-      exec(`git clone --depth 1 "${repoUrl}" "${skillDir}"`, { timeout: 60000 }, (err) => {
-        err ? reject(new Error(`Git clone failed: ${err.message}`)) : resolve();
+    try {
+      console.log(`[MCP] Cloning ${repoUrl} → ${skillDir}`);
+      await new Promise<void>((resolve, reject) => {
+        exec(`git clone --depth 1 "${repoUrl}" "${skillDir}"`, { timeout: 60000 }, (err) => {
+          err ? reject(new Error(`Git clone failed: ${err.message}`)) : resolve();
+        });
       });
-    });
 
-    // Run npm install
-    await this.installDepsSync(skillDir);
+      // Run npm install
+      await this.installDepsSync(skillDir);
 
-    // Read package.json for lumi config
-    let pkg: any = this.readPkg(skillDir);
-    const lumi = pkg.lumi || {};
+      // Read package.json for lumi config
+      let pkg: any = this.readPkg(skillDir);
+      const lumi = pkg.lumi || {};
 
-    // Patch install metadata
-    if (!pkg.lumi) pkg.lumi = {};
-    pkg.lumi.installedAt = new Date().toISOString();
-    pkg.lumi.installedFrom = 'github';
-    pkg.lumi.repoUrl = repoUrl;
-    pkg.lumi.toolCount = lumi.toolCount || 1;
-    if (!pkg.description) pkg.description = lumi.description || repoName;
-    fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(pkg, null, 2));
+      // Patch install metadata
+      if (!pkg.lumi) pkg.lumi = {};
+      pkg.lumi.installedAt = new Date().toISOString();
+      pkg.lumi.installedFrom = 'github';
+      pkg.lumi.repoUrl = repoUrl;
+      pkg.lumi.toolCount = lumi.toolCount || 1;
+      if (!pkg.description) pkg.description = lumi.description || repoName;
+      fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(pkg, null, 2));
 
-    this.registerLocalSkill(repoName, skillDir, pkg);
+      this.registerLocalSkill(repoName, skillDir, pkg);
+    } catch (err) {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      throw err;
+    }
     return skillDir;
   }
 
@@ -838,25 +848,36 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         generatedFrom: lumi.generatedFrom,
         description: pkg.description || lumi.description || name,
         toolCount: lumi.toolCount,
+        requiresApiKey: lumi.requiresApiKey || false,
+        apiKeyEnv: lumi.apiKeyEnv,
+        apiKeyUrl: lumi.apiKeyUrl,
       };
     } else {
       const indexPath = toPortableSkillPath(path.join(skillDir, 'index.ts'));
       // Build env map from lumi.envKeys (array of key names to pass through from stored keys)
       let env: Record<string, string> | undefined;
+      const envKeys = new Set<string>();
       if (lumi.envKeys && Array.isArray(lumi.envKeys)) {
+        for (const k of lumi.envKeys) envKeys.add(k);
+      }
+      if (lumi.requiresApiKey && lumi.apiKeyEnv) envKeys.add(lumi.apiKeyEnv);
+      if (envKeys.size > 0) {
         env = {};
-        for (const k of lumi.envKeys) { env[k] = `\${${k}}`; }
+        for (const k of envKeys) { env[k] = `\${${k}}`; }
       }
       config[name] = {
         command: 'npx',
         args: ['tsx', indexPath],
         env,
-        enabled: true,
+        enabled: !lumi.requiresApiKey,
         source: 'local',
         autoGenerated: lumi.autoGenerated || false,
         generatedFrom: lumi.generatedFrom,
         description: pkg.description || lumi.description || name,
         toolCount: lumi.toolCount,
+        requiresApiKey: lumi.requiresApiKey || false,
+        apiKeyEnv: lumi.apiKeyEnv,
+        apiKeyUrl: lumi.apiKeyUrl,
       };
     }
 

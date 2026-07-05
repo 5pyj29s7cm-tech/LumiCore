@@ -13,6 +13,7 @@
     "requiresApiKey": true,
     "apiKeyEnv": "MINIMAX_API_KEY",
     "apiKeyUrl": "https://platform.minimaxi.com",
+    "setupNote": "Requires a MiniMax API key. Save MINIMAX_API_KEY in Settings before enabling this skill; it will stay disconnected until the key is configured.",
     "runCommand": "npx",
     "runArgs": ["-y", "@minimax/mcp-js"]
   }

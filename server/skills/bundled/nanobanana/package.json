@@ -15,6 +15,7 @@
     "requiresApiKey": true,
     "apiKeyEnv": "SILICONFLOW_API_KEY",
     "apiKeyUrl": "https://cloud.siliconflow.cn",
+    "setupNote": "Requires a SiliconFlow API key. Save SILICONFLOW_API_KEY in Settings before using Nano Banana image generation.",
     "envKeys": ["SILICONFLOW_API_KEY"]
   }
 }

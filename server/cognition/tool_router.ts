@@ -292,6 +292,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'stock market quote, trading plan, or paper trading request',
     patterns: [
       /股票|A股|行情|股价|K线|大盘|板块|涨停|跌停|上证|深证|创业板|沪深|换手率|市盈率|PE|PB|市值|炒股|买入|卖出|仓位|止损|止盈|交易计划|模拟盘|纸上交易|持仓|股票池|投资组合|证券/u,
+      /(?:\u770b\u76d8|\u76ef\u76d8|\u76d8\u4e2d|\u76d8\u540e|\u80a1\u5e02\u8f85\u52a9|\u884c\u60c5\u8f85\u52a9|\u770b\u76d8\u8f85\u52a9)/u,
       /\b(stock|share|equity|quote|kline|candlestick|market\s*index|sector|portfolio|paper\s*trade|trading\s*plan|stop\s*loss|take\s*profit|position\s*sizing|A-share|A\s*stock)\b/i,
     ],
     prefixes: ['mcp_stockbot_'],

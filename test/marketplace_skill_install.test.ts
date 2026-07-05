@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { resolveMarketplaceSkillDirName } from '../server/routes/marketplace_routes';
 
 describe('marketplace skill install helpers', () => {
@@ -26,5 +28,16 @@ describe('marketplace skill install helpers', () => {
 
   it('avoids dash-only directory names for fully localized labels', () => {
     expect(resolveMarketplaceSkillDirName({ skillName: '行政助理包' })).toBe('skill');
+  });
+
+  it('keeps key-required bundled skills clear about setup requirements', () => {
+    const bundledRoot = path.join(process.cwd(), 'server', 'skills', 'bundled');
+    for (const dirName of ['code-sandbox', 'minimax', 'nanobanana']) {
+      const pkg = JSON.parse(fs.readFileSync(path.join(bundledRoot, dirName, 'package.json'), 'utf8'));
+      expect(pkg.lumi.requiresApiKey).toBe(true);
+      expect(pkg.lumi.apiKeyEnv).toMatch(/_API_KEY$/);
+      expect(pkg.lumi.apiKeyUrl).toMatch(/^https:\/\//);
+      expect(pkg.lumi.setupNote).toContain(pkg.lumi.apiKeyEnv);
+    }
   });
 });

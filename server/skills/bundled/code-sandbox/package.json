@@ -13,6 +13,7 @@
     "requiresApiKey": true,
     "apiKeyEnv": "E2B_API_KEY",
     "apiKeyUrl": "https://e2b.dev",
+    "setupNote": "Requires an E2B API key. Save E2B_API_KEY in Settings before enabling this skill; it will stay disconnected until the key is configured.",
     "runCommand": "npx",
     "runArgs": ["-y", "@e2b/mcp-server"]
   }

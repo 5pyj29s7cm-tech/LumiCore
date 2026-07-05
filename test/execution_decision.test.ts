@@ -14,6 +14,12 @@ const declarations = [
   'write_file',
   'desktop_ui_snapshot',
   'client_health_check',
+  'list_skills',
+  'install_skill',
+  'adapter_registry_list',
+  'mcp_stockbot_stock_quote',
+  'mcp_stockbot_stock_trade_plan',
+  'mcp_stockbot_paper_portfolio',
 ].map(name => ({
   type: 'function' as const,
   function: {
@@ -139,5 +145,88 @@ describe('Lumi execution decision', () => {
       expect(source).not.toContain('routeToolsForTurn');
       expect(source).not.toContain('mergeToolPolicyWithRoute');
     }
+  });
+
+  it('routes release-regression user wording without falling back to empty chat', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+
+    const openSkillHall = '\u6253\u5f00\u6280\u80fd\u5927\u5385';
+    const stockAssistant = '\u8fdb\u5165\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f';
+    const checkMcp = '\u5e2e\u6211\u68c0\u67e5 MCP \u72b6\u6001';
+    const installThisSkill = '\u628a\u8fd9\u4e2a\u6280\u80fd\u88c5\u4e0a';
+
+    const skillHallDispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_regression_user',
+      text: openSkillHall,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+    const skillHallDecision = buildLumiExecutionDecision({
+      flow: skillHallDispatch.flow,
+      text: openSkillHall,
+      toolDeclarations: declarations,
+    });
+    expect(skillHallDispatch.boundary).toBe('client_action');
+    expect(skillHallDecision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(skillHallDecision.promptOverlay).toContain('verification.status');
+
+    const stockDispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_regression_user',
+      text: stockAssistant,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+    const stockDecision = buildLumiExecutionDecision({
+      flow: stockDispatch.flow,
+      text: stockAssistant,
+      toolDeclarations: declarations,
+    });
+    expect(stockDecision.allowToolUse).toBe(true);
+    expect(stockDecision.toolRoute?.categories).toContain('market_finance');
+    expect(stockDecision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
+      'mcp_stockbot_stock_quote',
+      'mcp_stockbot_stock_trade_plan',
+    ]));
+
+    const mcpDispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_regression_user',
+      text: checkMcp,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+    const mcpDecision = buildLumiExecutionDecision({
+      flow: mcpDispatch.flow,
+      text: checkMcp,
+      toolDeclarations: declarations,
+    });
+    expect(mcpDispatch.boundary).toBe('self_repair');
+    expect(mcpDecision.allowToolUse).toBe(true);
+
+    const installDispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_regression_user',
+      text: installThisSkill,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+    const installDecision = buildLumiExecutionDecision({
+      flow: installDispatch.flow,
+      text: installThisSkill,
+      toolDeclarations: declarations,
+    });
+    expect(installDecision.allowToolUse).toBe(true);
+    expect(installDecision.toolRoute?.categories).toContain('skills_agents');
+    expect(installDecision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
+      'list_skills',
+      'install_skill',
+    ]));
   });
 });
