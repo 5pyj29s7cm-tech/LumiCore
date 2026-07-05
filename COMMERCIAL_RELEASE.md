@@ -78,3 +78,56 @@ Before public free downloads reopen on the official website:
 - Confirm which paid features remain gated in Free.
 - Confirm source/license strategy. The current repository includes `AGPL-3.0`; closed-source commercial distribution needs a separate licensing decision.
 - Validate updater endpoint and signing keys.
+
+## First-Run Release Gate
+
+Run this gate before handing a desktop build to testers or users:
+
+1. Start from a clean `main` checkout.
+2. Run `npm run release:verify`.
+3. Run `npm run tauri:build`.
+4. Run `npm run release:manifest`.
+5. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
+6. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
+
+The automated packaged smoke test must prove:
+
+- The bundled backend starts from `desktop-resources/dist-server`.
+- `node.exe`, `entry.cjs`, `server.mjs`, `tsx`, MCP SDK, and `zod` are packaged.
+- `server/mcp/config.example.json` is packaged.
+- `server/mcp/config.json` is not packaged.
+- A temporary new-user profile can open the marketplace.
+- A bundled marketplace skill can be installed into `~/lumi_skills`.
+- The installed bundled skill connects as an MCP server.
+
+Manual clean Windows user gate:
+
+1. Install the NSIS setup file.
+2. Launch Lumi OS from the installed app shortcut.
+3. Confirm the main window appears without a console window.
+4. Confirm the local backend starts and the UI leaves loading state.
+5. Open Skill Center.
+6. Confirm official bundled skills are listed.
+7. Install Admin Assistant.
+8. Confirm the skill appears installed and usable.
+9. Open MCP or skills status.
+10. Confirm installed bundled skills connect or show clear setup requirements.
+11. Try a no-key skill action.
+12. Try a key-required skill and confirm the setup message is clear.
+13. Quit and relaunch Lumi OS.
+14. Confirm installed skills and user data persist.
+
+Conversation gate prompts:
+
+- `Open Skill Center`
+- `Install Admin Assistant`
+- `Check MCP status`
+- `Open watchlist assistant mode`
+- `What changed after that action?`
+
+Expected behavior:
+
+- Lumi reads client state before client actions.
+- Lumi verifies action results instead of assuming success.
+- Lumi reports pending or failed actions plainly.
+- Lumi does not rely on disconnected MCP tools.
