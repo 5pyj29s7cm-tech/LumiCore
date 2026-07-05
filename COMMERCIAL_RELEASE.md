@@ -88,8 +88,10 @@ Run this gate before handing a desktop build to testers or users:
 3. Run `npm run tauri:build`.
 4. On Windows, run `npm run smoke:installer:win`.
 5. Run `npm run release:manifest`.
-6. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
-7. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
+6. Run `npm run release:bundle`.
+7. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
+8. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
+9. Hand testers the generated `release-out/` bundle directory, not loose files from multiple folders.
 
 The automated packaged smoke test must prove:
 

@@ -3,6 +3,7 @@ build/
 dist/
 dist-server/
 desktop-resources/
+release-out/
 coverage/
 logs/
 .codex-run/
