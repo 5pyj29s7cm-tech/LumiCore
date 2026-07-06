@@ -2,9 +2,9 @@ import { Router, Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import os from "os";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { readDB, writeDB } from "../../db_layer";
-import { mcpManager, getMCPConfig, updateMCPConfig, SKILLS_DIR } from "../mcp";
+import { mcpManager, getMCPConfig, updateMCPConfig, SKILLS_DIR, normalizeSkillInstallName } from "../mcp";
 import { generateSkill } from "../skills/generator";
 import { getRecentWorkflows } from "../skills/worklog";
 import { getDataPath } from "../config/data_path";
@@ -160,18 +160,22 @@ export function mountSkillRoutes(
       const { source, url, package: pkgName, path: localPath, name } = req.body;
 
       if (source === 'git' && url) {
-        const skillName = name || url.split('/').pop()?.replace('.git', '') || 'unnamed';
+        const skillName = normalizeSkillInstallName(name || url.split('/').pop()?.replace('.git', '') || 'unnamed');
         const tmpDir = path.join(os.tmpdir(), `lumi_skill_${Date.now()}`);
-        execSync(`git clone "${url}" "${tmpDir}"`, { stdio: 'pipe', timeout: 30000 });
-        const destDir = mcpManager.installSkill(skillName, tmpDir);
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        let destDir = '';
+        try {
+          execFileSync('git', ['clone', String(url), tmpDir], { stdio: 'pipe', timeout: 30000, windowsHide: true });
+          destDir = mcpManager.installSkill(skillName, tmpDir);
+        } finally {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
 
         // Restart to pick up new skill
         await mcpManager.restartServer(skillName);
         createAgentForSkill(skillName, { description: `Git install: ${url}`, category: 'general', installSource: 'git' }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'local' && localPath) {
-        const skillName = name || path.basename(localPath);
+        const skillName = normalizeSkillInstallName(name || path.basename(localPath));
         const destDir = mcpManager.installSkill(skillName, localPath);
         await mcpManager.restartServer(skillName);
         createAgentForSkill(skillName, { description: `Local install: ${localPath}`, category: 'general', installSource: 'local' }, io);

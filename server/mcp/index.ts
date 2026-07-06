@@ -1,4 +1,4 @@
-export { mcpManager, SKILLS_DIR } from './client';
+export { mcpManager, SKILLS_DIR, normalizeSkillInstallName } from './client';
 export type { MCPServerConfig, MCPToolDef, SkillPackage } from './client';
 
 import { toolRegistry } from '../tools/registry';

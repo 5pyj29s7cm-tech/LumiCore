@@ -9,7 +9,7 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { getDataPath } from '../config/data_path';
 import { loadKeys } from '../config/keys';
 
@@ -138,6 +138,56 @@ function packageExists(nodeModulesDir: string, packageName: string): boolean {
 function isNpxCommand(command: string): boolean {
   const base = path.basename(command).toLowerCase();
   return base === 'npx' || base === 'npx.cmd' || base === 'npx.ps1';
+}
+
+export function normalizeSkillInstallName(name: string): string {
+  const normalized = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+  if (!normalized) throw new Error('Invalid skill name');
+  return normalized;
+}
+
+export function normalizeGitHubRepoUrl(repoUrl: string): string {
+  const raw = String(repoUrl || '').trim();
+  if (!raw || /[\s"'`$;&|<>]/.test(raw)) {
+    throw new Error('Unsupported GitHub repository URL. Use https://github.com/owner/repo.git');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('Unsupported GitHub repository URL. Use https://github.com/owner/repo.git');
+  }
+
+  if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') {
+    throw new Error('Unsupported GitHub repository URL. Use https://github.com/owner/repo.git');
+  }
+
+  const parts = parsed.pathname.split('/').filter(Boolean);
+  if (parts.length !== 2) {
+    throw new Error('Unsupported GitHub repository URL. Use https://github.com/owner/repo.git');
+  }
+
+  const owner = parts[0];
+  const repo = parts[1].replace(/\.git$/i, '');
+  if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) {
+    throw new Error('Unsupported GitHub repository URL. Use https://github.com/owner/repo.git');
+  }
+
+  return `https://github.com/${owner}/${repo}.git`;
+}
+
+function repoNameFromGitHubUrl(repoUrl: string): string {
+  const parsed = new URL(repoUrl);
+  const repo = parsed.pathname.split('/').filter(Boolean)[1] || 'github-skill';
+  return normalizeSkillInstallName(repo.replace(/\.git$/i, ''));
 }
 
 interface CrashTracker {
@@ -274,7 +324,8 @@ export class MCPClientManager {
   /** Install a skill from a source directory into ~/lumi_skills/ */
   installSkill(name: string, sourceDir: string, allowUpgrade = false): string {
     this.ensureSkillsDir();
-    const destDir = path.join(SKILLS_DIR, name);
+    const skillName = normalizeSkillInstallName(name);
+    const destDir = path.join(SKILLS_DIR, skillName);
 
     if (fs.existsSync(destDir)) {
       const hasIndex = fs.existsSync(path.join(destDir, 'index.ts'));
@@ -293,7 +344,7 @@ export class MCPClientManager {
         console.log(`[MCP] Upgrading "${name}" ${installedVersion} → ${srcVersion}`);
         fs.rmSync(destDir, { recursive: true, force: true });
       } else {
-        throw new Error(`Skill "${name}" already exists. Uninstall it first.`);
+        throw new Error(`Skill "${skillName}" already exists. Uninstall it first.`);
       }
     }
 
@@ -305,7 +356,7 @@ export class MCPClientManager {
     this.patchInstalledVersion(destDir, srcPkg.version || '0.0.0');
 
     const resultingPkg: any = this.readPkg(destDir);
-    this.registerLocalSkill(name, destDir, resultingPkg);
+    this.registerLocalSkill(skillName, destDir, resultingPkg);
 
     return destDir;
   }
@@ -659,11 +710,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   /** Install a skill from a GitHub repository (clone + npm install + register) */
   async installFromGitHub(repoUrl: string): Promise<string> {
     this.ensureSkillsDir();
-    const repoName = repoUrl
-      .split('/').pop()!
-      .replace(/\.git$/, '')
-      .replace(/[^a-zA-Z0-9-]/g, '-')
-      .toLowerCase();
+    const normalizedRepoUrl = normalizeGitHubRepoUrl(repoUrl);
+    const repoName = repoNameFromGitHubUrl(normalizedRepoUrl);
     const skillDir = path.join(SKILLS_DIR, repoName);
 
     if (fs.existsSync(skillDir)) {
@@ -680,8 +728,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     try {
       console.log(`[MCP] Cloning ${repoUrl} → ${skillDir}`);
       await new Promise<void>((resolve, reject) => {
-        exec(`git clone --depth 1 "${repoUrl}" "${skillDir}"`, { timeout: 60000 }, (err) => {
-          err ? reject(new Error(`Git clone failed: ${err.message}`)) : resolve();
+        execFile('git', ['clone', '--depth', '1', normalizedRepoUrl, skillDir], { timeout: 60000, windowsHide: true }, (err, _stdout, stderr) => {
+          err ? reject(new Error(`Git clone failed: ${stderr?.trim() || err.message}`)) : resolve();
         });
       });
 
@@ -696,7 +744,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       if (!pkg.lumi) pkg.lumi = {};
       pkg.lumi.installedAt = new Date().toISOString();
       pkg.lumi.installedFrom = 'github';
-      pkg.lumi.repoUrl = repoUrl;
+      pkg.lumi.repoUrl = normalizedRepoUrl;
       pkg.lumi.toolCount = lumi.toolCount || 1;
       if (!pkg.description) pkg.description = lumi.description || repoName;
       fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify(pkg, null, 2));
@@ -815,15 +863,16 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
   /** Uninstall a local skill */
   uninstallSkill(name: string): void {
-    const skillDir = path.join(SKILLS_DIR, name);
+    const skillName = normalizeSkillInstallName(name);
+    const skillDir = path.join(SKILLS_DIR, skillName);
     if (fs.existsSync(skillDir)) {
       fs.rmSync(skillDir, { recursive: true, force: true });
     }
 
     // Remove from config.json
     const config = this.getConfig();
-    if (config[name]) {
-      delete config[name];
+    if (config[skillName]) {
+      delete config[skillName];
       this.saveConfig(config);
     }
   }
