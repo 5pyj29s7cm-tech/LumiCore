@@ -108,7 +108,8 @@
     "zod": "^3.25.0"
   },
   "overrides": {
-    "node-fetch": "npm:node-fetch-native"
+    "node-fetch": "npm:node-fetch-native",
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.3.1",
