@@ -248,20 +248,25 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   const loadTemplates = useCallback(async () => {
     try {
       const res = await fetch('/api/auth/biometric/list', { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        const templates = (data.voiceprints || []).map((vp: any) => ({
-          uid: 'owner',
-          label: vp.label,
-          voiceprintId: vp.id,
-          mfccFrames: Array.isArray(vp.mfccFeatures) ? vp.mfccFeatures : [],
-          hasEmbedding: vp.hasEmbedding === true,
-        }));
-        templatesRef.current = templates;
-        setEnrolledCount(templates.length);
-        setTemplateFrameCount(templates.reduce((sum: number, tpl: VoiceprintTemplate) => sum + tpl.mfccFrames.length, 0));
-        setUsableTemplateCount(templates.filter((tpl: VoiceprintTemplate) => tpl.hasEmbedding || tpl.mfccFrames.length > 0).length);
+      if (!res.ok) {
+        templatesRef.current = [];
+        setEnrolledCount(0);
+        setTemplateFrameCount(0);
+        setUsableTemplateCount(0);
+        return;
       }
+      const data = await res.json();
+      const templates = (data.voiceprints || []).map((vp: any) => ({
+        uid: 'owner',
+        label: vp.label,
+        voiceprintId: vp.id,
+        mfccFrames: Array.isArray(vp.mfccFeatures) ? vp.mfccFeatures : [],
+        hasEmbedding: vp.hasEmbedding === true,
+      }));
+      templatesRef.current = templates;
+      setEnrolledCount(templates.length);
+      setTemplateFrameCount(templates.reduce((sum: number, tpl: VoiceprintTemplate) => sum + tpl.mfccFrames.length, 0));
+      setUsableTemplateCount(templates.filter((tpl: VoiceprintTemplate) => tpl.hasEmbedding || tpl.mfccFrames.length > 0).length);
     } catch {
       templatesRef.current = [];
       setEnrolledCount(0);
@@ -273,8 +278,17 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   }, []);
 
   // ── Start microphone capture independently for voiceprint ──
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onBiometricsUpdated = () => {
+      void loadTemplates();
+    };
+    window.addEventListener('lumi:biometrics-updated', onBiometricsUpdated);
+    return () => window.removeEventListener('lumi:biometrics-updated', onBiometricsUpdated);
+  }, [loadTemplates]);
+
   const startListening = useCallback(async () => {
-    if (audioContextRef.current) return; // already running
+    if (audioContextRef.current) return true; // already running
     try {
       const stream = await requestMicrophoneStream({
         echoCancellation: true,
@@ -314,8 +328,10 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       zeroGain.gain.value = 0;
       processor.connect(zeroGain);
       zeroGain.connect(audioContextRef.current.destination);
+      return true;
     } catch {
-      // Mic not available — voiceprint won't work, but doesn't break the app
+      // Microphone is unavailable; voiceprint capture should fail softly.
+      return false;
     }
   }, []);
 
@@ -427,6 +443,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     socketRef.current?.emit('voiceprint:result', {
       isOwnerSpeaking: matchResult.isOwnerSpeaking,
       confidence: matchResult.confidence,
+      speakerLabel: matchResult.speakerLabel,
       source: matchResult.source,
       quality: matchResult.quality,
       reason: matchResult.reason,
@@ -466,13 +483,36 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     isEnrollingRef.current = true;
     enrollmentFramesRef.current = [];
     enrollmentPcmFramesRef.current = [];
-    await startListening();
+    const listeningStarted = await startListening();
+    if (!listeningStarted) {
+      isEnrollingRef.current = false;
+      return { success: false };
+    }
+
     // Collect voiced frames for roughly 6 seconds.
     return new Promise<{ success: boolean; voiceprintId?: string }>((resolve) => {
-      const collectInterval = setInterval(() => {
-        if (!isEnrollingRef.current) {
-          clearInterval(collectInterval);
+      let finalized = false;
+      let collectInterval: ReturnType<typeof setInterval> | null = null;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = (submit: boolean) => {
+        if (finalized) return;
+        finalized = true;
+        isEnrollingRef.current = false;
+        if (collectInterval) clearInterval(collectInterval);
+        if (timeout) clearTimeout(timeout);
+
+        if (!submit) {
           resolve({ success: false });
+          return;
+        }
+
+        submitEnrollment(label).then(resolve);
+      };
+
+      collectInterval = setInterval(() => {
+        if (!isEnrollingRef.current) {
+          finish(false);
           return;
         }
         const frames = frameBufferRef.current;
@@ -484,16 +524,12 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
         }
         if (enrollmentFramesRef.current.length >= 24) {
           // ~6 seconds of voice collected
-          isEnrollingRef.current = false;
-          clearInterval(collectInterval);
-          submitEnrollment(label).then(resolve);
+          finish(true);
         }
       }, 256);
       // Timeout after 12s
-      setTimeout(() => {
-        isEnrollingRef.current = false;
-        clearInterval(collectInterval);
-        submitEnrollment(label).then(resolve);
+      timeout = setTimeout(() => {
+        finish(enrollmentFramesRef.current.length >= 4);
       }, 12000);
     });
   }, [startListening]);

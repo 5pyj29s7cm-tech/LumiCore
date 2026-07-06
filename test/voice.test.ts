@@ -337,4 +337,29 @@ describe('Voice API', () => {
       else process.env.LUMI_VOICEPRINT_PROVIDER = previousProvider;
     }
   });
+
+  it('rejects unusable voiceprint enrollment when no embedding or MFCC frames are available', async () => {
+    const previousProvider = process.env.LUMI_VOICEPRINT_PROVIDER;
+    process.env.LUMI_VOICEPRINT_PROVIDER = 'mfcc';
+    try {
+      const pcm16Base64 = Buffer.alloc(16000 * 2).toString('base64');
+      const enroll = await fetch(`${url}/api/auth/biometric/voiceprint/enroll`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify({
+          label: 'Empty voice',
+          mfccFeatures: [],
+          audioPcm16Base64: pcm16Base64,
+          sampleRate: 16000,
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await enroll.json();
+      expect(enroll.status).toBe(400);
+      expect(body.reason).toBe('not_enough_voiceprint_frames');
+    } finally {
+      if (previousProvider === undefined) delete process.env.LUMI_VOICEPRINT_PROVIDER;
+      else process.env.LUMI_VOICEPRINT_PROVIDER = previousProvider;
+    }
+  });
 });

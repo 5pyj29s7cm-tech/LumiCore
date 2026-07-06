@@ -35,12 +35,15 @@ export function BiometricsEnrollPanel() {
 
   useEffect(() => { loadEnrolled(); }, [loadEnrolled]);
 
+  const notifyBiometricsUpdated = useCallback((type: string) => {
+    window.dispatchEvent(new CustomEvent('lumi:biometrics-updated', { detail: { type } }));
+  }, []);
+
   // ── Voiceprint enrollment ──
   const handleVoiceEnroll = useCallback(async () => {
     if (voiceStatus === 'recording') return;
     setVoiceStatus('recording');
     setVoiceProgress(0);
-    voiceprint.startListening();
 
     // Animate progress over ~6 seconds
     const startTime = Date.now();
@@ -52,19 +55,25 @@ export function BiometricsEnrollPanel() {
       if (pct >= 1) clearInterval(tick);
     }, 100);
 
-    const result = await voiceprint.startEnrollment(voiceLabel);
-    clearInterval(tick);
-    setVoiceProgress(1);
+    let result: { success: boolean; voiceprintId?: string } = { success: false };
+    try {
+      result = await voiceprint.startEnrollment(voiceLabel);
+    } finally {
+      clearInterval(tick);
+      voiceprint.stopListening();
+    }
+    setVoiceProgress(result.success ? 1 : 0);
 
     if (result.success) {
       setVoiceStatus('done');
       toast.success(ui('声纹录入成功', 'Voiceprint enrolled'));
+      notifyBiometricsUpdated('voiceprint');
       loadEnrolled();
     } else {
       setVoiceStatus('idle');
       toast.error(ui('声纹录入失败，请靠近麦克风重试', 'Voiceprint enrollment failed. Move closer to the microphone and try again.'));
     }
-  }, [voiceStatus, voiceLabel, voiceprint, loadEnrolled, ui]);
+  }, [voiceStatus, voiceLabel, voiceprint, loadEnrolled, notifyBiometricsUpdated, ui]);
 
   // ── Face enrollment ──
   const handleFaceEnroll = useCallback(async () => {
@@ -74,13 +83,14 @@ export function BiometricsEnrollPanel() {
     const result = await faceRecognition.enrollFace(ui('我的面孔', 'My face'));
     if (result.success) {
       setFaceStatus('done');
+      notifyBiometricsUpdated('face');
       toast.success(ui('人脸录入成功', 'Face enrolled'));
       loadEnrolled();
     } else {
       setFaceStatus('idle');
       toast.error(ui('人脸录入失败，请正对摄像头再试', 'Face enrollment failed. Look at the camera and try again.'));
     }
-  }, [faceStatus, faceRecognition, loadEnrolled, ui]);
+  }, [faceStatus, faceRecognition, loadEnrolled, notifyBiometricsUpdated, ui]);
 
   // ── Delete ──
   const handleDelete = useCallback(async (type: string, id: string) => {
@@ -88,12 +98,13 @@ export function BiometricsEnrollPanel() {
       const res = await fetch(`/api/auth/biometric/${type}/${id}`, { method: 'DELETE', credentials: 'include' });
       if (res.ok) {
         toast.success(ui('已删除', 'Deleted'));
+        notifyBiometricsUpdated(type);
         loadEnrolled();
       }
     } catch {
       toast.error(ui('删除失败', 'Delete failed'));
     }
-  }, [loadEnrolled, ui]);
+  }, [loadEnrolled, notifyBiometricsUpdated, ui]);
 
   return (
     <div className="space-y-8">

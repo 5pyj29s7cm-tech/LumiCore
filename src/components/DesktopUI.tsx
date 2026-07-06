@@ -67,7 +67,7 @@ import { getDefaultPets } from '../pets/defaults';
 import type { PetConfig } from '../pets/types';
 import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
-import { useVoiceCall } from '@/hooks/useVoiceCall';
+import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
@@ -1704,6 +1704,10 @@ interface MeetingNote {
   id: string;
   text: string;
   time: number;
+  speakerLabel?: string | null;
+  speakerConfidence?: number;
+  speakerSource?: string;
+  speakerMatched?: boolean;
 }
 
 export function DesktopUI({ 
@@ -1962,7 +1966,7 @@ export function DesktopUI({
   const [legalMeetingCaseTitle, setLegalMeetingCaseTitle] = useState(() => getLegalCaseLabel(getLegalConsultationCase()));
   const meetingModeRef = useRef(operationMode === 'meeting');
   const meetingVoiceActiveRef = useRef(false);
-  const lastMeetingTranscriptRef = useRef<{ text: string; at: number }>({ text: '', at: 0 });
+  const lastMeetingTranscriptRef = useRef<{ text: string; at: number; speakerKey: string }>({ text: '', at: 0, speakerKey: '' });
   const lastLegalMeetingArchiveRef = useRef('');
   useEffect(() => {
     meetingModeRef.current = operationMode === 'meeting';
@@ -1979,16 +1983,40 @@ export function DesktopUI({
     localStorage.setItem('lumi_meeting_notes', '[]');
     localStorage.removeItem('lumi_meeting_report');
     localStorage.setItem('lumi_meeting_started_at', String(startedAt));
-    lastMeetingTranscriptRef.current = { text: '', at: 0 };
+    lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
   }, []);
 
-  const appendMeetingTranscript = useCallback((text: string, isFinal: boolean) => {
+  const meetingSpeakerLabel = useCallback((note: Pick<MeetingNote, 'speakerLabel' | 'speakerMatched'>) => {
+    if (note.speakerMatched && note.speakerLabel) return note.speakerLabel;
+    return lang === 'zh' ? '未知说话人' : 'Unknown speaker';
+  }, [lang]);
+
+  const meetingNoteHasSpeakerInfo = useCallback((note: MeetingNote) => (
+    note.speakerMatched !== undefined ||
+    typeof note.speakerConfidence === 'number' ||
+    Boolean(note.speakerLabel)
+  ), []);
+
+  const formatMeetingNoteForExport = useCallback((note: MeetingNote) => {
+    const speaker = meetingNoteHasSpeakerInfo(note) ? `${meetingSpeakerLabel(note)}: ` : '';
+    return `${speaker}${note.text}`;
+  }, [meetingNoteHasSpeakerInfo, meetingSpeakerLabel]);
+
+  const appendMeetingTranscript = useCallback((text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => {
     if (!meetingModeRef.current || !isFinal) return;
     const clean = text.trim();
     if (!clean) return;
     const now = Date.now();
-    if (lastMeetingTranscriptRef.current.text === clean && now - lastMeetingTranscriptRef.current.at < 4000) return;
-    lastMeetingTranscriptRef.current = { text: clean, at: now };
+    const speakerConfidence = typeof meta?.speakerConfidence === 'number' ? meta.speakerConfidence : undefined;
+    const speakerMatched = meta?.speakerMatched === true && Boolean(meta.speakerLabel);
+    const speakerLabel = speakerMatched ? String(meta?.speakerLabel || '').trim() : null;
+    const speakerKey = speakerMatched ? speakerLabel || 'matched' : 'unknown';
+    if (
+      lastMeetingTranscriptRef.current.text === clean &&
+      lastMeetingTranscriptRef.current.speakerKey === speakerKey &&
+      now - lastMeetingTranscriptRef.current.at < 4000
+    ) return;
+    lastMeetingTranscriptRef.current = { text: clean, at: now, speakerKey };
     setMeetingReport('');
     localStorage.removeItem('lumi_meeting_report');
     setMeetingStartedAt(prev => {
@@ -1997,7 +2025,15 @@ export function DesktopUI({
       return now;
     });
     setMeetingNotes(prev => {
-      const next = [...prev, { id: `${now}-${Math.random().toString(36).slice(2, 8)}`, text: clean, time: now }];
+      const next = [...prev, {
+        id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+        text: clean,
+        time: now,
+        speakerLabel,
+        speakerConfidence,
+        speakerSource: meta?.speakerSource,
+        speakerMatched,
+      }];
       persistMeetingNotes(next);
       return next;
     });
@@ -2281,11 +2317,11 @@ export function DesktopUI({
       ...(meetingReport ? ['## Lumi Report', '', meetingReport, ''] : []),
       '## Transcript',
       '',
-      ...meetingNotes.map(note => `- [${formatMeetingTime(note.time)}] ${note.text}`),
+      ...meetingNotes.map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`),
       '',
     ];
     return lines.join('\n');
-  }, [formatMeetingTime, legalMeetingCaseTitle, meetingNotes, meetingReport, meetingStartedAt]);
+  }, [formatMeetingNoteForExport, formatMeetingTime, legalMeetingCaseTitle, meetingNotes, meetingReport, meetingStartedAt]);
 
   const buildFallbackMeetingReport = useCallback(() => {
     const started = meetingStartedAt ? new Date(meetingStartedAt).toLocaleString() : new Date().toLocaleString();
@@ -2294,7 +2330,7 @@ export function DesktopUI({
     const actionHints = meetingNotes
       .filter(note => /(todo|action|next|follow|owner|deadline|需要|安排|确认|推进|负责|下周|明天|今天|完成|决定|风险|问题|证据|材料|开庭|上诉|法院|法官)/i.test(note.text))
       .slice(-8)
-      .map(note => `- [${formatMeetingTime(note.time)}] ${note.text}`);
+      .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`);
     if (legalCaseTitle) {
       return [
         lang === 'zh' ? '# Lumi 律所会谈纪要' : '# Lumi Legal Consultation Memo',
@@ -2309,7 +2345,7 @@ export function DesktopUI({
           : (lang === 'zh' ? '本次会谈没有收录到可整理的转写。' : 'No transcript was captured for this consultation.'),
         '',
         `## ${lang === 'zh' ? '事实摘要' : 'Fact Summary'}`,
-        ...(meetingNotes.slice(-6).map(note => `- ${note.text}`)),
+        ...(meetingNotes.slice(-6).map(note => `- ${formatMeetingNoteForExport(note)}`)),
         ...(meetingNotes.length === 0 ? [`- ${lang === 'zh' ? '暂无事实摘要。' : 'No fact summary yet.'}`] : []),
         '',
         `## ${lang === 'zh' ? '争议焦点' : 'Issues'}`,
@@ -2342,7 +2378,7 @@ export function DesktopUI({
       `## ${lang === 'zh' ? '建议' : 'Suggestion'}`,
       `- ${lang === 'zh' ? '建议人工复核转写，补充负责人、截止时间和最终决策。' : 'Review the transcript manually and add owners, deadlines, and final decisions.'}`,
     ].join('\n');
-  }, [formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
+  }, [formatMeetingNoteForExport, formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
   const analyzeMeetingNotes = useCallback(async (endedAt = Date.now()) => {
     if (meetingNotes.length === 0) {
@@ -2410,7 +2446,7 @@ export function DesktopUI({
     if (workDomain === 'work' && orgConnection?.connected) {
       const started = meetingStartedAt ? new Date(meetingStartedAt) : new Date(endedAt);
       const transcript = meetingNotes
-        .map(note => `- [${formatMeetingTime(note.time)}] ${note.text}`)
+        .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`)
         .join('\n');
       const content = [
         `# 当事人会谈 ${started.toLocaleString()}`,
@@ -2466,7 +2502,7 @@ export function DesktopUI({
     lastLegalMeetingArchiveRef.current = archiveKey;
     setLegalMeetingCaseTitle('');
     toast.success(lang === 'zh' ? `会谈已归档到案件：${getLegalCaseLabel(archived.caseFile)}` : `Consultation archived to case: ${getLegalCaseLabel(archived.caseFile)}`);
-  }, [formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain]);
+  }, [formatMeetingNoteForExport, formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain]);
 
   const endMeetingAndReport = useCallback(async () => {
     const endedAt = Date.now();
@@ -2523,7 +2559,7 @@ export function DesktopUI({
     localStorage.setItem('lumi_meeting_notes', '[]');
     localStorage.removeItem('lumi_meeting_report');
     localStorage.setItem('lumi_meeting_started_at', String(now));
-    lastMeetingTranscriptRef.current = { text: '', at: 0 };
+    lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
     lastLegalMeetingArchiveRef.current = '';
     toast.success(lang === 'zh' ? '会议笔记已清空' : 'Meeting notes cleared');
   }, [lang]);
@@ -4914,7 +4950,23 @@ export function DesktopUI({
                 ) : (
                   meetingNotes.slice(-80).reverse().map(note => (
                     <div key={note.id} className="border-l border-cyan-400/25 pl-3">
-                      <div className="text-[10px] font-black uppercase tracking-widest text-cyan-300/70">{formatMeetingTime(note.time)}</div>
+                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-widest text-cyan-300/70">
+                        <span>{formatMeetingTime(note.time)}</span>
+                        {meetingNoteHasSpeakerInfo(note) && (
+                          <span
+                            className={`rounded-full border px-2 py-0.5 normal-case tracking-normal ${
+                              note.speakerMatched
+                                ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200'
+                                : 'border-white/10 bg-white/5 text-white/35'
+                            }`}
+                          >
+                            {meetingSpeakerLabel(note)}
+                            {typeof note.speakerConfidence === 'number'
+                              ? ` ${Math.round(note.speakerConfidence * 100)}%`
+                              : ''}
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-1 text-sm leading-relaxed text-white/70">{note.text}</p>
                     </div>
                   ))

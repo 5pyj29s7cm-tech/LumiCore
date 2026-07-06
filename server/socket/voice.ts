@@ -79,6 +79,8 @@ interface AudioSession {
   /** Voiceprint verification: true when owner's voice is recognized */
   voiceprintMatched: boolean;
   voiceprintConfidence: number;
+  voiceprintSpeakerLabel: string | null;
+  voiceprintSource: string;
   voiceprintRequired: boolean;
   voiceprintLastAt: number;
   /** Meeting mode: STT only, no LLM/TTS/tool processing. */
@@ -277,6 +279,8 @@ function getAudioSession(socket: Socket): AudioSession {
       orgId: '',
       voiceprintMatched: true,  // default: allow (no voiceprints enrolled yet)
       voiceprintConfidence: 0,
+      voiceprintSpeakerLabel: null,
+      voiceprintSource: '',
       voiceprintRequired: false,
       voiceprintLastAt: 0,
       transcriptionOnly: false,
@@ -289,6 +293,27 @@ function isVoiceprintGateOpen(session: AudioSession): boolean {
   if (!session.voiceprintRequired) return true;
   const fresh = Date.now() - session.voiceprintLastAt < 3500;
   return fresh && session.voiceprintMatched && session.voiceprintConfidence >= 0.68;
+}
+
+function getVoiceprintSpeakerMeta(session: AudioSession): {
+  speakerLabel: string | null;
+  speakerConfidence: number;
+  speakerSource: string;
+  speakerMatched: boolean;
+} {
+  const fresh = Date.now() - session.voiceprintLastAt < 3500;
+  const speakerMatched = Boolean(
+    fresh &&
+    session.voiceprintMatched &&
+    session.voiceprintConfidence >= 0.68 &&
+    session.voiceprintSpeakerLabel
+  );
+  return {
+    speakerLabel: speakerMatched ? session.voiceprintSpeakerLabel : null,
+    speakerConfidence: fresh ? session.voiceprintConfidence : 0,
+    speakerSource: fresh ? session.voiceprintSource : '',
+    speakerMatched,
+  };
 }
 
 function blockUnverifiedVoice(socket: Socket, session: AudioSession, reason: string): void {
@@ -1354,6 +1379,8 @@ export function registerVoiceHandlers(
     session.voiceprintRequired = enrolledVoiceprints.length > 0;
     session.voiceprintMatched = !session.voiceprintRequired;
     session.voiceprintConfidence = 0;
+    session.voiceprintSpeakerLabel = null;
+    session.voiceprintSource = '';
     session.voiceprintLastAt = 0;
     const personalityCfg = personalityRegistry.get(data.personalityId || 'lumi');
     // Use explicit voiceId, then personality's TTS voice, then null (TTS provider default)
@@ -1412,7 +1439,7 @@ export function registerVoiceHandlers(
               return;
             }
 
-            if (!isVoiceprintGateOpen(session)) {
+            if (!session.transcriptionOnly && !isVoiceprintGateOpen(session)) {
               blockUnverifiedVoice(socket, session, 'Ignored transcript before command/barge-in');
               resetSilenceTimer(session, socket);
               return;
@@ -1457,7 +1484,7 @@ export function registerVoiceHandlers(
             logger.info(`[Audio] Heard: "${text}"`);
 
             if (session.transcriptionOnly) {
-              socket.emit("audio:transcript", { text, isFinal: true });
+              socket.emit("audio:transcript", { text, isFinal: true, ...getVoiceprintSpeakerMeta(session) });
               socket.emit("audio:status", { status: "listening" });
               resetSilenceTimer(session, socket);
               return;
@@ -1511,10 +1538,12 @@ export function registerVoiceHandlers(
   });
 
   // ── Voiceprint: receive MFCC match results from frontend hook ──
-  socket.on("voiceprint:result", (data: { isOwnerSpeaking: boolean; confidence: number; source?: string; quality?: number; reason?: string }) => {
+  socket.on("voiceprint:result", (data: { isOwnerSpeaking: boolean; confidence: number; speakerLabel?: string | null; source?: string; quality?: number; reason?: string }) => {
     const session = getAudioSession(socket);
     session.voiceprintMatched = data.isOwnerSpeaking;
     session.voiceprintConfidence = data.confidence;
+    session.voiceprintSpeakerLabel = data.speakerLabel || null;
+    session.voiceprintSource = data.source || '';
     session.voiceprintLastAt = Date.now();
     logger.info(`[Voiceprint] result source=${data.source || 'unknown'} matched=${data.isOwnerSpeaking} conf=${Number(data.confidence || 0).toFixed(2)} quality=${typeof data.quality === 'number' ? data.quality.toFixed(2) : '-'} reason=${data.reason || '-'}`);
   });

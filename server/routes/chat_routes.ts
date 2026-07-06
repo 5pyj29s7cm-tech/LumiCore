@@ -11,6 +11,21 @@ import { optionalAuth } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 
+export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
+  const noteItems = Array.isArray(notes) ? notes : [];
+  return noteItems
+    .map((note: any) => {
+      const time = note?.time ? new Date(note.time).toLocaleTimeString() : '';
+      const text = String(note?.text || '').trim();
+      const speaker = note?.speakerMatched && note?.speakerLabel
+        ? `${String(note.speakerLabel).trim()}: `
+        : (note?.speakerMatched === false ? 'Unknown speaker: ' : '');
+      return text ? `[${time}] ${speaker}${text}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
 }) {
@@ -198,15 +213,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     if (reqProvider && reqProvider !== provider) {
       console.warn(`[Meeting] Ignoring request provider ${reqProvider}; using primary brain ${provider}/${model} for user ${userId}`);
     }
-    const noteItems = Array.isArray(notes) ? notes : [];
-    const transcript = noteItems
-      .map((note: any) => {
-        const time = note?.time ? new Date(note.time).toLocaleTimeString() : '';
-        const text = String(note?.text || '').trim();
-        return text ? `[${time}] ${text}` : '';
-      })
-      .filter(Boolean)
-      .join('\n');
+    const transcript = formatMeetingTranscriptForAnalysis(notes);
 
     if (!transcript.trim()) {
       return res.status(400).json({ error: 'No meeting transcript to analyze' });

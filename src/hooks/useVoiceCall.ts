@@ -5,9 +5,16 @@ export type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'spea
 
 const THINKING_WATCHDOG_MS = 45000;
 
+export interface VoiceTranscriptMeta {
+  speakerLabel?: string | null;
+  speakerConfidence?: number;
+  speakerSource?: string;
+  speakerMatched?: boolean;
+}
+
 interface UseVoiceCallOptions {
   socket: any;
-  onTranscript?: (text: string, isFinal: boolean) => void;
+  onTranscript?: (text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => void;
   onResponse?: (text: string) => void;
   canInterruptFromVoice?: () => boolean;
   canSendMicAudio?: () => boolean;
@@ -264,7 +271,10 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
 
     // Voice confirmation window — show recognized text during the 600ms delay
     const onAudioConfirm = (data: { text: string }) => {
-      onTranscript?.(data.text, true);
+      setTranscript(data.text);
+      if (!transcriptionOnlyRef.current) {
+        onTranscript?.(data.text, true);
+      }
     };
 
     /**
@@ -344,13 +354,18 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       playAudioChunk(actualBuffer, actualGain);
     };
 
-    const onAudioTranscript = (data: { text: string; isFinal: boolean }) => {
+    const onAudioTranscript = (data: { text: string; isFinal: boolean } & VoiceTranscriptMeta) => {
       // Reset passive timer — user is speaking
       if (passiveTimer.current) { clearTimeout(passiveTimer.current); passiveTimer.current = null; }
       if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
       if (prevCallState.current === 'passive') setCallState('listening');
       setTranscript(data.text);
-      onTranscript?.(data.text, data.isFinal);
+      onTranscript?.(data.text, data.isFinal, {
+        speakerLabel: data.speakerLabel,
+        speakerConfidence: data.speakerConfidence,
+        speakerSource: data.speakerSource,
+        speakerMatched: data.speakerMatched,
+      });
       if (data.isFinal) {
         setTimeout(() => setTranscript(''), 2000); // Clear after 2s if final
       }
@@ -539,7 +554,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
           return;
         }
 
-        const micAllowed = canSendMicAudioRef.current?.() ?? true;
+        const micAllowed = transcriptionOnlyRef.current || (canSendMicAudioRef.current?.() ?? true);
         if (!micAllowed) {
           ttsPreRollChunks.current = [];
           flushTtsPreRollOnNextAudio.current = false;

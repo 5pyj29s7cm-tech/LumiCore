@@ -17,6 +17,19 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const VOICEPRINT_COEFF_COUNT = 13;
+const VOICEPRINT_MIN_ENROLL_FRAMES = 4;
+
+function sanitizeVoiceprintFrames(value: unknown): number[][] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((frame) => Array.isArray(frame)
+      ? frame.slice(0, VOICEPRINT_COEFF_COUNT).map(Number)
+      : [])
+    .filter((frame) => frame.length === VOICEPRINT_COEFF_COUNT && frame.every(Number.isFinite))
+    .slice(-80);
+}
+
 export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOptions: () => any) {
   router.post("/auth/register", authLimiter, async (req, res) => {
     try {
@@ -263,19 +276,27 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       const decoded: any = jwt.verify(token, jwtSecret);
       const { label, mfccFeatures, sampleCount, sampleRate } = req.body || {};
       const audioPcm16Base64 = req.body?.audioPcm16Base64 || req.body?.pcm16Base64;
-      const hasMfcc = Array.isArray(mfccFeatures);
-      if (!label || (!hasMfcc && !audioPcm16Base64)) {
+      const labelText = typeof label === 'string' ? label.trim() : '';
+      const sanitizedMfccFeatures = sanitizeVoiceprintFrames(mfccFeatures);
+      if (!labelText || (sanitizedMfccFeatures.length === 0 && !audioPcm16Base64)) {
         return res.status(400).json({ error: "label plus mfccFeatures or audioPcm16Base64 are required" });
       }
       const embeddingResult = await extractSpeechBrainEmbedding({
         pcm16Base64: audioPcm16Base64,
         sampleRate: Number(sampleRate) || 16000,
       });
+      const hasUsableMfcc = sanitizedMfccFeatures.length >= VOICEPRINT_MIN_ENROLL_FRAMES;
+      if (!hasUsableMfcc && !embeddingResult.ok) {
+        return res.status(400).json({
+          error: "Not enough usable voiceprint audio",
+          reason: "not_enough_voiceprint_frames",
+        });
+      }
       const vp = saveVoiceprint(decoded.uid, {
         voiceprintId: `vp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        label,
-        mfccFeatures: hasMfcc ? mfccFeatures : [],
-        sampleCount: sampleCount || (hasMfcc ? mfccFeatures.length : 0),
+        label: labelText,
+        mfccFeatures: sanitizedMfccFeatures,
+        sampleCount: Number(sampleCount) || sanitizedMfccFeatures.length,
         embedding: embeddingResult.ok ? embeddingResult.embedding : undefined,
         embeddingProvider: embeddingResult.ok ? embeddingResult.provider : undefined,
         embeddingModel: embeddingResult.ok ? embeddingResult.model : undefined,
