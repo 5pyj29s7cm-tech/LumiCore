@@ -34,6 +34,7 @@ import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_conte
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
+import { canAutoApproveAction } from "../tools/action_constitution";
 import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
@@ -531,7 +532,7 @@ async function processVoiceInput(
   const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
     // Tool trust learning: auto-approve tools the user has trusted
     const { getTrustedTools, recordToolApprove, recordToolDeny } = await import("../personality/tool_trust");
-    if (getTrustedTools(session.userId).includes(toolName)) {
+    if (getTrustedTools(session.userId).includes(toolName) && canAutoApproveAction(toolName, args)) {
       socket.emit("agent:tool_call", { name: toolName, arguments: args, result: 'Auto-approved (trusted)', error: undefined });
       return true;
     }

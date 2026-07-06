@@ -30,6 +30,7 @@ import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_conte
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
+import { canAutoApproveAction } from "../tools/action_constitution";
 import type { ToolExecutionRecord } from "../tools/types";
 
 export function registerTaskHandler(
@@ -431,7 +432,7 @@ export function registerTaskHandler(
       const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
         // Tool trust: if user has approved this tool ≥ 5 times, auto-approve
         const { getTrustedTools, recordToolApprove, recordToolDeny } = await import("../personality/tool_trust");
-        if (getTrustedTools(uid).includes(toolName)) {
+        if (getTrustedTools(uid).includes(toolName) && canAutoApproveAction(toolName, args)) {
           socket.emit("agent:tool_call", { name: toolName, arguments: args, result: 'Auto-approved (trusted)', error: undefined });
           return true;
         }

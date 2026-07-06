@@ -140,13 +140,15 @@ export class ToolRegistry {
     let userConfirmed = false;
 
     if (constitutional.level === 'confirm') {
-      if (context?.requestConfirmation) {
+      if (context?.userConfirmed === true) {
+        userConfirmed = true;
+      } else if (context?.requestConfirmation) {
         const allowed = await context.requestConfirmation(name, args);
         if (!allowed) {
           return `Tool "${name}" execution was declined by the user.`;
         }
         userConfirmed = true;
-      } else if (effective.level === 'safe' && constitutional.requiresUserConfirmation) {
+      } else {
         throw new Error(`Tool "${name}" requires user confirmation: ${constitutional.reason}.`);
       }
       console.log(`[Tool] Executing confirmation-level tool: ${name} (${constitutional.reason})`);

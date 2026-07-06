@@ -229,6 +229,8 @@ describe('semi-automated legal workflows', () => {
         companyNames: ['Beta Retail Co.'],
         sourceIds: ['people-court-case-library', 'china-judgments-online', 'fachan', 'alpha-lawyer', 'qichacha'],
         outputDir: dir,
+      }, {
+        requestConfirmation: async () => true,
       });
 
       expect(output).toContain('外部网页登录工作区已生成');

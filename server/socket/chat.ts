@@ -22,6 +22,7 @@ import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPrompt } from "../client/self_model";
+import { classifyActionRisk, evaluateActionConstitution } from "../tools/action_constitution";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay } from "../personality/engine";
@@ -593,9 +594,37 @@ export function registerChatHandler(
         });
       });
 
+      const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
+        return new Promise((resolve) => {
+          const cid = crypto.randomUUID();
+          const timeout = setTimeout(() => resolve(false), 30000);
+          socket.once(`tool:confirm_result:${cid}`, (data: { allowed: boolean }) => {
+            clearTimeout(timeout);
+            resolve(data.allowed === true);
+          });
+          socket.emit('agent:confirm_tool', { correlationId: cid, name: toolName, arguments: args });
+        });
+      };
+
       const specialWorkflowText = visibleUserText || text;
       const specialWorkflow = turnFlow.specialWorkflow;
       if (specialWorkflow) {
+        const workflowHighRiskApprovals = new Set<string>();
+        const workflowDesktopRelay = async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
+          const decision = evaluateActionConstitution(toolName, args, 'safe', { source: specialWorkflow.source });
+          if (decision.level === 'forbidden') {
+            throw new Error(`Desktop action blocked: ${decision.reason}`);
+          }
+          if (classifyActionRisk(toolName, args) === 'high') {
+            const approvalKey = `${toolName}:${JSON.stringify(args || {}).slice(0, 240)}`;
+            if (!workflowHighRiskApprovals.has(approvalKey)) {
+              const allowed = await requestToolConfirmation(toolName, args);
+              if (!allowed) throw new Error(`Desktop action declined by user: ${toolName}`);
+              workflowHighRiskApprovals.add(approvalKey);
+            }
+          }
+          return desktopRelay(toolName, args);
+        };
         const workflowExecutionDecision = buildLumiExecutionDecision({
           flow: turnFlow,
           text: specialWorkflowText,
@@ -624,7 +653,7 @@ export function registerChatHandler(
             socket,
             userText: specialWorkflowText,
             userId: uid,
-            desktopRelay,
+            desktopRelay: workflowDesktopRelay,
             speak: async (line) => {
               emitAgent("agent:chunk", {
                 text: `${line}\n`,
@@ -875,7 +904,7 @@ export function registerChatHandler(
               });
             }
             try {
-              const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, desktopRelay, llmGetters });
+              const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, desktopRelay, llmGetters, requestConfirmation: requestToolConfirmation });
               quickToolResult = tcResult || '';
               if (shouldEmitQuickTool) {
                 emitToolLifecycle({
@@ -1543,19 +1572,7 @@ export function registerChatHandler(
                 emitAgent("agent:chunk", { text: `[${step}]\n`, agentName: "Lumi" });
               },
               ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-              ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? {
-                requestConfirmation: async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-                  return new Promise((resolve) => {
-                    const cid = crypto.randomUUID();
-                    const timeout = setTimeout(() => resolve(false), 30000);
-                    socket.once(`tool:confirm_result:${cid}`, (data: { allowed: boolean }) => {
-                      clearTimeout(timeout);
-                      resolve(data.allowed === true);
-                    });
-                    socket.emit('agent:confirm_tool', { correlationId: cid, name: toolName, arguments: args });
-                  });
-                }
-              } : {}),
+              ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
             },
             llmGetters.getOllama,
             llmGetters.getLmStudio,
@@ -1661,19 +1678,7 @@ export function registerChatHandler(
                     });
                   },
                   ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-                  ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? {
-                    requestConfirmation: async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-                      return new Promise((resolve) => {
-                        const cid = crypto.randomUUID();
-                        const timeout = setTimeout(() => resolve(false), 30000);
-                        socket.once(`tool:confirm_result:${cid}`, (data: { allowed: boolean }) => {
-                          clearTimeout(timeout);
-                          resolve(data.allowed === true);
-                        });
-                        socket.emit('agent:confirm_tool', { correlationId: cid, name: toolName, arguments: args });
-                      });
-                    }
-                  } : {}),
+                  ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
                 },
                 llmGetters.getOllama,
                 llmGetters.getLmStudio,
