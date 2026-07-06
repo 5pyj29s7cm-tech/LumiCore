@@ -23,6 +23,7 @@ import { getUserPreferredVision, type VisionProvider } from '../server/llm/visio
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../server/stt/file_transcription';
 import { extractPptxText } from '../server/knowledge/pptx';
 import { extractRtfText } from '../server/knowledge/rtf';
+import { workbookToText } from '../server/utils/spreadsheet';
 import {
   enrichMarkdownKnowledgeContent,
   normalizeKnowledgeLinkTarget,
@@ -532,14 +533,11 @@ async function extractKnowledgeFileContent(filePath: string, userId = 'anonymous
       const mammoth = await import('mammoth');
       return { content: (await mammoth.extractRawText({ path: filePath })).value, method: 'docx', status: 'indexed' };
     }
-    if (/\.xlsx?$/i.test(extName)) {
-      const XLSX = await import('xlsx');
-      const wb = XLSX.readFile(filePath);
-      const content = wb.SheetNames.map((name: string) => {
-        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
-        return `[${name}]\n${csv}`;
-      }).join('\n\n');
-      return { content, method: 'spreadsheet', status: 'indexed' };
+    if (/\.xlsx$/i.test(extName)) {
+      return { content: await workbookToText(filePath), method: 'spreadsheet', status: 'indexed' };
+    }
+    if (/\.xls$/i.test(extName)) {
+      throw new Error('Legacy .xls files are not supported by the safe spreadsheet reader. Convert the file to .xlsx or .csv first.');
     }
     if (/\.pptx$/i.test(extName)) {
       return { content: await extractPptxText(filePath), method: 'presentation', status: 'indexed' };

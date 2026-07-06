@@ -223,6 +223,39 @@ async function extractPptxText(filePath: string): Promise<string> {
   return sections.join('\n\n');
 }
 
+function cellValueToText(value: any): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== 'object') return String(value);
+  if (Array.isArray(value.richText)) return value.richText.map((part: any) => String(part?.text ?? '')).join('');
+  if (Object.prototype.hasOwnProperty.call(value, 'result')) return cellValueToText(value.result);
+  if (Object.prototype.hasOwnProperty.call(value, 'text')) return cellValueToText(value.text);
+  return String(value);
+}
+
+function worksheetToCsv(worksheet: any): string {
+  const lines: string[] = [];
+  const columnCount = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
+  worksheet.eachRow({ includeEmpty: false }, (row: any) => {
+    const fields: string[] = [];
+    for (let col = 1; col <= columnCount; col++) {
+      const text = cellValueToText(row.getCell(col).value);
+      fields.push(/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
+    }
+    while (fields.length > 0 && fields[fields.length - 1] === '') fields.pop();
+    if (fields.length > 0) lines.push(fields.join(','));
+  });
+  return lines.join('\n');
+}
+
+async function extractXlsxText(filePath: string): Promise<string> {
+  const mod: any = await import('exceljs');
+  const ExcelJS = mod.default || mod;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  return workbook.worksheets.map((sheet: any) => `[${sheet.name}]\n${worksheetToCsv(sheet)}`).join('\n\n');
+}
+
 async function extractFileText(filePath: string): Promise<string> {
   const ext = path.extname(filePath).toLowerCase();
   if (['.txt', '.md', '.csv', '.json', '.log'].includes(ext)) return fs.readFileSync(filePath, 'utf-8');
@@ -231,11 +264,8 @@ async function extractFileText(filePath: string): Promise<string> {
     const mammoth = await import('mammoth');
     return String((await mammoth.extractRawText({ path: filePath })).value || '');
   }
-  if (ext === '.xlsx' || ext === '.xls') {
-    const XLSX: any = await import('xlsx');
-    const wb = XLSX.readFile(filePath);
-    return wb.SheetNames.map((name: string) => `[${name}]\n${XLSX.utils.sheet_to_csv(wb.Sheets[name])}`).join('\n\n');
-  }
+  if (ext === '.xlsx') return extractXlsxText(filePath);
+  if (ext === '.xls') throw new Error('Legacy .xls files are not supported. Convert the file to .xlsx or .csv first.');
   if (ext === '.pptx') return extractPptxText(filePath);
   if (ext === '.pdf') return extractPdfText(filePath);
   throw new Error(`Unsupported file type: ${ext || '(none)'}`);

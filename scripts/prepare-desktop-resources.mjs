@@ -16,9 +16,8 @@ const runtimePackageTrees = [
   'jszip',
   'mammoth',
   'pdf-parse',
-  'xlsx',
+  'exceljs',
   'pdf-lib',
-  '@music163/ncm-cli',
   'playwright-core',
 ];
 const optionalRuntimePackageTrees = [

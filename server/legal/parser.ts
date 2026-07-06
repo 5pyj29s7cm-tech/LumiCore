@@ -5,6 +5,7 @@
 import fs from 'fs';
 import { extractPptxText } from '../knowledge/pptx';
 import { extractRtfText } from '../knowledge/rtf';
+import { loadXlsxWorkbook, worksheetToCsv } from '../utils/spreadsheet';
 
 // ── PDF Parsing ─────────────────────────────────────────────────────────
 
@@ -69,13 +70,10 @@ export function parseText(filePath: string): string {
 
 export async function parseSpreadsheet(filePath: string): Promise<string | null> {
   try {
-    const mod = await import('xlsx');
-    const XLSX = (mod as any).default || mod;
-    const workbook = XLSX.readFile(filePath, { cellDates: true });
-    const sections = workbook.SheetNames.map((sheetName: string) => {
-      const sheet = workbook.Sheets[sheetName];
-      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
-      return [`# Sheet: ${sheetName}`, csv].filter(Boolean).join('\n');
+    const workbook = await loadXlsxWorkbook(filePath);
+    const sections = workbook.worksheets.map((sheet: any) => {
+      const csv = worksheetToCsv(sheet);
+      return [`# Sheet: ${sheet.name}`, csv].filter(Boolean).join('\n');
     }).filter((section: string) => section.trim().length > 0);
     return sections.join('\n\n');
   } catch {

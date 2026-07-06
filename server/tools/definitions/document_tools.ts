@@ -10,6 +10,7 @@ import { ingestDocument } from '../../agents/rag';
 import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
+import { applySpreadsheetOperations, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, workbookToText, worksheetToCsv, writeXlsxWorkbook } from '../../utils/spreadsheet';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
@@ -188,24 +189,22 @@ async function readXlsx(args: Record<string, any>): Promise<string> {
     throw new Error(`XLSX file not found: ${filePath}`);
   }
 
-  const XLSX = require('xlsx');
-  const workbook = XLSX.readFile(filePath);
-  const sheetNames = workbook.SheetNames;
+  const workbook = await loadXlsxWorkbook(filePath);
+  const sheetNames = getWorksheetNames(workbook);
 
   if (sheetName) {
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet) throw new Error(`Sheet "${sheetName}" not found. Available: ${sheetNames.join(', ')}`);
-    const csv = XLSX.utils.sheet_to_csv(sheet);
+    const sheet = getWorksheetOrThrow(workbook, sheetName);
+    const csv = worksheetToCsv(sheet);
     return `Sheet: ${sheetName}\n\n${csv.slice(0, 10000)}`;
   }
 
   // Return summary of all sheets
   const results: string[] = [`Workbook has ${sheetNames.length} sheet(s): ${sheetNames.join(', ')}`];
-  for (const name of sheetNames.slice(0, 5)) {
-    const sheet = workbook.Sheets[name];
-    const csv = XLSX.utils.sheet_to_csv(sheet);
+  for (const sheet of workbook.worksheets.slice(0, 5)) {
+    const name = sheet.name;
+    const csv = worksheetToCsv(sheet);
     results.push(`\n=== ${name} ===\n${csv.slice(0, 3000)}`);
-    if (csv.length > 3000) results.push(`[Truncated — ${csv.length} total chars]`);
+    if (csv.length > 3000) results.push(`[Truncated - ${csv.length} total chars]`);
   }
   return results.join('\n');
 }
@@ -223,14 +222,10 @@ async function extractDocumentText(args: Record<string, any>): Promise<string> {
       text = (await mammoth.extractRawText({ path: filePath })).value;
       break;
     case '.xlsx':
-    case '.xls':
-      const XLSX = require('xlsx');
-      const wb = XLSX.readFile(filePath);
-      text = wb.SheetNames.map((n: string) => {
-        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[n]);
-        return `[${n}]\n${csv}`;
-    }).join('\n\n');
+      text = await workbookToText(filePath);
       break;
+    case '.xls':
+      throw new Error('Legacy .xls files are not supported by the safe spreadsheet reader. Convert the file to .xlsx or .csv first.');
     case '.pptx':
       text = await extractPptxText(filePath);
       break;
@@ -341,24 +336,11 @@ async function modifyXlsx(args: Record<string, any>): Promise<string> {
     throw new Error('operations (non-empty array) is required');
   }
 
-  const XLSX = require('xlsx');
-  const wb = XLSX.readFile(filePath);
-
-  for (const op of operations) {
-    if (op.addSheet) {
-      const ws = op.headers
-        ? XLSX.utils.aoa_to_sheet([op.headers, ...(op.data || [])])
-        : XLSX.utils.aoa_to_sheet(op.data || [[]]);
-      XLSX.utils.book_append_sheet(wb, ws, (op.sheet || `Sheet${wb.SheetNames.length + 1}`).slice(0, 31));
-    } else {
-      const sheet = wb.Sheets[op.sheet];
-      if (!sheet) throw new Error(`Sheet "${op.sheet}" not found. Available: ${wb.SheetNames.join(', ')}`);
-      XLSX.utils.sheet_add_aoa(sheet, [[op.value]], { origin: op.cell || 'A1' });
-    }
-  }
+  const wb = await loadXlsxWorkbook(filePath);
+  applySpreadsheetOperations(wb, operations);
 
   const outPath = filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`);
-  XLSX.writeFile(wb, outPath);
+  await writeXlsxWorkbook(wb, outPath);
   return `XLSX modified: ${outPath}`;
 }
 
@@ -500,13 +482,12 @@ async function xlsxToCsv(args: Record<string, any>): Promise<string> {
   const { filePath, sheetName, outputPath } = args;
   if (!filePath || !fs.existsSync(filePath)) throw new Error(`XLSX not found: ${filePath}`);
 
-  const XLSX = require('xlsx');
-  const wb = XLSX.readFile(filePath);
-  const targetSheet = sheetName || wb.SheetNames[0];
-  const ws = wb.Sheets[targetSheet];
-  if (!ws) throw new Error(`Sheet "${targetSheet}" not found. Available: ${wb.SheetNames.join(', ')}`);
+  const wb = await loadXlsxWorkbook(filePath);
+  const sheetNames = getWorksheetNames(wb);
+  const targetSheet = sheetName || sheetNames[0];
+  const ws = getWorksheetOrThrow(wb, targetSheet);
 
-  const csv = XLSX.utils.sheet_to_csv(ws);
+  const csv = worksheetToCsv(ws);
   const outPath = outputPath || filePath.replace(/\.xlsx$/i, '.csv');
   fs.writeFileSync(outPath, csv, 'utf-8');
   return `XLSX converted to CSV: ${outPath} (${csv.length} chars)`;
