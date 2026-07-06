@@ -234,6 +234,23 @@ describe('Lumi execution decision', () => {
       'list_skills',
       'install_skill',
     ]));
+
+    const browseSkillHall = '\u53bb\u6280\u80fd\u5927\u5385\u770b\u770b';
+    const browseDispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_regression_user',
+      text: browseSkillHall,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+    const browseDecision = buildLumiExecutionDecision({
+      flow: browseDispatch.flow,
+      text: browseSkillHall,
+      toolDeclarations: declarations,
+    });
+    expect(browseDispatch.boundary).toBe('client_action');
+    expect(browseDecision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
   });
 
   it('routes natural follow-up wording to action paths instead of empty chat', async () => {
@@ -285,6 +302,10 @@ describe('Lumi execution decision', () => {
     expect(legalFolder.decision.allowToolUse).toBe(true);
     expect(legalFolder.decision.toolRoute?.categories).toContain('legal');
 
+    const installLoose = decide('\u8fd9\u4e2a\u6280\u80fd\u88c5\u4e00\u4e0b');
+    expect(installLoose.decision.allowToolUse).toBe(true);
+    expect(installLoose.decision.toolRoute?.categories).toContain('skills_agents');
+
     const newsSearch = decide('\u641c\u4e00\u4e0b\u4eca\u5929 OpenAI \u65b0\u95fb');
     expect(newsSearch.decision.allowToolUse).toBe(true);
     expect(newsSearch.decision.toolRoute?.categories).toContain('web_research');
@@ -297,6 +318,22 @@ describe('Lumi execution decision', () => {
     const summarizeDoc = decide('\u628a\u8fd9\u4efd\u6587\u6863\u603b\u7ed3\u4e00\u4e0b');
     expect(summarizeDoc.decision.allowToolUse).toBe(true);
     expect(summarizeDoc.decision.toolRoute?.categories).toContain('documents');
+
+    const readLoose = decide('\u8bfb\u53d6\u8fd9\u4e2a\u6587\u4ef6');
+    expect(readLoose.decision.allowToolUse).toBe(true);
+    expect(readLoose.decision.toolRoute?.categories).toContain('documents');
+
+    const summarizePdf = decide('\u603b\u7ed3\u8fd9\u4efd PDF');
+    expect(summarizePdf.decision.allowToolUse).toBe(true);
+    expect(summarizePdf.decision.toolRoute?.categories).toContain('documents');
+
+    const poster = decide('\u753b\u4e00\u5f20\u6d77\u62a5');
+    expect(poster.decision.allowToolUse).toBe(true);
+    expect(poster.decision.toolRoute?.categories).toContain('cad_design');
+
+    const importKb = decide('\u628a\u8fd9\u4efd\u8d44\u6599\u5bfc\u5165\u77e5\u8bc6\u5e93');
+    expect(importKb.decision.allowToolUse).toBe(true);
+    expect(importKb.decision.toolRoute?.categories).toContain('documents');
 
     const wechatReply = decide('\u5e2e\u6211\u56de\u4e00\u4e0b\u5fae\u4fe1\u5ba2\u6237');
     expect(wechatReply.decision.allowToolUse).toBe(true);
@@ -323,6 +360,21 @@ describe('Lumi execution decision', () => {
     expect(naturalnessQuestion.dispatch.boundary).toBe('conversation');
     expect(naturalnessQuestion.decision.allowToolUse).toBe(false);
     expect(naturalnessQuestion.decision.toolRoute).toBeNull();
+
+    const stockModeQuestion = decide('\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f\u662f\u4ec0\u4e48');
+    expect(stockModeQuestion.dispatch.boundary).toBe('conversation');
+    expect(stockModeQuestion.decision.allowToolUse).toBe(false);
+    expect(stockModeQuestion.decision.toolRoute).toBeNull();
+
+    const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417');
+    expect(skillInstallQuestion.dispatch.boundary).toBe('conversation');
+    expect(skillInstallQuestion.decision.allowToolUse).toBe(false);
+    expect(skillInstallQuestion.decision.toolRoute).toBeNull();
+
+    const installerQuestion = decide('\u7f16\u8bd1\u6210\u5b89\u88c5\u5305\u4e5f\u80fd\u7528\u5417');
+    expect(installerQuestion.dispatch.boundary).toBe('conversation');
+    expect(installerQuestion.decision.allowToolUse).toBe(false);
+    expect(installerQuestion.decision.toolRoute).toBeNull();
 
     const whyFailed = decide('\u4e3a\u4ec0\u4e48\u6ca1\u505a\u5b8c');
     expect(whyFailed.dispatch.boundary).toBe('self_repair');
