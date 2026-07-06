@@ -22,6 +22,7 @@ import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
@@ -118,6 +119,12 @@ export function registerTaskHandler(
       toolDeclarations: toolRegistry.getToolDeclarations(),
       personalityToolPolicy: personality.toolPolicy,
     });
+    const intentTrace = buildLumiIntentTrace({
+      dispatch: turnDispatch,
+      execution: executionDecision,
+      text: data.text,
+      source: 'task',
+    });
     const capabilitySelection = buildLumiCapabilitySelection({
       dispatch: turnDispatch,
       execution: executionDecision,
@@ -137,8 +144,10 @@ export function registerTaskHandler(
         totalAvailable: executionDecision.toolRoute.totalAvailable,
         truncated: executionDecision.toolRoute.truncated,
         source: 'task',
+        trace: intentTrace,
       });
     }
+    socket.emit('agent:intent_trace', intentTrace);
     socket.emit('agent:capability_selection', {
       lane: capabilitySelection.lane,
       primary: capabilitySelection.primary,

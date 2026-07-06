@@ -13,6 +13,7 @@ import { parseStoredOperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
@@ -595,6 +596,20 @@ export function registerChatHandler(
       const specialWorkflowText = visibleUserText || text;
       const specialWorkflow = turnFlow.specialWorkflow;
       if (specialWorkflow) {
+        const workflowExecutionDecision = buildLumiExecutionDecision({
+          flow: turnFlow,
+          text: specialWorkflowText,
+          toolDeclarations: toolRegistry.getToolDeclarations(),
+          personalityToolPolicy: personality.toolPolicy,
+          isSanctuary,
+        });
+        const workflowIntentTrace = buildLumiIntentTrace({
+          dispatch: turnDispatch,
+          execution: workflowExecutionDecision,
+          text: specialWorkflowText,
+          source: eventSource,
+        });
+        socket.emit('agent:intent_trace', workflowIntentTrace);
         emitAgent("agent:status", {
           status: "thinking",
           agentName: personality.name,
@@ -695,6 +710,12 @@ export function registerChatHandler(
         personalityToolPolicy: personality.toolPolicy,
         isSanctuary,
       });
+      const intentTrace = buildLumiIntentTrace({
+        dispatch: turnDispatch,
+        execution: executionDecision,
+        text: visibleUserText || text,
+        source: eventSource,
+      });
       const capabilitySelection = buildLumiCapabilitySelection({
         dispatch: turnDispatch,
         execution: executionDecision,
@@ -710,7 +731,8 @@ export function registerChatHandler(
       const routedToolPolicy = executionDecision.toolPolicy;
       const exposeAgentWork = turnFlow.exposeAgentWork;
       effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid);
-      console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
+      console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
+      socket.emit('agent:intent_trace', intentTrace);
       if (toolRoute) {
         socket.emit('agent:tool_route', {
           categories: toolRoute.categories,
@@ -718,6 +740,7 @@ export function registerChatHandler(
           toolNames: toolRoute.toolNames,
           totalAvailable: toolRoute.totalAvailable,
           truncated: toolRoute.truncated,
+          trace: intentTrace,
         });
       }
       emitAgent('agent:capability_selection', {

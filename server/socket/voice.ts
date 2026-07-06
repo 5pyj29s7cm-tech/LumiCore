@@ -26,6 +26,7 @@ import { parseStoredOperationMode, OperationMode } from "../cognition/operation_
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
@@ -430,6 +431,12 @@ async function processVoiceInput(
     toolDeclarations: toolRegistry.getToolDeclarations(),
     personalityToolPolicy: personality.toolPolicy,
   });
+  const intentTrace = buildLumiIntentTrace({
+    dispatch: turnDispatch,
+    execution: executionDecision,
+    text: userText,
+    source: 'voice',
+  });
   const capabilitySelection = buildLumiCapabilitySelection({
     dispatch: turnDispatch,
     execution: executionDecision,
@@ -442,7 +449,8 @@ async function processVoiceInput(
     capabilitySelection,
   });
   const routedToolPolicy = executionDecision.toolPolicy;
-  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
+  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} trace=${intentTrace.summary} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
+  socket.emit('agent:intent_trace', intentTrace);
   if (executionDecision.toolRoute) {
     socket.emit('agent:tool_route', {
       categories: executionDecision.toolRoute.categories,
@@ -451,6 +459,7 @@ async function processVoiceInput(
       totalAvailable: executionDecision.toolRoute.totalAvailable,
       truncated: executionDecision.toolRoute.truncated,
       source: 'voice',
+      trace: intentTrace,
     });
   }
   socket.emit('agent:capability_selection', {

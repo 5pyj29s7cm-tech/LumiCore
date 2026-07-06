@@ -148,6 +148,8 @@ describe('Lumi execution decision', () => {
 
     for (const source of sources) {
       expect(source).toContain('buildLumiExecutionDecision');
+      expect(source).toContain('buildLumiIntentTrace');
+      expect(source).toContain('agent:intent_trace');
       expect(source).not.toContain('routeToolsForTurn');
       expect(source).not.toContain('mergeToolPolicyWithRoute');
     }
@@ -399,5 +401,78 @@ describe('Lumi execution decision', () => {
     const whyFailed = decide('\u4e3a\u4ec0\u4e48\u6ca1\u505a\u5b8c');
     expect(whyFailed.dispatch.boundary).toBe('self_repair');
     expect(whyFailed.decision.allowToolUse).toBe(true);
+  });
+
+  it('builds intent traces for action versus consultation boundaries', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const { buildLumiIntentTrace } = await import('../server/cognition/intent_trace');
+    const decide = (text: string) => {
+      const dispatch = buildLumiTurnDispatch({
+        userId: 'execution_decision_trace_user',
+        text,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'chat',
+        targetIsLumi: true,
+      });
+      const decision = buildLumiExecutionDecision({
+        flow: dispatch.flow,
+        text,
+        toolDeclarations: declarations,
+      });
+      const trace = buildLumiIntentTrace({
+        dispatch,
+        execution: decision,
+        text,
+        source: 'test',
+      });
+      return { dispatch, decision, trace };
+    };
+
+    const openSkillHall = decide('\u6253\u5f00\u6280\u80fd\u5927\u5385');
+    expect(openSkillHall.trace.boundary).toBe('client_action');
+    expect(openSkillHall.trace.allowed).toBe(true);
+    expect(openSkillHall.trace.matched.clientActionOnlyTurn).toBe(true);
+    expect(openSkillHall.trace.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(openSkillHall.trace.matchedRules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ layer: 'structured_client', name: 'client-navigation' }),
+      expect.objectContaining({ layer: 'turn_flow', name: 'client-action-only-turn' }),
+    ]));
+
+    const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417');
+    expect(skillInstallQuestion.trace.boundary).toBe('conversation');
+    expect(skillInstallQuestion.trace.allowed).toBe(false);
+    expect(skillInstallQuestion.trace.matched.informationOnlyQuestion).toBe(true);
+    expect(skillInstallQuestion.trace.blockedBy).toContain('information-only-question');
+    expect(skillInstallQuestion.trace.toolRoute).toBeNull();
+
+    const checkMcp = decide('\u5e2e\u6211\u68c0\u67e5 MCP \u72b6\u6001');
+    expect(checkMcp.trace.boundary).toBe('self_repair');
+    expect(checkMcp.trace.allowed).toBe(true);
+    expect(checkMcp.trace.matched.diagnosticOrRepair).toBe(true);
+    expect(checkMcp.trace.matchedRules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ layer: 'turn_flow', name: 'self-repair-turn' }),
+    ]));
+
+    const installThisSkill = decide('\u628a\u8fd9\u4e2a\u6280\u80fd\u88c5\u4e0a');
+    expect(installThisSkill.trace.boundary).toBe('tool_action');
+    expect(installThisSkill.trace.allowed).toBe(true);
+    expect(installThisSkill.trace.matched.explicitToolIntent).toBe(true);
+    expect(installThisSkill.trace.matchedRules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ layer: 'structured_tool', name: 'skill-install' }),
+    ]));
+    expect(installThisSkill.trace.toolRoute?.categories).toContain('skills_agents');
+
+    const mcpBrokenQuestion = decide('MCP \u4e3a\u4ec0\u4e48\u6253\u4e0d\u5f00');
+    expect(mcpBrokenQuestion.trace.boundary).toBe('self_repair');
+    expect(mcpBrokenQuestion.trace.allowed).toBe(true);
+    expect(mcpBrokenQuestion.trace.matched.diagnosticOrRepair).toBe(true);
+
+    const mcpConceptQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP');
+    expect(mcpConceptQuestion.trace.boundary).toBe('conversation');
+    expect(mcpConceptQuestion.trace.allowed).toBe(false);
+    expect(mcpConceptQuestion.trace.matched.informationOnlyQuestion).toBe(true);
+    expect(mcpConceptQuestion.trace.blockedBy).toContain('information-only-question');
   });
 });

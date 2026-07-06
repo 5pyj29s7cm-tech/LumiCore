@@ -1,10 +1,46 @@
-import { normalizeOperationMode } from './operation_modes';
+import { normalizeOperationMode, type OperationMode } from './operation_modes';
 import { hasVisionIntent } from './vision_routing';
 
 interface IntentGrammarRule {
   name: string;
   all: RegExp[];
   none?: RegExp[];
+}
+
+export type ToolIntentRuleLayer =
+  | 'information_guard'
+  | 'diagnostic'
+  | 'structured_tool'
+  | 'legacy_tool_pattern'
+  | 'structured_client'
+  | 'client_action'
+  | 'client_action_only'
+  | 'vision'
+  | 'mode';
+
+export interface ToolIntentMatchedRule {
+  layer: ToolIntentRuleLayer;
+  name: string;
+}
+
+export interface ToolIntentDecisionTrace {
+  text: string;
+  source: string;
+  operationMode: OperationMode;
+  normalized: string;
+  allowToolUse: boolean;
+  decisionReason: string;
+  blockedBy: string[];
+  matchedRules: ToolIntentMatchedRule[];
+  signals: {
+    informationOnlyQuestion: boolean;
+    diagnosticOrRepair: boolean;
+    explicitToolIntent: boolean;
+    clientActionIntent: boolean;
+    clientActionOnlyIntent: boolean;
+    visionIntent: boolean;
+    autonomousTask: boolean;
+  };
 }
 
 const CLIENT_NAVIGATION_VERBS = /(?:\u6253\u5f00|\u8fdb\u5165|\u53bb|\u770b\u770b|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u542f\u52a8|\u5f00\u542f|\u5f00\u59cb|\b(?:open|show|enter|switch|start)\b)/iu;
@@ -112,6 +148,27 @@ function matchesIntentGrammar(text: string, rules: IntentGrammarRule[]): boolean
   });
 }
 
+function matchIntentGrammarRuleNames(text: string, rules: IntentGrammarRule[]): string[] {
+  return rules
+    .filter((rule) => {
+      if (rule.none?.some((pattern) => pattern.test(text))) return false;
+      return rule.all.every((pattern) => pattern.test(text));
+    })
+    .map((rule) => rule.name);
+}
+
+function matchPatternRuleNames(text: string, patterns: RegExp[], prefix: string): string[] {
+  return patterns
+    .map((pattern, index) => pattern.test(text) ? `${prefix}-${index + 1}` : '')
+    .filter(Boolean);
+}
+
+function pushRule(out: ToolIntentMatchedRule[], layer: ToolIntentRuleLayer, name: string): void {
+  if (!name) return;
+  if (out.some((rule) => rule.layer === layer && rule.name === name)) return;
+  out.push({ layer, name });
+}
+
 export function hasExplicitToolIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
@@ -151,6 +208,110 @@ export function shouldAllowToolUseForTurn(text: string, source?: string, operati
   if (mode === 'autonomous' && AUTONOMOUS_TASK_PATTERNS.some((pattern) => pattern.test(text.trim()))) return true;
   if (hasExplicitToolIntent(text)) return true;
   return false;
+}
+
+export function traceToolIntentDecision(text: string, source?: string, operationMode?: string): ToolIntentDecisionTrace {
+  const normalized = text.trim();
+  const mode = normalizeOperationMode(operationMode);
+  const matchedRules: ToolIntentMatchedRule[] = [];
+  pushRule(matchedRules, 'mode', `operation-mode:${mode}`);
+
+  const informationOnlyQuestion = normalized ? isInformationOnlyQuestion(normalized) : false;
+  const diagnosticRules = normalized ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern') : [];
+  const diagnosticOrRepair = diagnosticRules.length > 0;
+  const structuredToolRules = !informationOnlyQuestion && normalized
+    ? matchIntentGrammarRuleNames(normalized, STRUCTURED_TOOL_INTENT_RULES)
+    : [];
+  const legacyToolRules = !informationOnlyQuestion && normalized
+    ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
+    : [];
+  const structuredClientRules = !informationOnlyQuestion && normalized
+    ? matchIntentGrammarRuleNames(normalized, STRUCTURED_CLIENT_ACTION_RULES)
+    : [];
+  const clientActionRules = !informationOnlyQuestion && normalized
+    ? matchPatternRuleNames(normalized, CLIENT_ACTION_INTENT_PATTERNS, 'client-action-pattern')
+    : [];
+  const clientActionOnlyRules = !informationOnlyQuestion && normalized
+    ? matchPatternRuleNames(normalized, CLIENT_ACTION_ONLY_PATTERNS, 'client-action-only-pattern')
+    : [];
+  const autonomousTaskRules = mode === 'autonomous' && normalized
+    ? matchPatternRuleNames(normalized, AUTONOMOUS_TASK_PATTERNS, 'autonomous-task-pattern')
+    : [];
+  const visionIntent = normalized ? hasVisionIntent(normalized) : false;
+
+  if (informationOnlyQuestion) pushRule(matchedRules, 'information_guard', 'information-only-question');
+  for (const name of diagnosticRules) pushRule(matchedRules, 'diagnostic', name);
+  for (const name of structuredToolRules) pushRule(matchedRules, 'structured_tool', name);
+  for (const name of legacyToolRules) pushRule(matchedRules, 'legacy_tool_pattern', name);
+  for (const name of structuredClientRules) pushRule(matchedRules, 'structured_client', name);
+  for (const name of clientActionRules) pushRule(matchedRules, 'client_action', name);
+  for (const name of clientActionOnlyRules) pushRule(matchedRules, 'client_action_only', name);
+  for (const name of autonomousTaskRules) pushRule(matchedRules, 'mode', name);
+  if (visionIntent) pushRule(matchedRules, 'vision', 'vision-intent');
+
+  const explicitToolIntent = structuredToolRules.length > 0 || legacyToolRules.length > 0;
+  const clientActionIntent = structuredClientRules.length > 0 || clientActionRules.length > 0;
+  const clientActionOnlyIntent = structuredClientRules.length > 0 || clientActionOnlyRules.length > 0;
+  const autonomousTask = autonomousTaskRules.length > 0;
+
+  let allowToolUse = false;
+  let decisionReason = 'no action signal matched';
+  if (!normalized) {
+    decisionReason = 'empty turn';
+  } else if (diagnosticOrRepair) {
+    allowToolUse = true;
+    decisionReason = 'diagnostic or repair wording enables self-inspection tools';
+  } else if (mode === 'chat') {
+    allowToolUse = clientActionIntent || explicitToolIntent || visionIntent;
+    decisionReason = allowToolUse
+      ? 'chat mode action signal matched'
+      : 'chat mode without client, tool, or vision action signal';
+  } else if (mode === 'meeting') {
+    allowToolUse = clientActionIntent;
+    decisionReason = allowToolUse
+      ? 'meeting mode allows client control action'
+      : 'meeting mode only allows client control action';
+  } else if (visionIntent) {
+    allowToolUse = true;
+    decisionReason = 'vision wording asks Lumi to inspect visible content';
+  } else if (mode === 'autonomous' && autonomousTask) {
+    allowToolUse = true;
+    decisionReason = 'autonomous mode task pattern matched';
+  } else if (explicitToolIntent) {
+    allowToolUse = true;
+    decisionReason = 'explicit tool or work action matched';
+  }
+
+  const blockedBy: string[] = [];
+  if (!allowToolUse) {
+    if (!normalized) blockedBy.push('empty-text');
+    if (informationOnlyQuestion) blockedBy.push('information-only-question');
+    if (mode === 'meeting' && !clientActionIntent) blockedBy.push('meeting-mode-client-actions-only');
+    if (mode === 'chat' && !clientActionIntent && !explicitToolIntent && !visionIntent) {
+      blockedBy.push('chat-mode-without-action-signal');
+    }
+    if (!blockedBy.length) blockedBy.push('no-tool-intent');
+  }
+
+  return {
+    text,
+    source: source || '',
+    operationMode: mode,
+    normalized,
+    allowToolUse,
+    decisionReason,
+    blockedBy,
+    matchedRules,
+    signals: {
+      informationOnlyQuestion,
+      diagnosticOrRepair,
+      explicitToolIntent,
+      clientActionIntent,
+      clientActionOnlyIntent,
+      visionIntent,
+      autonomousTask,
+    },
+  };
 }
 
 export function shouldExposeAgentWork(text: string): boolean {
