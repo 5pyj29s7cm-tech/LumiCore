@@ -17,6 +17,8 @@ const declarations = [
   'list_skills',
   'install_skill',
   'adapter_registry_list',
+  'web_login_run',
+  'url_fetch_logged_in',
   'mcp_stockbot_stock_quote',
   'mcp_stockbot_stock_trade_plan',
   'mcp_stockbot_paper_portfolio',
@@ -227,6 +229,52 @@ describe('Lumi execution decision', () => {
     expect(installDecision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
       'list_skills',
       'install_skill',
+    ]));
+  });
+
+  it('routes natural follow-up wording to action paths instead of empty chat', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const decide = (text: string) => {
+      const dispatch = buildLumiTurnDispatch({
+        userId: 'execution_decision_natural_probe_user',
+        text,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'chat',
+        targetIsLumi: true,
+      });
+      const decision = buildLumiExecutionDecision({
+        flow: dispatch.flow,
+        text,
+        toolDeclarations: declarations,
+      });
+      return { dispatch, decision };
+    };
+
+    const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f');
+    expect(autonomousMode.dispatch.boundary).toBe('client_action');
+    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+    expect(autonomousMode.decision.promptOverlay).toContain('verification.status');
+
+    const deliveryReport = decide('\u7ed9\u6211\u505a\u4e00\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u62a5\u544a\u5e76\u5bfc\u51fa');
+    expect(deliveryReport.decision.allowToolUse).toBe(true);
+    expect(deliveryReport.decision.toolRoute?.categories).toContain('documents');
+
+    const readFile = decide('\u628a\u8fd9\u4e2a\u6587\u4ef6\u8bfb\u4e00\u4e0b');
+    expect(readFile.decision.allowToolUse).toBe(true);
+    expect(readFile.decision.toolRoute?.categories).toContain('documents');
+
+    const stockNews = decide('\u67e5\u4e00\u4e0b\u4eca\u5929\u7f8e\u80a1\u65b0\u95fb');
+    expect(stockNews.decision.allowToolUse).toBe(true);
+    expect(stockNews.decision.toolRoute?.categories).toEqual(expect.arrayContaining(['market_finance', 'web_research']));
+
+    const taobaoBackend = decide('\u5e2e\u6211\u7528\u6d4f\u89c8\u5668\u6253\u5f00\u6dd8\u5b9d\u540e\u53f0');
+    expect(taobaoBackend.decision.allowToolUse).toBe(true);
+    expect(taobaoBackend.decision.toolRoute?.categories).toContain('authenticated_web');
+    expect(taobaoBackend.decision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
+      'web_login_run',
+      'url_fetch_logged_in',
     ]));
   });
 });

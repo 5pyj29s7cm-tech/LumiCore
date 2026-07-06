@@ -271,6 +271,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'website login, saved account, or authenticated browser session request',
     patterns: [
       /网页登录|自动登录|登录|账号|帐号|账户|保存密码|记住密码|已登录|登录会话|浏览器会话|店铺后台|商家后台|创作者中心|平台账号|扫码|验证码|二次验证|2FA/u,
+      /(?:淘宝|天猫|京东|抖店|拼多多|小红书|抖音|快手|视频号).*(?:后台|商家|店铺|账号|登录|登陆)/u,
       /\b(login|log\s*in|sign\s*in|account|password|credential|session|authenticated|auth|2fa|otp|captcha|dashboard|seller\s*center|creator\s*center)\b/i,
     ],
     prefixes: ['mcp_playwright_'],
@@ -280,7 +281,7 @@ const ROUTES: RouteDefinition[] = [
     category: 'web_research',
     reason: 'web search, source verification, or current information request',
     patterns: [
-      /搜索|查询|查找|联网|浏览|网页|网址|链接|资料来源|出处|引用|官方|验证|调研/u,
+      /搜索|查询|查一下|查一查|查找|联网|浏览|网页|网址|链接|资料来源|出处|引用|官方|验证|调研/u,
       /\b(search|look\s*up|browse|fetch|research|source|citation|official|verify)\b/i,
     ],
     prefixes: ['mcp_fetcher_', 'mcp_web-fetcher-pro_'],
@@ -291,7 +292,7 @@ const ROUTES: RouteDefinition[] = [
     category: 'market_finance',
     reason: 'stock market quote, trading plan, or paper trading request',
     patterns: [
-      /股票|A股|行情|股价|K线|大盘|板块|涨停|跌停|上证|深证|创业板|沪深|换手率|市盈率|PE|PB|市值|炒股|买入|卖出|仓位|止损|止盈|交易计划|模拟盘|纸上交易|持仓|股票池|投资组合|证券/u,
+      /股票|A股|美股|港股|财经|财报|行情|股价|K线|大盘|板块|涨停|跌停|上证|深证|创业板|沪深|换手率|市盈率|PE|PB|市值|炒股|买入|卖出|仓位|止损|止盈|交易计划|模拟盘|纸上交易|持仓|股票池|投资组合|证券/u,
       /(?:\u770b\u76d8|\u76ef\u76d8|\u76d8\u4e2d|\u76d8\u540e|\u80a1\u5e02\u8f85\u52a9|\u884c\u60c5\u8f85\u52a9|\u770b\u76d8\u8f85\u52a9)/u,
       /\b(stock|share|equity|quote|kline|candlestick|market\s*index|sector|portfolio|paper\s*trade|trading\s*plan|stop\s*loss|take\s*profit|position\s*sizing|A-share|A\s*stock)\b/i,
     ],
