@@ -1,26 +1,27 @@
-import React, { useState, useMemo } from 'react';
+import React, { Suspense, lazy, useMemo, useState } from 'react';
 import {
   Building2, BookOpen, Package, Users, Settings,
   ClipboardCheck, ScrollText, MessageSquare, ArrowLeft,
   Shield, User, Briefcase, Home, Scale, Palette, GitBranch, Loader2, MessagesSquare,
 } from 'lucide-react';
-import { BranchDashboard } from './BranchDashboard';
-import { KnowledgeBaseBrowser } from './KnowledgeBaseBrowser';
-import { KnowledgeBaseEditor } from './KnowledgeBaseEditor';
-import { TemplateMarketplace } from './TemplateMarketplace';
-import { TemplateCreator } from './TemplateCreator';
-import { TemplateReviewQueue } from './TemplateReviewQueue';
-import { CentralLumiChat } from './CentralLumiChat';
-import { OrgMembers } from './OrgMembers';
-import { OrgSettings } from './OrgSettings';
-import { AuditLogViewer } from './AuditLogViewer';
-import { LegalHub } from './LegalHub';
-import { DesignHub } from './DesignHub';
-import { OrgBranchPanel } from '../OrgBranchPanel';
-import { MessagingHub } from '../MessagingHub';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import { toast } from 'sonner';
+
+const AuditLogViewer = lazy(() => import('./AuditLogViewer').then(m => ({ default: m.AuditLogViewer })));
+const BranchDashboard = lazy(() => import('./BranchDashboard').then(m => ({ default: m.BranchDashboard })));
+const CentralLumiChat = lazy(() => import('./CentralLumiChat').then(m => ({ default: m.CentralLumiChat })));
+const DesignHub = lazy(() => import('./DesignHub').then(m => ({ default: m.DesignHub })));
+const KnowledgeBaseBrowser = lazy(() => import('./KnowledgeBaseBrowser').then(m => ({ default: m.KnowledgeBaseBrowser })));
+const KnowledgeBaseEditor = lazy(() => import('./KnowledgeBaseEditor').then(m => ({ default: m.KnowledgeBaseEditor })));
+const LegalHub = lazy(() => import('./LegalHub').then(m => ({ default: m.LegalHub })));
+const MessagingHub = lazy(() => import('../MessagingHub').then(m => ({ default: m.MessagingHub })));
+const OrgBranchPanel = lazy(() => import('../OrgBranchPanel').then(m => ({ default: m.OrgBranchPanel })));
+const OrgMembers = lazy(() => import('./OrgMembers').then(m => ({ default: m.OrgMembers })));
+const OrgSettings = lazy(() => import('./OrgSettings').then(m => ({ default: m.OrgSettings })));
+const TemplateCreator = lazy(() => import('./TemplateCreator').then(m => ({ default: m.TemplateCreator })));
+const TemplateMarketplace = lazy(() => import('./TemplateMarketplace').then(m => ({ default: m.TemplateMarketplace })));
+const TemplateReviewQueue = lazy(() => import('./TemplateReviewQueue').then(m => ({ default: m.TemplateReviewQueue })));
 
 type SubView = 'dashboard' | 'kb' | 'kb-edit' | 'templates' | 'templates-create' | 'review' | 'chat' | 'messaging' | 'members' | 'settings' | 'audit' | 'legal' | 'design' | 'branch';
 
@@ -29,6 +30,17 @@ interface NavItem {
   label: string;
   icon: React.ReactNode;
   roles: Array<'owner' | 'admin' | 'member' | 'viewer'>;
+}
+
+function OrgViewFallback() {
+  return (
+    <div className="flex min-h-[320px] items-center justify-center text-white/35">
+      <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-black uppercase tracking-[0.16em]">
+        <Loader2 size={13} className="animate-spin" />
+        <span>Loading</span>
+      </div>
+    </div>
+  );
 }
 
 export function OrgHub() {
@@ -195,7 +207,9 @@ export function OrgHub() {
           </span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-          {renderView()}
+          <Suspense fallback={<OrgViewFallback />}>
+            {renderView()}
+          </Suspense>
         </div>
       </div>
     </div>

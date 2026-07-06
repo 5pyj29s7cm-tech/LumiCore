@@ -58,14 +58,42 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir,
+      // Picovoice ships as a single on-demand ESM bundle; keep warnings focused on truly unexpected growth.
+      chunkSizeWarningLimit: 3500,
       rollupOptions: {
         input: inputs,
         output: {
           manualChunks(id: string) {
-            if (id.includes('node_modules/three') || id.includes('@react-three')) return 'vendor-three';
-            if (id.includes('node_modules/lucide-react')) return 'vendor-icons';
-            if (id.includes('node_modules/motion')) return 'vendor-motion';
-            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) return 'vendor-react';
+            const normalized = id.replace(/\\/g, '/');
+            if (!normalized.includes('/node_modules/')) return;
+
+            if (normalized.includes('/node_modules/@react-three/drei/')) return 'vendor-r3-drei';
+            if (normalized.includes('/node_modules/@react-three/fiber/')) return 'vendor-r3-fiber';
+            if (normalized.includes('/node_modules/@react-three/postprocessing/') || normalized.includes('/node_modules/postprocessing/')) return 'vendor-r3-postprocessing';
+            if (normalized.includes('/node_modules/three/examples/')) return 'vendor-three-addons';
+            if (normalized.includes('/node_modules/three/')) return 'vendor-three-core';
+
+            if (normalized.includes('/node_modules/@picovoice/')) return 'vendor-picovoice';
+            if (normalized.includes('/node_modules/@mediapipe/')) return 'vendor-mediapipe';
+            if (normalized.includes('/node_modules/@xterm/')) return 'vendor-terminal';
+            if (normalized.includes('/node_modules/@tauri-apps/api/')) return 'vendor-tauri';
+            if (normalized.includes('/node_modules/socket.io-client/') || normalized.includes('/node_modules/engine.io-client/')) return 'vendor-realtime';
+
+            if (
+              normalized.includes('/node_modules/react-markdown/') ||
+              normalized.includes('/node_modules/remark-') ||
+              normalized.includes('/node_modules/rehype-') ||
+              normalized.includes('/node_modules/highlight.js/') ||
+              normalized.includes('/node_modules/micromark') ||
+              normalized.includes('/node_modules/mdast-util') ||
+              normalized.includes('/node_modules/hast-util') ||
+              normalized.includes('/node_modules/unist-util') ||
+              normalized.includes('/node_modules/vfile')
+            ) return 'vendor-markdown';
+
+            if (normalized.includes('/node_modules/lucide-react/')) return 'vendor-icons';
+            if (normalized.includes('/node_modules/motion/')) return 'vendor-motion';
+            if (normalized.includes('/node_modules/react/') || normalized.includes('/node_modules/react-dom/')) return 'vendor-react';
           },
         },
       },

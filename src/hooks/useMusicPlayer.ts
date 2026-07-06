@@ -170,6 +170,10 @@ function setMusicVisible(visible: boolean) {
   setMusicState(prev => ({ ...prev, visible }));
 }
 
+export function setMusicLayerVisible(visible: boolean) {
+  setMusicVisible(visible);
+}
+
 function getEffectiveVolume() {
   return Math.max(0, Math.min(1, (_musicSnapshot.volume / 100) * _duckingLevel));
 }
@@ -502,9 +506,8 @@ export function useMusicPlayerSnapshot() {
   );
 }
 
-export function useMusicPlayer() {
+export function useMusicPlayerRuntime() {
   const socket = useSocket();
-  const state = useMusicPlayerSnapshot();
 
   useEffect(() => {
     ensureAudio();
@@ -546,6 +549,13 @@ export function useMusicPlayer() {
       window.removeEventListener('beforeunload', stopNativeOnLeave);
     };
   }, [socket]);
+
+  return socket;
+}
+
+export function useMusicPlayer() {
+  const socket = useMusicPlayerRuntime();
+  const state = useMusicPlayerSnapshot();
 
   const play = useCallback(() => {
     if (_musicSnapshot.source === 'netease') {

@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, ShoppingBag, Cpu, Download, Trash2, Power, PowerOff, RefreshCw, Star, Wrench, CheckCircle, Globe, Search, Zap, Tag, Upload, Palette, Terminal, Monitor, Film, Key, ExternalLink, Github, AlertTriangle, X, ShieldCheck, Info, Mail, QrCode, Link, Image, FileText, CloudSun, Languages, Calculator, StickyNote, Timer, TrendingUp, Music, GraduationCap, BriefcaseBusiness, Stethoscope } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
-import { GitHubMCPBrowser } from './GitHubMCPBrowser';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
 import { apiFetch } from '@/services/apiClient';
+
+const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 
 const ICON_CLASSES: Record<string, string> = {
   CloudSun: 'bg-sky-500/10 text-sky-400 border-sky-500/20',
@@ -1390,7 +1391,9 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
 
         {activeTab === 'mcp' && (
           <motion.div key="mcp" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="overflow-hidden rounded-3xl border border-white/5 bg-white/[0.03]">
-            <GitHubMCPBrowser t={t} embedded />
+            <Suspense fallback={null}>
+              <GitHubMCPBrowser t={t} embedded />
+            </Suspense>
           </motion.div>
         )}
 

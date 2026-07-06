@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Shield,
@@ -27,7 +27,6 @@ import { toast } from 'sonner';
 import { usePlatform } from '@/hooks/usePlatform';
 import { BiometricsEnrollPanel } from './biometrics/BiometricsEnrollPanel';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
-import { VoiceForge } from './VoiceForge';
 import { VoiceProviderSwitch } from './VoiceProviderSwitch';
 import { MCPSettings } from './MCPSettings';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
@@ -41,6 +40,8 @@ import {
   SENSOR_PERMISSIONS_CHANGED,
   type SensorPermissionState,
 } from '@/services/sensorPermissionService';
+
+const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.VoiceForge })));
 
 function buildSidebarGroups(t: any, isZh: boolean) {
   const ui = (zh: string, en: string) => (isZh ? zh : en);
@@ -187,7 +188,11 @@ export function Settings({
           </div>
         );
       case 'voice':
-        return <VoiceForge t={t} />;
+        return (
+          <Suspense fallback={null}>
+            <VoiceForge t={t} />
+          </Suspense>
+        );
       case 'llm-providers':
         return <LLMProvidersPage t={t} providerStatus={providerStatus} />;
       case 'vision-models':

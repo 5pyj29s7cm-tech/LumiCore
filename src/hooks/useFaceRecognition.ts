@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { initMediaPipe, detectFaceLandmarks, extractFaceEmbedding, isMediaPipeReady } from '../lib/mediapipe/loader';
 import { requestCameraStream } from '@/services/sensorPermissionService';
+
+type MediaPipeLoader = typeof import('../lib/mediapipe/loader');
+let mediaPipeLoaderPromise: Promise<MediaPipeLoader> | null = null;
+
+function loadMediaPipeLoader() {
+  mediaPipeLoaderPromise ||= import('../lib/mediapipe/loader');
+  return mediaPipeLoaderPromise;
+}
 
 // ── Cosine similarity ──
 
@@ -102,8 +109,10 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
 
     const start = async () => {
       try {
-        await initMediaPipe();
+        const mediaPipe = await loadMediaPipeLoader();
+        await mediaPipe.initMediaPipe();
         await loadTemplates();
+        if (!running) return;
 
         const video = document.createElement('video');
         video.setAttribute('playsinline', '');
@@ -139,17 +148,17 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
           if (
             now - lastProcessTimeRef.current >= FACE_RECOGNITION_INTERVAL_MS &&
             video.readyState >= 2 &&
-            isMediaPipeReady()
+            mediaPipe.isMediaPipeReady()
           ) {
             lastProcessTimeRef.current = now;
-            const faces = detectFaceLandmarks(video);
+            const faces = mediaPipe.detectFaceLandmarks(video);
 
             if (faces.length > 0) {
               faceLostRef.current = 0;
               const bestMatches: FaceMatch[] = [];
 
               for (const face of faces) {
-                const embedding = extractFaceEmbedding(face.landmarks);
+                const embedding = mediaPipe.extractFaceEmbedding(face.landmarks);
                 if (embedding.length === 0) continue;
 
                 // Compare against all stored templates
@@ -234,7 +243,8 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
     // In practice, this should capture a fresh embedding from the next detection tick
     return new Promise(async (resolve) => {
       try {
-        await initMediaPipe();
+        const mediaPipe = await loadMediaPipeLoader();
+        await mediaPipe.initMediaPipe();
 
         const video = document.createElement('video');
         video.setAttribute('playsinline', '');
@@ -253,17 +263,17 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
         let attempts = 0;
         const captureInterval = setInterval(() => {
           attempts++;
-          if (attempts > 60 || !isMediaPipeReady()) {
+          if (attempts > 60 || !mediaPipe.isMediaPipeReady()) {
             clearInterval(captureInterval);
             stream.getTracks().forEach(t => t.stop());
             resolve({ success: false });
             return;
           }
 
-          const faces = detectFaceLandmarks(video);
+          const faces = mediaPipe.detectFaceLandmarks(video);
           if (faces.length > 0) {
             clearInterval(captureInterval);
-            const embedding = extractFaceEmbedding(faces[0].landmarks);
+            const embedding = mediaPipe.extractFaceEmbedding(faces[0].landmarks);
             stream.getTracks().forEach(t => t.stop());
 
             if (embedding.length === 0) {

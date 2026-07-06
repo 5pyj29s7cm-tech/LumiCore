@@ -58,55 +58,26 @@ import {
 import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
 import { LocalAgentSphere } from './LocalAgentSphere';
-import { VoiceTrainingDialog } from './VoiceTrainingDialog';
 import { VoicePicker } from './VoicePicker';
-import { VoiceForge } from './VoiceForge';
-import { ToolPanel } from './ToolPanel';
-import { TeamHub } from './TeamHub';
-import { GitHubMCPBrowser } from './GitHubMCPBrowser';
-import { SkillCenter } from './SkillCenter';
-import { NotificationCenter } from './NotificationCenter';
-import { TokenDashboard } from './TokenDashboard';
-import { SubscriptionPanel } from './SubscriptionPanel';
 import { CursorGlow } from './CursorGlow';
 import { DesktopOnboarding } from './DesktopOnboarding';
-import { DeviceSyncCenter } from './DeviceSyncCenter';
-import { AgentChatPage } from './AgentChatPage';
-import { RuntimeLogPanel } from './RuntimeLogPanel';
-import { OrgHub } from './org/OrgHub';
-import { OrgPortal } from './OrgPortal';
 import { WorkModeSwitch } from './org/WorkModeSwitch';
-import { Sanctuary } from './Sanctuary';
-import { MemoryAvatarLab } from './MemoryAvatarLab';
-import { AvatarStudio } from './AvatarStudio';
-import { ReminderPanel } from './ReminderPanel';
 import { PetAvatar } from './SpriteAnimator';
 import { getDefaultPets } from '../pets/defaults';
 import type { PetConfig } from '../pets/types';
-import { ContributorNodePanel } from './ContributorNodePanel';
-import { MeshSyncSelector } from './MeshSyncSelector';
 import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
-import { AutonomousFeed } from './AutonomousFeed';
-import { SystemExplorer } from './SystemExplorer';
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
-import WorkflowPanel, { type BackgroundWorkflowTask, type WorkflowStep } from './WorkflowPanel';
+import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ToolConfirmDialog } from './ToolConfirmDialog';
 import { appConfirm } from '@/lib/appConfirm';
 import { designVoice, listVoices, synthesizeSpeech } from '@/services/voiceService';
-
-const KnowledgeBase = lazy(() => import('./KnowledgeBase').then(m => ({ default: m.KnowledgeBase })));
-import { PersonalityEditor } from './PersonalityEditor';
-import { Settings } from './Settings';
-import { TerminalWindow } from './Terminal';
-import { MusicMoodLayer } from './MusicMoodLayer';
-import { MusicCenter } from './MusicCenter';
-import { useMusicPlayerSnapshot, useMusicVisible } from '../hooks/useMusicPlayer';
+import { setMusicLayerVisible, useMusicPlayerRuntime, useMusicPlayerSnapshot, useMusicVisible } from '../hooks/useMusicPlayer';
 import { useVoiceprint } from '../hooks/useVoiceprint';
 import { useFaceRecognition } from '../hooks/useFaceRecognition';
 import { usePresence } from '../hooks/usePresence';
@@ -122,6 +93,46 @@ import { PresenceIndicator } from './biometrics/PresenceIndicator';
 import { UserSwitchPrompt } from './biometrics/UserSwitchPrompt';
 import { systemService } from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
+
+const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
+const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
+const AvatarStudio = lazy(() => import('./AvatarStudio').then(m => ({ default: m.AvatarStudio })));
+const ContributorNodePanel = lazy(() => import('./ContributorNodePanel').then(m => ({ default: m.ContributorNodePanel })));
+const DeviceSyncCenter = lazy(() => import('./DeviceSyncCenter').then(m => ({ default: m.DeviceSyncCenter })));
+const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
+const KnowledgeBase = lazy(() => import('./KnowledgeBase').then(m => ({ default: m.KnowledgeBase })));
+const MemoryAvatarLab = lazy(() => import('./MemoryAvatarLab').then(m => ({ default: m.MemoryAvatarLab })));
+const MeshSyncSelector = lazy(() => import('./MeshSyncSelector').then(m => ({ default: m.MeshSyncSelector })));
+const MusicCenter = lazy(() => import('./MusicCenter').then(m => ({ default: m.MusicCenter })));
+const MusicMoodLayer = lazy(() => import('./MusicMoodLayer').then(m => ({ default: m.MusicMoodLayer })));
+const NotificationCenter = lazy(() => import('./NotificationCenter').then(m => ({ default: m.NotificationCenter })));
+const OrgPortal = lazy(() => import('./OrgPortal').then(m => ({ default: m.OrgPortal })));
+const PersonalityEditor = lazy(() => import('./PersonalityEditor').then(m => ({ default: m.PersonalityEditor })));
+const ReminderPanel = lazy(() => import('./ReminderPanel').then(m => ({ default: m.ReminderPanel })));
+const RuntimeLogPanel = lazy(() => import('./RuntimeLogPanel').then(m => ({ default: m.RuntimeLogPanel })));
+const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanctuary })));
+const Settings = lazy(() => import('./Settings').then(m => ({ default: m.Settings })));
+const SkillCenter = lazy(() => import('./SkillCenter').then(m => ({ default: m.SkillCenter })));
+const SubscriptionPanel = lazy(() => import('./SubscriptionPanel').then(m => ({ default: m.SubscriptionPanel })));
+const SystemExplorer = lazy(() => import('./SystemExplorer').then(m => ({ default: m.SystemExplorer })));
+const TeamHub = lazy(() => import('./TeamHub').then(m => ({ default: m.TeamHub })));
+const TerminalWindow = lazy(() => import('./Terminal').then(m => ({ default: m.TerminalWindow })));
+const TokenDashboard = lazy(() => import('./TokenDashboard').then(m => ({ default: m.TokenDashboard })));
+const ToolPanel = lazy(() => import('./ToolPanel').then(m => ({ default: m.ToolPanel })));
+const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.VoiceForge })));
+const VoiceTrainingDialog = lazy(() => import('./VoiceTrainingDialog').then(m => ({ default: m.VoiceTrainingDialog })));
+const WorkflowPanel = lazy(() => import('./WorkflowPanel'));
+
+function LazyPanelFallback({ label = 'Loading' }: { label?: string }) {
+  return (
+    <div className="flex h-full min-h-[180px] w-full items-center justify-center text-white/35">
+      <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-black uppercase tracking-[0.16em]">
+        <RefreshCw size={13} className="animate-spin" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
 
 function resolvePetPreference(pet: any): PetConfig | null {
   if (!pet) return null;
@@ -1074,7 +1085,9 @@ function KernelMonitorApp({ t }: { t: any }) {
             <p className="mt-1 text-xs text-white/35">{t.kernelExploreMergedDesc || 'Runtime monitor and computer exploration are merged into this single kernel view.'}</p>
           </div>
         </div>
-        <SystemExplorer t={t} />
+        <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+          <SystemExplorer t={t} />
+        </Suspense>
       </div>
 
     </div>
@@ -1543,7 +1556,9 @@ function ExecutionWorkQueue({ t }: { t: any }) {
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[0.95fr_1.25fr]">
         <DailyPlans t={t} embedded />
-        <AutonomousFeed expanded />
+        <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+          <AutonomousFeed expanded />
+        </Suspense>
       </div>
       </section>
     </div>
@@ -1731,9 +1746,12 @@ export function DesktopUI({
   const [focusedWindow, setFocusedWindow] = useState<string | null>(activeTab !== 'home' && activeTab !== 'knowledge' ? activeTab : null);
   const [windowOrder, setWindowOrder] = useState<string[]>(activeTab !== 'home' && activeTab !== 'knowledge' ? [activeTab] : []);
   const [knowledgeOpen, setKnowledgeOpen] = useState(activeTab === 'knowledge');
+  const [knowledgeLoaded, setKnowledgeLoaded] = useState(activeTab === 'knowledge');
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatLoaded, setChatLoaded] = useState(false);
   const [chatPrefill, setChatPrefill] = useState('');
   const [sanctuaryOpen, setSanctuaryOpen] = useState(false);
+  const [sanctuaryLoaded, setSanctuaryLoaded] = useState(false);
   const [sanctuaryAgent, setSanctuaryAgent] = useState<any>(null);
   const [petReaction, setPetReaction] = useState<{ animation: string; until: number } | null>(null);
   const [activePersonality, setActivePersonality] = useState('lumi');
@@ -1986,8 +2004,27 @@ export function DesktopUI({
   }, [persistMeetingNotes]);
 
   const socket = useSocket();
+  useMusicPlayerRuntime();
   const musicVisible = useMusicVisible();
+  const [musicLayerLoaded, setMusicLayerLoaded] = useState(false);
   const musicSnapshot = useMusicPlayerSnapshot();
+
+  useEffect(() => {
+    if (knowledgeOpen) setKnowledgeLoaded(true);
+  }, [knowledgeOpen]);
+
+  useEffect(() => {
+    if (chatOpen) setChatLoaded(true);
+  }, [chatOpen]);
+
+  useEffect(() => {
+    if (sanctuaryOpen) setSanctuaryLoaded(true);
+  }, [sanctuaryOpen]);
+
+  useEffect(() => {
+    if (musicVisible) setMusicLayerLoaded(true);
+  }, [musicVisible]);
+
   const voiceprint = useVoiceprint({ socket });
   const ownerVoiceGateOpen = useCallback(() => {
     if (!voiceprint.templatesLoaded) return false;
@@ -3641,7 +3678,7 @@ export function DesktopUI({
               return;
             }
           }
-          window.dispatchEvent(new CustomEvent('lumi:music-layer', { detail: { visible: action === 'show_music_layer' } }));
+          setMusicLayerVisible(action === 'show_music_layer');
           respond({ ok: true, action, mode: operationMode });
           return;
         }
@@ -4211,8 +4248,10 @@ export function DesktopUI({
             </div>
 
             <div className="absolute left-8 top-24 flex flex-col gap-3 pointer-events-auto">
-              <MeshSyncSelector t={t} syncRate={syncRate} onSyncRateChange={setSyncRate} />
-              <ContributorNodePanel t={t} />
+              <Suspense fallback={null}>
+                <MeshSyncSelector t={t} syncRate={syncRate} onSyncRateChange={setSyncRate} />
+                <ContributorNodePanel t={t} />
+              </Suspense>
             </div>
           </motion.div>
         )}
@@ -4360,13 +4399,15 @@ export function DesktopUI({
                 className="fixed right-6 top-12 z-[102] h-[min(560px,calc(100vh-4.5rem))] w-[430px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 shadow-2xl shadow-black/50 pointer-events-auto"
                 onClick={(e) => e.stopPropagation()}
               >
-                <NotificationCenter
-                  onChatMessage={(message) => {
-                    setIsNotificationPanelOpen(false);
-                    setChatPrefill(message);
-                    setChatOpen(true);
-                  }}
-                />
+                <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+                  <NotificationCenter
+                    onChatMessage={(message) => {
+                      setIsNotificationPanelOpen(false);
+                      setChatPrefill(message);
+                      setChatOpen(true);
+                    }}
+                  />
+                </Suspense>
               </motion.div>
             </>
           )}
@@ -4955,15 +4996,19 @@ export function DesktopUI({
         )}
       </AnimatePresence>
 
-      <WorkflowPanel
-        visible={workflowPanelVisible && !customerTakeoverStage && !designDeliveryStage && !ecommerceGrowthStage}
-        agentStatus={agentStatus}
-        steps={workflowSteps}
-        t={t}
-        placement={isWallpaperMode ? 'center' : 'corner'}
-        backgroundTasks={backgroundWorkflowTasks}
-        onCancelBackgroundTask={cancelBackgroundWorkflowTask}
-      />
+      {workflowPanelVisible && !customerTakeoverStage && !designDeliveryStage && !ecommerceGrowthStage && (
+        <Suspense fallback={null}>
+          <WorkflowPanel
+            visible={true}
+            agentStatus={agentStatus}
+            steps={workflowSteps}
+            t={t}
+            placement={isWallpaperMode ? 'center' : 'corner'}
+            backgroundTasks={backgroundWorkflowTasks}
+            onCancelBackgroundTask={cancelBackgroundWorkflowTask}
+          />
+        </Suspense>
+      )}
       <AnimatePresence>
         {customerTakeoverStage && (
           <CustomerTakeoverPanel
@@ -5046,11 +5091,15 @@ export function DesktopUI({
           }}
           t={t}
         />
-        <VoiceTrainingDialog 
-          isOpen={isTrainingOpen} 
-          onClose={() => setIsTrainingOpen(false)} 
-          onSuccess={() => window.dispatchEvent(new CustomEvent('lumi:voice-updated'))}
-        />
+        {isTrainingOpen && (
+          <Suspense fallback={null}>
+            <VoiceTrainingDialog
+              isOpen={isTrainingOpen}
+              onClose={() => setIsTrainingOpen(false)}
+              onSuccess={() => window.dispatchEvent(new CustomEvent('lumi:voice-updated'))}
+            />
+          </Suspense>
+        )}
         <AnimatePresence>
           {openWindows.map(windowId => {
             const size = getWindowSize(windowId);
@@ -5080,6 +5129,7 @@ export function DesktopUI({
                 t={t}
               >
                 <div className="os-window-body custom-scrollbar">
+                  <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
                   {windowId === 'kernel' ? (
                     <KernelMonitorApp t={t} />
                   ) : windowId === 'settings' ? (
@@ -5160,6 +5210,7 @@ export function DesktopUI({
                     // Chat is now fullscreen overlay — this case should not be reached
                     null
                   ) : renderTabContent(windowId)}
+                  </Suspense>
                 </div>
               </OSWindow>
             );
@@ -5171,24 +5222,30 @@ export function DesktopUI({
       </motion.div>
 
       {/* Knowledge Base fullscreen overlay */}
-      <Suspense fallback={null}>
-        <KnowledgeBase
-          t={t}
-          isOpen={knowledgeOpen}
-          onClose={() => setKnowledgeOpen(false)}
-          domain={workDomain}
-        />
-      </Suspense>
+      {knowledgeLoaded && (
+        <Suspense fallback={null}>
+          <KnowledgeBase
+            t={t}
+            isOpen={knowledgeOpen}
+            onClose={() => setKnowledgeOpen(false)}
+            domain={workDomain}
+          />
+        </Suspense>
+      )}
 
       {/* Chat fullscreen overlay */}
-      <AgentChatPage
-        t={t}
-        user={user}
-        isOpen={chatOpen}
-        onClose={() => { setChatOpen(false); setChatPrefill(''); }}
-        prefillMessage={chatPrefill}
-        onPrefillConsumed={() => setChatPrefill('')}
-      />
+      {chatLoaded && (
+        <Suspense fallback={null}>
+          <AgentChatPage
+            t={t}
+            user={user}
+            isOpen={chatOpen}
+            onClose={() => { setChatOpen(false); setChatPrefill(''); }}
+            prefillMessage={chatPrefill}
+            onPrefillConsumed={() => setChatPrefill('')}
+          />
+        </Suspense>
+      )}
       {chatOpen && typeof document !== 'undefined' && createPortal(
         <AnimatePresence>
           {pendingOperationModeOption && (
@@ -5254,20 +5311,26 @@ export function DesktopUI({
             transition={{ duration: 0.3 }}
             className="fixed inset-0 z-[220] bg-celestial-deep overflow-auto"
           >
-            <OrgPortal
-              initialMode={orgConnection?.connected ? 'select' : 'create'}
-              onBack={() => setActiveTab('home')}
-            />
+            <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+              <OrgPortal
+                initialMode={orgConnection?.connected ? 'select' : 'create'}
+                onBack={() => setActiveTab('home')}
+              />
+            </Suspense>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Sanctuary — fullscreen immersive memory avatar space */}
-      <Sanctuary
-        agent={sanctuaryAgent}
-        isOpen={sanctuaryOpen}
-        onClose={() => { setSanctuaryOpen(false); setSanctuaryAgent(null); }}
-      />
+      {sanctuaryLoaded && (
+        <Suspense fallback={null}>
+          <Sanctuary
+            agent={sanctuaryAgent}
+            isOpen={sanctuaryOpen}
+            onClose={() => { setSanctuaryOpen(false); setSanctuaryAgent(null); }}
+          />
+        </Suspense>
+      )}
 
       {/* Memory Avatar Lab fullscreen overlay */}
       <AnimatePresence>
@@ -5288,21 +5351,27 @@ export function DesktopUI({
                 <ArrowLeft size={18} />
               </button>
             </div>
-            <MemoryAvatarLab
-              t={t}
-              onEnterSanctuary={(agent: any) => {
-                setMemoryLabOpen(false);
-                setSanctuaryAgent(agent);
-                setSanctuaryOpen(true);
-              }}
-            />
+            <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+              <MemoryAvatarLab
+                t={t}
+                onEnterSanctuary={(agent: any) => {
+                  setMemoryLabOpen(false);
+                  setSanctuaryAgent(agent);
+                  setSanctuaryOpen(true);
+                }}
+              />
+            </Suspense>
           </motion.div>
         )}
       </AnimatePresence>
 
       <ToolConfirmDialog socket={socket} isWallpaperMode={isWallpaperMode} />
       <UserSwitchPrompt socket={socket} />
-      <MusicMoodLayer />
+      {musicLayerLoaded && (
+        <Suspense fallback={null}>
+          <MusicMoodLayer />
+        </Suspense>
+      )}
 
     </div>
   );
@@ -5486,7 +5555,9 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
           {/* Voice Cloning — record/upload */}
           <div className="rounded-2xl bg-white/[0.02] border border-white/5 p-4">
             <h4 className="text-xs font-black uppercase tracking-widest text-white/55 mb-4">{t?.voiceCloning || 'Voice Cloning'}</h4>
-            <VoiceForge t={t} compact onCloneSuccess={() => setVoiceRefresh(n => n + 1)} />
+            <Suspense fallback={<LazyPanelFallback label={t?.loading || 'Loading'} />}>
+              <VoiceForge t={t} compact onCloneSuccess={() => setVoiceRefresh(n => n + 1)} />
+            </Suspense>
           </div>
         </div>
 

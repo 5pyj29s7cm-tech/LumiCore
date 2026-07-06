@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Download, MessageCircle, Briefcase, User } from 'lucide-react';
 import Markdown from 'react-markdown';
@@ -20,9 +20,11 @@ import { socketService } from '@/services/socketService';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import { useVoiceCloning } from '@/hooks/useVoiceCloning';
 import { listVoices } from '@/services/voiceService';
-import WorkflowPanel, { type BackgroundWorkflowTask, type WorkflowStep } from './WorkflowPanel';
+import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
+
+const WorkflowPanel = lazy(() => import('./WorkflowPanel'));
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -1307,15 +1309,19 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         accept={CHAT_ATTACHMENT_ACCEPT}
         onChange={(e) => { uploadChatAttachments(e.target.files); e.target.value = ''; }}
       />
-      <WorkflowPanel
-        visible={workflowPanelVisible}
-        agentStatus={workflowStatus}
-        steps={workflowSteps}
-        t={t}
-        placement="corner"
-        backgroundTasks={backgroundWorkflowTasks}
-        onCancelBackgroundTask={cancelBackgroundWorkflowTask}
-      />
+      {workflowPanelVisible && (
+        <Suspense fallback={null}>
+          <WorkflowPanel
+            visible={true}
+            agentStatus={workflowStatus}
+            steps={workflowSteps}
+            t={t}
+            placement="corner"
+            backgroundTasks={backgroundWorkflowTasks}
+            onCancelBackgroundTask={cancelBackgroundWorkflowTask}
+          />
+        </Suspense>
+      )}
       <AnimatePresence>
         {showWeChatSettings && (
           <motion.div
