@@ -78,6 +78,7 @@ Before public free downloads reopen on the official website:
 - Confirm which paid features remain gated in Free.
 - Confirm source/license strategy. The current repository includes `AGPL-3.0`; closed-source commercial distribution needs a separate licensing decision.
 - Validate updater endpoint and signing keys.
+- Run `npm run release:check -- --strict-publish` and resolve every failure.
 
 ## First-Run Release Gate
 
@@ -89,9 +90,12 @@ Run this gate before handing a desktop build to testers or users:
 4. On Windows, run `npm run smoke:installer:win`.
 5. Run `npm run release:manifest`.
 6. Run `npm run release:bundle`.
-7. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
-8. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
-9. Hand testers the generated `release-out/` bundle directory, not loose files from multiple folders.
+7. Run `npm run release:check`.
+8. Confirm the installer exists under `src-tauri/target/release/bundle/nsis/`.
+9. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
+10. Hand testers the generated `release-out/` bundle directory, not loose files from multiple folders.
+
+`npm run release:check` validates version sync, manifest freshness, artifact hashes, release bundle contents, release notes, updater endpoint shape, and download URL shape. For a public or paid distribution build, run `npm run release:check -- --strict-publish`; strict mode also blocks placeholder updater pubkeys, missing updater signing key, and missing Windows code-signing configuration.
 
 The automated packaged smoke test must prove:
 
