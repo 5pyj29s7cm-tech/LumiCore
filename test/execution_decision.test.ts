@@ -376,6 +376,26 @@ describe('Lumi execution decision', () => {
     expect(installerQuestion.decision.allowToolUse).toBe(false);
     expect(installerQuestion.decision.toolRoute).toBeNull();
 
+    const mcpWhyQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP');
+    expect(mcpWhyQuestion.dispatch.boundary).toBe('conversation');
+    expect(mcpWhyQuestion.decision.allowToolUse).toBe(false);
+    expect(mcpWhyQuestion.decision.toolRoute).toBeNull();
+
+    const marketHowQuestion = decide('\u770b\u76d8\u8f85\u52a9\u6a21\u5f0f\u600e\u4e48\u7528');
+    expect(marketHowQuestion.dispatch.boundary).toBe('conversation');
+    expect(marketHowQuestion.decision.allowToolUse).toBe(false);
+    expect(marketHowQuestion.decision.toolRoute).toBeNull();
+
+    const installerCanQuestion = decide('\u5b89\u88c5\u5305\u80fd\u4e0d\u80fd\u7528');
+    expect(installerCanQuestion.dispatch.boundary).toBe('conversation');
+    expect(installerCanQuestion.decision.allowToolUse).toBe(false);
+    expect(installerCanQuestion.decision.toolRoute).toBeNull();
+
+    const marketRiskQuestion = decide('\u770b\u76d8\u8f85\u52a9\u4f1a\u4e0d\u4f1a\u6709\u98ce\u9669');
+    expect(marketRiskQuestion.dispatch.boundary).toBe('conversation');
+    expect(marketRiskQuestion.decision.allowToolUse).toBe(false);
+    expect(marketRiskQuestion.decision.toolRoute).toBeNull();
+
     const whyFailed = decide('\u4e3a\u4ec0\u4e48\u6ca1\u505a\u5b8c');
     expect(whyFailed.dispatch.boundary).toBe('self_repair');
     expect(whyFailed.decision.allowToolUse).toBe(true);
