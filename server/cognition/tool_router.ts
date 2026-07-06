@@ -261,6 +261,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'document, office, PDF, spreadsheet, or presentation workflow',
     patterns: [
       /文档|文件夹|文件|资料|报告|表格|PPT|幻灯片|PDF|DOCX|Excel|整理|汇总|导出|保存|生成.*文/u,
+      /(?:\u603b\u7ed3|\u6458\u8981|\u5f52\u7eb3|\u63d0\u70bc|\u5206\u6790).*(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u8fd9\u4efd|\u8fd9\u4e2a)|(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u8fd9\u4efd|\u8fd9\u4e2a).*(?:\u603b\u7ed3|\u6458\u8981|\u5f52\u7eb3|\u63d0\u70bc|\u5206\u6790)/u,
       /\b(document|file|folder|report|spreadsheet|ppt|presentation|pdf|docx|xlsx|export|save)\b/i,
     ],
     prefixes: ['mcp_demo-ppt-creation_', 'mcp_wps-ppt-creator_', 'mcp_ai-research-ppt-outline_', 'mcp_pdftools_'],
@@ -282,6 +283,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'web search, source verification, or current information request',
     patterns: [
       /搜索|查询|查一下|查一查|查找|联网|浏览|网页|网址|链接|资料来源|出处|引用|官方|验证|调研/u,
+      /(?:\u641c\u4e00\u4e0b|\u641c\u4e00\u641c|\u5e2e(?:\u6211)?.*\u641c)/u,
       /\b(search|look\s*up|browse|fetch|research|source|citation|official|verify)\b/i,
     ],
     prefixes: ['mcp_fetcher_', 'mcp_web-fetcher-pro_'],
@@ -352,6 +354,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'work takeover, real closed-loop task run, or capability reuse pressure test',
     patterns: [
       /工作接管|接管.*微信|接管.*客户|真实闭环|先跑一遍|跑出结果|能力复用|压测|重复能力|会不会重复|稳不稳定|稳定性|任务中心/u,
+      /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b).*(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee)/u,
       /\b(work\s*takeover|real\s*smoke|closed\s*loop|capability\s*reuse|pressure\s*test|task\s*center|take\s*over)\b/i,
     ],
     groups: ['workTakeover', 'skills'],
@@ -361,6 +364,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'Feishu, WeChat, WeCom, or remote messaging request',
     patterns: [
       /飞书|微信|企业微信|WeCom|消息|回消息|远程协作|绑定码/u,
+      /(?:\u56de\u4e00\u4e0b|\u56de\u590d|\u56de|\u8349\u7a3f).*(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237)|(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237).*(?:\u56de\u590d|\u56de\u4e00\u4e0b|\u56de|\u8349\u7a3f)/u,
       /\b(feishu|lark|wechat|wecom|message|reply)\b/i,
     ],
     prefixes: ['mcp_messaging-ops_', 'mcp_wechat-launcher_'],

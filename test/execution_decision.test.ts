@@ -19,6 +19,10 @@ const declarations = [
   'adapter_registry_list',
   'web_login_run',
   'url_fetch_logged_in',
+  'wechat_prepare_reply',
+  'wechat_copy_reply_draft',
+  'work_takeover_task_continue',
+  'work_takeover_task_orchestrate',
   'mcp_stockbot_stock_quote',
   'mcp_stockbot_stock_trade_plan',
   'mcp_stockbot_paper_portfolio',
@@ -276,5 +280,52 @@ describe('Lumi execution decision', () => {
       'web_login_run',
       'url_fetch_logged_in',
     ]));
+
+    const legalFolder = decide('\u6839\u636e\u6848\u4ef6\u6587\u4ef6\u5939\u6574\u7406\u4ee3\u7406\u8bcd');
+    expect(legalFolder.decision.allowToolUse).toBe(true);
+    expect(legalFolder.decision.toolRoute?.categories).toContain('legal');
+
+    const newsSearch = decide('\u641c\u4e00\u4e0b\u4eca\u5929 OpenAI \u65b0\u95fb');
+    expect(newsSearch.decision.allowToolUse).toBe(true);
+    expect(newsSearch.decision.toolRoute?.categories).toContain('web_research');
+
+    const pptReport = decide('\u505a\u4e2a PPT \u6c47\u62a5\u5e76\u5bfc\u51fa');
+    expect(pptReport.decision.allowToolUse).toBe(true);
+    expect(pptReport.decision.toolRoute?.categories).toContain('documents');
+    expect(pptReport.decision.toolRoute?.toolNames).toContain('create_ppt');
+
+    const summarizeDoc = decide('\u628a\u8fd9\u4efd\u6587\u6863\u603b\u7ed3\u4e00\u4e0b');
+    expect(summarizeDoc.decision.allowToolUse).toBe(true);
+    expect(summarizeDoc.decision.toolRoute?.categories).toContain('documents');
+
+    const wechatReply = decide('\u5e2e\u6211\u56de\u4e00\u4e0b\u5fae\u4fe1\u5ba2\u6237');
+    expect(wechatReply.decision.allowToolUse).toBe(true);
+    expect(wechatReply.decision.toolRoute?.categories).toContain('messaging');
+    expect(wechatReply.decision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
+      'wechat_prepare_reply',
+      'wechat_copy_reply_draft',
+    ]));
+
+    const continueCustomerTask = decide('\u7ee7\u7eed\u90a3\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u4efb\u52a1');
+    expect(continueCustomerTask.decision.allowToolUse).toBe(true);
+    expect(continueCustomerTask.decision.toolRoute?.categories).toContain('work_takeover');
+    expect(continueCustomerTask.decision.toolRoute?.toolNames).toEqual(expect.arrayContaining([
+      'work_takeover_task_continue',
+      'work_takeover_task_orchestrate',
+    ]));
+
+    const whyPush = decide('\u4e3a\u4ec0\u4e48\u8981\u63a8\u9001');
+    expect(whyPush.dispatch.boundary).toBe('conversation');
+    expect(whyPush.decision.allowToolUse).toBe(false);
+    expect(whyPush.decision.toolRoute).toBeNull();
+
+    const naturalnessQuestion = decide('lumi \u80fd\u4e0d\u80fd\u66f4\u81ea\u7136\u4e00\u70b9');
+    expect(naturalnessQuestion.dispatch.boundary).toBe('conversation');
+    expect(naturalnessQuestion.decision.allowToolUse).toBe(false);
+    expect(naturalnessQuestion.decision.toolRoute).toBeNull();
+
+    const whyFailed = decide('\u4e3a\u4ec0\u4e48\u6ca1\u505a\u5b8c');
+    expect(whyFailed.dispatch.boundary).toBe('self_repair');
+    expect(whyFailed.decision.allowToolUse).toBe(true);
   });
 });
