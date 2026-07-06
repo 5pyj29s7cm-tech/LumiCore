@@ -62,6 +62,137 @@ function Stop-InstalledBackend {
     }
 }
 
+function Test-IsPathInside {
+  param(
+    [string]$Path,
+    [string]$Parent
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Parent)) {
+    return $false
+  }
+
+  try {
+    $separators = [char[]]@(
+      [System.IO.Path]::DirectorySeparatorChar,
+      [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fullParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd($separators)
+    return $fullPath.Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $fullPath.StartsWith("$fullParent$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase) -or
+      $fullPath.StartsWith("$fullParent$([System.IO.Path]::AltDirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)
+  } catch {
+    return $false
+  }
+}
+
+function Get-ExistingShortcutRoots {
+  param(
+    [string]$HomeDir,
+    [string]$OriginalDesktop,
+    [string]$OriginalPrograms,
+    [string]$OriginalAppData
+  )
+
+  $originalStartMenu = if ([string]::IsNullOrWhiteSpace($OriginalAppData)) { "" } else { Join-Path $OriginalAppData "Microsoft\Windows\Start Menu\Programs" }
+  $currentStartMenu = if ([string]::IsNullOrWhiteSpace($env:APPDATA)) { "" } else { Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs" }
+
+  $roots = @(
+    $OriginalDesktop,
+    $OriginalPrograms,
+    $originalStartMenu,
+    [Environment]::GetFolderPath("Desktop"),
+    [Environment]::GetFolderPath("Programs"),
+    $currentStartMenu,
+    (Join-Path $HomeDir "Desktop"),
+    (Join-Path $HomeDir "AppData\Roaming\Microsoft\Windows\Start Menu\Programs")
+  )
+
+  $seen = @{}
+  foreach ($root in $roots) {
+    if ([string]::IsNullOrWhiteSpace($root)) { continue }
+    try {
+      $full = [System.IO.Path]::GetFullPath($root)
+      if ($seen.ContainsKey($full)) { continue }
+      $seen[$full] = $true
+      if (Test-Path -LiteralPath $full) { $full }
+    } catch {}
+  }
+}
+
+function Test-IsInstallerSmokePath {
+  param(
+    [string]$Path,
+    [string]$SmokeRoot
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($SmokeRoot)) {
+    return $false
+  }
+
+  try {
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-IsPathInside -Path $fullPath -Parent $SmokeRoot)) {
+      return $false
+    }
+    return $fullPath -match '[\\/]installer-first-run-[^\\/]+[\\/]install([\\/]|$)'
+  } catch {
+    return $false
+  }
+}
+
+function Remove-InstallerShortcutResidue {
+  param(
+    [string]$InstallDir,
+    [string]$HomeDir,
+    [string]$SmokeRoot,
+    [string]$OriginalDesktop,
+    [string]$OriginalPrograms,
+    [string]$OriginalAppData
+  )
+
+  $removed = New-Object System.Collections.Generic.List[string]
+  $remaining = New-Object System.Collections.Generic.List[string]
+  $shell = $null
+
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($root in Get-ExistingShortcutRoots -HomeDir $HomeDir -OriginalDesktop $OriginalDesktop -OriginalPrograms $OriginalPrograms -OriginalAppData $OriginalAppData) {
+      $links = Get-ChildItem -LiteralPath $root -Filter "*.lnk" -File -Recurse -ErrorAction SilentlyContinue
+      foreach ($link in $links) {
+        try {
+          $shortcut = $shell.CreateShortcut($link.FullName)
+          $pointsToInstall = (Test-IsPathInside -Path $shortcut.TargetPath -Parent $InstallDir) -or
+            (Test-IsPathInside -Path $shortcut.WorkingDirectory -Parent $InstallDir)
+          $pointsToSmokeRun = (Test-IsInstallerSmokePath -Path $shortcut.TargetPath -SmokeRoot $SmokeRoot) -or
+            (Test-IsInstallerSmokePath -Path $shortcut.WorkingDirectory -SmokeRoot $SmokeRoot)
+
+          if ($pointsToInstall -or $pointsToSmokeRun) {
+            Remove-Item -LiteralPath $link.FullName -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $link.FullName) {
+              $remaining.Add($link.FullName)
+            } else {
+              $removed.Add($link.FullName)
+            }
+          }
+        } catch {
+          continue
+        }
+      }
+    }
+  } finally {
+    if ($shell) {
+      try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) } catch {}
+    }
+  }
+
+  [pscustomobject]@{
+    Removed = $removed.ToArray()
+    Remaining = $remaining.ToArray()
+  }
+}
+
 $Stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $CodexRun = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot ".codex-run"))
 $RunRoot = [System.IO.Path]::GetFullPath((Join-Path $CodexRun "installer-first-run-$Stamp"))
@@ -75,6 +206,9 @@ $LaunchErr = Join-Path $RunRoot "launch.err.log"
 New-Item -ItemType Directory -Force -Path $InstallDir, $HomeDir, $DataRoot | Out-Null
 
 $Port = Get-FreePort
+$OriginalDesktop = [Environment]::GetFolderPath("Desktop")
+$OriginalPrograms = [Environment]::GetFolderPath("Programs")
+$OriginalAppData = $env:APPDATA
 $OldEnv = @{
   PORT = $env:PORT
   HOST = $env:HOST
@@ -86,6 +220,8 @@ $OldEnv = @{
 
 $App = $null
 $Succeeded = $false
+$Result = $null
+$CleanupFailure = ""
 
 try {
   $InstallArgs = @("/S", "/D=$InstallDir")
@@ -180,7 +316,7 @@ try {
   $SkillDir = Join-Path $HomeDir "lumi_skills\$DirName"
   $RuntimeConfig = Join-Path $DataRoot "data\mcp_config.json"
   $Succeeded = $true
-  [pscustomobject]@{
+  $Result = [pscustomobject]@{
     ok = $true
     installer = $Installer
     installDir = $InstallDir
@@ -195,8 +331,10 @@ try {
     skillDirExists = (Test-Path $SkillDir)
     runtimeConfigCreated = (Test-Path $RuntimeConfig)
     cleanup = $(if ($Keep) { "kept" } else { "removed" })
+    shortcutResidueRemoved = 0
+    shortcutResidueRemaining = 0
     runRoot = $(if ($Keep) { $RunRoot } else { $null })
-  } | ConvertTo-Json -Compress
+  }
 } catch {
   Write-Error $_
   if (Test-Path $LaunchOut) {
@@ -220,6 +358,15 @@ try {
     Start-Process -FilePath $Uninstaller -ArgumentList @("/S") -Wait -WindowStyle Hidden | Out-Null
   }
 
+  $ShortcutCleanup = Remove-InstallerShortcutResidue -InstallDir $InstallDir -HomeDir $HomeDir -SmokeRoot $CodexRun -OriginalDesktop $OriginalDesktop -OriginalPrograms $OriginalPrograms -OriginalAppData $OriginalAppData
+  if ($Result) {
+    $Result.shortcutResidueRemoved = @($ShortcutCleanup.Removed).Count
+    $Result.shortcutResidueRemaining = @($ShortcutCleanup.Remaining).Count
+  }
+  if (@($ShortcutCleanup.Remaining).Count -gt 0) {
+    $CleanupFailure = "Installer shortcut cleanup left residue: $(@($ShortcutCleanup.Remaining) -join ', ')"
+  }
+
   foreach ($Key in $OldEnv.Keys) {
     if ($null -eq $OldEnv[$Key]) {
       Remove-Item -ErrorAction SilentlyContinue "env:$Key"
@@ -234,4 +381,13 @@ try {
       Remove-Item -Recurse -Force -Path $ResolvedRunRoot -ErrorAction SilentlyContinue
     }
   }
+}
+
+if ($CleanupFailure) {
+  Write-Error $CleanupFailure
+  exit 1
+}
+
+if ($Result) {
+  $Result | ConvertTo-Json -Compress
 }
