@@ -66,6 +66,14 @@ import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
+function stripHistoricalAttachmentBlocks(value: string): string {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text
+    .replace(/\n{0,2}\[Attachments\][\s\S]*$/i, '\n\n[Previous attachments omitted. Ask for a current attachment or exact local path before using file tools.]')
+    .trim();
+}
+
 function normalizeChatHistoryRecord(m: any): NormalizedMessage[] {
   const role = m?.role === 'assistant' ? 'assistant' : m?.role === 'system' ? 'system' : m?.role === 'user' ? 'user' : '';
   const source = typeof m?.source === 'string' ? m.source : '';
@@ -81,8 +89,8 @@ function normalizeChatHistoryRecord(m: any): NormalizedMessage[] {
   ) return [];
 
   const entries: NormalizedMessage[] = [];
-  const message = typeof m?.message === 'string' ? m.message.trim() : '';
-  const content = typeof m?.content === 'string' ? m.content.trim() : '';
+  const message = typeof m?.message === 'string' ? stripHistoricalAttachmentBlocks(m.message) : '';
+  const content = typeof m?.content === 'string' ? stripHistoricalAttachmentBlocks(m.content) : '';
   const response = typeof m?.response === 'string' ? m.response.trim() : '';
   const primaryText = message || content;
   const isUiErrorText = /^(Request failed|请求失败|出错了|Failed to route)/i.test(primaryText);
@@ -218,18 +226,20 @@ function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): str
     .slice(-8)
     .map((item: any) => {
       const role = String(item?.role || item?.type || '').slice(0, 20);
-      const content = String(item?.message || item?.content || item?.text || item?.response || '').trim();
+      const content = stripHistoricalAttachmentBlocks(String(item?.message || item?.content || item?.text || item?.response || '').trim());
       return content ? `${role}: ${content}` : '';
     })
     .filter(Boolean);
   return lines.join('\n').slice(-maxLength);
 }
 
-function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[], historyText = ''): boolean {
+function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
   if (attachments.some(item => item.path)) return true;
-  const combined = `${userText || ''}\n${historyText || ''}`;
-  if (extractExplicitLocalPaths(combined).length > 0) return true;
-  return LOCAL_ACTION_VERB_RE.test(userText || '') && LOCAL_ACTION_OBJECT_RE.test(`${userText || ''}\n${historyText || ''}`);
+  const text = userText || '';
+  if (extractExplicitLocalPaths(text).length > 0) return true;
+  const mentionsFileLocation = /\b(?:desktop|downloads?|documents?)\b|(?:\u684c\u9762|\u4e0b\u8f7d|\u6587\u6863)/iu.test(text);
+  const namesSpecificFile = LOCAL_READABLE_EXT_RE.test(text) || /["“][^"”]{2,}["”]/u.test(text);
+  return LOCAL_ACTION_VERB_RE.test(text) && LOCAL_ACTION_OBJECT_RE.test(text) && (mentionsFileLocation || namesSpecificFile);
 }
 
 function extractExplicitLocalPaths(input: string): string[] {
@@ -683,6 +693,7 @@ export function registerChatHandler(
         }
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
+      effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn or exact local paths stated in the current user message. If the user says "this file", "the attachment", or similar without a current attachment/path, ask them to reattach the file or provide the exact path before calling file tools.';
 
       const turnDispatch = buildLumiTurnDispatch({
         userId: uid,
@@ -1306,14 +1317,14 @@ export function registerChatHandler(
       };
 
       const historyContextText = getRecentHistoryText(history);
-      const preflightSearchText = [visibleUserText, historyContextText].filter(Boolean).join('\n');
+      const preflightSearchText = [visibleUserText, attachmentContext].filter(Boolean).join('\n');
       const shouldPreflightLocalAction =
         !cognition.directToolExecuted &&
         executionDecision.allowToolUse &&
         !clientActionOnlyTurn &&
         !selfRepairTurn &&
         !isSanctuary &&
-        shouldRunVisibleActionPreflight(visibleUserText, attachments, historyContextText);
+        shouldRunVisibleActionPreflight(visibleUserText, attachments);
 
       if (shouldPreflightLocalAction) {
         emitAgent("agent:status", {
@@ -1327,7 +1338,7 @@ export function registerChatHandler(
         for (const item of attachments) {
           if (item.path) pathKinds.set(path.normalize(item.path), item.kind);
         }
-        for (const localPath of extractExplicitLocalPaths(`${visibleUserText}\n${historyContextText}`)) {
+        for (const localPath of extractExplicitLocalPaths(visibleUserText)) {
           pathKinds.set(path.normalize(localPath), pathKinds.get(path.normalize(localPath)));
         }
 
@@ -1338,7 +1349,7 @@ export function registerChatHandler(
           }
         } else {
           const discovered: NativeFileEntry[] = [];
-          const probeDirs = getLikelyLocalDirs(preflightSearchText);
+          const probeDirs = getLikelyLocalDirs(visibleUserText);
           for (const dir of probeDirs.slice(0, 4)) {
             const record = await runPreflightTool('desktop_list_files', { path: dir, limit: 80 });
             if (!record.error) {
@@ -1359,7 +1370,7 @@ export function registerChatHandler(
             }
           }
 
-          const candidate = selectBestLocalFileCandidate(discovered, preflightSearchText);
+          const candidate = selectBestLocalFileCandidate(discovered, visibleUserText);
           if (candidate?.path) {
             const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
             await runPreflightTool(toolCall.name, toolCall.arguments);

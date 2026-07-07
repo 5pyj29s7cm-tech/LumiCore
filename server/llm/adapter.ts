@@ -155,10 +155,7 @@ function getPrimaryUserText(messages: NormalizedMessage[]): string {
 function buildIterationLimitSummary(executionLog: ToolExecutionRecord[]): string {
   if (executionLog.length === 0) return 'Maximum tool call iterations reached.';
 
-  const artifacts = new Set<string>();
-  for (const record of executionLog) {
-    for (const ref of collectArtifactRefs(record.result || '')) artifacts.add(ref);
-  }
+  const artifacts = collectExistingArtifacts(executionLog).slice(0, 8);
 
   const recentSteps = executionLog.slice(-8).map((record, index) => {
     const status = record.error ? `failed: ${record.error}` : 'done';
@@ -170,11 +167,13 @@ function buildIterationLimitSummary(executionLog: ToolExecutionRecord[]): string
     '',
     'What completed:',
     ...recentSteps,
-    artifacts.size > 0 ? '' : '',
-    artifacts.size > 0 ? 'Generated or referenced files:' : '',
-    ...Array.from(artifacts).map(ref => `- ${ref}`),
+    artifacts.length > 0 ? '' : '',
+    artifacts.length > 0 ? 'Verified generated files:' : '',
+    ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)}, from ${artifact.sourceTool})`),
     '',
-    'The task can be continued from these files/results instead of starting over.',
+    artifacts.length > 0
+      ? 'The task can be continued from these verified files/results instead of starting over.'
+      : 'No verified generated file was detected in this tool run. Continue from the current user request or ask for the current file/path.',
   ].filter(Boolean).join('\n');
 }
 

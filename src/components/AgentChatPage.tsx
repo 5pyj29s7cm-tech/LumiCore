@@ -79,7 +79,7 @@ function buildChatHistoryPayload(messages: any[]) {
   return messages.flatMap((m) => {
     const text = getDisplayText(m).trim();
     const attachmentSummary = Array.isArray(m.attachments) && m.attachments.length > 0
-      ? `\n\n[Attachments]\n${m.attachments.map((item: ChatAttachment) => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : item.kind === 'audio' ? ' (audio)' : ''}`).join('\n')}`
+      ? `\n\n[Previous attachments omitted. Ask for a current attachment or exact local path before using file tools.]`
       : '';
     if (!text && !attachmentSummary) return [];
     if (m.type === 'tool') return [];
@@ -227,6 +227,10 @@ function buildGeneratedFileUrl(filePath: string): string {
 }
 
 function extractGeneratedFiles(text: string): GeneratedFileLink[] {
+  const canExposeFiles =
+    /(?:Verified generated files|Generated and verified these files exist|Audio transcription result|Text file:|Output file:|Saved to:|已生成)/i.test(text || '');
+  if (!canExposeFiles) return [];
+
   const seen = new Set<string>();
   const candidates = [
     ...(text.match(WINDOWS_GENERATED_FILE_RE) || []),

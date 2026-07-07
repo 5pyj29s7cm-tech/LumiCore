@@ -11,6 +11,7 @@
  * - Valuable outputs crystallize into growth-tier memories (memory crystallization)
  */
 
+import fs from "fs";
 import { readDB, writeDB } from "../../db_layer";
 import { NormalizedMessage, makeLLMCall } from "../llm/providers";
 import { runWithTools } from "../llm/adapter";
@@ -139,11 +140,26 @@ function collectArtifactRefs(text: string): string[] {
   return Array.from(refs).slice(0, 10);
 }
 
+const ARTIFACT_PRODUCER_TOOL_RE =
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|generate_.*(?:dxf|ppt|file)|export_|save_|document_|image_generate)/i;
+
+function isVerifiedArtifactRef(ref: string): boolean {
+  if (/^https?:\/\//i.test(ref)) return true;
+  try {
+    const stat = fs.statSync(ref);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 function buildWorkerOutput(text: string, toolCalls: ToolExecutionRecord[] = []): string {
   const artifacts = new Set<string>();
-  for (const ref of collectArtifactRefs(text)) artifacts.add(ref);
   for (const call of toolCalls) {
-    for (const ref of collectArtifactRefs(call.result || '')) artifacts.add(ref);
+    if (call.error || !ARTIFACT_PRODUCER_TOOL_RE.test(call.name)) continue;
+    for (const ref of collectArtifactRefs(call.result || '')) {
+      if (isVerifiedArtifactRef(ref)) artifacts.add(ref);
+    }
   }
 
   if (!/Maximum tool call iterations reached/i.test(text) && artifacts.size === 0) {
