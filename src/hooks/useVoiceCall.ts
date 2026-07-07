@@ -232,6 +232,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     if (!socket) return;
 
     const onAudioStatus = (data: { status: string }) => {
+      if (!isCallActive.current) return;
       const map: Record<string, CallState> = {
         listening: 'listening',
         thinking: 'thinking',
@@ -271,6 +272,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
 
     // Voice confirmation window — show recognized text during the 600ms delay
     const onAudioConfirm = (data: { text: string }) => {
+      if (!isCallActive.current) return;
       setTranscript(data.text);
       if (!transcriptionOnlyRef.current) {
         onTranscript?.(data.text, true);
@@ -355,6 +357,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     };
 
     const onAudioTranscript = (data: { text: string; isFinal: boolean } & VoiceTranscriptMeta) => {
+      if (!isCallActive.current) return;
       // Reset passive timer — user is speaking
       if (passiveTimer.current) { clearTimeout(passiveTimer.current); passiveTimer.current = null; }
       if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
@@ -372,12 +375,14 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     };
 
     const onAgentResponse = (data: { text: string }) => {
+      if (!isCallActive.current) return;
       setTranscript(''); // Clear user transcript when AI starts responding
       setResponseText(data.text);
       onResponse?.(data.text);
     };
 
     const onAudioError = (data: { message: string }) => {
+      if (!isCallActive.current) return;
       setError(data.message);
       clearThinkingWatchdog();
       setCallState('idle');

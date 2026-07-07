@@ -712,7 +712,9 @@ function DesktopWidgetPanel({
     callState !== 'idle' ? 'wave' :
     dragActive || uploading ? 'wave' :
     'idle';
-  const speechText = transcript || (wakeError ? `Wake: ${wakeError}` : '');
+  const speechText = operationMode === 'meeting'
+    ? (wakeError ? `Wake: ${wakeError}` : '')
+    : transcript || (wakeError ? `Wake: ${wakeError}` : '');
   const showWidgetChrome = isCallActive || dragActive || uploading || Boolean(speechText);
   const chromeVisibility = showWidgetChrome
     ? 'opacity-100 pointer-events-auto'
@@ -4769,7 +4771,7 @@ export function DesktopUI({
                    </div>
 
                    <AnimatePresence>
-                     {callState !== 'idle' && transcript && (
+                      {operationMode !== 'meeting' && callState !== 'idle' && transcript && (
                        <motion.div
                          initial={{ opacity: 0, y: 20 }}
                          animate={{ opacity: 1, y: 0 }}
