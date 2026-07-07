@@ -523,7 +523,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       });
       streamRef.current = stream;
 
-      // Set up audio level monitoring (16000 Hz matches Deepgram linear16 config)
+      // Set up audio level monitoring at the realtime STT sample rate.
       audioContext.current = new AudioContext({ sampleRate: 16000 });
       const source = audioContext.current.createMediaStreamSource(stream);
       analyser.current = audioContext.current.createAnalyser();
@@ -531,7 +531,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       source.connect(analyser.current);
       updateAudioLevel();
 
-      // Set up ScriptProcessorNode to capture raw PCM (linear16) for Deepgram
+      // Set up ScriptProcessorNode to capture raw PCM (linear16) for realtime STT.
       const bufferSize = 4096;
       const scriptProcessor = audioContext.current.createScriptProcessor(bufferSize, 1, 1);
 

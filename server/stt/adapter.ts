@@ -1,5 +1,4 @@
 import { STTConfig, STTResult, STTProvider } from './types';
-import * as deepgram from './providers/deepgram';
 import * as whisper from './providers/whisper';
 import * as qwen from './providers/qwen';
 import * as ark from './providers/ark';
@@ -9,15 +8,11 @@ import { getVoicePreference } from '../config/voice_preference';
 import { recordLatency } from '../monitor/latency_store';
 import { isCircuitClosed } from '../cloud/circuit_breaker';
 
-type StreamingSTTProvider = 'qwen' | 'deepgram';
+type StreamingSTTProvider = 'qwen';
 
 function hasQwenKey(): boolean {
   return Boolean(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
     || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY'));
-}
-
-function hasDeepgramKey(): boolean {
-  return Boolean(process.env.DEEPGRAM_API_KEY || getKey('DEEPGRAM_API_KEY'));
 }
 
 function hasOpenAIKey(): boolean {
@@ -32,7 +27,7 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
     : config.provider;
 
   if (!effectiveProvider) {
-    throw new Error('No STT provider configured. Configure local Whisper, DashScope, Deepgram, OpenAI Whisper, or Doubao Speech.');
+    throw new Error('No STT provider configured. Configure local Whisper, DashScope, OpenAI Whisper, or Doubao Speech.');
   }
 
   let result: STTResult;
@@ -45,18 +40,6 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
       break;
     case 'ark':
       result = await ark.transcribe(audioBuffer, config.language);
-      break;
-    case 'deepgram':
-      result = await new Promise((resolve, reject) => {
-        const session = deepgram.createStream(config.language, false);
-        session.onResult((result) => {
-          if (result.isFinal) resolve(result);
-        });
-        session.onError(reject);
-        session.sendAudio(audioBuffer);
-        session.end();
-        setTimeout(() => resolve({ text: '', isFinal: false }), 8000);
-      });
       break;
     case 'qwen':
       result = await new Promise((resolve, reject) => {
@@ -79,13 +62,10 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
 
 export function createStreamingSession(
   config: STTConfig,
-): deepgram.DeepgramStreamSession | qwen.QwenStreamSession {
+): qwen.QwenStreamSession {
   const provider = config.provider;
   if (provider === 'qwen') {
     return qwen.createStream(config.language, config.interimResults);
-  }
-  if (provider === 'deepgram') {
-    return deepgram.createStream(config.language, config.interimResults);
   }
   throw new Error(`Streaming not supported for provider: ${provider}`);
 }
@@ -96,7 +76,6 @@ export function getActiveSTTProvider(): STTProvider | null {
   if (pref.stt === 'local-whisper' && localWhisper.isLocalWhisperAvailable()) return 'local-whisper';
   if (pref.stt === 'qwen') return 'qwen';
   if (pref.stt === 'ark') return 'ark';
-  if (pref.stt === 'deepgram') return 'deepgram';
   if (pref.stt === 'whisper') return 'whisper';
   // Auto mode — prefer local, then healthy cloud providers
   try {
@@ -107,12 +86,8 @@ export function getActiveSTTProvider(): STTProvider | null {
   // Check every cloud provider — skip ones with open circuit breakers
   const qwenKey = hasQwenKey();
   if (qwenKey && isCircuitClosed('qwen')) return 'qwen';
-  if (hasDeepgramKey()) {
-    if (isCircuitClosed('deepgram')) return 'deepgram';
-  }
   // Fallback: try them anyway if nothing healthy (circuit may have recovered)
   if (qwenKey) return 'qwen';
-  if (hasDeepgramKey()) return 'deepgram';
   if (hasOpenAIKey()) return 'whisper';
   return null;
 }
@@ -120,15 +95,11 @@ export function getActiveSTTProvider(): STTProvider | null {
 export function getActiveStreamingSTTProvider(): StreamingSTTProvider | null {
   const pref = getVoicePreference();
   const qwenKey = hasQwenKey();
-  const deepgramKey = hasDeepgramKey();
 
   if (pref.stt === 'qwen') return qwenKey ? 'qwen' : null;
-  if (pref.stt === 'deepgram') return deepgramKey ? 'deepgram' : null;
   if (pref.stt === 'local-whisper' || pref.stt === 'ark' || pref.stt === 'whisper') return null;
 
   if (qwenKey && isCircuitClosed('qwen-stt')) return 'qwen';
-  if (deepgramKey && isCircuitClosed('deepgram')) return 'deepgram';
   if (qwenKey) return 'qwen';
-  if (deepgramKey) return 'deepgram';
   return null;
 }

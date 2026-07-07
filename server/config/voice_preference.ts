@@ -4,24 +4,31 @@
 import { readDB, writeDB } from '../../db_layer';
 
 export interface VoicePreference {
-  stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'deepgram' | 'whisper';
+  stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper';
   tts: 'auto' | 'gptsovits' | 'cosyvoice' | 'ark';
 }
 
 const DEFAULT: VoicePreference = { stt: 'auto', tts: 'auto' };
+const ALLOWED_STT = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
+
+function normalizePreference(pref: Partial<VoicePreference>): VoicePreference {
+  const stt = ALLOWED_STT.has(pref.stt as VoicePreference['stt']) ? pref.stt : DEFAULT.stt;
+  const tts = pref.tts || DEFAULT.tts;
+  return { stt: stt as VoicePreference['stt'], tts };
+}
 
 export function getVoicePreference(): VoicePreference {
   try {
     const db = readDB();
     const setting = (db.settings || []).find((s: any) => s.key === 'voice_preference');
-    if (setting) return { ...DEFAULT, ...JSON.parse(setting.value) };
+    if (setting) return normalizePreference({ ...DEFAULT, ...JSON.parse(setting.value) });
   } catch {}
   return { ...DEFAULT };
 }
 
 export function setVoicePreference(pref: Partial<VoicePreference>): VoicePreference {
   const current = getVoicePreference();
-  const merged = { ...current, ...pref };
+  const merged = normalizePreference({ ...current, ...pref });
   try {
     const db = readDB();
     if (!db.settings) db.settings = [];

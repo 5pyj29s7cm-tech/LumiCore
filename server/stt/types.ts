@@ -1,4 +1,4 @@
-export type STTProvider = 'deepgram' | 'whisper' | 'qwen' | 'ark' | 'local-whisper';
+export type STTProvider = 'whisper' | 'qwen' | 'ark' | 'local-whisper';
 
 export interface STTConfig {
   provider: STTProvider;
@@ -9,7 +9,7 @@ export interface STTConfig {
 export interface STTResult {
   text: string;
   isFinal: boolean;
-  /** Deepgram: true when the user has finished speaking (VAD endpointing) */
+  /** True when the streaming provider reports that the user has finished speaking. */
   speechFinal?: boolean;
   sentiment?: {
     sentiment: 'positive' | 'negative' | 'neutral';

@@ -14,6 +14,7 @@ export interface AudioFileTranscriptionOptions {
   language?: string;
   preferredProvider?: STTProvider | 'auto';
   allowLocal?: boolean;
+  allowQwenFileStt?: boolean;
   fetchImpl?: typeof fetch;
   providerAvailability?: Partial<Record<AudioFileProvider, boolean>>;
 }
@@ -44,22 +45,19 @@ const AUDIO_MIME_BY_EXT: Record<string, string> = {
 };
 
 const PROVIDER_MODELS: Record<AudioFileProvider, string> = {
-  deepgram: 'nova-2',
   whisper: 'whisper-1',
   qwen: 'sensevoice-v1',
   ark: 'doubao-stt-1.0',
   'local-whisper': 'faster-whisper-small',
 };
 
-const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['deepgram', 'whisper', 'ark', 'local-whisper'];
+const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['whisper', 'ark', 'local-whisper'];
 
 function getConfiguredKey(provider: AudioFileProvider, availability?: Partial<Record<AudioFileProvider, boolean>>): string {
   if (availability && Object.prototype.hasOwnProperty.call(availability, provider)) {
     return availability[provider] ? 'configured' : '';
   }
   switch (provider) {
-    case 'deepgram':
-      return process.env.DEEPGRAM_API_KEY || getKey('DEEPGRAM_API_KEY') || '';
     case 'whisper':
       return process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY') || '';
     case 'qwen':
@@ -100,13 +98,17 @@ export function isSupportedAudioFileName(fileName?: string): boolean {
   return AUDIO_FILE_EXTS.test(String(fileName || ''));
 }
 
+function isQwenFileSttAllowed(options: AudioFileTranscriptionOptions = {}): boolean {
+  return options.allowQwenFileStt === true || process.env.LUMI_ENABLE_QWEN_FILE_STT === '1';
+}
+
 export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions = {}): AudioFileProvider[] {
   const allowLocal = options.allowLocal !== false;
   const preferred = options.preferredProvider || 'auto';
   const baseOrder: AudioFileProvider[] = preferred && preferred !== 'auto'
     ? [preferred as AudioFileProvider, ...DEFAULT_AUTO_ORDER]
     : DEFAULT_AUTO_ORDER;
-  const allowQwenFileStt = process.env.LUMI_ENABLE_QWEN_FILE_STT === '1';
+  const allowQwenFileStt = isQwenFileSttAllowed(options);
 
   const providers: AudioFileProvider[] = [];
   for (const provider of baseOrder) {
@@ -152,32 +154,6 @@ function extractQwenText(data: any): string {
   return candidates.map(value => String(value || '').trim()).find(Boolean) || '';
 }
 
-async function transcribeDeepgramFile(
-  audioBuffer: Buffer,
-  fileName: string,
-  language: string,
-  mimeType: string,
-  fetchImpl: typeof fetch,
-): Promise<string> {
-  const apiKey = getConfiguredKey('deepgram');
-  if (!apiKey) throw new Error('DEEPGRAM_API_KEY is not configured');
-  const url = `https://api.deepgram.com/v1/listen?model=nova-2&language=${encodeURIComponent(language)}&punctuate=true`;
-  const res = await fetchImpl(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Token ${apiKey}`,
-      'Content-Type': mimeType || getAudioMimeType(fileName),
-    },
-    body: audioBuffer as any,
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Deepgram error (${res.status}): ${detail || res.statusText}`);
-  }
-  const data = await res.json() as any;
-  return String(data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '').trim();
-}
-
 async function transcribeQwenFile(
   audioBuffer: Buffer,
   fileName: string,
@@ -210,8 +186,6 @@ async function transcribeWithProvider(
   options: Required<Pick<AudioFileTranscriptionOptions, 'language' | 'fetchImpl'>> & { fileName: string; mimeType: string },
 ): Promise<string> {
   switch (provider) {
-    case 'deepgram':
-      return transcribeDeepgramFile(audioBuffer, options.fileName, options.language, options.mimeType, options.fetchImpl);
     case 'qwen':
       return transcribeQwenFile(audioBuffer, options.fileName, options.language, options.mimeType, options.fetchImpl);
     case 'whisper': {
@@ -256,9 +230,13 @@ export async function transcribeAudioFile(
   const plan = getAudioFileProviderPlan({ ...options, preferredProvider });
 
   if (plan.length === 0) {
+    const qwenConfigured = !!getConfiguredKey('qwen', options.providerAvailability);
+    const qwenDisabled = qwenConfigured && !isQwenFileSttAllowed(options);
     throw errorCode(
       'NO_AUDIO_TRANSCRIPTION_PROVIDER',
-      'No audio transcription provider is configured. Configure OpenAI Whisper, Deepgram, DashScope SenseVoice, Doubao Speech, or local Whisper.',
+      qwenDisabled
+        ? 'No usable local-file audio transcription provider is configured. DashScope/Qwen file STT is disabled for local uploads because this endpoint requires public file_urls in Lumi; configure OpenAI Whisper, Doubao Speech, or local Whisper.'
+        : 'No audio transcription provider is configured. Configure OpenAI Whisper, DashScope SenseVoice, Doubao Speech, or local Whisper.',
     );
   }
 

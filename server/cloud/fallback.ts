@@ -23,7 +23,6 @@ export const LLM_PRIORITY: Array<{ provider: string; label: string }> = [
 
 export const STT_PRIORITY: Array<{ provider: string; label: string }> = [
   { provider: 'qwen', label: 'Qwen-ASR' },
-  { provider: 'deepgram', label: 'Deepgram' },
   { provider: 'whisper', label: 'Whisper' },
 ];
 
@@ -174,7 +173,6 @@ export function getAvailableLLMProviders(): Record<string, boolean> {
 export function getAvailableSTTProviders(): Record<string, boolean> {
   return {
     qwen: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
-    deepgram: !!(process.env.DEEPGRAM_API_KEY || getKey('DEEPGRAM_API_KEY')),
     whisper: !!(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY')),
   };
 }

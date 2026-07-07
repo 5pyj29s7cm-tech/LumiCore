@@ -139,7 +139,7 @@ export interface Setting {
 }
 
 export interface VoicePreference {
-  stt: 'auto' | 'qwen' | 'ark' | 'deepgram' | 'whisper' | 'local-whisper';
+  stt: 'auto' | 'qwen' | 'ark' | 'whisper' | 'local-whisper';
   tts: 'auto' | 'cosyvoice' | 'ark' | 'gptsovits';
 }
 

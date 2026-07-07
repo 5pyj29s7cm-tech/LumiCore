@@ -20,11 +20,10 @@ describe('Key Store — merge & delete logic', () => {
 
   it('deletes empty string keys on merge', () => {
     const result = mergeAndClean(
-      { DEEPGRAM_API_KEY: 'abc', OPENAI_API_KEY: '' },
+      { OPENAI_API_KEY: 'abc', GEMINI_API_KEY: '' },
       { DASHSCOPE_API_KEY: 'xyz', OPENAI_API_KEY: '' },
     );
     expect(result).toEqual({
-      DEEPGRAM_API_KEY: 'abc',
       DASHSCOPE_API_KEY: 'xyz',
     });
     expect((result as any).OPENAI_API_KEY).toBeUndefined();
@@ -32,35 +31,35 @@ describe('Key Store — merge & delete logic', () => {
 
   it('deletes undefined value keys', () => {
     const result = mergeAndClean(
-      { DEEPGRAM_API_KEY: 'abc', GEMINI_API_KEY: undefined },
+      { OPENAI_API_KEY: 'abc', GEMINI_API_KEY: undefined },
       {},
     );
-    expect(result).toEqual({ DEEPGRAM_API_KEY: 'abc' });
+    expect(result).toEqual({ OPENAI_API_KEY: 'abc' });
     expect((result as any).GEMINI_API_KEY).toBeUndefined();
   });
 
   it('preserves existing keys when updates are empty', () => {
     const result = mergeAndClean(
-      { DEEPGRAM_API_KEY: 'abc123' },
+      { OPENAI_API_KEY: 'abc123' },
       {},
     );
-    expect(result).toEqual({ DEEPGRAM_API_KEY: 'abc123' });
+    expect(result).toEqual({ OPENAI_API_KEY: 'abc123' });
   });
 
   it('overwrites existing key with new value', () => {
     const result = mergeAndClean(
-      { DEEPGRAM_API_KEY: 'old-key' },
-      { DEEPGRAM_API_KEY: 'new-key' },
+      { OPENAI_API_KEY: 'old-key' },
+      { OPENAI_API_KEY: 'new-key' },
     );
-    expect(result).toEqual({ DEEPGRAM_API_KEY: 'new-key' });
+    expect(result).toEqual({ OPENAI_API_KEY: 'new-key' });
   });
 
   it('handles whitespace-only values as empty', () => {
     const result = mergeAndClean(
-      { DEEPGRAM_API_KEY: 'abc' },
+      { QWEN_API_KEY: 'abc' },
       { OPENAI_API_KEY: '   ' },
     );
-    expect(result).toEqual({ DEEPGRAM_API_KEY: 'abc' });
+    expect(result).toEqual({ QWEN_API_KEY: 'abc' });
   });
 
   it('handles both empty stores', () => {
@@ -71,13 +70,13 @@ describe('Key Store — merge & delete logic', () => {
 
 describe('Key names — static list', () => {
   const ALL_KEYS = [
-    'DEEPGRAM_API_KEY',
     'DASHSCOPE_API_KEY',
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
     'GEMINI_API_KEY',
     'DEEPSEEK_API_KEY',
     'QWEN_API_KEY',
+    'MINIMAX_API_KEY',
     'FISHAUDIO_API_KEY',
     'ELEVENLABS_API_KEY',
   ];
@@ -97,13 +96,13 @@ describe('Key names — static list', () => {
   });
 
   it('includes all major providers', () => {
-    expect(ALL_KEYS).toContain('DEEPGRAM_API_KEY');   // STT
     expect(ALL_KEYS).toContain('DASHSCOPE_API_KEY');  // TTS + Qwen
     expect(ALL_KEYS).toContain('OPENAI_API_KEY');
     expect(ALL_KEYS).toContain('ANTHROPIC_API_KEY');
     expect(ALL_KEYS).toContain('GEMINI_API_KEY');
     expect(ALL_KEYS).toContain('DEEPSEEK_API_KEY');
     expect(ALL_KEYS).toContain('QWEN_API_KEY');
+    expect(ALL_KEYS).toContain('MINIMAX_API_KEY');
     expect(ALL_KEYS).toContain('FISHAUDIO_API_KEY');
     expect(ALL_KEYS).toContain('ELEVENLABS_API_KEY');
   });

@@ -29,7 +29,6 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
     { value: 'local-whisper', label: t?.local || 'Local' },
     { value: 'ark', label: 'Doubao' },
     { value: 'qwen', label: 'Qwen ASR' },
-    { value: 'deepgram', label: 'Deepgram' },
     { value: 'whisper', label: 'Whisper' },
   ];
 

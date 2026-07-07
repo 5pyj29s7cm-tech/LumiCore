@@ -10,6 +10,7 @@ import { ingestDocument } from '../../agents/rag';
 import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
+import type { STTProvider } from '../../stt/types';
 import { applySpreadsheetOperations, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, workbookToText, worksheetToCsv, writeXlsxWorkbook } from '../../utils/spreadsheet';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
@@ -46,6 +47,14 @@ function uniqueOutputPath(baseName: string, extension: '.txt' | '.md'): string {
     counter += 1;
   }
   return candidate;
+}
+
+function getAudioToolPreferredProvider(value: unknown): STTProvider | 'auto' {
+  const provider = String(value || 'auto').trim().toLowerCase();
+  const allowed = new Set(['auto', 'whisper', 'qwen', 'ark', 'local-whisper']);
+  if (!allowed.has(provider)) return 'auto';
+  if (provider === 'qwen' && process.env.LUMI_ENABLE_QWEN_FILE_STT !== '1') return 'auto';
+  return provider as STTProvider | 'auto';
 }
 
 function formatAudioTranscriptFile(args: Record<string, any>, result: Awaited<ReturnType<typeof transcribeAudioFile>>, sourcePath: string, format: 'txt' | 'md'): string {
@@ -101,7 +110,7 @@ async function transcribeAudioToTextFile(args: Record<string, any>): Promise<str
     const result = await transcribeAudioFile(fs.readFileSync(resolvedPath), {
       fileName: path.basename(resolvedPath),
       language: String(args.language || 'zh'),
-      preferredProvider: args.preferredProvider || 'auto',
+      preferredProvider: getAudioToolPreferredProvider(args.preferredProvider),
       allowLocal: args.allowLocal !== false,
     });
     const format = /^(md|markdown)$/i.test(String(args.outputFormat || '')) ? 'md' : 'txt';
@@ -129,7 +138,11 @@ async function transcribeAudioToTextFile(args: Record<string, any>): Promise<str
     ].filter(line => line !== '').join('\n');
   } catch (err: any) {
     if (isAudioTranscriptionUnavailable(err)) {
-      throw new Error('No audio transcription provider is configured. Configure OpenAI Whisper, Deepgram, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.');
+      throw new Error('No audio transcription provider is configured. Configure OpenAI Whisper, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.');
+    }
+    if (err?.code === 'AUDIO_TRANSCRIPTION_FAILED') {
+      const failures = Array.isArray(err.failures) ? err.failures.join('; ') : (err?.message || String(err));
+      throw new Error(`Audio transcription failed after trying available providers. Provider errors: ${failures}`);
     }
     throw err;
   }
@@ -693,7 +706,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
         filename: { type: 'string', description: 'Optional output filename base without extension' },
         outputFormat: { type: 'string', description: 'txt or md. Defaults to txt.' },
         language: { type: 'string', description: 'Speech language code. Defaults to zh.' },
-        preferredProvider: { type: 'string', description: 'Optional STT provider: auto, qwen, deepgram, whisper, ark, local-whisper' },
+        preferredProvider: { type: 'string', description: 'Optional STT provider: auto, qwen, whisper, ark, local-whisper' },
         allowLocal: { type: 'boolean', description: 'Allow local Whisper fallback. Defaults to true.' },
         excerptLimit: { type: 'number', description: 'Maximum transcript excerpt characters returned in chat. Defaults to 1200.' },
       },

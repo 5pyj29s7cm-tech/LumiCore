@@ -57,7 +57,7 @@ LumiOS 是这个愿景的第一个落地形态。
 
 ### 语音交互
 - **TTS 语音合成** — GPT-SoVITS · CosyVoice · 豆包语音 (Ark)
-- **STT 语音识别** — Deepgram · Whisper · Qwen · 豆包语音 · Local Whisper
+- **STT 语音识别** — Whisper · Qwen · 豆包语音 · Local Whisper
 - 语音唤醒、实时流式识别、情感自适应语速/音调
 
 ### MCP 生态系统
@@ -155,7 +155,7 @@ LumiOS 是这个愿景的第一个落地形态。
 **前端：** React 19, TypeScript, Tailwind CSS v4, Vite, Framer Motion  
 **后端：** Node.js, Express, Socket.io, SQLite3  
 **桌面：** Tauri v2 (Rust), WebView2  
-**AI：** 11 个 LLM 提供商, MCP SDK, GPT-SoVITS, CosyVoice, Deepgram, Whisper  
+**AI：** 11 个 LLM 提供商, MCP SDK, GPT-SoVITS, CosyVoice, Whisper  
 
 ---
 
@@ -231,7 +231,6 @@ JWT_SECRET=随便写一串随机字符
 
 语音功能需要额外配置 API Key：
 ```env
-DEEPGRAM_API_KEY=       # 语音转文字（STT）
 DASHSCOPE_API_KEY=      # CosyVoice 语音合成（TTS）
 ```
 

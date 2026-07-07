@@ -5,7 +5,13 @@ import path from 'path';
 
 let tempRoot = '';
 let previousDataDir: string | undefined;
-const clearedEnvKeys = ['DEEPGRAM_API_KEY', 'OPENAI_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'DOUBAO_SPEECH_KEY'] as const;
+const clearedEnvKeys = [
+  'OPENAI_API_KEY',
+  'DASHSCOPE_API_KEY',
+  'QWEN_API_KEY',
+  'DOUBAO_SPEECH_KEY',
+  'LUMI_ENABLE_QWEN_FILE_STT',
+] as const;
 let previousKeys: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
 
 async function loadModule() {
@@ -52,7 +58,6 @@ describe('audio file transcription helper', () => {
       allowLocal: false,
       providerAvailability: {
         qwen: false,
-        deepgram: false,
         whisper: false,
         ark: false,
         'local-whisper': false,
@@ -60,13 +65,23 @@ describe('audio file transcription helper', () => {
     })).rejects.toMatchObject({ code: 'NO_AUDIO_TRANSCRIPTION_PROVIDER' });
   });
 
-  it('transcribes with the DashScope SenseVoice file endpoint through injected fetch', async () => {
+  it('skips DashScope SenseVoice for local file buffers unless explicitly enabled', async () => {
     process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
+    const mod = await loadModule();
+    expect(mod.getAudioFileProviderPlan({
+      preferredProvider: 'qwen',
+      allowLocal: false,
+    })).toEqual([]);
+  });
+
+  it('transcribes with the DashScope SenseVoice file endpoint when explicitly enabled', async () => {
+    process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
+    process.env.LUMI_ENABLE_QWEN_FILE_STT = '1';
     const mod = await loadModule();
     const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.method).toBe('POST');
       expect((init?.headers as Record<string, string>)?.Authorization).toBe('Bearer dashscope-test-key');
-      return new Response(JSON.stringify({ output: { sentence: { text: '会议记录已经整理好' } } }), {
+      return new Response(JSON.stringify({ output: { sentence: { text: 'meeting transcript ready' } } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -79,7 +94,7 @@ describe('audio file transcription helper', () => {
       fetchImpl: fetchImpl as typeof fetch,
     });
 
-    expect(result.text).toBe('会议记录已经整理好');
+    expect(result.text).toBe('meeting transcript ready');
     expect(result.provider).toBe('qwen');
     expect(result.model).toBe('sensevoice-v1');
     expect(result.mimeType).toBe('audio/mpeg');

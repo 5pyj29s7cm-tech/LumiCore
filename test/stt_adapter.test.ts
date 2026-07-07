@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const clearedEnvKeys = ['DEEPGRAM_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY'] as const;
+const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY'] as const;
 let previousEnv: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
 
-async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'deepgram' | 'whisper' = 'auto') {
+async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' = 'auto') {
   vi.resetModules();
   vi.doMock('../server/config/voice_preference', () => ({
     getVoicePreference: () => ({ stt, tts: 'auto' }),
@@ -19,9 +19,6 @@ async function loadAdapter(stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'dee
   vi.doMock('../server/stt/providers/local-whisper', () => ({
     isLocalWhisperAvailable: () => false,
     transcribe: vi.fn(),
-  }));
-  vi.doMock('../server/stt/providers/deepgram', () => ({
-    createStream: vi.fn(),
   }));
   vi.doMock('../server/stt/providers/qwen', () => ({
     createStream: vi.fn(),
@@ -66,7 +63,7 @@ describe('STT adapter provider selection', () => {
   });
 
   it('keeps local Whisper out of realtime even when explicitly preferred', async () => {
-    process.env.DEEPGRAM_API_KEY = 'deepgram-test-key';
+    process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
     const adapter = await loadAdapter('local-whisper');
     expect(adapter.getActiveStreamingSTTProvider()).toBeNull();
   });

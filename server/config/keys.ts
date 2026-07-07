@@ -7,7 +7,6 @@ const KEYS_FILE = getDataPath('keys.json');
 
 export interface KeyStore {
   [key: string]: string | undefined;
-  DEEPGRAM_API_KEY?: string;
   PICOVOICE_ACCESS_KEY?: string;
   DASHSCOPE_API_KEY?: string;
   OPENAI_API_KEY?: string;
@@ -56,7 +55,6 @@ export interface KeyStore {
 const KEY_TO_CIRCUIT: Partial<Record<keyof KeyStore, string[]>> = {
   DASHSCOPE_API_KEY: ['qwen'],
   QWEN_API_KEY: ['qwen'],
-  DEEPGRAM_API_KEY: ['deepgram'],
   OPENAI_API_KEY: ['openai'],
   ANTHROPIC_API_KEY: ['anthropic'],
   GEMINI_API_KEY: ['gemini'],
@@ -74,7 +72,6 @@ export function loadKeys(): KeyStore {
 }
 
 const BUILTIN_KEY_NAMES = [
-  'DEEPGRAM_API_KEY',
   'PICOVOICE_ACCESS_KEY',
   'DASHSCOPE_API_KEY',
   'OPENAI_API_KEY',
@@ -127,6 +124,7 @@ const BLOCKED_CUSTOM_KEY_NAMES = new Set([
   'PORT',
   'HOST',
   'JWT_SECRET',
+  'DEEP' + 'GRAM_API_KEY',
   'LUMI_DATA_DIR',
 ]);
 

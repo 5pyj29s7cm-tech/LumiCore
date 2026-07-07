@@ -487,7 +487,7 @@ async function extractAudioKnowledge(filePath: string): Promise<KnowledgeExtract
       method: 'audio-transcript',
       status: 'failed',
       error: isAudioTranscriptionUnavailable(err)
-        ? 'No audio transcription provider is configured. Configure OpenAI Whisper, Deepgram, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.'
+        ? 'No audio transcription provider is configured. Configure OpenAI Whisper, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.'
         : message,
     };
   }

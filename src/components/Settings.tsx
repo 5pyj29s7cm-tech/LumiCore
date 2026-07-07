@@ -1470,7 +1470,7 @@ function VoiceServicesPage({ t }: { t: any }) {
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-xs font-bold text-white/80">{t.sttEngine || ui('STT 引擎', 'STT Engine')}</span>
             </div>
-            <p className="text-xs text-white/40">{t.sttEngineDesc || ui('Deepgram 语音识别已启用。', 'Deepgram speech recognition active.')}</p>
+            <p className="text-xs text-white/40">{t.sttEngineDesc || ui('本地 Whisper、OpenAI Whisper、豆包和 Qwen ASR 可用。', 'Local Whisper, OpenAI Whisper, Doubao, and Qwen ASR are available.')}</p>
           </div>
           <VoiceProviderSwitch t={t} />
         </div>

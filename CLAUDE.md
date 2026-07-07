@@ -26,6 +26,6 @@ Run type-check, then verify Rust backend compiles.
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS v4 + Framer Motion
 - **Backend**: Express (tsx server.ts) on port 3000
 - **Desktop**: Tauri v2 with WebView2, Rust backend
-- **AI Stack**: 5 LLM providers, GPT-SoVITS TTS, Deepgram STT, MCP ecosystem (27 tools)
+- **AI Stack**: 5 LLM providers, GPT-SoVITS TTS, Whisper/Qwen/Doubao STT, MCP ecosystem (27 tools)
 - **Dev URL**: http://localhost:3000 (WebView2 connects to Vite dev server)
 - **Tauri binary**: src-tauri/target/debug/lumi-os.exe
