@@ -20,6 +20,13 @@ import { socketService } from '@/services/socketService';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import { useVoiceCloning } from '@/hooks/useVoiceCloning';
 import { listVoices } from '@/services/voiceService';
+import {
+  describeToolProgress,
+  describeTurnCompletionProgress,
+  needsVisibleToolEvidence,
+  type ChatProgressLine,
+  type ChatProgressTone,
+} from '@/lib/chatProgress';
 import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
@@ -414,13 +421,17 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [backgroundWorkflowTasks, setBackgroundWorkflowTasks] = useState<BackgroundWorkflowTask[]>([]);
+  const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
   const { speak, stop, pause, resume, isSpeaking, isPaused } = useTTS();
   const recognition = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agentNameRef = useRef<string>('Lumi');
-  const seenToolEventIds = useRef<Set<string>>(new Set());
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
+  const lastChatProgressTextRef = useRef('');
+  const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentRequestHadToolRef = useRef(false);
+  const currentRequestNeedsEvidenceRef = useRef(false);
 
   useEffect(() => {
     if (inputDictationActiveRef.current && callState === 'idle') {
@@ -447,6 +458,49 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         backgroundTaskStatusRef.current.delete(task.id);
       }, 12000);
     }
+  }, []);
+
+  const clearChatProgress = useCallback(() => {
+    if (chatProgressClearTimerRef.current) {
+      clearTimeout(chatProgressClearTimerRef.current);
+      chatProgressClearTimerRef.current = null;
+    }
+    lastChatProgressTextRef.current = '';
+    setChatProgressLines([]);
+  }, []);
+
+  const pushChatProgress = useCallback((text: string, tone: ChatProgressTone = 'thinking') => {
+    const clean = String(text || '').trim();
+    if (!clean || lastChatProgressTextRef.current === clean) return;
+    lastChatProgressTextRef.current = clean;
+    if (chatProgressClearTimerRef.current) {
+      clearTimeout(chatProgressClearTimerRef.current);
+      chatProgressClearTimerRef.current = null;
+    }
+    const now = Date.now();
+    setChatProgressLines(prev => [
+      ...prev,
+      {
+        id: `chat-progress-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        text: clean,
+        tone,
+        time: now,
+      },
+    ].slice(-4));
+  }, []);
+
+  const finishChatProgress = useCallback((text: string, tone: ChatProgressTone = 'done') => {
+    pushChatProgress(text, tone);
+    if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
+    chatProgressClearTimerRef.current = setTimeout(() => {
+      lastChatProgressTextRef.current = '';
+      setChatProgressLines([]);
+      chatProgressClearTimerRef.current = null;
+    }, 4200);
+  }, [pushChatProgress]);
+
+  useEffect(() => () => {
+    if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
   }, []);
 
   const cancelBackgroundWorkflowTask = useCallback((taskId: string) => {
@@ -493,7 +547,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
   const agentId = agent?.id || 'lumi';
-  const toolFailureHint = t.toolFailureHint || 'Check permission, adjust the request, or ask Lumi to retry.';
   const scopedConversationUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}`;
@@ -843,42 +896,17 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
     const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; error?: string; requestId?: string; source?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      const eventId = data.correlationId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const args = data.arguments ?? data.args;
-      const status = data.error ? 'error' : (data.result !== undefined ? 'done' : 'running');
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
-      const nextMessage = {
-        id: eventId,
-        userName: data.name,
-        text: data.error || data.result || '',
-        timestamp: new Date().toISOString(),
-        type: 'tool',
-        toolName: data.name,
-        toolArgs: args,
-        toolResult: data.result,
-        toolError: data.error,
-        toolStatus: status,
-      };
-
-      setMessages(prev => {
-        const existingIndex = prev.findIndex(m => m.id === eventId);
-        if (existingIndex !== -1) {
-          const updated = [...prev];
-          updated[existingIndex] = { ...updated[existingIndex], ...nextMessage };
-          return updated;
-        }
-        if (seenToolEventIds.current.has(eventId)) return prev;
-        seenToolEventIds.current.add(eventId);
-        return [...prev, nextMessage];
-      });
-
-      if (data.correlationId) {
-        const workflowEventKey = `${data.correlationId}:${phase}`;
-        if (seenWorkflowToolEvents.current.has(workflowEventKey)) return;
-        seenWorkflowToolEvents.current.add(workflowEventKey);
-      }
+      const workflowEventKey = data.correlationId
+        ? `${data.correlationId}:${phase}`
+        : `${data.name}:${phase}:${String(data.result ?? data.error ?? '').slice(0, 120)}`;
+      if (seenWorkflowToolEvents.current.has(workflowEventKey)) return;
+      seenWorkflowToolEvents.current.add(workflowEventKey);
 
       setWorkflowStatus('executing');
+      currentRequestHadToolRef.current = true;
+      pushChatProgress(describeToolProgress(data.name, phase, isZh), phase === 'error' ? 'error' : 'tool');
       if (data.result !== undefined) {
         setWorkflowSteps(prev => [...prev, {
           id: `chat-tool-ok-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
@@ -912,6 +940,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; requestId?: string; source?: string }) => {
       if (!isCurrentChatEvent(data)) return;
       setWorkflowStatus('waiting_confirmation');
+      pushChatProgress(
+        isZh ? '这一步需要你确认后我才能继续。' : 'This step needs your confirmation before I continue.',
+        'confirmation'
+      );
       const argsSummary = data.arguments
         ? Object.entries(data.arguments).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
         : '';
@@ -928,6 +960,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (!isCurrentChatEvent(data)) return;
       setIsTyping(false);
       setWorkflowStatus('done');
+      const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+      finishChatProgress(completion.text, completion.tone);
       setWorkflowSteps(prev => [...prev, {
         id: `chat-resp-${Date.now()}`,
         type: 'response',
@@ -967,6 +1001,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       setIsTyping(data.status === "thinking");
       if (data.status === 'thinking') {
         setWorkflowStatus('thinking');
+        pushChatProgress(isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', 'thinking');
         setWorkflowSteps(prev => {
           const last = prev[prev.length - 1];
           if (last?.type === 'thinking' && Date.now() - last.time < 1200) return prev;
@@ -979,6 +1014,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         });
       } else if (data.status === 'idle') {
         setWorkflowStatus('done');
+        const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+        finishChatProgress(completion.text, completion.tone);
         setWorkflowSteps(prev => [...prev, {
           id: `chat-done-${Date.now()}`,
           type: 'response',
@@ -992,6 +1029,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         }, 5000);
       } else if (data.status === 'error') {
         setWorkflowStatus('error');
+        finishChatProgress(
+          isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.',
+          'error'
+        );
         setTimeout(() => {
           setWorkflowStatus('idle');
           setWorkflowSteps([]);
@@ -1012,6 +1053,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (!isCurrentChatEvent(data)) return;
       setIsTyping(false);
       setWorkflowStatus('error');
+      finishChatProgress(
+        isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.',
+        'error'
+      );
       setWorkflowSteps(prev => [...prev, {
         id: `chat-err-${Date.now()}`,
         type: 'error',
@@ -1150,7 +1195,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         }
       });
     }
-  }, [messages]);
+  }, [chatProgressLines.length, messages]);
 
   // Scroll to bottom on mount when messages first load
   useEffect(() => {
@@ -1167,8 +1212,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (isOpen) return;
     setWorkflowStatus('idle');
     setWorkflowSteps([]);
+    clearChatProgress();
+    currentRequestHadToolRef.current = false;
+    currentRequestNeedsEvidenceRef.current = false;
     seenWorkflowToolEvents.current.clear();
-  }, [isOpen]);
+  }, [clearChatProgress, isOpen]);
 
   const sendText = async (text: string, attachments: ChatAttachment[] = pendingAttachments) => {
     const trimmedText = text.trim();
@@ -1201,6 +1249,15 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     };
     textChatActiveRef.current = true;
     seenWorkflowToolEvents.current.clear();
+    currentRequestHadToolRef.current = false;
+    currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0);
+    clearChatProgress();
+    pushChatProgress(
+      outgoingAttachments.length > 0
+        ? (isZh ? '我先读取你发来的附件和要求。' : 'I am checking your attachments and request first.')
+        : (isZh ? '我先看一下你的要求。' : 'I am checking your request first.'),
+      'thinking'
+    );
     setWorkflowStatus('thinking');
     setWorkflowSteps([{
       id: `chat-start-${Date.now()}`,
@@ -1460,7 +1517,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const workflowPanelVisible =
     isOpen &&
     (workflowStatus !== 'idle' || isTyping || workflowSteps.length > 0 || workflowHasExecution || backgroundWorkflowTasks.length > 0);
-  const latestWorkflowStep = workflowSteps[workflowSteps.length - 1];
+  const latestChatProgressLine = chatProgressLines[chatProgressLines.length - 1];
   const workflowProgressVisible = workflowStatus !== 'idle' || isTyping || backgroundWorkflowTasks.length > 0;
   const workflowStatusText =
     workflowStatus === 'thinking' ? (t.workflowAnalyzing || 'Analyzing') :
@@ -1471,6 +1528,13 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     workflowStatus === 'error' ? (t.workflowError || 'Error') :
     isTyping ? (t.neuralProcessing || 'Processing') :
     (t.workflowIdle || 'Idle');
+  const chatProgressStatusText =
+    latestChatProgressLine?.text ||
+    (workflowStatus === 'background'
+      ? (isZh ? '我在后台继续处理这件事。' : 'I am continuing this in the background.')
+      : isTyping
+        ? (isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.')
+        : workflowStatusText);
   const chatPanelStyle: React.CSSProperties = {
     background: chatAccentTheme.panel,
     borderColor: chatAccentTheme.panelBorder,
@@ -1817,14 +1881,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                   {workflowStatusText}
                 </span>
                 <span className="min-w-0 truncate text-xs text-white/60">
-                  {latestWorkflowStep?.text || (isTyping ? (t.neuralProcessing || 'Neural Processing...') : '')}
+                  {chatProgressStatusText}
                 </span>
               </div>
-              {latestWorkflowStep?.detail && (
-                <div className="mt-1 truncate pl-5 text-xs text-white/30">
-                  {latestWorkflowStep.detail}
-                </div>
-              )}
             </div>
           )}
 
@@ -1881,48 +1940,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             )}
             <AnimatePresence initial={false}>
               {displayMessages.map((msg) => (
-                msg.type === 'file_context' ? null /* invisible context */ : msg.type === 'tool' ? (
-                  <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="flex flex-col items-start"
-                  >
-                    <div className={`relative max-w-[85%] p-4 rounded-2xl text-xs ${
-                      msg.toolStatus === 'error'
-                        ? 'bg-red-500/10 border border-red-500/20 text-red-400'
-                        : msg.toolStatus === 'done'
-                          ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
-                        : 'bg-amber-500/5 border border-amber-500/20 text-amber-400'
-                    }`}>
-                      <div className="flex items-center gap-2 mb-1">
-                        {msg.toolStatus === 'error' ? (
-                          <XCircle size={14} />
-                        ) : msg.toolStatus === 'done' ? (
-                          <CheckCircle2 size={14} />
-                        ) : (
-                          <Loader2 size={14} className="animate-spin" />
-                        )}
-                        <span className="font-bold uppercase tracking-widest text-xs">{msg.toolName}</span>
-                      </div>
-                      {msg.toolArgs && (
-                        <div className="text-xs opacity-50 truncate max-w-[200px]">
-                          {JSON.stringify(msg.toolArgs).slice(0, 80)}
-                        </div>
-                      )}
-                      {msg.toolResult && (
-                        <div className="text-xs text-green-400/70 mt-1 truncate max-w-[250px]">{msg.toolResult.slice(0, 150)}</div>
-                      )}
-                      {msg.toolError && (
-                        <>
-                          <div className="text-xs text-red-400/80 mt-1 break-words">{msg.toolError}</div>
-                          <div className="text-xs text-red-300/50 mt-1">{toolFailureHint}</div>
-                        </>
-                      )}
-                    </div>
-                    {renderGeneratedFiles(extractGeneratedFiles([msg.toolResult, msg.text].filter(Boolean).join('\n')), 'start')}
-                  </motion.div>
-                ) : (
+                msg.type === 'file_context' || msg.type === 'tool' ? null /* invisible context; tool detail lives in WorkflowPanel */ : (
                 <motion.div
                   key={msg.id}
                   initial={{ opacity: 0, y: 10 }}
@@ -2031,35 +2049,46 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 </motion.div>
               )))}
             </AnimatePresence>
-            {isTyping && (
-              <div className="flex flex-col gap-3">
-                <div className="flex gap-2 items-center text-celestial-saturn/40 text-xs font-bold uppercase tracking-widest">
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  >
-                    <Loader2 size={14} />
-                  </motion.div>
-                  {t.neuralProcessing || 'Neural Processing...'}
+            {(isTyping || chatProgressLines.length > 0) && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex flex-col items-start"
+              >
+                <div className="max-w-[92%] md:max-w-[78%] rounded-[1.35rem] rounded-tl-none border border-white/10 bg-white/[0.045] px-4 py-3 shadow-xl shadow-black/10">
+                  <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-white/35">
+                    {workflowStatus === 'done' ? (
+                      <CheckCircle2 size={13} className="text-emerald-300" />
+                    ) : workflowStatus === 'error' ? (
+                      <XCircle size={13} className="text-red-300" />
+                    ) : (
+                      <Loader2 size={13} className="animate-spin text-celestial-saturn" />
+                    )}
+                    {isZh ? 'Lumi 正在处理' : 'Lumi is working'}
+                  </div>
+                  <div className="mt-2 space-y-1.5">
+                    {(chatProgressLines.length > 0
+                      ? chatProgressLines.slice(-3)
+                      : [{ id: 'chat-progress-fallback', text: isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', tone: 'thinking', time: Date.now() }]
+                    ).map((line, index, list) => (
+                      <div
+                        key={line.id}
+                        className={`text-sm leading-relaxed ${
+                          line.tone === 'error'
+                            ? 'text-red-100/80'
+                            : line.tone === 'done'
+                              ? 'text-emerald-100/80'
+                              : index === list.length - 1
+                                ? 'text-white/78'
+                                : 'text-white/43'
+                        }`}
+                      >
+                        {line.text}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex gap-1">
-                  {[...Array(3)].map((_, i) => (
-                    <motion.div
-                      key={i}
-                      animate={{ 
-                        scale: [1, 1.5, 1],
-                        opacity: [0.3, 1, 0.3]
-                      }}
-                      transition={{ 
-                        duration: 1, 
-                        repeat: Infinity, 
-                        delay: i * 0.2 
-                      }}
-                      className="w-1.5 h-1.5 rounded-full bg-celestial-saturn"
-                    />
-                  ))}
-                </div>
-              </div>
+              </motion.div>
             )}
           </div>
 

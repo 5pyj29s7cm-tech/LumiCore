@@ -1,9 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Mic, MicOff, CheckCircle, XCircle, Loader2, MessageSquare, Plus, Square, Copy, Trash2, Wifi, WifiOff, Check, Sparkles, ChevronRight } from 'lucide-react';
+import { Send, Mic, MicOff, Loader2, MessageSquare, Plus, Square, Copy, Trash2, Wifi, WifiOff, Check, ChevronRight } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import {
+  describeToolProgress,
+  describeTurnCompletionProgress,
+  needsVisibleToolEvidence,
+  type ChatProgressLine,
+  type ChatProgressTone,
+} from '@/lib/chatProgress';
 
 export interface ChatMessage {
   id: string;
@@ -48,9 +55,14 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const [installedSkillNames, setInstalledSkillNames] = useState<string[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeConvIdRef = useRef<string | null>(null);
+  const lastChatProgressTextRef = useRef('');
+  const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentRequestHadToolRef = useRef(false);
+  const currentRequestNeedsEvidenceRef = useRef(false);
   activeConvIdRef.current = activeConvId;
 
   const scrollToBottom = useCallback(() => {
@@ -59,7 +71,50 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     }
   }, []);
 
-  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
+  const clearChatProgress = useCallback(() => {
+    if (chatProgressClearTimerRef.current) {
+      clearTimeout(chatProgressClearTimerRef.current);
+      chatProgressClearTimerRef.current = null;
+    }
+    lastChatProgressTextRef.current = '';
+    setChatProgressLines([]);
+  }, []);
+
+  const pushChatProgress = useCallback((text: string, tone: ChatProgressTone = 'thinking') => {
+    const clean = String(text || '').trim();
+    if (!clean || lastChatProgressTextRef.current === clean) return;
+    lastChatProgressTextRef.current = clean;
+    if (chatProgressClearTimerRef.current) {
+      clearTimeout(chatProgressClearTimerRef.current);
+      chatProgressClearTimerRef.current = null;
+    }
+    const now = Date.now();
+    setChatProgressLines(prev => [
+      ...prev,
+      {
+        id: `chat-progress-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        text: clean,
+        tone,
+        time: now,
+      },
+    ].slice(-4));
+  }, []);
+
+  const finishChatProgress = useCallback((text: string, tone: ChatProgressTone = 'done') => {
+    pushChatProgress(text, tone);
+    if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
+    chatProgressClearTimerRef.current = setTimeout(() => {
+      lastChatProgressTextRef.current = '';
+      setChatProgressLines([]);
+      chatProgressClearTimerRef.current = null;
+    }, 4200);
+  }, [pushChatProgress]);
+
+  useEffect(() => () => {
+    if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
+  }, []);
+
+  useEffect(() => { scrollToBottom(); }, [chatProgressLines.length, messages, scrollToBottom]);
 
   // Fetch installed skills for dynamic suggestions
   useEffect(() => {
@@ -133,6 +188,8 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       setIsTyping(false);
       setIsStreaming(false);
       setStreamingText('');
+      const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+      finishChatProgress(completion.text, completion.tone);
       setMessages(prev => [...prev, {
         id: crypto.randomUUID().slice(0, 9),
         type: 'lumi',
@@ -148,11 +205,21 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     };
 
     const onStatus = (data: { status: string }) => {
-      if (data.status === 'thinking') setIsTyping(true);
+      if (data.status === 'thinking') {
+        setIsTyping(true);
+        pushChatProgress(isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', 'thinking');
+      }
       else if (data.status === 'idle' || data.status === 'error') {
         setIsTyping(false);
         setIsStreaming(false);
         setStreamingText('');
+        const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+        finishChatProgress(
+          data.status === 'error'
+            ? (isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.')
+            : completion.text,
+          data.status === 'error' ? 'error' : completion.tone
+        );
       }
     };
 
@@ -160,6 +227,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       setIsTyping(false);
       setIsStreaming(false);
       setStreamingText('');
+      finishChatProgress(
+        isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.',
+        'error'
+      );
       const message = data.message || (t?.requestFailed || 'Request failed');
       setMessages(prev => [...prev, {
         id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -177,31 +248,9 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       result?: string;
       error?: string;
     }) => {
-      setMessages(prev => {
-        if (data.correlationId) {
-          const idx = prev.findIndex(m => m.id === data.correlationId);
-          if (idx !== -1) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              result: data.result,
-              error: data.error,
-              status: data.error ? 'error' : 'done',
-            };
-            return updated;
-          }
-        }
-        return [...prev, {
-          id: data.correlationId || crypto.randomUUID().slice(0, 9),
-          type: 'tool',
-          name: data.name,
-          args: data.arguments,
-          result: data.result,
-          error: data.error,
-          status: data.result || data.error ? (data.error ? 'error' : 'done') : 'running',
-          timestamp: new Date().toISOString(),
-        }];
-      });
+      const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
+      currentRequestHadToolRef.current = true;
+      pushChatProgress(describeToolProgress(data.name, phase, isZh), phase === 'error' ? 'error' : 'tool');
     };
 
     const onTranscript = (data: { text: string; isFinal: boolean }) => {
@@ -221,6 +270,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     socket.on('agent:status', onStatus);
     socket.on('agent:error', onError);
     socket.on('agent:tool_call', onToolCall);
+    socket.on('agent:tool', onToolCall);
     socket.on('audio:transcript', onTranscript);
 
     return () => {
@@ -229,25 +279,36 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       socket.off('agent:status', onStatus);
       socket.off('agent:error', onError);
       socket.off('agent:tool_call', onToolCall);
+      socket.off('agent:tool', onToolCall);
       socket.off('audio:transcript', onTranscript);
     };
-  }, [socket, refreshConversations]);
+  }, [finishChatProgress, isZh, pushChatProgress, refreshConversations, socket, t?.requestFailed]);
 
   const selectConversation = useCallback((convId: string) => {
     setActiveConvId(convId);
     setMessages([]);
+    currentRequestHadToolRef.current = false;
+    currentRequestNeedsEvidenceRef.current = false;
+    clearChatProgress();
     socket.emit('chat:messages', { conversationId: convId });
-  }, [socket]);
+  }, [clearChatProgress, socket]);
 
   const newConversation = useCallback(() => {
     setActiveConvId(null);
     setMessages([]);
-  }, []);
+    currentRequestHadToolRef.current = false;
+    currentRequestNeedsEvidenceRef.current = false;
+    clearChatProgress();
+  }, [clearChatProgress]);
 
   const handleSend = useCallback((textOverride?: string) => {
     const text = (textOverride || input).trim();
     if (!text || !socket) return;
     if (!textOverride) setInput('');
+    currentRequestHadToolRef.current = false;
+    currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(text);
+    clearChatProgress();
+    pushChatProgress(isZh ? '我先看一下你的要求。' : 'I am checking your request first.', 'thinking');
 
     setMessages(prev => [...prev, {
       id: crypto.randomUUID().slice(0, 9),
@@ -258,7 +319,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
 
     socket.emit('agent:task', { text, conversationId: activeConvIdRef.current });
     refreshConversations();
-  }, [input, socket, refreshConversations]);
+  }, [clearChatProgress, input, isZh, pushChatProgress, refreshConversations, socket]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -313,31 +374,16 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     } catch { return ''; }
   };
 
-  const formatArgs = (args?: Record<string, any>) => {
-    if (!args || Object.keys(args).length === 0) return '';
-    const first = Object.entries(args)[0];
-    const val = typeof first[1] === 'string' ? first[1] : JSON.stringify(first[1]);
-    return `${first[0]}: ${val.length > 50 ? val.slice(0, 50) + '...' : val}`;
-  };
-
   const toolFailureHint = t?.toolFailureHint || 'Check permission, adjust the request, or ask Lumi to retry.';
-
-  const toolIcon = (name?: string) => {
-    if (name?.startsWith('desktop_open')) return '🖥️';
-    if (name?.startsWith('desktop_run')) return '⚡';
-    if (name?.startsWith('desktop_list')) return '📂';
-    if (name?.includes('search')) return '🔍';
-    if (name?.includes('file') || name?.includes('write')) return '📝';
-    return '🔧';
-  };
 
   const activeConv = conversations.find(c => c.id === activeConvId);
 
   // Group messages by time proximity for cleaner display
-  const groupedMessages = messages.reduce<{ msg: ChatMessage; showTime: boolean }[]>((acc, msg, i) => {
+  const visibleMessages = messages.filter(msg => msg.type !== 'tool');
+  const groupedMessages = visibleMessages.reduce<{ msg: ChatMessage; showTime: boolean }[]>((acc, msg, i) => {
     const showTime = i === 0 ||
-      (new Date(msg.timestamp).getTime() - new Date(messages[i - 1].timestamp).getTime()) > 300000 ||
-      messages[i - 1].type !== msg.type;
+      (new Date(msg.timestamp).getTime() - new Date(visibleMessages[i - 1].timestamp).getTime()) > 300000 ||
+      visibleMessages[i - 1].type !== msg.type;
     acc.push({ msg, showTime });
     return acc;
   }, []);
@@ -524,36 +570,6 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                     </div>
                   </div>
                 )}
-
-                {msg.type === 'tool' && (
-                  <div className="flex justify-start">
-                    <div className={`max-w-[85%] border rounded-lg px-2.5 py-1.5 text-xs ${
-                      msg.status === 'running' ? 'border-yellow-500/30 bg-yellow-500/5' :
-                      msg.status === 'error' ? 'border-red-500/30 bg-red-500/5' :
-                      'border-green-500/20 bg-green-500/5'
-                    }`}>
-                      <div className="flex items-center gap-1.5">
-                        <span>{toolIcon(msg.name)}</span>
-                        <span className="text-white/70 font-medium">{msg.name}</span>
-                        {msg.status === 'running' && <Loader2 size={10} className="animate-spin text-yellow-400" />}
-                        {msg.status === 'done' && <CheckCircle size={10} className="text-green-400" />}
-                        {msg.status === 'error' && <XCircle size={10} className="text-red-400" />}
-                      </div>
-                      {formatArgs(msg.args) && (
-                        <p className="text-white/40 mt-0.5 ml-5">{formatArgs(msg.args)}</p>
-                      )}
-                      {msg.result && (
-                        <p className="text-green-300/60 mt-0.5 ml-5 truncate">{msg.result.slice(0, 100)}</p>
-                      )}
-                      {msg.error && (
-                        <>
-                          <p className="text-red-300/70 mt-0.5 ml-5 break-words">{msg.error}</p>
-                          <p className="text-red-200/45 mt-1 ml-5">{toolFailureHint}</p>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
               </motion.div>
             ))}
 
@@ -575,28 +591,53 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
               </motion.div>
             )}
 
-            {/* Typing indicator */}
-            {isTyping && !isStreaming && (
+            {(isTyping || chatProgressLines.length > 0) && (
               <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex justify-start items-center gap-2"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex justify-start items-start gap-2"
               >
-                <div className="bg-white/5 border border-white/10 rounded-lg px-3 py-2">
-                  <div className="flex gap-1">
-                    <span className="w-1.5 h-1.5 bg-celestial-glow/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="w-1.5 h-1.5 bg-celestial-glow/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="w-1.5 h-1.5 bg-celestial-glow/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <div className="max-w-[85%] rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-white/35">
+                    {isTyping ? (
+                      <Loader2 size={11} className="animate-spin text-celestial-glow/70" />
+                    ) : (
+                      <Check size={11} className="text-emerald-300" />
+                    )}
+                    {isZh ? 'Lumi 正在处理' : 'Lumi is working'}
+                  </div>
+                  <div className="mt-1 space-y-1">
+                    {(chatProgressLines.length > 0
+                      ? chatProgressLines.slice(-3)
+                      : [{ id: 'chat-progress-fallback', text: isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', tone: 'thinking', time: Date.now() }]
+                    ).map((line, index, list) => (
+                      <div
+                        key={line.id}
+                        className={`text-xs leading-relaxed ${
+                          line.tone === 'error'
+                            ? 'text-red-100/80'
+                            : line.tone === 'done'
+                              ? 'text-emerald-100/80'
+                              : index === list.length - 1
+                                ? 'text-white/78'
+                                : 'text-white/43'
+                        }`}
+                      >
+                        {line.text}
+                      </div>
+                    ))}
                   </div>
                 </div>
-                <button
-                  onClick={handleCancelTask}
-                  className="text-xs text-red-400/60 hover:text-red-400 font-bold uppercase tracking-wider flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors"
-                  title={t?.cancelTask || 'Cancel task'}
-                >
-                  <Square size={10} />
-                  {t?.stop || 'Stop'}
-                </button>
+                {isTyping && !isStreaming && (
+                  <button
+                    onClick={handleCancelTask}
+                    className="mt-1 text-xs text-red-400/60 hover:text-red-400 font-bold uppercase tracking-wider flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors"
+                    title={t?.cancelTask || 'Cancel task'}
+                  >
+                    <Square size={10} />
+                    {t?.stop || 'Stop'}
+                  </button>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

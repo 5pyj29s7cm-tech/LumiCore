@@ -8,6 +8,29 @@ export interface CompletionGuardResult {
   reason?: string;
 }
 
+function buildActionPromiseGuardedResponse(
+  task: string,
+  reason: string,
+  failed: ToolExecutionRecord[],
+): string {
+  const isZh = /[\u3400-\u9fff]/.test(task);
+  const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
+
+  if (!isZh) {
+    return [
+      `I have not actually started that action yet: ${reason}`,
+      lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: this turn produced only a text reply, with no successful tool evidence.',
+      'Next step: provide or select the file/location, then I should run the real read/open/review tool and show progress before giving the result.',
+    ].filter(Boolean).join('\n');
+  }
+
+  return [
+    '我还没有真正开始读取或审查：这一轮没有记录到成功的工具执行。',
+    lastFailure ? `最近的阻塞点：${lastFailure}。` : '现在能确认的是：这次只是生成了文字回复，没有实际读到文件内容。',
+    '下一步需要先拿到可读取的文件或位置；真正读取时，聊天窗会显示“正在读取文件”等进度，工具小组件也会出现执行记录。',
+  ].filter(Boolean).join('\n');
+}
+
 interface CompletionGuardInput {
   task: string;
   response: string;
@@ -36,7 +59,22 @@ const FILE_PRODUCER_TOOL_RE =
 const OPEN_TOOL_RE =
   /^(desktop_open|client_action|computer_use|external_app_.*open|open_)/i;
 
+const ACTION_PROMISE_EVIDENCE_TOOL_RE =
+  /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_action|work_product_verify|create_|write_|generate_|export_|save_)/i;
+
+const READ_REVIEW_PROMISE_RE =
+  /\b(?:read|open|check|review|analy[sz]e|inspect|process)\b|(?:\u8bfb\u53d6|\u8bfb\u4e00\u4e0b|\u8bfb\u4e0b|\u6253\u5f00|\u67e5\u770b|\u770b\u770b|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u68c0\u67e5|\u5904\u7406)/iu;
+
+const READ_REVIEW_EVIDENCE_TOOL_RE =
+  /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_action)/i;
+
 const VERIFY_PASS_RE = /"status"\s*:\s*"pass"|status:\s*pass/i;
+
+const ACTION_EVIDENCE_TASK_RE =
+  /\b(?:file|document|docx|pdf|attachment|desktop|screen|open|read|review|inspect|analy[sz]e|contract|agreement)\b|(?:文件|文档|资料|附件|合同|协议|打开|读取|查看|看看|审查|分析|检查|桌面|屏幕|生成|保存|导出)/iu;
+
+const ACTION_PROMISE_RE =
+  /(?:\b(?:i(?:'ll| will| am going to|'m going to)|let me|i need to|i'll first|let me first)\b[^.\n]{0,120}\b(?:read|open|check|review|analy[sz]e|inspect|process|search|generate|create|export)\b)|(?:(?:我|让我|我先|让我先|先|现在|马上|接下来)[^。\n]{0,80}(?:读取|读|打开|查看|看看|审查|分析|检查|处理|调用|搜索|查找|生成|导出|保存))/iu;
 
 export function needsCompletionEvidence(task: string): boolean {
   return EXTERNAL_WORK_TASK_RE.test(task || '');
@@ -48,12 +86,34 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   if (!response.trim()) return { text: response, blocked: false };
 
   const needsEvidence = needsCompletionEvidence(task) || EXTERNAL_WORK_TASK_RE.test(response);
-  const claimsCompletion = COMPLETION_CLAIM_RE.test(response);
-  if (!needsEvidence || !claimsCompletion) return { text: response, blocked: false };
-
   const toolCalls = input.toolCalls || [];
   const successful = toolCalls.filter(call => !call.error);
   const failed = toolCalls.filter(call => call.error);
+  const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(response);
+  const hasPromiseEvidence = successful.some(call =>
+    ACTION_PROMISE_EVIDENCE_TOOL_RE.test(call.name) ||
+    (!INSPECTION_ONLY_TOOL_RE.test(call.name) && Boolean(call.result || call.name))
+  );
+  const hasReadReviewEvidence = successful.some(call => READ_REVIEW_EVIDENCE_TOOL_RE.test(call.name));
+  const promisesActionWithoutEvidence =
+    ACTION_PROMISE_RE.test(response) &&
+    (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(response)) &&
+    (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence));
+
+  if (promisesActionWithoutEvidence) {
+    const reason = promisesReadReviewAction
+      ? 'No successful content-read/open/review tool execution was recorded for the promised action.'
+      : 'No successful tool execution was recorded for the promised action.';
+    return {
+      text: buildActionPromiseGuardedResponse(task, reason, failed),
+      blocked: true,
+      reason,
+    };
+  }
+
+  const claimsCompletion = COMPLETION_CLAIM_RE.test(response);
+  if (!needsEvidence || !claimsCompletion) return { text: response, blocked: false };
+
   const hasAnySuccess = successful.length > 0;
   const hasActionTool = successful.some(call => !INSPECTION_ONLY_TOOL_RE.test(call.name));
   const hasFileProducer = successful.some(call =>

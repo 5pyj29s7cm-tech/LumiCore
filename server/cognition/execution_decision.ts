@@ -188,6 +188,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   const promptParts = [
     '## Lumi Execution Decision',
     `Boundary: ${input.flow.channel}/${input.flow.surface}; tools=${allowToolUse ? 'available' : 'off'}; policyMaxIterations=${toolPolicy.maxIterations || 0}.`,
+    allowToolUse ? 'For file/screen/document actions, do not answer with a future-tense promise such as "I will read/open/review it now" as the final response. Call the actual read/open/review tool in this turn. If no readable path/content is available, say clearly that no tool has run yet and ask for the file or location.' : '',
     input.flow.clientActionOnlyTurn ? 'Use only Lumi client state/action tools for this turn. First read client_get_state when the current state is not already in the tool result, then call client_action. Trust the returned verification.status: verified=done, pending=state not confirmed yet, failed=diagnose or one safe recovery. Do not claim a mode/window/surface changed from intention alone.' : '',
     input.flow.selfRepairTurn ? 'Inspect and repair Lumi/client state first; verify after one safe recovery.' : '',
     input.isSanctuary ? 'This agent is in sanctuary territory; tools are disabled.' : '',

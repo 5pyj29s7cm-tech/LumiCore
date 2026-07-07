@@ -3,6 +3,8 @@
  */
 import { Socket } from "socket.io";
 import jwt from "jsonwebtoken";
+import os from "os";
+import path from "path";
 import { readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
@@ -175,6 +177,228 @@ function buildStoredAttachmentSummary(userText: string, attachments: ChatIncomin
     .map(item => `- ${item.fileName}${item.kind === 'image' ? ' (image)' : item.kind === 'audio' ? ' (audio)' : ''}`)
     .join('\n');
   return `${userText}\n\n[Attachments]\n${summary}`.trim();
+}
+
+type NativeFileEntry = {
+  name?: string;
+  path?: string;
+  type?: string;
+  isDirectory?: boolean;
+  is_directory?: boolean;
+  size?: number;
+  modifiedMs?: number | null;
+  modified_ms?: number | null;
+};
+
+const LOCAL_DOCUMENT_EXT_RE = /\.(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?)$/i;
+const LOCAL_AUDIO_EXT_RE = /\.(?:mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i;
+const LOCAL_IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|bmp|gif|tiff?)$/i;
+const LOCAL_READABLE_EXT_RE = /\.(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?|mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm|png|jpe?g|webp|bmp|gif|tiff?)$/i;
+const LOCAL_READABLE_EXT_PATTERN = '(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?|mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm|png|jpe?g|webp|bmp|gif|tiff?)';
+const EXPLICIT_LOCAL_PATH_RE = new RegExp(`[A-Za-z]:[\\\\/][^\\n\\r"'<>|]+?\\.${LOCAL_READABLE_EXT_PATTERN}`, 'gi');
+const DESKTOP_RELATIVE_PATH_RE = new RegExp(`(?:Desktop|\\u684c\\u9762)[\\\\/][^\\n\\r"'<>|]+?\\.${LOCAL_READABLE_EXT_PATTERN}`, 'gi');
+const LOCAL_ACTION_VERB_RE =
+  /\b(?:open|read|review|inspect|analy[sz]e|summari[sz]e|compare|transcribe|extract|ocr|check|look\s+at|look\s+over)\b|(?:\u6253\u5f00|\u8bfb\u53d6|\u8bfb\u4e00\u4e0b|\u8bfb\u4e0b|\u770b\u4e00\u4e0b|\u770b\u770b|\u67e5\u770b|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u68c0\u67e5|\u6574\u7406|\u603b\u7ed3|\u8f6c\u6587\u5b57|\u8f6c\u5199|\u8bc6\u522b|\u63d0\u53d6|\u5bf9\u6bd4|\u505a\u6210|\u751f\u6210)/iu;
+const LOCAL_ACTION_OBJECT_RE =
+  /\b(?:file|document|docx|pdf|word|attachment|desktop|contract|agreement|audio|recording|voice|screenshot|image|picture)\b|(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u9644\u4ef6|\u684c\u9762|\u5408\u540c|\u534f\u8bae|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3|\u622a\u56fe|\u56fe\u7247|\u7167\u7247|\u8fd9\u4efd)/iu;
+const TRANSCRIPTION_REQUEST_RE =
+  /\b(?:transcribe|transcript|speech\s*to\s*text|voice\s*to\s*text)\b|(?:\u8f6c\u6587\u5b57|\u8f6c\u5199|\u7b14\u5f55|\u8bed\u97f3\u8bc6\u522b|\u5f55\u97f3)/iu;
+const DOCUMENT_REVIEW_REQUEST_RE =
+  /\b(?:contract|agreement|review|inspect|analy[sz]e|document|docx|pdf)\b|(?:\u5408\u540c|\u534f\u8bae|\u5ba1\u67e5|\u5ba1\u9605|\u4e59\u65b9|\u7532\u65b9|\u4fee\u6539\u610f\u89c1|\u6587\u4ef6|\u6587\u6863|\u8d44\u6599)/iu;
+const OCR_REQUEST_RE =
+  /\b(?:ocr|image|picture|screenshot|photo)\b|(?:\u8bc6\u522b|\u63d0\u53d6|\u622a\u56fe|\u56fe\u7247|\u7167\u7247)/iu;
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): string {
+  if (!Array.isArray(history) || history.length === 0) return '';
+  const lines = history
+    .slice(-8)
+    .map((item: any) => {
+      const role = String(item?.role || item?.type || '').slice(0, 20);
+      const content = String(item?.message || item?.content || item?.text || item?.response || '').trim();
+      return content ? `${role}: ${content}` : '';
+    })
+    .filter(Boolean);
+  return lines.join('\n').slice(-maxLength);
+}
+
+function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[], historyText = ''): boolean {
+  if (attachments.some(item => item.path)) return true;
+  const combined = `${userText || ''}\n${historyText || ''}`;
+  if (extractExplicitLocalPaths(combined).length > 0) return true;
+  return LOCAL_ACTION_VERB_RE.test(userText || '') && LOCAL_ACTION_OBJECT_RE.test(`${userText || ''}\n${historyText || ''}`);
+}
+
+function extractExplicitLocalPaths(input: string): string[] {
+  const out: string[] = [];
+  const text = String(input || '');
+  for (const match of text.match(EXPLICIT_LOCAL_PATH_RE) || []) {
+    out.push(match.trim().replace(/[),.;\]\u3002\uff0c\uff1b]+$/g, ''));
+  }
+  const homeDesktop = path.join(os.homedir(), 'Desktop');
+  for (const match of text.match(DESKTOP_RELATIVE_PATH_RE) || []) {
+    const cleaned = match.trim().replace(/[),.;\]\u3002\uff0c\uff1b]+$/g, '');
+    const relative = cleaned.replace(/^(?:Desktop|\u684c\u9762)[\\/]/i, '');
+    out.push(path.join(homeDesktop, relative));
+  }
+  return uniqueStrings(out).slice(0, 6);
+}
+
+function parseNativeFiles(raw: string): NativeFileEntry[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function isNativeDirectory(entry: NativeFileEntry): boolean {
+  return entry.type === 'directory' || entry.isDirectory === true || entry.is_directory === true;
+}
+
+function getNativeModifiedMs(entry: NativeFileEntry): number {
+  const value = entry.modifiedMs ?? entry.modified_ms;
+  return typeof value === 'number' ? value : 0;
+}
+
+function getLikelyLocalDirs(searchText: string): string[] {
+  const home = os.homedir();
+  const oneDrive = process.env.OneDrive || process.env.ONEDRIVE || process.env.OneDriveConsumer || process.env.ONEDRIVECONSUMER || '';
+  const dirs = new Set<string>();
+  dirs.add(path.join(home, 'Desktop'));
+  dirs.add(path.join(home, 'OneDrive', 'Desktop'));
+  if (oneDrive) dirs.add(path.join(oneDrive, 'Desktop'));
+  if (process.env.PUBLIC) dirs.add(path.join(process.env.PUBLIC, 'Desktop'));
+  dirs.add('C:\\Users\\Public\\Desktop');
+
+  const text = String(searchText || '');
+  if (/\bdownloads?\b|\u4e0b\u8f7d/i.test(text)) {
+    dirs.add(path.join(home, 'Downloads'));
+  }
+  if (/\bdocuments?\b|\u6587\u6863/i.test(text)) {
+    dirs.add(path.join(home, 'Documents'));
+    dirs.add(path.join(home, 'OneDrive', 'Documents'));
+    if (oneDrive) dirs.add(path.join(oneDrive, 'Documents'));
+  }
+  return uniqueStrings(Array.from(dirs)).slice(0, 6);
+}
+
+function normalizeComparableText(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[\s"'“”‘’`.,，。；;:：()[\]{}<>《》【】_-]+/g, '');
+}
+
+function scoreLocalFileCandidate(entry: NativeFileEntry, searchText: string): number {
+  if (isNativeDirectory(entry)) return -Infinity;
+  const filePath = entry.path || entry.name || '';
+  if (!LOCAL_READABLE_EXT_RE.test(filePath)) return -Infinity;
+
+  const name = entry.name || path.basename(filePath);
+  const nameLower = name.toLowerCase();
+  const query = String(searchText || '');
+  const queryComparable = normalizeComparableText(query);
+  const baseComparable = normalizeComparableText(path.basename(name, path.extname(name)));
+  const isDoc = LOCAL_DOCUMENT_EXT_RE.test(name);
+  const isAudio = LOCAL_AUDIO_EXT_RE.test(name);
+  const isImage = LOCAL_IMAGE_EXT_RE.test(name);
+  let score = 0;
+
+  if (isDoc) score += 6;
+  if (isAudio) score += 6;
+  if (isImage) score += 4;
+  if (TRANSCRIPTION_REQUEST_RE.test(query) && isAudio) score += 34;
+  if (DOCUMENT_REVIEW_REQUEST_RE.test(query) && isDoc) score += 18;
+  if (OCR_REQUEST_RE.test(query) && isImage) score += 20;
+  if (/\b(?:contract|agreement)\b|(?:\u5408\u540c|\u534f\u8bae)/iu.test(query) && /\b(?:contract|agreement)\b|(?:\u5408\u540c|\u534f\u8bae)/iu.test(nameLower)) score += 30;
+  if (/\b(?:transcript|recording|audio|voice)\b|(?:\u7b14\u5f55|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/iu.test(query) && /\b(?:recording|audio|voice)\b|(?:\u7b14\u5f55|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/iu.test(nameLower)) score += 24;
+  if (baseComparable.length >= 4 && queryComparable.includes(baseComparable.slice(0, Math.min(18, baseComparable.length)))) score += 45;
+  if (getNativeModifiedMs(entry) > 0) {
+    const ageHours = Math.max(0, (Date.now() - getNativeModifiedMs(entry)) / 3_600_000);
+    score += Math.max(0, 8 - Math.min(8, ageHours / 12));
+  }
+  return score;
+}
+
+function selectBestLocalFileCandidate(entries: NativeFileEntry[], searchText: string): NativeFileEntry | null {
+  const scored = entries
+    .map(entry => ({ entry, score: scoreLocalFileCandidate(entry, searchText) }))
+    .filter(item => Number.isFinite(item.score) && item.score > 0)
+    .sort((a, b) => b.score - a.score || getNativeModifiedMs(b.entry) - getNativeModifiedMs(a.entry));
+  if (scored.length === 0) return null;
+  const best = scored[0];
+  const second = scored[1];
+  if (best.score >= 30) return best.entry;
+  if (scored.length === 1 && best.score >= 14) return best.entry;
+  if (best.score >= 22 && (!second || best.score - second.score >= 8)) return best.entry;
+  return null;
+}
+
+function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncomingAttachment['kind']): { name: string; arguments: Record<string, any> } {
+  const fileName = path.basename(filePath);
+  if (kind === 'audio' || LOCAL_AUDIO_EXT_RE.test(filePath)) {
+    return {
+      name: 'transcribe_audio_to_text_file',
+      arguments: {
+        filePath,
+        title: fileName,
+        outputFormat: 'txt',
+        language: /[\u3400-\u9fff]/.test(searchText) ? 'zh' : 'auto',
+      },
+    };
+  }
+  if (kind === 'image' || LOCAL_IMAGE_EXT_RE.test(filePath)) {
+    return {
+      name: 'ocr_image_file',
+      arguments: {
+        imagePath: filePath,
+        query: 'Extract the visible text and details relevant to the user request.',
+      },
+    };
+  }
+  if (LOCAL_DOCUMENT_EXT_RE.test(filePath)) {
+    return { name: 'extract_document_text', arguments: { filePath } };
+  }
+  return { name: 'read_file', arguments: { path: filePath } };
+}
+
+function compactPreflightResult(record: ToolExecutionRecord): string {
+  const result = String(record.result || '');
+  const limit = /^(extract_document_text|read_docx|read_file|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file)$/i.test(record.name)
+    ? 18000
+    : 4000;
+  if (result.length <= limit) return result;
+  return `${result.slice(0, limit)}\n[...preflight result truncated: ${result.length - limit} more chars]`;
+}
+
+function formatPreflightContext(records: ToolExecutionRecord[]): string {
+  const useful = records.filter(record => record.result || record.error);
+  if (useful.length === 0) return '';
+  const extractedContent = useful.some(record =>
+    !record.error && /^(extract_document_text|read_docx|read_file|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file)$/i.test(record.name)
+  );
+  const lines = [
+    '## Visible Action Preflight',
+    'Before answering, Lumi already performed these safe tool steps. Treat them as visible evidence from this turn.',
+    extractedContent
+      ? 'Readable content was extracted below. Use it directly, and do not promise to read it again unless something is missing.'
+      : 'Only discovery/checking evidence is available below. Do not claim the document/audio/image content was read; say what was checked and ask for the exact file if needed.',
+  ];
+  useful.slice(-6).forEach((record, index) => {
+    lines.push(`### Step ${index + 1}: ${record.name}`);
+    lines.push(`Arguments: ${JSON.stringify(record.arguments || {})}`);
+    if (record.error) {
+      lines.push(`Error: ${record.error}`);
+    } else {
+      lines.push(`Result:\n${compactPreflightResult(record)}`);
+    }
+  });
+  return lines.join('\n');
 }
 
 function buildNaturalReplyStyleOverlay(source?: string): string {
@@ -1043,6 +1267,110 @@ export function registerChatHandler(
       let responseText = '';
       let llmWasCalled = false;
       const allToolRecords: ToolExecutionRecord[] = [];
+      let actionPreflightContext = '';
+      const runPreflightTool = async (name: string, args: Record<string, any>): Promise<ToolExecutionRecord> => {
+        const correlationId = `preflight-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const record: ToolExecutionRecord = {
+          id: correlationId,
+          name,
+          arguments: args || {},
+          result: '',
+        };
+        const shouldEmitLifecycle = !isDirectDesktopTool(name);
+        if (shouldEmitLifecycle) {
+          emitToolLifecycle({ correlationId, name, arguments: args || {} });
+        }
+        try {
+          const result = await toolRegistry.execute(name, args || {}, {
+            userId: uid,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            desktopRelay,
+            llmGetters,
+            source: 'chat_preflight',
+            isCancelled: () => abortController.signal.aborted,
+            requestConfirmation: requestToolConfirmation,
+          });
+          record.result = result || '';
+          if (shouldEmitLifecycle) {
+            emitToolLifecycle({ correlationId, name, arguments: args || {}, result: formatToolResultForUi(record.result) });
+          }
+        } catch (err: any) {
+          record.error = err?.message || String(err);
+          if (shouldEmitLifecycle) {
+            emitToolLifecycle({ correlationId, name, arguments: args || {}, error: record.error });
+          }
+        }
+        allToolRecords.push(record);
+        return record;
+      };
+
+      const historyContextText = getRecentHistoryText(history);
+      const preflightSearchText = [visibleUserText, historyContextText].filter(Boolean).join('\n');
+      const shouldPreflightLocalAction =
+        !cognition.directToolExecuted &&
+        executionDecision.allowToolUse &&
+        !clientActionOnlyTurn &&
+        !selfRepairTurn &&
+        !isSanctuary &&
+        shouldRunVisibleActionPreflight(visibleUserText, attachments, historyContextText);
+
+      if (shouldPreflightLocalAction) {
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: 'preflight',
+          detail: "Checking available local evidence before answering",
+        });
+        const preflightStartIndex = allToolRecords.length;
+        const pathKinds = new Map<string, ChatIncomingAttachment['kind'] | undefined>();
+        for (const item of attachments) {
+          if (item.path) pathKinds.set(path.normalize(item.path), item.kind);
+        }
+        for (const localPath of extractExplicitLocalPaths(`${visibleUserText}\n${historyContextText}`)) {
+          pathKinds.set(path.normalize(localPath), pathKinds.get(path.normalize(localPath)));
+        }
+
+        if (pathKinds.size > 0) {
+          for (const [localPath, kind] of Array.from(pathKinds.entries()).slice(0, 4)) {
+            const toolCall = toolForLocalFile(localPath, preflightSearchText, kind);
+            await runPreflightTool(toolCall.name, toolCall.arguments);
+          }
+        } else {
+          const discovered: NativeFileEntry[] = [];
+          const probeDirs = getLikelyLocalDirs(preflightSearchText);
+          for (const dir of probeDirs.slice(0, 4)) {
+            const record = await runPreflightTool('desktop_list_files', { path: dir, limit: 80 });
+            if (!record.error) {
+              const entries = parseNativeFiles(record.result || '');
+              discovered.push(...entries);
+            }
+          }
+          const hadDesktopListingSuccess = allToolRecords
+            .slice(preflightStartIndex)
+            .some(record => record.name === 'desktop_list_files' && !record.error);
+          if (!hadDesktopListingSuccess) {
+            for (const dir of probeDirs.slice(0, 2)) {
+              const record = await runPreflightTool('list_directory', { path: dir });
+              if (!record.error) {
+                discovered.push(...parseNativeFiles(record.result || ''));
+                if (discovered.length > 0) break;
+              }
+            }
+          }
+
+          const candidate = selectBestLocalFileCandidate(discovered, preflightSearchText);
+          if (candidate?.path) {
+            const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
+            await runPreflightTool(toolCall.name, toolCall.arguments);
+          }
+        }
+
+        actionPreflightContext = formatPreflightContext(allToolRecords.slice(preflightStartIndex));
+        if (actionPreflightContext) {
+          effectiveSystemPrompt += '\n\n' + actionPreflightContext;
+        }
+      }
       const deferCompletionStream = turnFlow.completionEvidenceNeeded;
       const prefersSequentialWorkflow =
         shouldChainTask(text) &&
@@ -1097,7 +1425,7 @@ export function registerChatHandler(
         }
       }
 
-      if (!responseText) {
+      if (!responseText && !actionPreflightContext) {
         const delegationDecision = shouldDelegateWorkInBackground({
           text,
           source: eventSource,
@@ -1348,7 +1676,7 @@ export function registerChatHandler(
         }
       }
 
-      if (!responseText && !prefersSequentialWorkflow && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
+      if (!responseText && !actionPreflightContext && !prefersSequentialWorkflow && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
         // Path B: Orchestrator — decompose tasks into sub-tasks for worker agents
         // (Skipped for sanctuary agents — they stay in their territory)
         try {
@@ -1406,7 +1734,7 @@ export function registerChatHandler(
       }
 
       // Path B2: NL Task Chainer — for office workflows that chain tools (search→read→create etc.)
-      if (!responseText && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(text)) {
+      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(text)) {
         // Pre-flight: auto-install any matching uninstalled/outdated skills
         await autoInstallForTask(text, { emit: (event, data) => socket.emit(event, data) });
 
