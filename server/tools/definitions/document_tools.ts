@@ -6,6 +6,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 import { ingestDocument } from '../../agents/rag';
 import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
@@ -53,7 +54,6 @@ function getAudioToolPreferredProvider(value: unknown): STTProvider | 'auto' {
   const provider = String(value || 'auto').trim().toLowerCase();
   const allowed = new Set(['auto', 'whisper', 'qwen', 'ark', 'local-whisper']);
   if (!allowed.has(provider)) return 'auto';
-  if (provider === 'qwen' && process.env.LUMI_ENABLE_QWEN_FILE_STT !== '1') return 'auto';
   return provider as STTProvider | 'auto';
 }
 
@@ -95,7 +95,7 @@ function formatAudioTranscriptFile(args: Record<string, any>, result: Awaited<Re
   ].filter(line => line !== '').join('\n');
 }
 
-async function transcribeAudioToTextFile(args: Record<string, any>): Promise<string> {
+async function transcribeAudioToTextFile(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const filePath = String(args.filePath || args.audioPath || '').trim().replace(/^["']|["']$/g, '');
   if (!filePath) throw new Error('filePath is required. Attach an audio file or provide the local audio path.');
   const resolvedPath = path.resolve(filePath);
@@ -107,12 +107,15 @@ async function transcribeAudioToTextFile(args: Record<string, any>): Promise<str
   }
 
   try {
+    context?.onProgress?.(`已收到音频文件：${path.basename(resolvedPath)}`);
     const result = await transcribeAudioFile(fs.readFileSync(resolvedPath), {
       fileName: path.basename(resolvedPath),
       language: String(args.language || 'zh'),
       preferredProvider: getAudioToolPreferredProvider(args.preferredProvider),
       allowLocal: args.allowLocal !== false,
+      onProgress: (message) => context?.onProgress?.(message),
     });
+    context?.onProgress?.('正在写入转写文本文件');
     const format = /^(md|markdown)$/i.test(String(args.outputFormat || '')) ? 'md' : 'txt';
     const extension = format === 'md' ? '.md' : '.txt';
     const baseName = safeOutputBaseName(String(args.filename || args.title || args.caseName || path.basename(resolvedPath)), 'audio_transcript');
@@ -138,7 +141,7 @@ async function transcribeAudioToTextFile(args: Record<string, any>): Promise<str
     ].filter(line => line !== '').join('\n');
   } catch (err: any) {
     if (isAudioTranscriptionUnavailable(err)) {
-      throw new Error('No audio transcription provider is configured. Configure OpenAI Whisper, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.');
+      throw new Error('No audio transcription provider is configured. Configure DashScope Fun-ASR, local Whisper, OpenAI Whisper, or Doubao Speech, then retry.');
     }
     if (err?.code === 'AUDIO_TRANSCRIPTION_FAILED') {
       const failures = Array.isArray(err.failures) ? err.failures.join('; ') : (err?.message || String(err));

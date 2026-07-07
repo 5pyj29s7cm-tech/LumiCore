@@ -10,7 +10,7 @@ const clearedEnvKeys = [
   'DASHSCOPE_API_KEY',
   'QWEN_API_KEY',
   'DOUBAO_SPEECH_KEY',
-  'LUMI_ENABLE_QWEN_FILE_STT',
+  'LUMI_DISABLE_QWEN_FILE_STT',
 ] as const;
 let previousKeys: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
 
@@ -65,8 +65,22 @@ describe('audio file transcription helper', () => {
     })).rejects.toMatchObject({ code: 'NO_AUDIO_TRANSCRIPTION_PROVIDER' });
   });
 
-  it('skips DashScope SenseVoice for local file buffers unless explicitly enabled', async () => {
+  it('prioritizes DashScope Fun-ASR for automatic audio transcription', async () => {
+    const mod = await loadModule();
+    expect(mod.getAudioFileProviderPlan({
+      preferredProvider: 'auto',
+      providerAvailability: {
+        qwen: true,
+        whisper: true,
+        ark: true,
+        'local-whisper': true,
+      },
+    })).toEqual(['qwen', 'local-whisper', 'whisper', 'ark']);
+  });
+
+  it('can disable DashScope file ASR by local policy', async () => {
     process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
+    process.env.LUMI_DISABLE_QWEN_FILE_STT = '1';
     const mod = await loadModule();
     expect(mod.getAudioFileProviderPlan({
       preferredProvider: 'qwen',
@@ -74,29 +88,100 @@ describe('audio file transcription helper', () => {
     })).toEqual([]);
   });
 
-  it('transcribes with the DashScope SenseVoice file endpoint when explicitly enabled', async () => {
+  it('transcribes with DashScope Fun-ASR async file tasks', async () => {
     process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
-    process.env.LUMI_ENABLE_QWEN_FILE_STT = '1';
     const mod = await loadModule();
-    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
-      expect(init?.method).toBe('POST');
-      expect((init?.headers as Record<string, string>)?.Authorization).toBe('Bearer dashscope-test-key');
-      return new Response(JSON.stringify({ output: { sentence: { text: 'meeting transcript ready' } } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    const calls: Array<{ url: string; method?: string; headers?: Record<string, string> }> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      const headers = init?.headers as Record<string, string> | undefined;
+      calls.push({ url: target, method: init?.method, headers });
+      if (target.includes('/api/v1/uploads?action=getPolicy')) {
+        expect(init?.method).toBe('GET');
+        expect(headers?.Authorization).toBe('Bearer dashscope-test-key');
+        return new Response(JSON.stringify({
+          data: {
+            policy: 'policy',
+            signature: 'signature',
+            upload_dir: 'tmp/lumi',
+            upload_host: 'https://oss.example/upload',
+            oss_access_key_id: 'oss-ak',
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (target === 'https://oss.example/upload') {
+        expect(init?.method).toBe('POST');
+        return new Response('', { status: 200 });
+      }
+      if (target.includes('/api/v1/services/audio/asr/transcription')) {
+        expect(init?.method).toBe('POST');
+        expect(headers?.Authorization).toBe('Bearer dashscope-test-key');
+        expect(headers?.['X-DashScope-Async']).toBe('enable');
+        expect(headers?.['X-DashScope-OssResourceResolve']).toBe('enable');
+        const body = JSON.parse(String(init?.body || '{}'));
+        expect(body.model).toBe('fun-asr');
+        expect(body.input.file_urls[0]).toMatch(/^oss:\/\/tmp\/lumi\//);
+        expect(body.parameters.diarization_enabled).toBe(true);
+        return new Response(JSON.stringify({ output: { task_id: 'task-1' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (target.includes('/api/v1/tasks/task-1')) {
+        expect(init?.method).toBe('GET');
+        return new Response(JSON.stringify({
+          output: {
+            task_status: 'SUCCEEDED',
+            results: [{
+              subtask_status: 'SUCCEEDED',
+              transcription_url: 'https://result.example/transcript.json',
+            }],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (target === 'https://result.example/transcript.json') {
+        expect(init?.method).toBe('GET');
+        return new Response(JSON.stringify({
+          transcripts: [{
+            channel_id: 0,
+            sentences: [
+              { begin_time: 0, end_time: 1000, speaker_id: 0, text: 'hello' },
+              { begin_time: 1500, end_time: 2800, speaker_id: 1, text: 'world' },
+            ],
+          }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
     };
 
+    const progress: string[] = [];
     const result = await mod.transcribeAudioFile(Buffer.from('fake-audio'), {
       fileName: 'meeting.mp3',
       preferredProvider: 'qwen',
       allowLocal: false,
       fetchImpl: fetchImpl as typeof fetch,
+      onProgress: (message) => progress.push(message),
     });
 
-    expect(result.text).toBe('meeting transcript ready');
+    expect(result.text).toContain('\u8bf4\u8bdd\u4eba1\uff1ahello');
+    expect(result.text).toContain('\u8bf4\u8bdd\u4eba2\uff1aworld');
     expect(result.provider).toBe('qwen');
-    expect(result.model).toBe('sensevoice-v1');
+    expect(result.model).toBe('fun-asr');
     expect(result.mimeType).toBe('audio/mpeg');
+    expect(result.speakerCount).toBe(2);
+    expect(result.segments).toHaveLength(2);
+    expect(result.taskId).toBe('task-1');
+    expect(calls.map(call => call.method)).toEqual(['GET', 'POST', 'POST', 'GET', 'GET']);
+    expect(progress.some(message => message.includes('DashScope'))).toBe(true);
   });
+
 });

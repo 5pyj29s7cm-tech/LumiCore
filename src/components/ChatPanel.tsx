@@ -204,6 +204,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       setStreamingText(prev => prev + data.text);
     };
 
+    const onProgress = (data: { text?: string; tone?: ChatProgressTone }) => {
+      pushChatProgress(data.text || '', data.tone || 'tool');
+    };
+
     const onStatus = (data: { status: string }) => {
       if (data.status === 'thinking') {
         setIsTyping(true);
@@ -267,6 +271,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
 
     socket.on('agent:response', onResponse);
     socket.on('agent:chunk', onChunk);
+    socket.on('agent:progress', onProgress);
     socket.on('agent:status', onStatus);
     socket.on('agent:error', onError);
     socket.on('agent:tool_call', onToolCall);
@@ -276,6 +281,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     return () => {
       socket.off('agent:response', onResponse);
       socket.off('agent:chunk', onChunk);
+      socket.off('agent:progress', onProgress);
       socket.off('agent:status', onStatus);
       socket.off('agent:error', onError);
       socket.off('agent:tool_call', onToolCall);

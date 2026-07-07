@@ -3,6 +3,8 @@
  * v2.1 — Multi-turn tool iteration, hands/mouth separation, input queue
  */
 import { Socket } from "socket.io";
+import fs from "fs";
+import path from "path";
 import { readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
@@ -13,6 +15,8 @@ import { personalityRegistry } from "../personality";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../personality/state";
 import { himTick } from "../personality/him";
 import { createStreamingSession, getActiveStreamingSTTProvider } from "../stt/adapter";
+import { transcribeAudioFile } from "../stt/file_transcription";
+import { getMeetingAudioDir } from "../stt/artifact_paths";
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, resolveEmotionVoice } from "../tts/adapter";
 import { recordLatency } from "../monitor/latency_store";
 import { getOrCreateActiveConversation, addMessage, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
@@ -85,6 +89,10 @@ interface AudioSession {
   voiceprintLastAt: number;
   /** Meeting mode: STT only, no LLM/TTS/tool processing. */
   transcriptionOnly: boolean;
+  /** Meeting mode raw PCM recording for high-accuracy final transcription. */
+  meetingPcmPath: string | null;
+  meetingPcmBytes: number;
+  meetingStartedAt: number;
 }
 
 // Module-level ambient noise tracking — used by both processVoiceInput and registerVoiceHandlers
@@ -284,9 +292,75 @@ function getAudioSession(socket: Socket): AudioSession {
       voiceprintRequired: false,
       voiceprintLastAt: 0,
       transcriptionOnly: false,
+      meetingPcmPath: null,
+      meetingPcmBytes: 0,
+      meetingStartedAt: 0,
     };
   }
   return socket.data.audioSession as AudioSession;
+}
+
+function writePcm16Wav(rawPath: string, wavPath: string, sampleRate = 16000): void {
+  const pcm = fs.readFileSync(rawPath);
+  const header = Buffer.alloc(44);
+  const dataSize = pcm.length;
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+  fs.writeFileSync(wavPath, Buffer.concat([header, pcm]));
+}
+
+function startMeetingPcmRecording(session: AudioSession): void {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const rawPath = path.join(getMeetingAudioDir(), `meeting_${stamp}_${Math.random().toString(36).slice(2)}.pcm`);
+  fs.writeFileSync(rawPath, Buffer.alloc(0));
+  session.meetingPcmPath = rawPath;
+  session.meetingPcmBytes = 0;
+  session.meetingStartedAt = Date.now();
+}
+
+async function refineMeetingTranscript(socket: Socket, session: AudioSession, rawPath: string, bytes: number): Promise<void> {
+  if (bytes < 16000 || !fs.existsSync(rawPath)) {
+    socket.emit('meeting:refine_error', { message: 'Meeting recording is too short for high-accuracy transcription.' });
+    return;
+  }
+  const wavPath = rawPath.replace(/\.pcm$/i, '.wav');
+  try {
+    socket.emit('meeting:refine_status', { status: 'transcribing', bytes });
+    writePcm16Wav(rawPath, wavPath);
+    const result = await transcribeAudioFile(fs.readFileSync(wavPath), {
+      fileName: path.basename(wavPath),
+      language: 'zh',
+      preferredProvider: 'qwen',
+      allowLocal: true,
+      allowQwenFileStt: true,
+      onProgress: (message) => socket.emit('meeting:refine_status', { status: 'transcribing', bytes, message }),
+    });
+    socket.emit('meeting:refined_transcript', {
+      text: result.text,
+      provider: result.provider,
+      model: result.model,
+      segments: result.segments,
+      speakerCount: result.speakerCount,
+      taskId: result.taskId,
+      durationMs: result.durationMs,
+      audioPath: wavPath,
+      startedAt: session.meetingStartedAt || Date.now(),
+    });
+  } catch (err: any) {
+    logger.error('[Meeting Refine Error]:', err);
+    socket.emit('meeting:refine_error', { message: err?.message || String(err) });
+  }
 }
 
 function isVoiceprintGateOpen(session: AudioSession): boolean {
@@ -1375,6 +1449,16 @@ export function registerVoiceHandlers(
     session.domain = data.domain === 'work' && data.orgId ? 'work' : 'personal';
     session.orgId = session.domain === 'work' ? String(data.orgId || '') : '';
     session.transcriptionOnly = data.transcriptionOnly === true;
+    session.meetingPcmPath = null;
+    session.meetingPcmBytes = 0;
+    session.meetingStartedAt = 0;
+    if (session.transcriptionOnly) {
+      try {
+        startMeetingPcmRecording(session);
+      } catch (err: any) {
+        logger.warn(`[Meeting] Failed to start PCM recording: ${err?.message || err}`);
+      }
+    }
     const enrolledVoiceprints = session.userId ? getVoiceprints(session.userId) : [];
     session.voiceprintRequired = enrolledVoiceprints.length > 0;
     session.voiceprintMatched = !session.voiceprintRequired;
@@ -1530,6 +1614,15 @@ export function registerVoiceHandlers(
     if (!session.isActive) return;
     session.lastChunkTime = Date.now();
     resetSilenceTimer(session, socket);
+    if (session.transcriptionOnly && session.meetingPcmPath) {
+      try {
+        const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        fs.appendFileSync(session.meetingPcmPath, chunk);
+        session.meetingPcmBytes += chunk.length;
+      } catch (err: any) {
+        logger.warn(`[Meeting] Failed to append PCM chunk: ${err?.message || err}`);
+      }
+    }
     if (session.sttSession) {
       session.sttSession.sendAudio(data);
       chunkCount++;
@@ -1565,9 +1658,12 @@ export function registerVoiceHandlers(
     socket.emit("audio:interrupt-ack", {});
   });
 
-  socket.on("audio:stop", () => {
+  socket.on("audio:stop", (data?: { refineTranscript?: boolean }) => {
     logger.info(`[Audio] Voice call ended by ${socket.id}`);
     const session = getAudioSession(socket);
+    const shouldRefineMeeting = session.transcriptionOnly && data?.refineTranscript === true;
+    const meetingPcmPath = session.meetingPcmPath;
+    const meetingPcmBytes = session.meetingPcmBytes;
     session.isActive = false;
     session.transcriptionOnly = false;
     cancelActiveVoiceTurn(session);
@@ -1576,8 +1672,13 @@ export function registerVoiceHandlers(
       session.sttSession.end();
       session.sttSession = null;
     }
+    session.meetingPcmPath = null;
+    session.meetingPcmBytes = 0;
     // Clear tracked timers to prevent post-session mutations
     socket.emit("audio:status", { status: "idle" });
+    if (shouldRefineMeeting && meetingPcmPath) {
+      void refineMeetingTranscript(socket, session, meetingPcmPath, meetingPcmBytes);
+    }
   });
 
   // Track ambient noise level for environment-gated proactive speech

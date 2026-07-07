@@ -1712,6 +1712,14 @@ interface MeetingNote {
   speakerMatched?: boolean;
 }
 
+interface RefinedMeetingSegment {
+  text?: string;
+  beginMs?: number;
+  endMs?: number;
+  speakerId?: number | null;
+  speakerLabel?: string | null;
+}
+
 export function DesktopUI({ 
   t, 
   user, 
@@ -2048,6 +2056,81 @@ export function DesktopUI({
   }, [persistMeetingNotes]);
 
   const socket = useSocket();
+  const applyRefinedMeetingTranscript = useCallback((data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[] }) => {
+    const clean = String(data.text || '').trim();
+    if (!clean) return null;
+    const now = Date.now();
+    const startedAt = data.startedAt || meetingStartedAt || now;
+    const speakerSource = data.provider ? `${data.provider}/${data.model || ''}` : 'dashscope';
+    const segments = Array.isArray(data.segments) ? data.segments : [];
+    const nextFromSegments = segments
+      .map((segment, index): MeetingNote | null => {
+        const text = String(segment?.text || '').trim();
+        if (!text) return null;
+        const numericSpeaker = typeof segment.speakerId === 'number' ? segment.speakerId : null;
+        const speakerLabel = String(segment.speakerLabel || (numericSpeaker !== null ? `\u8bf4\u8bdd\u4eba${numericSpeaker + 1}` : '')).trim();
+        return {
+          id: `refined-${now}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          text,
+          time: startedAt + Math.max(0, Number(segment.beginMs || 0)),
+          speakerLabel: speakerLabel || null,
+          speakerConfidence: speakerLabel ? 1 : undefined,
+          speakerSource,
+          speakerMatched: Boolean(speakerLabel),
+        };
+      })
+      .filter((note): note is MeetingNote => Boolean(note));
+    const next: MeetingNote[] = nextFromSegments.length > 0 ? nextFromSegments : [{
+      id: `refined-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      text: clean,
+      time: startedAt,
+      speakerSource,
+    }];
+    setMeetingNotes(next);
+    persistMeetingNotes(next);
+    setMeetingReport('');
+    localStorage.removeItem('lumi_meeting_report');
+    toast.success(lang === 'zh' ? '\u4f1a\u8bae\u5df2\u7528\u9ad8\u7cbe\u5ea6\u6a21\u578b\u91cd\u65b0\u8f6c\u5199' : 'Meeting transcript refined with the high-accuracy model');
+    return next;
+  }, [lang, meetingStartedAt, persistMeetingNotes]);
+
+  const waitForMeetingRefinement = useCallback(() => new Promise<MeetingNote[] | null>((resolve) => {
+    if (!socket?.connected) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const cleanup = () => {
+      socket.off('meeting:refined_transcript', onRefined);
+      socket.off('meeting:refine_error', onError);
+      socket.off('meeting:refine_status', onStatus);
+      window.clearTimeout(timeout);
+    };
+    const finish = (value: MeetingNote[] | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const onStatus = (data?: { message?: string }) => {
+      toast.info(data?.message || (lang === 'zh' ? '\u6b63\u5728\u7528\u9ad8\u7cbe\u5ea6\u6a21\u578b\u91cd\u8f6c\u4f1a\u8bae\u5f55\u97f3...' : 'Refining the meeting recording with the high-accuracy model...'));
+    };
+    const onRefined = (data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[] }) => {
+      finish(applyRefinedMeetingTranscript(data));
+    };
+    const onError = (data: { message?: string }) => {
+      toast.error(data?.message || (lang === 'zh' ? '\u9ad8\u7cbe\u5ea6\u4f1a\u8bae\u8f6c\u5199\u5931\u8d25\uff0c\u4fdd\u7559\u5b9e\u65f6\u7b14\u8bb0' : 'High-accuracy meeting transcription failed; keeping realtime notes'));
+      finish(null);
+    };
+    const timeout = window.setTimeout(() => {
+      toast.error(lang === 'zh' ? '\u9ad8\u7cbe\u5ea6\u4f1a\u8bae\u8f6c\u5199\u8d85\u65f6\uff0c\u4fdd\u7559\u5b9e\u65f6\u7b14\u8bb0' : 'High-accuracy meeting transcription timed out; keeping realtime notes');
+      finish(null);
+    }, 60 * 60 * 1000);
+    socket.once('meeting:refined_transcript', onRefined);
+    socket.once('meeting:refine_error', onError);
+    socket.on('meeting:refine_status', onStatus);
+  }), [applyRefinedMeetingTranscript, lang, socket]);
+
   useMusicPlayerRuntime();
   const musicVisible = useMusicVisible();
   const [musicLayerLoaded, setMusicLayerLoaded] = useState(false);
@@ -2115,11 +2198,11 @@ export function DesktopUI({
     void startCall(selectedVoiceId, activePersonality, activePersonality, getVoiceScopeOptions());
   }, [activePersonality, getVoiceScopeOptions, selectedVoiceId, startCall]);
 
-  const stopMeetingAudio = useCallback(() => {
+  const stopMeetingAudio = useCallback((options: { refineTranscript?: boolean } = {}) => {
     setMeetingPaused(false);
     meetingVoiceActiveRef.current = false;
     if (operationMode === 'meeting') setOperationMode('assistant');
-    if (callState !== 'idle') endCall();
+    if (callState !== 'idle') endCall({ refineTranscript: options.refineTranscript === true });
   }, [callState, endCall, operationMode, setOperationMode]);
 
   useEffect(() => {
@@ -2341,11 +2424,12 @@ export function DesktopUI({
     return lines.join('\n');
   }, [formatMeetingNoteForExport, formatMeetingTime, legalMeetingCaseTitle, meetingNotes, meetingReport, meetingStartedAt]);
 
-  const buildFallbackMeetingReport = useCallback(() => {
+  const buildFallbackMeetingReport = useCallback((notesOverride?: MeetingNote[]) => {
+    const notesForReport = notesOverride || meetingNotes;
     const started = meetingStartedAt ? new Date(meetingStartedAt).toLocaleString() : new Date().toLocaleString();
     const legalCase = getLegalConsultationCase();
     const legalCaseTitle = legalCase ? getLegalCaseLabel(legalCase) : legalMeetingCaseTitle;
-    const actionHints = meetingNotes
+    const actionHints = notesForReport
       .filter(note => /(todo|action|next|follow|owner|deadline|需要|安排|确认|推进|负责|下周|明天|今天|完成|决定|风险|问题|证据|材料|开庭|上诉|法院|法官)/i.test(note.text))
       .slice(-8)
       .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`);
@@ -2355,16 +2439,16 @@ export function DesktopUI({
         '',
         `${lang === 'zh' ? '案件' : 'Case'}: ${legalCaseTitle}`,
         `${lang === 'zh' ? '开始时间' : 'Started'}: ${started}`,
-        `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${meetingNotes.length}`,
+        `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${notesForReport.length}`,
         '',
         `## ${lang === 'zh' ? '会谈纪要' : 'Consultation Summary'}`,
-        meetingNotes.length > 0
-          ? (lang === 'zh' ? `本次会谈共收录 ${meetingNotes.length} 条转写。LLM 分析暂不可用，以下为本地基础整理。` : `Captured ${meetingNotes.length} transcript items. LLM analysis was unavailable; this is a local structured memo.`)
+        notesForReport.length > 0
+          ? (lang === 'zh' ? `本次会谈共收录 ${notesForReport.length} 条转写。LLM 分析暂不可用，以下为本地基础整理。` : `Captured ${notesForReport.length} transcript items. LLM analysis was unavailable; this is a local structured memo.`)
           : (lang === 'zh' ? '本次会谈没有收录到可整理的转写。' : 'No transcript was captured for this consultation.'),
         '',
         `## ${lang === 'zh' ? '事实摘要' : 'Fact Summary'}`,
-        ...(meetingNotes.slice(-6).map(note => `- ${formatMeetingNoteForExport(note)}`)),
-        ...(meetingNotes.length === 0 ? [`- ${lang === 'zh' ? '暂无事实摘要。' : 'No fact summary yet.'}`] : []),
+        ...(notesForReport.slice(-6).map(note => `- ${formatMeetingNoteForExport(note)}`)),
+        ...(notesForReport.length === 0 ? [`- ${lang === 'zh' ? '暂无事实摘要。' : 'No fact summary yet.'}`] : []),
         '',
         `## ${lang === 'zh' ? '争议焦点' : 'Issues'}`,
         `- ${lang === 'zh' ? '请律师结合案由、证据和对方主张进一步确认。' : 'Counsel should confirm issues against claims, evidence, and procedural posture.'}`,
@@ -2383,11 +2467,11 @@ export function DesktopUI({
       lang === 'zh' ? '# Lumi 会议报告' : '# Lumi Meeting Report',
       '',
       `${lang === 'zh' ? '开始时间' : 'Started'}: ${started}`,
-      `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${meetingNotes.length}`,
+      `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${notesForReport.length}`,
       '',
       `## ${lang === 'zh' ? '会议摘要' : 'Summary'}`,
-      meetingNotes.length > 0
-        ? (lang === 'zh' ? `本次会议共收录 ${meetingNotes.length} 条转写。LLM 分析暂不可用，下面是基于转写的基础整理。` : `Captured ${meetingNotes.length} transcript items. LLM analysis was unavailable, so this is a basic local report.`)
+      notesForReport.length > 0
+        ? (lang === 'zh' ? `本次会议共收录 ${notesForReport.length} 条转写。LLM 分析暂不可用，下面是基于转写的基础整理。` : `Captured ${notesForReport.length} transcript items. LLM analysis was unavailable, so this is a basic local report.`)
         : (lang === 'zh' ? '本次会议没有可整理的转写内容。' : 'No transcript was captured for this meeting.'),
       '',
       `## ${lang === 'zh' ? '待办/决策线索' : 'Action / Decision Signals'}`,
@@ -2398,9 +2482,10 @@ export function DesktopUI({
     ].join('\n');
   }, [formatMeetingNoteForExport, formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
-  const analyzeMeetingNotes = useCallback(async (endedAt = Date.now()) => {
-    if (meetingNotes.length === 0) {
-      const fallback = buildFallbackMeetingReport();
+  const analyzeMeetingNotes = useCallback(async (endedAt = Date.now(), notesOverride?: MeetingNote[]) => {
+    const notesForAnalysis = notesOverride || meetingNotes;
+    if (notesForAnalysis.length === 0) {
+      const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
       localStorage.setItem('lumi_meeting_report', fallback);
       toast.info(lang === 'zh' ? '会议没有收录到转写，已生成空会议报告' : 'No transcript captured; generated an empty meeting report');
@@ -2428,7 +2513,7 @@ export function DesktopUI({
         body: JSON.stringify({
           provider: aiConfig?.provider || 'gemini',
           model: aiConfig?.model,
-          notes: meetingNotes,
+          notes: notesForAnalysis,
           startedAt: meetingStartedAt,
           endedAt,
           language: lang,
@@ -2438,13 +2523,13 @@ export function DesktopUI({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to analyze meeting');
-      const report = String(data.report || '').trim() || buildFallbackMeetingReport();
+      const report = String(data.report || '').trim() || buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(report);
       localStorage.setItem('lumi_meeting_report', report);
       toast.success(lang === 'zh' ? 'Lumi 已整理会议报告' : 'Lumi generated the meeting report');
       return report;
     } catch (err: any) {
-      const fallback = buildFallbackMeetingReport();
+      const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
       localStorage.setItem('lumi_meeting_report', fallback);
       toast.error(err?.message || (lang === 'zh' ? '会议分析失败，已生成基础报告' : 'Meeting analysis failed; generated a basic report'));
@@ -2454,16 +2539,17 @@ export function DesktopUI({
     }
   }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
-  const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number) => {
+  const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number, notesOverride?: MeetingNote[]) => {
+    const notesForArchive = notesOverride || meetingNotes;
     const consultationCaseId = getLegalConsultationCaseId();
-    if (!consultationCaseId || meetingNotes.length === 0) return;
-    const lastNote = meetingNotes[meetingNotes.length - 1];
-    const archiveKey = `${consultationCaseId}:${meetingStartedAt || ''}:${lastNote?.id || meetingNotes.length}`;
+    if (!consultationCaseId || notesForArchive.length === 0) return;
+    const lastNote = notesForArchive[notesForArchive.length - 1];
+    const archiveKey = `${consultationCaseId}:${meetingStartedAt || ''}:${lastNote?.id || notesForArchive.length}`;
     if (lastLegalMeetingArchiveRef.current === archiveKey) return;
 
     if (workDomain === 'work' && orgConnection?.connected) {
       const started = meetingStartedAt ? new Date(meetingStartedAt) : new Date(endedAt);
-      const transcript = meetingNotes
+      const transcript = notesForArchive
         .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`)
         .join('\n');
       const content = [
@@ -2509,7 +2595,7 @@ export function DesktopUI({
 
     const archived = archiveLegalMeetingToConsultationCase({
       report,
-      notes: meetingNotes,
+      notes: notesForArchive,
       startedAt: meetingStartedAt,
       endedAt,
     });
@@ -2524,11 +2610,14 @@ export function DesktopUI({
 
   const endMeetingAndReport = useCallback(async () => {
     const endedAt = Date.now();
-    stopMeetingAudio();
+    setMeetingReportGenerating(true);
+    const refinementPromise = callState !== 'idle' ? waitForMeetingRefinement() : Promise.resolve(null);
+    stopMeetingAudio({ refineTranscript: true });
     setMeetingNotesOpen(true);
-    const report = await analyzeMeetingNotes(endedAt);
-    await archiveLegalMeetingReport(report, endedAt);
-  }, [analyzeMeetingNotes, archiveLegalMeetingReport, stopMeetingAudio]);
+    const refinedNotes = await refinementPromise;
+    const report = await analyzeMeetingNotes(endedAt, refinedNotes || undefined);
+    await archiveLegalMeetingReport(report, endedAt, refinedNotes || undefined);
+  }, [analyzeMeetingNotes, archiveLegalMeetingReport, callState, stopMeetingAudio, waitForMeetingRefinement]);
 
   const endVoiceCallFromUI = useCallback(() => {
     if (operationMode === 'meeting') {

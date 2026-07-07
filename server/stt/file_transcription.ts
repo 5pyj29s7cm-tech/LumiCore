@@ -2,7 +2,8 @@ import path from 'path';
 import { getKey } from '../config/keys';
 import { isCircuitClosed, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { recordLatency } from '../monitor/latency_store';
-import type { STTProvider } from './types';
+import type { STTProvider, STTSegment } from './types';
+import * as dashscopeFile from './providers/dashscope-file';
 import * as localWhisper from './providers/local-whisper';
 import * as whisper from './providers/whisper';
 import * as ark from './providers/ark';
@@ -17,6 +18,7 @@ export interface AudioFileTranscriptionOptions {
   allowQwenFileStt?: boolean;
   fetchImpl?: typeof fetch;
   providerAvailability?: Partial<Record<AudioFileProvider, boolean>>;
+  onProgress?: (message: string) => void;
 }
 
 export interface AudioFileTranscriptionResult {
@@ -27,7 +29,18 @@ export interface AudioFileTranscriptionResult {
   mimeType: string;
   durationMs: number;
   warnings?: string[];
+  segments?: STTSegment[];
+  speakerCount?: number;
+  taskId?: string;
 }
+
+type ProviderTranscript = {
+  text: string;
+  model?: string;
+  segments?: STTSegment[];
+  speakerCount?: number;
+  taskId?: string;
+};
 
 export const AUDIO_FILE_EXTS = /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i;
 
@@ -46,12 +59,22 @@ const AUDIO_MIME_BY_EXT: Record<string, string> = {
 
 const PROVIDER_MODELS: Record<AudioFileProvider, string> = {
   whisper: 'whisper-1',
-  qwen: 'sensevoice-v1',
+  qwen: 'fun-asr',
   ark: 'doubao-stt-1.0',
-  'local-whisper': 'faster-whisper-small',
+  'local-whisper': 'faster-whisper-large-v3,medium,small',
 };
 
-const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['whisper', 'ark', 'local-whisper'];
+function getProviderModelLabel(provider: AudioFileProvider): string {
+  if (provider === 'local-whisper') {
+    return `faster-whisper-${String(process.env.LUMI_WHISPER_MODEL || 'large-v3,medium,small')}`;
+  }
+  if (provider === 'qwen') {
+    return String(process.env.DASHSCOPE_FILE_ASR_MODEL || PROVIDER_MODELS.qwen);
+  }
+  return PROVIDER_MODELS[provider];
+}
+
+const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['qwen', 'local-whisper', 'whisper', 'ark'];
 
 function getConfiguredKey(provider: AudioFileProvider, availability?: Partial<Record<AudioFileProvider, boolean>>): string {
   if (availability && Object.prototype.hasOwnProperty.call(availability, provider)) {
@@ -99,7 +122,7 @@ export function isSupportedAudioFileName(fileName?: string): boolean {
 }
 
 function isQwenFileSttAllowed(options: AudioFileTranscriptionOptions = {}): boolean {
-  return options.allowQwenFileStt === true || process.env.LUMI_ENABLE_QWEN_FILE_STT === '1';
+  return options.allowQwenFileStt !== false && process.env.LUMI_DISABLE_QWEN_FILE_STT !== '1';
 }
 
 export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions = {}): AudioFileProvider[] {
@@ -108,17 +131,14 @@ export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions 
   const baseOrder: AudioFileProvider[] = preferred && preferred !== 'auto'
     ? [preferred as AudioFileProvider, ...DEFAULT_AUTO_ORDER]
     : DEFAULT_AUTO_ORDER;
-  const allowQwenFileStt = isQwenFileSttAllowed(options);
 
   const providers: AudioFileProvider[] = [];
   for (const provider of baseOrder) {
     if (providers.includes(provider)) continue;
-    // DashScope file ASR currently requires public file_urls; Lumi's local upload flow
-    // passes an in-memory file buffer, so keep qwen out unless explicitly enabled.
-    if (provider === 'qwen' && !allowQwenFileStt) continue;
+    if (provider === 'qwen' && !isQwenFileSttAllowed(options)) continue;
     if (provider === 'local-whisper' && !allowLocal) continue;
     if (!getConfiguredKey(provider, options.providerAvailability)) continue;
-    if (preferred !== provider && !isCircuitClosed(circuitProvider(provider), PROVIDER_MODELS[provider])) continue;
+    if (preferred !== provider && !isCircuitClosed(circuitProvider(provider), getProviderModelLabel(provider))) continue;
     providers.push(provider);
   }
   return providers;
@@ -135,78 +155,51 @@ async function getPreferredAudioFileProvider(options: AudioFileTranscriptionOpti
   }
 }
 
-function extractQwenText(data: any): string {
-  const output = data?.output || data || {};
-  const sentence = output?.sentence;
-  const candidates = [
-    sentence?.text,
-    output?.text,
-    output?.transcript,
-    output?.transcription,
-    data?.text,
-  ];
-  if (Array.isArray(sentence)) {
-    candidates.push(sentence.map((item: any) => item?.text || item?.sentence || '').join(' '));
-  }
-  if (Array.isArray(output?.sentences)) {
-    candidates.push(output.sentences.map((item: any) => item?.text || item?.sentence || '').join(' '));
-  }
-  return candidates.map(value => String(value || '').trim()).find(Boolean) || '';
-}
-
-async function transcribeQwenFile(
-  audioBuffer: Buffer,
-  fileName: string,
-  language: string,
-  mimeType: string,
-  fetchImpl: typeof fetch,
-): Promise<string> {
-  const apiKey = getConfiguredKey('qwen');
-  if (!apiKey) throw new Error('DASHSCOPE_API_KEY or QWEN_API_KEY is not configured');
-  const form = new FormData();
-  form.append('model', 'sensevoice-v1');
-  form.append('file', new Blob([audioBuffer as any], { type: mimeType }), fileName);
-  if (language) form.append('language', language);
-  const res = await fetchImpl('https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`DashScope SenseVoice error (${res.status}): ${detail || res.statusText}`);
-  }
-  const data = await res.json() as any;
-  return extractQwenText(data);
-}
-
 async function transcribeWithProvider(
   provider: AudioFileProvider,
   audioBuffer: Buffer,
-  options: Required<Pick<AudioFileTranscriptionOptions, 'language' | 'fetchImpl'>> & { fileName: string; mimeType: string },
-): Promise<string> {
+  options: Required<Pick<AudioFileTranscriptionOptions, 'language' | 'fetchImpl'>> & {
+    fileName: string;
+    mimeType: string;
+    onProgress?: (message: string) => void;
+  },
+): Promise<ProviderTranscript> {
   switch (provider) {
-    case 'qwen':
-      return transcribeQwenFile(audioBuffer, options.fileName, options.language, options.mimeType, options.fetchImpl);
+    case 'qwen': {
+      const result = await dashscopeFile.transcribe(audioBuffer, options.language, {
+        fileName: options.fileName,
+        mimeType: options.mimeType,
+        fetchImpl: options.fetchImpl,
+        onProgress: options.onProgress,
+      });
+      return {
+        text: result.text,
+        model: result.model,
+        segments: result.segments,
+        speakerCount: result.speakerCount,
+        taskId: result.taskId,
+      };
+    }
     case 'whisper': {
       const result = await whisper.transcribe(audioBuffer, options.language, {
         fileName: options.fileName,
         mimeType: options.mimeType,
       });
-      return result.text;
+      return { text: result.text, model: result.model };
     }
     case 'ark': {
       const result = await ark.transcribe(audioBuffer, options.language, {
         fileName: options.fileName,
         mimeType: options.mimeType,
       });
-      return result.text;
+      return { text: result.text, model: result.model };
     }
     case 'local-whisper': {
       const result = await localWhisper.transcribe(audioBuffer, options.language, {
         fileName: options.fileName,
+        onProgress: options.onProgress,
       });
-      return result.text;
+      return { text: result.text, model: result.model };
     }
     default:
       throw new Error(`Unsupported audio transcription provider: ${provider}`);
@@ -228,6 +221,8 @@ export async function transcribeAudioFile(
   const fetchImpl = options.fetchImpl || fetch;
   const preferredProvider = await getPreferredAudioFileProvider(options);
   const plan = getAudioFileProviderPlan({ ...options, preferredProvider });
+  options.onProgress?.(`准备转写音频：${fileName}`);
+  options.onProgress?.(`转写引擎顺序：${plan.join(' -> ') || 'none'}`);
 
   if (plan.length === 0) {
     const qwenConfigured = !!getConfiguredKey('qwen', options.providerAvailability);
@@ -235,35 +230,49 @@ export async function transcribeAudioFile(
     throw errorCode(
       'NO_AUDIO_TRANSCRIPTION_PROVIDER',
       qwenDisabled
-        ? 'No usable local-file audio transcription provider is configured. DashScope/Qwen file STT is disabled for local uploads because this endpoint requires public file_urls in Lumi; configure OpenAI Whisper, Doubao Speech, or local Whisper.'
-        : 'No audio transcription provider is configured. Configure OpenAI Whisper, DashScope SenseVoice, Doubao Speech, or local Whisper.',
+        ? 'No usable audio transcription provider is configured. DashScope file STT is disabled by local policy; enable it or configure local Whisper/OpenAI/Doubao.'
+        : 'No audio transcription provider is configured. Configure DashScope Fun-ASR, local Whisper, OpenAI Whisper, or Doubao Speech.',
     );
   }
 
   const failures: string[] = [];
   for (const provider of plan) {
-    const model = PROVIDER_MODELS[provider];
+    const plannedModel = getProviderModelLabel(provider);
     const providerStart = Date.now();
     try {
-      const text = (await transcribeWithProvider(provider, audioBuffer, { fileName, language, mimeType, fetchImpl })).trim();
+      options.onProgress?.(`正在使用 ${provider}/${plannedModel} 转写，较长录音可能需要几分钟`);
+      const transcript = await transcribeWithProvider(provider, audioBuffer, {
+        fileName,
+        language,
+        mimeType,
+        fetchImpl,
+        onProgress: options.onProgress,
+      });
+      const text = transcript.text.trim();
+      const actualModel = transcript.model || plannedModel;
       if (!text) {
         failures.push(`${provider}: empty transcript`);
         continue;
       }
       recordLatency('stt', Date.now() - providerStart);
-      recordSuccess(circuitProvider(provider), model);
+      recordSuccess(circuitProvider(provider), actualModel);
+      options.onProgress?.(`转写完成：${provider}/${actualModel}，共 ${text.length} 字`);
       return {
         text,
         provider,
-        model,
+        model: actualModel,
         language,
         mimeType,
         durationMs: Date.now() - start,
         warnings: failures.length > 0 ? failures : undefined,
+        segments: transcript.segments,
+        speakerCount: transcript.speakerCount,
+        taskId: transcript.taskId,
       };
     } catch (err: any) {
-      recordFailure(circuitProvider(provider), model, err instanceof Error ? err : new Error(String(err)));
+      recordFailure(circuitProvider(provider), plannedModel, err instanceof Error ? err : new Error(String(err)));
       failures.push(`${provider}: ${err?.message || String(err)}`);
+      options.onProgress?.(`${provider} 转写失败，准备尝试下一个引擎`);
     }
   }
 

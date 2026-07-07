@@ -7,7 +7,9 @@ release-out/
 coverage/
 logs/
 .codex-run/
+.lumi-runtime/
 .playwright-mcp/
+__pycache__/
 .DS_Store
 *.log
 .env*

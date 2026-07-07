@@ -1897,7 +1897,7 @@ export function registerChatHandler(
                 });
               },
               onProgress: (step: string) => {
-                emitAgent("agent:chunk", { text: `[${step}]\n`, agentName: "Lumi" });
+                emitAgent("agent:progress", { text: step, agentName: "Lumi" });
               },
               ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
               ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),

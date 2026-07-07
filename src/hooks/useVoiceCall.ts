@@ -26,6 +26,10 @@ interface StartCallOptions {
   orgId?: string;
 }
 
+interface EndCallOptions {
+  refineTranscript?: boolean;
+}
+
 export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFromVoice, canSendMicAudio }: UseVoiceCallOptions) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [audioLevel, setAudioLevel] = useState(0);
@@ -643,11 +647,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
   }, []);
 
-  const endCall = useCallback(() => {
+  const endCall = useCallback((options: EndCallOptions = {}) => {
     isCallActive.current = false;
     clearPassiveTimers();
     clearThinkingWatchdog();
-    socket?.emit('audio:stop');
+    socket?.emit('audio:stop', { refineTranscript: options.refineTranscript === true });
     stopAllPlayback();
 
     if (streamRef.current) {

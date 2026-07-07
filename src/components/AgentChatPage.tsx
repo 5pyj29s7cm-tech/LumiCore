@@ -937,6 +937,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       }
     };
 
+    const onProgress = (data: { text?: string; tone?: ChatProgressTone; requestId?: string; source?: string }) => {
+      if (!isCurrentChatEvent(data)) return;
+      pushChatProgress(data.text || '', data.tone || 'tool');
+    };
+
     const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; requestId?: string; source?: string }) => {
       if (!isCurrentChatEvent(data)) return;
       setWorkflowStatus('waiting_confirmation');
@@ -1162,6 +1167,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     socket.on("agent:delegation", onDelegation);
     socket.on("agent:background_task_update", onBackgroundTaskUpdate);
     socket.on("agent:chunk", onChunk);
+    socket.on("agent:progress", onProgress);
     socket.on("agent:tool", onTool);
     socket.on("agent:tool_call", onTool);
     socket.on("agent:confirm_tool", onConfirmTool);
@@ -1175,6 +1181,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       socket.off("agent:delegation", onDelegation);
       socket.off("agent:background_task_update", onBackgroundTaskUpdate);
       socket.off("agent:chunk", onChunk);
+      socket.off("agent:progress", onProgress);
       socket.off("agent:tool", onTool);
       socket.off("agent:tool_call", onTool);
       socket.off("agent:confirm_tool", onConfirmTool);
