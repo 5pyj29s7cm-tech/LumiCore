@@ -1954,6 +1954,7 @@ export function DesktopUI({
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
   const [meetingNotesOpen, setMeetingNotesOpen] = useState(false);
+  const [meetingPaused, setMeetingPaused] = useState(false);
   const [meetingStartedAt, setMeetingStartedAt] = useState<number | null>(() => {
     const saved = localStorage.getItem('lumi_meeting_started_at');
     return saved ? Number(saved) || null : null;
@@ -1965,18 +1966,23 @@ export function DesktopUI({
   const [meetingReportGenerating, setMeetingReportGenerating] = useState(false);
   const [legalMeetingCaseTitle, setLegalMeetingCaseTitle] = useState(() => getLegalCaseLabel(getLegalConsultationCase()));
   const meetingModeRef = useRef(operationMode === 'meeting');
+  const meetingPausedRef = useRef(meetingPaused);
   const meetingVoiceActiveRef = useRef(false);
   const lastMeetingTranscriptRef = useRef<{ text: string; at: number; speakerKey: string }>({ text: '', at: 0, speakerKey: '' });
   const lastLegalMeetingArchiveRef = useRef('');
   useEffect(() => {
     meetingModeRef.current = operationMode === 'meeting';
   }, [operationMode]);
+  useEffect(() => {
+    meetingPausedRef.current = meetingPaused;
+  }, [meetingPaused]);
 
   const persistMeetingNotes = useCallback((notes: MeetingNote[]) => {
     localStorage.setItem('lumi_meeting_notes', JSON.stringify(notes.slice(-300)));
   }, []);
 
   const resetMeetingCapture = useCallback((startedAt = Date.now()) => {
+    setMeetingPaused(false);
     setMeetingNotes([]);
     setMeetingReport('');
     setMeetingStartedAt(startedAt);
@@ -2003,7 +2009,7 @@ export function DesktopUI({
   }, [meetingNoteHasSpeakerInfo, meetingSpeakerLabel]);
 
   const appendMeetingTranscript = useCallback((text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => {
-    if (!meetingModeRef.current || !isFinal) return;
+    if (!meetingModeRef.current || meetingPausedRef.current || !isFinal) return;
     const clean = text.trim();
     if (!clean) return;
     const now = Date.now();
@@ -2108,6 +2114,7 @@ export function DesktopUI({
   }, [activePersonality, getVoiceScopeOptions, selectedVoiceId, startCall]);
 
   const stopMeetingAudio = useCallback(() => {
+    setMeetingPaused(false);
     meetingVoiceActiveRef.current = false;
     if (operationMode === 'meeting') setOperationMode('assistant');
     if (callState !== 'idle') endCall();
@@ -2115,6 +2122,15 @@ export function DesktopUI({
 
   useEffect(() => {
     if (operationMode !== 'meeting') {
+      if (meetingPaused) setMeetingPaused(false);
+      if (meetingVoiceActiveRef.current && callState !== 'idle') {
+        meetingVoiceActiveRef.current = false;
+        endCall();
+      }
+      return;
+    }
+
+    if (meetingPaused) {
       if (meetingVoiceActiveRef.current && callState !== 'idle') {
         meetingVoiceActiveRef.current = false;
         endCall();
@@ -2136,7 +2152,7 @@ export function DesktopUI({
       meetingVoiceActiveRef.current = true;
       void startCall(selectedVoiceId, activePersonality, activePersonality, { ...getVoiceScopeOptions(), transcriptionOnly: true });
     }
-  }, [activePersonality, callState, endCall, getVoiceScopeOptions, operationMode, selectedVoiceId, startCall]);
+  }, [activePersonality, callState, endCall, getVoiceScopeOptions, meetingPaused, operationMode, selectedVoiceId, startCall]);
   // Spacebar push-to-talk: track whether this call was started by spacebar
   const isSpacebarRecording = useRef(false);
   const callStateRef = useRef(callState);
@@ -2520,6 +2536,30 @@ export function DesktopUI({
     endCall();
   }, [endCall, endMeetingAndReport, operationMode]);
 
+  const pauseMeetingCapture = useCallback(() => {
+    setMeetingPaused(true);
+    meetingVoiceActiveRef.current = false;
+    meetingStartAttemptRef.current = 0;
+    if (callState !== 'idle') endCall();
+    toast.success(lang === 'zh' ? '会议记录已暂停' : 'Meeting capture paused');
+  }, [callState, endCall, lang]);
+
+  const resumeMeetingCapture = useCallback(() => {
+    meetingStartAttemptRef.current = 0;
+    setMeetingPaused(false);
+    if (operationMode !== 'meeting') setOperationMode('meeting');
+    setMeetingNotesOpen(true);
+    toast.success(lang === 'zh' ? '会议记录继续' : 'Meeting capture resumed');
+  }, [lang, operationMode, setOperationMode]);
+
+  const toggleMeetingCapturePaused = useCallback(() => {
+    if (meetingPaused) {
+      resumeMeetingCapture();
+      return;
+    }
+    pauseMeetingCapture();
+  }, [meetingPaused, pauseMeetingCapture, resumeMeetingCapture]);
+
   const copyMeetingNotes = useCallback(async () => {
     if (meetingNotes.length === 0) {
       toast.info(lang === 'zh' ? '暂无会议笔记' : 'No meeting notes yet');
@@ -2576,7 +2616,10 @@ export function DesktopUI({
   const confirmOperationModeChange = useCallback(() => {
     if (!pendingOperationMode) return;
     setOperationMode(pendingOperationMode);
-    if (pendingOperationMode === 'meeting') setMeetingNotesOpen(true);
+    if (pendingOperationMode === 'meeting') {
+      setMeetingPaused(false);
+      setMeetingNotesOpen(true);
+    }
     setPendingOperationMode(null);
   }, [pendingOperationMode, setOperationMode]);
 
@@ -2595,6 +2638,7 @@ export function DesktopUI({
       else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
 
       if (detail.confirmed) {
+        setMeetingPaused(false);
         setOperationMode('meeting');
         setMeetingNotesOpen(true);
         detail.respond?.({ ok: true, action: 'start_meeting_mode', mode: 'meeting' });
@@ -3600,7 +3644,10 @@ export function DesktopUI({
           throw new Error(`${value} mode requires explicit user confirmation`);
         }
         setOperationMode(value as OperationMode);
-        if (value === 'meeting') setMeetingNotesOpen(true);
+        if (value === 'meeting') {
+          setMeetingPaused(false);
+          setMeetingNotesOpen(true);
+        }
       };
 
       try {
@@ -3892,6 +3939,7 @@ export function DesktopUI({
         },
         meeting: {
           active: operationMode === 'meeting',
+          paused: meetingPaused,
           noteCount: meetingNotes.length,
           hasReport: Boolean(meetingReport),
           startedAt: meetingStartedAt,
@@ -4856,26 +4904,36 @@ export function DesktopUI({
           </motion.div>
         )}
       </AnimatePresence>
-
-      <AnimatePresence>
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
         {meetingNotesOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[220] pointer-events-auto bg-black/[0.72] p-3 backdrop-blur-2xl md:p-6"
+            transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
+            className="fixed inset-0 z-[100000] pointer-events-auto overflow-hidden bg-[#020711] text-white"
+            style={{
+              background:
+                'radial-gradient(circle at 16% 12%, rgba(34,211,238,0.22) 0%, transparent 30%), radial-gradient(circle at 82% 18%, rgba(56,189,248,0.13) 0%, transparent 32%), linear-gradient(145deg, #020711 0%, #03111c 46%, #010203 100%)',
+            }}
           >
-            <GlassCard className="flex h-full w-full flex-col overflow-hidden rounded-[2rem] border-cyan-400/20 bg-black/[0.86] p-4 shadow-2xl backdrop-blur-2xl md:p-6">
+            <GlassCard
+              hoverEffect={false}
+              className="flex h-full w-full flex-col overflow-hidden rounded-none border-0 bg-transparent p-4 shadow-none backdrop-blur-2xl md:p-8"
+            >
               <div className="flex shrink-0 items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${operationMode === 'meeting' && callState !== 'idle' ? 'bg-cyan-400 animate-pulse' : 'bg-white/25'}`} />
+                    <span className={`h-2 w-2 rounded-full ${operationMode === 'meeting' && !meetingPaused && callState !== 'idle' ? 'bg-cyan-400 animate-pulse' : meetingPaused ? 'bg-amber-300' : 'bg-white/25'}`} />
                     <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white/80">
                       {t.meetingMode || (lang === 'zh' ? '会议模式' : 'Meeting Mode')}
                     </h3>
                   </div>
                   <p className="mt-1 text-[11px] leading-relaxed text-white/45">
-                    {operationMode === 'meeting'
+                    {meetingPaused
+                      ? (lang === 'zh' ? '会议记录已暂停，已有笔记会保留' : 'Meeting capture paused; existing notes are preserved')
+                      : operationMode === 'meeting'
                       ? (lang === 'zh' ? '正在自动语音转文字并收录笔记' : 'Recording speech-to-text notes automatically')
                       : (lang === 'zh' ? '会议笔记已暂停' : 'Meeting notes paused')}
                   </p>
@@ -4915,7 +4973,9 @@ export function DesktopUI({
               <div className="mt-5 grid shrink-0 grid-cols-3 gap-2 text-center md:gap-3">
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
                   <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '状态' : 'State'}</div>
-                  <div className="mt-1 text-xs font-bold text-cyan-300">{callState === 'idle' ? 'Idle' : callState}</div>
+                  <div className={`mt-1 text-xs font-bold ${meetingPaused ? 'text-amber-300' : 'text-cyan-300'}`}>
+                    {meetingPaused ? 'Paused' : callState === 'idle' ? 'Idle' : callState}
+                  </div>
                 </div>
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
                   <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '条目' : 'Items'}</div>
@@ -4975,6 +5035,18 @@ export function DesktopUI({
 
               <div className="mt-5 flex shrink-0 flex-col gap-2 border-t border-white/10 pt-4 sm:flex-row">
                 <button
+                  onClick={toggleMeetingCapturePaused}
+                  disabled={meetingReportGenerating}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-black uppercase tracking-widest transition-colors ${
+                    meetingPaused
+                      ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15'
+                      : 'border-amber-400/25 bg-amber-400/10 text-amber-200 hover:bg-amber-400/15'
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {meetingPaused ? <Play size={14} /> : <Pause size={14} />}
+                  <span>{meetingPaused ? (lang === 'zh' ? '继续记录' : 'Resume') : (lang === 'zh' ? '暂停记录' : 'Pause')}</span>
+                </button>
+                <button
                   onClick={() => void endMeetingAndReport()}
                   disabled={meetingReportGenerating}
                   className="flex-1 rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-xs font-black uppercase tracking-widest text-cyan-200 transition-colors hover:bg-cyan-400/15"
@@ -4993,7 +5065,9 @@ export function DesktopUI({
             </GlassCard>
           </motion.div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Workflow Status Panel — breathing lights + step log */}
       <AnimatePresence>
