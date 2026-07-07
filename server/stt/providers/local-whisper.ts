@@ -49,6 +49,12 @@ function safeAudioExt(fileName?: string): string {
   return SAFE_AUDIO_EXTS.has(ext) ? ext : '.wav';
 }
 
+function getLocalWhisperTimeoutMs(): number {
+  const configured = Number(process.env.LUMI_LOCAL_WHISPER_TIMEOUT_MS || '');
+  if (Number.isFinite(configured) && configured > 0) return Math.max(30_000, configured);
+  return 10 * 60 * 1000;
+}
+
 export async function transcribe(audioBuffer: Buffer, language: string = 'zh', options: LocalWhisperOptions = {}): Promise<STTResult> {
   const python = findPython();
   if (!python) throw new Error('Python not found. Local STT requires Python 3.10+.');
@@ -64,9 +70,12 @@ export async function transcribe(audioBuffer: Buffer, language: string = 'zh', o
   try {
     const stdout = execFileSync(python, [SCRIPT_PATH, audioPath, language || 'zh'], {
       encoding: 'utf-8',
-      timeout: 30000, // 30s for first run (model download), 2s for subsequent
-      maxBuffer: 1024 * 1024,
-      env: { ...process.env },
+      timeout: getLocalWhisperTimeoutMs(),
+      maxBuffer: 10 * 1024 * 1024,
+      env: {
+        ...process.env,
+        KMP_DUPLICATE_LIB_OK: process.env.KMP_DUPLICATE_LIB_OK || 'TRUE',
+      },
     });
 
     const text = stdout.trim();

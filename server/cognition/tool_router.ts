@@ -251,6 +251,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'audio recording transcription or speech-to-text file request',
     patterns: [
       /(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3).*(?:\u8f6c\u5199|\u8f6c\u6587\u5b57|\u6587\u5b57\u7a3f|\u6587\u4ef6)|(?:\u8f6c\u5199|\u8f6c\u6587\u5b57|\u6587\u5b57\u7a3f).*(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/u,
+      /(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3).*(?:\u7b14\u5f55|\u8c08\u8bdd\u7b14\u5f55|\u8be2\u95ee\u7b14\u5f55|\u7eaa\u8981|\u6750\u6599|\u6574\u7406|\u8bb0\u5f55)|(?:\u7b14\u5f55|\u8c08\u8bdd\u7b14\u5f55|\u8be2\u95ee\u7b14\u5f55|\u7eaa\u8981|\u6750\u6599).*(?:\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/u,
       /\b(audio|voice|recording|memo)\b.*\b(transcri|speech\s*to\s*text|text\s*file)\b/i,
       /\b(transcribe|speech\s*to\s*text)\b.*\b(audio|voice|recording|memo)\b/i,
     ],

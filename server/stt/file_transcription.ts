@@ -51,7 +51,7 @@ const PROVIDER_MODELS: Record<AudioFileProvider, string> = {
   'local-whisper': 'faster-whisper-small',
 };
 
-const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['qwen', 'deepgram', 'whisper', 'ark', 'local-whisper'];
+const DEFAULT_AUTO_ORDER: AudioFileProvider[] = ['deepgram', 'whisper', 'ark', 'local-whisper'];
 
 function getConfiguredKey(provider: AudioFileProvider, availability?: Partial<Record<AudioFileProvider, boolean>>): string {
   if (availability && Object.prototype.hasOwnProperty.call(availability, provider)) {
@@ -106,10 +106,14 @@ export function getAudioFileProviderPlan(options: AudioFileTranscriptionOptions 
   const baseOrder: AudioFileProvider[] = preferred && preferred !== 'auto'
     ? [preferred as AudioFileProvider, ...DEFAULT_AUTO_ORDER]
     : DEFAULT_AUTO_ORDER;
+  const allowQwenFileStt = process.env.LUMI_ENABLE_QWEN_FILE_STT === '1';
 
   const providers: AudioFileProvider[] = [];
   for (const provider of baseOrder) {
     if (providers.includes(provider)) continue;
+    // DashScope file ASR currently requires public file_urls; Lumi's local upload flow
+    // passes an in-memory file buffer, so keep qwen out unless explicitly enabled.
+    if (provider === 'qwen' && !allowQwenFileStt) continue;
     if (provider === 'local-whisper' && !allowLocal) continue;
     if (!getConfiguredKey(provider, options.providerAvailability)) continue;
     if (preferred !== provider && !isCircuitClosed(circuitProvider(provider), PROVIDER_MODELS[provider])) continue;
