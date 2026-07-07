@@ -12,7 +12,7 @@ import { ToolExecutionRecord } from "../tools/types";
 import { personalityRegistry } from "../personality";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../personality/state";
 import { himTick } from "../personality/him";
-import { createStreamingSession, getActiveSTTProvider } from "../stt/adapter";
+import { createStreamingSession, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, resolveEmotionVoice } from "../tts/adapter";
 import { recordLatency } from "../monitor/latency_store";
 import { getOrCreateActiveConversation, addMessage, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
@@ -1390,7 +1390,7 @@ export function registerVoiceHandlers(
     // End previous STT session if re-starting without explicit stop
     if (session.sttSession) { try { session.sttSession.end(); } catch {} session.sttSession = null; }
 
-    const sttProvider = getActiveSTTProvider();
+    const sttProvider = getActiveStreamingSTTProvider();
     if (sttProvider) {
       try {
         const language = sttProvider === 'qwen' ? 'zh' : 'zh-CN';
@@ -1517,8 +1517,10 @@ export function registerVoiceHandlers(
         socket.emit("audio:error", { message: err.message });
       }
     } else {
-      socket.emit("audio:status", { status: "listening" });
-      socket.emit("audio:error", { message: "No STT provider configured. Set DASHSCOPE_API_KEY or DEEPGRAM_API_KEY." });
+      socket.emit("audio:status", { status: "idle" });
+      socket.emit("audio:error", {
+        message: "Realtime speech recognition is not configured. Set DASHSCOPE_API_KEY/QWEN_API_KEY or DEEPGRAM_API_KEY. Local/OpenAI Whisper can still transcribe uploaded audio files.",
+      });
     }
   });
 

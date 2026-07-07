@@ -9,12 +9,31 @@ import { getVoicePreference } from '../config/voice_preference';
 import { recordLatency } from '../monitor/latency_store';
 import { isCircuitClosed } from '../cloud/circuit_breaker';
 
+type StreamingSTTProvider = 'qwen' | 'deepgram';
+
+function hasQwenKey(): boolean {
+  return Boolean(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
+    || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY'));
+}
+
+function hasDeepgramKey(): boolean {
+  return Boolean(process.env.DEEPGRAM_API_KEY || getKey('DEEPGRAM_API_KEY'));
+}
+
+function hasOpenAIKey(): boolean {
+  return Boolean(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY'));
+}
+
 export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promise<STTResult> {
   const start = Date.now();
-  // Local whisper is preferred when available — no API key, no network, no latency
-  const effectiveProvider = config.provider === 'local-whisper'
-    ? (localWhisper.isLocalWhisperAvailable() ? 'local-whisper' : getActiveSTTProvider() || 'whisper')
+  // Local Whisper is batch-only; use it only when installed.
+  const effectiveProvider = config.provider === 'local-whisper' && !localWhisper.isLocalWhisperAvailable()
+    ? getActiveSTTProvider()
     : config.provider;
+
+  if (!effectiveProvider) {
+    throw new Error('No STT provider configured. Configure local Whisper, DashScope, Deepgram, OpenAI Whisper, or Doubao Speech.');
+  }
 
   let result: STTResult;
   switch (effectiveProvider) {
@@ -61,14 +80,11 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
 export function createStreamingSession(
   config: STTConfig,
 ): deepgram.DeepgramStreamSession | qwen.QwenStreamSession {
-  // local-whisper is batch-only — auto-fallback to Qwen for streaming
-  const provider = config.provider === 'local-whisper'
-    ? (process.env.DASHSCOPE_API_KEY ? 'qwen' : 'deepgram')
-    : config.provider;
+  const provider = config.provider;
   if (provider === 'qwen') {
     return qwen.createStream(config.language, config.interimResults);
   }
-  if (provider === 'deepgram' || provider === 'whisper') {
+  if (provider === 'deepgram') {
     return deepgram.createStream(config.language, config.interimResults);
   }
   throw new Error(`Streaming not supported for provider: ${provider}`);
@@ -89,15 +105,30 @@ export function getActiveSTTProvider(): STTProvider | null {
   const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY');
   if (doubaoSpeech && doubaoSpeech.includes(':')) return 'ark';
   // Check every cloud provider — skip ones with open circuit breakers
-  const qwenKey = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
-    || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY');
+  const qwenKey = hasQwenKey();
   if (qwenKey && isCircuitClosed('qwen')) return 'qwen';
-  if (process.env.DEEPGRAM_API_KEY || getKey('DEEPGRAM_API_KEY')) {
+  if (hasDeepgramKey()) {
     if (isCircuitClosed('deepgram')) return 'deepgram';
   }
   // Fallback: try them anyway if nothing healthy (circuit may have recovered)
   if (qwenKey) return 'qwen';
-  if (process.env.DEEPGRAM_API_KEY || getKey('DEEPGRAM_API_KEY')) return 'deepgram';
-  if (process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY')) return 'whisper';
-  return 'local-whisper';
+  if (hasDeepgramKey()) return 'deepgram';
+  if (hasOpenAIKey()) return 'whisper';
+  return null;
+}
+
+export function getActiveStreamingSTTProvider(): StreamingSTTProvider | null {
+  const pref = getVoicePreference();
+  const qwenKey = hasQwenKey();
+  const deepgramKey = hasDeepgramKey();
+
+  if (pref.stt === 'qwen') return qwenKey ? 'qwen' : null;
+  if (pref.stt === 'deepgram') return deepgramKey ? 'deepgram' : null;
+  if (pref.stt === 'local-whisper' || pref.stt === 'ark' || pref.stt === 'whisper') return null;
+
+  if (qwenKey && isCircuitClosed('qwen-stt')) return 'qwen';
+  if (deepgramKey && isCircuitClosed('deepgram')) return 'deepgram';
+  if (qwenKey) return 'qwen';
+  if (deepgramKey) return 'deepgram';
+  return null;
 }

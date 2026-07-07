@@ -41,6 +41,11 @@ type ChatAttachment = {
   size?: number;
   kind: 'image' | 'audio' | 'file';
   downloadUrl?: string;
+  transcript?: string | null;
+  transcriptionStatus?: string;
+  transcriptionError?: string | null;
+  transcriptionProvider?: string;
+  transcriptionModel?: string;
 };
 
 type GeneratedFileLink = {
@@ -85,6 +90,107 @@ function isImageFileName(name: string, mimeType?: string): boolean {
 
 function isAudioFileName(name: string, mimeType?: string): boolean {
   return Boolean(mimeType?.startsWith('audio/')) || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(name || '');
+}
+
+function extractAudioTranscript(value?: string | null): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const marker = 'transcript:';
+  const index = raw.toLowerCase().indexOf(marker);
+  const transcript = index >= 0 ? raw.slice(index + marker.length).trim() : raw;
+  return transcript || null;
+}
+
+function getSelectedTextWithin(container?: HTMLElement | null): string {
+  if (typeof window === 'undefined') return '';
+  const selection = window.getSelection?.();
+  const text = selection?.toString().trim() || '';
+  if (!selection || !text) return '';
+  if (!container) return text;
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  if ((anchor && container.contains(anchor)) || (focus && container.contains(focus))) return text;
+  return '';
+}
+
+const CHAT_ACCENT_STORAGE_KEY = 'lumi_chat_accent_theme';
+const CHAT_ACCENT_THEMES = [
+  {
+    id: 'saturn',
+    label: 'Saturn',
+    saturn: '#ffcc00',
+    glow: '#00ffff',
+    nebula: '#ff2d55',
+    mars: '#ff4d4d',
+    background: 'radial-gradient(circle at 18% 12%, rgba(255,204,0,0.24) 0%, transparent 28%), radial-gradient(circle at 82% 22%, rgba(0,255,255,0.14) 0%, transparent 30%), linear-gradient(145deg, #11100a 0%, #060810 46%, #020205 100%)',
+    panel: 'linear-gradient(180deg, rgba(34,28,8,0.82) 0%, rgba(7,9,18,0.92) 100%)',
+    panelBorder: 'rgba(255, 204, 0, 0.32)',
+    panelShadow: '0 26px 80px rgba(255, 204, 0, 0.13), 0 0 0 1px rgba(255,255,255,0.04)',
+    header: 'linear-gradient(90deg, rgba(255,204,0,0.16), rgba(0,255,255,0.07))',
+    progress: 'linear-gradient(90deg, rgba(255,204,0,0.18), rgba(0,0,0,0.18))',
+    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.072), rgba(255,204,0,0.055))',
+    userBubble: 'linear-gradient(135deg, rgba(255,204,0,0.23), rgba(0,255,255,0.08))',
+    inputPanel: 'linear-gradient(90deg, rgba(255,204,0,0.12), rgba(0,0,0,0.32))',
+    input: 'rgba(18, 14, 4, 0.72)',
+  },
+  {
+    id: 'cyan',
+    label: 'Cyan',
+    saturn: '#22d3ee',
+    glow: '#a78bfa',
+    nebula: '#38bdf8',
+    mars: '#fb7185',
+    background: 'radial-gradient(circle at 20% 12%, rgba(34,211,238,0.30) 0%, transparent 30%), radial-gradient(circle at 84% 16%, rgba(167,139,250,0.22) 0%, transparent 32%), linear-gradient(145deg, #061924 0%, #07101f 48%, #020205 100%)',
+    panel: 'linear-gradient(180deg, rgba(5,35,49,0.84) 0%, rgba(5,9,20,0.92) 100%)',
+    panelBorder: 'rgba(34, 211, 238, 0.40)',
+    panelShadow: '0 26px 80px rgba(34, 211, 238, 0.16), 0 0 0 1px rgba(167,139,250,0.10)',
+    header: 'linear-gradient(90deg, rgba(34,211,238,0.18), rgba(167,139,250,0.12))',
+    progress: 'linear-gradient(90deg, rgba(34,211,238,0.20), rgba(20,9,44,0.20))',
+    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.07), rgba(34,211,238,0.06))',
+    userBubble: 'linear-gradient(135deg, rgba(34,211,238,0.24), rgba(167,139,250,0.13))',
+    inputPanel: 'linear-gradient(90deg, rgba(34,211,238,0.13), rgba(4,9,20,0.35))',
+    input: 'rgba(4, 22, 34, 0.76)',
+  },
+  {
+    id: 'emerald',
+    label: 'Emerald',
+    saturn: '#34d399',
+    glow: '#5eead4',
+    nebula: '#84cc16',
+    mars: '#f97316',
+    background: 'radial-gradient(circle at 18% 12%, rgba(52,211,153,0.28) 0%, transparent 30%), radial-gradient(circle at 82% 20%, rgba(249,115,22,0.15) 0%, transparent 30%), linear-gradient(145deg, #071d14 0%, #07130f 46%, #020205 100%)',
+    panel: 'linear-gradient(180deg, rgba(6,40,27,0.84) 0%, rgba(4,12,10,0.93) 100%)',
+    panelBorder: 'rgba(52, 211, 153, 0.40)',
+    panelShadow: '0 26px 80px rgba(52, 211, 153, 0.15), 0 0 0 1px rgba(249,115,22,0.08)',
+    header: 'linear-gradient(90deg, rgba(52,211,153,0.17), rgba(249,115,22,0.08))',
+    progress: 'linear-gradient(90deg, rgba(52,211,153,0.19), rgba(4,14,10,0.22))',
+    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.066), rgba(52,211,153,0.058))',
+    userBubble: 'linear-gradient(135deg, rgba(52,211,153,0.25), rgba(94,234,212,0.10))',
+    inputPanel: 'linear-gradient(90deg, rgba(52,211,153,0.13), rgba(4,12,10,0.36))',
+    input: 'rgba(4, 26, 18, 0.76)',
+  },
+  {
+    id: 'rose',
+    label: 'Rose',
+    saturn: '#fb7185',
+    glow: '#f0abfc',
+    nebula: '#f472b6',
+    mars: '#f97316',
+    background: 'radial-gradient(circle at 20% 12%, rgba(251,113,133,0.30) 0%, transparent 29%), radial-gradient(circle at 82% 18%, rgba(240,171,252,0.19) 0%, transparent 30%), linear-gradient(145deg, #2b0a17 0%, #130713 46%, #020205 100%)',
+    panel: 'linear-gradient(180deg, rgba(45,9,24,0.84) 0%, rgba(15,7,16,0.93) 100%)',
+    panelBorder: 'rgba(251, 113, 133, 0.42)',
+    panelShadow: '0 26px 80px rgba(251, 113, 133, 0.16), 0 0 0 1px rgba(240,171,252,0.09)',
+    header: 'linear-gradient(90deg, rgba(251,113,133,0.18), rgba(240,171,252,0.10))',
+    progress: 'linear-gradient(90deg, rgba(251,113,133,0.20), rgba(23,7,22,0.22))',
+    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.068), rgba(251,113,133,0.060))',
+    userBubble: 'linear-gradient(135deg, rgba(251,113,133,0.26), rgba(240,171,252,0.12))',
+    inputPanel: 'linear-gradient(90deg, rgba(251,113,133,0.14), rgba(15,7,16,0.36))',
+    input: 'rgba(36, 8, 20, 0.76)',
+  },
+] as const;
+
+function getChatAccentTheme(id?: string | null) {
+  return CHAT_ACCENT_THEMES.find(theme => theme.id === id) || CHAT_ACCENT_THEMES[0];
 }
 
 const CHAT_ATTACHMENT_ACCEPT = [
@@ -203,6 +309,22 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const voicePickerRef = useRef<HTMLDivElement>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [installedSkillNames, setInstalledSkillNames] = useState<string[]>([]);
+  const inputDictationActiveRef = useRef(false);
+  const [chatAccentThemeId, setChatAccentThemeId] = useState(() => {
+    if (typeof window === 'undefined') return CHAT_ACCENT_THEMES[0].id;
+    return localStorage.getItem(CHAT_ACCENT_STORAGE_KEY) || CHAT_ACCENT_THEMES[0].id;
+  });
+  const chatAccentTheme = useMemo(() => getChatAccentTheme(chatAccentThemeId), [chatAccentThemeId]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    root.style.setProperty('--color-celestial-saturn', chatAccentTheme.saturn);
+    root.style.setProperty('--color-celestial-glow', chatAccentTheme.glow);
+    root.style.setProperty('--color-celestial-nebula', chatAccentTheme.nebula);
+    root.style.setProperty('--color-celestial-mars', chatAccentTheme.mars);
+    try { localStorage.setItem(CHAT_ACCENT_STORAGE_KEY, chatAccentTheme.id); } catch {}
+  }, [chatAccentTheme]);
 
   // Fetch installed skills to generate dynamic suggestions
   useEffect(() => {
@@ -229,6 +351,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     socket,
     onTranscript: (text, isFinal) => {
       if (isFinal) {
+        if (inputDictationActiveRef.current) {
+          const transcript = String(text || '').trim();
+          if (transcript) {
+            const current = draftTextRef.current.trim();
+            setDraftText([current, transcript].filter(Boolean).join('\n'));
+          }
+          return;
+        }
         setMessages(prev => [...prev, {
           id: Date.now().toString(),
           text,
@@ -291,6 +421,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const seenToolEventIds = useRef<Set<string>>(new Set());
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    if (inputDictationActiveRef.current && callState === 'idle') {
+      inputDictationActiveRef.current = false;
+      endCall();
+      setIsListening(false);
+    }
+  }, [callState, endCall]);
 
   const upsertBackgroundWorkflowTask = useCallback((task: BackgroundWorkflowTask) => {
     if (!task?.id) return;
@@ -400,7 +538,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     return Array.isArray(file.agentIds) && file.agentIds.includes(targetAgentId);
   }, [activeDomain]);
 
-  const recentKnowledgeFiles = useMemo(() => knowledgeFiles.slice(0, 4), [knowledgeFiles]);
   const readyKnowledgeCount = useMemo(() => knowledgeFiles.filter(isKnowledgeReady).length, [isKnowledgeReady, knowledgeFiles]);
   const knowledgeStatusText = knowledgeFiles.length > 0
     ? ui(`${readyKnowledgeCount}/${knowledgeFiles.length} 个资料可用于对话`, `${readyKnowledgeCount}/${knowledgeFiles.length} knowledge files available`)
@@ -466,9 +603,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     }
   }, [setDraftText, t.speechNotSupported]);
 
-  const handleCopyMessage = useCallback(async (text: string, id: string) => {
+  const handleCopyMessage = useCallback(async (text: string, id: string, container?: HTMLElement | null) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(getSelectedTextWithin(container) || text);
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 1500);
     } catch {}
@@ -1045,6 +1182,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       size: item.size || 0,
       kind: item.kind,
       downloadUrl: item.downloadUrl,
+      transcript: item.transcript || null,
+      transcriptionStatus: item.transcriptionStatus || '',
+      transcriptionError: item.transcriptionError || null,
+      transcriptionProvider: item.transcriptionProvider || '',
+      transcriptionModel: item.transcriptionModel || '',
     }));
     if ((!trimmedText && outgoingAttachments.length === 0) || !user) return;
     const outgoingText = trimmedText || ui('请帮我看看这些附件。', 'Please review these attachments.');
@@ -1187,15 +1329,35 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   };
 
   const toggleListening = () => {
-    if (!recognition.current) {
-      toast.error(t.speechNotSupported || "Speech recognition is not supported in this browser.");
-      return;
-    }
-
     if (isListening) {
-      recognition.current.stop();
+      if (inputDictationActiveRef.current) {
+        inputDictationActiveRef.current = false;
+        endCall();
+        setIsListening(false);
+        return;
+      }
+      recognition.current?.stop();
     } else {
       stop(); // Stop TTS if speaking
+      const useBackendDictation = isElectron || !recognition.current;
+      if (useBackendDictation) {
+        if (callState !== 'idle') {
+          toast.error(ui('语音通话正在进行，先结束当前通话', 'Voice is already active. End the current call first.'));
+          return;
+        }
+        inputDictationActiveRef.current = true;
+        setIsListening(true);
+        startCall(selectedVoiceId, 'lumi', agentId, {
+          transcriptionOnly: true,
+          domain: activeDomain,
+          orgId: activeOrgId,
+        }).catch((err: any) => {
+          inputDictationActiveRef.current = false;
+          setIsListening(false);
+          toast.error(err?.message || t.speechNotSupported || 'Speech recognition failed');
+        });
+        return;
+      }
       recognition.current.start();
       setIsListening(true);
     }
@@ -1226,6 +1388,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             f.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
             f.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
             'file';
+          const transcript = kind === 'audio'
+            ? extractAudioTranscript(f.transcript || f.content || f.preview || null)
+            : null;
           return {
             id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             fileName,
@@ -1236,12 +1401,29 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             size: f.rawSize || f.size || 0,
             kind,
             downloadUrl: f.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(f.id)}?inline=1`) : undefined,
+            transcript,
+            transcriptionStatus: f.extractionStatus || (transcript ? 'indexed' : ''),
+            transcriptionError: f.extractionError || f.syncError || null,
+            transcriptionProvider: f.extractionProvider || undefined,
+            transcriptionModel: f.extractionModel || undefined,
           };
         });
         setPendingAttachments(prev => [...prev, ...attachments]);
         setOptimizationProgress(100);
         setTimeout(() => { setIsOptimizing(false); setOptimizationProgress(0); }, 500);
-        if (attachments.length > 0) toast.success(ui('已添加到本条消息', 'Attached to this message'));
+        const audioTranscripts = attachments
+          .filter(item => item.kind === 'audio' && item.transcript)
+          .map(item => `${item.fileName}:\n${item.transcript}`);
+        if (audioTranscripts.length > 0) {
+          const current = draftTextRef.current.trim();
+          setDraftText([current, audioTranscripts.join('\n\n')].filter(Boolean).join('\n\n'));
+          toast.success(ui('录音已转成文字并填入输入框', 'Audio transcript inserted into the input'));
+        } else if (attachments.some(item => item.kind === 'audio' && item.transcriptionError)) {
+          const failed = attachments.find(item => item.kind === 'audio' && item.transcriptionError);
+          toast.error(failed?.transcriptionError || ui('录音转文字失败', 'Audio transcription failed'));
+        } else if (attachments.length > 0) {
+          toast.success(ui('已添加到本条消息', 'Attached to this message'));
+        }
         notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
       } else {
         setIsOptimizing(false);
@@ -1277,7 +1459,36 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   );
   const workflowPanelVisible =
     isOpen &&
-    (workflowStatus !== 'idle' || workflowSteps.length > 0 || workflowHasExecution || backgroundWorkflowTasks.length > 0);
+    (workflowStatus !== 'idle' || isTyping || workflowSteps.length > 0 || workflowHasExecution || backgroundWorkflowTasks.length > 0);
+  const latestWorkflowStep = workflowSteps[workflowSteps.length - 1];
+  const workflowProgressVisible = workflowStatus !== 'idle' || isTyping || backgroundWorkflowTasks.length > 0;
+  const workflowStatusText =
+    workflowStatus === 'thinking' ? (t.workflowAnalyzing || 'Analyzing') :
+    workflowStatus === 'executing' ? (t.workflowExecuting || 'Executing tools') :
+    workflowStatus === 'waiting_confirmation' ? (t.workflowWaitingConfirm || 'Waiting for approval') :
+    workflowStatus === 'background' ? (t.workflowBackground || 'Working in background') :
+    workflowStatus === 'done' ? (t.workflowDone || 'Done') :
+    workflowStatus === 'error' ? (t.workflowError || 'Error') :
+    isTyping ? (t.neuralProcessing || 'Processing') :
+    (t.workflowIdle || 'Idle');
+  const chatPanelStyle: React.CSSProperties = {
+    background: chatAccentTheme.panel,
+    borderColor: chatAccentTheme.panelBorder,
+    boxShadow: chatAccentTheme.panelShadow,
+  };
+  const chatHeaderStyle: React.CSSProperties = {
+    background: chatAccentTheme.header,
+    borderBottomColor: chatAccentTheme.panelBorder,
+  };
+  const chatInputPanelStyle: React.CSSProperties = {
+    background: chatAccentTheme.inputPanel,
+    borderTopColor: chatAccentTheme.panelBorder,
+  };
+  const chatInputStyle: React.CSSProperties = {
+    background: chatAccentTheme.input,
+    borderColor: chatAccentTheme.panelBorder,
+    boxShadow: `0 0 0 1px ${chatAccentTheme.panelBorder}`,
+  };
   const displayMessages = searchQuery.trim()
     ? searchDisplayMessages
     : messages.length > CHAT_RENDER_LIMIT
@@ -1297,7 +1508,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
           className="fixed inset-0 z-[210] flex flex-col"
           style={{
-            background: 'radial-gradient(ellipse at 50% 30%, #0a0f1e 0%, #060810 40%, #020205 100%)',
+            background: chatAccentTheme.background,
             willChange: 'opacity, transform',
           }}
         >
@@ -1408,6 +1619,34 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             </AnimatePresence>
           </div>
 
+          <div
+            className="hidden h-10 items-center gap-1.5 rounded-2xl border px-2 sm:flex"
+            title={ui('切换聊天界面颜色', 'Switch chat colors')}
+            aria-label={ui('切换聊天界面颜色', 'Switch chat colors')}
+            style={{ background: chatAccentTheme.header, borderColor: chatAccentTheme.panelBorder }}
+          >
+            {CHAT_ACCENT_THEMES.map(theme => (
+              <button
+                key={theme.id}
+                type="button"
+                onClick={() => setChatAccentThemeId(theme.id)}
+                className={`h-6 w-6 rounded-full border transition-all ${
+                  chatAccentTheme.id === theme.id
+                    ? 'scale-110 border-white'
+                    : 'border-white/15 hover:border-white/45'
+                }`}
+                style={{
+                  background: `linear-gradient(135deg, ${theme.saturn}, ${theme.glow})`,
+                  boxShadow: chatAccentTheme.id === theme.id
+                    ? `0 0 0 3px ${theme.saturn}55, 0 0 22px ${theme.saturn}66`
+                    : `0 0 10px ${theme.saturn}24`,
+                }}
+                title={theme.label}
+                aria-label={theme.label}
+              />
+            ))}
+          </div>
+
           <VoiceCallButton
             callState={callState}
             audioLevel={audioLevel}
@@ -1471,8 +1710,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       <div className="flex gap-3 flex-1 min-h-0">
 
         {/* Chat Panel */}
-        <div className="flex-1 flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border-white/10 overflow-hidden shadow-2xl min-w-0">
-          <div className="p-4 md:p-6 border-b border-white/5 flex items-center justify-between bg-white/5">
+        <div
+          className="flex-1 flex flex-col glass rounded-[2.5rem] md:rounded-[3rem] border overflow-hidden shadow-2xl min-w-0"
+          style={chatPanelStyle}
+        >
+          <div
+            className="p-4 md:p-6 border-b flex items-center justify-between"
+            style={chatHeaderStyle}
+          >
             <div className="flex items-center gap-3">
               <div className={`w-2 h-2 rounded-full ${isSpeaking ? 'bg-celestial-nebula animate-ping' : 'bg-celestial-saturn animate-pulse'}`} />
               <span className="text-xs md:text-xs font-bold uppercase tracking-widest text-white/60">
@@ -1489,7 +1734,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               {(knowledgeFiles.length > 0 || knowledgeLoading) && (
                 <div
                   className="ml-1 hidden min-w-0 items-center gap-1.5 rounded-full border border-emerald-400/15 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-100/75 sm:flex"
-                  title={recentKnowledgeFiles.map(file => file.displayName || file.name || file.id).join('\n') || knowledgeStatusText}
+                  title={knowledgeStatusText}
                 >
                   {knowledgeLoading ? <Loader2 size={11} className="animate-spin" /> : <FileText size={11} />}
                   <span className="max-w-[180px] truncate">{knowledgeStatusText}</span>
@@ -1548,6 +1793,40 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               </div>
             </div>
           </div>
+
+          {workflowProgressVisible && (
+            <div
+              className="border-b px-4 py-2 md:px-6"
+              style={{
+                background: chatAccentTheme.progress,
+                borderBottomColor: chatAccentTheme.panelBorder,
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                {workflowStatus === 'done' ? (
+                  <CheckCircle2 size={13} className="shrink-0 text-emerald-300" />
+                ) : workflowStatus === 'error' ? (
+                  <XCircle size={13} className="shrink-0 text-red-300" />
+                ) : (
+                  <Loader2 size={13} className="shrink-0 animate-spin text-celestial-saturn" />
+                )}
+                <span className="shrink-0 text-[10px] font-black uppercase tracking-widest text-white/35">
+                  Lumi work
+                </span>
+                <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white/55">
+                  {workflowStatusText}
+                </span>
+                <span className="min-w-0 truncate text-xs text-white/60">
+                  {latestWorkflowStep?.text || (isTyping ? (t.neuralProcessing || 'Neural Processing...') : '')}
+                </span>
+              </div>
+              {latestWorkflowStep?.detail && (
+                <div className="mt-1 truncate pl-5 text-xs text-white/30">
+                  {latestWorkflowStep.detail}
+                </div>
+              )}
+            </div>
+          )}
 
           <div
             ref={scrollRef}
@@ -1706,22 +1985,37 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                     </div>
                   )}
 
-                  <div className={`relative group text-sm leading-relaxed ${
+                  <div data-chat-message-bubble className={`relative group select-text text-sm leading-relaxed ${
                     msg.type === 'agent'
                       ? 'max-w-[92%] md:max-w-[84%] rounded-[1.5rem] rounded-tl-none border border-white/10 bg-white/[0.055] p-5 text-white/85 shadow-xl shadow-black/10 md:p-6'
                       : 'max-w-[85%] rounded-3xl rounded-tr-none border border-white/10 bg-white/5 p-5 text-white/80'
-                  }`}>
-                    <div className={`markdown-body chat-message-markdown ${msg.type === 'agent' ? 'chat-message-markdown-agent' : 'chat-message-markdown-user'}`}>
+                  }`}
+                    style={{
+                      background: msg.type === 'agent' ? chatAccentTheme.agentBubble : chatAccentTheme.userBubble,
+                      borderColor: msg.type === 'agent' ? 'rgba(255,255,255,0.12)' : chatAccentTheme.panelBorder,
+                      boxShadow: msg.type === 'agent'
+                        ? '0 16px 40px rgba(0,0,0,0.18)'
+                        : `0 16px 42px ${chatAccentTheme.panelBorder}`,
+                    }}
+                  >
+                    <div className={`markdown-body chat-message-markdown select-text ${msg.type === 'agent' ? 'chat-message-markdown-agent' : 'chat-message-markdown-user'}`}>
                       <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                         {getDisplayText(msg)}
                       </Markdown>
                     </div>
                     {getDisplayText(msg) && (
                       <button
-                        onClick={() => handleCopyMessage(getDisplayText(msg), msg.id)}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={(event) => handleCopyMessage(
+                          getDisplayText(msg),
+                          msg.id,
+                          event.currentTarget.closest('[data-chat-message-bubble]') as HTMLElement | null,
+                        )}
                         className={`absolute top-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-white/10 ${
                           msg.type === 'agent' ? 'right-2' : 'left-2'
                         }`}
+                        title={ui('复制选中内容；未选中时复制整条', 'Copy selection, or the whole message')}
+                        aria-label={ui('复制选中内容；未选中时复制整条', 'Copy selection, or the whole message')}
                       >
                         {copiedId === msg.id ? (
                           <Check size={12} className="text-green-400" />
@@ -1769,56 +2063,50 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             )}
           </div>
 
-          <div className="p-6 bg-white/5 border-t border-white/5">
-            {recentKnowledgeFiles.length > 0 && (
-              <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 rounded-2xl border border-emerald-400/12 bg-emerald-400/[0.06] px-3 py-2 text-xs text-emerald-50/70">
-                <div className="flex shrink-0 items-center gap-2 font-semibold text-emerald-100/80">
-                  <FileText size={14} />
-                  <span>{ui('最近资料', 'Recent knowledge')}</span>
-                </div>
-                <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-                  {recentKnowledgeFiles.map(file => (
-                    <span
-                      key={file.id}
-                      className={`max-w-[180px] truncate rounded-full border px-2.5 py-1 ${
-                        isKnowledgeReady(file)
-                          ? 'border-emerald-300/15 bg-emerald-300/10 text-emerald-50/75'
-                          : 'border-amber-300/16 bg-amber-300/10 text-amber-50/70'
-                      }`}
-                      title={file.displayName || file.name || file.id}
-                    >
-                      {file.displayName || file.name || file.id}
-                    </span>
-                  ))}
-                </div>
-                <span className="shrink-0 text-[10px] font-black uppercase tracking-wider text-emerald-100/45">
-                  {ui('聊天/语音', 'Chat/Voice')}
-                </span>
-              </div>
-            )}
+          <div
+            className="p-6 border-t"
+            style={chatInputPanelStyle}
+          >
             {pendingAttachments.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-2">
                 {pendingAttachments.map(item => (
-                  <div key={item.id} className="flex max-w-full items-center gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                    {item.kind === 'image' && item.downloadUrl ? (
-                      <img src={item.downloadUrl} alt={item.fileName} className="h-8 w-8 rounded-lg object-cover" />
-                    ) : item.kind === 'image' ? (
-                      <ImageIcon size={16} className="shrink-0 text-celestial-saturn" />
-                    ) : item.kind === 'audio' ? (
-                      <Mic size={16} className="shrink-0 text-celestial-saturn" />
-                    ) : (
-                      <FileText size={16} className="shrink-0 text-white/45" />
+                  <div key={item.id} className="flex max-w-full flex-col gap-1.5 rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {item.kind === 'image' && item.downloadUrl ? (
+                        <img src={item.downloadUrl} alt={item.fileName} className="h-8 w-8 rounded-lg object-cover" />
+                      ) : item.kind === 'image' ? (
+                        <ImageIcon size={16} className="shrink-0 text-celestial-saturn" />
+                      ) : item.kind === 'audio' ? (
+                        <Mic size={16} className="shrink-0 text-celestial-saturn" />
+                      ) : (
+                        <FileText size={16} className="shrink-0 text-white/45" />
+                      )}
+                      <span className="max-w-[220px] truncate">{item.fileName}</span>
+                      {item.kind === 'audio' && item.transcript && (
+                        <span className="rounded-full border border-emerald-300/15 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-100/80">
+                          STT
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removePendingAttachment(item.id)}
+                        className="ml-1 rounded-full p-0.5 text-white/30 transition-colors hover:bg-white/10 hover:text-white/70"
+                        title={ui('移除附件', 'Remove attachment')}
+                        aria-label={ui('移除附件', 'Remove attachment')}
+                      >
+                        <XCircle size={13} />
+                      </button>
+                    </div>
+                    {item.kind === 'audio' && item.transcript && (
+                      <div className="max-h-10 max-w-[520px] overflow-hidden text-xs leading-5 text-emerald-50/60">
+                        {item.transcript}
+                      </div>
                     )}
-                    <span className="max-w-[220px] truncate">{item.fileName}</span>
-                    <button
-                      type="button"
-                      onClick={() => removePendingAttachment(item.id)}
-                      className="ml-1 rounded-full p-0.5 text-white/30 transition-colors hover:bg-white/10 hover:text-white/70"
-                      title={ui('移除附件', 'Remove attachment')}
-                      aria-label={ui('移除附件', 'Remove attachment')}
-                    >
-                      <XCircle size={13} />
-                    </button>
+                    {item.kind === 'audio' && !item.transcript && item.transcriptionError && (
+                      <div className="max-w-[520px] truncate text-xs text-red-200/70">
+                        {item.transcriptionError}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1851,6 +2139,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                   onChange={(e) => updateDraftText(e.target.value)}
                   placeholder={t.communicatePlaceholder || "Communicate with your essence..."}
                   className="bg-black/40 border-white/10 rounded-2xl py-6 pr-12 focus-visible:ring-celestial-saturn/50"
+                  style={chatInputStyle}
                 />
                 <Button
                   type="button"
@@ -1876,6 +2165,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                   type="submit"
                   disabled={!hasDraftText && pendingAttachments.length === 0}
                   className="bg-celestial-saturn text-black rounded-2xl px-6 hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
+                  style={{
+                    backgroundColor: chatAccentTheme.saturn,
+                    boxShadow: `0 12px 34px ${chatAccentTheme.panelBorder}`,
+                  }}
                 >
                   <Send size={20} />
                 </Button>
