@@ -188,7 +188,7 @@ const ARTIFACT_PATH_RE =
   /[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi;
 
 const ARTIFACT_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
 
 function normalizeArtifactPath(raw: string): string {
   return path.normalize(String(raw || '').trim().replace(/[)\].,;，。；]+$/g, ''));

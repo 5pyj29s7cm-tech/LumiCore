@@ -54,7 +54,7 @@ const INSPECTION_ONLY_TOOL_RE =
   /^(read_|list_|search_|grep_|desktop_path_info|desktop_list_files|client_get_state|adapter_health_check|usage_get_summary|calendar_|lumi_constitution|agent_list|get_|path_info)/i;
 
 const FILE_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
 
 const OPEN_TOOL_RE =
   /^(desktop_open|client_action|computer_use|external_app_.*open|open_)/i;
@@ -118,7 +118,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const hasActionTool = successful.some(call => !INSPECTION_ONLY_TOOL_RE.test(call.name));
   const hasFileProducer = successful.some(call =>
     FILE_PRODUCER_TOOL_RE.test(call.name) ||
-    /File written:|written:|created:|saved:|exported:|\.dxf|\.pptx|\.docx|\.pdf|\.md/i.test(call.result || '')
+    /File written:|Text file:|Output file:|Saved to:|written:|created:|saved:|exported:|\.dxf|\.pptx|\.docx|\.pdf|\.md|\.txt/i.test(call.result || '')
   );
   const hasOpenTool = successful.some(call => OPEN_TOOL_RE.test(call.name));
   const hasPassingVerification = successful.some(call => /work_product_verify/i.test(call.name) && VERIFY_PASS_RE.test(call.result || ''));

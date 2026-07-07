@@ -141,7 +141,7 @@ function collectArtifactRefs(text: string): string[] {
 }
 
 const ARTIFACT_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|generate_.*(?:dxf|ppt|file)|export_|save_|document_|image_generate)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_|image_generate)/i;
 
 function isVerifiedArtifactRef(ref: string): boolean {
   if (/^https?:\/\//i.test(ref)) return true;

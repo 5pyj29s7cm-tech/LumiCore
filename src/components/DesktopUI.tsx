@@ -2957,13 +2957,18 @@ export function DesktopUI({
   useEffect(() => {
     if (!socket) return;
 
+    const isChatScopedEvent = (data?: { source?: string }) => data?.source === 'chat';
+    const workflowStepId = (prefix: string, seed?: string) =>
+      `${prefix}-${seed || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
     const onStatus = (data: { status: string; agentName?: string; phase?: string; detail?: string; source?: string }) => {
+      if (isChatScopedEvent(data)) return;
       if (data.status === 'thinking') {
         const isBackground = data.phase === 'background';
         if (isBackground && data.source !== 'chat') showWallpaperWorkPrompt();
         setAgentStatus(isBackground ? 'background' : 'thinking');
         setWorkflowSteps(prev => [...prev, {
-          id: `thinking-${Date.now()}`,
+          id: workflowStepId('thinking'),
           type: isBackground ? 'background' : 'thinking',
           text: isBackground
             ? (t.workflowBackgroundStep || 'Lumi is handling this in the background')
@@ -2974,7 +2979,7 @@ export function DesktopUI({
       } else if (data.status === 'idle') {
         setAgentStatus('done');
         setWorkflowSteps(prev => [...prev, {
-          id: `done-${Date.now()}`,
+          id: workflowStepId('done'),
           type: 'response',
           text: t.workflowCompleted || 'Completed',
           time: Date.now(),
@@ -2993,6 +2998,7 @@ export function DesktopUI({
     };
 
     const onToolCall = (data: { correlationId?: string; name: string; arguments?: any; args?: any; result?: string; error?: string; source?: string }) => {
+      if (isChatScopedEvent(data)) return;
       const toolArgs = data.arguments ?? data.args;
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
       if (data.correlationId) {
@@ -3037,13 +3043,14 @@ export function DesktopUI({
     };
 
     const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; source?: string }) => {
+      if (isChatScopedEvent(data)) return;
       if (data.source !== 'chat') showWallpaperWorkPrompt();
       setAgentStatus('waiting_confirmation');
       const argsSummary = data.arguments
         ? Object.entries(data.arguments).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
         : '';
       setWorkflowSteps(prev => [...prev, {
-        id: `confirm-${data.correlationId || Date.now()}`,
+        id: workflowStepId('confirm', data.correlationId),
         type: 'confirmation',
         text: `${t.workflowWaitingConfirm || 'Waiting for approval'}: ${data.name}`,
         detail: argsSummary || (t.workflowConfirmHint || 'Review the permission dialog to continue.'),
@@ -3051,9 +3058,10 @@ export function DesktopUI({
       }]);
     };
 
-    const onResponse = (data: { text: string; agentName?: string }) => {
+    const onResponse = (data: { text: string; agentName?: string; source?: string; requestId?: string }) => {
+      if (isChatScopedEvent(data)) return;
       setWorkflowSteps(prev => [...prev, {
-        id: `resp-${Date.now()}`,
+        id: workflowStepId('resp', data.requestId),
         type: 'response',
         text: t.workflowResponseReady || 'Response ready',
         detail: data.text?.slice(0, 100),
@@ -3061,10 +3069,11 @@ export function DesktopUI({
       }]);
     };
 
-    const onError = (data: { message: string }) => {
+    const onError = (data: { message: string; source?: string; requestId?: string }) => {
+      if (isChatScopedEvent(data)) return;
       setAgentStatus('error');
       setWorkflowSteps(prev => [...prev, {
-        id: `err-${Date.now()}`,
+        id: workflowStepId('err', data.requestId),
         type: 'error',
         text: t.workflowError || 'Processing failed',
         detail: data.message,

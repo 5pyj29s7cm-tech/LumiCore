@@ -110,6 +110,10 @@ interface ChatIncomingAttachment {
   path?: string;
   content?: string | null;
   preview?: string | null;
+  transcript?: string | null;
+  transcriptionStatus?: string;
+  transcriptionProvider?: string;
+  transcriptionModel?: string;
   mimeType?: string;
   size?: number;
   kind: 'image' | 'audio' | 'file';
@@ -146,11 +150,23 @@ function normalizeIncomingAttachments(input: unknown): ChatIncomingAttachment[] 
       path: boundedString(item?.path, 1200) || undefined,
       content: boundedString(item?.content, MAX_CHAT_ATTACHMENT_CONTENT) || null,
       preview: boundedString(item?.preview, 4000) || null,
+      transcript: boundedString(item?.transcript, MAX_CHAT_ATTACHMENT_CONTENT) || null,
+      transcriptionStatus: boundedString(item?.transcriptionStatus, 120) || undefined,
+      transcriptionProvider: boundedString(item?.transcriptionProvider, 120) || undefined,
+      transcriptionModel: boundedString(item?.transcriptionModel, 120) || undefined,
       mimeType,
       size: typeof item?.size === 'number' ? item.size : undefined,
       kind,
     };
-  }).filter(item => item.fileName || item.path || item.content);
+  }).filter(item => item.fileName || item.path || item.content || item.transcript);
+}
+
+function getAudioAttachmentTranscript(item: ChatIncomingAttachment): string {
+  if (item.kind !== 'audio') return '';
+  const raw = String(item.transcript || item.content || item.preview || '').trim();
+  if (!raw) return '';
+  const markerIndex = raw.toLowerCase().indexOf('transcript:');
+  return (markerIndex >= 0 ? raw.slice(markerIndex + 'transcript:'.length) : raw).trim();
 }
 
 function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): string {
@@ -160,7 +176,7 @@ function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): stri
     'The user attached these files to the current message. Treat them as part of the user request.',
   ];
   attachments.forEach((item, index) => {
-    const content = item.content || item.preview || '';
+    const content = item.transcript || item.content || item.preview || '';
     lines.push(`### ${index + 1}. ${item.fileName}`);
     lines.push(`Type: ${item.kind}${item.mimeType ? ` (${item.mimeType})` : ''}`);
     if (item.path) lines.push(`Local path: ${item.path}`);
@@ -168,7 +184,15 @@ function buildChatAttachmentContext(attachments: ChatIncomingAttachment[]): stri
       lines.push('For visual details, use the ocr_image_file tool with the local path before answering.');
     }
     if (item.kind === 'audio') {
-      lines.push('This is an audio recording. If the user asks for transcription, speech-to-text, a written transcript, or a text file, use transcribe_audio_to_text_file with the local path.');
+      const transcript = getAudioAttachmentTranscript(item);
+      if (transcript) {
+        lines.push('This is an audio recording with an attached transcript from the current upload. Reuse the transcript below for summaries, notes, or text-file creation. If the user asks for a text file, write the attached transcript to a file instead of re-transcribing. Do not call transcribe_audio_to_text_file again unless the user explicitly asks to re-transcribe.');
+        if (item.transcriptionProvider || item.transcriptionModel || item.transcriptionStatus) {
+          lines.push(`Transcript metadata: provider=${item.transcriptionProvider || 'unknown'} model=${item.transcriptionModel || 'unknown'} status=${item.transcriptionStatus || 'ready'}`);
+        }
+      } else {
+        lines.push('This is an audio recording. If the user asks for transcription, speech-to-text, a written transcript, or a text file, use transcribe_audio_to_text_file with the local path.');
+      }
     }
     if (content) {
       lines.push(`Extracted text:\n${content}`);
@@ -234,7 +258,7 @@ function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): str
 }
 
 function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
-  if (attachments.some(item => item.path)) return true;
+  if (attachments.some(item => item.path && !shouldSkipPreflightForAttachment(item))) return true;
   const text = userText || '';
   if (extractExplicitLocalPaths(text).length > 0) return true;
   const mentionsFileLocation = /\b(?:desktop|downloads?|documents?)\b|(?:\u684c\u9762|\u4e0b\u8f7d|\u6587\u6863)/iu.test(text);
@@ -375,6 +399,10 @@ function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncom
     return { name: 'extract_document_text', arguments: { filePath } };
   }
   return { name: 'read_file', arguments: { path: filePath } };
+}
+
+function shouldSkipPreflightForAttachment(item: ChatIncomingAttachment): boolean {
+  return item.kind === 'audio' && Boolean(getAudioAttachmentTranscript(item));
 }
 
 function compactPreflightResult(record: ToolExecutionRecord): string {
@@ -1336,6 +1364,7 @@ export function registerChatHandler(
         const preflightStartIndex = allToolRecords.length;
         const pathKinds = new Map<string, ChatIncomingAttachment['kind'] | undefined>();
         for (const item of attachments) {
+          if (shouldSkipPreflightForAttachment(item)) continue;
           if (item.path) pathKinds.set(path.normalize(item.path), item.kind);
         }
         for (const localPath of extractExplicitLocalPaths(visibleUserText)) {

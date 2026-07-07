@@ -38,6 +38,10 @@ const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
 type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'done' | 'error';
 
+function makeChatMessageId(prefix = 'msg'): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 type ChatAttachment = {
   id: string;
   fileName: string;
@@ -371,7 +375,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           return;
         }
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: makeChatMessageId('voice'),
           text,
           userName: user?.displayName || user?.username || 'You',
           timestamp: new Date().toISOString(),
@@ -886,7 +890,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           m.id === streamingMsgId.current ? { ...m, text: m.text + data.text } : m
         ));
       } else {
-        const id = Date.now().toString();
+        const id = makeChatMessageId('stream');
         streamingMsgId.current = id;
         setMessages(prev => [...prev, {
           id,
@@ -972,7 +976,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
       finishChatProgress(completion.text, completion.tone);
       setWorkflowSteps(prev => [...prev, {
-        id: `chat-resp-${Date.now()}`,
+        id: makeChatMessageId('chat-resp'),
         type: 'response',
         text: t.workflowResponseReady || 'Response ready',
         detail: data.text?.slice(0, 100),
@@ -995,7 +999,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       } else if (data.text && data.text.trim()) {
         // No streaming; add as new message only if non-empty.
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: makeChatMessageId('agent'),
           text: data.text,
           userName: data.agentName,
           timestamp: new Date().toISOString(),
@@ -1251,7 +1255,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     const outgoingText = trimmedText || ui('请帮我看看这些附件。', 'Please review these attachments.');
 
     const userMsg = {
-      id: Date.now().toString(),
+      id: makeChatMessageId('user'),
       text: outgoingText,
       attachments: outgoingAttachments,
       userName: user.displayName || user.username || (t.chatUserFallback || 'User'),
@@ -1271,7 +1275,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     );
     setWorkflowStatus('thinking');
     setWorkflowSteps([{
-      id: `chat-start-${Date.now()}`,
+      id: makeChatMessageId('chat-start'),
       type: 'thinking',
       text: t.workflowAnalyzing || 'Analyzing your request...',
       time: Date.now(),
@@ -1349,7 +1353,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         resolve();
         setAgentMetadata(response);
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: makeChatMessageId('agent'),
           text: response.text,
           userName: agentName,
           timestamp: new Date().toISOString(),
