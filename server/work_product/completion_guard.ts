@@ -105,7 +105,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
 
   const needsEvidence = needsCompletionEvidence(task) || EXTERNAL_WORK_TASK_RE.test(response);
   const toolCalls = input.toolCalls || [];
-  const successful = toolCalls.filter(call => !call.error);
+  const successful = toolCalls.filter(call => !call.error && String(call.result || '').trim());
   const failed = toolCalls.filter(call => call.error);
   const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(response);
   const hasPromiseEvidence = successful.some(call =>

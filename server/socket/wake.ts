@@ -5,11 +5,16 @@ import { logger } from "../../logger";
 
 export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => string) {
   let wakeDetector: ReturnType<typeof createWakeDetector> | null = null;
+  let wakeStarting = false;
 
   socket.on("wake:start", async () => {
     const uid = getUserId(socket);
     try {
-      if (wakeDetector) { try { wakeDetector.stop(); } catch {} }
+      if (wakeDetector || wakeStarting) {
+        socket.emit("wake:started", { reused: true });
+        return;
+      }
+      wakeStarting = true;
       wakeDetector = createWakeDetector(undefined, isEchoText);
 
       wakeDetector.onWake((keyword: string) => {
@@ -20,12 +25,18 @@ export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => s
       wakeDetector.onError((err: Error) => {
         logger.error(`[Wake] Error for user ${uid}:`, err.message);
         socket.emit("wake:error", { message: err.message });
+        if (wakeDetector) {
+          try { wakeDetector.stop(); } catch {}
+          wakeDetector = null;
+        }
       });
 
       socket.emit("wake:started");
       logger.info(`[Wake] Started for user ${uid}`);
     } catch (err: any) {
       socket.emit("wake:error", { message: err.message || 'Failed to start wake detector' });
+    } finally {
+      wakeStarting = false;
     }
   });
 

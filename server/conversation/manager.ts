@@ -232,9 +232,31 @@ function compactRecordForPrompt(m: MessageRecord): MessageRecord {
 export function getMessages(conversationId: string, limit = 1000): MessageRecord[] {
   const db = readDB();
   if (!db.interactions) return [];
-  return db.interactions
+  const rows = db.interactions
     .filter((i: any) => i.conversationId === conversationId)
-    .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  return rows
+    .filter((row: any) => {
+      const response = String(row.response || '').trim();
+      if (row.role !== 'user' || !response) return true;
+      const message = String(row.message || row.content || '').trim();
+      const ts = new Date(row.timestamp).getTime();
+      const hasSplitUser = rows.some((other: any) =>
+        other !== row &&
+        other.role === 'user' &&
+        !String(other.response || '').trim() &&
+        String(other.message || other.content || '').trim() === message &&
+        Math.abs(new Date(other.timestamp).getTime() - ts) < 2000
+      );
+      const hasSplitAssistant = rows.some((other: any) =>
+        other !== row &&
+        other.role === 'assistant' &&
+        String(other.message || other.content || '').trim() === response &&
+        Math.abs(new Date(other.timestamp).getTime() - ts) < 2000
+      );
+      return !(hasSplitUser || hasSplitAssistant);
+    })
     .slice(-limit);
 }
 

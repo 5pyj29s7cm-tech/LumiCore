@@ -23,6 +23,8 @@ const PACKAGE_INSTALL_PATTERN = /\b(npm|pnpm|yarn|bun|pip|pip3|uv|cargo|go|gem|w
 const GIT_MUTATION_PATTERN = /\bgit\s+(?:commit|push|tag|merge|rebase|reset|checkout|clean|branch\s+-d|branch\s+-D)\b/i;
 const SHELL_DOWNLOAD_EXEC_PATTERN = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[\s\S]*(?:\||;|&&)\s*(?:sh|bash|powershell|pwsh|iex|invoke-expression)\b/i;
 const EXTERNAL_SEND_TARGET_PATTERN = /\b(?:wechat|weixin|wecom|feishu|lark|slack|telegram|whatsapp|mail|email|gmail|outlook|browser|chrome|edge|alipay|paypal|stripe|bank|trading|broker|stock|payment|checkout|订单|付款|支付|转账|微信|企业微信|飞书|浏览器|股票|证券|交易)\b/i;
+const TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE =
+  /^(write_file|create_(?:docx|pdf|ppt|pptx|xlsx|txt|markdown|md)|transcribe_audio_to_text_file|cad_generate_dxf|document_|export_|save_)/i;
 
 export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
   return {
@@ -30,7 +32,7 @@ export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
     confirmationDomains: ['local_write', 'desktop_control', 'external_app', 'messaging', 'system', 'destructive'],
     rules: [
       'Observation, reading, search, and analysis tools may run automatically when tool policy allows them.',
-      'Local writes, file generation, desktop control, browser/external app automation, and system operations require confirmation unless a narrower trusted policy already exists.',
+      'Local writes, file generation, desktop control, browser/external app automation, and system operations require confirmation unless a narrower trusted policy already exists or the current turn explicitly requests a low-risk local file deliverable.',
       'Messaging send/post/submit/purchase/payment actions require confirmation.',
       'Destructive commands are forbidden unless implemented as an explicitly confirmed safe tool.',
       'Autonomous background work cannot use external app automation unless the autonomy gate enables it.',
@@ -92,7 +94,11 @@ export function evaluateActionConstitution(
     return confirm(domain, `High-risk ${domain} action requires explicit user confirmation`);
   }
 
-  if (domain === 'local_write' && currentLevel === 'safe' && context?.allowLocalFileWrites === true) {
+  if (
+    domain === 'local_write' &&
+    context?.allowLocalFileWrites === true &&
+    TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE.test(toolName)
+  ) {
     return {
       level: 'safe',
       domain,

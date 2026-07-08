@@ -123,7 +123,11 @@ function createQwenWakeDetector(
   };
 
   ws.onclose = (event: CloseEvent) => {
-    logger.info(`[Wake:Qwen] Closed (code=${event.code})`);
+    const reason = event.reason ? `, reason=${event.reason}` : '';
+    logger.info(`[Wake:Qwen] Closed (code=${event.code}${reason})`);
+    if (event.code !== 1000 && event.code !== 1005) {
+      errorCallbacks.forEach(cb => cb(new Error(event.reason || `Wake detector closed unexpectedly (${event.code})`)));
+    }
   };
 
   return {

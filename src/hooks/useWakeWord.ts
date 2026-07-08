@@ -85,6 +85,8 @@ export function useWakeWord({
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const enabledRef = useRef(enabled);
   const socketRef = useRef(socket);
+  const isListeningRef = useRef(false);
+  const startInFlightRef = useRef(false);
   const wakeConfigUnavailableRef = useRef(false);
   const wakeHandlersRef = useRef<{
     detected?: (data: { keyword: string; timestamp: string }) => void;
@@ -94,6 +96,10 @@ export function useWakeWord({
 
   enabledRef.current = enabled;
   socketRef.current = socket;
+
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
 
   const accessKey = propKey || localStorage.getItem(PICOVOICE_ACCESS_KEY_STORAGE) || '';
 
@@ -125,6 +131,8 @@ export function useWakeWord({
 
   const disable = useCallback(() => {
     setIsListening(false);
+    isListeningRef.current = false;
+    startInFlightRef.current = false;
     const s = socketRef.current;
     if (s?.connected) {
       s.emit('wake:stop');
@@ -213,6 +221,7 @@ export function useWakeWord({
 
       const onStarted = () => {
         console.log('[WakeWord-Qwen] Server confirmed, listening');
+        isListeningRef.current = true;
         setIsListening(true);
         setIsSupported(true);
       };
@@ -222,6 +231,7 @@ export function useWakeWord({
         const message = data.message || '';
         if (/required for wake word detection|not configured|no DashScope key/i.test(message)) {
           wakeConfigUnavailableRef.current = true;
+          isListeningRef.current = false;
           setIsListening(false);
           setIsSupported(false);
           setError(WAKE_SERVICE_MISSING_MESSAGE);
@@ -230,6 +240,11 @@ export function useWakeWord({
           removeWakeHandlers();
           return;
         }
+        isListeningRef.current = false;
+        setIsListening(false);
+        cleanupAudio();
+        try { s.emit('wake:stop'); } catch {}
+        removeWakeHandlers();
         setError(data.message);
       };
 
@@ -247,6 +262,7 @@ export function useWakeWord({
         setError('Microphone permission denied. Please allow mic access.');
       } else if (/required for wake word detection|not configured|no DashScope key/i.test(msg)) {
         wakeConfigUnavailableRef.current = true;
+        isListeningRef.current = false;
         setIsListening(false);
         setIsSupported(false);
         setError(WAKE_SERVICE_MISSING_MESSAGE);
@@ -357,18 +373,24 @@ export function useWakeWord({
   }, [accessKey, keyword, sensitivity, voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio, canAcceptWake, isCallActive, onDetection, onInterrupt]);
 
   const enable = useCallback(async () => {
+    if (startInFlightRef.current || isListeningRef.current) return;
     // Stop any existing session first
     disable();
+    startInFlightRef.current = true;
 
-    if (accessKey) {
-      console.log('[WakeWord] Using Picovoice (on-device)');
-      await enablePicovoice();
-    } else if (socketRef.current?.connected) {
-      console.log('[WakeWord] Using Qwen ASR (server-side)');
-      await enableQwenWake();
-    } else {
-      console.log('[WakeWord] No Picovoice key and socket not connected, waiting...');
-      setError('Waiting for connection...');
+    try {
+      if (accessKey) {
+        console.log('[WakeWord] Using Picovoice (on-device)');
+        await enablePicovoice();
+      } else if (socketRef.current?.connected) {
+        console.log('[WakeWord] Using Qwen ASR (server-side)');
+        await enableQwenWake();
+      } else {
+        console.log('[WakeWord] No Picovoice key and socket not connected, waiting...');
+        setError('Waiting for connection...');
+      }
+    } finally {
+      startInFlightRef.current = false;
     }
   }, [accessKey, disable, enablePicovoice, enableQwenWake]);
 

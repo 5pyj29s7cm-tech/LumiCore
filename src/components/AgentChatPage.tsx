@@ -1521,6 +1521,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     let resolved = false;
     let safetyTimer: ReturnType<typeof setTimeout>;
     let restFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let socketAckTimer: ReturnType<typeof setTimeout> | null = null;
+    let socketAcknowledged = false;
     const isCurrentResponse = (data?: { requestId?: string; source?: string }) => {
       if (data?.requestId) return data.requestId === requestId;
       if (data?.source && data.source !== 'chat') return false;
@@ -1536,6 +1538,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       resolved = true;
       clearTimeout(safetyTimer);
       if (restFallbackTimer) clearTimeout(restFallbackTimer);
+      if (socketAckTimer) clearTimeout(socketAckTimer);
       cleanupSocketWaiters();
       setIsTyping(false);
       textChatActiveRef.current = false;
@@ -1558,8 +1561,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     socket.on('agent:error', onError);
     socket.on('agent:status', onStatus);
 
-    // Always try socket first
-    socket.emit("agent:chat", {
+    const chatPayload = {
       text: outgoingText,
       attachments: outgoingAttachments,
       history: buildChatHistoryPayload(priorMessages, { sinceMs: historySinceMs }),
@@ -1570,11 +1572,50 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       orgId: activeOrgId || null,
       source: 'chat',
       requestId,
+    };
+
+    socketAckTimer = setTimeout(() => {
+      if (resolved || socketAcknowledged) return;
+      setWorkflowStatus('error');
+      pushChatProgress(
+        isZh
+          ? '这条消息还没有被后端确认接收，我会继续等结果；如果没有后续进度，说明发送链路没打通。'
+          : 'The backend has not acknowledged this message yet. I will keep waiting, but the send path may be disconnected.',
+        'error'
+      );
+      setWorkflowSteps(prev => [...prev, {
+        id: `chat-ack-timeout-${Date.now()}`,
+        type: 'error',
+        text: isZh ? '后端未确认接收' : 'Backend did not acknowledge receipt',
+        detail: socket.connected ? undefined : (isZh ? 'Socket 当前未连接' : 'Socket is currently disconnected'),
+        time: Date.now(),
+      }]);
+    }, 5000);
+
+    // Always try socket first. The ack lets the UI distinguish "received and working"
+    // from "message only exists optimistically in the frontend".
+    socket.emit("agent:chat", chatPayload, (ack?: { ok?: boolean; error?: string }) => {
+      socketAcknowledged = Boolean(ack?.ok);
+      if (socketAckTimer) {
+        clearTimeout(socketAckTimer);
+        socketAckTimer = null;
+      }
+      if (resolved) return;
+      if (ack?.ok) {
+        pushChatProgress(isZh ? '后端已收到，我开始处理。' : 'The backend has received this. I am working on it.', 'thinking');
+      } else {
+        setWorkflowStatus('error');
+        pushChatProgress(
+          ack?.error || (isZh ? '后端没有接收这条消息。' : 'The backend did not accept this message.'),
+          'error'
+        );
+      }
     });
 
-    // Parallel REST fallback after 5s if socket hasn't responded. It is text-only,
-    // so attachment turns wait for the socket path that preserves file context.
-    restFallbackTimer = outgoingAttachments.length === 0 ? setTimeout(async () => {
+    // Parallel REST fallback after 5s for pure conversation only. Action/tool turns
+    // must not degrade into a text-only answer that looks like work happened.
+    const allowTextOnlyRestFallback = outgoingAttachments.length === 0 && !currentRequestNeedsEvidenceRef.current;
+    restFallbackTimer = allowTextOnlyRestFallback ? setTimeout(async () => {
       if (resolved) return;
       try {
         const response = await runAgentLogic(outgoingText, { platform, aiConfig });

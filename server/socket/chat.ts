@@ -577,7 +577,10 @@ export function registerChatHandler(
     });
   });
 
-  socket.on("agent:chat", async (data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; source?: string; requestId?: string }) => {
+  socket.on("agent:chat", async (
+    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; source?: string; requestId?: string },
+    ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
+  ) => {
     console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify(data).slice(0, 300));
     const { history, personalityId = "lumi", category, agentId, mode: payloadMode, source } = data;
     const attachments = normalizeIncomingAttachments(data.attachments);
@@ -591,6 +594,7 @@ export function registerChatHandler(
       ? `Current chat request explicitly asked Lumi to generate/export a local deliverable: "${visibleUserText.slice(0, 120)}"`
       : undefined;
     const requestId = typeof data.requestId === 'string' ? data.requestId.slice(0, 120) : undefined;
+    try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
     const eventSource = source || 'chat';
     const toolResultPreviewLimit = 500;
     const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
@@ -2227,6 +2231,7 @@ export function registerChatHandler(
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
         // Persist tool calls interleaved before the assistant response
         for (const tc of allToolRecords) {
+          if (!tc.error && !String(tc.result || '').trim()) continue;
           const tcSummary = tc.error
             ? `[Tool: ${tc.name}] Error: ${tc.error}`
             : `[Tool: ${tc.name}] Done`;
@@ -2249,19 +2254,6 @@ export function registerChatHandler(
           );
         }
       }
-
-      // Log interaction
-      const db = readDB();
-      db.interactions.push({
-        id: interactionId, userId: uid, agentId: agentId || '',
-        conversationId: conversationId || '', content: storedUserContent, response: responseText,
-        role: "user", personality: personality.id, timestamp: new Date().toISOString(),
-        cognitiveIntent: cognition.intent.category,
-        llmWasCalled,
-        domain: resolvedDomain,
-        orgId: resolvedOrgId,
-      });
-      writeDB(db);
 
       // Emit response BEFORE conversation_updated so the client finalizes streaming first
       emitAgent("agent:response", { text: responseText, agentName: personality.name });
