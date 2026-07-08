@@ -1,4 +1,5 @@
 import { TTSConfig, TTSResult, TTSProvider, VoiceCloneRequest, VoiceListItem } from './types';
+import * as localCosyvoice from './providers/local_cosyvoice';
 import * as gptsovits from './providers/gptsovits';
 import * as cosyvoice from './providers/cosyvoice';
 import * as ark from './providers/ark';
@@ -9,6 +10,8 @@ import { isCircuitClosed } from '../cloud/circuit_breaker';
 
 export async function synthesizeSpeech(text: string, config: TTSConfig): Promise<TTSResult> {
   switch (config.provider) {
+    case 'local-cosyvoice':
+      return localCosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
     case 'gptsovits':
       return gptsovits.synthesizeSpeech(text, config.voiceId, config.signal);
     case 'cosyvoice':
@@ -40,6 +43,8 @@ export async function designVoice(prompt: string, name: string, provider: TTSPro
 
 export async function listVoices(provider: TTSProvider): Promise<VoiceListItem[]> {
   switch (provider) {
+    case 'local-cosyvoice':
+      return localCosyvoice.listVoices();
     case 'cosyvoice':
       return cosyvoice.listVoices();
     case 'gptsovits':
@@ -51,16 +56,37 @@ export async function listVoices(provider: TTSProvider): Promise<VoiceListItem[]
   }
 }
 
+function hasDashScopeKey(): boolean {
+  return Boolean(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY'));
+}
+
+export function isTTSProviderConfigured(provider: TTSProvider): boolean {
+  switch (provider) {
+    case 'local-cosyvoice':
+      return localCosyvoice.isConfigured();
+    case 'gptsovits':
+      return gptsovits.isConfigured();
+    case 'cosyvoice':
+      return hasDashScopeKey();
+    case 'ark':
+      return hasDoubaoSpeech();
+    default:
+      return false;
+  }
+}
+
 export function getActiveProvider(): TTSProvider | null {
   const pref = getVoicePreference();
-  if (pref.tts === 'gptsovits' && (process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true')) return 'gptsovits';
+  if (pref.tts === 'local-cosyvoice' && localCosyvoice.isConfigured()) return 'local-cosyvoice';
+  if (pref.tts === 'gptsovits' && gptsovits.isConfigured()) return 'gptsovits';
   if (pref.tts === 'cosyvoice') return 'cosyvoice';
   if (pref.tts === 'ark' && hasDoubaoSpeech()) return 'ark';
   // Auto mode — pick based on what's available, skip circuit-open providers
+  if (localCosyvoice.isConfigured()) return 'local-cosyvoice';
   if (hasDoubaoSpeech()) return 'ark';
-  const dashscopeKey = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY');
+  const dashscopeKey = hasDashScopeKey();
   if (dashscopeKey && isCircuitClosed('qwen')) return 'cosyvoice';
-  if (process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true') return 'gptsovits';
+  if (gptsovits.isConfigured()) return 'gptsovits';
   // Fallback: try anyway if nothing healthy
   if (dashscopeKey) return 'cosyvoice';
   return 'cosyvoice';

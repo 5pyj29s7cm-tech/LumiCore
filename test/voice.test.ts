@@ -237,6 +237,46 @@ describe('Voice API', () => {
     expect(body.active).toHaveProperty('tts');
   });
 
+  it('accepts local CosyVoice TTS preference without pretending it is active before configuration', async () => {
+    const previousEnabled = process.env.LOCAL_COSYVOICE_ENABLED;
+    const previousUrl = process.env.LOCAL_COSYVOICE_API_URL;
+    const previousAliasUrl = process.env.COSYVOICE_LOCAL_API_URL;
+    delete process.env.LOCAL_COSYVOICE_ENABLED;
+    delete process.env.LOCAL_COSYVOICE_API_URL;
+    delete process.env.COSYVOICE_LOCAL_API_URL;
+
+    try {
+      const save = await fetch(`${url}/api/voice/provider`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ tts: 'local-cosyvoice' }),
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(save.status).toBe(200);
+      const saved = await save.json();
+      expect(saved.tts).toBe('local-cosyvoice');
+
+      const status = await fetch(`${url}/api/voice/active-provider`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await status.json();
+      expect(body.pref.tts).toBe('local-cosyvoice');
+      expect(body.active.tts).not.toBe('local-cosyvoice');
+    } finally {
+      await fetch(`${url}/api/voice/provider`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ tts: 'auto' }),
+      });
+      if (previousEnabled === undefined) delete process.env.LOCAL_COSYVOICE_ENABLED;
+      else process.env.LOCAL_COSYVOICE_ENABLED = previousEnabled;
+      if (previousUrl === undefined) delete process.env.LOCAL_COSYVOICE_API_URL;
+      else process.env.LOCAL_COSYVOICE_API_URL = previousUrl;
+      if (previousAliasUrl === undefined) delete process.env.COSYVOICE_LOCAL_API_URL;
+      else process.env.COSYVOICE_LOCAL_API_URL = previousAliasUrl;
+    }
+  });
+
   it('rejects synthesize without body', async () => {
     const res = await fetch(`${url}/api/voice/synthesize`, {
       method: 'POST',

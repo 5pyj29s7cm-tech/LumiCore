@@ -21,6 +21,7 @@ db.json
 data/
 server/mcp/config.json
 gpt-sovits-src/
+local-tts/
 src-tauri/target/
 .claude/
 docs/

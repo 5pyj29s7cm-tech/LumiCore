@@ -6,6 +6,7 @@ import { apiFetch } from '@/services/apiClient';
 export function VoiceProviderSwitch({ t }: { t?: any }) {
   const [pref, setPref] = useState<{ stt: string; tts: string }>({ stt: 'auto', tts: 'auto' });
   const [active, setActive] = useState<{ stt: string; tts: string }>({ stt: '?', tts: '?' });
+  const localTtsProviders = new Set(['local-cosyvoice', 'gptsovits']);
 
   const load = () => {
     apiFetch('/api/voice/active-provider')
@@ -34,10 +35,13 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
 
   const ttsOpts = [
     { value: 'auto', label: t?.auto || 'Auto' },
-    { value: 'gptsovits', label: t?.local || 'Local' },
+    { value: 'local-cosyvoice', label: 'Local CosyVoice' },
+    { value: 'gptsovits', label: 'GPT-SoVITS' },
     { value: 'ark', label: 'Doubao' },
-    { value: 'cosyvoice', label: 'CosyVoice' },
+    { value: 'cosyvoice', label: 'DashScope CosyVoice' },
   ];
+  const providerLabel = (value: string, options: Array<{ value: string; label: string }>) =>
+    options.find(o => o.value === value)?.label || value;
 
   return (
     <div className="space-y-4">
@@ -48,7 +52,7 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
           <span className="text-[12px] font-mono text-white/55">{active.stt}</span>
         </div>
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {sttOpts.map(o => (
           <button
             key={o.value}
@@ -65,11 +69,11 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
       <div className="flex items-center justify-between mt-4">
         <span className="text-xs font-black uppercase tracking-widest text-white/40">{t?.ttsProvider || 'TTS'}</span>
         <div className="flex items-center gap-1">
-          {active.tts === 'gptsovits' ? <Cpu size={12} className="text-emerald-400" /> : <Cloud size={12} className={active.tts === 'ark' ? 'text-cyan-400' : 'text-blue-400'} />}
-          <span className="text-[12px] font-mono text-white/55">{active.tts}</span>
+          {localTtsProviders.has(active.tts) ? <Cpu size={12} className="text-emerald-400" /> : <Cloud size={12} className={active.tts === 'ark' ? 'text-cyan-400' : 'text-blue-400'} />}
+          <span className="text-[12px] font-mono text-white/55">{providerLabel(active.tts, ttsOpts)}</span>
         </div>
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {ttsOpts.map(o => (
           <button
             key={o.value}

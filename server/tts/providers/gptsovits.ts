@@ -4,9 +4,21 @@ import path from 'path';
 import { getDataPath } from '../../config/data_path';
 import { withCloudResilience } from '../../cloud/resilience';
 
-const BASE_URL = 'http://127.0.0.1:9880';
+const DEFAULT_BASE_URL = 'http://127.0.0.1:9880';
 
 const SEGMENTS_DIR = getDataPath('voice_training/segments');
+
+function getBaseUrl(): string {
+  return (process.env.GPTSOVITS_API_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+}
+
+export function isConfigured(): boolean {
+  if (process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true') return true;
+
+  const localDir = path.join(process.cwd(), 'gpt-sovits-src');
+  return fs.existsSync(path.join(localDir, 'venv', 'Scripts', 'python.exe'))
+    && fs.existsSync(path.join(localDir, 'api_v2.py'));
+}
 
 function listReferenceFiles(): { path: string; name: string }[] {
   try {
@@ -77,7 +89,7 @@ export async function synthesizeSpeech(
   };
 
   const res = await withCloudResilience(
-    () => fetch(`${BASE_URL}/tts`, {
+    () => fetch(`${getBaseUrl()}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

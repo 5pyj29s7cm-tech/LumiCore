@@ -5,16 +5,17 @@ import { readDB, writeDB } from '../../db_layer';
 
 export interface VoicePreference {
   stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper';
-  tts: 'auto' | 'gptsovits' | 'cosyvoice' | 'ark';
+  tts: 'auto' | 'local-cosyvoice' | 'gptsovits' | 'cosyvoice' | 'ark';
 }
 
 const DEFAULT: VoicePreference = { stt: 'auto', tts: 'auto' };
 const ALLOWED_STT = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
+const ALLOWED_TTS = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark']);
 
 function normalizePreference(pref: Partial<VoicePreference>): VoicePreference {
   const stt = ALLOWED_STT.has(pref.stt as VoicePreference['stt']) ? pref.stt : DEFAULT.stt;
-  const tts = pref.tts || DEFAULT.tts;
-  return { stt: stt as VoicePreference['stt'], tts };
+  const tts = ALLOWED_TTS.has(pref.tts as VoicePreference['tts']) ? pref.tts : DEFAULT.tts;
+  return { stt: stt as VoicePreference['stt'], tts: tts as VoicePreference['tts'] };
 }
 
 export function getVoicePreference(): VoicePreference {

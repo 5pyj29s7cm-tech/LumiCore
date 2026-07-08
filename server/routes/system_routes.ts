@@ -166,7 +166,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
   router.post("/voice/provider", (req, res) => {
     const { stt, tts } = req.body || {};
     const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
-    const allowedTts = new Set<VoicePreference['tts']>(['auto', 'gptsovits', 'cosyvoice', 'ark']);
+    const allowedTts = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark']);
     const next: Partial<VoicePreference> = {};
 
     if (stt !== undefined) {

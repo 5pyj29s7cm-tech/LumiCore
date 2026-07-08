@@ -4,10 +4,9 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFileSync } from 'child_process';
-import { synthesizeSpeech, cloneVoice, designVoice, listVoices, getActiveProvider } from '../server/tts/adapter';
+import { synthesizeSpeech, cloneVoice, designVoice, listVoices, getActiveProvider, isTTSProviderConfigured } from '../server/tts/adapter';
 import { TTSProvider } from '../server/tts/types';
 import { readDB, writeDB } from '../db_layer';
-import { getKey } from '../server/config/keys';
 import { logger } from '../logger';
 import { recordLatency } from '../server/monitor/latency_store';
 import { getDataPath } from '../server/config/data_path';
@@ -309,7 +308,7 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
     const activeProvider = (provider || 'cosyvoice') as TTSProvider;
     if (activeProvider !== 'cosyvoice') {
       return res.status(400).json({
-        error: 'Voice cloning currently supports CosyVoice only. Choose CosyVoice in the cloning flow or add a provider adapter.',
+        error: 'Voice cloning currently supports DashScope CosyVoice only. Choose DashScope CosyVoice in the cloning flow or add a provider adapter.',
         activeProvider,
         supportedProviders: ['cosyvoice'],
       });
@@ -381,7 +380,7 @@ router.post('/voice/design', requireAuth, async (req: Request, res: Response) =>
     }
     const activeProvider = ((req.body?.provider as TTSProvider | undefined) || 'cosyvoice') as TTSProvider;
     if (activeProvider !== 'cosyvoice') {
-      return res.status(400).json({ error: 'Voice design currently supports CosyVoice only. Use CosyVoice (DashScope).' });
+      return res.status(400).json({ error: 'Voice design currently supports DashScope CosyVoice only.' });
     }
 
     const cleanName = name.trim();
@@ -428,20 +427,8 @@ router.get('/voice/voices', requireAuth, async (req: Request, res: Response) => 
     let premadeVoices: any[] = [];
     const providers: TTSProvider[] = [];
 
-    // Check which providers are available (by API key / server presence)
-    if (true) {
-      // cosyvoice always available if dashscope key is set
-      const dk = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY');
-      if (dk) providers.push('cosyvoice');
-    }
-    {
-      // Ark (Doubao) TTS needs separate Speech AppID + Token (not ARK_API_KEY for LLM)
-      const { hasDoubaoSpeech } = await import('../server/tts/providers/ark');
-      if (hasDoubaoSpeech()) providers.push('ark');
-    }
-    if (process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true') {
-      providers.push('gptsovits');
-    }
+    const knownProviders: TTSProvider[] = ['local-cosyvoice', 'cosyvoice', 'ark', 'gptsovits'];
+    providers.push(...knownProviders.filter(isTTSProviderConfigured));
     // If nothing configured, fall back to active provider
     if (providers.length === 0) {
       const active = getActiveProvider();

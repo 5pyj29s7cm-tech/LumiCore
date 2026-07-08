@@ -9,6 +9,8 @@
 import { isCircuitClosed, recordFailure, recordSuccess } from './circuit_breaker';
 import { isCloudRetryable } from './retry';
 import { getKey } from '../config/keys';
+import fs from 'fs';
+import path from 'path';
 
 // ── Provider Priority Lists ──
 
@@ -27,7 +29,8 @@ export const STT_PRIORITY: Array<{ provider: string; label: string }> = [
 ];
 
 export const TTS_PRIORITY: Array<{ provider: string; label: string }> = [
-  { provider: 'cosyvoice', label: 'CosyVoice' },
+  { provider: 'local-cosyvoice', label: 'Local CosyVoice' },
+  { provider: 'cosyvoice', label: 'DashScope CosyVoice' },
   { provider: 'gptsovits', label: 'GPT-SoVITS' },
 ];
 
@@ -181,8 +184,22 @@ export function getAvailableSTTProviders(): Record<string, boolean> {
  * Check which TTS providers have API keys configured.
  */
 export function getAvailableTTSProviders(): Record<string, boolean> {
+  const gptSovitsDir = path.join(process.cwd(), 'gpt-sovits-src');
   return {
+    'local-cosyvoice': !!(
+      process.env.LOCAL_COSYVOICE_ENABLED === 'true'
+      || process.env.LOCAL_COSYVOICE_API_URL
+      || process.env.COSYVOICE_LOCAL_API_URL
+    ),
     cosyvoice: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
-    gptsovits: !!(process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true' || getKey('GPTSOVITS_API_URL')),
+    gptsovits: !!(
+      process.env.GPTSOVITS_API_URL
+      || process.env.GPTSOVITS_ENABLED === 'true'
+      || getKey('GPTSOVITS_API_URL')
+      || (
+        fs.existsSync(path.join(gptSovitsDir, 'venv', 'Scripts', 'python.exe'))
+        && fs.existsSync(path.join(gptSovitsDir, 'api_v2.py'))
+      )
+    ),
   };
 }

@@ -1463,7 +1463,7 @@ function VoiceServicesPage({ t }: { t: any }) {
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-xs font-bold text-white/80">{t.ttsEngine || ui('TTS 引擎', 'TTS Engine')}</span>
             </div>
-            <p className="text-xs text-white/40">{t.ttsEngineDesc || ui('已配置 GPT-SoVITS + DashScope CosyVoice。', 'GPT-SoVITS + DashScope CosyVoice configured.')}</p>
+            <p className="text-xs text-white/40">{t.ttsEngineDesc || ui('本地 TTS：Local CosyVoice / GPT-SoVITS；云端：DashScope CosyVoice / Doubao。', 'Local TTS: Local CosyVoice / GPT-SoVITS; cloud: DashScope CosyVoice / Doubao.')}</p>
           </div>
           <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2">
             <div className="flex items-center gap-2">
@@ -1475,11 +1475,11 @@ function VoiceServicesPage({ t }: { t: any }) {
           <VoiceProviderSwitch t={t} />
         </div>
         <p className="text-sm text-white/40 max-w-xl mb-6">
-          {t.voiceServicesDesc || ui('语音识别（ASR）和语音合成（TTS）。配置豆包语音后会自动优先使用。', 'Speech recognition (ASR) and speech synthesis (TTS). Doubao Speech is auto-prioritized when configured.')}
+          {t.voiceServicesDesc || ui('语音识别（ASR）和语音合成（TTS）。本地 TTS 不需要 API key；云端 TTS 需要对应服务密钥。', 'Speech recognition (ASR) and speech synthesis (TTS). Local TTS does not need an API key; cloud TTS uses the matching service key.')}
         </p>
         <div className="grid grid-cols-1 gap-6">
           <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || ui('格式：AppID:AccessToken。可在 console.volcengine.com/speech 的应用管理中获取。', 'Format: AppID:AccessToken. Get both from console.volcengine.com/speech → App Management')} t={t} />
-          <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || ui('用于 Qwen ASR 和 CosyVoice TTS。可在 dashscope.aliyun.com 获取密钥。', 'Powers Qwen ASR and CosyVoice TTS. Get your key at dashscope.aliyun.com')} t={t} />
+          <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || ui('用于 Qwen ASR 和 DashScope CosyVoice 云端 TTS。可在 dashscope.aliyun.com 获取密钥。', 'Powers Qwen ASR and DashScope CosyVoice cloud TTS. Get your key at dashscope.aliyun.com')} t={t} />
         </div>
         <div className="mt-6 p-4 bg-white/5 rounded-xl border border-white/10">
           <div className="flex items-center justify-between">
