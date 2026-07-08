@@ -25,6 +25,7 @@
     "core:window:allow-set-skip-taskbar",
     "core:window:allow-show",
     "core:window:allow-start-dragging",
-    "core:window:allow-unmaximize"
+    "core:window:allow-unmaximize",
+    "shell:allow-open"
   ]
 }

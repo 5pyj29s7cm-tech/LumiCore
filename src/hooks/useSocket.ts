@@ -143,6 +143,9 @@ async function handleDesktopExec(socket: Socket, data: {
           return;
         }
         const openResult: { success: boolean; output: string } = await invoke('open_item', { target: target.trim() });
+        if (!openResult.success) {
+          throw new Error(openResult.output || `Failed to open: ${target}`);
+        }
         output = openResult.output || `Opened: ${target}`;
         break;
       }

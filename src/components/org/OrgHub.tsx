@@ -3,6 +3,7 @@ import {
   Building2, BookOpen, Package, Users, Settings,
   ClipboardCheck, ScrollText, MessageSquare, ArrowLeft,
   Shield, User, Briefcase, Home, Scale, Palette, GitBranch, Loader2, MessagesSquare,
+  ChevronDown, ChevronRight, Layers,
 } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
@@ -47,6 +48,7 @@ export function OrgHub() {
   const [subView, setSubView] = useState<SubView>('dashboard');
   const [editingArticleId, setEditingArticleId] = useState<string | undefined>(undefined);
   const [switchBusy, setSwitchBusy] = useState(false);
+  const [orgModulesOpen, setOrgModulesOpen] = useState(false);
   const { workDomain, switchDomain, orgConnection } = useApp();
   const t = useT();
   const isZh = t.langCode !== 'en';
@@ -54,8 +56,8 @@ export function OrgHub() {
 
   const allNavItems: NavItem[] = useMemo(() => [
     { id: 'dashboard', label: t.orgDashboard, icon: <Home size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'chat', label: t.orgChat, icon: <MessageSquare size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
     { id: 'kb', label: t.orgKB, icon: <BookOpen size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'chat', label: t.orgChat, icon: <MessageSquare size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
     { id: 'messaging', label: t.messaging || ui('消息接入', 'Messaging'), icon: <MessagesSquare size={16} />, roles: ['owner', 'admin', 'member'] },
     { id: 'templates', label: t.orgTemplates, icon: <Package size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
     { id: 'review', label: t.orgReview, icon: <ClipboardCheck size={16} />, roles: ['owner', 'admin'] },
@@ -89,8 +91,16 @@ export function OrgHub() {
 
   const orgRole = orgConnection?.orgRole || 'member';
   const visibleItems = allNavItems.filter(item => item.roles.includes(orgRole as any));
+  const moduleItemIds = useMemo(() => new Set<SubView>(['legal', 'design']), []);
+  const primaryNavItems = visibleItems.filter(item => !moduleItemIds.has(item.id));
+  const moduleNavItems = visibleItems.filter(item => moduleItemIds.has(item.id));
+  const isModuleView = moduleItemIds.has(subView);
   const roleInfo = roleLabel[orgRole] || roleLabel.member;
   const currentItem = visibleItems.find(item => item.id === subView) || allNavItems.find(item => item.id === subView) || allNavItems[0];
+
+  React.useEffect(() => {
+    if (isModuleView) setOrgModulesOpen(true);
+  }, [isModuleView]);
 
   const openSubView = (view: SubView) => {
     if (view !== 'kb-edit') setEditingArticleId(undefined);
@@ -161,12 +171,12 @@ export function OrgHub() {
         </div>
 
         <nav className="custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
-          {visibleItems.map(item => (
+          {primaryNavItems.map(item => (
             <button
               key={item.id}
               onClick={() => openSubView(item.id)}
               className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm transition-colors ${
-                subView === item.id
+                subView === item.id || (subView === 'kb-edit' && item.id === 'kb')
                   ? 'border border-blue-400/20 bg-blue-500/10 text-blue-200'
                   : 'border border-transparent text-white/50 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
               }`}
@@ -175,6 +185,41 @@ export function OrgHub() {
               <span className="min-w-0 truncate">{item.label}</span>
             </button>
           ))}
+          {moduleNavItems.length > 0 && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setOrgModulesOpen(prev => !prev)}
+                className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                  isModuleView
+                    ? 'border-blue-400/20 bg-blue-500/10 text-blue-200'
+                    : 'border-white/[0.08] bg-white/[0.03] text-white/55 hover:bg-white/[0.06] hover:text-white/80'
+                }`}
+              >
+                <Layers size={16} className="shrink-0" />
+                <span className="min-w-0 flex-1 truncate text-left">{ui('组织模块', 'Organization Modules')}</span>
+                {orgModulesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+              {orgModulesOpen && (
+                <div className="mt-1 space-y-1 pl-3">
+                  {moduleNavItems.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => openSubView(item.id)}
+                      className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm transition-colors ${
+                        subView === item.id
+                          ? 'border border-blue-400/20 bg-blue-500/10 text-blue-200'
+                          : 'border border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
+                      }`}
+                    >
+                      <span className="shrink-0">{item.icon}</span>
+                      <span className="min-w-0 truncate">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="my-2 border-t border-white/[0.08]" />
           <button
             onClick={() => {

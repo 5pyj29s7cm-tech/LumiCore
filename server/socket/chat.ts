@@ -252,6 +252,22 @@ function buildDetachedAttachmentFollowupResponse(userText: string): string {
   ].join('\n');
 }
 
+function shouldAllowLocalFileWriteForTurn(userText: string, attachments: ChatIncomingAttachment[]): boolean {
+  const clean = String(userText || '').trim();
+  if (!clean) return false;
+  if (/(?:不要|别|不用|无需|先别|暂时别).{0,12}(?:生成|创建|写入|保存|导出|输出|做成|整理成)/iu.test(clean)) return false;
+
+  const explicitDeliverable =
+    /(?:生成|创建|制作|新建|编写|写成|做成|整理成|汇总成|形成|转成|保存为?|导出为?|输出为?|出一份|做一份).{0,48}(?:文件|文档|材料|报告|笔录|纪要|记录|文本|文字|文稿|清单|方案|表格|DOCX|docx|Word|PDF|pdf|TXT|txt|MD|md|PPTX?|pptx?|XLSX?|xlsx?)/iu.test(clean);
+  const attachedArtifactRequest =
+    attachments.length > 0 &&
+    /(?:整理|汇总|总结|提炼|转写|转成|做成|生成|创建|保存|导出).{0,48}(?:文本|文字|文档|文件|材料|笔录|纪要|记录|报告|DOCX|docx|Word|PDF|pdf|TXT|txt|MD|md)/iu.test(clean);
+  const directEnglishRequest =
+    /\b(?:create|generate|write|save|export|turn|make)\b.{0,48}\b(?:file|document|docx|word|pdf|txt|markdown|transcript|notes|minutes|report)\b/i.test(clean);
+
+  return explicitDeliverable || attachedArtifactRequest || directEnglishRequest;
+}
+
 type NativeFileEntry = {
   name?: string;
   path?: string;
@@ -570,6 +586,10 @@ export function registerChatHandler(
     const attachmentContext = buildChatAttachmentContext(attachments);
     const text = [visibleUserText, attachmentContext].filter(Boolean).join('\n\n');
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
+    const allowLocalFileWrites = shouldAllowLocalFileWriteForTurn(visibleUserText, attachments);
+    const localWriteIntentReason = allowLocalFileWrites
+      ? `Current chat request explicitly asked Lumi to generate/export a local deliverable: "${visibleUserText.slice(0, 120)}"`
+      : undefined;
     const requestId = typeof data.requestId === 'string' ? data.requestId.slice(0, 120) : undefined;
     const eventSource = source || 'chat';
     const toolResultPreviewLimit = 500;
@@ -1172,7 +1192,13 @@ export function registerChatHandler(
             const step = matched.steps[i];
             if (step.tool) {
               try {
-                const result = await toolRegistry.execute(step.tool, step.args || {}, { userId: uid });
+                const result = await toolRegistry.execute(step.tool, step.args || {}, {
+                  userId: uid,
+                  domain: resolvedDomain,
+                  orgId: resolvedOrgId,
+                  allowLocalFileWrites,
+                  localWriteIntentReason,
+                });
                 steps.push(`Step ${i + 1} (${step.tool}): ${(result || 'OK').slice(0, 200)}`);
               } catch (e: any) {
                 steps.push(`Step ${i + 1} (${step.tool}): Error - ${e.message}`);
@@ -1223,7 +1249,16 @@ export function registerChatHandler(
               });
             }
             try {
-              const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, desktopRelay, llmGetters, requestConfirmation: requestToolConfirmation });
+              const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, {
+                userId: uid,
+                domain: resolvedDomain,
+                orgId: resolvedOrgId,
+                desktopRelay,
+                llmGetters,
+                allowLocalFileWrites,
+                localWriteIntentReason,
+                requestConfirmation: requestToolConfirmation,
+              });
               quickToolResult = tcResult || '';
               if (shouldEmitQuickTool) {
                 emitToolLifecycle({
@@ -1383,6 +1418,8 @@ export function registerChatHandler(
             desktopRelay,
             llmGetters,
             source: 'chat_preflight',
+            allowLocalFileWrites,
+            localWriteIntentReason,
             isCancelled: () => abortController.signal.aborted,
             requestConfirmation: requestToolConfirmation,
           });
@@ -1843,7 +1880,22 @@ export function registerChatHandler(
               provider: activeProvider,
               model: activeModel,
               desktopRelay,
-              context: { isCancelled: () => abortController.signal.aborted, toolPolicy: routedToolPolicy || personality.toolPolicy },
+              context: {
+                userId: uid,
+                domain: resolvedDomain,
+                orgId: resolvedOrgId,
+                desktopRelay,
+                llmGetters,
+                source: 'chat_chainer',
+                allowLocalFileWrites,
+                localWriteIntentReason,
+                isCancelled: () => abortController.signal.aborted,
+                requestConfirmation: requestToolConfirmation,
+                toolPolicy: routedToolPolicy || personality.toolPolicy,
+                onProgress: (step: string) => {
+                  emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+                },
+              },
               onTool: (record) => {
                 allToolRecords.push(record);
                 const payload: Record<string, any> = {
@@ -1862,6 +1914,11 @@ export function registerChatHandler(
             llmGetters,
             (step, total, desc) => {
               emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background', detail: `Step ${step}/${total}: ${desc}` });
+              emitAgent("agent:progress", {
+                text: `Step ${step}/${total}: ${desc}`,
+                tone: 'tool',
+                agentName: personality.name,
+              });
             },
           );
           if (chainerResult.finalResponse) {
@@ -1983,6 +2040,8 @@ export function registerChatHandler(
               desktopRelay,
               llmGetters,
               source: 'chat',
+              allowLocalFileWrites,
+              localWriteIntentReason,
               isCancelled: () => abortController.signal.aborted,
               onToolStart: (call) => {
                 if (isDirectDesktopTool(call.name)) return;
@@ -2092,6 +2151,8 @@ export function registerChatHandler(
                   desktopRelay,
                   llmGetters,
                   source: 'chat',
+                  allowLocalFileWrites,
+                  localWriteIntentReason,
                   isCancelled: () => abortController.signal.aborted,
                   onToolStart: (call) => {
                     if (isDirectDesktopTool(call.name)) return;

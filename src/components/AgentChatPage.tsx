@@ -724,7 +724,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           return;
         }
       } catch (err: any) {
-        toast.error(err?.message || ui('原生打开失败，尝试后端打开', 'Native open failed; trying server open'));
+        console.debug('[AgentChat] Native file open failed; falling back to server open:', err?.message || err);
       }
     }
 

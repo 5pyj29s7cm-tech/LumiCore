@@ -1,14 +1,34 @@
 import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { BrainCircuit, Building2, Send, Loader2, User, Bot, Settings } from 'lucide-react';
+import { BrainCircuit, Building2, Send, Loader2, User, Bot, Settings, Paperclip, FileText, Mic, Image as ImageIcon, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import { useApp } from '../../contexts/AppContext';
 import { useSocket } from '../../hooks/useSocket';
 import { useT } from '../../lib/useT';
+
+type ChatAttachment = {
+  id: string;
+  fileName: string;
+  path?: string;
+  content?: string | null;
+  preview?: string | null;
+  mimeType?: string;
+  size?: number;
+  kind: 'image' | 'audio' | 'file';
+  fileId?: string;
+  downloadUrl?: string;
+  transcript?: string | null;
+  transcriptionStatus?: string;
+  transcriptionError?: string | null;
+  transcriptionProvider?: string;
+  transcriptionModel?: string;
+};
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachments?: ChatAttachment[];
   timestamp: number;
   source?: 'socket' | 'history' | 'error' | 'system';
 }
@@ -24,6 +44,49 @@ interface OrgLlmPolicy {
 
 function makeMessageId(prefix = 'org-msg') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const CHAT_ATTACHMENT_ACCEPT = [
+  '.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff',
+  '.mp3,.mpeg,.wav,.m4a,.ogg,.oga,.flac,.aac,.wma,.webm',
+  '.txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.pptx,.ppt,.rtf,.ts,.tsx,.js,.jsx,.py,.html,.css,.yaml,.yml,.xml,.log',
+].join(',');
+
+function isImageFileName(name: string, mimeType?: string): boolean {
+  return Boolean(mimeType?.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(name || '');
+}
+
+function isAudioFileName(name: string, mimeType?: string): boolean {
+  return Boolean(mimeType?.startsWith('audio/')) || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(name || '');
+}
+
+function extractAudioTranscript(value?: string | null): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const marker = 'transcript:';
+  const index = raw.toLowerCase().indexOf(marker);
+  const transcript = index >= 0 ? raw.slice(index + marker.length).trim() : raw;
+  return transcript || null;
+}
+
+function serializeChatAttachment(item: ChatAttachment): ChatAttachment {
+  return {
+    id: item.id,
+    fileName: item.fileName,
+    path: item.path,
+    content: item.content || null,
+    preview: item.preview || null,
+    mimeType: item.mimeType || '',
+    size: item.size || 0,
+    kind: item.kind,
+    fileId: item.fileId || '',
+    downloadUrl: item.downloadUrl,
+    transcript: item.transcript || null,
+    transcriptionStatus: item.transcriptionStatus || '',
+    transcriptionError: item.transcriptionError || null,
+    transcriptionProvider: item.transcriptionProvider || '',
+    transcriptionModel: item.transcriptionModel || '',
+  };
 }
 
 function normalizeHistoryMessage(item: any): Message | null {
@@ -56,9 +119,12 @@ export function CentralLumiChat() {
   }), [ui]);
   const [messages, setMessages] = useState<Message[]>(() => [greeting()]);
   const [input, setInput] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [llmPolicy, setLlmPolicy] = useState<OrgLlmPolicy | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const activeRequestIdRef = useRef<string | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,6 +173,105 @@ export function CentralLumiChat() {
   const openOrgSettings = () => {
     window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'settings' } }));
   };
+  const scopedFileUrl = useCallback((path: string) => {
+    const separator = path.includes('?') ? '&' : '?';
+    const orgScope = orgConnection?.orgId ? `&orgId=${encodeURIComponent(orgConnection.orgId)}` : '';
+    return `${path}${separator}domain=work${orgScope}`;
+  }, [orgConnection?.orgId]);
+  const notifyKnowledgeUpdated = useCallback((files?: Array<{ id?: string; name?: string; displayName?: string }>) => {
+    window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
+      detail: {
+        domain: 'work',
+        orgId: orgConnection?.orgId || undefined,
+        files,
+      },
+    }));
+    window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+  }, [orgConnection?.orgId]);
+
+  const uploadChatAttachments = useCallback(async (files: FileList | null) => {
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) return;
+    if (!orgConnection?.orgId) {
+      toast.error('Please connect an organization workspace first.');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      selectedFiles.forEach(file => formData.append('files', file));
+      formData.append('domain', 'work');
+      formData.append('orgId', orgConnection.orgId);
+
+      const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `Upload failed (${res.status})`);
+      }
+
+      const uploadedAttachments: ChatAttachment[] = (Array.isArray(data.files) ? data.files : []).map((file: any) => {
+        const fileName = file.name || file.displayName || file.id || 'attachment';
+        const mimeType = file.mimeType || '';
+        const kind: ChatAttachment['kind'] =
+          file.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
+          file.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
+          'file';
+        const transcript = kind === 'audio'
+          ? extractAudioTranscript(file.transcript || file.content || file.preview || null)
+          : null;
+
+        return {
+          id: `org-att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          fileName,
+          path: file.path,
+          content: file.content || null,
+          preview: file.preview || null,
+          mimeType,
+          size: file.rawSize || file.size || 0,
+          kind,
+          fileId: file.id || fileName,
+          downloadUrl: file.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`) : undefined,
+          transcript,
+          transcriptionStatus: file.extractionStatus || (transcript ? 'indexed' : ''),
+          transcriptionError: file.extractionError || file.syncError || null,
+          transcriptionProvider: file.extractionProvider || undefined,
+          transcriptionModel: file.extractionModel || undefined,
+        };
+      });
+
+      if (uploadedAttachments.length === 0) {
+        throw new Error('No files were returned by upload.');
+      }
+
+      setPendingAttachments(prev => [...prev, ...uploadedAttachments]);
+      notifyKnowledgeUpdated(uploadedAttachments.map(item => ({
+        id: item.fileId || item.path || item.fileName,
+        name: item.fileName,
+        displayName: item.fileName,
+      })));
+
+      const failedAudio = uploadedAttachments.find(item => item.kind === 'audio' && item.transcriptionError);
+      if (failedAudio?.transcriptionError) {
+        toast.error(failedAudio.transcriptionError);
+      } else {
+        toast.success('Attached to Company Lumi.');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Upload failed.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [notifyKnowledgeUpdated, orgConnection?.orgId, scopedFileUrl]);
+
+  const removePendingAttachment = useCallback((id: string) => {
+    setPendingAttachments(prev => prev.filter(item => item.id !== id));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,7 +396,8 @@ export function CentralLumiChat() {
 
   const handleSend = () => {
     const text = input.trim();
-    if (!text || loading) return;
+    const outgoingAttachments = pendingAttachments.map(serializeChatAttachment);
+    if ((!text && outgoingAttachments.length === 0) || loading || uploading) return;
     if (!socket) {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
@@ -257,10 +423,12 @@ export function CentralLumiChat() {
     const history = messages
       .filter(message => message.source !== 'error' && message.source !== 'system')
       .map(message => ({ role: message.role, content: message.content }));
+    const outgoingText = text || 'Please review these attachments.';
     const userMsg: Message = {
       id: makeMessageId('org-user'),
       role: 'user',
-      content: text,
+      content: outgoingText,
+      attachments: outgoingAttachments,
       timestamp: Date.now(),
       source: 'socket',
     };
@@ -282,10 +450,12 @@ export function CentralLumiChat() {
 
     setMessages(prev => [...prev, userMsg]);
     setInput('');
+    setPendingAttachments([]);
     setLoading(true);
     socket.emit('agent:chat', {
-      text,
+      text: outgoingText,
       history,
+      attachments: outgoingAttachments,
       personalityId: 'lumi',
       category: 'organization',
       agentId: 'lumi',
@@ -348,6 +518,33 @@ export function CentralLumiChat() {
                 ? 'bg-purple-500/10 border border-purple-500/20 text-white/90'
                 : 'bg-white/5 border border-white/10 text-white/80'
             }`}>
+              {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {msg.attachments.map(item => {
+                    const card = (
+                      <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/70">
+                        {item.kind === 'image' && item.downloadUrl ? (
+                          <img src={item.downloadUrl} alt={item.fileName} className="h-8 w-8 rounded-lg object-cover" loading="lazy" />
+                        ) : item.kind === 'image' ? (
+                          <ImageIcon size={16} className="text-blue-300" />
+                        ) : item.kind === 'audio' ? (
+                          <Mic size={16} className="text-blue-300" />
+                        ) : (
+                          <FileText size={16} className="text-white/50" />
+                        )}
+                        <span className="max-w-[180px] truncate">{item.fileName}</span>
+                      </div>
+                    );
+                    return item.downloadUrl ? (
+                      <a key={item.id} href={item.downloadUrl} target="_blank" rel="noopener noreferrer" className="min-w-0 transition-opacity hover:opacity-80">
+                        {card}
+                      </a>
+                    ) : (
+                      <div key={item.id} className="min-w-0">{card}</div>
+                    );
+                  })}
+                </div>
+              )}
               <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
               <span className="text-xs text-white/45 mt-1 block">
                 {new Date(msg.timestamp).toLocaleTimeString(isZh ? 'zh-CN' : undefined, { hour: '2-digit', minute: '2-digit' })}
@@ -370,7 +567,60 @@ export function CentralLumiChat() {
 
       {/* Input */}
       <div className="p-4 border-t border-white/5">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept={CHAT_ATTACHMENT_ACCEPT}
+          onChange={(event) => { void uploadChatAttachments(event.target.files); }}
+          className="hidden"
+        />
+        {pendingAttachments.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {pendingAttachments.map(item => (
+              <div
+                key={item.id}
+                className="group flex max-w-full items-center gap-2 rounded-xl border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-xs text-white/75"
+              >
+                {item.kind === 'image' && item.downloadUrl ? (
+                  <img src={item.downloadUrl} alt={item.fileName} className="h-7 w-7 rounded-lg object-cover" loading="lazy" />
+                ) : item.kind === 'image' ? (
+                  <ImageIcon size={15} className="text-blue-300" />
+                ) : item.kind === 'audio' ? (
+                  <Mic size={15} className="text-blue-300" />
+                ) : (
+                  <FileText size={15} className="text-white/50" />
+                )}
+                <span className="max-w-[220px] truncate">{item.fileName}</span>
+                {item.transcriptionStatus && item.kind === 'audio' && (
+                  <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/45">
+                    {item.transcriptionStatus}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removePendingAttachment(item.id)}
+                  className="rounded-lg p-1 text-white/35 transition hover:bg-white/10 hover:text-white"
+                  aria-label="Remove attachment"
+                  title="Remove attachment"
+                >
+                  <XCircle size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading || uploading || !orgConnection?.orgId}
+            className="p-3 rounded-xl border border-white/10 bg-white/5 text-white/65 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+            title="Attach files"
+            aria-label="Attach files"
+          >
+            {uploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+          </button>
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -380,7 +630,7 @@ export function CentralLumiChat() {
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || loading}
+            disabled={(!input.trim() && pendingAttachments.length === 0) || loading || uploading}
             className="p-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed text-white transition-colors"
           >
             {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}

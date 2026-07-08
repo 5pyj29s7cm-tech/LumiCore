@@ -17,6 +17,14 @@ export interface ToolContext {
   requestConfirmation?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** True only after the registry's confirmation callback approved this tool call. */
   userConfirmed?: boolean;
+  /**
+   * True when the current user turn explicitly asked Lumi to create/export/save a
+   * local deliverable. This only relaxes medium-risk local file generation tools;
+   * high-risk actions and already-confirm-level tools keep their confirmation gate.
+   */
+  allowLocalFileWrites?: boolean;
+  /** Human-readable reason recorded when allowLocalFileWrites is set. */
+  localWriteIntentReason?: string;
   /** Personality's tool policy for security level resolution */
   toolPolicy?: import('../personality/types').ToolPolicy;
   /** Returns true if the task has been cancelled — checked between tool iterations */

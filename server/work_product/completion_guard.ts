@@ -15,12 +15,30 @@ function buildActionPromiseGuardedResponse(
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
   const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
+  const confirmationBlocked = failed.some(call =>
+    /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
+  );
 
   if (!isZh) {
+    if (confirmationBlocked) {
+      return [
+        `I did start the workflow, but it is blocked at a confirmation step: ${reason}`,
+        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
+        'Next step: confirm the requested local action in the client, or ask me to retry after giving explicit approval.',
+      ].filter(Boolean).join('\n');
+    }
     return [
       `I have not actually started that action yet: ${reason}`,
       lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: this turn produced only a text reply, with no successful tool evidence.',
       'Next step: provide or select the file/location, then I should run the real read/open/review tool and show progress before giving the result.',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (confirmationBlocked) {
+    return [
+      '我已经开始处理了，但卡在一个需要确认的本地动作上。',
+      lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
+      '下一步需要在客户端确认这一步，或者你明确授权后让我重试；我不能把这一步说成已经完成。',
     ].filter(Boolean).join('\n');
   }
 
@@ -165,13 +183,33 @@ function buildGuardedResponse(
   const isZh = /[\u3400-\u9fff]/.test(task);
   const lastSuccess = successful.slice(-3).map(call => call.name).join(', ');
   const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
+  const confirmationBlocked = failed.some(call =>
+    /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
+  );
 
   if (!isZh) {
+    if (confirmationBlocked) {
+      return [
+        `I started the workflow, but cannot mark it complete yet: ${reason}.`,
+        lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : '',
+        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
+        'Next step: confirm the gated action in the client or explicitly ask me to retry with approval.',
+      ].filter(Boolean).join('\n');
+    }
     return [
       `I cannot honestly mark this complete yet: ${reason}.`,
       lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful tool execution was recorded.',
       lastFailure ? `Latest blocker: ${lastFailure}.` : '',
       'Next step: continue the actual tool workflow, then verify the produced file/action before reporting completion.',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (confirmationBlocked) {
+    return [
+      `我已经开始处理，但还不能说完成：${reason}。`,
+      lastSuccess ? `目前能确认的成功步骤：${lastSuccess}。` : '',
+      lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
+      '下一步需要在客户端确认这个受控动作，或你明确授权后让我重试。',
     ].filter(Boolean).join('\n');
   }
 

@@ -92,6 +92,15 @@ export function evaluateActionConstitution(
     return confirm(domain, `High-risk ${domain} action requires explicit user confirmation`);
   }
 
+  if (domain === 'local_write' && currentLevel === 'safe' && context?.allowLocalFileWrites === true) {
+    return {
+      level: 'safe',
+      domain,
+      reason: context.localWriteIntentReason || 'Current user turn explicitly requested local file output',
+      requiresUserConfirmation: false,
+    };
+  }
+
   if (domain === 'system' || domain === 'desktop_control' || domain === 'external_app' || domain === 'local_write') {
     if (currentLevel === 'safe') {
       return confirm(domain, `${domain} action requires confirmation by Action Constitution`);
