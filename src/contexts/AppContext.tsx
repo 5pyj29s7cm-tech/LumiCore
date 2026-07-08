@@ -46,6 +46,8 @@ interface NotificationItem {
   type: string;
   title: string;
   message: string;
+  action?: string;
+  proactiveContext?: Record<string, any>;
   timestamp: number;
   read: boolean;
 }

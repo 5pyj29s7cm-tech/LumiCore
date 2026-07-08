@@ -123,6 +123,74 @@ const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.Voi
 const VoiceTrainingDialog = lazy(() => import('./VoiceTrainingDialog').then(m => ({ default: m.VoiceTrainingDialog })));
 const WorkflowPanel = lazy(() => import('./WorkflowPanel'));
 
+type ProactiveChatDetail = {
+  type?: string;
+  message?: string;
+  action?: string;
+  proactiveContext?: Record<string, any>;
+  context?: Record<string, any>;
+  timestamp?: string;
+};
+
+function proactiveActionLabel(action: string | undefined, lang: 'en' | 'zh'): string {
+  const labels: Record<string, { zh: string; en: string }> = {
+    analyze_code: { zh: '代码辅助', en: 'Code help' },
+    debug_error: { zh: '错误分析', en: 'Debug error' },
+    debug_trace: { zh: '堆栈定位', en: 'Trace debugging' },
+    open_path: { zh: '打开文件路径', en: 'Open path' },
+    summarize_url: { zh: '链接总结', en: 'Summarize URL' },
+    create_presentation: { zh: '制作演示文稿', en: 'Create presentation' },
+    write_document: { zh: '文档写作', en: 'Write document' },
+    analyze_spreadsheet: { zh: '表格分析', en: 'Spreadsheet analysis' },
+  };
+  const resolved = action ? labels[action] : undefined;
+  return resolved ? resolved[lang] : (action || (lang === 'zh' ? '继续处理' : 'Continue'));
+}
+
+function compactProactivePreview(value: unknown): string {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+  return text.length > 700 ? `${text.slice(0, 700)}...` : text;
+}
+
+function formatProactiveChatPrefill(detail: ProactiveChatDetail, lang: 'en' | 'zh'): string {
+  const message = String(detail.message || '').trim();
+  const context = detail.proactiveContext || detail.context || {};
+  const lines = [message || (lang === 'zh' ? '我刚刚注意到一个上下文变化。' : 'I just noticed a context change.')];
+
+  if (context.trigger === 'window_changed') {
+    const appLabel = context.appLabel || context.processName || (lang === 'zh' ? '当前应用' : 'the current app');
+    lines.push('');
+    lines.push(lang === 'zh'
+      ? `我刚刚是因为你切到了 ${appLabel} 才问的。`
+      : `I asked because you switched to ${appLabel}.`);
+    if (context.windowTitle) {
+      lines.push(lang === 'zh'
+        ? `当前窗口：${context.windowTitle}`
+        : `Active window: ${context.windowTitle}`);
+    }
+  } else if (context.trigger === 'clipboard_changed') {
+    lines.push('');
+    lines.push(lang === 'zh'
+      ? '我刚刚是因为检测到剪贴板内容才问的。'
+      : 'I asked because I noticed new clipboard content.');
+    const preview = compactProactivePreview(context.preview);
+    if (preview) {
+      lines.push(lang === 'zh' ? `内容线索：${preview}` : `Context preview: ${preview}`);
+    }
+  }
+
+  if (detail.action) {
+    lines.push(lang === 'zh'
+      ? `建议动作：${proactiveActionLabel(detail.action, lang)}`
+      : `Suggested action: ${proactiveActionLabel(detail.action, lang)}`);
+  }
+  lines.push(lang === 'zh'
+    ? '你可以直接回复“嗯，帮我看”，我会接着这个上下文处理。'
+    : 'You can reply "yes, take a look" and I will continue from this context.');
+  return lines.join('\n');
+}
+
 function LazyPanelFallback({ label = 'Loading' }: { label?: string }) {
   return (
     <div className="flex h-full min-h-[180px] w-full items-center justify-center text-white/35">
@@ -1774,6 +1842,7 @@ export function DesktopUI({
   const [chatOpen, setChatOpen] = useState(false);
   const [chatLoaded, setChatLoaded] = useState(false);
   const [chatPrefill, setChatPrefill] = useState('');
+  const [chatPrefillSource, setChatPrefillSource] = useState('proactive');
   const [sanctuaryOpen, setSanctuaryOpen] = useState(false);
   const [sanctuaryLoaded, setSanctuaryLoaded] = useState(false);
   const [sanctuaryAgent, setSanctuaryAgent] = useState<any>(null);
@@ -1881,6 +1950,21 @@ export function DesktopUI({
     chatOpenRef.current = chatOpen;
     if (chatOpen) setWallpaperWorkPromptVisible(false);
   }, [chatOpen]);
+
+  const openProactiveChat = useCallback((detail: ProactiveChatDetail) => {
+    setIsNotificationPanelOpen(false);
+    setChatPrefillSource('proactive_context');
+    setChatPrefill(formatProactiveChatPrefill(detail, lang));
+    setChatOpen(true);
+  }, [lang]);
+
+  useEffect(() => {
+    const handleOpenProactiveChat = (event: Event) => {
+      openProactiveChat((event as CustomEvent<ProactiveChatDetail>).detail || {});
+    };
+    window.addEventListener('lumi:open-proactive-chat', handleOpenProactiveChat);
+    return () => window.removeEventListener('lumi:open-proactive-chat', handleOpenProactiveChat);
+  }, [openProactiveChat]);
 
   const getDefaultDesktopIconPosition = useCallback((index: number) => ({
     x: desktopIconLayout.startX + (index % desktopIconLayout.columns) * desktopIconLayout.cellWidth,
@@ -3092,17 +3176,6 @@ export function DesktopUI({
     const onProactive = (data: { type?: string; taskId: string; message: string; timestamp: string }) => {
       const taskId = data.type || data.taskId || data.taskId;
       if (taskId === 'greeting' && localStorage.getItem('lumi_allow_proactive_voice') !== 'true') return;
-      // Always add to notification center so user can find it later
-      addNotification({
-        type: taskId === 'daily_summary' || taskId === 'evening_wrapup' ? 'success' :
-              taskId === 'memory_decay' || taskId === 'reminder_check' ? 'warning' : 'info',
-        title: taskId === 'daily_summary' ? 'Daily Summary' :
-               taskId === 'evening_wrapup' ? 'Evening Wrap-up' :
-               taskId === 'reminder_check' ? 'Reminder' :
-               taskId === 'memory_decay' ? 'Memory' :
-               taskId === 'behavioral_analysis' ? 'Insight' : 'Lumi',
-        message: data.message,
-      });
       // Trigger pet reaction
       switch (taskId) {
         case 'reminder_check': triggerPetReaction('wave', 2000); break;
@@ -4589,11 +4662,7 @@ export function DesktopUI({
               >
                 <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
                   <NotificationCenter
-                    onChatMessage={(message) => {
-                      setIsNotificationPanelOpen(false);
-                      setChatPrefill(message);
-                      setChatOpen(true);
-                    }}
+                    onChatMessage={openProactiveChat}
                   />
                 </Suspense>
               </motion.div>
@@ -5395,10 +5464,9 @@ export function DesktopUI({
                     <GitHubMCPBrowser t={t} />
                   ) : windowId === 'notifications' ? (
                     <NotificationCenter
-                      onChatMessage={(message) => {
+                      onChatMessage={(item) => {
                         closeWindow('notifications');
-                        setChatPrefill(message);
-                        setChatOpen(true);
+                        openProactiveChat(item);
                       }}
                     />
                   ) : windowId === 'reminders' ? (
@@ -5470,9 +5538,10 @@ export function DesktopUI({
             t={t}
             user={user}
             isOpen={chatOpen}
-            onClose={() => { setChatOpen(false); setChatPrefill(''); }}
+            onClose={() => { setChatOpen(false); setChatPrefill(''); setChatPrefillSource('proactive'); }}
             prefillMessage={chatPrefill}
-            onPrefillConsumed={() => setChatPrefill('')}
+            prefillSource={chatPrefillSource}
+            onPrefillConsumed={() => { setChatPrefill(''); setChatPrefillSource('proactive'); }}
           />
         </Suspense>
       )}

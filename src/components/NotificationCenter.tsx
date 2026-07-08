@@ -11,14 +11,14 @@ const ICONS: Record<string, React.ReactNode> = {
   system: <Zap size={14} className="text-violet-400" />,
 };
 
-export function NotificationCenter({ onChatMessage }: { onChatMessage?: (message: string) => void }) {
+export function NotificationCenter({ onChatMessage }: { onChatMessage?: (item: any) => void }) {
   const { notifications, markAllNotificationsRead, clearNotifications } = useApp();
   const t = useT();
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
   const handleClick = (item: any) => {
     setDismissedIds(prev => new Set([...prev, item.id]));
-    onChatMessage?.(item.message);
+    onChatMessage?.(item);
   };
 
   // Filter: show all in-memory notifications, excluding dismissed

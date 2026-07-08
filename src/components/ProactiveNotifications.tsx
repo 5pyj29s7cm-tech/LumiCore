@@ -4,6 +4,39 @@ import { useApp } from '@/contexts/AppContext';
 import { toast } from 'sonner';
 import { useT } from '../lib/useT';
 
+type ProactivePayload = {
+  type?: string;
+  taskId?: string;
+  message: string;
+  timestamp?: string;
+  action?: string;
+  context?: Record<string, any>;
+};
+
+function openProactiveChat(data: ProactivePayload) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('lumi:open-proactive-chat', {
+    detail: {
+      type: data.type || data.taskId || 'unknown',
+      message: data.message,
+      action: data.action,
+      proactiveContext: data.context,
+      timestamp: data.timestamp,
+    },
+  }));
+}
+
+function toastOptions(data: ProactivePayload, duration: number, actionLabel: string) {
+  return {
+    duration,
+    id: `proactive-${data.timestamp || Date.now()}`,
+    action: {
+      label: actionLabel,
+      onClick: () => openProactiveChat(data),
+    },
+  };
+}
+
 /**
  * Bridge between backend socket events and frontend toast notifications.
  * Mounts once at the app root. No visual rendering.
@@ -16,10 +49,18 @@ export function ProactiveNotifications() {
   useEffect(() => {
     if (!socket) return;
 
-    const handleProactive = (data: { type?: string; taskId?: string; message: string; timestamp: string }) => {
+    const handleProactive = (data: ProactivePayload) => {
       const taskId = data.type || data.taskId || 'unknown';
       const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
       if (taskId === 'greeting' && !proactiveGreetingEnabled) return;
+      const actionLabel = t.langCode === 'en' ? 'Continue' : '继续';
+      const notify = (item: { type: string; title: string; message: string }) => {
+        addNotification({
+          ...item,
+          action: data.action,
+          proactiveContext: data.context,
+        });
+      };
 
       // Voice-appropriate proactive events: also trigger spoken output
       const voiceTasks = new Set(['proactive_lumi_scan', 'greeting', 'daily_summary', 'evening_wrapup']);
@@ -29,31 +70,32 @@ export function ProactiveNotifications() {
 
       switch (taskId) {
         case 'greeting':
-          addNotification({ type: 'system', title: t.notifLumi || 'Lumi', message: data.message });
-          toast(data.message, { duration: 8000, id: `proactive-${data.timestamp}` });
+          notify({ type: 'system', title: t.notifLumi || 'Lumi', message: data.message });
+          toast(data.message, toastOptions(data, 8000, actionLabel));
           break;
         case 'reminder_check':
-          addNotification({ type: 'info', title: t.notifReminder || 'Reminder', message: data.message });
-          toast.info(data.message, { duration: 8000, id: `proactive-${data.timestamp}` });
+          notify({ type: 'info', title: t.notifReminder || 'Reminder', message: data.message });
+          toast.info(data.message, toastOptions(data, 8000, actionLabel));
           break;
         case 'memory_decay':
-          addNotification({ type: 'warning', title: t.notifMemoryAlert || 'Memory Alert', message: data.message });
-          toast.warning(data.message, { duration: 6000, id: `proactive-${data.timestamp}` });
+          notify({ type: 'warning', title: t.notifMemoryAlert || 'Memory Alert', message: data.message });
+          toast.warning(data.message, toastOptions(data, 6000, actionLabel));
           break;
         case 'daily_summary':
-          addNotification({ type: 'success', title: t.notifDailySummary || 'Daily Summary', message: data.message });
-          toast.success(data.message, { duration: 12000, id: `proactive-${data.timestamp}` });
+          notify({ type: 'success', title: t.notifDailySummary || 'Daily Summary', message: data.message });
+          toast.success(data.message, toastOptions(data, 12000, actionLabel));
           break;
         case 'evening_wrapup':
-          addNotification({ type: 'system', title: t.notifEveningWrapup || 'Evening Wrap-up', message: data.message });
-          toast(data.message, { duration: 10000, id: `proactive-${data.timestamp}`, style: { background: '#1e1b4b', color: '#e0e7ff' } });
+          notify({ type: 'system', title: t.notifEveningWrapup || 'Evening Wrap-up', message: data.message });
+          toast(data.message, { ...toastOptions(data, 10000, actionLabel), style: { background: '#1e1b4b', color: '#e0e7ff' } });
           break;
         case 'behavioral_analysis':
-          addNotification({ type: 'success', title: t.notifBehavioralInsight || 'Behavioral Insight', message: data.message });
-          toast.success(data.message, { duration: 8000, id: `proactive-${data.timestamp}` });
+          notify({ type: 'success', title: t.notifBehavioralInsight || 'Behavioral Insight', message: data.message });
+          toast.success(data.message, toastOptions(data, 8000, actionLabel));
           break;
         default:
-          toast(data.message, { duration: 5000, id: `proactive-${data.timestamp}` });
+          notify({ type: 'info', title: t.notifLumi || 'Lumi', message: data.message });
+          toast(data.message, toastOptions(data, 5000, actionLabel));
       }
     };
 

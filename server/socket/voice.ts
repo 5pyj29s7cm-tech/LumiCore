@@ -43,6 +43,7 @@ import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { getIdleState } from "../context/activity_stream";
+import { formatProactiveSuggestionForPrompt, getRecentProactiveSuggestion } from "../context/proactive_triggers";
 import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
@@ -243,6 +244,16 @@ function buildVoiceReplyStyleOverlay(): string {
   ].join('\n');
 }
 
+function isVoiceProactiveFollowup(text: string): boolean {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  if (/(刚才|刚刚|弹窗|提示|通知|上面|那个|这个|继续|接着|顺着)/u.test(raw)) return true;
+  const compact = raw.replace(/[\s，。！？,.!?、…~～"“”'‘’]/g, '').toLowerCase();
+  if (!compact) return false;
+  if (compact.length > 18) return false;
+  return /^(嗯+|哦+|好+|好的|可以|行|来吧|开始|继续|帮我看|看一下|处理|弄一下|搞一下|就这个|对|yes|ok|okay|go|continue|doit)$/.test(compact);
+}
+
 function getAmbientNoise(): number | null {
   if (Date.now() - ambientRmsLastUpdate > 15000) return null; // stale
   return ambientRms;
@@ -431,13 +442,30 @@ async function processVoiceInput(
   session.ttsAbortController = new AbortController();
   socket.emit("audio:status", { status: "thinking" });
   const voiceScope = { domain: session.domain, orgId: session.orgId };
+  const recentProactiveSuggestion = getRecentProactiveSuggestion(session.userId);
+  const shouldUseProactiveContext = Boolean(recentProactiveSuggestion && isVoiceProactiveFollowup(userText));
+  const proactiveContextPrompt = shouldUseProactiveContext && recentProactiveSuggestion
+    ? formatProactiveSuggestionForPrompt(recentProactiveSuggestion)
+    : '';
+  const routedUserText = proactiveContextPrompt
+    ? `${userText}\n\n${proactiveContextPrompt}`
+    : userText;
+  if (proactiveContextPrompt) {
+    logger.info(`[Audio] Using recent proactive context for voice follow-up: type=${recentProactiveSuggestion?.type} action=${recentProactiveSuggestion?.action || 'none'}`);
+    socket.emit('agent:proactive_context', {
+      source: 'voice',
+      type: recentProactiveSuggestion?.type,
+      action: recentProactiveSuggestion?.action,
+      context: recentProactiveSuggestion?.context || {},
+    });
+  }
 
   // Cross-session memory retrieval — voice now has access to what was discussed before
   let voiceMemories: any[] = [];
   try {
     voiceMemories = queryMemories({
       userId: session.userId,
-      query: userText,
+      query: routedUserText,
       limit: 5,
       minConfidence: 0.4,
       domain: voiceScope.domain,
@@ -452,7 +480,7 @@ async function processVoiceInput(
     {
       userId: session.userId,
       memories: voiceMemories.length > 0 ? voiceMemories : undefined,
-      userText,
+      userText: routedUserText,
     },
   );
 
@@ -508,7 +536,7 @@ async function processVoiceInput(
   const requestedMode = detectVoiceClientModeSwitch(userText);
   const turnDispatch = buildLumiTurnDispatch({
     userId: session.userId,
-    text: userText,
+    text: routedUserText,
     channel: 'voice',
     source: 'voice',
     domain: voiceScope.domain,
@@ -527,24 +555,24 @@ async function processVoiceInput(
   const exposeAgentWork = turnFlow.exposeAgentWork;
   const executionDecision = buildLumiExecutionDecision({
     flow: turnFlow,
-    text: userText,
+    text: routedUserText,
     toolDeclarations: toolRegistry.getToolDeclarations(),
     personalityToolPolicy: personality.toolPolicy,
   });
   const intentTrace = buildLumiIntentTrace({
     dispatch: turnDispatch,
     execution: executionDecision,
-    text: userText,
+    text: routedUserText,
     source: 'voice',
   });
   const capabilitySelection = buildLumiCapabilitySelection({
     dispatch: turnDispatch,
     execution: executionDecision,
-    text: userText,
+    text: routedUserText,
   });
   const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
     channel: 'voice',
-    text: userText,
+    text: routedUserText,
     flow: turnFlow,
     capabilitySelection,
   });
@@ -579,7 +607,7 @@ async function processVoiceInput(
   }
   const opModeOverlay = '\n\n' + buildInteractionModeOverlay(turnFlow);
   const workSurfaceOverlay = workSurfaceRoute.promptOverlay ? '\n\n' + workSurfaceRoute.promptOverlay : '';
-  const visionRoutingOverlay = visionIntent && effectiveOperationMode !== 'meeting' ? '\n\n' + buildVisionRoutingOverlay(session.userId, userText) : '';
+  const visionRoutingOverlay = visionIntent && effectiveOperationMode !== 'meeting' ? '\n\n' + buildVisionRoutingOverlay(session.userId, routedUserText) : '';
   const interactionOverlay = executionDecision.allowToolUse
     ? toolVoiceOverlay
     : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, assemble a team, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
@@ -592,7 +620,7 @@ async function processVoiceInput(
   const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
     userId: session.userId,
-    text: userText,
+    text: routedUserText,
     flow: turnFlow,
     toolRegistry,
     domain: voiceScope.domain,
@@ -602,7 +630,8 @@ async function processVoiceInput(
     channel: 'voice',
     flow: turnFlow,
   });
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const proactiveContextOverlay = proactiveContextPrompt ? `\n\n${proactiveContextPrompt}` : '';
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -1059,7 +1088,7 @@ async function processVoiceInput(
       return result.text || '{"category":"unknown","confidence":0.5,"entities":{}}';
     };
 
-    const cognition = await processInput(userText, cognitiveCtx, llmClassifier);
+    const cognition = await processInput(routedUserText, cognitiveCtx, llmClassifier);
 
     if (cognition.directToolExecuted && cognition.responseText) {
       // Path A: Cognitive engine handled this directly — no LLM needed
@@ -1143,7 +1172,7 @@ async function processVoiceInput(
 
     // ── Orchestrator: complex/moderate tasks → multi-agent decomposition ──
     let usedOrchestrator = false;
-    const complexity = classifyComplexity(userText, { userId: session.userId, personalityId: session.personalityId });
+    const complexity = classifyComplexity(routedUserText, { userId: session.userId, personalityId: session.personalityId });
     if (executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && !(workSurfaceRoute.artifactFirst && !workSurfaceRoute.directDesktop) && (complexity === 'complex' || complexity === 'moderate')) {
       try {
         socket.emit("agent:status", { status: "thinking", agentName: "Lumi", phase: exposeAgentWork ? 'orchestrator' : 'background' });
@@ -1154,7 +1183,7 @@ async function processVoiceInput(
         session.isOrchestrating = true;
 
         const orchResult = await runOrchestratedTask(
-          userText,
+          routedUserText,
           { userId: session.userId, personalityId: session.personalityId, domain: voiceScope.domain, orgId: voiceScope.orgId, desktopRelay },
           { provider, model: effectiveModel },
           llmGetters,
@@ -1306,7 +1335,7 @@ async function processVoiceInput(
     } // end if (!usedOrchestrator)
 
     const finalResponse = finalizeLumiResponse({
-      taskText: userText,
+      taskText: routedUserText,
       responseText,
       toolRecords: toolResults,
       source: 'voice',
@@ -1321,7 +1350,7 @@ async function processVoiceInput(
 
     const executionWriteback = persistWorkTakeoverTurnExecution({
       userId: session.userId,
-      userText,
+      userText: routedUserText,
       assistantText: responseText,
       source: 'voice',
       domain: voiceScope.domain,

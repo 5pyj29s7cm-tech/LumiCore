@@ -122,6 +122,7 @@ export function CentralLumiChat() {
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [requestNotice, setRequestNotice] = useState('');
   const [llmPolicy, setLlmPolicy] = useState<OrgLlmPolicy | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -137,6 +138,7 @@ export function CentralLumiChat() {
     activeRequestIdRef.current = null;
     streamingMessageIdRef.current = null;
     setLoading(false);
+    setRequestNotice('');
   }, []);
 
   useEffect(() => {
@@ -313,6 +315,7 @@ export function CentralLumiChat() {
     const onChunk = (data: { text?: string; agentName?: string; requestId?: string }) => {
       if (!isCurrent(data) || !data.text) return;
       setLoading(false);
+      setRequestNotice('');
       setMessages(prev => {
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
@@ -336,6 +339,7 @@ export function CentralLumiChat() {
 
     const onResponse = (data: { text?: string; requestId?: string }) => {
       if (!isCurrent(data)) return;
+      setRequestNotice('');
       const finalText = (data.text || '').trim();
       setMessages(prev => {
         const streamingId = streamingMessageIdRef.current;
@@ -362,6 +366,7 @@ export function CentralLumiChat() {
       if (!isCurrent(data)) return;
       if (data.status === 'thinking' || data.status === 'responding') {
         setLoading(true);
+        setRequestNotice('');
       }
       if (data.status === 'idle' || data.status === 'error') {
         clearActiveRequest();
@@ -370,6 +375,7 @@ export function CentralLumiChat() {
 
     const onError = (data: { message?: string; requestId?: string }) => {
       if (!isCurrent(data)) return;
+      setRequestNotice('');
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
         role: 'assistant',
@@ -398,6 +404,7 @@ export function CentralLumiChat() {
     const text = input.trim();
     const outgoingAttachments = pendingAttachments.map(serializeChatAttachment);
     if ((!text && outgoingAttachments.length === 0) || loading || uploading) return;
+    setRequestNotice('');
     if (!socket) {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
@@ -438,14 +445,12 @@ export function CentralLumiChat() {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       if (activeRequestIdRef.current !== requestId) return;
-      setMessages(prev => [...prev, {
-        id: makeMessageId('org-timeout'),
-        role: 'assistant',
-        content: ui('公司 Lumi 响应超时了，请稍后重试。', 'Company Lumi timed out. Please try again shortly.'),
-        timestamp: Date.now(),
-        source: 'error',
-      }]);
-      clearActiveRequest();
+      timeoutRef.current = null;
+      setLoading(false);
+      setRequestNotice(ui(
+        '公司 Lumi 处理时间比平时久，我会继续等后端的真实回复，不会在聊天里生成兜底回答。',
+        'Company Lumi is taking longer than usual. I will keep waiting for the backend response instead of writing a fallback answer.',
+      ));
     }, 60000);
 
     setMessages(prev => [...prev, userMsg]);
@@ -575,6 +580,11 @@ export function CentralLumiChat() {
           onChange={(event) => { void uploadChatAttachments(event.target.files); }}
           className="hidden"
         />
+        {requestNotice && (
+          <div className="mb-3 rounded-xl border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-xs leading-relaxed text-blue-100/75">
+            {requestNotice}
+          </div>
+        )}
         {pendingAttachments.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             {pendingAttachments.map(item => (

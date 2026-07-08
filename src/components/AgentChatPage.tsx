@@ -10,10 +10,7 @@ import { useTTS } from '@/hooks/useTTS';
 import { GlassCard, PulseCounter } from './SharedUI';
 import { toast } from 'sonner';
 import { FoundersSanctuary } from './FoundersSanctuary';
-import * as conversationService from '@/services/conversationService';
-import * as agentService from '@/services/agentService';
 import { usePlatform } from '@/hooks/usePlatform';
-import { runAgentLogic, AgentResponse } from '@/services/agentService';
 import { useApp } from '@/contexts/AppContext';
 import { VoiceCallButton } from './VoiceCallButton';
 import { socketService } from '@/services/socketService';
@@ -343,13 +340,12 @@ function extractGeneratedFiles(text: string): GeneratedFileLink[] {
     });
 }
 
-export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage, onPrefillConsumed }: { t: any; user: any; agent?: any; isOpen: boolean; onClose: () => void; prefillMessage?: string; onPrefillConsumed?: () => void }) {
+export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage, prefillSource = 'proactive', onPrefillConsumed }: { t: any; user: any; agent?: any; isOpen: boolean; onClose: () => void; prefillMessage?: string; prefillSource?: string; onPrefillConsumed?: () => void }) {
   const [messages, setMessages] = useState<any[]>([]);
-  const [agentMetadata, setAgentMetadata] = useState<Partial<AgentResponse>>({});
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
-  const { aiConfig, orgConnection, workDomain, operationMode } = useApp();
+  const { orgConnection, workDomain, operationMode } = useApp();
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
@@ -357,6 +353,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const activeDomainDetail = isWorkChat
     ? ui('当前消息、附件、记忆和工具调用进入组织工作域。', 'Messages, attachments, memories, and tools are scoped to the organization.')
     : ui('当前消息只进入个人域，不写入组织知识和组织记忆。', 'Messages stay in your personal domain and do not write to organization knowledge or memory.');
+  const activeCapabilities = [
+    isWorkChat ? ui('组织记忆', 'Org Memory') : (t.neuralCore || 'Neural Core'),
+    isWorkChat ? ui('知识库引用', 'Knowledge Base') : (t.webMesh || 'Web Mesh'),
+    isElectron ? ui('本地节点', 'Local Node') : ui('浏览器通道', 'Browser Channel'),
+  ];
   const operationModeMeta = (() => {
     if (operationMode === 'chat') {
       return {
@@ -1531,7 +1532,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
     let resolved = false;
     let safetyTimer: ReturnType<typeof setTimeout>;
-    let restFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let socketAckTimer: ReturnType<typeof setTimeout> | null = null;
     let socketAcknowledged = false;
     const isCurrentResponse = (data?: { requestId?: string; source?: string }) => {
@@ -1549,7 +1549,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (resolved) return;
       resolved = true;
       clearTimeout(safetyTimer);
-      if (restFallbackTimer) clearTimeout(restFallbackTimer);
       if (socketAckTimer) clearTimeout(socketAckTimer);
       cleanupSocketWaiters();
       setIsTyping(false);
@@ -1564,10 +1563,19 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     };
     safetyTimer = setTimeout(() => {
       if (!resolved) {
+        if (socketAcknowledged) {
+          pushChatProgress(
+            isZh
+              ? '后端已经接收，正在等待最终回复；我不会切到旧兜底通道。'
+              : 'The backend has accepted this turn. I am waiting for the final response instead of using the old fallback path.',
+            'thinking'
+          );
+          return;
+        }
         streamingMsgId.current = null;
         resolve();
       }
-    }, outgoingAttachments.length > 0 ? 60000 : 30000);
+    }, outgoingAttachments.length > 0 ? 180000 : 120000);
 
     socket.on('agent:response', onResponse);
     socket.on('agent:error', onError);
@@ -1624,40 +1632,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       }
     });
 
-    // REST fallback is only for a socket send that was never acknowledged. Once
-    // the realtime backend accepts the turn, do not race it with the older REST
-    // chat path; otherwise the UI can show a fallback answer while the real
-    // persisted response appears only after refresh.
-    const allowTextOnlyRestFallback = outgoingAttachments.length === 0 && !currentRequestNeedsEvidenceRef.current;
-    restFallbackTimer = allowTextOnlyRestFallback ? setTimeout(async () => {
-      if (resolved) return;
-      if (socketAcknowledged || socket.connected) return;
-      try {
-        const response = await runAgentLogic(outgoingText, { platform, aiConfig });
-        if (resolved) return;
-        resolve();
-        setAgentMetadata(response);
-        setMessages(prev => [...prev, {
-          id: makeChatMessageId('agent'),
-          text: response.text,
-          userName: agentName,
-          timestamp: new Date().toISOString(),
-          type: 'agent'
-        }]);
-      } catch (err) {
-        resolve();
-        const message = t.failedToRouteNeuralMesh || "Failed to route through Neural Mesh.";
-        setMessages(prev => [...prev, {
-          id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          text: `${t.requestFailed || 'Request failed'}\n\n${message}`,
-          userName: agentName,
-          timestamp: new Date().toISOString(),
-          type: 'agent',
-          source: 'error',
-        }]);
-        toast.error(message);
-      }
-    }, 5000) : null;
+    // No frontend AI fallback here. If the realtime backend is down, show the
+    // connection problem instead of generating a second, inconsistent answer.
   };
 
   // When prefillMessage comes from notification center, show it as a Lumi message
@@ -1673,12 +1649,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           userName: agentName,
           timestamp: new Date().toISOString(),
           type: 'agent',
-          source: 'proactive',
+          source: prefillSource,
         }];
       });
       onPrefillConsumed?.();
     }
-  }, [prefillMessage, onPrefillConsumed]);
+  }, [prefillMessage, prefillSource, onPrefillConsumed]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2559,7 +2535,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              {(agentMetadata.capabilities || [t.neuralCore || 'Neural Core', t.webMesh || 'Web Mesh']).map((cap, i) => (
+              {activeCapabilities.map((cap, i) => (
                 <div key={i} className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/5 text-xs text-white/60 font-bold flex items-center gap-2">
                   <div className="w-1 h-1 rounded-full bg-celestial-saturn" />
                   {cap}
