@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Scale, FileText, Search, Crosshair, Shield, Brain, CheckCircle, Upload,
   Calendar, ClipboardList, Plus, FolderOpen, Gavel, AlertTriangle, RefreshCw, Loader2, Database,
+  ArrowRight, Archive,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LegalBidWorkbench } from './LegalBidWorkbench';
@@ -25,12 +26,63 @@ import {
   type LegalCaseStage,
 } from '../../lib/legalCaseStore';
 
-type LegalView = 'workspace' | 'packet' | 'external-research' | 'data-sources' | 'bid' | 'case-search' | 'asset-trace' | 'contract-review' | 'strategy' | 'verify' | 'import';
+type LegalView = 'workspace' | 'packet' | 'external-research' | 'data-sources' | 'bid' | 'case-search' | 'asset-trace' | 'contract-review' | 'strategy' | 'verify' | 'import' | 'knowledge-sync';
 
 interface NavItem {
   id: LegalView;
   label: string;
   icon: React.ReactNode;
+}
+
+const LEGAL_WORKFLOW_ORDER: LegalView[] = [
+  'workspace',
+  'import',
+  'external-research',
+  'case-search',
+  'asset-trace',
+  'contract-review',
+  'strategy',
+  'packet',
+  'verify',
+  'knowledge-sync',
+];
+
+function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
+  if (!caseFile) return 'Untitled legal case';
+  return caseFile.title || caseFile.party || caseFile.caseNumber || 'Untitled legal case';
+}
+
+function buildLegalCaseKnowledgeMarkdown(caseFile: LegalCaseFile): string {
+  const materialLines = (caseFile.materials || []).map((material, index) => [
+    `## Material ${index + 1}: ${material.title}`,
+    `- Type: ${material.type}`,
+    `- Source: ${material.source || 'manual'}`,
+    `- Created: ${material.createdAt}`,
+    '',
+    material.content || '(No extracted content)',
+  ].join('\n'));
+
+  return [
+    `# Legal Case Archive: ${legalCaseTitle(caseFile)}`,
+    '',
+    '## Case Profile',
+    `- Case number: ${caseFile.caseNumber || '-'}`,
+    `- Party: ${caseFile.party || '-'}`,
+    `- Cause: ${caseFile.cause || '-'}`,
+    `- Court: ${caseFile.court || '-'}`,
+    `- Judge: ${caseFile.judge || '-'}`,
+    `- Stage: ${caseFile.stage || '-'}`,
+    `- Hearing date: ${caseFile.hearingDate || '-'}`,
+    `- Judgment date: ${caseFile.judgmentDate || '-'}`,
+    `- Appeal deadline: ${caseFile.appealDeadline || '-'}`,
+    `- Enforcement deadline: ${caseFile.enforcementDeadline || '-'}`,
+    '',
+    '## Facts / Notes',
+    caseFile.notes || '(No notes)',
+    '',
+    '## Archived Materials',
+    materialLines.length > 0 ? materialLines.join('\n\n') : '(No materials archived yet)',
+  ].join('\n');
 }
 
 function addDays(dateValue: string, days: number): string {
@@ -123,11 +175,27 @@ export function LegalHub() {
     { id: 'strategy', label: t.legalCaseStrategy, icon: <Brain size={16} /> },
     { id: 'verify', label: t.legalVerifyCitation, icon: <CheckCircle size={16} /> },
     { id: 'import', label: t.legalImportJudgment, icon: <Upload size={16} /> },
+    { id: 'knowledge-sync', label: ui('同步知识库', 'Sync to KB'), icon: <Archive size={16} /> },
   ], [t, ui]);
+
+  const workflowNavItems = useMemo(() => {
+    const order = new Map(LEGAL_WORKFLOW_ORDER.map((id, index) => [id, index]));
+    return navItems
+      .filter(item => item.id !== 'data-sources' && item.id !== 'bid')
+      .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+  }, [navItems]);
+  const specialToolNavItems = useMemo(() => navItems.filter(item => item.id === 'bid'), [navItems]);
+  const utilityNavItems = useMemo(() => navItems.filter(item => item.id === 'data-sources'), [navItems]);
 
   const activeCase = useMemo(() => {
     return cases.find(item => item.id === activeCaseId) || cases[0] || null;
   }, [activeCaseId, cases]);
+  const workflowStepIndex = workflowNavItems.findIndex(item => item.id === view);
+  const isWorkflowView = workflowStepIndex >= 0;
+  const isSpecialToolView = specialToolNavItems.some(item => item.id === view);
+  const activeStepIndex = isWorkflowView ? workflowStepIndex : 0;
+  const currentStep = isWorkflowView ? workflowNavItems[activeStepIndex] : navItems.find(item => item.id === view);
+  const nextStep = isWorkflowView ? (workflowNavItems[activeStepIndex + 1] || null) : null;
 
   const saveCases = (next: LegalCaseFile[], nextActiveId = activeCaseId) => {
     setCases(next);
@@ -328,9 +396,10 @@ export function LegalHub() {
       case 'case-search': return <LegalCaseSearch />;
       case 'asset-trace': return <LegalAssetTrace />;
       case 'contract-review': return <LegalContractReview />;
-      case 'strategy': return <LegalStrategyView caseFile={activeCase} />;
-      case 'verify': return <LegalVerifyView />;
+      case 'strategy': return <LegalStrategyView caseFile={activeCase} onAddMaterial={addMaterial} />;
+      case 'verify': return <LegalVerifyView caseFile={activeCase} onAddMaterial={addMaterial} />;
       case 'import': return <LegalImportView caseFile={activeCase} onAddMaterial={addMaterial} />;
+      case 'knowledge-sync': return <LegalKnowledgeSyncView caseFile={activeCase} />;
       default: return <LegalCaseSearch />;
     }
   };
@@ -352,7 +421,7 @@ export function LegalHub() {
           )}
         </div>
         <nav className="custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
-          {navItems.map(item => (
+          {workflowNavItems.map((item, index) => (
             <button
               key={item.id}
               onClick={() => setView(item.id)}
@@ -362,14 +431,110 @@ export function LegalHub() {
                   : 'border-transparent text-white/50 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
               }`}
             >
+              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-[10px] font-bold ${
+                view === item.id
+                  ? 'border-amber-300/25 bg-amber-400/15 text-amber-100'
+                  : 'border-white/10 bg-white/[0.035] text-white/35'
+              }`}>
+                {index + 1}
+              </span>
               <span className="shrink-0">{item.icon}</span>
               <span className="min-w-0 truncate">{item.label}</span>
             </button>
           ))}
+          {specialToolNavItems.length > 0 && (
+            <>
+              <div className="my-2 border-t border-white/[0.08]" />
+              <div className="px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
+                {ui('专项工具', 'Special Tools')}
+              </div>
+              {specialToolNavItems.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => setView(item.id)}
+                  className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                    view === item.id
+                      ? 'border-violet-400/20 bg-violet-500/10 text-violet-200'
+                      : 'border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
+                  }`}
+                >
+                  <span className="shrink-0">{item.icon}</span>
+                  <span className="min-w-0 truncate">{item.label}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {utilityNavItems.length > 0 && (
+            <>
+              <div className="my-2 border-t border-white/[0.08]" />
+              <div className="px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
+                {ui('配置', 'Settings')}
+              </div>
+              {utilityNavItems.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => setView(item.id)}
+                  className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                    view === item.id
+                      ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200'
+                      : 'border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
+                  }`}
+                >
+                  <span className="shrink-0">{item.icon}</span>
+                  <span className="min-w-0 truncate">{item.label}</span>
+                </button>
+              ))}
+            </>
+          )}
         </nav>
       </div>
-      <div className="custom-scrollbar flex-1 overflow-y-auto bg-black/10">
-        {renderView()}
+      <div className="flex min-w-0 flex-1 flex-col bg-black/10">
+        <div className="border-b border-white/[0.08] bg-black/25 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-amber-200/70">
+                <span>{isWorkflowView ? ui('案件流水线', 'Case Workflow') : isSpecialToolView ? ui('律所专项工具', 'Legal Special Tool') : ui('律所配置', 'Legal Settings')}</span>
+                {isWorkflowView && (
+                  <>
+                    <span className="text-white/25">/</span>
+                    <span>{activeStepIndex + 1}/{workflowNavItems.length}</span>
+                  </>
+                )}
+              </div>
+              <div className="mt-1 flex min-w-0 items-center gap-2 text-sm text-white/70">
+                <span className="truncate font-semibold text-white/85">{legalCaseTitle(activeCase)}</span>
+                <span className="text-white/25">&rarr;</span>
+                <span className="truncate">{currentStep?.label}</span>
+                <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-white/40">
+                  {(activeCase?.materials || []).length} {ui('份材料', 'materials')}
+                </span>
+              </div>
+            </div>
+            {nextStep ? (
+              <button
+                type="button"
+                onClick={() => setView(nextStep.id)}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 text-xs font-bold text-amber-100 transition hover:bg-amber-500/18"
+              >
+                <span>{ui('下一步', 'Next')}</span>
+                <span className="max-w-[160px] truncate">{nextStep.label}</span>
+                <ArrowRight size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 text-xs font-bold text-cyan-100 transition hover:bg-cyan-500/18"
+              >
+                <span>{ui('去公司 Lumi 引用', 'Ask Company Lumi')}</span>
+                <ArrowRight size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+          {renderView()}
+        </div>
       </div>
     </div>
   );
@@ -1141,7 +1306,13 @@ function LegalTwoPaneTool({
   );
 }
 
-function LegalStrategyView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
+function LegalStrategyView({
+  caseFile,
+  onAddMaterial,
+}: {
+  caseFile?: LegalCaseFile | null;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+}) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
@@ -1189,6 +1360,11 @@ function LegalStrategyView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
       setLoading(false);
     }
   };
+  const archive = () => {
+    if (!result || !onAddMaterial) return;
+    onAddMaterial('note', `${legalCaseTitle(caseFile)} 诉讼策略分析`, result, 'tool');
+    toast.success(ui('策略分析已归档到当前案件', 'Strategy analysis archived to the current case'));
+  };
 
   return (
     <div className="h-full overflow-y-auto p-6 text-white">
@@ -1226,9 +1402,17 @@ function LegalStrategyView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
 
           <div className="min-h-0 rounded-lg border border-white/10 bg-white/[0.04] p-4">
             {result ? (
-              <pre className="h-full min-h-[420px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
-                {result}
-              </pre>
+              <div className="flex h-full min-h-[420px] flex-col gap-3">
+                <div className="flex justify-end">
+                  <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
+                    <FolderOpen size={14} />
+                    {ui('归档到案件', 'Archive to Case')}
+                  </button>
+                </div>
+                <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
+                  {result}
+                </pre>
+              </div>
             ) : (
               <div className="flex h-full min-h-[420px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                 <Brain size={32} className="text-white/20" />
@@ -1242,7 +1426,13 @@ function LegalStrategyView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
   );
 }
 
-function LegalVerifyView() {
+function LegalVerifyView({
+  caseFile,
+  onAddMaterial,
+}: {
+  caseFile?: LegalCaseFile | null;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+}) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
@@ -1271,6 +1461,12 @@ function LegalVerifyView() {
     } finally {
       setLoading(false);
     }
+  };
+  const verificationText = (results || []).map((item: any) => item.content || item.error || '').filter(Boolean).join('\n\n');
+  const archive = () => {
+    if (!verificationText || !onAddMaterial) return;
+    onAddMaterial('note', `${legalCaseTitle(caseFile)} 引用校验`, verificationText, 'tool');
+    toast.success(ui('引用校验已归档到当前案件', 'Citation verification archived to the current case'));
   };
 
   return (
@@ -1309,10 +1505,18 @@ function LegalVerifyView() {
 
           <div className="min-h-0 rounded-lg border border-white/10 bg-white/[0.04] p-4">
             {results && results.length > 0 ? (
-              <div className="h-full min-h-[400px] overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
-                {results.map((r: any, i: number) => (
-                  <div key={i} className={r.error ? 'text-red-300' : 'whitespace-pre-wrap'}>{r.content || r.error}</div>
-                ))}
+              <div className="flex h-full min-h-[400px] flex-col gap-3">
+                <div className="flex justify-end">
+                  <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
+                    <FolderOpen size={14} />
+                    {ui('归档到案件', 'Archive to Case')}
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
+                  {results.map((r: any, i: number) => (
+                    <div key={i} className={r.error ? 'text-red-300' : 'whitespace-pre-wrap'}>{r.content || r.error}</div>
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
@@ -1320,6 +1524,148 @@ function LegalVerifyView() {
                 <span>{ui('引用校验结果会显示在这里。', 'Citation verification results will appear here.')}</span>
               </div>
             )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
+  const t = useT();
+  const isZh = t.langCode !== 'en';
+  const ui = (zh: string, en: string) => (isZh ? zh : en);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('');
+  const caseTitle = legalCaseTitle(caseFile);
+  const articleTitle = `${caseTitle} - ${ui('案件知识归档', 'Case Knowledge Archive')}`;
+  const articleContent = useMemo(() => (
+    caseFile ? buildLegalCaseKnowledgeMarkdown(caseFile) : ''
+  ), [caseFile]);
+
+  const syncToKnowledgeBase = async () => {
+    if (!caseFile || loading) return;
+    setLoading(true);
+    setStatus('');
+    try {
+      const res = await fetch('/api/org/kb/articles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          title: articleTitle,
+          content: articleContent,
+          category: 'legal_case',
+          tags: ['legal', 'case', caseFile.stage, caseFile.cause].filter(Boolean),
+          status: 'published',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ui('同步知识库失败', 'Failed to sync to knowledge base'));
+      const articleId = data.id || data.article?.id || data.articleId || '';
+      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
+        detail: {
+          domain: 'work',
+          files: [{ id: articleId, name: articleTitle, displayName: articleTitle }],
+        },
+      }));
+      window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
+      setStatus(ui('已同步到组织知识库。公司 Lumi 可以在组织知识中检索并引用这份案件归档。', 'Synced to the organization knowledge base. Company Lumi can retrieve and cite this case archive.'));
+      toast.success(ui('案件已同步到组织知识库', 'Case synced to organization knowledge base'));
+    } catch (err: any) {
+      const message = err?.message || ui('同步知识库失败', 'Failed to sync to knowledge base');
+      setStatus(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!caseFile) {
+    return (
+      <div className="flex h-full items-center justify-center p-8 text-white">
+        <div className="max-w-md text-center">
+          <Archive size={36} className="mx-auto mb-3 text-white/25" />
+          <h2 className="text-xl font-semibold">{ui('先建立案件档案', 'Create a case first')}</h2>
+          <p className="mt-2 text-sm leading-6 text-white/45">
+            {ui('案件归档需要当前案件、事实摘要和材料池。', 'Knowledge sync needs a current case, facts, and archived materials.')}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-6 text-white">
+      <div className="mx-auto flex max-w-6xl flex-col gap-4">
+        <section className="rounded-lg border border-emerald-400/15 bg-emerald-500/[0.045] p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/20 bg-emerald-500/10 text-emerald-300">
+                <Archive size={22} />
+              </span>
+              <div className="min-w-0">
+                <h2 className="truncate text-xl font-semibold text-white">{ui('同步到组织知识库', 'Sync to Organization Knowledge')}</h2>
+                <p className="mt-1 text-sm leading-6 text-white/50">
+                  {ui('把当前案件、事实摘要、会谈纪要、裁判文书和工具产物汇总成组织知识，供公司 Lumi 后续引用。', 'Package the current case, facts, consultation notes, judgments, and tool outputs into organization knowledge for Company Lumi.')}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={syncToKnowledgeBase}
+              disabled={loading || !articleContent.trim()}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-45"
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <Archive size={16} />}
+              {loading ? ui('同步中...', 'Syncing...') : ui('同步知识库', 'Sync to KB')}
+            </button>
+          </div>
+          {status && (
+            <div className={`mt-4 rounded-lg border px-3 py-2 text-sm ${
+              /失败|failed|error/i.test(status)
+                ? 'border-red-400/20 bg-red-500/[0.08] text-red-200'
+                : 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-100'
+            }`}>
+              {status}
+            </div>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb' } }))}
+              className="lumi-button h-9 px-3 text-xs"
+            >
+              {ui('打开组织知识库', 'Open Knowledge Base')}
+            </button>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
+              className="lumi-button h-9 px-3 text-xs"
+            >
+              {ui('去公司 Lumi 引用', 'Ask Company Lumi')}
+            </button>
+          </div>
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+            <h3 className="text-sm font-semibold text-white">{ui('归档摘要', 'Archive Summary')}</h3>
+            <div className="mt-3 space-y-2 text-sm text-white/62">
+              <div>{ui('案件', 'Case')}: {caseTitle}</div>
+              <div>{ui('案号', 'Case number')}: {caseFile.caseNumber || '-'}</div>
+              <div>{ui('案由', 'Cause')}: {caseFile.cause || '-'}</div>
+              <div>{ui('阶段', 'Stage')}: {caseFile.stage || '-'}</div>
+              <div>{ui('材料数', 'Materials')}: {(caseFile.materials || []).length}</div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-white">{ui('将写入知识库的内容预览', 'Knowledge Preview')}</h3>
+              <span className="text-xs text-white/35">{articleContent.length} chars</span>
+            </div>
+            <pre className="max-h-[560px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/25 p-4 text-xs leading-6 text-white/72 custom-scrollbar">
+              {articleContent}
+            </pre>
           </div>
         </section>
       </div>
