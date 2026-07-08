@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen } from 'lucide-react';
 import Markdown from 'react-markdown';
@@ -30,8 +30,6 @@ import {
 import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
-
-const WorkflowPanel = lazy(() => import('./WorkflowPanel'));
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -1085,7 +1083,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (isFounder || !socket) return;
 
     const isCurrentChatEvent = (data?: { requestId?: string; source?: string }) => {
-      if (data?.requestId) return data.requestId === activeChatRequestIdRef.current;
+      const activeRequestId = activeChatRequestIdRef.current;
+      if (activeRequestId) return data?.requestId === activeRequestId;
+      if (data?.requestId) return false;
       if (data?.source && data.source !== 'chat') return false;
       return textChatActiveRef.current;
     };
@@ -1536,8 +1536,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     let socketAcknowledged = false;
     const isCurrentResponse = (data?: { requestId?: string; source?: string }) => {
       if (data?.requestId) return data.requestId === requestId;
+      if (activeChatRequestIdRef.current) return false;
       if (data?.source && data.source !== 'chat') return false;
-      return true;
+      return textChatActiveRef.current;
     };
     const cleanupSocketWaiters = () => {
       socket.off('agent:response', onResponse);
@@ -1623,11 +1624,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       }
     });
 
-    // Parallel REST fallback after 5s for pure conversation only. Action/tool turns
-    // must not degrade into a text-only answer that looks like work happened.
+    // REST fallback is only for a socket send that was never acknowledged. Once
+    // the realtime backend accepts the turn, do not race it with the older REST
+    // chat path; otherwise the UI can show a fallback answer while the real
+    // persisted response appears only after refresh.
     const allowTextOnlyRestFallback = outgoingAttachments.length === 0 && !currentRequestNeedsEvidenceRef.current;
     restFallbackTimer = allowTextOnlyRestFallback ? setTimeout(async () => {
       if (resolved) return;
+      if (socketAcknowledged || socket.connected) return;
       try {
         const response = await runAgentLogic(outgoingText, { platform, aiConfig });
         if (resolved) return;
@@ -1839,16 +1843,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     return <FoundersSanctuary t={t} user={user} onBack={onClose} />;
   }
 
-  const workflowHasExecution = workflowSteps.some(step =>
-    step.type === 'background' ||
-    step.type === 'confirmation' ||
-    step.type === 'tool_start' ||
-    step.type === 'tool_result' ||
-    step.type === 'error'
-  );
-  const workflowPanelVisible =
-    isOpen &&
-    (workflowStatus !== 'idle' || isTyping || workflowSteps.length > 0 || workflowHasExecution || backgroundWorkflowTasks.length > 0);
   const latestChatProgressLine = chatProgressLines[chatProgressLines.length - 1];
   const workflowProgressVisible = workflowStatus !== 'idle' || isTyping || backgroundWorkflowTasks.length > 0;
   const workflowStatusText =
@@ -1920,19 +1914,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         accept={CHAT_ATTACHMENT_ACCEPT}
         onChange={(e) => { uploadChatAttachments(e.target.files); e.target.value = ''; }}
       />
-      {workflowPanelVisible && (
-        <Suspense fallback={null}>
-          <WorkflowPanel
-            visible={true}
-            agentStatus={workflowStatus}
-            steps={workflowSteps}
-            t={t}
-            placement="corner"
-            backgroundTasks={backgroundWorkflowTasks}
-            onCancelBackgroundTask={cancelBackgroundWorkflowTask}
-          />
-        </Suspense>
-      )}
       <AnimatePresence>
         {showWeChatSettings && (
           <motion.div
@@ -2248,7 +2229,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             )}
             <AnimatePresence initial={false}>
               {displayMessages.map((msg) => (
-                msg.type === 'file_context' || msg.type === 'tool' ? null /* invisible context; tool detail lives in WorkflowPanel */ : (
+                msg.type === 'file_context' || msg.type === 'tool' ? null /* invisible context; tool detail stays on the home WorkflowPanel while chat shows inline progress */ : (
                 <motion.div
                   key={msg.id}
                   initial={{ opacity: 0, y: 10 }}
