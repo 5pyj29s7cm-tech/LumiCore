@@ -645,14 +645,44 @@ async function processVoiceInput(
   const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
     return new Promise((resolve, reject) => {
       const cid = Math.random().toString(36).substring(2, 11);
+      const eventName = `tool:desktop_result:${cid}`;
+      let settled = false;
       const timeout = setTimeout(() => {
-        reject(new Error(`Desktop tool "${toolName}" timed out (30s)`));
+        finishWithError(`Desktop tool "${toolName}" timed out (30s)`);
       }, 30000);
-      socket.once(`tool:desktop_result:${cid}`, (data: { output?: string; error?: string }) => {
+
+      function cleanup() {
         clearTimeout(timeout);
+        socket.off(eventName, onResult);
+        socket.off('disconnect', onDisconnect);
+      }
+
+      function finishWithError(message: string) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(message));
+      }
+
+      function onResult(data: { output?: string; error?: string }) {
+        if (settled) return;
+        settled = true;
+        cleanup();
         if (data.error) reject(new Error(data.error));
         else resolve(data.output || '');
-      });
+      }
+
+      function onDisconnect() {
+        finishWithError(`Desktop tool "${toolName}" cancelled: desktop client disconnected before returning a result`);
+      }
+
+      if (!socket.connected) {
+        finishWithError(`Desktop tool "${toolName}" cannot run: desktop client socket is disconnected`);
+        return;
+      }
+
+      socket.once(eventName, onResult);
+      socket.once('disconnect', onDisconnect);
       socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
     });
   };

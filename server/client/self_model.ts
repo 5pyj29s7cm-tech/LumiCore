@@ -53,6 +53,7 @@ export interface ClientStateSnapshot {
   platform?: string;
   mode?: ClientMode;
   activeTab?: string;
+  viewMode?: 'personal' | 'world' | string;
   workDomain?: 'personal' | 'work';
   org?: { connected?: boolean; id?: string; name?: string; role?: string };
   windows?: { open?: string[]; focused?: string | null; minimized?: string[] };
@@ -63,6 +64,8 @@ export interface ClientStateSnapshot {
     meetingOpen?: boolean;
     musicLayerVisible?: boolean;
     wallpaperMode?: boolean;
+    widgetMode?: boolean;
+    nexusOpen?: boolean;
   };
   voice?: { state?: string; muted?: boolean };
   music?: {
@@ -151,6 +154,7 @@ export type ClientActionVerificationStatus = 'verified' | 'pending' | 'failed' |
 export interface ClientStateDigest {
   mode: string;
   activeTab: string;
+  viewMode: string;
   focusedWindow: string;
   openWindows: string[];
   openSurfaces: string[];
@@ -234,9 +238,17 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.manager',
     label: 'Desktop window manager',
     kind: 'window',
-    actions: ['open_app', 'close_app', 'focus_home'],
+    actions: ['open_app', 'close_app', 'focus_home', 'open_nexus', 'close_nexus'],
     notes: 'Manages Lumi desktop windows and full-screen surfaces through routed client actions rather than mouse/keyboard control.',
     stateKeys: ['windows', 'surfaces'],
+  },
+  {
+    id: 'workspace.nexus',
+    label: 'Nexus / central world view',
+    kind: 'workspace',
+    actions: ['open_nexus', 'close_nexus'],
+    notes: 'The large central world view inside LumiOS. It is a client-native viewMode, not an external website.',
+    stateKeys: ['viewMode', 'surfaces.nexusOpen'],
   },
   {
     id: 'window.chat',
@@ -299,7 +311,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Visible task execution',
     kind: 'system',
     actions: ['client_get_state', 'client_action', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_mouse_click_at', 'desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen'],
-    notes: 'For visible work Lumi should state the task goal, choose the right interface, inspect the active window with desktop_ui_snapshot when native controls are available, use desktop_ui_focus/click/invoke/type for real accessible controls, inspect the screen/current window when pixels are needed, move the visible cursor to the real target before raw desktop clicks, perform real desktop input when appropriate, verify outcomes, report only results/blockers/needed confirmations, and close temporary surfaces after they are explained. Demo workflows are learned patterns, not the only allowed path: adapt the sequence to the current user goal, screen state, installed apps, and required deliverables.',
+    notes: 'For visible work Lumi should state the task goal, choose the right interface, inspect the active window with desktop_ui_snapshot when native controls are available, use desktop_ui_focus/click/invoke/type for real accessible controls, inspect the screen/current window when pixels are needed, move the visible cursor to the real target before raw desktop clicks, perform real desktop input when appropriate, verify outcomes, report only results/blockers/needed confirmations, and close temporary surfaces after they are explained. Prebuilt workflows are reusable operating patterns, not fake demos: adapt the sequence to the current user goal, screen state, installed apps, and required deliverables.',
     requiresConfirmation: true,
     stateKeys: ['surfaces', 'windows', 'tools', 'permissions'],
   },
@@ -519,7 +531,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'WeChat and messaging adapter',
     kind: 'external_app',
     actions: ['wechat_intake_analyze', 'wechat_intake_from_clipboard', 'work_takeover_task_from_wechat', 'work_takeover_task_from_clipboard', 'wechat_prepare_reply', 'wechat_copy_reply_draft', 'desktop_active_window', 'desktop_open', 'desktop_run_command'],
-    notes: 'Lumi can triage user-provided or copied WeChat messages into current-stage work takeover tasks, extract key amounts/deadlines/people, persist the task, prepare next actions and reply drafts, and copy drafts after confirmation. For desktop demos and work handoff, Lumi should first restore an already running personal WeChat/Weixin window from the taskbar/background with visible focus, then fall back to launching personal WeChat, and only then fall back to enterprise WeChat/WeCom. If WeChat is logged in, Lumi may continue safe draft/preparation work inside that session; QR login, verification, account switching, and sending remain confirmation/handoff boundaries. It should not claim to send messages unless a confirmed integration explicitly supports sending.',
+    notes: 'Lumi can triage user-provided or copied WeChat messages into current-stage work takeover tasks, extract key amounts/deadlines/people, persist the task, prepare next actions and reply drafts, and copy drafts after confirmation. For visible desktop work and handoff, Lumi should first restore an already running personal WeChat/Weixin window from the taskbar/background with visible focus, then fall back to launching personal WeChat, and only then fall back to enterprise WeChat/WeCom. If WeChat is logged in, Lumi may continue safe draft/preparation work inside that session; QR login, verification, account switching, and sending remain confirmation/handoff boundaries. It should not claim to send messages unless a confirmed integration explicitly supports sending.',
     requiresConfirmation: true,
     stateKeys: ['permissions', 'tools'],
   },
@@ -567,6 +579,13 @@ const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     label: 'Home / desktop shell',
     actions: ['focus_home', 'desktop_show_lumi_window'],
     useWhen: 'Return to Lumi base state, orient the user, or recover from scattered windows.',
+  },
+  {
+    id: 'nexus',
+    label: 'Nexus / central world',
+    actions: ['open_nexus', 'close_nexus'],
+    useWhen: 'Show the central world view / Nexus entrance in the LumiOS client.',
+    closeAfterUse: false,
   },
   {
     id: 'chat',
@@ -874,6 +893,14 @@ export function normalizeClientActionTarget(value?: string): string {
     computer: 'kernel',
     adaptation: 'kernel',
     'computer-adaptation': 'kernel',
+    nexus: 'nexus',
+    world: 'nexus',
+    'world-view': 'nexus',
+    'nexus-view': 'nexus',
+    'cloud-canvas': 'nexus',
+    'central-world': 'nexus',
+    '中枢': 'nexus',
+    '中枢世界': 'nexus',
     log: 'runtime-log',
     logs: 'runtime-log',
     runtime: 'runtime-log',
@@ -888,6 +915,8 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   const openWindows = [...(state.windows?.open || [])];
   const openSurfaces: string[] = [];
   if (state.activeTab) openSurfaces.push(`tab:${state.activeTab}`);
+  if (state.viewMode) openSurfaces.push(`view:${state.viewMode}`);
+  if (state.viewMode === 'world' || state.surfaces?.nexusOpen) openSurfaces.push('nexus');
   if (state.surfaces?.knowledgeOpen) openSurfaces.push('knowledge');
   if (state.surfaces?.chatOpen) openSurfaces.push('chat');
   if (state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) openSurfaces.push('runtime-log');
@@ -901,6 +930,7 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   return {
     mode: state.mode || 'unknown',
     activeTab: state.activeTab || 'unknown',
+    viewMode: state.viewMode || 'unknown',
     focusedWindow: state.windows?.focused || 'none',
     openWindows,
     openSurfaces,
@@ -945,6 +975,15 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       break;
     case 'focus_home':
       setSurface('home', 'home');
+      break;
+    case 'open_nexus':
+      setSurface('nexus', 'Nexus / central world');
+      break;
+    case 'close_nexus':
+      expectedState = ['surface:nexus:closed'];
+      verification = 'The Nexus / central world view should no longer be active.';
+      naturalCompletion = 'Nexus / central world is closed.';
+      naturalPending = 'I asked to close Nexus / central world, but I still need a fresh client state to confirm it.';
       break;
     case 'open_app':
       setSurface(target || 'home', target || 'home');
@@ -1125,7 +1164,7 @@ export function getClientSelfAwarenessReport(userId: string): ClientSelfAwarenes
   if (health.findings.length) gaps.push(...health.findings.slice(0, 3).map(f => `${f.area}: ${f.message}`));
 
   const bodySummary = digest
-    ? `mode=${digest.mode}; active=${digest.activeTab}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
+    ? `mode=${digest.mode}; active=${digest.activeTab}; view=${digest.viewMode}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
     : `no live client body; health=${health.level}`;
 
   return {
@@ -1161,6 +1200,7 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   const target = normalizeClientActionTarget(surface);
   const openWindows = state.windows?.open || [];
   if (target === 'home') return state.activeTab === 'home';
+  if (target === 'nexus') return state.viewMode === 'world' || Boolean(state.surfaces?.nexusOpen);
   if (target === 'org') return state.activeTab === 'org' || openWindows.includes('org') || state.windows?.focused === 'org';
   if (target === 'knowledge') return Boolean(state.surfaces?.knowledgeOpen) || openWindows.includes('knowledge');
   if (target === 'chat') return Boolean(state.surfaces?.chatOpen) || openWindows.includes('chat');
@@ -1272,11 +1312,12 @@ export function formatClientSelfPrompt(userId: string): string {
     `- Platform: ${state.platform || 'unknown'}`,
     `- Current mode: ${state.mode || 'unknown'}`,
     `- Active tab: ${state.activeTab || 'unknown'}`,
+    `- View mode: ${state.viewMode || 'personal'}${state.viewMode === 'world' || state.surfaces?.nexusOpen ? ' (Nexus / central world visible)' : ''}`,
     `- Work domain: ${state.workDomain || 'personal'}`,
     `- Organization: ${state.org?.connected ? `${state.org.name || state.org.id || 'connected'} (${state.org.role || 'member'}${state.org.id ? `, id=${state.org.id}` : ''})` : 'not connected or personal domain'}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}`,
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
     `- Music: ${state.music?.isPlaying ? 'playing' : 'idle'}${state.music?.trackName ? `, track="${state.music.trackName}"` : ''}${state.music?.volume != null ? `, volume=${state.music.volume}` : ''}, layer=${Boolean(state.music?.layerVisible ?? state.surfaces?.musicLayerVisible)}`,
     `- Music taste profile: ${formatMusicProfileForPrompt(musicProfile)}`,

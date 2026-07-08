@@ -3708,6 +3708,7 @@ export function DesktopUI({
         if (value === 'memory') return 'knowledge';
         if (value === 'files') return 'knowledge';
         if (value === 'sync') return 'devices';
+        if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
         return value;
       };
 
@@ -3727,6 +3728,12 @@ export function DesktopUI({
           setKnowledgeOpen(false);
           setChatOpen(false);
           setIsNotificationPanelOpen(false);
+          setViewMode('personal');
+          setActiveTab('home');
+          return;
+        }
+        if (windowId === 'nexus') {
+          setViewMode('world');
           setActiveTab('home');
           return;
         }
@@ -3797,6 +3804,10 @@ export function DesktopUI({
         }
         if (windowId === 'chat') {
           setChatOpen(false);
+          return;
+        }
+        if (windowId === 'nexus') {
+          setViewMode('personal');
           return;
         }
         if (windowId === 'notifications') {
@@ -3923,6 +3934,17 @@ export function DesktopUI({
         if (action === 'focus_home') {
           openSurface('home');
           respond({ ok: true, action });
+          return;
+        }
+        if (action === 'open_nexus') {
+          setViewMode('world');
+          setActiveTab('home');
+          respond({ ok: true, action, target: 'nexus', viewMode: 'world' });
+          return;
+        }
+        if (action === 'close_nexus') {
+          setViewMode('personal');
+          respond({ ok: true, action, target: 'nexus', viewMode: 'personal' });
           return;
         }
         if (action === 'open_music_center') {
@@ -4059,6 +4081,7 @@ export function DesktopUI({
     resetMeetingCapture,
     setActiveTab,
     setOperationMode,
+    setViewMode,
   ]);
 
   useEffect(() => {
@@ -4074,6 +4097,7 @@ export function DesktopUI({
         platform: isTauri ? 'desktop' : 'web',
         mode: operationMode,
         activeTab,
+        viewMode,
         workDomain,
         org: {
           connected: Boolean(orgConnection?.connected),
@@ -4094,6 +4118,7 @@ export function DesktopUI({
           musicLayerVisible: musicVisible,
           wallpaperMode: isWallpaperMode,
           widgetMode: isDesktopWidgetMode,
+          nexusOpen: viewMode === 'world',
         },
         voice: {
           state: callState,
@@ -4178,6 +4203,7 @@ export function DesktopUI({
     orgConnection?.orgName,
     orgConnection?.orgRole,
     socket,
+    viewMode,
     workDomain,
     workflowSteps,
   ]);

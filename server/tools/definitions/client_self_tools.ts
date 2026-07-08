@@ -20,6 +20,8 @@ const ACTIONS = [
   'set_mode',
   'set_client_mode',
   'focus_home',
+  'open_nexus',
+  'close_nexus',
   'open_music_center',
   'show_music_layer',
   'hide_music_layer',
@@ -152,7 +154,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     name: 'client_action',
     description: [
       'Safely control Lumi client UI surfaces through the client action router.',
-      'Use explicit client-native actions like refresh_client_state, open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_computer_adaptation, open_settings, or set_wallpaper_mode.',
+      'Use explicit client-native actions like refresh_client_state, open_nexus, open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_computer_adaptation, open_settings, or set_wallpaper_mode.',
       'Legacy open_app/close_app/set_mode are still accepted for compatibility.',
       'This does not use mouse/keyboard control and should be preferred over computer_use for Lumi client UI navigation.',
     ].join(' '),
@@ -166,7 +168,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         target: {
           type: 'string',
-          description: 'Target app/surface for open_app or close_app, e.g. org, knowledge, runtime-log, skills, team, music-center, settings. The legacy files target opens knowledge.',
+          description: 'Target app/surface for open_app or close_app, e.g. nexus, org, knowledge, runtime-log, skills, team, music-center, settings. The legacy files target opens knowledge.',
         },
         mode: {
           type: 'string',

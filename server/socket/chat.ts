@@ -75,7 +75,7 @@ function stripHistoricalAttachmentBlocks(value: string): string {
 }
 
 const ASSISTANT_HISTORY_NOISE_RE =
-  /我还没有真正开始读取或审查|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
+  /我还没有真正开始读取或审查|我还没有真正操作客户端|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|I have not actually started|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
 
 function isNoisyAssistantHistory(value: string): boolean {
   return ASSISTANT_HISTORY_NOISE_RE.test(String(value || ''));
@@ -323,6 +323,45 @@ function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): str
     })
     .filter(Boolean);
   return lines.join('\n').slice(-maxLength);
+}
+
+const SHORT_CLIENT_CONTINUATION_RE =
+  /^(?:查|查一下|看|看看|看一下|继续|接着|继续查|接着查|开始|处理|做|整|改|打开|试试|重试|嗯|嗯嗯|好|好的|可以|来|走|为什么|怎么回事|在哪|在哪里|为什么不执行)$/iu;
+
+const CLIENT_SURFACE_CONTEXT_RE =
+  /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|界面|入口|主屏幕|主页|技能大厅|知识库|运行日志|文件小组件|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view)\b/iu;
+
+const CLIENT_SURFACE_ACTION_RE =
+  /打开|进入|切换|查看|看看|检查|查|摸索|操作|入口|界面|状态|没有打开|没打开|为什么|怎么回事|能不能|能打开|\b(?:open|show|enter|switch|inspect|check|operate)\b/iu;
+
+function isShortClientContinuation(userText: string): boolean {
+  const clean = String(userText || '').trim();
+  return Boolean(clean) && clean.length <= 24 && SHORT_CLIENT_CONTINUATION_RE.test(clean);
+}
+
+function hasRecentClientSurfaceContext(history: any[] | undefined): boolean {
+  const recent = getRecentHistoryText(history, 5000);
+  return CLIENT_SURFACE_CONTEXT_RE.test(recent);
+}
+
+function isClientSurfaceRequestText(userText: string): boolean {
+  const clean = String(userText || '').trim();
+  if (!clean) return false;
+  return CLIENT_SURFACE_CONTEXT_RE.test(clean) && CLIENT_SURFACE_ACTION_RE.test(clean);
+}
+
+function buildClientSurfaceContinuationBridge(userText: string, history: any[] | undefined): string {
+  const clean = String(userText || '').trim();
+  const directClientSurfaceRequest = isClientSurfaceRequestText(clean);
+  const shortContinuation = isShortClientContinuation(clean) && hasRecentClientSurfaceContext(history);
+  if (!directClientSurfaceRequest && !shortContinuation) return '';
+
+  return [
+    '## Internal client-surface continuation context',
+    'The user is continuing a Lumi client/UI operation or self-inspection request. Treat this as foreground client work, not background delegation.',
+    'Use client_get_state first unless a fresh client state is already available. For "中枢世界", "中枢", "Nexus", or "cloud canvas", use client_action with action=open_nexus.',
+    'Do not claim that a client surface was opened, checked, or changed unless client_action verification is verified/not_applicable or fresh client state proves it. If verification is pending or failed, say the exact blocker and next retry.',
+  ].join('\n');
 }
 
 function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
@@ -598,6 +637,8 @@ export function registerChatHandler(
     const rawUserText = typeof data.text === 'string' ? data.text.trim() : '';
     const visibleUserText = rawUserText || (attachments.length > 0 ? 'Please review the attached file(s).' : '');
     const attachmentContext = buildChatAttachmentContext(attachments);
+    const historyItems = Array.isArray(history) ? history : [];
+    let chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, historyItems);
     const text = [visibleUserText, attachmentContext].filter(Boolean).join('\n\n');
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
     const allowLocalFileWrites = shouldAllowLocalFileWriteForTurn(visibleUserText, attachments);
@@ -744,6 +785,12 @@ export function registerChatHandler(
       }
       console.log('[ChatHandler] conversationId:', conversationId, 'mode:', conversationMode);
 
+      if (!chatContextBridge && conversationId && isShortClientContinuation(visibleUserText)) {
+        const dbHistoryItems = getMessages(conversationId, 12)
+          .map(record => ({ role: record.role, message: record.message, response: record.response }));
+        chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, dbHistoryItems);
+      }
+
       if (shouldBlockDetachedAttachmentFollowup(visibleUserText, attachments, history)) {
         const responseText = buildDetachedAttachmentFollowupResponse(visibleUserText);
         emitAgent("agent:status", { status: "responding", agentName: "Lumi" });
@@ -812,7 +859,13 @@ export function registerChatHandler(
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
       effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn or exact local paths stated in the current user message. If the user says "this file", "the attachment", or similar without a current attachment/path, ask them to reattach the file or provide the exact path before calling file tools.';
-      const routingText = attachments.length > 0 ? text : (visibleUserText || text);
+      if (chatContextBridge) {
+        effectiveSystemPrompt += '\n\n' + chatContextBridge;
+      }
+      const effectiveRoutedVisibleUserText = [visibleUserText, chatContextBridge].filter(Boolean).join('\n\n');
+      const routingText = attachments.length > 0
+        ? [effectiveRoutedVisibleUserText, attachmentContext].filter(Boolean).join('\n\n')
+        : (effectiveRoutedVisibleUserText || text);
 
       const turnDispatch = buildLumiTurnDispatch({
         userId: uid,
@@ -919,19 +972,24 @@ export function registerChatHandler(
 
           emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args });
 
-          const finishWithError = (message: string) => {
-            if (settled) return;
-            settled = true;
+          function cleanup() {
             if (timeout) clearTimeout(timeout);
             socket.off(eventName, onResult);
-            emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: message });
-            reject(new Error(message));
-          };
+            socket.off('disconnect', onDisconnect);
+          }
 
-          const onResult = (data: { output?: string; error?: string }) => {
+          function finishWithError(message: string) {
             if (settled) return;
             settled = true;
-            if (timeout) clearTimeout(timeout);
+            cleanup();
+            emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: message });
+            reject(new Error(message));
+          }
+
+          function onResult(data: { output?: string; error?: string }) {
+            if (settled) return;
+            settled = true;
+            cleanup();
             if (data.error) {
               emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: data.error });
               reject(new Error(data.error));
@@ -940,10 +998,20 @@ export function registerChatHandler(
             const output = data.output || '';
             emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, result: formatToolResultForUi(output) });
             resolve(output);
-          };
+          }
+
+          function onDisconnect() {
+            finishWithError(`Desktop tool "${toolName}" cancelled: desktop client disconnected before returning a result`);
+          }
+
+          if (!socket.connected) {
+            finishWithError(`Desktop tool "${toolName}" cannot run: desktop client socket is disconnected`);
+            return;
+          }
 
           timeout = setTimeout(() => finishWithError(`Desktop tool "${toolName}" timed out (30s)`), 30000);
           socket.once(eventName, onResult);
+          socket.once('disconnect', onDisconnect);
           socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
         });
       });
@@ -1581,6 +1649,7 @@ export function registerChatHandler(
           complexity: backgroundComplexity,
           allowToolUse: executionDecision.allowToolUse,
           clientActionOnly: clientActionOnlyTurn,
+          clientSurfaceRequest: Boolean(chatContextBridge) || isClientSurfaceRequestText(routingText),
           selfRepair: selfRepairTurn,
           sanctuary: isSanctuary,
           directDesktop: workSurfaceRoute.directDesktop,

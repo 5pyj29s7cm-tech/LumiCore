@@ -14,12 +14,20 @@ function buildActionPromiseGuardedResponse(
   failed: ToolExecutionRecord[],
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
+  const clientSurfaceTask = isClientSurfaceTask(task);
   const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
   );
 
   if (!isZh) {
+    if (clientSurfaceTask) {
+      return [
+        `I have not actually operated the Lumi client yet: ${reason}`,
+        lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: no successful client_get_state/client_action evidence was recorded for this turn.',
+        'Next step: inspect client_get_state, then run the matching client_action and trust only its verification result.',
+      ].filter(Boolean).join('\n');
+    }
     if (confirmationBlocked) {
       return [
         `I did start the workflow, but it is blocked at a confirmation step: ${reason}`,
@@ -31,6 +39,14 @@ function buildActionPromiseGuardedResponse(
       `I have not actually started that action yet: ${reason}`,
       lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: this turn produced only a text reply, with no successful tool evidence.',
       'Next step: provide or select the file/location, then I should run the real read/open/review tool and show progress before giving the result.',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (clientSurfaceTask) {
+    return [
+      '我还没有真正操作客户端：这一轮没有记录到成功的 client_get_state / client_action 证据。',
+      lastFailure ? `最近的阻塞点：${lastFailure}。` : '现在能确认的是：这次没有完成可验证的客户端状态读取或界面动作。',
+      '下一步应该先读取客户端状态；如果是打开中枢世界，就调用 client_action(open_nexus)，并等验证结果后再说完成。',
     ].filter(Boolean).join('\n');
   }
 
@@ -78,13 +94,13 @@ const OPEN_TOOL_RE =
   /^(desktop_open|client_action|computer_use|external_app_.*open|open_)/i;
 
 const ACTION_PROMISE_EVIDENCE_TOOL_RE =
-  /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_action|work_product_verify|create_|write_|generate_|export_|save_)/i;
+  /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_get_state|client_action|work_product_verify|create_|write_|generate_|export_|save_)/i;
 
 const READ_REVIEW_PROMISE_RE =
   /\b(?:read|open|check|review|analy[sz]e|inspect|process)\b|(?:\u8bfb\u53d6|\u8bfb\u4e00\u4e0b|\u8bfb\u4e0b|\u6253\u5f00|\u67e5\u770b|\u770b\u770b|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u68c0\u67e5|\u5904\u7406)/iu;
 
 const READ_REVIEW_EVIDENCE_TOOL_RE =
-  /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_action)/i;
+  /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_get_state|client_action)/i;
 
 const VERIFY_PASS_RE = /"status"\s*:\s*"pass"|status:\s*pass/i;
 
@@ -93,6 +109,13 @@ const ACTION_EVIDENCE_TASK_RE =
 
 const ACTION_PROMISE_RE =
   /(?:\b(?:i(?:'ll| will| am going to|'m going to)|let me|i need to|i'll first|let me first)\b[^.\n]{0,120}\b(?:read|open|check|review|analy[sz]e|inspect|process|search|generate|create|export)\b)|(?:(?:我|让我|我先|让我先|先|现在|马上|接下来)[^。\n]{0,80}(?:读取|读|打开|查看|看看|审查|分析|检查|处理|调用|搜索|查找|生成|导出|保存))/iu;
+
+const CLIENT_SURFACE_TASK_RE =
+  /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view)\b/iu;
+
+function isClientSurfaceTask(task: string): boolean {
+  return CLIENT_SURFACE_TASK_RE.test(task || '');
+}
 
 export function needsCompletionEvidence(task: string): boolean {
   return EXTERNAL_WORK_TASK_RE.test(task || '');
@@ -181,6 +204,7 @@ function buildGuardedResponse(
   failed: ToolExecutionRecord[],
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
+  const clientSurfaceTask = isClientSurfaceTask(task);
   const lastSuccess = successful.slice(-3).map(call => call.name).join(', ');
   const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
   const confirmationBlocked = failed.some(call =>
@@ -188,6 +212,14 @@ function buildGuardedResponse(
   );
 
   if (!isZh) {
+    if (clientSurfaceTask) {
+      return [
+        `I cannot honestly say the Lumi client action is complete yet: ${reason}.`,
+        lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful client state/action evidence was recorded.',
+        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
+        'Next step: run or retry the real client_get_state/client_action path, then report the verified state.',
+      ].filter(Boolean).join('\n');
+    }
     if (confirmationBlocked) {
       return [
         `I started the workflow, but cannot mark it complete yet: ${reason}.`,
@@ -201,6 +233,15 @@ function buildGuardedResponse(
       lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful tool execution was recorded.',
       lastFailure ? `Latest blocker: ${lastFailure}.` : '',
       'Next step: continue the actual tool workflow, then verify the produced file/action before reporting completion.',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (clientSurfaceTask) {
+    return [
+      `我还不能说客户端动作已经完成：${reason}。`,
+      lastSuccess ? `目前能确认的成功步骤：${lastSuccess}。` : '目前没有记录到成功的客户端状态读取或界面动作。',
+      lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
+      '下一步应该继续真实执行 client_get_state / client_action，并在状态验证后再汇报完成。',
     ].filter(Boolean).join('\n');
   }
 

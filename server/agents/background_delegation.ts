@@ -7,6 +7,7 @@ export interface BackgroundDelegationDecisionInput {
   complexity: TaskComplexity;
   allowToolUse: boolean;
   clientActionOnly: boolean;
+  clientSurfaceRequest?: boolean;
   selfRepair: boolean;
   sanctuary: boolean;
   directDesktop: boolean;
@@ -34,6 +35,7 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (!input.text.trim()) return { shouldDelegate: false, reason: 'empty_text' };
   if (!input.allowToolUse) return { shouldDelegate: false, reason: 'tools_disabled' };
   if (input.clientActionOnly) return { shouldDelegate: false, reason: 'client_action_only' };
+  if (input.clientSurfaceRequest) return { shouldDelegate: false, reason: 'client_surface_foreground' };
   if (input.selfRepair) return { shouldDelegate: false, reason: 'self_repair' };
   if (input.sanctuary) return { shouldDelegate: false, reason: 'sanctuary_agent' };
   if (input.directDesktop) return { shouldDelegate: false, reason: 'direct_desktop_visible_work' };
