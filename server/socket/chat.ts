@@ -211,6 +211,47 @@ function buildStoredAttachmentSummary(userText: string, attachments: ChatIncomin
   return `${userText}\n\n[Attachments]\n${summary}`.trim();
 }
 
+function shouldBlockDetachedAttachmentFollowup(
+  userText: string,
+  attachments: ChatIncomingAttachment[],
+  history: any,
+): boolean {
+  const clean = String(userText || '').trim();
+  if (attachments.length > 0 || !clean || clean.length > 160) return false;
+  if (extractExplicitLocalPaths(clean).length > 0) return false;
+
+  const historyItems = Array.isArray(history) ? history : [];
+  const historyText = historyItems
+    .slice(-12)
+    .map((item: any) => String(item?.content || item?.message || item?.text || ''))
+    .join('\n');
+  const historyHasDetachedAttachment =
+    /\[Previous attachments omitted\]|\[Attachments\]|Current Turn Attachments/i.test(historyText);
+  const hasReference =
+    /刚才|刚刚|上面|前面|这个|这份|它|附件|文件|录音|音频|语音|转写|文本|笔录|记录|纪要|材料|文稿|\b(?:this|that|attachment|file|audio|recording|transcript|notes?)\b/iu.test(clean);
+  const hasAction =
+    /整理|做成|生成|转成|保存|导出|写成|形成|归纳|总结|提炼|分析|笔录|材料|\b(?:summari[sz]e|make|create|generate|save|export|write|format|turn)\b/iu.test(clean);
+  const shortArtifactRequest =
+    clean.length <= 40 &&
+    /^(?:帮我|给我|把它|把这个|这个|这份|刚才的|刚刚的|上面的|前面的)?\s*(?:整理|做成|生成|转成|保存成|导出成|写成|形成|归纳|总结|提炼).{0,16}(?:文本|文字|txt|md|笔录|记录|纪要|材料|文稿|文件)\s*$/iu.test(clean);
+
+  return shortArtifactRequest || (historyHasDetachedAttachment && hasReference && hasAction);
+}
+
+function buildDetachedAttachmentFollowupResponse(userText: string): string {
+  const isZh = /[\u3400-\u9fff]/.test(userText);
+  if (!isZh) {
+    return [
+      'I do not have the current attachment or transcript context in this turn, so I will not pretend that the file work has started.',
+      'Please attach/select the file again, or send the transcript text in the message. Then I will show the real read/write progress before reporting the result.',
+    ].join('\n');
+  }
+  return [
+    '我这轮没有收到要整理的附件或刚才的转写上下文，所以不能假装已经开始处理。',
+    '请重新上传、从右侧文件里选择那份音频/转写结果，或把转写文本发在这一条里。收到后我会先显示读取/沿用转写进度，再生成文本结果。',
+  ].join('\n');
+}
+
 type NativeFileEntry = {
   name?: string;
   path?: string;
@@ -668,6 +709,20 @@ export function registerChatHandler(
       }
       console.log('[ChatHandler] conversationId:', conversationId, 'mode:', conversationMode);
 
+      if (shouldBlockDetachedAttachmentFollowup(visibleUserText, attachments, history)) {
+        const responseText = buildDetachedAttachmentFollowupResponse(visibleUserText);
+        emitAgent("agent:status", { status: "responding", agentName: "Lumi" });
+        emitAgent("agent:response", { text: responseText, agentName: "Lumi" });
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+        }
+        emitAgent("agent:status", { status: "idle" });
+        chatSessionMap.delete(sessionKey);
+        return;
+      }
+
       const operationMode = (() => {
         try {
           const db = readDB();
@@ -722,10 +777,11 @@ export function registerChatHandler(
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
       effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn or exact local paths stated in the current user message. If the user says "this file", "the attachment", or similar without a current attachment/path, ask them to reattach the file or provide the exact path before calling file tools.';
+      const routingText = attachments.length > 0 ? text : (visibleUserText || text);
 
       const turnDispatch = buildLumiTurnDispatch({
         userId: uid,
-        text: visibleUserText || text,
+        text: routingText,
         channel: 'chat',
         source: eventSource,
         category,
@@ -735,7 +791,7 @@ export function registerChatHandler(
         targetIsLumi:
           personality.id === 'lumi' ||
           conversationAgentId === 'lumi' ||
-          /lumi/i.test(visibleUserText || text),
+          /lumi/i.test(routingText),
       });
       const turnFlow = turnDispatch.flow;
       const turnSurface = turnDispatch.surface;
@@ -743,7 +799,7 @@ export function registerChatHandler(
       effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
       effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
         userId: uid,
-        text: visibleUserText || text,
+        text: routingText,
         flow: turnFlow,
         toolRegistry,
         domain: resolvedDomain,
@@ -1005,17 +1061,17 @@ export function registerChatHandler(
       const intentTrace = buildLumiIntentTrace({
         dispatch: turnDispatch,
         execution: executionDecision,
-        text: visibleUserText || text,
+        text: routingText,
         source: eventSource,
       });
       const capabilitySelection = buildLumiCapabilitySelection({
         dispatch: turnDispatch,
         execution: executionDecision,
-        text: visibleUserText || text,
+        text: routingText,
       });
       const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
         channel: 'chat',
-        text: visibleUserText || text,
+        text: routingText,
         flow: turnFlow,
         capabilitySelection,
       });

@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Download, MessageCircle, Briefcase, User, ExternalLink, FolderOpen } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -93,8 +93,23 @@ function getDisplayText(message: any): string {
   return String(message.text);
 }
 
-function buildChatHistoryPayload(messages: any[]) {
-  return messages.flatMap((m) => {
+const RECENT_ATTACHMENT_CONTEXT_TTL_MS = 15 * 60 * 1000;
+
+function messageTimestampMs(message: any): number | null {
+  const value = message?.timestamp || message?.createdAt || message?.time;
+  const parsed = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildChatHistoryPayload(messages: any[], options?: { sinceMs?: number }) {
+  const scopedMessages = typeof options?.sinceMs === 'number'
+    ? messages.filter((m) => {
+      const timestamp = messageTimestampMs(m);
+      return timestamp !== null && timestamp >= options.sinceMs!;
+    })
+    : messages;
+
+  return scopedMessages.flatMap((m) => {
     const text = getDisplayText(m).trim();
     const attachmentSummary = Array.isArray(m.attachments) && m.attachments.length > 0
       ? `\n\n[Previous attachments omitted. Ask for a current attachment or exact local path before using file tools.]`
@@ -124,6 +139,36 @@ function extractAudioTranscript(value?: string | null): string | null {
   const index = raw.toLowerCase().indexOf(marker);
   const transcript = index >= 0 ? raw.slice(index + marker.length).trim() : raw;
   return transcript || null;
+}
+
+function serializeChatAttachment(item: ChatAttachment): ChatAttachment {
+  return {
+    id: item.id,
+    fileName: item.fileName,
+    path: item.path,
+    content: item.content || null,
+    preview: item.preview || null,
+    mimeType: item.mimeType || '',
+    size: item.size || 0,
+    kind: item.kind,
+    fileId: item.fileId || '',
+    downloadUrl: item.downloadUrl,
+    transcript: item.transcript || null,
+    transcriptionStatus: item.transcriptionStatus || '',
+    transcriptionError: item.transcriptionError || null,
+    transcriptionProvider: item.transcriptionProvider || '',
+    transcriptionModel: item.transcriptionModel || '',
+  };
+}
+
+function shouldReuseRecentAttachmentContext(text: string): boolean {
+  const clean = text.trim();
+  if (!clean) return false;
+  const hasReference = /刚才|刚刚|上面|前面|这个|这份|它|附件|文件|录音|音频|语音|转写|文本|笔录|记录|纪要|材料|文稿|\b(?:this|that|attachment|file|audio|recording|transcript|notes?)\b/iu.test(clean);
+  const hasAction = /整理|做成|生成|转成|保存|导出|写成|形成|归纳|总结|提炼|分析|笔录|材料|\b(?:summari[sz]e|make|create|generate|save|export|write|format|turn)\b/iu.test(clean);
+  const shortArtifactRequest = clean.length <= 40 &&
+    /^(?:帮我|给我|把它|把这个|这个|这份|刚才的|刚刚的|上面的|前面的)?\s*(?:整理|做成|生成|转成|保存成|导出成|写成|形成|归纳|总结|提炼).{0,16}(?:文本|文字|txt|md|笔录|记录|纪要|材料|文稿|文件)\s*$/iu.test(clean);
+  return shortArtifactRequest || (hasReference && hasAction);
 }
 
 function getSelectedTextWithin(container?: HTMLElement | null): string {
@@ -454,6 +499,13 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentRequestHadToolRef = useRef(false);
   const currentRequestNeedsEvidenceRef = useRef(false);
+  const messagesRef = useRef<any[]>([]);
+  const recentAttachmentContextRef = useRef<ChatAttachment[]>([]);
+  const recentAttachmentContextSinceRef = useRef(0);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     if (inputDictationActiveRef.current && callState === 'idle') {
@@ -648,12 +700,33 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     }
     return uniqueRecent;
   }, [messages]);
+
+  const openNativeFilePath = useCallback(async (target?: string | null): Promise<boolean> => {
+    if (platform !== 'tauri' || !target) return false;
+    const { invoke } = await import('@tauri-apps/api/core');
+    const result = await invoke<{ success: boolean; output: string }>('open_item', { target });
+    if (!result?.success) throw new Error(result?.output || 'Open file failed');
+    return true;
+  }, [platform]);
+
   const openChatFile = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>) => {
     const payload = file.fileId
       ? { id: file.fileId }
       : file.path
         ? { path: file.path }
         : null;
+
+    if (file.path) {
+      try {
+        const openedNatively = await openNativeFilePath(file.path);
+        if (openedNatively) {
+          toast.success(ui(`已打开：${file.path}`, `Opened: ${file.path}`));
+          return;
+        }
+      } catch (err: any) {
+        toast.error(err?.message || ui('原生打开失败，尝试后端打开', 'Native open failed; trying server open'));
+      }
+    }
 
     if (payload) {
       try {
@@ -667,7 +740,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           const data = await res.json().catch(() => ({}));
           throw new Error(data?.error || 'Open file failed');
         }
-        toast.success(ui('已用系统默认程序打开文件', 'Opened with the default app'));
+        const data = await res.json().catch(() => ({}));
+        toast.success(ui(`已请求系统打开：${data.path || file.fileName}`, `Requested system open: ${data.path || file.fileName}`));
         return;
       } catch (err: any) {
         if (!file.openUrl && !file.saveUrl) {
@@ -680,9 +754,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
     const fallbackUrl = file.openUrl || file.saveUrl;
     if (fallbackUrl && typeof window !== 'undefined') {
-      window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+      try {
+        window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+      } catch (err: any) {
+        toast.error(err?.message || ui('无法打开预览链接', 'Could not open preview link'));
+      }
     }
-  }, [isZh, scopedFileUrl]);
+  }, [isZh, openNativeFilePath, scopedFileUrl]);
+
   const chatFileSections = useMemo(() => {
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
       id: `pending-${item.id}`,
@@ -723,6 +802,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         kind,
         source: 'knowledge',
         fileId: file.id,
+        path: file.path,
         openUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`),
         saveUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}`),
         status: ready ? undefined : (file.extractionStatus || file.status),
@@ -834,16 +914,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               </div>
             </div>
             </button>
-            <a
-              href={file.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-emerald-100/55 transition-colors hover:bg-emerald-300/10 hover:text-emerald-100"
-              title={ui('保存文件', 'Save file')}
-              aria-label={ui('保存文件', 'Save file')}
-            >
-              <Download size={14} />
-            </a>
           </div>
         ))}
       </div>
@@ -929,6 +999,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       lastConversationScopeRef.current = conversationScopeKey;
       initialLoadDoneRef.current = false;
       setMessages([]);
+      messagesRef.current = [];
+      setPendingAttachments([]);
+      recentAttachmentContextRef.current = [];
+      recentAttachmentContextSinceRef.current = 0;
     }
 
     // Only load once; do not overwrite live conversation.
@@ -1372,25 +1446,28 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     seenWorkflowToolEvents.current.clear();
   }, [clearChatProgress, isOpen]);
 
+  const rememberAttachmentContext = useCallback((attachments: ChatAttachment[]) => {
+    const reusable = attachments
+      .filter(item => item.path || item.transcript || item.content || item.preview)
+      .map(serializeChatAttachment);
+    if (reusable.length === 0) return;
+    recentAttachmentContextRef.current = reusable;
+    recentAttachmentContextSinceRef.current = Date.now();
+  }, []);
+
   const sendText = async (text: string, attachments: ChatAttachment[] = pendingAttachments) => {
     const trimmedText = text.trim();
-    const outgoingAttachments = attachments.map(item => ({
-      id: item.id,
-      fileName: item.fileName,
-      path: item.path,
-      content: item.content || null,
-      preview: item.preview || null,
-      mimeType: item.mimeType || '',
-      size: item.size || 0,
-      kind: item.kind,
-      fileId: item.fileId || '',
-      downloadUrl: item.downloadUrl,
-      transcript: item.transcript || null,
-      transcriptionStatus: item.transcriptionStatus || '',
-      transcriptionError: item.transcriptionError || null,
-      transcriptionProvider: item.transcriptionProvider || '',
-      transcriptionModel: item.transcriptionModel || '',
-    }));
+    const directAttachments = attachments.map(serializeChatAttachment);
+    const recentContextIsFresh =
+      recentAttachmentContextRef.current.length > 0 &&
+      Date.now() - recentAttachmentContextSinceRef.current <= RECENT_ATTACHMENT_CONTEXT_TTL_MS;
+    const reusedRecentAttachmentContext =
+      directAttachments.length === 0 &&
+      recentContextIsFresh &&
+      shouldReuseRecentAttachmentContext(trimmedText);
+    const outgoingAttachments = reusedRecentAttachmentContext
+      ? recentAttachmentContextRef.current.map(serializeChatAttachment)
+      : directAttachments;
     if ((!trimmedText && outgoingAttachments.length === 0) || !user) return;
     const outgoingText = trimmedText || ui('请帮我看看这些附件。', 'Please review these attachments.');
 
@@ -1402,13 +1479,19 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       timestamp: new Date().toISOString(),
       type: 'user'
     };
+    const priorMessages = messagesRef.current.length > 0 ? messagesRef.current : messages;
+    const historySinceMs = outgoingAttachments.length > 0 && recentAttachmentContextSinceRef.current > 0
+      ? Math.max(0, recentAttachmentContextSinceRef.current - 1000)
+      : undefined;
     textChatActiveRef.current = true;
     seenWorkflowToolEvents.current.clear();
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0);
     clearChatProgress();
     pushChatProgress(
-      outgoingAttachments.length > 0
+      reusedRecentAttachmentContext
+        ? (isZh ? '我沿用刚才上传的附件和转写结果继续处理。' : 'I am using the recent attachment and transcript for this request.')
+        : outgoingAttachments.length > 0
         ? (isZh ? '我先读取你发来的附件和要求。' : 'I am checking your attachments and request first.')
         : (isZh ? '我先看一下你的要求。' : 'I am checking your request first.'),
       'thinking'
@@ -1421,9 +1504,15 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       time: Date.now(),
     }]);
 
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => {
+      const base = prev.length >= priorMessages.length ? prev : priorMessages;
+      const next = [...base, userMsg];
+      messagesRef.current = next;
+      return next;
+    });
     setDraftText('');
     setPendingAttachments(prev => prev.filter(item => !outgoingAttachments.some(sent => sent.id === item.id)));
+    if (outgoingAttachments.length > 0) rememberAttachmentContext(outgoingAttachments);
     stop();
     setIsTyping(true);
     const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1473,7 +1562,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     socket.emit("agent:chat", {
       text: outgoingText,
       attachments: outgoingAttachments,
-      history: buildChatHistoryPayload(messages),
+      history: buildChatHistoryPayload(priorMessages, { sinceMs: historySinceMs }),
       personalityId: 'lumi',
       category: agentCategory,
       agentId,
@@ -1622,6 +1711,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           };
         });
         setPendingAttachments(prev => [...prev, ...attachments]);
+        rememberAttachmentContext(attachments);
         setOptimizationProgress(100);
         setTimeout(() => { setIsOptimizing(false); setOptimizationProgress(0); }, 500);
         const audioTranscripts = attachments
@@ -1657,6 +1747,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
   const removePendingAttachment = (id: string) => {
     setPendingAttachments(prev => prev.filter(item => item.id !== id));
+    recentAttachmentContextRef.current = recentAttachmentContextRef.current.filter(item => item.id !== id);
+    if (recentAttachmentContextRef.current.length === 0) {
+      recentAttachmentContextSinceRef.current = 0;
+    }
   };
 
   const renderChatFileRow = (item: ChatFilePanelItem) => (
@@ -1686,19 +1780,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           </span>
         </span>
       </button>
-      {item.saveUrl && (
-        <a
-          href={item.saveUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          download={item.fileName}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white/35 transition-colors hover:bg-white/10 hover:text-white/75"
-          title={ui('保存文件', 'Save file')}
-          aria-label={ui('保存文件', 'Save file')}
-        >
-          <Download size={14} />
-        </a>
-      )}
     </div>
   );
 

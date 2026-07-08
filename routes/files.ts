@@ -119,6 +119,7 @@ interface KnowledgeEntry {
   id: string;
   name: string;
   displayName: string;
+  path?: string;
   domain: 'personal' | 'work';
   orgId?: string;
   size: string;
@@ -339,20 +340,47 @@ function resolveKnowledgeFilePath(req: Request, idValue: unknown): string {
   return fs.realpathSync.native(filePath);
 }
 
-function openPathWithDefaultApp(filePath: string): void {
-  let proc;
-  if (process.platform === 'win32') {
-    proc = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'Start-Process -LiteralPath $args[0]', filePath],
-      { detached: true, stdio: 'ignore', windowsHide: true },
-    );
-  } else if (process.platform === 'darwin') {
-    proc = spawn('open', [filePath], { detached: true, stdio: 'ignore' });
-  } else {
-    proc = spawn('xdg-open', [filePath], { detached: true, stdio: 'ignore' });
-  }
-  proc.unref();
+function openPathWithDefaultApp(filePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const command = process.platform === 'win32'
+      ? 'powershell.exe'
+      : process.platform === 'darwin'
+        ? 'open'
+        : 'xdg-open';
+    const args = process.platform === 'win32'
+      ? [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        '$ErrorActionPreference = "Stop"; $target = $args[0]; if (-not (Test-Path -LiteralPath $target)) { throw "Path not found: $target" }; Start-Process -LiteralPath $target',
+        filePath,
+      ]
+      : [filePath];
+    const proc = spawn(command, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error('Open command timed out'));
+    }, 8000);
+    proc.stderr?.on('data', chunk => { stderr += chunk.toString(); });
+    proc.on('error', err => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error((stderr || `Open command failed with exit code ${code}`).trim()));
+      }
+    });
+  });
 }
 
 function visionModelFor(provider: VisionProvider): string {
@@ -912,6 +940,7 @@ function buildEntry(filename: string, source: 'upload' | 'generated' | 'ingested
     id: filename,
     name: displayName,
     displayName,
+    path: filePath,
     domain: scope.domain,
     orgId: scope.orgId,
     size: formatSize(st.size),
@@ -1225,15 +1254,15 @@ router.get('/files/generated', requireAuth, (req: Request, res: Response) => {
 });
 
 // Open a knowledge/generated file with the OS default application.
-router.post('/files/open', requireAuth, (req: Request, res: Response) => {
+router.post('/files/open', requireAuth, async (req: Request, res: Response) => {
   try {
     const id = req.body?.id || req.query.id;
     const rawPath = req.body?.path || req.query.path;
     const filePath = id
       ? resolveKnowledgeFilePath(req, id)
       : resolveGeneratedDownloadPath(rawPath);
-    openPathWithDefaultApp(filePath);
-    res.json({ success: true, path: filePath });
+    await openPathWithDefaultApp(filePath);
+    res.json({ success: true, path: filePath, fileName: repairFilename(path.basename(filePath)) });
   } catch (err: any) {
     sendRouteError(res, err);
   }
@@ -1266,7 +1295,19 @@ router.get('/files/download/:id', (req: Request, res: Response) => {
 });
 
 // ── GET /files/open-folder/:id — open the file's containing folder in the OS ──
-router.get('/files/open-folder/:id', requireAuth, (req: Request, res: Response) => {
+router.get('/files/open-folder', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const scope = getFileScope(req);
+    const folder = path.resolve(scope.dir);
+    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+    await openPathWithDefaultApp(folder);
+    res.json({ success: true, path: folder });
+  } catch (err: any) {
+    sendRouteError(res, err);
+  }
+});
+
+router.get('/files/open-folder/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);
@@ -1274,18 +1315,7 @@ router.get('/files/open-folder/:id', requireAuth, (req: Request, res: Response) 
     if (!safeName || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
 
     const folder = path.resolve(path.dirname(filePath));
-    const platform = process.platform;
-    let cmd: string;
-    if (platform === 'win32') {
-      cmd = `explorer "${folder}"`;
-    } else if (platform === 'darwin') {
-      cmd = `open "${folder}"`;
-    } else {
-      cmd = `xdg-open "${folder}"`;
-    }
-    // spawn detached so it survives server restart; explorer may exit 1 on success
-    const proc = spawn(cmd, [], { detached: true, stdio: 'ignore', shell: true });
-    proc.unref();
+    await openPathWithDefaultApp(folder);
     res.json({ success: true, path: folder });
   } catch (err: any) {
     sendRouteError(res, err);

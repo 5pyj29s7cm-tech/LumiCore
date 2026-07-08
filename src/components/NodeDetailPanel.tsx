@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useT } from '../lib/useT';
-import { X, Download, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, Sparkles, CheckCircle2, Loader2, MessageSquare, Eye, EyeOff, FileText, FolderOpen } from 'lucide-react';
+import { X, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, Sparkles, CheckCircle2, Loader2, MessageSquare, Eye, EyeOff, FileText, FolderOpen } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface FileEntry {
   id: string;
   name: string;
   displayName?: string;
+  path?: string;
   domain?: 'personal' | 'work';
   orgId?: string;
   size?: string;
@@ -74,7 +76,6 @@ interface NodeDetailPanelProps {
   position?: { x: number; y: number } | null;
   onClose: () => void;
   onDelete: (id: string) => void;
-  onDownload?: (id: string) => void;
   onIngest?: (id: string) => void;
   onToggleProtect?: (id: string) => void;
   onChangeTier?: (id: string, tier: string, confirmed?: boolean) => void;
@@ -100,7 +101,6 @@ export function NodeDetailPanel({
   position,
   onClose,
   onDelete,
-  onDownload,
   onIngest,
   onToggleProtect,
   onChangeTier,
@@ -162,6 +162,36 @@ export function NodeDetailPanel({
       setPreviewLoading(false);
     }
   };
+
+  const handleOpenFile = async () => {
+    if (!node || node.type !== 'file') return;
+    try {
+      const res = await fetch(fileUrl('/api/files/open'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: node.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Open file failed');
+      toast.success(`Opened: ${data.path || node.title}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Open file failed');
+    }
+  };
+
+  const handleOpenFolder = async () => {
+    if (!node || node.type !== 'file') return;
+    try {
+      const res = await fetch(fileUrl(`/api/files/open-folder/${encodeURIComponent(node.id)}`), { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Open folder failed');
+      toast.success(`Opened folder: ${data.path || node.title}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Open folder failed');
+    }
+  };
+
   return (
     <AnimatePresence>
       {node && (
@@ -496,18 +526,14 @@ export function NodeDetailPanel({
             <div className="px-5 pb-5 flex items-center gap-2 flex-wrap">
               {node.type === 'file' && (
                 <>
-                  {onDownload && (
-                    <button onClick={() => onDownload(node.id)} className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold text-white/60 transition-colors">
-                      <Download size={13} /> Download
-                    </button>
-                  )}
                   <button
-                    onClick={async () => {
-                      try {
-                        const res = await fetch(fileUrl(`/api/files/open-folder/${encodeURIComponent(node.id)}`), { credentials: 'include' });
-                        if (!res.ok) throw new Error('');
-                      } catch { /* fall through */ }
-                    }}
+                    onClick={handleOpenFile}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold text-white/60 transition-colors"
+                  >
+                    <FileText size={13} /> Open File
+                  </button>
+                  <button
+                    onClick={handleOpenFolder}
                     className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold text-white/60 transition-colors"
                   >
                     <FolderOpen size={13} /> Show in Folder

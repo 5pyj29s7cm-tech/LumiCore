@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Loader2, Search, Sparkles, TrendingUp, Network, GitMerge, Upload, ArrowRight, File, FileText, Trash2, Download, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
+import { X, Loader2, Search, Sparkles, TrendingUp, Network, GitMerge, Upload, ArrowRight, File, FileText, Trash2, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { appConfirm } from '@/lib/appConfirm';
@@ -245,20 +245,6 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     } catch { toast.error(t.kbDeleteFailed || 'Delete failed'); }
   };
 
-  const handleDownload = async (id: string) => {
-    try {
-      const res = await fetch(scopedFileUrl(`/api/files/download/${encodeURIComponent(id)}`), { credentials: 'include' });
-      if (!res.ok) throw new Error('');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const file = files.find(f => f.id === id);
-      a.href = url; a.download = file?.displayName || file?.name || id;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch { toast.error('Download failed'); }
-  };
-
   const handleIngest = async (id: string) => {
     const agentId = targetAgentId;
     setIngestingFiles(prev => new Set(prev).add(id));
@@ -402,6 +388,17 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleOpenKnowledgeFolder = async () => {
+    try {
+      const res = await fetch(scopedFileUrl('/api/files/open-folder'), { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Open knowledge folder failed');
+      toast.success(isZh ? `已打开知识库文件夹：${data.path}` : `Opened knowledge folder: ${data.path}`);
+    } catch (err: any) {
+      toast.error(err?.message || (isZh ? '打开知识库文件夹失败' : 'Open knowledge folder failed'));
     }
   };
 
@@ -705,6 +702,15 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                   {t.kbImport || 'Import'}
                 </button>
+                <button
+                  onClick={() => void handleOpenKnowledgeFolder()}
+                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-xl px-3 py-2 text-xs font-bold text-white/55 hover:text-white/80 hover:border-white/20 transition-all"
+                  title={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
+                  aria-label={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
+                >
+                  <FolderOpen size={13} />
+                  {isZh ? '文件夹' : 'Folder'}
+                </button>
                 {ingestableFiles.length > 0 && (
                   <button
                     onClick={() => void handleIngestAll()}
@@ -785,7 +791,6 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
             position={cardPos}
             onClose={() => { setSelectedId(null); setCardPos(null); }}
             onDelete={handleDelete}
-            onDownload={handleDownload}
             onIngest={handleIngest}
             onToggleProtect={handleToggleProtect}
             onChangeTier={handleChangeTier}

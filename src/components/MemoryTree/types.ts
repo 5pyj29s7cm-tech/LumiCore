@@ -22,6 +22,7 @@ export interface FileEntry {
   id: string;
   name: string;
   displayName?: string;
+  path?: string;
   domain?: 'personal' | 'work';
   orgId?: string;
   size?: string;
