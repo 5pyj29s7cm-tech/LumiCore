@@ -351,7 +351,17 @@ function OSWindow({
           else if (info.point.x > viewport.width - safeInset - 80) setSnapZone('right');
           else setSnapZone('none');
         }}
-        initial={{ opacity: 0, scale: 0.85, y: 20, filter: 'blur(0px)' }}
+        initial={{
+          opacity: 0,
+          scale: 0.92,
+          y: 12,
+          filter: 'blur(0px)',
+          width: resolvedWidth,
+          height: resolvedHeight,
+          top: isSnapped ? topInset : normalTop,
+          left: isSnapped ? snappedLeft : normalLeft,
+          x: 0,
+        }}
         animate={isMinimized
           ? { opacity: 0, scale: 0.3, y: 40, filter: 'blur(4px)', transition: { duration: 0.25, ease: [0.4, 0, 1, 1] } }
           : {
@@ -373,7 +383,7 @@ function OSWindow({
         exit={{ opacity: 0, scale: 0.85, y: 20, filter: 'blur(4px)', transition: { duration: 0.18, ease: [0.4, 0, 1, 1] } }}
         style={{
           zIndex: isMinimized ? zIndex - 100 : zIndex,
-          position: isSnapped ? 'fixed' : 'absolute',
+          position: 'fixed',
           maxWidth: `calc(100vw - ${safeInset * 2}px)`,
           maxHeight: `${availableHeight}px`,
         }}

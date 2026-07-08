@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Download, MessageCircle, Briefcase, User } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Download, MessageCircle, Briefcase, User, ExternalLink, FolderOpen } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -51,6 +51,7 @@ type ChatAttachment = {
   mimeType?: string;
   size?: number;
   kind: 'image' | 'audio' | 'file';
+  fileId?: string;
   downloadUrl?: string;
   transcript?: string | null;
   transcriptionStatus?: string;
@@ -65,6 +66,19 @@ type GeneratedFileLink = {
   path: string;
   url: string;
   kind: 'image' | 'document' | 'deck' | 'sheet' | 'pdf' | 'cad' | 'file';
+};
+
+type ChatFilePanelItem = {
+  id: string;
+  fileName: string;
+  subtitle: string;
+  kind: GeneratedFileLink['kind'] | ChatAttachment['kind'];
+  source: 'pending' | 'generated' | 'knowledge';
+  fileId?: string;
+  path?: string;
+  openUrl?: string;
+  saveUrl?: string;
+  status?: string;
 };
 
 type KnowledgeUpdateDetail = {
@@ -124,7 +138,6 @@ function getSelectedTextWithin(container?: HTMLElement | null): string {
   return '';
 }
 
-const CHAT_ACCENT_STORAGE_KEY = 'lumi_chat_accent_theme';
 const CHAT_ACCENT_THEMES = [
   {
     id: 'saturn',
@@ -200,9 +213,24 @@ const CHAT_ACCENT_THEMES = [
   },
 ] as const;
 
-function getChatAccentTheme(id?: string | null) {
-  return CHAT_ACCENT_THEMES.find(theme => theme.id === id) || CHAT_ACCENT_THEMES[0];
-}
+const CHAT_NEUTRAL_THEME = {
+  id: 'neutral',
+  label: 'Neutral',
+  saturn: '#e5e7eb',
+  glow: '#f8fafc',
+  nebula: '#cbd5e1',
+  mars: '#f87171',
+  background: 'linear-gradient(145deg, rgba(10,12,16,0.96) 0%, rgba(4,6,10,0.98) 48%, rgba(1,2,5,1) 100%)',
+  panel: 'linear-gradient(180deg, rgba(18,20,26,0.86) 0%, rgba(7,9,14,0.94) 100%)',
+  panelBorder: 'rgba(255, 255, 255, 0.14)',
+  panelShadow: '0 26px 80px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255,255,255,0.04)',
+  header: 'linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03))',
+  progress: 'linear-gradient(90deg, rgba(255,255,255,0.07), rgba(0,0,0,0.18))',
+  agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.045))',
+  userBubble: 'linear-gradient(135deg, rgba(255,255,255,0.105), rgba(255,255,255,0.055))',
+  inputPanel: 'linear-gradient(90deg, rgba(255,255,255,0.06), rgba(0,0,0,0.30))',
+  input: 'rgba(6, 8, 12, 0.76)',
+} as const;
 
 const CHAT_ATTACHMENT_ACCEPT = [
   '.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff',
@@ -325,21 +353,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [installedSkillNames, setInstalledSkillNames] = useState<string[]>([]);
   const inputDictationActiveRef = useRef(false);
-  const [chatAccentThemeId, setChatAccentThemeId] = useState(() => {
-    if (typeof window === 'undefined') return CHAT_ACCENT_THEMES[0].id;
-    return localStorage.getItem(CHAT_ACCENT_STORAGE_KEY) || CHAT_ACCENT_THEMES[0].id;
-  });
-  const chatAccentTheme = useMemo(() => getChatAccentTheme(chatAccentThemeId), [chatAccentThemeId]);
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-    root.style.setProperty('--color-celestial-saturn', chatAccentTheme.saturn);
-    root.style.setProperty('--color-celestial-glow', chatAccentTheme.glow);
-    root.style.setProperty('--color-celestial-nebula', chatAccentTheme.nebula);
-    root.style.setProperty('--color-celestial-mars', chatAccentTheme.mars);
-    try { localStorage.setItem(CHAT_ACCENT_STORAGE_KEY, chatAccentTheme.id); } catch {}
-  }, [chatAccentTheme]);
+  const chatAccentTheme = CHAT_NEUTRAL_THEME;
 
   // Fetch installed skills to generate dynamic suggestions
   useEffect(() => {
@@ -605,6 +619,118 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     : knowledgeLoading
       ? ui('正在同步资料库', 'Syncing knowledge')
       : ui('暂无资料', 'No knowledge files');
+  const fileKindLabel = useCallback((kind: ChatFilePanelItem['kind']) => {
+    if (kind === 'deck') return ui('演示文稿', 'Presentation');
+    if (kind === 'sheet') return ui('表格', 'Spreadsheet');
+    if (kind === 'pdf') return 'PDF';
+    if (kind === 'cad') return 'CAD';
+    if (kind === 'image') return ui('图片', 'Image');
+    if (kind === 'audio') return ui('音频', 'Audio');
+    if (kind === 'document') return ui('文档', 'Document');
+    return ui('文件', 'File');
+  }, [isZh]);
+  const generatedChatFiles = useMemo(() => {
+    const collected: GeneratedFileLink[] = [];
+    for (const message of messages) {
+      const text = getDisplayText(message);
+      if (!text) continue;
+      collected.push(...extractGeneratedFiles(text));
+    }
+
+    const seen = new Set<string>();
+    const uniqueRecent: GeneratedFileLink[] = [];
+    for (const file of [...collected].reverse()) {
+      const key = file.path.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueRecent.push(file);
+      if (uniqueRecent.length >= 10) break;
+    }
+    return uniqueRecent;
+  }, [messages]);
+  const openChatFile = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>) => {
+    const payload = file.fileId
+      ? { id: file.fileId }
+      : file.path
+        ? { path: file.path }
+        : null;
+
+    if (payload) {
+      try {
+        const res = await fetch(scopedFileUrl('/api/files/open'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.error || 'Open file failed');
+        }
+        toast.success(ui('已用系统默认程序打开文件', 'Opened with the default app'));
+        return;
+      } catch (err: any) {
+        if (!file.openUrl && !file.saveUrl) {
+          toast.error(err?.message || ui('打开文件失败', 'Failed to open file'));
+          return;
+        }
+        toast.error(ui('系统打开失败，已改用预览链接', 'Default app failed; opening the preview link instead'));
+      }
+    }
+
+    const fallbackUrl = file.openUrl || file.saveUrl;
+    if (fallbackUrl && typeof window !== 'undefined') {
+      window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+    }
+  }, [isZh, scopedFileUrl]);
+  const chatFileSections = useMemo(() => {
+    const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
+      id: `pending-${item.id}`,
+      fileName: item.fileName,
+      subtitle: item.transcript ? ui('已转写附件', 'Transcribed attachment') : ui('本次消息附件', 'Current attachment'),
+      kind: item.kind,
+      source: 'pending',
+      fileId: item.fileId,
+      path: item.path,
+      openUrl: item.downloadUrl,
+      saveUrl: item.fileId ? scopedFileUrl(`/api/files/download/${encodeURIComponent(item.fileId)}`) : item.downloadUrl,
+      status: item.transcript ? 'STT' : undefined,
+    }));
+
+    const generated: ChatFilePanelItem[] = generatedChatFiles.map(file => ({
+      id: `generated-panel-${file.id}`,
+      fileName: file.fileName,
+      subtitle: ui('Lumi 生成文件', 'Generated by Lumi'),
+      kind: file.kind,
+      source: 'generated',
+      path: file.path,
+      openUrl: file.url,
+      saveUrl: file.url,
+    }));
+
+    const knowledge: ChatFilePanelItem[] = knowledgeFiles.slice(0, 12).map(file => {
+      const fileName = file.displayName || file.name || file.id;
+      const kind: ChatFilePanelItem['kind'] = isImageFileName(fileName)
+        ? 'image'
+        : isAudioFileName(fileName)
+          ? 'audio'
+          : generatedFileKind(fileName);
+      const ready = isKnowledgeReady(file);
+      return {
+        id: `knowledge-${file.id}`,
+        fileName,
+        subtitle: ready ? ui('可用于对话', 'Available for chat') : ui('资料库文件', 'Knowledge file'),
+        kind,
+        source: 'knowledge',
+        fileId: file.id,
+        openUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`),
+        saveUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}`),
+        status: ready ? undefined : (file.extractionStatus || file.status),
+      };
+    });
+
+    return { pending, generated, knowledge };
+  }, [generatedChatFiles, isKnowledgeReady, isZh, knowledgeFiles, pendingAttachments, scopedFileUrl]);
   const requestMeetingMode = useCallback(() => {
     window.dispatchEvent(new CustomEvent('lumi:request-meeting-mode'));
   }, []);
@@ -687,29 +813,42 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     return (
       <div className={`max-w-[92%] mb-3 flex flex-wrap gap-2 ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
         {files.map(file => (
-          <a
+          <div
             key={file.id}
-            href={file.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group flex min-w-0 max-w-[280px] items-center gap-3 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-3 py-2.5 text-left transition-all hover:border-emerald-300/35 hover:bg-emerald-400/15"
+            className="group flex min-w-0 max-w-[300px] items-center gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 px-3 py-2.5 text-left transition-all hover:border-emerald-300/35 hover:bg-emerald-400/15"
             title={file.path}
           >
+            <button
+              type="button"
+              onClick={() => openChatFile({ fileName: file.fileName, path: file.path, openUrl: file.url, saveUrl: file.url })}
+              className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-400/15 text-emerald-200">
               {file.kind === 'image' ? <ImageIcon size={17} /> : <FileText size={17} />}
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs font-semibold text-white/80">{file.fileName}</div>
               <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-emerald-100/55">
-                <Download size={11} />
+                <ExternalLink size={11} />
                 <span>{labelFor(file.kind)}</span>
               </div>
             </div>
-          </a>
+            </button>
+            <a
+              href={file.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-emerald-100/55 transition-colors hover:bg-emerald-300/10 hover:text-emerald-100"
+              title={ui('保存文件', 'Save file')}
+              aria-label={ui('保存文件', 'Save file')}
+            >
+              <Download size={14} />
+            </a>
+          </div>
         ))}
       </div>
     );
-  }, [isZh]);
+  }, [isZh, openChatFile]);
 
   const buildSearchDisplayMessages = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -1244,6 +1383,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       mimeType: item.mimeType || '',
       size: item.size || 0,
       kind: item.kind,
+      fileId: item.fileId || '',
       downloadUrl: item.downloadUrl,
       transcript: item.transcript || null,
       transcriptionStatus: item.transcriptionStatus || '',
@@ -1472,6 +1612,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             mimeType,
             size: f.rawSize || f.size || 0,
             kind,
+            fileId: f.id || fileName,
             downloadUrl: f.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(f.id)}?inline=1`) : undefined,
             transcript,
             transcriptionStatus: f.extractionStatus || (transcript ? 'indexed' : ''),
@@ -1517,6 +1658,49 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const removePendingAttachment = (id: string) => {
     setPendingAttachments(prev => prev.filter(item => item.id !== id));
   };
+
+  const renderChatFileRow = (item: ChatFilePanelItem) => (
+    <div
+      key={item.id}
+      className="group flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-2.5 py-2 transition-colors hover:border-emerald-300/25 hover:bg-emerald-400/10"
+      title={item.path || item.fileName}
+    >
+      <button
+        type="button"
+        onClick={() => openChatFile(item)}
+        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-white/58 group-hover:text-emerald-100">
+          {item.kind === 'image' ? <ImageIcon size={15} /> : item.kind === 'audio' ? <Mic size={15} /> : <FileText size={15} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-semibold text-white/78">{item.fileName}</span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-white/38">
+            <ExternalLink size={10} className="shrink-0" />
+            <span className="truncate">{item.subtitle || fileKindLabel(item.kind)}</span>
+            {item.status && (
+              <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/38">
+                {item.status}
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+      {item.saveUrl && (
+        <a
+          href={item.saveUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          download={item.fileName}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white/35 transition-colors hover:bg-white/10 hover:text-white/75"
+          title={ui('保存文件', 'Save file')}
+          aria-label={ui('保存文件', 'Save file')}
+        >
+          <Download size={14} />
+        </a>
+      )}
+    </div>
+  );
 
   if (isFounder) {
     return <FoundersSanctuary t={t} user={user} onBack={onClose} />;
@@ -1588,8 +1772,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           className="fixed inset-0 z-[210] flex flex-col"
           style={{
             background: chatAccentTheme.background,
+            '--color-celestial-saturn': chatAccentTheme.saturn,
+            '--color-celestial-glow': chatAccentTheme.glow,
+            '--color-celestial-nebula': chatAccentTheme.nebula,
+            '--color-celestial-mars': chatAccentTheme.mars,
             willChange: 'opacity, transform',
-          }}
+          } as React.CSSProperties}
         >
       <input
         type="file"
@@ -1696,34 +1884,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
-
-          <div
-            className="hidden h-10 items-center gap-1.5 rounded-2xl border px-2 sm:flex"
-            title={ui('切换聊天界面颜色', 'Switch chat colors')}
-            aria-label={ui('切换聊天界面颜色', 'Switch chat colors')}
-            style={{ background: chatAccentTheme.header, borderColor: chatAccentTheme.panelBorder }}
-          >
-            {CHAT_ACCENT_THEMES.map(theme => (
-              <button
-                key={theme.id}
-                type="button"
-                onClick={() => setChatAccentThemeId(theme.id)}
-                className={`h-6 w-6 rounded-full border transition-all ${
-                  chatAccentTheme.id === theme.id
-                    ? 'scale-110 border-white'
-                    : 'border-white/15 hover:border-white/45'
-                }`}
-                style={{
-                  background: `linear-gradient(135deg, ${theme.saturn}, ${theme.glow})`,
-                  boxShadow: chatAccentTheme.id === theme.id
-                    ? `0 0 0 3px ${theme.saturn}55, 0 0 22px ${theme.saturn}66`
-                    : `0 0 10px ${theme.saturn}24`,
-                }}
-                title={theme.label}
-                aria-label={theme.label}
-              />
-            ))}
           </div>
 
           <VoiceCallButton
@@ -2227,6 +2387,55 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.5, ease: [0.25, 0.1, 0.25, 1], delay: 0.15 }}
               className="w-96 flex-shrink-0 space-y-4 overflow-y-auto custom-scrollbar">
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1], delay: 0.16 }}>
+          <GlassCard className="p-5 rounded-[2rem] space-y-4 border-emerald-400/20" hoverEffect={false}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white/45">
+                  <FolderOpen size={14} />
+                  {ui('对话文件', 'Chat Files')}
+                </h4>
+                <p className="mt-1 truncate text-[11px] text-white/32">{knowledgeStatusText}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void refreshKnowledgeFiles()}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/40 transition-colors hover:bg-white/10 hover:text-white/70"
+                title={ui('刷新文件', 'Refresh files')}
+                aria-label={ui('刷新文件', 'Refresh files')}
+              >
+                {knowledgeLoading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
+              </button>
+            </div>
+
+            <div className="max-h-[22rem] space-y-3 overflow-y-auto pr-1 custom-scrollbar">
+              {chatFileSections.pending.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{ui('本次附件', 'Current Attachments')}</div>
+                  {chatFileSections.pending.map(renderChatFileRow)}
+                </div>
+              )}
+              {chatFileSections.generated.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{ui('生成文件', 'Generated Files')}</div>
+                  {chatFileSections.generated.map(renderChatFileRow)}
+                </div>
+              )}
+              {chatFileSections.knowledge.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{ui('对话资料', 'Knowledge Files')}</div>
+                  {chatFileSections.knowledge.map(renderChatFileRow)}
+                </div>
+              )}
+              {chatFileSections.pending.length === 0 && chatFileSections.generated.length === 0 && chatFileSections.knowledge.length === 0 && (
+                <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-3 py-4 text-center text-xs text-white/35">
+                  {ui('暂无可操作文件', 'No files available yet')}
+                </div>
+              )}
+            </div>
+          </GlassCard>
+          </motion.div>
+
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1], delay: 0.2 }}>
           <GlassCard className="p-6 rounded-[2.5rem] space-y-4 border-celestial-saturn/20" hoverEffect={false}>
             <div className="flex items-center justify-between">

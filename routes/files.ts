@@ -276,7 +276,11 @@ function isInsideRoot(filePath: string, root: string): boolean {
 }
 
 function resolveGeneratedDownloadPath(value: unknown): string {
-  const raw = String(value || '').trim();
+  const rawInput = String(value || '').trim();
+  const normalizedRawInput = rawInput.replace(/\\/g, '/');
+  const raw = normalizedRawInput.startsWith('/lumi_output/')
+    ? path.join(process.cwd(), normalizedRawInput.replace(/^\/+/, ''))
+    : rawInput;
   if (!raw) {
     const err: any = new Error('path is required');
     err.status = 400;
@@ -309,6 +313,46 @@ function resolveGeneratedDownloadPath(value: unknown): string {
     throw err;
   }
   return resolved;
+}
+
+function resolveKnowledgeFilePath(req: Request, idValue: unknown): string {
+  const scope = getFileScope(req);
+  const safeName = path.basename(String(idValue || '').trim());
+  if (!safeName) {
+    const err: any = new Error('id is required');
+    err.status = 400;
+    throw err;
+  }
+
+  const filePath = path.resolve(path.join(scope.dir, safeName));
+  const scopeDir = path.resolve(scope.dir);
+  if (!isInsideRoot(filePath, scopeDir)) {
+    const err: any = new Error('File path is outside allowed directories');
+    err.status = 403;
+    throw err;
+  }
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    const err: any = new Error('File not found');
+    err.status = 404;
+    throw err;
+  }
+  return fs.realpathSync.native(filePath);
+}
+
+function openPathWithDefaultApp(filePath: string): void {
+  let proc;
+  if (process.platform === 'win32') {
+    proc = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'Start-Process -LiteralPath $args[0]', filePath],
+      { detached: true, stdio: 'ignore', windowsHide: true },
+    );
+  } else if (process.platform === 'darwin') {
+    proc = spawn('open', [filePath], { detached: true, stdio: 'ignore' });
+  } else {
+    proc = spawn('xdg-open', [filePath], { detached: true, stdio: 'ignore' });
+  }
+  proc.unref();
 }
 
 function visionModelFor(provider: VisionProvider): string {
@@ -1175,6 +1219,21 @@ router.get('/files/generated', requireAuth, (req: Request, res: Response) => {
     const disposition = inline ? 'inline' : 'attachment';
     res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     fs.createReadStream(filePath).pipe(res);
+  } catch (err: any) {
+    sendRouteError(res, err);
+  }
+});
+
+// Open a knowledge/generated file with the OS default application.
+router.post('/files/open', requireAuth, (req: Request, res: Response) => {
+  try {
+    const id = req.body?.id || req.query.id;
+    const rawPath = req.body?.path || req.query.path;
+    const filePath = id
+      ? resolveKnowledgeFilePath(req, id)
+      : resolveGeneratedDownloadPath(rawPath);
+    openPathWithDefaultApp(filePath);
+    res.json({ success: true, path: filePath });
   } catch (err: any) {
     sendRouteError(res, err);
   }
