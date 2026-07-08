@@ -152,28 +152,97 @@ function getPrimaryUserText(messages: NormalizedMessage[]): string {
     .join(' ');
 }
 
-function buildIterationLimitSummary(executionLog: ToolExecutionRecord[]): string {
-  if (executionLog.length === 0) return 'Maximum tool call iterations reached.';
+const CONFIRMATION_REQUIRED_RE =
+  /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i;
+
+function isConfirmationBlocked(record: ToolExecutionRecord): boolean {
+  return Boolean(record.error && CONFIRMATION_REQUIRED_RE.test(record.error));
+}
+
+function humanToolLabel(name: string): string {
+  const lower = String(name || '').toLowerCase();
+  if (lower.includes('database')) return '数据库查询';
+  if (lower.includes('filesystem') || lower.includes('file')) return '文件系统访问';
+  if (lower.includes('desktop') || lower.includes('computer')) return '桌面控制';
+  if (lower.includes('browser') || lower.includes('web')) return '网页/浏览器操作';
+  if (lower.includes('message') || lower.includes('wechat') || lower.includes('feishu')) return '消息操作';
+  if (lower.includes('install') || lower.includes('skill')) return '安装/技能操作';
+  if (lower.includes('sleep')) return '状态检查';
+  return '受控工具操作';
+}
+
+function buildConfirmationBlockedSummary(executionLog: ToolExecutionRecord[], task: string): string {
+  const isZh = /[\u3400-\u9fff]/.test(task);
+  const blocked = executionLog.filter(isConfirmationBlocked);
+  const successful = executionLog.filter(record => !record.error);
+  const labels = Array.from(new Set(blocked.map(record => humanToolLabel(record.name)))).slice(0, 4);
+
+  if (!isZh) {
+    return [
+      'I started checking this, but I hit a confirmation boundary before I could finish.',
+      labels.length ? `Blocked step: ${labels.join(', ')}.` : '',
+      successful.length ? `Already checked: ${successful.map(record => humanToolLabel(record.name)).slice(0, 3).join(', ')}.` : '',
+      'I have not completed the requested action yet. Please confirm the gated action in the client, or tell me to continue with explicit approval.',
+    ].filter(Boolean).join('\n');
+  }
+
+  return [
+    '我开始处理了，但中途卡在需要你确认的安全边界上，还没有完成这件事。',
+    labels.length ? `卡住的步骤：${labels.join('、')}。` : '',
+    successful.length ? `已经检查过：${successful.map(record => humanToolLabel(record.name)).slice(0, 3).join('、')}。` : '',
+    '下一步需要你在客户端确认这个受控操作，或者明确告诉我继续授权；在确认前我不会把它说成已经完成。',
+  ].filter(Boolean).join('\n');
+}
+
+function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: string = ''): string {
+  if (executionLog.some(isConfirmationBlocked)) {
+    return buildConfirmationBlockedSummary(executionLog, task);
+  }
+
+  const isZh = /[\u3400-\u9fff]/.test(task);
+  if (executionLog.length === 0) {
+    return isZh
+      ? '这轮处理没有拿到可执行的工具结果，所以我还不能确认已经完成。请再说一次你要我继续处理的目标。'
+      : 'The tool loop ended before any tool result was available, so I cannot confirm completion yet. Please restate what you want me to continue.';
+  }
 
   const artifacts = collectExistingArtifacts(executionLog).slice(0, 8);
 
-  const recentSteps = executionLog.slice(-8).map((record, index) => {
-    const status = record.error ? `failed: ${record.error}` : 'done';
-    return `${index + 1}. ${record.name} - ${status}`;
+  const recentSteps = executionLog.slice(-6).map((record, index) => {
+    const status = record.error
+      ? (isZh ? '未成功' : 'not completed')
+      : (isZh ? '已执行' : 'done');
+    return `${index + 1}. ${humanToolLabel(record.name)} - ${status}`;
   });
 
+  if (isZh) {
+    return [
+      '这轮工具处理次数到上限了，我还没来得及整理成最终结论。',
+      '',
+      '这轮进展：',
+      ...recentSteps,
+      artifacts.length > 0 ? '' : '',
+      artifacts.length > 0 ? '已确认的产物：' : '',
+      ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
+      '',
+      artifacts.length > 0
+        ? '你可以直接让我继续，我会从这些已确认结果接着处理。'
+        : '这轮没有检测到已生成的可验证文件。你可以让我继续当前请求，或重新指定要处理的文件/路径。',
+    ].filter(Boolean).join('\n');
+  }
+
   return [
-    'Maximum tool call iterations reached before Lumi could write the final answer.',
+    'The tool loop reached its limit before Lumi could write the final answer.',
     '',
-    'What completed:',
+    'Progress:',
     ...recentSteps,
     artifacts.length > 0 ? '' : '',
     artifacts.length > 0 ? 'Verified generated files:' : '',
-    ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)}, from ${artifact.sourceTool})`),
+    ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
     '',
     artifacts.length > 0
       ? 'The task can be continued from these verified files/results instead of starting over.'
-      : 'No verified generated file was detected in this tool run. Continue from the current user request or ask for the current file/path.',
+      : 'No verified generated file was detected in this tool run. Continue from the current request, or ask for the current file/path.',
   ].filter(Boolean).join('\n');
 }
 
@@ -529,6 +598,15 @@ export async function runWithTools(
         toolCallId: tc.id,
         name: tc.name,
       });
+
+      if (isConfirmationBlocked(record)) {
+        recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
+        return {
+          text: buildConfirmationBlockedSummary(executionLog, getPrimaryUserText(messages)),
+          toolCalls: executionLog,
+          usageRecords,
+        };
+      }
     }
 
     const readyWorkProduct = buildReadyWorkProductSummary(messages, executionLog);
@@ -552,7 +630,7 @@ export async function runWithTools(
     };
   }
   return {
-    text: buildIterationLimitSummary(executionLog),
+    text: buildIterationLimitSummary(executionLog, getPrimaryUserText(messages)),
     toolCalls: executionLog,
     usageRecords,
   };
