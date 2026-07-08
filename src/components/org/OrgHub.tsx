@@ -138,7 +138,7 @@ export function OrgHub() {
   };
 
   return (
-    <div className="lumi-surface flex h-full overflow-hidden rounded-none border-0 bg-black/20">
+    <div className="lumi-work-surface lumi-surface flex h-full overflow-hidden rounded-none border-0 bg-black/20">
       {/* Sidebar */}
       <div className="flex w-60 shrink-0 flex-col border-r border-white/[0.08] bg-black/25">
         <div className="space-y-3 border-b border-white/[0.08] p-4">

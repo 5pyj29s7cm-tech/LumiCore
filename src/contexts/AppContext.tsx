@@ -58,12 +58,23 @@ interface ToolOverride {
 }
 
 export type OperationMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
+export type AppearanceMode = 'system' | 'light' | 'dark';
 
 function normalizeOperationMode(mode: unknown): OperationMode {
   if (mode === 'chat' || mode === 'assistant' || mode === 'autonomous' || mode === 'meeting') return mode;
   if (mode === 'music') return 'assistant';
   if (mode === 'desktop_control' || mode === 'terminal') return 'assistant';
   return 'assistant';
+}
+
+function normalizeAppearanceMode(mode: unknown): AppearanceMode {
+  if (mode === 'system' || mode === 'light' || mode === 'dark') return mode;
+  return 'dark';
+}
+
+function getSystemAppearanceMode(): 'light' | 'dark' {
+  if (typeof window === 'undefined' || !window.matchMedia) return 'dark';
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 export interface OrgConnection {
@@ -107,6 +118,10 @@ interface AppContextType {
   // Operation mode
   operationMode: OperationMode;
   setOperationMode: (mode: OperationMode) => void;
+  // Appearance
+  appearanceMode: AppearanceMode;
+  resolvedAppearanceMode: 'light' | 'dark';
+  setAppearanceMode: (mode: AppearanceMode) => void;
   // Core
   login: () => Promise<void>;
   logout: () => Promise<void>;
@@ -261,6 +276,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [operationMode, setOperationModeState] = useState<OperationMode>(() => {
     try { return normalizeOperationMode(localStorage.getItem('lumi_operation_mode')); } catch { return 'assistant'; }
   });
+  const [appearanceMode, setAppearanceModeState] = useState<AppearanceMode>(() => {
+    try { return normalizeAppearanceMode(localStorage.getItem('lumi_appearance_mode')); } catch { return 'dark'; }
+  });
+  const [systemAppearanceMode, setSystemAppearanceMode] = useState<'light' | 'dark'>(() => getSystemAppearanceMode());
+  const resolvedAppearanceMode = appearanceMode === 'system' ? systemAppearanceMode : appearanceMode;
 
   const setOperationMode = async (mode: OperationMode) => {
     const normalizedMode = normalizeOperationMode(mode);
@@ -275,6 +295,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     } catch {}
   };
+
+  const setAppearanceMode = (mode: AppearanceMode) => {
+    const normalizedMode = normalizeAppearanceMode(mode);
+    setAppearanceModeState(normalizedMode);
+    localStorage.setItem('lumi_appearance_mode', normalizedMode);
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const syncSystemAppearance = () => setSystemAppearanceMode(media.matches ? 'light' : 'dark');
+    syncSystemAppearance();
+    media.addEventListener?.('change', syncSystemAppearance);
+    return () => media.removeEventListener?.('change', syncSystemAppearance);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-mode', resolvedAppearanceMode);
+    document.documentElement.style.colorScheme = resolvedAppearanceMode;
+  }, [resolvedAppearanceMode]);
 
   const updateAIConfig = (newConfig: Partial<AIConfig>) => {
     setAiConfig(prev => {
@@ -627,6 +667,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       switchDomain,
       operationMode,
       setOperationMode,
+      appearanceMode,
+      resolvedAppearanceMode,
+      setAppearanceMode,
       login,
       logout,
       createAgent,

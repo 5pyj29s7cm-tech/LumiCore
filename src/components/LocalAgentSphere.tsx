@@ -4,6 +4,31 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Mic, MicOff, Sparkles, Volume2, Box, User as UserIcon, Pause, Wifi, WifiOff, Clock } from 'lucide-react';
 import { Button } from './ui/button';
 
+const DAYLIGHT_CORE_PALETTE = {
+  ink: '#25313a',
+  mineralBlue: '#2d5f88',
+  warmCopper: '#b7792d',
+  deepCopper: '#8f5a24',
+  jadeInk: '#326f63',
+};
+
+function daylightParticleColor(color: string) {
+  if (color === '#ffffff') return DAYLIGHT_CORE_PALETTE.mineralBlue;
+  if (color === '#ff4d4d') return DAYLIGHT_CORE_PALETTE.warmCopper;
+  if (color === '#ffcc00') return DAYLIGHT_CORE_PALETTE.deepCopper;
+  if (color.startsWith('hsl')) return DAYLIGHT_CORE_PALETTE.jadeInk;
+  return color;
+}
+
+function daylightVoidColor(x: number, y: number, z: number) {
+  const phase = Math.sin((x + y + z) * 0.045);
+  return phase > 0.34
+    ? DAYLIGHT_CORE_PALETTE.mineralBlue
+    : phase < -0.34
+      ? DAYLIGHT_CORE_PALETTE.warmCopper
+      : DAYLIGHT_CORE_PALETTE.ink;
+}
+
 export function LocalAgentSphere({
   t,
   onMessage,
@@ -49,13 +74,21 @@ export function LocalAgentSphere({
   useEffect(() => {
     if (reaction) {
       setInteractionPulse(p => p + 1);
-      setReactionColor(
-        reaction === 'failed' ? 'rgba(255,60,60,0.25)' :
-        reaction === 'jump' ? 'rgba(80,255,120,0.2)' :
-        'rgba(255,200,80,0.2)'
-      );
+      if (isLightMode) {
+        setReactionColor(
+          reaction === 'failed' ? 'rgba(143,90,36,0.22)' :
+          reaction === 'jump' ? 'rgba(50,111,99,0.20)' :
+          'rgba(183,121,45,0.18)'
+        );
+      } else {
+        setReactionColor(
+          reaction === 'failed' ? 'rgba(255,60,60,0.25)' :
+          reaction === 'jump' ? 'rgba(80,255,120,0.2)' :
+          'rgba(255,200,80,0.2)'
+        );
+      }
     }
-  }, [reaction]);
+  }, [isLightMode, reaction]);
 
   const [spatialMode, setSpatialMode] = useState<'geometric' | 'humanoid'>('geometric');
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -167,27 +200,38 @@ export function LocalAgentSphere({
       const perspective = 600 / (600 - pz);
       const x = this.x * perspective + cx;
       const y = this.y * perspective + cy;
-      const size = this.size * perspective;
       const lm = lightModeRef.current;
+      const size = this.size * perspective;
+      const drawSize = lm ? size * 1.16 : size;
       if (this.color === '#000000') {
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = lm ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 0.5;
-        ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.stroke();
+        if (lm) {
+          const c = daylightVoidColor(this.baseX, this.baseY, this.baseZ);
+          ctx.fillStyle = c;
+          ctx.shadowColor = c;
+          ctx.shadowBlur = 2.5;
+          ctx.globalAlpha = Math.max(0.26, perspective - 0.30);
+          ctx.beginPath(); ctx.arc(x, y, drawSize, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+        } else {
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath(); ctx.arc(x, y, drawSize, 0, Math.PI * 2); ctx.stroke();
+        }
       } else {
         let c = this.color;
         if (lm) {
-          if (c === '#ffffff') c = '#1a2a1a';
-          else if (c === '#ff4d4d') c = '#8b1a1a';
-          else if (c === '#ffcc00') c = '#1a8040';
-          else if (c.startsWith('hsl')) c = '#142c1c';
+          c = daylightParticleColor(c);
+          ctx.shadowColor = c;
+          ctx.shadowBlur = 2.5;
         }
         ctx.fillStyle = c;
-        ctx.globalAlpha = Math.max(0.1, perspective - 0.4);
-        ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = Math.max(lm ? 0.30 : 0.1, perspective - (lm ? 0.30 : 0.4));
+        ctx.beginPath(); ctx.arc(x, y, drawSize, 0, Math.PI * 2); ctx.fill();
+        if (lm) ctx.shadowBlur = 0;
         if (isDispersed && this.type === 'signal') {
           ctx.globalAlpha = Math.max(0.03, (perspective - 0.4) * 0.3);
-          ctx.beginPath(); ctx.arc(x, y, size * 2.5, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(x, y, drawSize * 2.5, 0, Math.PI * 2); ctx.fill();
         }
       }
     }
@@ -202,11 +246,21 @@ export function LocalAgentSphere({
       const size = this.size * perspective * scale;
       if (size < 0.3) return;
       if (this.color === '#000000') {
-        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-        ctx.lineWidth = 0.5;
-        ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.stroke();
+        if (lightModeRef.current) {
+          const c = daylightVoidColor(this.baseX, this.baseY, this.baseZ);
+          ctx.fillStyle = c;
+          ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.stroke();
+        }
       } else {
-        ctx.fillStyle = this.color;
+        let c = this.color;
+        if (lightModeRef.current) {
+          c = daylightParticleColor(c);
+        }
+        ctx.fillStyle = c;
         ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
       }
     }
@@ -257,9 +311,15 @@ export function LocalAgentSphere({
         if (facePresentRef.current) {
           const pulse = 0.06 + Math.sin(time * 0.003) * 0.02;
           const glow = mainCtx.createRadialGradient(centerX, centerY, 100, centerX, centerY, 260);
-          glow.addColorStop(0, `rgba(255,200,100,${pulse.toFixed(3)})`);
-          glow.addColorStop(0.5, `rgba(255,180,60,${(pulse * 0.5).toFixed(3)})`);
-          glow.addColorStop(1, 'rgba(255,150,30,0)');
+          if (lightModeRef.current) {
+            glow.addColorStop(0, `rgba(45,95,136,${(pulse * 0.58).toFixed(3)})`);
+            glow.addColorStop(0.5, `rgba(183,121,45,${(pulse * 0.28).toFixed(3)})`);
+            glow.addColorStop(1, 'rgba(45,95,136,0)');
+          } else {
+            glow.addColorStop(0, `rgba(255,200,100,${pulse.toFixed(3)})`);
+            glow.addColorStop(0.5, `rgba(255,180,60,${(pulse * 0.5).toFixed(3)})`);
+            glow.addColorStop(1, 'rgba(255,150,30,0)');
+          }
           mainCtx.fillStyle = glow;
           mainCtx.fillRect(centerX - 260, centerY - 260, 520, 520);
         }

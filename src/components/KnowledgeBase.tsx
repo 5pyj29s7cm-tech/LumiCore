@@ -461,6 +461,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          data-theme-scope="dark"
           initial={{ clipPath: 'circle(0% at 50% 95%)', opacity: 0 }}
           animate={{ clipPath: 'circle(150% at 50% 95%)', opacity: 1 }}
           exit={{ clipPath: 'circle(0% at 50% 95%)', opacity: 0 }}

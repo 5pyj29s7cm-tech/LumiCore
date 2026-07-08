@@ -11,6 +11,7 @@ import '../index.css';
 import { DesktopUI } from '../components/DesktopUI';
 import { LoginRequired } from '../core/components/Auth';
 import { useAppShell } from './useAppShell';
+import { useApp } from '../contexts/AppContext';
 
 installApiBridge();
 
@@ -27,6 +28,7 @@ const SkillHall = lazy(() => import('../components/SkillHall').then(m => ({ defa
 
 export function DesktopApp() {
   const shell = useAppShell();
+  const { resolvedAppearanceMode } = useApp();
   const [activeTab, setActiveTab] = useState('home');
   const [selectedAgent, setSelectedAgent] = useState<any>(null);
   const [showSetup, setShowSetup] = useState(() => localStorage.getItem(SETUP_DONE_KEY) !== '1');
@@ -65,7 +67,7 @@ export function DesktopApp() {
   return (
     <div className="h-screen w-full bg-transparent overflow-hidden">
       <ProactiveNotifications />
-      <Toaster position="top-right" theme="dark" />
+      <Toaster position="top-right" theme={resolvedAppearanceMode} />
       {showSetup ? (
         <div className="h-full w-full flex items-center justify-center bg-black/80 p-8">
           <Suspense fallback={null}>

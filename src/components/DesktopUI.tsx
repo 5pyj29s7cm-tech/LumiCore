@@ -1831,7 +1831,7 @@ export function DesktopUI({
   const personalScale = useTransform(cameraZ, [0, -1000], [1, 0.4]);
   const personalOpacity = useTransform(cameraZ, [0, -400], [1, 0]);
   const { isTauri } = usePlatform();
-  const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, aiConfig } = useApp();
+  const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, aiConfig, resolvedAppearanceMode } = useApp();
 
   const [openWindows, setOpenWindows] = useState<string[]>(activeTab !== 'home' && activeTab !== 'knowledge' ? [activeTab] : []);
   const [minimizedWindows, setMinimizedWindows] = useState<string[]>([]);
@@ -1909,9 +1909,6 @@ export function DesktopUI({
     const nextTheme = themeForMode[operationMode];
     if (nextTheme && theme !== nextTheme) setTheme(nextTheme);
   }, [operationMode, theme]);
-  useEffect(() => {
-    document.documentElement.setAttribute('data-mode', 'dark');
-  }, []);
   const [clientPermissions, setClientPermissions] = useState<ClientPermissionSnapshot>({});
   const [clientRuntime, setClientRuntime] = useState<ClientRuntimeSnapshot>({});
   const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
@@ -4366,17 +4363,20 @@ export function DesktopUI({
 
   return (
     <div
-      data-mode="dark"
+      data-theme-scope="shell"
+      data-appearance={resolvedAppearanceMode}
+      data-view-mode={viewMode}
       onContextMenu={handleShellContextMenu}
-      className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${
+      className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${resolvedAppearanceMode === 'light' ? 'lumi-light-shell' : 'lumi-dark-shell'} ${
       isWallpaperMode ? 'bg-transparent pointer-events-none' :
+      resolvedAppearanceMode === 'light' ? 'bg-[#e9efe6]' :
       theme === 'celestial' ? 'bg-[#010103]' :
       theme === 'nebula' ? 'bg-[#050010]' :
       theme === 'cyber' ? 'bg-[#000808]' :
       'bg-black'
     }`}
       style={{
-        ...(wallpaper === 'custom' && wallpaperUrl ? {
+        ...(wallpaper === 'custom' && wallpaperUrl && !isWallpaperMode ? {
           backgroundImage: `url(${wallpaperUrl})`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
@@ -4398,7 +4398,7 @@ export function DesktopUI({
         toggleWindow={toggleWindow}
       />
       {/* CRT Scanline / Noise Overlay */}
-      <div className="fixed inset-0 z-[1000] pointer-events-none opacity-[0.03] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] select-none" />
+      <div className={`fixed inset-0 z-[1000] pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] select-none transition-opacity duration-500 ${isWallpaperMode ? 'opacity-0' : 'opacity-[0.03]'}`} />
       
       {/* Hardcore Boot Screen Overlay */}
       <AnimatePresence>
@@ -4409,7 +4409,9 @@ export function DesktopUI({
 
       {/* Immersive Environment Layer (Wallpaper OS Foundation) */}
       <div 
-        className={`fixed inset-0 z-0 overflow-hidden transition-all duration-1000 ${isWallpaperMode ? 'bg-transparent' : 'bg-[#010103]'}`}
+        className={`fixed inset-0 z-0 overflow-hidden transition-all duration-1000 ${
+          isWallpaperMode ? 'bg-transparent opacity-0' : resolvedAppearanceMode === 'light' ? 'bg-[#e9efe6] opacity-100' : 'bg-[#010103] opacity-100'
+        }`}
       >
         <div className="absolute inset-0">
           {/* Warp Flash Overlay */}
@@ -4446,9 +4448,15 @@ export function DesktopUI({
                     transition={{ duration: 1 }}
                     className="absolute inset-0"
                   >
-                    <div className="star-field opacity-20" />
-                    <div className="undulating-bg opacity-30 scale-125" />
-                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black/80" />
+                    {resolvedAppearanceMode === 'light' ? (
+                      <DayInkLandscape variant="celestial" />
+                    ) : (
+                      <>
+                        <div className="star-field opacity-20" />
+                        <div className="undulating-bg opacity-30 scale-125" />
+                        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black/80" />
+                      </>
+                    )}
                   </motion.div>
                 )}
                 {theme === 'nebula' && (
@@ -4458,9 +4466,15 @@ export function DesktopUI({
                     transition={{ duration: 1 }}
                     className="absolute inset-0"
                   >
-                    <div className="star-field opacity-10" />
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.1)_0%,transparent_70%)]" />
-                    <div className="absolute inset-0 bg-gradient-to-b from-black/0 to-black/60" />
+                    {resolvedAppearanceMode === 'light' ? (
+                      <DayInkLandscape variant="nebula" />
+                    ) : (
+                      <>
+                        <div className="star-field opacity-10" />
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.1)_0%,transparent_70%)]" />
+                        <div className="absolute inset-0 bg-gradient-to-b from-black/0 to-black/60" />
+                      </>
+                    )}
                   </motion.div>
                 )}
                 {theme === 'cyber' && (
@@ -4470,8 +4484,14 @@ export function DesktopUI({
                     transition={{ duration: 1 }}
                     className="absolute inset-0"
                   >
-                    <div className="absolute inset-0 bg-[linear-gradient(rgba(16,185,129,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(16,185,129,0.05)_1px,transparent_1px)] bg-[size:40px_40px]" />
-                    <div className="absolute inset-0 bg-gradient-to-b from-black/0 to-black/80" />
+                    {resolvedAppearanceMode === 'light' ? (
+                      <DayInkLandscape variant="cyber" />
+                    ) : (
+                      <>
+                        <div className="absolute inset-0 bg-[linear-gradient(rgba(16,185,129,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(16,185,129,0.05)_1px,transparent_1px)] bg-[size:40px_40px]" />
+                        <div className="absolute inset-0 bg-gradient-to-b from-black/0 to-black/80" />
+                      </>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -4480,7 +4500,7 @@ export function DesktopUI({
         </div>
 
         {/* Hyper-tunnel edges */}
-        <div className="absolute inset-0 shadow-[inset_0_0_300px_rgba(0,0,0,1)] pointer-events-none" />
+        <div className={`absolute inset-0 pointer-events-none ${resolvedAppearanceMode === 'light' ? 'shadow-[inset_0_0_190px_rgba(72,88,74,0.20)]' : 'shadow-[inset_0_0_300px_rgba(0,0,0,1)]'}`} />
         
         {/* Brightness Overlay */}
         <div 
@@ -4493,11 +4513,12 @@ export function DesktopUI({
       <AnimatePresence>
         {viewMode === 'world' && (
           <motion.div
+            data-theme-scope="dark"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 1.2 }}
-            className="fixed inset-0 z-0"
+            className="lumi-ink-view fixed inset-0 z-0 overflow-hidden"
           >
             <Suspense fallback={null}><InkWorldLazy theme={theme as 'celestial' | 'nebula' | 'cyber'} syncRate={syncRate} /></Suspense>
           </motion.div>
@@ -4508,17 +4529,18 @@ export function DesktopUI({
       <AnimatePresence>
         {viewMode === 'world' && (
           <motion.div
+            data-theme-scope="dark"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-20 flex items-center justify-center pointer-events-none"
+            className="lumi-ink-hud fixed inset-0 z-20 flex items-center justify-center pointer-events-none"
           >
             <div className="relative z-10 text-center space-y-8 pointer-events-auto">
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
               >
-                <h2 className="text-6xl font-black text-white/90 tracking-[1.2rem] uppercase drop-shadow-[0_0_30px_rgba(255,255,255,0.1)]">{t.nexusTitle || 'Nexus'}</h2>
+                <h2 className="lumi-ink-title text-6xl font-black text-white/90 tracking-[1.2rem] uppercase drop-shadow-[0_0_30px_rgba(255,255,255,0.1)]">{t.nexusTitle || 'Nexus'}</h2>
                 <div className="mt-4 flex items-center justify-center gap-4">
                   <div className="h-px w-12 bg-gradient-to-r from-transparent to-celestial-saturn/50" />
                   <p className="text-xs text-celestial-saturn font-black tracking-[0.8em] uppercase">{t.distributedOSCore || 'Distributed OS Core'}</p>
@@ -4528,7 +4550,7 @@ export function DesktopUI({
 
               <motion.button
                 onClick={() => setViewMode('personal')}
-                className="group px-10 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-xs font-black text-white/60 tracking-[0.4em] uppercase transition-all backdrop-blur-2xl hover:text-white hover:border-white/20"
+                className="lumi-ink-return-button group px-10 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-xs font-black text-white/60 tracking-[0.4em] uppercase transition-all backdrop-blur-2xl hover:text-white hover:border-white/20"
               >
                 {t.focusPersonalTerritory || 'Focus Personal Territory'}
               </motion.button>
@@ -4546,7 +4568,10 @@ export function DesktopUI({
 
       <div className="fixed inset-0 z-[100] pointer-events-none">
         {/* Top Status Bar */}
-        <div className={`absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+        <div
+          data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
+          className={`absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+        >
           <div className="flex items-center gap-6 flex-1">
             <button data-lumi-target="home" onClick={() => toggleWindow('home')} className="flex items-center gap-2 group transition-all">
                <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-celestial-mars to-celestial-saturn flex items-center justify-center p-1 group-hover:rotate-12 transition-transform shadow-lg shadow-celestial-saturn/20">
@@ -4683,7 +4708,11 @@ export function DesktopUI({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -18, scale: 0.98 }}
                 transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-                className="fixed right-6 top-12 z-[102] h-[min(560px,calc(100vh-4.5rem))] w-[430px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 shadow-2xl shadow-black/50 pointer-events-auto"
+                className={`fixed right-6 top-12 z-[102] h-[min(560px,calc(100vh-4.5rem))] w-[430px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border shadow-2xl pointer-events-auto ${
+                  resolvedAppearanceMode === 'light'
+                    ? 'border-emerald-900/10 bg-white/95 shadow-slate-900/10'
+                    : 'border-white/10 bg-zinc-950/95 shadow-black/50'
+                }`}
                 onClick={(e) => e.stopPropagation()}
               >
                 <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
@@ -4712,7 +4741,10 @@ export function DesktopUI({
         </AnimatePresence>
 
         {/* Bottom Taskbar / Dock */}
-        <div className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}>
+        <div
+          data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
+          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}
+        >
           <button 
             onClick={() => setViewMode(viewMode === 'personal' ? 'world' : 'personal')}
             className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
@@ -4822,9 +4854,9 @@ export function DesktopUI({
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 2, ease: "easeOut" }}
-          className="relative pointer-events-auto scale-75 opacity-90 transition-all"
+          className="relative pointer-events-auto scale-[0.82] opacity-95 transition-all"
         >
-          <div className="relative flex flex-col items-center">
+          <div className="lumi-core-shell relative flex flex-col items-center">
             {selectedPet ? (
               <div className="relative group flex flex-col items-center gap-3">
                 <button
@@ -4906,7 +4938,7 @@ export function DesktopUI({
                 onMessage={() => {}}
                 facePresent={faceRecognition.result.facePresent}
                 gesturesDisabled={false}
-                isLightMode={false}
+                isLightMode={resolvedAppearanceMode === 'light'}
               />
               <div className="mt-2">
                 <MeetingModeButton
@@ -5111,10 +5143,13 @@ export function DesktopUI({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
-            className="fixed inset-0 z-[100000] pointer-events-auto overflow-hidden bg-[#020711] text-white"
+            className={`fixed inset-0 z-[100000] pointer-events-auto overflow-hidden ${
+              resolvedAppearanceMode === 'light' ? 'bg-[#f4f7f2] text-slate-900' : 'bg-[#020711] text-white'
+            }`}
             style={{
-              background:
-                'radial-gradient(circle at 16% 12%, rgba(34,211,238,0.22) 0%, transparent 30%), radial-gradient(circle at 82% 18%, rgba(56,189,248,0.13) 0%, transparent 32%), linear-gradient(145deg, #020711 0%, #03111c 46%, #010203 100%)',
+              background: resolvedAppearanceMode === 'light'
+                ? 'radial-gradient(circle at 16% 12%, rgba(16,185,129,0.10) 0%, transparent 30%), radial-gradient(circle at 82% 18%, rgba(59,130,246,0.08) 0%, transparent 32%), linear-gradient(145deg, #f8fbf5 0%, #eef5ef 46%, #e8eef1 100%)'
+                : 'radial-gradient(circle at 16% 12%, rgba(34,211,238,0.22) 0%, transparent 30%), radial-gradient(circle at 82% 18%, rgba(56,189,248,0.13) 0%, transparent 32%), linear-gradient(145deg, #020711 0%, #03111c 46%, #010203 100%)',
             }}
           >
             <GlassCard
@@ -5275,7 +5310,9 @@ export function DesktopUI({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[99990] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm"
+            className={`fixed inset-0 z-[99990] flex items-center justify-center px-4 backdrop-blur-sm ${
+              resolvedAppearanceMode === 'light' ? 'bg-slate-100/70' : 'bg-black/55'
+            }`}
             onClick={() => setPendingOperationMode(null)}
           >
             <motion.div
@@ -5283,7 +5320,11 @@ export function DesktopUI({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 16, scale: 0.96 }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-md rounded-2xl border border-cyan-400/20 bg-zinc-950/95 p-5 shadow-2xl"
+              className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${
+                resolvedAppearanceMode === 'light'
+                  ? 'border-emerald-900/10 bg-white/95 text-slate-900 shadow-slate-900/10'
+                  : 'border-cyan-400/20 bg-zinc-950/95 text-white'
+              }`}
             >
               <div className="flex items-start gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-400/10 text-cyan-300">
@@ -5458,7 +5499,7 @@ export function DesktopUI({
                   {windowId === 'kernel' ? (
                     <KernelMonitorApp t={t} />
                   ) : windowId === 'settings' ? (
-                    <Settings t={t} lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} activeSection={settingsSection} onSectionChange={setSettingsSection} />
+                    <Settings t={t} lang={lang} setLang={setLang} activeSection={settingsSection} onSectionChange={setSettingsSection} />
                   ) : windowId === 'music' ? (
                     <div className="flex flex-col items-center justify-center h-full text-center space-y-8 animate-in zoom-in-95 duration-500">
                       <div className="relative">
@@ -5578,7 +5619,9 @@ export function DesktopUI({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100010] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm"
+              className={`fixed inset-0 z-[100010] flex items-center justify-center px-4 backdrop-blur-sm ${
+                resolvedAppearanceMode === 'light' ? 'bg-slate-100/70' : 'bg-black/55'
+              }`}
               onClick={() => setPendingOperationMode(null)}
             >
               <motion.div
@@ -5586,7 +5629,11 @@ export function DesktopUI({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 16, scale: 0.96 }}
                 onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-md rounded-2xl border border-cyan-400/20 bg-zinc-950/95 p-5 shadow-2xl"
+                className={`w-full max-w-md rounded-2xl border p-5 shadow-2xl ${
+                  resolvedAppearanceMode === 'light'
+                    ? 'border-emerald-900/10 bg-white/95 text-slate-900 shadow-slate-900/10'
+                    : 'border-cyan-400/20 bg-zinc-950/95 text-white'
+                }`}
               >
                 <div className="flex items-start gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-400/10 text-cyan-300">
@@ -5994,6 +6041,20 @@ function MeetingModeButton({
   );
 }
 
+function DayInkLandscape({ variant }: { variant: 'celestial' | 'nebula' | 'cyber' }) {
+  return (
+    <div className="lumi-day-landscape" data-day-variant={variant} aria-hidden="true">
+      <div className="lumi-day-paper" />
+      <div className="lumi-day-mist lumi-day-mist-back" />
+      <div className="lumi-day-mountains lumi-day-mountains-back" />
+      <div className="lumi-day-mountains lumi-day-mountains-mid" />
+      <div className="lumi-day-ground" />
+      <div className="lumi-day-ink-lines" />
+      <div className="lumi-day-vignette" />
+    </div>
+  );
+}
+
 function ThemeWidget({
   t,
   lang,
@@ -6046,7 +6107,7 @@ function ThemeWidget({
   ];
 
   return (
-    <GlassCard className="rounded-[1.6rem] border-white/5 bg-black/20 p-3">
+    <GlassCard className="lumi-mode-panel rounded-[1.6rem] border-white/5 bg-black/20 p-3">
       <div className="grid grid-cols-3 gap-3">
         {themeOptions.map((option) => {
           const active = theme === option.id && operationMode === option.mode;
@@ -6062,7 +6123,7 @@ function ThemeWidget({
                 onModeChange(option.mode);
                 sounds.playPulse();
               }}
-              className={`group relative min-h-[134px] overflow-hidden rounded-[1.25rem] border p-3 text-left transition-all ${
+              className={`lumi-mode-card group relative min-h-[134px] overflow-hidden rounded-[1.25rem] border p-3 text-left transition-all ${
                 active
                   ? 'border-white/20 bg-white/[0.10] shadow-[0_18px_45px_rgba(0,0,0,0.28)]'
                   : visualActive
@@ -6070,10 +6131,10 @@ function ThemeWidget({
                     : 'border-white/5 bg-black/20 hover:bg-white/[0.05]'
               }`}
             >
-              <div className={`absolute inset-0 bg-gradient-to-br ${option.glow} transition-opacity group-hover:opacity-80 ${visualActive ? 'opacity-100' : 'opacity-40'}`} />
+              <div className={`lumi-mode-card-glow absolute inset-0 bg-gradient-to-br ${option.glow} transition-opacity group-hover:opacity-80 ${visualActive ? 'opacity-100' : 'opacity-40'}`} />
               <div className="relative flex h-full flex-col justify-between">
                 <div className="flex items-start justify-between gap-2">
-                  <div className={`flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${option.orb} text-black shadow-lg`}>
+                  <div className={`lumi-mode-orb flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${option.orb} text-black shadow-lg`}>
                     {option.icon}
                   </div>
                   <span className={`h-2 w-2 rounded-full ${active ? option.line : 'bg-white/20'}`} />

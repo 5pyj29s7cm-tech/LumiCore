@@ -19,14 +19,16 @@ import {
   Loader2,
   LogOut,
   Cloud,
-  Volume2
+  Volume2,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
 
 import { usePlatform } from '@/hooks/usePlatform';
 import { BiometricsEnrollPanel } from './biometrics/BiometricsEnrollPanel';
-import { useApp, type OperationMode } from '@/contexts/AppContext';
+import { useApp, type AppearanceMode, type OperationMode } from '@/contexts/AppContext';
 import { VoiceProviderSwitch } from './VoiceProviderSwitch';
 import { MCPSettings } from './MCPSettings';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
@@ -76,21 +78,17 @@ export function Settings({
   t,
   lang,
   setLang,
-  theme,
-  setTheme,
   activeSection = 'general',
   onSectionChange,
 }: {
   t: any;
   lang: 'en' | 'zh';
   setLang: (l: 'en' | 'zh') => void;
-  theme?: string;
-  setTheme?: (theme: string) => void;
   activeSection?: string;
   onSectionChange?: (section: string) => void;
 }) {
   const { platform, isElectron } = usePlatform();
-  const { operationMode, setOperationMode } = useApp();
+  const { operationMode, setOperationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode } = useApp();
   const [providerStatus, setProviderStatus] = useState<Record<string, { available: boolean; model: string }>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const visibleSection = activeSection === 'computer' || activeSection === 'messaging' ? 'general' : activeSection;
@@ -158,20 +156,39 @@ export function Settings({
             <SettingsSection title={t.appearanceThemes || ui('外观与主题', 'Appearance & Themes')} icon={<Sparkle size={18} className="text-celestial-saturn" />}>
               <div className="p-8 bg-white/5 rounded-[2.5rem] border border-white/5 space-y-8">
                 <div>
-                  <label className="text-xs font-black uppercase tracking-widest text-white/50 block mb-4">{t.selectMatrixVariant || ui('选择全局主题变体', 'Select Global Matrix Variant')}</label>
-                  <div className="grid grid-cols-3 gap-4">
-                    {[
-                      { id: 'celestial', label: t.celestial || ui('星辉', 'Celestial'), color: 'from-orange-400 to-red-500' },
-                      { id: 'nebula', label: t.nebula || ui('星云', 'Nebula'), color: 'from-indigo-500 to-purple-600' },
-                      { id: 'cyber', label: t.cyber || ui('赛博', 'Cyber'), color: 'from-emerald-400 to-teal-600' }
-                    ].map(themeItem => (
-                      <button key={themeItem.id} onClick={() => setTheme && setTheme(themeItem.id)}
-                        className={`flex flex-col items-center gap-3 p-4 rounded-2xl border transition-all text-center ${theme === themeItem.id ? 'bg-white/10 border-white/20 shadow-lg' : 'border-white/5 hover:bg-white/5'}`}>
-                        <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${themeItem.color} shadow-lg ${theme === themeItem.id ? 'ring-2 ring-white/50 ring-offset-2 ring-offset-black' : ''}`} />
-                        <span className={`text-xs font-black uppercase tracking-widest ${theme === themeItem.id ? 'text-white' : 'text-white/60'}`}>{themeItem.label}</span>
-                      </button>
-                    ))}
+                  <label className="text-xs font-black uppercase tracking-widest text-white/50 block mb-4">{ui('全局明暗外观', 'Global Appearance')}</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {([
+                      { id: 'light', label: ui('白天', 'Day'), hint: ui('主界面更亮', 'Bright shell'), icon: <Sun size={16} /> },
+                      { id: 'dark', label: ui('夜间', 'Night'), hint: ui('经典暗色', 'Classic dark'), icon: <Moon size={16} /> },
+                      { id: 'system', label: ui('跟随系统', 'System'), hint: resolvedAppearanceMode === 'light' ? ui('当前白天', 'Now day') : ui('当前夜间', 'Now night'), icon: <Globe size={16} /> },
+                    ] as Array<{ id: AppearanceMode; label: string; hint: string; icon: React.ReactNode }>).map(option => {
+                      const active = appearanceMode === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => setAppearanceMode(option.id)}
+                          className={`min-h-[92px] rounded-2xl border px-4 py-3 text-left transition-all ${
+                            active
+                              ? 'border-celestial-saturn/40 bg-celestial-saturn/10 shadow-[0_0_22px_rgba(255,204,0,0.12)]'
+                              : 'border-white/5 bg-white/[0.03] hover:border-white/10 hover:bg-white/[0.06]'
+                          }`}
+                        >
+                          <span className={`mb-3 flex h-9 w-9 items-center justify-center rounded-xl border ${
+                            active ? 'border-celestial-saturn/35 bg-celestial-saturn/18 text-celestial-saturn' : 'border-white/10 bg-black/20 text-white/50'
+                          }`}>
+                            {option.icon}
+                          </span>
+                          <span className={`block text-xs font-black uppercase tracking-[0.14em] ${active ? 'text-white' : 'text-white/65'}`}>{option.label}</span>
+                          <span className="mt-1 block text-[11px] font-bold text-white/35">{option.hint}</span>
+                        </button>
+                      );
+                    })}
                   </div>
+                  <p className="mt-3 text-[12px] leading-relaxed text-white/40">
+                    {ui('这是全局外壳主题。知识库、音乐沉浸层、会议覆盖层等需要暗场对比的页面会保留自己的深色工作台。', 'This controls the global shell. Knowledge base, immersive music, meeting overlays, and other contrast-heavy surfaces can keep their own dark workspace.')}
+                  </p>
                 </div>
               </div>
             </SettingsSection>
@@ -235,7 +252,7 @@ export function Settings({
   };
 
   return (
-    <div className="lumi-surface flex h-full overflow-hidden">
+    <div className="lumi-work-surface lumi-surface flex h-full overflow-hidden">
       {/* Sidebar — fixed height, scrollable */}
       <div className="w-44 flex-shrink-0 border-r border-white/[0.08] bg-white/[0.025] flex flex-col min-h-0 md:w-56">
         <div className="px-3 pt-4 pb-3 md:px-4 md:pt-5">

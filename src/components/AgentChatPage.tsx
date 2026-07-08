@@ -283,6 +283,25 @@ const CHAT_NEUTRAL_THEME = {
   input: 'rgba(6, 8, 12, 0.76)',
 } as const;
 
+const CHAT_LIGHT_THEME = {
+  id: 'light',
+  label: 'Light',
+  saturn: '#167a5f',
+  glow: '#0ea5a3',
+  nebula: '#2563eb',
+  mars: '#dc2626',
+  background: 'radial-gradient(circle at 18% 12%, rgba(22,122,95,0.10) 0%, transparent 30%), radial-gradient(circle at 82% 18%, rgba(37,99,235,0.07) 0%, transparent 34%), linear-gradient(145deg, #fbfcf8 0%, #f4f7f2 48%, #eef3ef 100%)',
+  panel: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0.90) 100%)',
+  panelBorder: 'rgba(30, 66, 49, 0.13)',
+  panelShadow: '0 26px 80px rgba(31, 46, 39, 0.10), 0 0 0 1px rgba(255,255,255,0.72)',
+  header: 'linear-gradient(90deg, rgba(255,255,255,0.94), rgba(242,248,244,0.88))',
+  progress: 'linear-gradient(90deg, rgba(22,122,95,0.09), rgba(255,255,255,0.82))',
+  agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.98), rgba(249,252,249,0.95))',
+  userBubble: 'linear-gradient(135deg, rgba(232,246,240,0.98), rgba(242,248,255,0.92))',
+  inputPanel: 'linear-gradient(90deg, rgba(255,255,255,0.95), rgba(246,250,247,0.92))',
+  input: 'rgba(255,255,255,0.98)',
+} as const;
+
 const CHAT_ATTACHMENT_ACCEPT = [
   '.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff',
   '.mp3,.mpeg,.wav,.m4a,.ogg,.oga,.flac,.aac,.wma,.webm',
@@ -345,7 +364,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
-  const { orgConnection, workDomain, operationMode } = useApp();
+  const { orgConnection, workDomain, operationMode, resolvedAppearanceMode } = useApp();
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
@@ -408,7 +427,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [installedSkillNames, setInstalledSkillNames] = useState<string[]>([]);
   const inputDictationActiveRef = useRef(false);
-  const chatAccentTheme = CHAT_NEUTRAL_THEME;
+  const chatAccentTheme = resolvedAppearanceMode === 'light' ? CHAT_LIGHT_THEME : CHAT_NEUTRAL_THEME;
 
   // Fetch installed skills to generate dynamic suggestions
   useEffect(() => {
@@ -1872,7 +1891,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.99 }}
           transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
-          className="fixed inset-0 z-[210] flex flex-col"
+          className="lumi-work-surface fixed inset-0 z-[210] flex flex-col"
           style={{
             background: chatAccentTheme.background,
             '--color-celestial-saturn': chatAccentTheme.saturn,
@@ -2277,7 +2296,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                       background: msg.type === 'agent' ? chatAccentTheme.agentBubble : chatAccentTheme.userBubble,
                       borderColor: msg.type === 'agent' ? 'rgba(255,255,255,0.12)' : chatAccentTheme.panelBorder,
                       boxShadow: msg.type === 'agent'
-                        ? '0 16px 40px rgba(0,0,0,0.18)'
+                        ? (resolvedAppearanceMode === 'light' ? '0 16px 40px rgba(31,46,39,0.08)' : '0 16px 40px rgba(0,0,0,0.18)')
                         : `0 16px 42px ${chatAccentTheme.panelBorder}`,
                     }}
                   >

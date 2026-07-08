@@ -148,7 +148,7 @@ export function OrgPortal({ onBack, initialMode = 'select' }: { onBack?: () => v
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center p-20">
+      <div className="lumi-work-surface flex items-center justify-center p-20">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center">
           <Building2 size={48} className="mx-auto text-white/45 mb-4" />
           <p className="text-white/40 text-sm">{t.loginRequired || 'Sign in to access org features'}</p>
@@ -159,7 +159,7 @@ export function OrgPortal({ onBack, initialMode = 'select' }: { onBack?: () => v
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-20">
+      <div className="lumi-work-surface flex items-center justify-center p-20">
         <Loader2 size={32} className="animate-spin text-white/55" />
       </div>
     );
@@ -168,7 +168,7 @@ export function OrgPortal({ onBack, initialMode = 'select' }: { onBack?: () => v
   // Already connected to an org — show full org workbench inline
   if (isConnected && (workDomain !== 'work' || !hasActiveOrgSession)) {
     return (
-      <div className="flex items-center justify-center p-8 h-full">
+      <div className="lumi-work-surface flex items-center justify-center p-8 h-full">
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="max-w-md w-full bg-white/5 border border-white/10 rounded-2xl p-6 text-center space-y-4">
           <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto">
             <Briefcase size={26} className="text-blue-400" />
@@ -220,7 +220,7 @@ export function OrgPortal({ onBack, initialMode = 'select' }: { onBack?: () => v
 
   // Not connected — choose join or create
   return (
-    <div className="p-8">
+    <div className="lumi-work-surface p-8">
       <AnimatePresence mode="wait">
         {mode === 'select' && (
           <motion.div key="select" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="max-w-lg mx-auto space-y-6">
