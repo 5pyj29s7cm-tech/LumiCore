@@ -46,6 +46,11 @@ interface UseWakeWordReturn {
 
 const PICOVOICE_ACCESS_KEY_STORAGE = 'lumi_picovoice_key';
 const WAKE_SERVICE_MISSING_MESSAGE = '语音唤醒需要先在设置 > 语音服务配置豆包语音或 DashScope。';
+const WAKE_SERVICE_UNAVAILABLE_MESSAGE = '语音唤醒服务当前不可用，请检查语音服务 Key、账号状态或切换服务后再开启。';
+
+function isWakeProviderUnavailableMessage(message: string): boolean {
+  return /required for wake word detection|not configured|no DashScope key|access denied|not in good standing|unauthori[sz]ed|invalid api key|forbidden|401|403/i.test(message || '');
+}
 
 async function hasServerWakeProvider(): Promise<boolean | null> {
   try {
@@ -229,12 +234,14 @@ export function useWakeWord({
       const onError = (data: { message: string }) => {
         console.warn('[WakeWord-Qwen] Server error:', data.message);
         const message = data.message || '';
-        if (/required for wake word detection|not configured|no DashScope key/i.test(message)) {
+        if (isWakeProviderUnavailableMessage(message)) {
           wakeConfigUnavailableRef.current = true;
           isListeningRef.current = false;
           setIsListening(false);
           setIsSupported(false);
-          setError(WAKE_SERVICE_MISSING_MESSAGE);
+          setError(/required for wake word detection|not configured|no DashScope key/i.test(message)
+            ? WAKE_SERVICE_MISSING_MESSAGE
+            : WAKE_SERVICE_UNAVAILABLE_MESSAGE);
           cleanupAudio();
           try { s.emit('wake:stop'); } catch {}
           removeWakeHandlers();
@@ -260,12 +267,14 @@ export function useWakeWord({
       const msg = err.message || 'Failed to start wake word';
       if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
         setError('Microphone permission denied. Please allow mic access.');
-      } else if (/required for wake word detection|not configured|no DashScope key/i.test(msg)) {
+      } else if (isWakeProviderUnavailableMessage(msg)) {
         wakeConfigUnavailableRef.current = true;
         isListeningRef.current = false;
         setIsListening(false);
         setIsSupported(false);
-        setError(WAKE_SERVICE_MISSING_MESSAGE);
+        setError(/required for wake word detection|not configured|no DashScope key/i.test(msg)
+          ? WAKE_SERVICE_MISSING_MESSAGE
+          : WAKE_SERVICE_UNAVAILABLE_MESSAGE);
       } else {
         setError(msg);
       }

@@ -101,6 +101,16 @@ function messageTimestampMs(message: any): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+const ASSISTANT_HISTORY_NOISE_RE =
+  /我还没有真正开始读取或审查|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
+
+function shouldOmitAssistantHistoryMessage(message: any, text: string): boolean {
+  const role = String(message?.role || '').toLowerCase();
+  const type = String(message?.type || '').toLowerCase();
+  const isAssistantLike = role === 'assistant' || type === 'agent';
+  return isAssistantLike && ASSISTANT_HISTORY_NOISE_RE.test(text);
+}
+
 function buildChatHistoryPayload(messages: any[], options?: { sinceMs?: number }) {
   const scopedMessages = typeof options?.sinceMs === 'number'
     ? messages.filter((m) => {
@@ -118,6 +128,7 @@ function buildChatHistoryPayload(messages: any[], options?: { sinceMs?: number }
     if (m.type === 'tool') return [];
     if (['error', 'proactive'].includes(m.source)) return [];
     if (/^(Request failed|请求失败|出错了|Failed to route)/i.test(text)) return [];
+    if (shouldOmitAssistantHistoryMessage(m, text)) return [];
     if (m.type === 'agent') return [{ role: 'assistant', content: text }];
     if (m.type === 'user' || m.type === 'file_context') return [{ role: 'user', content: `${text}${attachmentSummary}`.trim() }];
     return [];

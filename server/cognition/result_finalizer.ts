@@ -1,4 +1,4 @@
-import { guardCompletionClaims } from '../work_product/completion_guard';
+import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 
@@ -21,7 +21,27 @@ export interface LumiResultFinalizerResult {
   };
 }
 
+function hasToolEvidence(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
+}
+
+function shouldRunCompletionGuard(input: LumiResultFinalizerInput): boolean {
+  const toolRecords = input.toolRecords || [];
+  if (hasToolEvidence(toolRecords)) return true;
+  if (input.flow?.completionEvidenceNeeded) return true;
+  if (needsCompletionEvidence(input.taskText)) return true;
+
+  const source = String(input.source || '').toLowerCase();
+  if (['task', 'workflow', 'background_delegation', 'autonomous'].includes(source)) return true;
+
+  return false;
+}
+
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
+  if (!shouldRunCompletionGuard(input)) {
+    return { text: input.responseText, blocked: false };
+  }
+
   const guard = guardCompletionClaims({
     task: input.taskText,
     response: input.responseText,

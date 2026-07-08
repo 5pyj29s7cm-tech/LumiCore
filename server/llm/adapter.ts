@@ -6,7 +6,7 @@ import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } 
 import { recordTokenUsage } from './token_tracker';
 import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
-import { guardCompletionClaims } from '../work_product/completion_guard';
+import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
 
 export interface LLMConfig {
   provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
@@ -29,6 +29,22 @@ export interface LLMUsageRecord {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+}
+
+function hasCompletionGuardEvidence(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
+}
+
+function guardToolResponseIfNeeded(input: {
+  task: string;
+  response: string;
+  toolCalls: ToolExecutionRecord[];
+  source?: string;
+}) {
+  if (!hasCompletionGuardEvidence(input.toolCalls) && !needsCompletionEvidence(input.task)) {
+    return { text: input.response, blocked: false as const };
+  }
+  return guardCompletionClaims(input);
 }
 
 const DEFAULT_TOOL_RESULT_MODEL_LIMIT = 5_000;
@@ -515,7 +531,7 @@ export async function runWithTools(
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
       recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
-      const guarded = guardCompletionClaims({
+      const guarded = guardToolResponseIfNeeded({
         task: getPrimaryUserText(messages),
         response: response.text || 'No response.',
         toolCalls: executionLog,
@@ -546,7 +562,7 @@ export async function runWithTools(
       if (sameTools && lastAssistantMsg.toolCalls.length === normalizedToolCalls.length) {
         recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
         const fallbackText = response.text || 'The same tools were called repeatedly. Breaking the loop to prevent infinite execution.';
-        const guarded = guardCompletionClaims({
+        const guarded = guardToolResponseIfNeeded({
           task: getPrimaryUserText(messages),
           response: fallbackText,
           toolCalls: executionLog,

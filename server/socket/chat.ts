@@ -74,6 +74,13 @@ function stripHistoricalAttachmentBlocks(value: string): string {
     .trim();
 }
 
+const ASSISTANT_HISTORY_NOISE_RE =
+  /我还没有真正开始读取或审查|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
+
+function isNoisyAssistantHistory(value: string): boolean {
+  return ASSISTANT_HISTORY_NOISE_RE.test(String(value || ''));
+}
+
 function normalizeChatHistoryRecord(m: any): NormalizedMessage[] {
   const role = m?.role === 'assistant' ? 'assistant' : m?.role === 'system' ? 'system' : m?.role === 'user' ? 'user' : '';
   const source = typeof m?.source === 'string' ? m.source : '';
@@ -95,10 +102,14 @@ function normalizeChatHistoryRecord(m: any): NormalizedMessage[] {
   const primaryText = message || content;
   const isUiErrorText = /^(Request failed|请求失败|出错了|Failed to route)/i.test(primaryText);
 
+  if (role === 'assistant' && isNoisyAssistantHistory(primaryText)) {
+    return [];
+  }
+
   if (primaryText && !isUiErrorText) {
     entries.push({ role, content: primaryText });
   }
-  if (response && role === 'user') {
+  if (response && role === 'user' && !isNoisyAssistantHistory(response)) {
     entries.push({ role: 'assistant', content: response });
   }
   return entries;
