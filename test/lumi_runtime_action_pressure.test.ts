@@ -198,6 +198,30 @@ describe('Lumi runtime action pressure coverage', () => {
     }
   });
 
+  it('keeps direct external actions out of capability-learning detours', () => {
+    const login = evaluate(
+      '\u6253\u5f00\u6d4f\u89c8\u5668\u81ea\u52a8\u767b\u5f55\u6dd8\u5b9d\u540e\u53f0',
+      'pressure_direct_login_lane',
+    );
+    const cad = evaluate('CAD\u81ea\u52a8\u753b\u56fe', 'pressure_direct_cad_order');
+
+    expect(login.contract.kind).toBe('browser_account');
+    expect(login.dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
+    expect(login.selection.lane).toBe('web_or_account');
+    expect(login.route?.categories).not.toContain('capability_learning');
+    expect(login.route?.toolNames.slice(0, 4)).toEqual(expect.arrayContaining([
+      'web_login_run',
+      'browser_open_task',
+    ]));
+
+    expect(cad.contract.kind).toBe('cad_drafting');
+    expect(cad.route?.toolNames.slice(0, 3)).toEqual([
+      'cad_generate_dxf',
+      'cad_generate_autocad_draw_script',
+      'cad_run_autocad_draw_script',
+    ]);
+  });
+
   it('does not treat reading a chat as sending a chat', () => {
     const result = evaluate(
       '\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9',

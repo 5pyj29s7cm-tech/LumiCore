@@ -167,7 +167,7 @@ function enhanceToolRouteForFlow(
     reasons.push('artifact-first turns need production and verification tools');
   }
 
-  const merged = unique([...Array.from(additions), ...route.toolNames]);
+  const merged = unique([...route.toolNames, ...Array.from(additions)]);
   if (merged.length === route.toolNames.length && route.categories.length === categories.length) return route;
 
   const truncated = route.truncated || merged.length > route.maxTools;

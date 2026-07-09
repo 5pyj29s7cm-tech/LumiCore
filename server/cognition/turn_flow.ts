@@ -173,6 +173,15 @@ function classifyCapabilityLearningIntent(
   const englishReuseAudit = /\b(duplicate|reuse|reusable|hard-?coded|script|built-?in|demo|already|existing|fragmented|same\s+path)\b/i.test(text);
   const englishCapabilityAction = /\b(learn|stabili[sz]e|remember|optimi[sz]e|improve|wire|integrate|make\s+real|make\s+reusable|fix|repair)\b/i.test(text);
   const englishCapabilityGap = /\b(can'?t|cannot|fail(?:s|ed)?|broken|unstable|missing|brittle|bad|not\s+working|crash(?:ed)?|stuck|forgot)\b/i.test(text);
+  const directActionContract = buildActionContract(text);
+  const explicitCapabilityMeta = /(?:Lumi|lumi).{0,32}(?:能力|技能|工具|权限|认知|稳定|优化|修|学会|通用|复用|脚本|接入|边界|桌面|后台)|(?:能力|技能|工具|权限|认知|稳定|优化|修|学会|通用|复用|脚本|接入|边界|桌面|后台).{0,32}(?:Lumi|lumi)|\b(?:capabilit(?:y|ies)|skill|tool|adapter|workflow|mcp|agent)\b.*\b(?:learn|stabili[sz]e|improve|fix|reuse|reusable|hard-?coded|script)\b|\b(?:learn|stabili[sz]e|improve|fix|reuse|reusable|hard-?coded|script)\b.*\b(?:capabilit(?:y|ies)|skill|tool|adapter|workflow|mcp|agent)\b/i.test(text);
+  if (directActionContract.applies && directActionContract.kind !== 'none' && !explicitCapabilityMeta) {
+    return {
+      capabilityLearningIntent: 'none',
+      capabilityLearningReason: 'direct external action contract should execute instead of entering capability learning',
+      shouldInspectCapabilitiesFirst: false,
+    };
+  }
   const inCapabilityContext = input.targetIsLumi || CAPABILITY_CONTEXT_RE.test(text) || englishCapabilityContext;
   if (!inCapabilityContext) {
     return {
