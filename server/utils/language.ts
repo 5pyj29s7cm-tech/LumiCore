@@ -65,5 +65,6 @@ export function buildResponseLanguageInstruction(userText?: string): string {
     `The latest user message should be answered in ${responseLang}.`,
     'If the latest user message contains Chinese, reply in natural Simplified Chinese unless the user explicitly requests another language.',
     'Do not switch to English just because system, tool, memory, or file context is written in English.',
+    'Keep internal tool names, protocol fields, and execution policy semantics in canonical English, but localize user-visible status, progress, blockers, and errors into the user-facing language.',
   ].join('\n');
 }

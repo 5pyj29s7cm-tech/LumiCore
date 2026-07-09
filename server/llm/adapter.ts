@@ -41,10 +41,15 @@ function guardToolResponseIfNeeded(input: {
   toolCalls: ToolExecutionRecord[];
   source?: string;
 }) {
+  const task = input.task || '';
   if (!hasCompletionGuardEvidence(input.toolCalls) && !needsCompletionEvidence(input.task)) {
-    return { text: input.response, blocked: false as const };
+    return { text: localizeInternalStatusLeak(input.response, task), blocked: false as const };
   }
-  return guardCompletionClaims(input);
+  const guarded = guardCompletionClaims(input);
+  return {
+    ...guarded,
+    text: localizeInternalStatusLeak(guarded.text, task),
+  };
 }
 
 const DEFAULT_TOOL_RESULT_MODEL_LIMIT = 5_000;
@@ -159,13 +164,38 @@ function collectArtifactRefs(text: string): string[] {
 }
 
 function getPrimaryUserText(messages: NormalizedMessage[]): string {
-  const rawContent = messages.find(m => m.role === 'user')?.content || '';
+  const rawContent = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   if (typeof rawContent === 'string') return rawContent;
   if (!Array.isArray(rawContent)) return '';
   return rawContent
     .filter(part => part.type === 'text')
     .map(part => part.text)
     .join(' ');
+}
+
+export function localizeInternalStatusLeak(text: string, userText: string): string {
+  const raw = String(text || '');
+  if (!/[\u3400-\u9fff]/.test(userText || '')) return raw;
+
+  if (/I have not actually operated the Lumi client yet/i.test(raw)) {
+    return '我还没有真正操作 Lumi 客户端。刚才没有拿到成功的客户端状态读取或界面动作记录；下一步我需要先读取状态，再执行对应的客户端动作，并按验证结果告诉你。';
+  }
+  if (/I have not verified the desktop action yet|I tried the desktop action, but cannot mark it complete yet/i.test(raw)) {
+    return '我还没有拿到可确认的桌面动作结果。下一步我需要继续打开、聚焦或检查真实窗口，看到窗口/进程验证后再告诉你完成。';
+  }
+  if (/I have not actually started that action yet|No successful tool execution was recorded for the promised action/i.test(raw)) {
+    return '我刚才没有真正执行成功：没有记录到对应工具的成功结果。下一步我需要重新调用真实工具，并在聊天窗里同步处理进度。';
+  }
+  if (/The tool loop reached its limit|Maximum tool call iterations reached|before Lumi could write the final answer/i.test(raw)) {
+    return '这轮工具处理次数到上限了，我还没来得及整理成最终结论。你可以直接让我继续，我会从已经执行到的位置接着处理，不会假装已经完成。';
+  }
+  if (/No verified generated file was detected/i.test(raw)) {
+    return '这轮没有检测到已生成的可验证文件。请让我继续当前请求，或重新指定要处理的文件/路径。';
+  }
+  if (/requires user confirmation|Action Constitution/i.test(raw)) {
+    return '这一步被本地安全边界拦住了，需要你确认后才能继续。我不会把需要确认的动作说成已经完成。';
+  }
+  return raw;
 }
 
 const CONFIRMATION_REQUIRED_RE =

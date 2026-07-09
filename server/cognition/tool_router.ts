@@ -178,6 +178,12 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'mcp_playwright_browser_fill_form',
   ],
   messaging: [
+    'desktop_list_apps',
+    'desktop_open',
+    'desktop_active_window',
+    'desktop_ui_focus',
+    'desktop_ui_snapshot',
+    'desktop_capture_screen',
     'wechat_prepare_reply',
     'wechat_copy_reply_draft',
     'browser_open_task',
@@ -366,9 +372,10 @@ const ROUTES: RouteDefinition[] = [
     patterns: [
       /飞书|微信|企业微信|WeCom|消息|回消息|远程协作|绑定码/u,
       /(?:\u56de\u4e00\u4e0b|\u56de\u590d|\u56de|\u8349\u7a3f).*(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237)|(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237).*(?:\u56de\u590d|\u56de\u4e00\u4e0b|\u56de|\u8349\u7a3f)/u,
+      /(?:\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\u53d1\u9001|\u53d1\u7ed9|\u8f6c\u53d1|\u7c98\u8d34|\u8d34\u5230|\u53d1).*(?:\u95ee\u5019\u8bed|\u95ee\u5019|\u5bd2\u6684|\u62db\u547c|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u6d88\u606f|\u5ba2\u6237|\u8054\u7cfb\u4eba|\u7fa4)|(?:\u95ee\u5019\u8bed|\u95ee\u5019|\u5bd2\u6684|\u62db\u547c|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u6d88\u606f|\u5ba2\u6237|\u8054\u7cfb\u4eba|\u7fa4).*(?:\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\u53d1\u9001|\u53d1\u7ed9|\u8f6c\u53d1|\u7c98\u8d34|\u8d34\u5230|\u53d1)/u,
       /\b(feishu|lark|wechat|wecom|message|reply)\b/i,
     ],
-    prefixes: ['mcp_messaging-ops_', 'mcp_wechat-launcher_'],
+    prefixes: ['mcp_messaging-ops_'],
     groups: ['messaging', 'files', 'documents'],
   },
   {

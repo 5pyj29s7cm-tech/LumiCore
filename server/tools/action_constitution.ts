@@ -149,7 +149,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
 
   if (name === 'client_action') return getSensitiveClientAction(args) ? 'desktop_control' : 'observe';
   if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
-  if (name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_path_info' || name === 'desktop_active_window' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot') return 'observe';
+  if (name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen') return 'observe';
   if (name.includes('run_command') || name.includes('terminal') || name.includes('shell') || name.includes('code_execution')) return 'system';
   if (name.includes('wechat') || name.includes('feishu') || name.includes('wecom') || name.includes('message')) return 'messaging';
   if (name === 'computer_use' || name.startsWith('desktop_') || name.includes('mouse') || name.includes('keyboard') || name.includes('screenshot')) return 'desktop_control';

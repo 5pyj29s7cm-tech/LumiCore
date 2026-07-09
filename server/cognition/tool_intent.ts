@@ -59,6 +59,8 @@ const LEGAL_TERMS = /(?:\u6848\u4ef6|\u6848\u53f7|\u8bc1\u636e|\u6750\u6599|\u8d
 const WORK_PRODUCT_VERBS = /(?:\u6574\u7406|\u751f\u6210|\u8d77\u8349|\u64b0\u5199|\u63d0\u70bc|\u5206\u6790|\b(?:draft|generate|prepare|analy[sz]e)\b)/iu;
 const MESSAGE_TERMS = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237|\b(?:wechat|wecom|feishu|lark|message|customer)\b)/iu;
 const REPLY_VERBS = /(?:\u56de\u4e00\u4e0b|\u56de\u590d|\u56de|\u8349\u7a3f|\b(?:reply|respond|draft)\b)/iu;
+const MESSAGE_SEND_VERBS = /(?:\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\u53d1\u7ed9|\u53d1\u9001|\u8f6c\u53d1|\u7c98\u8d34|\u8d34\u5230|\u53d1|\b(?:send|forward|paste)\b)/iu;
+const GREETING_MESSAGE_TERMS = /(?:\u95ee\u5019\u8bed|\u95ee\u5019|\u5bd2\u6684|\u62db\u547c|\u6d88\u606f|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u5ba2\u6237|\u8054\u7cfb\u4eba|\u7fa4|\b(?:greeting|message|wechat|wecom|customer|contact|group)\b)/iu;
 const CONTINUE_VERBS = /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b|\b(?:continue|resume)\b)/iu;
 const TASK_TERMS = /(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee|\b(?:task|customer|delivery|takeover|project)\b)/iu;
 const CREATE_OR_DRAW_VERBS = /(?:\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u5236\u4f5c|\u505a|\u753b|\u51fa|\b(?:create|generate|draw|make)\b)/iu;
@@ -74,6 +76,7 @@ const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
   { name: 'knowledge-import', all: [DOCUMENT_TERMS, KNOWLEDGE_BASE_TERMS, IMPORT_VERBS] },
   { name: 'legal-work-product', all: [LEGAL_TERMS, WORK_PRODUCT_VERBS] },
   { name: 'messaging-reply', all: [MESSAGE_TERMS, REPLY_VERBS] },
+  { name: 'messaging-send-or-greeting', all: [MESSAGE_SEND_VERBS, GREETING_MESSAGE_TERMS] },
   { name: 'task-continuation', all: [CONTINUE_VERBS, TASK_TERMS] },
   { name: 'visual-production', all: [CREATE_OR_DRAW_VERBS, VISUAL_OUTPUT_TERMS] },
   { name: 'work-product', all: [WORK_PRODUCT_VERBS, WORK_PRODUCT_TERMS] },

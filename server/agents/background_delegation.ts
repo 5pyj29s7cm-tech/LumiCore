@@ -25,9 +25,18 @@ const BACKGROUND_REQUEST_PATTERNS = [
   /\b(background|sub-?agent|delegate|dispatch|async|parallel|don't wait|do not wait)\b/i,
 ];
 
+const BACKGROUND_APP_CONTEXT_RE =
+  /(?:\u540e\u53f0(?:\u6b63\u5728)?\u8fd0\u884c|\u6b63\u5728\u540e\u53f0\u8fd0\u884c|\u540e\u53f0(?:\u8fdb\u7a0b|\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u7a97\u53e3|\u5fae\u4fe1|WeChat|Weixin))/iu;
+
+const EXPLICIT_BACKGROUND_DELEGATION_RE =
+  /(?:\u5b50\s*agent|\u5b50\u667a\u80fd\u4f53|\u4ea4\u7ed9.*agent|\u5206\u6d3e|\u6d3e\u7ed9|\u4e0d\u7528\u7b49|\u4e0d\u8981\u7b49|\u5f02\u6b65|\u5e76\u884c|\b(?:background\s+task|sub-?agent|delegate|dispatch|async|parallel|don't wait|do not wait)\b)/iu;
+
 const WORK_CATEGORY_ALLOWLIST = new Set(['command', 'code', 'question', 'analysis']);
 
 export function hasExplicitBackgroundDelegationPreference(text: string): boolean {
+  if (BACKGROUND_APP_CONTEXT_RE.test(text) && !EXPLICIT_BACKGROUND_DELEGATION_RE.test(text)) {
+    return false;
+  }
   return BACKGROUND_REQUEST_PATTERNS.some(pattern => pattern.test(text));
 }
 
