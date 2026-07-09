@@ -23,6 +23,8 @@ export function createApp(): AppContext {
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, {
+    pingInterval: 25_000,
+    pingTimeout: 60_000,
     cors: {
       origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => cb(null, true),
       methods: ["GET", "POST"],

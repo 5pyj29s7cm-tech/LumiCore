@@ -3039,13 +3039,13 @@ pub fn run() {
             }
             } // end else (release mode spawns backend)
 
-            // ── Child process health check (release mode, checks every 30s) ──
+            // ── Child process health check (release mode, checks every 5s) ──
             if !cfg!(debug_assertions) {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
-                    let max_restarts: u32 = 3;
+                    let max_restarts: u32 = 30;
                     loop {
-                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        std::thread::sleep(std::time::Duration::from_secs(5));
                         let app_state = app_handle.state::<Mutex<BackendProcesses>>();
                         let mut state = app_state.lock().unwrap();
 

@@ -17,13 +17,16 @@ const DEVICE_FINGERPRINT = getDeviceFingerprint();
 
 const HEARTBEAT_KEY = 'lumi_page_heartbeat';
 const RUNTIME_EVENTS_KEY = 'lumi_runtime_events';
-const LAST_RELOAD_REASON_KEY = 'lumi_last_reload_reason';
+const LAST_RECOVERY_REASON_KEY = 'lumi_last_recovery_reason';
 const MAX_RUNTIME_EVENTS = 80;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let disconnectSince: number | null = null;
-let reportedPreviousReload = false;
-const DISCONNECT_RELOAD_MS = 120_000; // 2 minutes disconnected → reload
+let lastForcedReconnectAt = 0;
+let reportedPreviousRecovery = false;
 const HEARTBEAT_INTERVAL_MS = 5_000;
+const DISCONNECT_RECOVERY_MS = 30_000;
+const SERVER_UNREACHABLE_RECOVERY_MS = 60_000;
+const FORCE_RECONNECT_THROTTLE_MS = 10_000;
 
 type RuntimeEvent = {
   at: string;
@@ -45,32 +48,50 @@ function recordRuntimeEvent(type: string, detail: Record<string, unknown> = {}) 
   return event;
 }
 
-function markReloadReason(reason: string, detail: Record<string, unknown>) {
+function markRecoveryReason(reason: string, detail: Record<string, unknown>) {
   const payload = { at: new Date().toISOString(), reason, detail };
   try {
-    sessionStorage.setItem(LAST_RELOAD_REASON_KEY, JSON.stringify(payload));
-    localStorage.setItem(LAST_RELOAD_REASON_KEY, JSON.stringify(payload));
+    sessionStorage.setItem(LAST_RECOVERY_REASON_KEY, JSON.stringify(payload));
+    localStorage.setItem(LAST_RECOVERY_REASON_KEY, JSON.stringify(payload));
   } catch {}
-  recordRuntimeEvent('watchdog_reload_requested', payload);
+  recordRuntimeEvent('socket_recovery_requested', payload);
   return payload;
 }
 
-function reportPreviousReloadReason() {
-  if (reportedPreviousReload) return;
-  reportedPreviousReload = true;
+function reportPreviousRecoveryReason() {
+  if (reportedPreviousRecovery) return;
+  reportedPreviousRecovery = true;
   try {
-    const raw = sessionStorage.getItem(LAST_RELOAD_REASON_KEY) || localStorage.getItem(LAST_RELOAD_REASON_KEY);
+    const raw = sessionStorage.getItem(LAST_RECOVERY_REASON_KEY) || localStorage.getItem(LAST_RECOVERY_REASON_KEY);
     if (!raw) {
       recordRuntimeEvent('page_started');
       return;
     }
     const payload = JSON.parse(raw);
-    console.warn('[Lumi runtime] Previous WebView reload reason:', payload);
-    recordRuntimeEvent('page_recovered_after_reload', payload);
-    sessionStorage.removeItem(LAST_RELOAD_REASON_KEY);
+    console.warn('[Lumi runtime] Previous socket recovery:', payload);
+    recordRuntimeEvent('page_started_after_socket_recovery', payload);
+    sessionStorage.removeItem(LAST_RECOVERY_REASON_KEY);
   } catch {
     recordRuntimeEvent('page_started');
   }
+}
+
+function forceReconnect(socket: Socket, reason: string, detail: Record<string, unknown>) {
+  const now = Date.now();
+  if (now - lastForcedReconnectAt < FORCE_RECONNECT_THROTTLE_MS) return;
+  lastForcedReconnectAt = now;
+  const payload = markRecoveryReason(reason, detail);
+  console.warn('[Watchdog] Socket disconnected; forcing reconnect instead of reloading WebView', payload);
+  try {
+    socket.disconnect();
+  } catch {}
+  window.setTimeout(() => {
+    try {
+      socket.connect();
+    } catch (err: any) {
+      recordRuntimeEvent('socket_force_reconnect_failed', { message: err?.message || String(err) });
+    }
+  }, 250);
 }
 
 function startWatchdog(socket: Socket) {
@@ -95,14 +116,11 @@ function startWatchdog(socket: Socket) {
     recordRuntimeEvent('socket_connect_error', { message: err.message });
   });
 
-  // Periodic check: if disconnected for too long, reload to restore the WebView2 renderer
+  // Periodic check: keep reconnecting in place. The native shell owns backend restarts.
   const checkInterval = setInterval(() => {
-    if (disconnectSince && (Date.now() - disconnectSince) > DISCONNECT_RELOAD_MS) {
+    if (disconnectSince && (Date.now() - disconnectSince) > DISCONNECT_RECOVERY_MS) {
       const durationMs = Date.now() - disconnectSince;
-      const payload = markReloadReason('socket_disconnected_timeout', { durationMs });
-      console.warn('[Watchdog] Socket disconnected for >2min, reloading page to recover renderer', payload);
-      clearInterval(checkInterval);
-      window.location.reload();
+      forceReconnect(socket, 'socket_disconnected_reconnect', { durationMs });
     }
     // Also ping the server directly as a secondary health check
     const token = getStoredToken();
@@ -111,13 +129,10 @@ function startWatchdog(socket: Socket) {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(5000),
       }).catch(() => {
-        // If fetch fails AND socket is disconnected, reload sooner
-        if (disconnectSince && (Date.now() - disconnectSince) > 60_000) {
+        // If fetch fails AND socket is disconnected, keep nudging the socket.
+        if (disconnectSince && (Date.now() - disconnectSince) > SERVER_UNREACHABLE_RECOVERY_MS) {
           const durationMs = Date.now() - disconnectSince;
-          const payload = markReloadReason('server_unreachable_socket_disconnected', { durationMs });
-          console.warn('[Watchdog] Server unreachable + socket disconnected >1min, reloading', payload);
-          clearInterval(checkInterval);
-          window.location.reload();
+          forceReconnect(socket, 'server_unreachable_socket_reconnect', { durationMs });
         }
       });
     }
@@ -130,7 +145,7 @@ function startWatchdog(socket: Socket) {
         const durationMs = Date.now() - disconnectSince;
         recordRuntimeEvent('socket_reconnect_on_visible', { durationMs });
         console.warn('[Watchdog] Page became visible but socket disconnected >30s, reconnecting', { durationMs });
-        socket.connect();
+        forceReconnect(socket, 'socket_visible_reconnect', { durationMs });
       }
     }
   };
@@ -149,7 +164,7 @@ class SocketService {
   private watchdogCleanup: (() => void) | null = null;
 
   connect() {
-    reportPreviousReloadReason();
+    reportPreviousRecoveryReason();
     const token = getStoredToken();
 
     if (!this.socket) {

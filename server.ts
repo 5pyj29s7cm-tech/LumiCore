@@ -2,21 +2,86 @@
 // / → personal AI OS desktop
 // /index.org.html → org workbench (create/manage orgs, legal tools)
 import "dotenv/config";
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+const IS_DESKTOP_RUNTIME = process.env.LUMI_DESKTOP === '1';
+const DESKTOP_LOG_FILE = process.env.LUMI_LOG_FILE || (
+  IS_DESKTOP_RUNTIME
+    ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'LumiOS', 'server.log')
+    : ''
+);
+const MAX_DESKTOP_LOG_BYTES = 8 * 1024 * 1024;
+
+function stringifyLogPart(value: unknown): string {
+  if (value instanceof Error) return value.stack || value.message;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function appendRuntimeLog(level: string, values: unknown[]): void {
+  if (!DESKTOP_LOG_FILE) return;
+  try {
+    fs.mkdirSync(path.dirname(DESKTOP_LOG_FILE), { recursive: true });
+    try {
+      const stat = fs.existsSync(DESKTOP_LOG_FILE) ? fs.statSync(DESKTOP_LOG_FILE) : null;
+      if (stat && stat.size > MAX_DESKTOP_LOG_BYTES) {
+        const rotated = `${DESKTOP_LOG_FILE}.1`;
+        try { fs.rmSync(rotated, { force: true }); } catch {}
+        try { fs.renameSync(DESKTOP_LOG_FILE, rotated); } catch {}
+      }
+    } catch {}
+    fs.appendFileSync(
+      DESKTOP_LOG_FILE,
+      `[${new Date().toISOString()}] [${level}] ${values.map(stringifyLogPart).join(' ')}\n`,
+      'utf8',
+    );
+  } catch {}
+}
+
+if (DESKTOP_LOG_FILE) {
+  process.env.LUMI_LOG_FILE = DESKTOP_LOG_FILE;
+  const originalLog = console.log.bind(console);
+  const originalWarn = console.warn.bind(console);
+  const originalError = console.error.bind(console);
+  console.log = (...args: unknown[]) => {
+    appendRuntimeLog('INFO', args);
+    originalLog(...args);
+  };
+  console.warn = (...args: unknown[]) => {
+    appendRuntimeLog('WARN', args);
+    originalWarn(...args);
+  };
+  console.error = (...args: unknown[]) => {
+    appendRuntimeLog('ERROR', args);
+    originalError(...args);
+  };
+}
 
 // ── Global exception handlers (must be first — before any async setup) ──
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err.message);
   console.error(err.stack);
-  process.exit(1);
+  if (!IS_DESKTOP_RUNTIME || process.env.LUMI_EXIT_ON_UNCAUGHT_EXCEPTION === '1') {
+    process.exit(1);
+  }
+  console.error('[DesktopRuntime] Keeping local backend alive after uncaught exception.');
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled rejection:', reason);
+  console.error('[UnhandledRejection]', reason);
   if (reason instanceof Error) console.error(reason.stack);
-  process.exit(1);
+  if (!IS_DESKTOP_RUNTIME || process.env.LUMI_EXIT_ON_UNHANDLED_REJECTION === '1') {
+    process.exit(1);
+  }
+  console.error('[DesktopRuntime] Keeping local backend alive after unhandled rejection.');
 });
 
 import { fileURLToPath } from "url";
-import path from "path";
 import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
 import express from "express";
