@@ -66,6 +66,12 @@ export interface ClientStateSnapshot {
     wallpaperMode?: boolean;
     widgetMode?: boolean;
     nexusOpen?: boolean;
+    customerTakeoverOpen?: boolean;
+    customerTakeoverStage?: string | null;
+    designDeliveryOpen?: boolean;
+    designDeliveryStage?: string | null;
+    ecommerceGrowthOpen?: boolean;
+    ecommerceGrowthStage?: string | null;
   };
   voice?: { state?: string; muted?: boolean };
   music?: {
@@ -303,7 +309,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Interface awareness',
     kind: 'system',
     actions: ['client_get_state', 'client_action', 'adapter_registry_list'],
-    notes: 'Lumi knows her own client interfaces and can choose the right surface for a task: home, chat, knowledge, runtime log, skills, tools, team, avatar, sound, organization, plans, settings, music, meeting, wallpaper, and computer adaptation.',
+    notes: 'Lumi knows her own client interfaces and can choose the right surface for a task: home, chat, knowledge, runtime log, skills, tools, team, avatar, sound, organization, plans, settings, music, meeting, wallpaper, widget mode, subscription/activation/billing, computer adaptation, and large work takeover panels.',
     stateKeys: ['windows', 'surfaces', 'tools', 'runtimeLog', 'music', 'meeting', 'org'],
   },
   {
@@ -422,8 +428,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.advanced',
     label: 'Advanced and account windows',
     kind: 'window',
-    actions: ['open_app:terminal', 'open_app:tokens', 'open_app:subscription', 'open_app:notifications', 'open_app:reminders'],
-    notes: 'Terminal, token usage, subscription, notification, and reminder windows remain available when the user asks for them.',
+    actions: ['open_app:terminal', 'open_app:tokens', 'open_subscription', 'open_activation', 'open_billing', 'open_app:notifications', 'open_app:reminders'],
+    notes: 'Terminal, token usage, subscription, activation, billing, notification, and reminder windows remain available when the user asks for them.',
     stateKeys: ['windows'],
   },
   {
@@ -686,6 +692,41 @@ const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     closeAfterUse: true,
   },
   {
+    id: 'widget',
+    label: 'Desktop widget mode',
+    actions: ['enter_widget_mode', 'show_desktop_widget', 'exit_widget_mode', 'expand_from_widget'],
+    useWhen: 'Collapse Lumi into or expand Lumi out of the desktop widget shell.',
+    closeAfterUse: false,
+  },
+  {
+    id: 'subscription',
+    label: 'Subscription, activation, and billing',
+    actions: ['open_subscription', 'open_activation', 'open_billing'],
+    useWhen: 'Show plan status, activation, billing, or subscription controls.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'customer-takeover-panel',
+    label: 'Customer takeover panel',
+    actions: ['customer_takeover_panel', 'close_customer_takeover_panel'],
+    useWhen: 'Show or close the large customer takeover/result panel without launching a full workflow.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'design-delivery-panel',
+    label: 'Design delivery panel',
+    actions: ['design_delivery_panel', 'close_design_delivery_panel'],
+    useWhen: 'Show or close the large renovation/design delivery panel without launching a full workflow.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'ecommerce-growth-panel',
+    label: 'Ecommerce growth panel',
+    actions: ['ecommerce_growth_panel', 'close_ecommerce_growth_panel'],
+    useWhen: 'Show or close the large ecommerce/account/content growth panel without launching a full workflow.',
+    closeAfterUse: true,
+  },
+  {
     id: 'computer-adaptation',
     label: 'Computer adaptation center',
     actions: ['open_computer_adaptation'],
@@ -887,12 +928,45 @@ export function normalizeClientActionTarget(value?: string): string {
     music: 'music-center',
     media: 'music-center',
     memory: 'knowledge',
+    home: 'home',
+    main: 'home',
+    'main-screen': 'home',
+    chat: 'chat',
+    team: 'team',
+    tools: 'tools',
+    tool: 'tools',
+    plans: 'plans',
+    plan: 'plans',
+    planner: 'plans',
+    'work-queue': 'plans',
+    org: 'org',
+    organization: 'org',
+    workspace: 'org',
+    'org-workspace': 'org',
+    notifications: 'notifications',
+    notification: 'notifications',
+    reminders: 'reminders',
+    reminder: 'reminders',
+    devices: 'devices',
+    device: 'devices',
+    'device-sync': 'devices',
+    'avatar-studio': 'avatar-studio',
+    avatar: 'avatar-studio',
+    'sound-studio': 'sound',
+    sound: 'sound',
+    'memory-avatar': 'memory-avatar',
     files: 'knowledge',
     file: 'knowledge',
     sync: 'devices',
     computer: 'kernel',
     adaptation: 'kernel',
     'computer-adaptation': 'kernel',
+    subscription: 'subscription',
+    billing: 'subscription',
+    activation: 'subscription',
+    widget: 'widget',
+    'desktop-widget': 'widget',
+    'desktop-widget-mode': 'widget',
     nexus: 'nexus',
     world: 'nexus',
     'world-view': 'nexus',
@@ -901,11 +975,67 @@ export function normalizeClientActionTarget(value?: string): string {
     'central-world': 'nexus',
     '中枢': 'nexus',
     '中枢世界': 'nexus',
+    '桌面小组件': 'widget',
+    '小组件': 'widget',
+    '主屏幕': 'home',
+    '主页': 'home',
+    '首页': 'home',
+    '聊天': 'chat',
+    '聊天窗口': 'chat',
+    '团队': 'team',
+    '团队面板': 'team',
+    '工具': 'tools',
+    '工具面板': 'tools',
+    '形象': 'avatar-studio',
+    '头像': 'avatar-studio',
+    '头像工作室': 'avatar-studio',
+    '声音': 'sound',
+    '声音工作室': 'sound',
+    '记忆头像': 'memory-avatar',
+    '组织': 'org',
+    '组织空间': 'org',
+    '组织工作区': 'org',
+    '计划': 'plans',
+    '计划面板': 'plans',
+    '工作队列': 'plans',
+    '通知': 'notifications',
+    '通知面板': 'notifications',
+    '通知窗口': 'notifications',
+    '提醒': 'reminders',
+    '提醒面板': 'reminders',
+    '提醒窗口': 'reminders',
+    '设备': 'devices',
+    '设备同步': 'devices',
+    '电脑适配中心': 'kernel',
+    '计算机适配中心': 'kernel',
+    '电脑适配': 'kernel',
+    '订阅': 'subscription',
+    '激活': 'subscription',
+    '账单': 'subscription',
+    'customer_takeover_panel': 'customer-takeover-panel',
+    'customer-takeover': 'customer-takeover-panel',
+    'customer-takeover-panel': 'customer-takeover-panel',
+    '客户接管面板': 'customer-takeover-panel',
+    'design_delivery_panel': 'design-delivery-panel',
+    'design-delivery': 'design-delivery-panel',
+    'design-delivery-panel': 'design-delivery-panel',
+    '设计交付面板': 'design-delivery-panel',
+    'ecommerce_growth_panel': 'ecommerce-growth-panel',
+    'ecommerce-growth': 'ecommerce-growth-panel',
+    'ecommerce-growth-panel': 'ecommerce-growth-panel',
+    '电商增长面板': 'ecommerce-growth-panel',
     log: 'runtime-log',
     logs: 'runtime-log',
     runtime: 'runtime-log',
-    organization: 'org',
     settings: 'settings',
+    '设置': 'settings',
+    '运行日志': 'runtime-log',
+    '日志': 'runtime-log',
+    '音乐': 'music-center',
+    '音乐中心': 'music-center',
+    '知识库': 'knowledge',
+    '文件中心': 'knowledge',
+    '文件管理器': 'knowledge',
   };
   return aliases[normalized] || normalized;
 }
@@ -923,6 +1053,16 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   if (state.surfaces?.meetingOpen || state.meeting?.active) openSurfaces.push('meeting');
   if (state.surfaces?.musicLayerVisible || state.music?.layerVisible) openSurfaces.push('music-layer');
   if (state.surfaces?.wallpaperMode) openSurfaces.push('wallpaper');
+  if (state.surfaces?.widgetMode) openSurfaces.push('widget');
+  if (state.surfaces?.customerTakeoverOpen || state.surfaces?.customerTakeoverStage) {
+    openSurfaces.push(`customer-takeover-panel${state.surfaces?.customerTakeoverStage ? `:${state.surfaces.customerTakeoverStage}` : ''}`);
+  }
+  if (state.surfaces?.designDeliveryOpen || state.surfaces?.designDeliveryStage) {
+    openSurfaces.push(`design-delivery-panel${state.surfaces?.designDeliveryStage ? `:${state.surfaces.designDeliveryStage}` : ''}`);
+  }
+  if (state.surfaces?.ecommerceGrowthOpen || state.surfaces?.ecommerceGrowthStage) {
+    openSurfaces.push(`ecommerce-growth-panel${state.surfaces?.ecommerceGrowthStage ? `:${state.surfaces.ecommerceGrowthStage}` : ''}`);
+  }
   for (const win of openWindows) {
     if (!openSurfaces.includes(win)) openSurfaces.push(win);
   }
@@ -987,6 +1127,20 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       break;
     case 'open_app':
       setSurface(target || 'home', target || 'home');
+      break;
+    case 'enter_widget_mode':
+    case 'show_desktop_widget':
+      expectedState = ['surface:widget:open'];
+      verification = 'Desktop widget mode should be active in client state.';
+      naturalCompletion = 'Desktop widget mode is active.';
+      naturalPending = 'I asked to enter desktop widget mode, but I still need fresh state to confirm it.';
+      break;
+    case 'exit_widget_mode':
+    case 'expand_from_widget':
+      expectedState = ['surface:widget:closed'];
+      verification = 'Desktop widget mode should be inactive in client state.';
+      naturalCompletion = 'Desktop widget mode is closed.';
+      naturalPending = 'I asked to leave desktop widget mode, but I still need fresh state to confirm it.';
       break;
     case 'close_app':
       expectedState = target ? [`surface:${target}:closed`] : [];
@@ -1071,6 +1225,38 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
     case 'open_plans':
     case 'open_work_queue':
       setSurface('plans', 'plans');
+      break;
+    case 'open_subscription':
+    case 'open_activation':
+    case 'open_billing':
+      setSurface('subscription', action === 'open_activation' ? 'activation' : action === 'open_billing' ? 'billing' : 'subscription');
+      break;
+    case 'customer_takeover_panel':
+      setSurface('customer-takeover-panel', 'customer takeover panel');
+      break;
+    case 'close_customer_takeover_panel':
+      expectedState = ['surface:customer-takeover-panel:closed'];
+      verification = 'The customer takeover panel should be closed in client state.';
+      naturalCompletion = 'Customer takeover panel is closed.';
+      naturalPending = 'I asked to close the customer takeover panel, but I still need fresh state to confirm it.';
+      break;
+    case 'design_delivery_panel':
+      setSurface('design-delivery-panel', 'design delivery panel');
+      break;
+    case 'close_design_delivery_panel':
+      expectedState = ['surface:design-delivery-panel:closed'];
+      verification = 'The design delivery panel should be closed in client state.';
+      naturalCompletion = 'Design delivery panel is closed.';
+      naturalPending = 'I asked to close the design delivery panel, but I still need fresh state to confirm it.';
+      break;
+    case 'ecommerce_growth_panel':
+      setSurface('ecommerce-growth-panel', 'ecommerce growth panel');
+      break;
+    case 'close_ecommerce_growth_panel':
+      expectedState = ['surface:ecommerce-growth-panel:closed'];
+      verification = 'The ecommerce growth panel should be closed in client state.';
+      naturalCompletion = 'Ecommerce growth panel is closed.';
+      naturalPending = 'I asked to close the ecommerce growth panel, but I still need fresh state to confirm it.';
       break;
     case 'set_wallpaper_mode':
       expectedState = [`surface:wallpaper:${enabled ? 'open' : 'closed'}`];
@@ -1208,6 +1394,10 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
   if (target === 'music-layer') return Boolean(state.surfaces?.musicLayerVisible || state.music?.layerVisible);
   if (target === 'wallpaper') return Boolean(state.surfaces?.wallpaperMode);
+  if (target === 'widget') return Boolean(state.surfaces?.widgetMode);
+  if (target === 'customer-takeover-panel') return Boolean(state.surfaces?.customerTakeoverOpen || state.surfaces?.customerTakeoverStage);
+  if (target === 'design-delivery-panel') return Boolean(state.surfaces?.designDeliveryOpen || state.surfaces?.designDeliveryStage);
+  if (target === 'ecommerce-growth-panel') return Boolean(state.surfaces?.ecommerceGrowthOpen || state.surfaces?.ecommerceGrowthStage);
   return state.activeTab === target || openWindows.includes(target) || state.windows?.focused === target;
 }
 
@@ -1317,7 +1507,7 @@ export function formatClientSelfPrompt(userId: string): string {
     `- Organization: ${state.org?.connected ? `${state.org.name || state.org.id || 'connected'} (${state.org.role || 'member'}${state.org.id ? `, id=${state.org.id}` : ''})` : 'not connected or personal domain'}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}, customerPanel=${state.surfaces?.customerTakeoverStage || false}, designPanel=${state.surfaces?.designDeliveryStage || false}, ecommercePanel=${state.surfaces?.ecommerceGrowthStage || false}`,
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
     `- Music: ${state.music?.isPlaying ? 'playing' : 'idle'}${state.music?.trackName ? `, track="${state.music.trackName}"` : ''}${state.music?.volume != null ? `, volume=${state.music.volume}` : ''}, layer=${Boolean(state.music?.layerVisible ?? state.surfaces?.musicLayerVisible)}`,
     `- Music taste profile: ${formatMusicProfileForPrompt(musicProfile)}`,
@@ -1354,7 +1544,7 @@ export function formatClientSelfPrompt(userId: string): string {
     'You are Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
-    'Prefer explicit client actions such as open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_settings, and set_wallpaper_mode instead of mouse/keyboard control for Lumi UI.',
+    'Prefer explicit client actions such as open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_settings, open_subscription, enter_widget_mode, customer_takeover_panel, design_delivery_panel, ecommerce_growth_panel, and set_wallpaper_mode instead of mouse/keyboard control for Lumi UI.',
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
     'Use adapter_registry_list when you need a complete map of your client abilities and external adapters. Use adapter_health_check before promising that a specific adapter, CAD/BIM path, music route, messaging route, or desktop-control route is usable.',

@@ -5,7 +5,9 @@ import { registerClientSelfTools } from '../server/tools/definitions/client_self
 import {
   formatClientSelfPrompt,
   getClientActionExpectation,
+  getClientInterfaceSurfaces,
   getClientSelfAwarenessReport,
+  normalizeClientActionTarget,
   updateClientState,
   verifyClientActionResult,
 } from '../server/client/self_model';
@@ -94,6 +96,28 @@ describe('Lumi client self model', () => {
     expect(verified.matched).toContain('surface:knowledge:closed');
   });
 
+  it('includes large client panels in the interface map', () => {
+    const ids = getClientInterfaceSurfaces().map(surface => surface.id);
+
+    expect(ids).toEqual(expect.arrayContaining([
+      'customer-takeover-panel',
+      'design-delivery-panel',
+      'ecommerce-growth-panel',
+      'subscription',
+      'widget',
+    ]));
+  });
+
+  it('normalizes user-facing surface names to client target ids', () => {
+    expect(normalizeClientActionTarget('头像工作室')).toBe('avatar-studio');
+    expect(normalizeClientActionTarget('记忆头像')).toBe('memory-avatar');
+    expect(normalizeClientActionTarget('工作队列')).toBe('plans');
+    expect(normalizeClientActionTarget('通知面板')).toBe('notifications');
+    expect(normalizeClientActionTarget('提醒面板')).toBe('reminders');
+    expect(normalizeClientActionTarget('电脑适配中心')).toBe('kernel');
+    expect(normalizeClientActionTarget('主屏幕')).toBe('home');
+  });
+
   it('pressure-tests common client action expectations across surfaces and modes', () => {
     const cases: Array<{
       name: string;
@@ -180,6 +204,51 @@ describe('Lumi client self model', () => {
         },
         matched: 'surface:wallpaper:closed',
       },
+      {
+        name: 'enter widget mode',
+        args: { action: 'enter_widget_mode' },
+        after: {
+          activeTab: 'home',
+          windows: { open: [], focused: null, minimized: [] },
+          surfaces: { widgetMode: true },
+        },
+        matched: 'surface:widget:open',
+      },
+      {
+        name: 'open subscription',
+        args: { action: 'open_subscription' },
+        after: {
+          activeTab: 'subscription',
+          windows: { open: ['subscription'], focused: 'subscription', minimized: [] },
+          surfaces: {},
+        },
+        matched: 'surface:subscription:open',
+      },
+      {
+        name: 'open customer takeover panel',
+        args: { action: 'customer_takeover_panel', stage: 'result' },
+        after: {
+          activeTab: 'home',
+          windows: { open: [], focused: null, minimized: [] },
+          surfaces: { customerTakeoverOpen: true, customerTakeoverStage: 'result' },
+        },
+        matched: 'surface:customer-takeover-panel:open',
+      },
+      {
+        name: 'close design delivery panel',
+        args: { action: 'close_design_delivery_panel' },
+        before: {
+          activeTab: 'home',
+          windows: { open: [], focused: null, minimized: [] },
+          surfaces: { designDeliveryOpen: true, designDeliveryStage: 'cad' },
+        },
+        after: {
+          activeTab: 'home',
+          windows: { open: [], focused: null, minimized: [] },
+          surfaces: { designDeliveryOpen: false, designDeliveryStage: null },
+        },
+        matched: 'surface:design-delivery-panel:closed',
+      },
     ];
 
     for (const item of cases) {
@@ -253,6 +322,31 @@ describe('Lumi client self model', () => {
 });
 
 describe('client self tools', () => {
+  it('declares all client-native surfaces that the self model routes to', () => {
+    const registry = new ToolRegistry();
+    registerClientSelfTools(registry);
+
+    const declaration = registry.getToolDeclarations()
+      .find(item => item.function.name === 'client_action');
+    const actionEnum = declaration?.function.parameters.properties.action.enum || [];
+
+    expect(actionEnum).toEqual(expect.arrayContaining([
+      'enter_widget_mode',
+      'show_desktop_widget',
+      'exit_widget_mode',
+      'expand_from_widget',
+      'open_subscription',
+      'open_activation',
+      'open_billing',
+      'customer_takeover_panel',
+      'close_customer_takeover_panel',
+      'design_delivery_panel',
+      'close_design_delivery_panel',
+      'ecommerce_growth_panel',
+      'close_ecommerce_growth_panel',
+    ]));
+  });
+
   it('wraps client_action with before/after state verification', async () => {
     const userId = 'client_self_tool_user';
     updateClientState(userId, {
