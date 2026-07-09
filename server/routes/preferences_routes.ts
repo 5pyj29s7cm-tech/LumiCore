@@ -3,6 +3,7 @@ import { readDB, writeDB } from "../../db_layer";
 import { requireAuth } from "../middleware/auth";
 import { broadcastPreferenceChange } from "../memory";
 import { normalizeOperationMode, parseStoredOperationMode } from "../cognition/operation_modes";
+import { autonomyLevelForOperationMode, saveGateConfig } from "../autonomy/safety_gate";
 
 export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
   router.get("/preferences/pet", requireAuth, (req, res) => {
@@ -74,8 +75,10 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
         db.settings.push({ key, value });
       }
       writeDB(db);
+      const autonomyLevel = autonomyLevelForOperationMode(normalizedMode);
+      if (autonomyLevel) saveGateConfig({ autonomyLevel });
       broadcastPreferenceChange(uid, 'operation_mode', { mode: normalizedMode });
-      res.json({ ok: true });
+      res.json({ ok: true, autonomyLevel: autonomyLevel || undefined });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

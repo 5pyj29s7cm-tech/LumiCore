@@ -36,6 +36,13 @@ async function desktopOpen(args: Record<string, any>, context?: any): Promise<st
   });
 }
 
+async function desktopShowLumiWindow(_args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) {
+    throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
+  }
+  return context.desktopRelay('desktop_show_lumi_window', {});
+}
+
 async function desktopPathInfo(args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
@@ -53,6 +60,20 @@ async function desktopRunCommand(args: Record<string, any>, context?: any): Prom
     command: args.command || '',
     cwd: args.cwd || '',
   });
+}
+
+async function desktopIdleTime(_args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) {
+    throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
+  }
+  return context.desktopRelay('desktop_idle_time', {});
+}
+
+async function desktopPollActivity(_args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) {
+    throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
+  }
+  return context.desktopRelay('desktop_poll_activity', {});
 }
 
 export function registerDesktopTools(registry: ToolRegistry): void {
@@ -121,6 +142,20 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   });
 
   registry.register({
+    name: 'desktop_show_lumi_window',
+    description:
+      'Bring the Lumi desktop window to the foreground using the native client. Use this to return Lumi to the user or recover focus before client/UI work; it does not control external applications.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+    handler: desktopShowLumiWindow,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
     name: 'desktop_path_info',
     description:
       'Check whether an exact file or folder path exists on the user\'s real desktop machine. Use this after creating files, especially CAD/doc/image outputs, before telling the user the file is ready.',
@@ -152,5 +187,33 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopRunCommand,
     permission: 'user',
     securityLevel: 'confirm',
+  });
+
+  registry.register({
+    name: 'desktop_idle_time',
+    description:
+      'Read the current desktop idle-time signal from the native client. Use this to understand whether the user appears active or idle before proposing background/visible desktop work.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+    handler: desktopIdleTime,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'desktop_poll_activity',
+    description:
+      'Poll the native desktop activity snapshot, including foreground/idle signals exposed by the client. Use this for readiness checks, not for continuous surveillance.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+    handler: desktopPollActivity,
+    permission: 'user',
+    securityLevel: 'safe',
   });
 }

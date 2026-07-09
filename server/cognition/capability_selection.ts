@@ -71,7 +71,7 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
   ],
   artifact_work: ['work_product_plan', 'create_docx', 'create_ppt', 'create_pdf', 'write_file', 'work_product_verify'],
   design_cad: ['floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'],
-  desktop_control: ['desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_type', 'desktop_ui_invoke', 'desktop_capture_screen', 'desktop_open', 'computer_use'],
+  desktop_control: ['desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_type', 'desktop_ui_invoke', 'desktop_capture_screen', 'desktop_show_lumi_window', 'desktop_open', 'read_clipboard', 'write_clipboard', 'mouse_move', 'mouse_click', 'keyboard_type', 'keyboard_press', 'computer_use'],
   web_or_account: ['desktop_active_window', 'web_login_run', 'url_fetch_logged_in', 'web_search', 'browser_open_task', 'mcp_playwright_browser_snapshot'],
   external_tool: [],
   blocked_no_tools: [],

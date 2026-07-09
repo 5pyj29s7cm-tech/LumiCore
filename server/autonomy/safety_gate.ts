@@ -4,9 +4,13 @@
  */
 import { readDB, writeDB } from '../../db_layer';
 
+export type AutonomyLevel = 'reactive' | 'semi' | 'full';
+
 export interface SafetyGateConfig {
+  autonomyLevel: AutonomyLevel;
   alwaysOnline: boolean;
   autoProcessEnabled: boolean;
+  /** Legacy setting retained for old configs; it no longer gates external app execution. */
   externalAppAutomationEnabled: boolean;
   messagingSendRequiresConfirmation: boolean;
   maxConsecutiveTasks: number;
@@ -20,18 +24,55 @@ export interface SafetyGateConfig {
 }
 
 const DEFAULT_CONFIG: SafetyGateConfig = {
+  autonomyLevel: 'semi',
   alwaysOnline: true,
-  autoProcessEnabled: false,
+  autoProcessEnabled: true,
   externalAppAutomationEnabled: false,
   messagingSendRequiresConfirmation: true,
-  maxConsecutiveTasks: 1,
+  maxConsecutiveTasks: 3,
   allowedHours: [{ start: 8, end: 22 }],
   requireIdle: true,
-  minIdleSeconds: 120,
-  maxTokensPerHour: 3000,
+  minIdleSeconds: 60,
+  maxTokensPerHour: 10000,
   quietHoursEnabled: false,
   quietHoursStart: 22,
   quietHoursEnd: 8,
+};
+
+const AUTONOMY_LEVEL_PRESETS: Record<AutonomyLevel, Partial<SafetyGateConfig>> = {
+  reactive: {
+    autonomyLevel: 'reactive',
+    alwaysOnline: true,
+    autoProcessEnabled: false,
+    messagingSendRequiresConfirmation: true,
+    maxConsecutiveTasks: 1,
+    allowedHours: [{ start: 8, end: 22 }],
+    requireIdle: true,
+    minIdleSeconds: 120,
+    maxTokensPerHour: 3000,
+  },
+  semi: {
+    autonomyLevel: 'semi',
+    alwaysOnline: true,
+    autoProcessEnabled: true,
+    messagingSendRequiresConfirmation: true,
+    maxConsecutiveTasks: 3,
+    allowedHours: [{ start: 8, end: 22 }],
+    requireIdle: true,
+    minIdleSeconds: 60,
+    maxTokensPerHour: 10000,
+  },
+  full: {
+    autonomyLevel: 'full',
+    alwaysOnline: true,
+    autoProcessEnabled: true,
+    messagingSendRequiresConfirmation: false,
+    maxConsecutiveTasks: 10,
+    allowedHours: [{ start: 0, end: 24 }],
+    requireIdle: false,
+    minIdleSeconds: 0,
+    maxTokensPerHour: 100000,
+  },
 };
 
 const DB_KEY = 'autonomy_gate_config';
@@ -45,7 +86,7 @@ export function loadGateConfig(): SafetyGateConfig {
     const db = readDB();
     const setting = (db.settings || []).find((s: any) => s.key === DB_KEY);
     if (setting?.value) {
-      config = normalizeGateConfig({ ...DEFAULT_CONFIG, ...JSON.parse(setting.value) });
+      config = normalizeGateConfig(JSON.parse(setting.value));
     }
   } catch {}
   return { ...config };
@@ -56,7 +97,9 @@ export function getGateConfig(): SafetyGateConfig {
 }
 
 export function saveGateConfig(partial: Partial<SafetyGateConfig>): SafetyGateConfig {
-  config = normalizeGateConfig({ ...config, ...partial });
+  const level = normalizeAutonomyLevel(partial.autonomyLevel);
+  const patch = level ? { ...AUTONOMY_LEVEL_PRESETS[level], ...partial, autonomyLevel: level } : partial;
+  config = normalizeGateConfig({ ...config, ...patch });
   try {
     const db = readDB();
     let setting = (db.settings || []).find((s: any) => s.key === DB_KEY);
@@ -74,6 +117,7 @@ export function saveGateConfig(partial: Partial<SafetyGateConfig>): SafetyGateCo
 
 function normalizeGateConfig(input: Partial<SafetyGateConfig>): SafetyGateConfig {
   const next = { ...DEFAULT_CONFIG, ...input };
+  next.autonomyLevel = normalizeAutonomyLevel(input.autonomyLevel) || deriveAutonomyLevel(next);
   next.allowedHours = Array.isArray(next.allowedHours) && next.allowedHours.length > 0
     ? next.allowedHours
         .map(range => ({
@@ -94,6 +138,25 @@ function normalizeGateConfig(input: Partial<SafetyGateConfig>): SafetyGateConfig
   next.quietHoursStart = Math.max(0, Math.min(23, Number(next.quietHoursStart) || DEFAULT_CONFIG.quietHoursStart));
   next.quietHoursEnd = Math.max(0, Math.min(23, Number(next.quietHoursEnd) || DEFAULT_CONFIG.quietHoursEnd));
   return next;
+}
+
+function normalizeAutonomyLevel(value: any): AutonomyLevel | null {
+  return value === 'reactive' || value === 'semi' || value === 'full' ? value : null;
+}
+
+export function autonomyLevelForOperationMode(mode: string): AutonomyLevel | null {
+  if (mode === 'chat') return 'reactive';
+  if (mode === 'assistant') return 'semi';
+  if (mode === 'autonomous') return 'full';
+  return null;
+}
+
+function deriveAutonomyLevel(input: Partial<SafetyGateConfig>): AutonomyLevel {
+  if (!input.autoProcessEnabled) return 'reactive';
+  if (input.requireIdle === false && input.allowedHours?.length === 1 && input.allowedHours[0]?.start === 0 && input.allowedHours[0]?.end === 24) {
+    return 'full';
+  }
+  return 'semi';
 }
 
 /** Called from ambient poller socket handler to record latest idle state */
@@ -120,8 +183,12 @@ export function isAutonomousWorkAllowed(userId?: string): { allowed: boolean; re
     return { allowed: false, reason: 'Always Online is disabled' };
   }
 
-  if (!cfg.autoProcessEnabled) {
-    return { allowed: false, reason: 'Automatic processing is disabled until the user confirms a workflow' };
+  if (cfg.autonomyLevel === 'reactive' || !cfg.autoProcessEnabled) {
+    return { allowed: false, reason: 'Autonomous level is reactive; automatic processing is disabled' };
+  }
+
+  if (cfg.autonomyLevel === 'full') {
+    return { allowed: true };
   }
 
   // 1. Time-of-day gate
@@ -155,10 +222,6 @@ export function isAutonomousWorkAllowed(userId?: string): { allowed: boolean; re
   }
 
   return { allowed: true };
-}
-
-export function isExternalAppAutomationAllowed(): boolean {
-  return Boolean(config.externalAppAutomationEnabled);
 }
 
 export function isMessagingSendConfirmationRequired(): boolean {

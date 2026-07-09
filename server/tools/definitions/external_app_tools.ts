@@ -7,7 +7,7 @@ import { getDataPath } from '../../config/data_path';
 import { getExternalAppAdapters } from '../../external_apps/adapters';
 import { getAdapterRegistry } from '../../adapters/registry';
 import { getClientState } from '../../client/self_model';
-import { isExternalAppAutomationAllowed, isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate';
+import { isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 
 function requireDesktopRelay(context?: ToolContext) {
@@ -15,12 +15,6 @@ function requireDesktopRelay(context?: ToolContext) {
     throw new Error('External app actions require the Lumi desktop client relay.');
   }
   return context.desktopRelay;
-}
-
-function requireExternalAutomation() {
-  if (!isExternalAppAutomationAllowed()) {
-    throw new Error('External app automation is disabled. Enable it in Settings > Autonomy before opening or controlling external apps.');
-  }
 }
 
 function normalizeUrl(args: Record<string, any>): string {
@@ -1137,7 +1131,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const userId = context?.userId || 'anonymous';
       const adapterRegistry = getAdapterRegistry({ userId, clientState: getClientState(userId) as Record<string, any> | null });
       return JSON.stringify({
-        externalAppAutomationEnabled: isExternalAppAutomationAllowed(),
+        externalAppAutomationGate: 'removed',
         messagingSendRequiresConfirmation: isMessagingSendConfirmationRequired(),
         adapters: getExternalAppAdapters(),
         adapterRegistrySummary: adapterRegistry.summary,
@@ -1156,7 +1150,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       properties: {
         url: { type: 'string', description: 'URL to open. If omitted, query is converted to a Bing search URL.' },
         query: { type: 'string', description: 'Search query when no URL is provided.' },
-        open: { type: 'boolean', description: 'Open the URL in the desktop browser. Requires external app automation.' },
+        open: { type: 'boolean', description: 'Open the URL in the desktop browser. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
       },
       required: [],
     },
@@ -1165,7 +1159,6 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       if (!args.open) {
         return JSON.stringify({ target, opened: false, note: 'Set open=true after user confirmation to open the browser.' }, null, 2);
       }
-      requireExternalAutomation();
       const desktopRelay = requireDesktopRelay(context);
       const result = await desktopRelay('desktop_open', { target });
       return JSON.stringify({ target, opened: true, result }, null, 2);
@@ -1259,13 +1252,12 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         draft: { type: 'string', description: 'Reply draft to copy.' },
-        openWechat: { type: 'boolean', description: 'Open WeChat after copying the draft.' },
+        openWechat: { type: 'boolean', description: 'Open WeChat after copying the draft. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
         applicationTarget: { type: 'string', description: 'Optional app target, default wechat.exe.' },
       },
       required: ['draft'],
     },
     handler: async (args, context) => {
-      requireExternalAutomation();
       const draft = String(args.draft || '').trim();
       if (!draft) throw new Error('Draft is required.');
       const desktopRelay = requireDesktopRelay(context);
@@ -1306,7 +1298,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         outputPath: { type: 'string', description: 'Optional exact output base path. Extensions .lsp/.scr/.ps1 are generated from it.' },
         strokeDelayMs: { type: 'number', description: 'Delay in milliseconds after each visible operation. Defaults to 250, max 5000.' },
         autocadExecutable: { type: 'string', description: 'Optional AutoCAD executable path/name for the generated PowerShell runner. Defaults to acad.exe.' },
-        launchAutoCAD: { type: 'boolean', description: 'Optionally launch AutoCAD with the generated .scr via desktop_run_command. Requires desktop relay and external app automation.' },
+        launchAutoCAD: { type: 'boolean', description: 'Optionally launch AutoCAD with the generated .scr via desktop_run_command. Requires desktop relay plus foreground confirmation, or an approved autonomous workflow when used in the background.' },
         walls: {
           type: 'array',
           description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
@@ -1377,7 +1369,6 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
       let launchResult: string | undefined;
       if (args.launchAutoCAD) {
-        requireExternalAutomation();
         const desktopRelay = requireDesktopRelay(context);
         launchResult = await desktopRelay('desktop_run_command', {
           command: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
@@ -1459,7 +1450,6 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const shouldLaunch = args.launch !== false;
 
       if (shouldLaunch) {
-        requireExternalAutomation();
         const desktopRelay = requireDesktopRelay(context);
         try { fs.rmSync(markerPath, { force: true }); } catch {}
         launchResult = await desktopRelay('desktop_run_command', { command: launchCommand });
@@ -1574,7 +1564,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           description: 'Optional holes as objects with x, y, and r/radius.',
           items: { type: 'object' },
         },
-        openPreview: { type: 'boolean', description: 'Open the generated DXF with the system default app. Requires external app automation.' },
+        openPreview: { type: 'boolean', description: 'Open the generated DXF with the system default app. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
       },
       required: ['width', 'height'],
     },
@@ -1590,7 +1580,6 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
       let openResult: string | undefined;
       if (args.openPreview) {
-        requireExternalAutomation();
         const desktopRelay = requireDesktopRelay(context);
         openResult = await desktopRelay('desktop_open', { target: outPath });
       }

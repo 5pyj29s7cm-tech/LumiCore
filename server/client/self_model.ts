@@ -121,9 +121,9 @@ export interface ClientStateSnapshot {
     lastError?: string;
   };
   autonomy?: {
+    autonomyLevel?: 'reactive' | 'semi' | 'full';
     alwaysOnline?: boolean;
     autoProcessEnabled?: boolean;
-    externalAppAutomationEnabled?: boolean;
     messagingSendRequiresConfirmation?: boolean;
     maxConsecutiveTasks?: number;
   };
@@ -316,8 +316,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.visible_execution',
     label: 'Visible task execution',
     kind: 'system',
-    actions: ['client_get_state', 'client_action', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_mouse_click_at', 'desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen'],
-    notes: 'For visible work Lumi should state the task goal, choose the right interface, inspect the active window with desktop_ui_snapshot when native controls are available, use desktop_ui_focus/click/invoke/type for real accessible controls, inspect the screen/current window when pixels are needed, move the visible cursor to the real target before raw desktop clicks, perform real desktop input when appropriate, verify outcomes, report only results/blockers/needed confirmations, and close temporary surfaces after they are explained. Prebuilt workflows are reusable operating patterns, not fake demos: adapt the sequence to the current user goal, screen state, installed apps, and required deliverables.',
+    actions: ['client_get_state', 'client_action', 'desktop_show_lumi_window', 'desktop_active_window', 'desktop_running_processes', 'desktop_idle_time', 'desktop_poll_activity', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen', 'read_clipboard', 'write_clipboard', 'mouse_move', 'mouse_click', 'mouse_drag', 'keyboard_type', 'keyboard_press', 'computer_use'],
+    notes: 'For visible work Lumi should state the task goal, choose the right interface, inspect the active window with desktop_ui_snapshot when native controls are available, use desktop_ui_focus/click/invoke/type for real accessible controls, inspect the screen/current window when pixels are needed, move the visible cursor to the real target before raw desktop clicks, perform real desktop input when appropriate, verify outcomes, report only results/blockers/needed confirmations, and close temporary surfaces after they are explained. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, command execution, and vision computer_use. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are reserved for controlled demos/workflows or computer_use cleanup. Prebuilt workflows are reusable operating patterns, not fake demos: adapt the sequence to the current user goal, screen state, installed apps, and required deliverables.',
     requiresConfirmation: true,
     stateKeys: ['surfaces', 'windows', 'tools', 'permissions'],
   },
@@ -326,7 +326,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'External account session reuse',
     kind: 'external_app',
     actions: ['desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'web_login_profile_list', 'web_login_profile_save', 'web_login_learn_site', 'web_login_run', 'browser_open_task'],
-    notes: 'When work involves WeChat, store backends, creator platforms, or other account surfaces, Lumi can restore and use already logged-in taskbar/background windows or saved browser profiles for visible safe preparation work. If the exact local app path is unknown, use desktop_list_apps before desktop_open instead of guessing install paths or generating a one-off skill. With explicit authorization, Lumi can learn a generic website login, store encrypted credentials locally, or reuse a browser/session-only login profile after the user completes QR/OTP/captcha/passkey checks. It must stop for user confirmation or handoff at first-time login, QR/OTP/biometric checks, account switching, third-party authorization, saving credentials, publishing, payment, or sending messages. The learned behavior is to continue from existing sessions instead of pretending that a local HTML page or a fresh browser tab is real account control.',
+    notes: 'When work involves WeChat, store backends, creator platforms, or other account surfaces, Lumi can restore and use already logged-in taskbar/background windows or saved browser profiles for visible safe preparation work after foreground confirmation or inside an approved autonomous workflow. If the exact local app path is unknown, use desktop_list_apps before desktop_open instead of guessing install paths or generating a one-off skill. With explicit authorization, Lumi can learn a generic website login, store encrypted credentials locally, or reuse a browser/session-only login profile after the user completes QR/OTP/captcha/passkey checks. It must stop for user confirmation or handoff at first-time login, QR/OTP/biometric checks, account switching, third-party authorization, saving credentials, publishing, payment, or sending messages. The learned behavior is to continue from existing sessions instead of pretending that a local HTML page or a fresh browser tab is real account control.',
     requiresConfirmation: true,
     stateKeys: ['permissions', 'tools', 'windows'],
   },
@@ -458,10 +458,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'system.always_online',
-    label: 'Always Online and autonomous work',
+    label: 'Desktop modes and autonomous work',
     kind: 'system',
     actions: ['open_plans', 'open_work_queue', 'open_settings(section=autonomy)', 'autonomy_get_policy', 'autonomy_update_policy', 'autonomy_list_workflows', 'autonomy_register_workflow', 'autonomy_set_workflow_enabled'],
-    notes: 'Lumi can stay ready while the desktop/server is running. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes; background execution still requires the autonomy gate plus an enabled user-confirmed workflow.',
+    notes: 'Lumi uses the three desktop modes as the autonomy permission source: Chat maps to reactive, Assistant maps to semi, and Autonomy maps to full. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. There is no separate external-app automation gate.',
     requiresConfirmation: true,
     stateKeys: ['mode', 'autonomy', 'runtime'],
   },
@@ -1516,7 +1516,7 @@ export function formatClientSelfPrompt(userId: string): string {
     `- Permissions: ${formatStateObject(state.permissions)}`,
     `- Tools: agent=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
     `- Native runtime: autostart=${Boolean(state.runtime?.autostartEnabled)}, closeToBackground=${Boolean(state.runtime?.closeToBackground)}, backend=${state.runtime?.backendNodeRunning ? 'running' : 'dev/not-spawned'}, shortcut=${state.runtime?.globalShortcut || 'Alt+Space'}${state.runtime?.lastError ? `, error=${state.runtime.lastError}` : ''}`,
-    `- Autonomy gate: alwaysOnline=${gate.alwaysOnline}, autoProcess=${gate.autoProcessEnabled}, externalAppAutomation=${gate.externalAppAutomationEnabled}, messagingSendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}, maxConsecutiveTasks=${gate.maxConsecutiveTasks}`,
+    `- Autonomy level: ${gate.autonomyLevel} (alwaysOnline=${gate.alwaysOnline}, autoProcess=${gate.autoProcessEnabled}, messagingSendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}, maxConsecutiveTasks=${gate.maxConsecutiveTasks}, externalAppAutomationGate=removed)`,
     `- Confirmed autonomous workflows: enabled=${enabledWorkflows.length}, total=${workflows.length}${enabledWorkflows.length ? `, titles=${enabledWorkflows.map(workflow => workflow.title).slice(0, 5).join(', ')}` : ''}`,
     `- Recent errors: ${state.errors?.length ? state.errors.map(e => `${e.source}: ${e.message}`).slice(-3).join(' | ') : 'none'}`,
     `- State age: ${stateAge}s`,

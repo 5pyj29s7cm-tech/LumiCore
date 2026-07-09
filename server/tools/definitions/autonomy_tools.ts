@@ -7,18 +7,7 @@ import {
 } from '../../autonomy/workflows';
 
 const ALLOWED_KEYS = new Set<keyof SafetyGateConfig>([
-  'alwaysOnline',
-  'autoProcessEnabled',
-  'externalAppAutomationEnabled',
-  'messagingSendRequiresConfirmation',
-  'maxConsecutiveTasks',
-  'allowedHours',
-  'requireIdle',
-  'minIdleSeconds',
-  'maxTokensPerHour',
-  'quietHoursEnabled',
-  'quietHoursStart',
-  'quietHoursEnd',
+  'autonomyLevel',
 ]);
 
 function pickGatePatch(args: Record<string, any>): Partial<SafetyGateConfig> {
@@ -34,35 +23,31 @@ function pickGatePatch(args: Record<string, any>): Partial<SafetyGateConfig> {
 export function registerAutonomyTools(registry: ToolRegistry): void {
   registry.register({
     name: 'autonomy_get_policy',
-    description: 'Read Lumi autonomous work safety policy: always-online, auto processing, external app automation, idle gate, time window, and budget.',
+    description: 'Read Lumi autonomous work policy derived from the desktop modes: chat/reactive, assistant/semi, autonomous/full, plus compatibility safety fields.',
     parameters: {
       type: 'object',
       properties: {},
       required: [],
     },
-    handler: async () => JSON.stringify(getGateConfig(), null, 2),
+    handler: async () => {
+      const policy = { ...getGateConfig() } as Partial<SafetyGateConfig> & { externalAppAutomationEnabled?: boolean; externalAppAutomationGate?: string };
+      delete policy.externalAppAutomationEnabled;
+      policy.externalAppAutomationGate = 'removed';
+      return JSON.stringify({
+        ...policy,
+      }, null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
   });
 
   registry.register({
     name: 'autonomy_update_policy',
-    description: 'Update Lumi autonomous work safety policy after explicit user confirmation. Use when the user agrees to a background workflow, 24-hour work window, or external app automation.',
+    description: 'Update Lumi autonomous work policy after explicit user confirmation. Prefer changing the desktop operation mode; autonomyLevel exists for compatibility with chat/reactive, assistant/semi, and autonomous/full.',
     parameters: {
       type: 'object',
       properties: {
-        alwaysOnline: { type: 'boolean', description: 'Keep Lumi ready while the client/server is running.' },
-        autoProcessEnabled: { type: 'boolean', description: 'Allow queued confirmed workflows to run in the background.' },
-        externalAppAutomationEnabled: { type: 'boolean', description: 'Allow opening/controlling external apps from adapters or autonomous work.' },
-        messagingSendRequiresConfirmation: { type: 'boolean', description: 'Require confirmation before sending messages. Keep true unless an approved integration exists.' },
-        maxConsecutiveTasks: { type: 'number', description: 'Maximum autonomous tasks per scheduler cycle, 1-10.' },
-        allowedHours: { type: 'array', description: 'Allowed execution windows, e.g. [{start:0,end:24}] for 24h.' },
-        requireIdle: { type: 'boolean', description: 'Require the user to be idle before background execution.' },
-        minIdleSeconds: { type: 'number', description: 'Minimum idle seconds before background execution.' },
-        maxTokensPerHour: { type: 'number', description: 'Hourly token budget for autonomous work.' },
-        quietHoursEnabled: { type: 'boolean', description: 'Suppress proactive notifications during quiet hours.' },
-        quietHoursStart: { type: 'number', description: 'Quiet hour start, 0-23.' },
-        quietHoursEnd: { type: 'number', description: 'Quiet hour end, 0-23.' },
+        autonomyLevel: { type: 'string', enum: ['reactive', 'semi', 'full'], description: 'Compatibility field mirroring desktop modes: chat=reactive, assistant=semi, autonomous=full.' },
         reason: { type: 'string', description: 'Short reason/user instruction for auditability.' },
       },
       required: [],

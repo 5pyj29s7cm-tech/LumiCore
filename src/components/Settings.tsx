@@ -88,7 +88,7 @@ export function Settings({
   onSectionChange?: (section: string) => void;
 }) {
   const { platform, isElectron } = usePlatform();
-  const { operationMode, setOperationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode } = useApp();
+  const { operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode } = useApp();
   const [providerStatus, setProviderStatus] = useState<Record<string, { available: boolean; model: string }>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const visibleSection = activeSection === 'computer' || activeSection === 'messaging' ? 'general' : activeSection;
@@ -199,7 +199,7 @@ export function Settings({
           <div className="space-y-8">
             <SettingsSection title={t.agentFramework || ui('智能体框架（Lumi 协议）', 'Agent Framework (Lumi Protocol)')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
               <div className="space-y-6">
-                <AutonomousSettingsPanel t={t} operationMode={operationMode} setOperationMode={setOperationMode} />
+                <AutonomousSettingsPanel t={t} operationMode={operationMode} />
               </div>
             </SettingsSection>
           </div>
@@ -1721,9 +1721,9 @@ function RelayProviderRow({ t }: { t?: any }) {
 }
 
 type AutonomyGateConfig = {
+  autonomyLevel: 'reactive' | 'semi' | 'full';
   alwaysOnline: boolean;
   autoProcessEnabled: boolean;
-  externalAppAutomationEnabled: boolean;
   messagingSendRequiresConfirmation: boolean;
   maxConsecutiveTasks: number;
   allowedHours: { start: number; end: number }[];
@@ -1751,18 +1751,18 @@ type NativeRuntimeStatus = {
 };
 
 const DEFAULT_AUTONOMY_GATE: AutonomyGateConfig = {
+  autonomyLevel: 'semi',
   alwaysOnline: true,
-  autoProcessEnabled: false,
-  externalAppAutomationEnabled: false,
+  autoProcessEnabled: true,
   messagingSendRequiresConfirmation: true,
-  maxConsecutiveTasks: 1,
+  maxConsecutiveTasks: 3,
   allowedHours: [{ start: 8, end: 22 }],
   requireIdle: true,
-  minIdleSeconds: 120,
-  maxTokensPerHour: 3000,
+  minIdleSeconds: 60,
+  maxTokensPerHour: 10000,
 };
 
-function AutonomousSettingsPanel({ t, operationMode, setOperationMode }: { t: any; operationMode: OperationMode; setOperationMode: (m: OperationMode) => void }) {
+function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: OperationMode }) {
   const [gateConfig, setGateConfig] = useState<AutonomyGateConfig>(DEFAULT_AUTONOMY_GATE);
   const [nativeRuntime, setNativeRuntime] = useState<NativeRuntimeStatus | null>(null);
   const [nativeRuntimeError, setNativeRuntimeError] = useState('');
@@ -1808,24 +1808,6 @@ function AutonomousSettingsPanel({ t, operationMode, setOperationMode }: { t: an
     };
   }, []);
 
-  const updateGate = (partial: Partial<AutonomyGateConfig>) => {
-    const updated = { ...gateConfig, ...partial };
-    setGateConfig(updated);
-    fetch('/api/autonomy/gate_config', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(partial),
-    })
-      .then(async r => {
-        const data = await r.json().catch(() => null);
-        if (!r.ok) throw new Error(data?.error || ui('自主设置更新失败', 'Failed to update autonomy settings'));
-        if (data) setGateConfig({ ...DEFAULT_AUTONOMY_GATE, ...data });
-      })
-      .catch((err: any) => {
-        setGateConfig(gateConfig);
-        toast.error(err?.message || ui('自主设置更新失败', 'Failed to update autonomy settings'));
-      });
-  };
-
   const refreshNativeRuntime = async () => {
     const { invoke } = await import('@tauri-apps/api/core');
     const status = await invoke<NativeRuntimeStatus>('get_runtime_resilience_status');
@@ -1867,8 +1849,12 @@ function AutonomousSettingsPanel({ t, operationMode, setOperationMode }: { t: an
     } catch {}
   };
 
-  const isAutonomous = operationMode === 'autonomous';
-  const isAllDay = gateConfig.allowedHours?.length === 1 && gateConfig.allowedHours[0]?.start === 0 && gateConfig.allowedHours[0]?.end === 24;
+  const modeLabel =
+    operationMode === 'autonomous' ? ui('自主', 'Autonomy') :
+    operationMode === 'assistant' ? ui('助手', 'Assistant') :
+    operationMode === 'chat' ? ui('聊天', 'Chat') :
+    ui('会议', 'Meeting');
+  const gateLevel = gateConfig.autonomyLevel || (gateConfig.autoProcessEnabled ? 'semi' : 'reactive');
   const ToggleRow = ({
     label,
     desc,
@@ -1898,53 +1884,25 @@ function AutonomousSettingsPanel({ t, operationMode, setOperationMode }: { t: an
 
   return (
     <div className="space-y-4">
-      {/* Operation Mode */}
-      <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('自主模式', 'Autonomy Mode')}</div>
-            <p className="text-xs text-white/40 mt-1">{ui('允许 Lumi 先给行动指南，再用工具、运行日志、桌面控制和团队智能体处理多步工作。', 'Allow Lumi to give an action guide, then handle multi-step work with tools, run logs, desktop control, and team agents.')}</p>
-          </div>
-          <button
-            onClick={() => setOperationMode(isAutonomous ? 'assistant' : 'autonomous')}
-            className={`w-11 h-6 rounded-full transition-all ${isAutonomous ? 'bg-cyan-500' : 'bg-white/10'}`}
-          >
-            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${isAutonomous ? 'translate-x-[24px]' : 'translate-x-[2px]'}`} />
-          </button>
-        </div>
-        {isAutonomous && (
-          <div className="flex items-center gap-2 text-xs text-cyan-400/70">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            {ui('自主模式已开启：Lumi 可以把复杂任务拆成可见的工作路径。', 'Autonomy active: Lumi can turn complex tasks into visible work paths.')}
-          </div>
-        )}
-      </div>
-
-      {/* Always Online */}
+      {/* Desktop Mode Authority */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <div>
-          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('常驻在线', 'Always Online')}</div>
-          <p className="text-xs text-white/40 mt-1">{ui('桌面客户端或后台服务运行时，Lumi 可以保持待命。自动处理由下面的安全门单独控制。', 'Lumi can stay ready while the desktop client or background server is running. Automatic processing is controlled separately.')}</p>
+          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('桌面三档', 'Desktop Modes')}</div>
+          <p className="text-xs text-white/40 mt-1">{ui('权限跟随桌面主界面的三档：聊天、助手、自主。会议是独立记录模式，不单独改变自主权限。', 'Permissions follow the three desktop modes: Chat, Assistant, and Autonomy. Meeting is a separate capture mode and does not create another autonomy level.')}</p>
         </div>
-        <ToggleRow
-          label={ui('保持 Lumi 待命', 'Keep Lumi ready')}
-          desc={ui('应用在线时允许后台扫描、状态中继、计划任务和待处理工作流检查。', 'Allows background scans, state relay, schedulers, and pending workflow checks while the app is online.')}
-          checked={gateConfig.alwaysOnline}
-          onClick={() => updateGate({ alwaysOnline: !gateConfig.alwaysOnline })}
-        />
-        <ToggleRow
-          label={ui('自动处理已确认工作流', 'Auto-process confirmed workflows')}
-          desc={ui('只有用户已经同意该工作流后，Lumi 才会执行排队的后台工作。', 'Lets Lumi execute queued background work only after the user has agreed to that workflow.')}
-          checked={gateConfig.autoProcessEnabled}
-          onClick={() => updateGate({ autoProcessEnabled: !gateConfig.autoProcessEnabled })}
-          danger
-        />
-        <ToggleRow
-          label={ui('24 小时工作窗口', '24-hour work window')}
-          desc={ui('开启后安全门允许任意时间自动工作；空闲、预算和确认限制仍然生效。', 'When enabled, the safety gate permits automatic work at any hour; idle, budget, and confirmation gates still apply.')}
-          checked={isAllDay}
-          onClick={() => updateGate({ allowedHours: isAllDay ? [{ start: 8, end: 22 }] : [{ start: 0, end: 24 }] })}
-        />
+        <div className="rounded-xl bg-black/18 px-3 py-3 text-[11px] leading-relaxed text-white/42">
+          {ui('当前桌面档位', 'Current desktop mode')}: <span className="font-bold text-white/72">{modeLabel}</span>
+          <span className="mx-2 text-white/18">/</span>
+          {ui('后端权限档', 'Backend autonomy')}: <span className="font-bold text-white/72">{gateLevel}</span>
+        </div>
+      </div>
+
+      {/* Resident Runtime */}
+      <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
+        <div>
+          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('原生常驻运行', 'Native Resident Runtime')}</div>
+          <p className="text-xs text-white/40 mt-1">{ui('控制桌面客户端是否随系统启动，以及关闭窗口后是否继续留在后台。', 'Controls whether the desktop client starts with the system and stays alive after closing the window.')}</p>
+        </div>
         <div className="rounded-xl border border-white/8 bg-black/18 p-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -2000,75 +1958,6 @@ function AutonomousSettingsPanel({ t, operationMode, setOperationMode }: { t: an
               {nativeRuntimeError || ui('正在加载原生运行状态...', 'Native runtime status is loading...')}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* External Apps */}
-      <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-        <div>
-          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('外部应用', 'External Apps')}</div>
-          <p className="text-xs text-white/40 mt-1">{ui('浏览器、微信、CAD 和其他 AI 应用会先经过适配器路由，再由 Lumi 使用视觉控制。', 'Browser, WeChat, CAD, and other AI apps are routed through adapters before Lumi uses visual control.')}</p>
-        </div>
-        <ToggleRow
-          label={ui('允许外部应用自动化', 'Allow external app automation')}
-          desc={ui('Lumi 通过适配器打开或控制外部应用前需要开启。关闭时只生成草稿和文件。', 'Required before Lumi opens or controls external apps through adapters. Keep off for draft-only behavior.')}
-          checked={gateConfig.externalAppAutomationEnabled}
-          onClick={() => updateGate({ externalAppAutomationEnabled: !gateConfig.externalAppAutomationEnabled })}
-          danger
-        />
-        <ToggleRow
-          label={ui('发送消息前确认', 'Confirm before message sending')}
-          desc={ui('Lumi 可以准备并复制消息草稿，但最终发送仍需要用户确认。', 'Lumi may prepare and copy message drafts, but sending should remain user-confirmed.')}
-          checked={gateConfig.messagingSendRequiresConfirmation}
-          onClick={() => updateGate({ messagingSendRequiresConfirmation: !gateConfig.messagingSendRequiresConfirmation })}
-        />
-      </div>
-
-      {/* Safety Gates */}
-      <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-4">
-        <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('安全门', 'Safety Gates')}</div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-white/50">{ui('要求用户空闲', 'Require user idle')}</span>
-          <button
-            onClick={() => updateGate({ requireIdle: !gateConfig.requireIdle })}
-            className={`w-10 h-5 rounded-full transition-all ${gateConfig.requireIdle ? 'bg-cyan-500' : 'bg-white/10'}`}
-          >
-            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${gateConfig.requireIdle ? 'translate-x-[22px]' : 'translate-x-[2px]'}`} />
-          </button>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-white/50">{ui(`最短空闲时间：${gateConfig.minIdleSeconds} 秒`, `Min idle time: ${gateConfig.minIdleSeconds}s`)}</span>
-          </div>
-          <input
-            type="range" min={30} max={600} step={30} value={gateConfig.minIdleSeconds}
-            onChange={e => updateGate({ minIdleSeconds: parseInt(e.target.value) })}
-            className="w-full accent-cyan-500"
-          />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-white/50">{ui(`最大连续任务数：${gateConfig.maxConsecutiveTasks}`, `Max consecutive tasks: ${gateConfig.maxConsecutiveTasks}`)}</span>
-          </div>
-          <input
-            type="range" min={1} max={10} step={1} value={gateConfig.maxConsecutiveTasks}
-            onChange={e => updateGate({ maxConsecutiveTasks: parseInt(e.target.value) })}
-            className="w-full accent-cyan-500"
-          />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-white/50">{ui(`每小时最大 Token：${gateConfig.maxTokensPerHour}`, `Max tokens/hour: ${gateConfig.maxTokensPerHour}`)}</span>
-          </div>
-          <input
-            type="range" min={500} max={10000} step={500} value={gateConfig.maxTokensPerHour}
-            onChange={e => updateGate({ maxTokensPerHour: parseInt(e.target.value) })}
-            className="w-full accent-cyan-500"
-          />
         </div>
       </div>
 

@@ -22,7 +22,7 @@ function groupTools(toolNames: string[]): string[] {
   const groups: Array<[string, RegExp]> = [
     ['client/ui', /^(client_|adapter_|external_app_)/],
     ['task', /^(work_takeover_|work_product_)/],
-    ['desktop', /^(desktop_|computer_use$|capture_screen|get_active_window)/],
+    ['desktop', /^(desktop_|computer_use$|capture_screen|get_active_window|get_running_processes|mouse_|keyboard_|read_clipboard|write_clipboard)/],
     ['web/account', /^(web_|url_|browser_|mcp_playwright_|external_control_)/],
     ['files/docs', /^(read_|write_|create_|extract_|pdf_|ocr_|transcribe_|list_|search_|grep_)/],
     ['cad/design', /^(cad_|floorplan_|generate_image|edit_image)/],

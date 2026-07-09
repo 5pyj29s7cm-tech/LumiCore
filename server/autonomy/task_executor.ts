@@ -3,7 +3,7 @@
  * Executes tasks via runWithTools with tighter safety policy than user-initiated autonomous mode.
  */
 import { dequeue, markRunning, markCompleted, markFailed, getRunningTask } from './task_queue';
-import { isAutonomousWorkAllowed, isExternalAppAutomationAllowed, recordAutonomousTokens } from './safety_gate';
+import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry } from '../tools/registry';
 import { ToolContext } from '../tools/types';
@@ -34,26 +34,8 @@ const AUTONOMOUS_POLICY = {
     'run_command',   // shell remains available but gated below
     'system_command',
   ],
-  maxIterations: 15,
+  maxIterations: 25,
 };
-
-/** Desktop tools that are always safe for autonomous use */
-const ALLOWED_DESKTOP_TOOLS = [
-  'desktop_system_info',
-  'desktop_list_files',
-  'desktop_open',
-  'capture_screen',
-  'get_active_window_info',
-  'get_running_processes',
-  'read_clipboard',
-  'mouse_move',
-  'mouse_click',
-  'mouse_drag',
-  'keyboard_type',
-  'keyboard_press',
-  'ocr_screen',
-  'ocr_region',
-];
 
 const pendingDesktopResults = new Map<string, {
   resolve: (output: string) => void;
@@ -134,17 +116,6 @@ export function handleAutonomousDesktopResult(
   return true;
 }
 
-function isDesktopTool(name: string): boolean {
-  return /^(desktop_|mouse_|keyboard_|computer_|get_|capture_|read_|ocr_)/.test(name);
-}
-
-function isExternalAutomationTool(name: string): boolean {
-  return name === 'desktop_open'
-    || name.startsWith('mouse_')
-    || name.startsWith('keyboard_')
-    || name.startsWith('computer_');
-}
-
 export async function executeNextAutonomousTask(
   io: SocketIOServer,
   getters: LLMGetters,
@@ -174,15 +145,10 @@ export async function executeNextAutonomousTask(
   });
 
   try {
+    const currentGate = getGateConfig();
+    const maxIterations = currentGate.autonomyLevel === 'full' ? 25 : 15;
     // Build desktop relay using socket.io broadcast
     const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
-      // Only allow safe desktop tools in autonomous mode
-      if (!ALLOWED_DESKTOP_TOOLS.includes(toolName) && isDesktopTool(toolName)) {
-        throw new Error(`Autonomous safety: desktop tool "${toolName}" is not allowed`);
-      }
-      if (isExternalAutomationTool(toolName) && !isExternalAppAutomationAllowed()) {
-        throw new Error(`Autonomous safety: external app automation is disabled for "${toolName}"`);
-      }
       return new Promise((resolve, reject) => {
         const cid = `autonomous_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const timeout = setTimeout(() => {
@@ -201,7 +167,7 @@ export async function executeNextAutonomousTask(
       userId: task.userId,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
       requestConfirmation: async () => true, // Auto-approve in autonomous mode
-      toolPolicy: AUTONOMOUS_POLICY,
+      toolPolicy: { ...AUTONOMOUS_POLICY, maxIterations },
       isCancelled: () => cancelled,
       autonomous: true,
       source: 'autonomous',
@@ -221,7 +187,7 @@ export async function executeNextAutonomousTask(
       toolRegistry,
       getUserPreferredLLMConfig(task.userId, { maxTokens: 2000 }),
       undefined, // onToolCall
-      15, // maxIterations
+      maxIterations,
       getters.getDeepSeek, getters.getGemini,
       getters.getOpenAI || (() => null),
       getters.getAnthropic || (() => null),

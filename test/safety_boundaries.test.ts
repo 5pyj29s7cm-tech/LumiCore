@@ -56,6 +56,11 @@ describe('Action Constitution', () => {
     expect(classifyAction('install_skill')).toBe('local_write');
     expect(classifyAction('mcp_playwright_browser_click')).toBe('external_app');
     expect(classifyAction('desktop_run_command')).toBe('system');
+    expect(classifyAction('desktop_show_lumi_window')).toBe('observe');
+    expect(classifyAction('desktop_idle_time')).toBe('observe');
+    expect(classifyAction('desktop_poll_activity')).toBe('observe');
+    expect(classifyAction('mouse_click')).toBe('desktop_control');
+    expect(classifyAction('keyboard_type')).toBe('desktop_control');
   });
 
   it('upgrades safe local writes to confirmation', () => {
