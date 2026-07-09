@@ -15,7 +15,7 @@ import { mcpManager, getMCPConfig } from "../mcp";
 import { DEFAULT_VISION_MODELS } from "../llm/vision_preferences";
 import { getOrgPreferredLLM, getUserPreferredLLM, upsertOrgPreferredLLM } from "../llm/user_preferences";
 import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
-import { getActiveSTTProvider } from "../stt/adapter";
+import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
 
 // Cached GPU detection — queried once
@@ -158,6 +158,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
       pref,
       active: {
         stt: getActiveSTTProvider(),
+        streamingStt: getActiveStreamingSTTProvider(),
         tts: getActiveTTSProvider(),
       },
     });
@@ -184,6 +185,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
       pref,
       active: {
         stt: getActiveSTTProvider(),
+        streamingStt: getActiveStreamingSTTProvider(),
         tts: getActiveTTSProvider(),
       },
     });

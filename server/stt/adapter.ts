@@ -2,13 +2,14 @@ import { STTConfig, STTResult, STTProvider } from './types';
 import * as whisper from './providers/whisper';
 import * as qwen from './providers/qwen';
 import * as ark from './providers/ark';
+import * as arkStream from './providers/ark_stream';
 import * as localWhisper from './providers/local-whisper';
 import { getKey } from '../config/keys';
 import { getVoicePreference } from '../config/voice_preference';
 import { recordLatency } from '../monitor/latency_store';
 import { isCircuitClosed } from '../cloud/circuit_breaker';
 
-type StreamingSTTProvider = 'qwen';
+type StreamingSTTProvider = 'qwen' | 'ark';
 
 function hasQwenKey(): boolean {
   return Boolean(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
@@ -62,10 +63,13 @@ export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promis
 
 export function createStreamingSession(
   config: STTConfig,
-): qwen.QwenStreamSession {
+): qwen.QwenStreamSession | arkStream.ArkStreamSession {
   const provider = config.provider;
   if (provider === 'qwen') {
     return qwen.createStream(config.language, config.interimResults);
+  }
+  if (provider === 'ark') {
+    return arkStream.createStream(config.language || 'zh-CN', config.interimResults);
   }
   throw new Error(`Streaming not supported for provider: ${provider}`);
 }
@@ -95,11 +99,15 @@ export function getActiveSTTProvider(): STTProvider | null {
 export function getActiveStreamingSTTProvider(): StreamingSTTProvider | null {
   const pref = getVoicePreference();
   const qwenKey = hasQwenKey();
+  const doubaoSpeech = arkStream.hasDoubaoSpeech();
 
   if (pref.stt === 'qwen') return qwenKey ? 'qwen' : null;
-  if (pref.stt === 'local-whisper' || pref.stt === 'ark' || pref.stt === 'whisper') return null;
+  if (pref.stt === 'ark') return doubaoSpeech ? 'ark' : null;
+  if (pref.stt === 'local-whisper' || pref.stt === 'whisper') return null;
 
+  if (doubaoSpeech && isCircuitClosed('doubao-stt-stream')) return 'ark';
   if (qwenKey && isCircuitClosed('qwen-stt')) return 'qwen';
+  if (doubaoSpeech) return 'ark';
   if (qwenKey) return 'qwen';
   return null;
 }

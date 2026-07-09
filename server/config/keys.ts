@@ -55,6 +55,7 @@ export interface KeyStore {
 const KEY_TO_CIRCUIT: Partial<Record<keyof KeyStore, string[]>> = {
   DASHSCOPE_API_KEY: ['qwen'],
   QWEN_API_KEY: ['qwen'],
+  DOUBAO_SPEECH_KEY: ['ark', 'doubao-tts', 'doubao-stt-stream'],
   OPENAI_API_KEY: ['openai'],
   ANTHROPIC_API_KEY: ['anthropic'],
   GEMINI_API_KEY: ['gemini'],

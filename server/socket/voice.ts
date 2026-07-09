@@ -1662,7 +1662,7 @@ export function registerVoiceHandlers(
     } else {
       socket.emit("audio:status", { status: "idle" });
       socket.emit("audio:error", {
-        message: "Realtime speech recognition is not configured. Set DASHSCOPE_API_KEY or QWEN_API_KEY. Local/OpenAI Whisper can still transcribe uploaded audio files.",
+        message: "Realtime speech recognition is not configured. Set DOUBAO_SPEECH_KEY (AppID:AccessToken) or DASHSCOPE_API_KEY/QWEN_API_KEY. Local/OpenAI Whisper can still transcribe uploaded audio files.",
       });
     }
   });

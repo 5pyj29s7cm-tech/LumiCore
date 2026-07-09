@@ -24,12 +24,14 @@ export const LLM_PRIORITY: Array<{ provider: string; label: string }> = [
 ];
 
 export const STT_PRIORITY: Array<{ provider: string; label: string }> = [
+  { provider: 'ark', label: 'Doubao-ASR' },
   { provider: 'qwen', label: 'Qwen-ASR' },
   { provider: 'whisper', label: 'Whisper' },
 ];
 
 export const TTS_PRIORITY: Array<{ provider: string; label: string }> = [
   { provider: 'local-cosyvoice', label: 'Local CosyVoice' },
+  { provider: 'ark', label: 'Doubao TTS' },
   { provider: 'cosyvoice', label: 'DashScope CosyVoice' },
   { provider: 'gptsovits', label: 'GPT-SoVITS' },
 ];
@@ -174,7 +176,9 @@ export function getAvailableLLMProviders(): Record<string, boolean> {
  * Check which STT providers have API keys configured.
  */
 export function getAvailableSTTProviders(): Record<string, boolean> {
+  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
   return {
+    ark: doubaoSpeech.includes(':'),
     qwen: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
     whisper: !!(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY')),
   };
@@ -185,12 +189,14 @@ export function getAvailableSTTProviders(): Record<string, boolean> {
  */
 export function getAvailableTTSProviders(): Record<string, boolean> {
   const gptSovitsDir = path.join(process.cwd(), 'gpt-sovits-src');
+  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
   return {
     'local-cosyvoice': !!(
       process.env.LOCAL_COSYVOICE_ENABLED === 'true'
       || process.env.LOCAL_COSYVOICE_API_URL
       || process.env.COSYVOICE_LOCAL_API_URL
     ),
+    ark: doubaoSpeech.includes(':'),
     cosyvoice: !!(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY')),
     gptsovits: !!(
       process.env.GPTSOVITS_API_URL

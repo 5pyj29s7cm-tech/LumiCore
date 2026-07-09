@@ -5,7 +5,7 @@ import { apiFetch } from '@/services/apiClient';
 
 export function VoiceProviderSwitch({ t }: { t?: any }) {
   const [pref, setPref] = useState<{ stt: string; tts: string }>({ stt: 'auto', tts: 'auto' });
-  const [active, setActive] = useState<{ stt: string; tts: string }>({ stt: '?', tts: '?' });
+  const [active, setActive] = useState<{ stt: string; streamingStt?: string; tts: string }>({ stt: '?', streamingStt: '?', tts: '?' });
   const localTtsProviders = new Set(['local-cosyvoice', 'gptsovits']);
 
   const load = () => {
@@ -48,8 +48,8 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
       <div className="flex items-center justify-between">
         <span className="text-xs font-black uppercase tracking-widest text-white/40">{t?.sttProvider || 'STT'}</span>
         <div className="flex items-center gap-1">
-          {active.stt === 'local-whisper' ? <Cpu size={12} className="text-emerald-400" /> : <Cloud size={12} className={active.stt === 'ark' ? 'text-cyan-400' : 'text-blue-400'} />}
-          <span className="text-[12px] font-mono text-white/55">{active.stt}</span>
+          {(active.streamingStt || active.stt) === 'local-whisper' ? <Cpu size={12} className="text-emerald-400" /> : <Cloud size={12} className={(active.streamingStt || active.stt) === 'ark' ? 'text-cyan-400' : 'text-blue-400'} />}
+          <span className="text-[12px] font-mono text-white/55">{active.streamingStt || active.stt}</span>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
