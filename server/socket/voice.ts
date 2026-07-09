@@ -764,6 +764,7 @@ async function processVoiceInput(
     desktopRelay,
     llmGetters,
     source: 'voice',
+    supervisedExternalCommits: true,
     allowLocalFileWrites,
     localWriteIntentReason,
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),

@@ -76,7 +76,7 @@ describe('Action Constitution', () => {
     expect(decision.level).toBe('forbidden');
   });
 
-  it('requires confirmation for package installs, git mutations, and external send surfaces', () => {
+  it('requires confirmation for package installs, git mutations, and high-consequence external commits', () => {
     const gitPush = evaluateActionConstitution('desktop_run_command', { command: 'git push origin main' }, 'safe');
     expect(gitPush.level).toBe('confirm');
     expect(classifyActionRisk('desktop_run_command', { command: 'git push origin main' })).toBe('high');
@@ -92,6 +92,13 @@ describe('Action Constitution', () => {
     const browserSubmit = evaluateActionConstitution('mcp_playwright_browser_click', { name: 'Submit payment' }, 'safe');
     expect(browserSubmit.level).toBe('confirm');
     expect(classifyActionRisk('mcp_playwright_browser_click', { name: 'Submit payment' })).toBe('high');
+
+    const legalFile = evaluateActionConstitution('mcp_playwright_browser_click', { name: 'File case with court' }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(legalFile.level).toBe('confirm');
+    expect(classifyActionRisk('mcp_playwright_browser_click', { name: 'File case with court' })).toBe('high');
   });
 
   it('keeps low and medium desktop control quiet unless the action is high-risk', () => {
@@ -110,6 +117,13 @@ describe('Action Constitution', () => {
     const publishClick = evaluateActionConstitution('desktop_ui_click', { name: 'Publish' }, 'safe');
     expect(publishClick.level).toBe('confirm');
     expect(publishClick.requiresUserConfirmation).toBe(true);
+
+    const supervisedPublishClick = evaluateActionConstitution('desktop_ui_click', { name: 'Publish comment' }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(supervisedPublishClick.level).toBe('safe');
+    expect(supervisedPublishClick.requiresUserConfirmation).toBe(false);
   });
 
   it('does not prompt for messaging drafts or clipboard handoff before sending', () => {
@@ -132,6 +146,83 @@ describe('Action Constitution', () => {
     }, 'safe');
     expect(send.level).toBe('confirm');
     expect(send.requiresUserConfirmation).toBe(true);
+
+    const supervisedSend = evaluateActionConstitution('wechat_send_message', {
+      text: 'Thanks, I will check this.',
+    }, 'safe', {
+      source: 'voice',
+      supervisedExternalCommits: true,
+    });
+    expect(supervisedSend.level).toBe('safe');
+    expect(supervisedSend.requiresUserConfirmation).toBe(false);
+    expect(classifyActionRisk('wechat_send_message', { text: 'Thanks' })).toBe('medium');
+  });
+
+  it('allows supervised video comments while keeping payment submission gated', () => {
+    const comment = evaluateActionConstitution('mcp_playwright_browser_click', {
+      name: 'Submit comment',
+      platform: 'youtube',
+    }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(comment.level).toBe('safe');
+    expect(comment.requiresUserConfirmation).toBe(false);
+    expect(classifyActionRisk('mcp_playwright_browser_click', { name: 'Submit comment' })).toBe('medium');
+
+    const payment = evaluateActionConstitution('mcp_playwright_browser_click', {
+      name: 'Submit payment',
+      platform: 'checkout',
+    }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(payment.level).toBe('confirm');
+    expect(payment.requiresUserConfirmation).toBe(true);
+  });
+
+  it('allows stock watching and paper trading while gating real brokerage orders', () => {
+    const quote = evaluateActionConstitution('mcp_stockbot_stock_quote', {
+      code: '600519',
+    }, 'safe');
+    expect(quote.level).toBe('safe');
+    expect(quote.requiresUserConfirmation).toBe(false);
+    expect(classifyActionRisk('mcp_stockbot_stock_quote', { code: '600519' })).toBe('low');
+
+    const watchApp = evaluateActionConstitution('desktop_open', {
+      target: 'stock watch app',
+    }, 'safe');
+    expect(watchApp.level).toBe('safe');
+    expect(watchApp.requiresUserConfirmation).toBe(false);
+    expect(classifyActionRisk('desktop_open', { target: 'stock watch app' })).toBe('medium');
+
+    const paperTrade = evaluateActionConstitution('mcp_stockbot_paper_trade', {
+      side: 'buy',
+      code: '600519',
+      quantity: 100,
+    }, 'safe');
+    expect(paperTrade.level).toBe('safe');
+    expect(paperTrade.requiresUserConfirmation).toBe(false);
+
+    const realBuy = evaluateActionConstitution('desktop_ui_click', {
+      name: 'Buy order',
+      target: 'brokerage trading screen',
+    }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(realBuy.level).toBe('confirm');
+    expect(realBuy.requiresUserConfirmation).toBe(true);
+    expect(classifyActionRisk('desktop_ui_click', { name: 'Buy order' })).toBe('high');
+
+    const cancelOrder = evaluateActionConstitution('desktop_ui_click', {
+      name: '撤单',
+    }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(cancelOrder.level).toBe('confirm');
+    expect(cancelOrder.requiresUserConfirmation).toBe(true);
   });
 
   it('allows explicit CAD file generation but confirms CAD app execution', () => {

@@ -73,7 +73,12 @@ const DECLARATIONS = [
   'mcp_legal-casework_legal_case_folder_workflow',
   'mcp_legal-casework_legal_document_outline',
   'mcp_neteasemusic_search_song',
+  'mcp_stockbot_stock_search',
   'mcp_stockbot_stock_quote',
+  'mcp_stockbot_stock_kline',
+  'mcp_stockbot_market_index',
+  'mcp_stockbot_hot_sectors',
+  'mcp_stockbot_stock_news',
   'mcp_stockbot_stock_trade_plan',
   'mcp_stockbot_paper_trade',
   'mcp_stockbot_paper_portfolio',
@@ -308,6 +313,21 @@ describe('tool router', () => {
     ]));
     expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
     expect(route.toolNames).not.toContain('legal_search_case');
+  });
+
+  it('routes stock watchlists and price alerts to stockbot tools', () => {
+    const route = routeToolsForTurn(
+      'Track my A-share watchlist, check market alerts, and watch 600519 intraday.',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('market_finance');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'mcp_stockbot_stock_quote',
+      'mcp_stockbot_stock_kline',
+      'mcp_stockbot_stock_news',
+      'mcp_stockbot_paper_portfolio',
+    ]));
   });
 
   it('filters unavailable MCP tools when a health gate is provided', () => {

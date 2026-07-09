@@ -5,6 +5,7 @@ import { registerClientSelfTools } from '../server/tools/definitions/client_self
 import {
   formatClientSelfPrompt,
   getClientActionExpectation,
+  getClientCapabilities,
   getClientInterfaceSurfaces,
   getClientSelfAwarenessReport,
   normalizeClientActionTarget,
@@ -106,6 +107,34 @@ describe('Lumi client self model', () => {
       'subscription',
       'widget',
     ]));
+  });
+
+  it('exposes local machine, visible desktop, and background runtime awareness', () => {
+    const capabilities = getClientCapabilities();
+    const localMachine = capabilities.find(capability => capability.id === 'system.local_machine_awareness');
+    const backgroundRuntime = capabilities.find(capability => capability.id === 'runtime.background_residency');
+
+    expect(localMachine?.actions).toEqual(expect.arrayContaining([
+      'desktop_system_info',
+      'desktop_list_apps',
+      'desktop_list_files',
+      'desktop_path_info',
+      'desktop_running_processes',
+      'desktop_active_window',
+      'desktop_capture_screen',
+    ]));
+    expect(localMachine?.notes).toContain('local machine');
+    expect(backgroundRuntime?.actions).toEqual(expect.arrayContaining([
+      'client_get_state',
+      'client_health_check',
+      'open_runtime_log',
+      'desktop_idle_time',
+      'desktop_poll_activity',
+      'autonomy_list_workflows',
+      'autonomy_register_workflow',
+    ]));
+    expect(backgroundRuntime?.notes).toContain('hidden-to-background');
+    expect(backgroundRuntime?.notes).toContain('autonomous workflow execution');
   });
 
   it('normalizes user-facing surface names to client target ids', () => {
@@ -308,6 +337,17 @@ describe('Lumi client self model', () => {
       windows: { open: ['runtime-log'], focused: 'runtime-log', minimized: [] },
       surfaces: { runtimeLogOpen: true },
       runtimeLog: { open: true, status: 'ready' },
+      runtime: {
+        autostartSupported: true,
+        autostartEnabled: true,
+        closeToBackground: true,
+        startedInBackground: false,
+        backendNodeRunning: true,
+        backendPythonRunning: true,
+        nodeRestarts: 1,
+        pythonRestarts: 0,
+        globalShortcut: 'Alt+Space',
+      },
     });
 
     const report = getClientSelfAwarenessReport('client_self_model_prompt_user');
@@ -315,6 +355,16 @@ describe('Lumi client self model', () => {
 
     expect(report.level).toBe('live');
     expect(report.bodySummary).toContain('mode=assistant');
+    expect(report.knows.join('\n')).toContain('local machine identity');
+    expect(report.habits.join('\n')).toContain('resident runtime');
+    expect(prompt).toContain('Keep three maps separate and current');
+    expect(prompt).toContain('local machine');
+    expect(prompt).toContain('visible desktop');
+    expect(prompt).toContain('background runtime');
+    expect(prompt).toContain('desktop_system_info');
+    expect(prompt).toContain('autostartSupported=true');
+    expect(prompt).toContain('closeToBackground=true');
+    expect(prompt).toContain('backendNode=running');
     expect(prompt).toContain('Present-Moment Client Awareness');
     expect(prompt).toContain('Client Action Verification Contract');
     expect(prompt).toContain('verification.status');

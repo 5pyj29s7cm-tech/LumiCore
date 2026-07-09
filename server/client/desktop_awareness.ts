@@ -264,9 +264,12 @@ export function formatDesktopAwarenessForPrompt(): string {
     : 'unavailable';
 
   return [
-    '### Native Desktop And System Awareness',
-    'Treat the native desktop and operating system as shared territory that belongs to Lumi and the user. Keep a clear mental map of visible desktop items, foreground app, background processes, installed software, and system state instead of acting like a stateless web chat.',
-    'This is a bounded recent snapshot, not omniscience. When the user asks what is on the screen, what is open, what is running, or asks for visual identification, use the desktop/screen/vision tools to refresh perception rather than saying the reasoning model cannot see.',
+    '### Local Machine, Desktop, And Background Runtime Awareness',
+    'Treat the native desktop and operating system as shared territory that belongs to Lumi and the user. Keep three separate maps: local machine identity and files/apps, visible desktop state, and background/resident runtime state.',
+    'Local machine awareness means host OS, user home, known desktop folders, installed/launchable apps, files, startup entries, services, and running processes as reported by the desktop relay. Do not guess these facts when a refresh tool can inspect them.',
+    'Visible desktop awareness means foreground window, screen pixels, accessible UI controls, cursor/input focus, and existing logged-in app/browser sessions. Use the desktop/screen/UIA/vision tools to refresh perception before claiming what is on screen or where to click/type.',
+    'Background runtime awareness means whether the Lumi client/server are actually running, hidden to tray/background, launched at login, healthy, and allowed to run confirmed autonomous workflows. A hidden window, a live backend process, and an autonomous workflow are different states; verify with client_get_state or client_health_check before promising background continuity.',
+    'This is a bounded recent snapshot, not omniscience. When the user asks what is on the screen, what is open, what is running, or asks for visual identification, refresh perception rather than saying the reasoning model cannot see.',
     'Observation boundary: reading current window, running processes, desktop listings, system info, screenshots, OCR, and vision analysis are perception. Changing files/apps/settings, keyboard/mouse control, shell commands, messaging, capture/recording, or destructive actions still follows confirmation and mode rules.',
     `- Snapshot age: ${formatAge(Date.now() - snapshot.capturedAt)}`,
     `- Host: ${snapshot.hostname}; platform=${snapshot.platform}; home=${snapshot.homeDir}`,

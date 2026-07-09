@@ -137,7 +137,7 @@ function getSkillRuntimeFindings() {
 export function registerClientSelfTools(registry: ToolRegistry): void {
   registry.register({
     name: 'client_get_state',
-    description: 'Read Lumi desktop client self-model: available capabilities, interface map, visible execution habits, and the latest reported UI state.',
+    description: 'Read Lumi desktop client self-model: local machine/desktop/background runtime awareness, available capabilities, interface map, visible execution habits, and the latest reported UI state.',
     parameters: {
       type: 'object',
       properties: {},
@@ -286,7 +286,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'client_health_check',
-    description: 'Run Lumi local self-governance health check: client body state, runtime errors, music/runtime/files/voice issues, autonomy boundary, and skill runtime findings.',
+    description: 'Run Lumi local self-governance health check: client body state, background/runtime health, runtime errors, music/runtime/files/voice issues, autonomy boundary, and skill runtime findings.',
     parameters: {
       type: 'object',
       properties: {},

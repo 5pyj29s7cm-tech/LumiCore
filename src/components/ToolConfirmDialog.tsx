@@ -26,6 +26,28 @@ function getSensitiveClientAction(args: Record<string, any> = {}): string {
 function getToolRisk(name: string, args: Record<string, any> = {}): ToolRisk {
   const normalized = name.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
+  const actionText = `${normalized} ${argText}`;
+  if (/mcp_stockbot_(?:stock_search|stock_quote|stock_kline|market_index|hot_sectors|stock_news|stock_trade_plan|paper_portfolio)/i.test(normalized)) return 'low';
+  if (/mcp_stockbot_paper_trade/i.test(normalized)) return 'medium';
+  const socialContentCommit =
+    /(?:^|[_\W])(?:send|post|publish|comment|reply|share|dm|message)(?:$|[_\W])|(?:\u53d1\u9001|\u53d1\u5e03|\u53d1\u8868|\u8bc4\u8bba|\u56de\u590d|\u5206\u4eab|\u79c1\u4fe1|\u7559\u8a00)/i.test(actionText)
+    || /\bsubmit\b.{0,40}\b(?:comment|reply|message|post|video|content|draft|text)\b|\b(?:comment|reply|message|post|video|content|draft|text)\b.{0,40}\bsubmit\b|(?:\u63d0\u4ea4|\u53d1\u9001).{0,16}(?:\u8bc4\u8bba|\u56de\u590d|\u7559\u8a00|\u89c6\u9891|\u5185\u5bb9|\u6587\u6848)/i.test(actionText);
+  const highConsequenceCommit =
+    /\b(?:purchase|buy|transfer|pay|payment|checkout|bank|wire|charge|refund|withdraw|deposit|ad\s*spend|ads?|inventory|price|legal\s*filing|court\s*filing|file\s+case|lawsuit|signature|contract\s*execute|place\s+(?:a\s+)?(?:trade|order)|submit\s+(?:a\s+)?(?:trade|order)|cancel\s+(?:a\s+)?order|buy\s+order|sell\s+order|real\s+(?:trade|trading|order)|brokerage\s+(?:trade|order)|trading\s+password)\b|(?:\u4ed8\u6b3e|\u652f\u4ed8|\u8f6c\u8d26|\u8d2d\u4e70|\u4e0b\u5355|\u7ed3\u8d26|\u94f6\u884c|\u8ba2\u5355|\u6295\u653e|\u5e7f\u544a\u8d39|\u6539\u4ef7|\u4ef7\u683c|\u5e93\u5b58|\u7acb\u6848|\u8d77\u8bc9|\u5ead\u5ba1|\u6cd5\u9662|\u7b7e\u7f72|\u5408\u540c\u751f\u6548|\u4e70\u5165|\u5356\u51fa|\u59d4\u6258|\u64a4\u5355|\u6210\u4ea4\u786e\u8ba4|\u4ea4\u6613\u5bc6\u7801|\u5238\u5546\u4ea4\u6613|\u94f6\u8bc1\u8f6c\u8d26|\u5b9e\u76d8|\u771f\u5b9e\u4e0b\u5355|\u80a1\u7968\u4e0b\u5355)/i.test(actionText)
+    || /\b(?:login|log\s*in|sign\s*in|password|passkey|otp|2fa|mfa|captcha|qr|authorize|authorization|account\s*switch|switch\s*account|credential|secret|api\s*key)\b|(?:\u767b\u5f55|\u767b\u5165|\u5bc6\u7801|\u9a8c\u8bc1\u7801|\u4e8c\u6b21\u9a8c\u8bc1|\u626b\u7801|\u4eba\u673a\u9a8c\u8bc1|\u6388\u6743|\u5207\u6362\u8d26\u53f7|\u51ed\u636e|\u5bc6\u94a5)/i.test(actionText)
+    || (/\b(?:submit|confirm|approve|authorize|sign|file)\b|(?:\u63d0\u4ea4|\u786e\u8ba4|\u6388\u6743|\u7b7e\u7f72|\u7acb\u6848)/i.test(actionText) && !socialContentCommit);
+  if (highConsequenceCommit) return 'high';
+  if (
+    socialContentCommit &&
+    !normalized.includes('delete') &&
+    !normalized.includes('remove') &&
+    !normalized.includes('rm') &&
+    !normalized.includes('install') &&
+    !normalized.includes('uninstall') &&
+    !normalized.includes('run_command') &&
+    !normalized.includes('terminal') &&
+    !normalized.includes('shell')
+  ) return 'medium';
   if (normalized === 'client_action' && getSensitiveClientAction(args)) return 'high';
   if (normalized.includes('delete') || normalized.includes('remove') || normalized.includes('rm') || normalized.includes('install') || normalized.includes('uninstall')) return 'high';
   if (/\b(rm\s+-rf|format\b|shutdown\b|reboot\b|reg\s+delete|drop\s+table|delete\s+from)\b/i.test(argText)) return 'high';

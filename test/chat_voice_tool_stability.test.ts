@@ -7,8 +7,9 @@ describe('chat and voice tool-call stability', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
-    for (const source of [chat, voice]) {
+    for (const source of [chat, voice, task]) {
       expect(source).toContain('buildLumiTurnDispatch');
       expect(source).toContain('buildLumiExecutionDecision');
       expect(source).toContain('buildLumiCapabilitySelection');
@@ -16,6 +17,7 @@ describe('chat and voice tool-call stability', () => {
       expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
       expect(source).toContain('toolPolicy');
       expect(source).toContain('requestConfirmation');
+      expect(source).toContain('supervisedExternalCommits');
     }
   });
 

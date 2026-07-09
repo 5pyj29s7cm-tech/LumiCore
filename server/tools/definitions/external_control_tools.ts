@@ -173,7 +173,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ui_type',
-    description: 'Type or set text into a native Windows UI Automation text control. Uses ValuePattern when available and falls back to focused keyboard input. Use desktop_ui_snapshot first and avoid sending messages or submitting forms without confirmation.',
+    description: 'Type or set text into a native Windows UI Automation text control. Uses ValuePattern when available and falls back to focused keyboard input. Use desktop_ui_snapshot first; foreground user-requested ordinary messages/comments can proceed, while payments, account-security transitions, legal/contractual submits, and ambiguous external submits still require confirmation.',
     parameters: {
       type: 'object',
       properties: {

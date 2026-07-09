@@ -64,4 +64,61 @@ describe('desktop capability alignment', () => {
     expect(accountReuse?.diagnostics).toContain('externalAutomationGate=removed');
     expect(accountReuse?.setup || []).toEqual([]);
   });
+
+  it('keeps desktop awareness split across local machine, visible desktop, and background runtime', async () => {
+    const { formatDesktopAwarenessForPrompt } = await import('../server/client/desktop_awareness');
+
+    const prompt = formatDesktopAwarenessForPrompt();
+
+    expect(prompt).toContain('Local Machine, Desktop, And Background Runtime Awareness');
+    expect(prompt).toContain('local machine identity');
+    expect(prompt).toContain('Visible desktop awareness');
+    expect(prompt).toContain('Background runtime awareness');
+    expect(prompt).toContain('client_get_state');
+    expect(prompt).toContain('client_health_check');
+    expect(prompt).toContain('A hidden window, a live backend process, and an autonomous workflow are different states');
+  });
+
+  it('surfaces local machine and background runtime awareness in the adapter registry', async () => {
+    const { getAdapterRegistry } = await import('../server/adapters/registry');
+    const report = getAdapterRegistry({
+      includePlanned: false,
+      clientState: {
+        platform: 'desktop',
+        updatedAt: Date.now(),
+        runtime: {
+          autostartEnabled: true,
+          closeToBackground: true,
+          startedInBackground: true,
+          backendNodeRunning: true,
+        },
+      },
+    });
+
+    const localMachine = report.adapters.find(adapter => adapter.id === 'system.local_machine_awareness');
+    const backgroundRuntime = report.adapters.find(adapter => adapter.id === 'system.background_runtime_awareness');
+
+    expect(localMachine?.status).toBe('available');
+    expect(localMachine?.requiresConfirmation).toBe(false);
+    expect(localMachine?.actions).toEqual(expect.arrayContaining([
+      'desktop_system_info',
+      'desktop_list_apps',
+      'desktop_list_files',
+      'desktop_path_info',
+      'desktop_running_processes',
+      'desktop_active_window',
+      'desktop_capture_screen',
+    ]));
+    expect(localMachine?.safety).toContain('Observation only');
+    expect(backgroundRuntime?.status).toBe('ready');
+    expect(backgroundRuntime?.requiresConfirmation).toBe(true);
+    expect(backgroundRuntime?.diagnostics).toEqual(expect.arrayContaining([
+      'autostart=true',
+      'closeToBackground=true',
+      'startedInBackground=true',
+      'backendNode=running',
+    ]));
+    expect(backgroundRuntime?.notes).toContain('24-hour availability');
+    expect(backgroundRuntime?.safety).toContain('Hidden-to-background');
+  });
 });

@@ -55,6 +55,8 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       'Open the run log only when the user asks for logs or when debugging client/runtime failures.',
       'For visible desktop work, explain what you are about to do, inspect the screen/active window, show and move the cursor before clicks when available, use wallpaper mode for immersive confirmed sessions, and verify the result.',
       'For command/file/network actions, keep the user informed and respect confirmations.',
+      'For supervised foreground work, ordinary user-requested messages, comments, replies, and non-commercial content posts can proceed; payments, purchases, transfers, account-security transitions, legal filings/signatures, ambiguous submits, and destructive/system actions still require confirmation.',
+      'Stock watch, quote checks, watchlists, alerts, trading plans, and paper trading can run as observational/simulated work; real brokerage orders, cancel-orders, trading passwords, and fund transfers require confirmation.',
     ].join('\n'),
     toolPolicy: {
       allowedTools: ['*'],
@@ -82,6 +84,8 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       'For visible desktop work, keep the user oriented: name the task, show/move the cursor before clicks when available, verify results, and report exact blockers.',
       'Keep progress visible, summarize major steps, and do not hide failures.',
       'Dangerous or destructive actions still require confirmation.',
+      'Foreground social/content commits requested by the user can run with visible progress; high-consequence commits such as payment, purchase, transfer, account-security, legal filing/signature, ambiguous submit, and destructive/system changes still require confirmation.',
+      'Market watch and paper-trading loops may continue with visible progress; real-money brokerage actions still stop for explicit confirmation.',
     ].join('\n'),
     toolPolicy: {
       allowedTools: ['*'],

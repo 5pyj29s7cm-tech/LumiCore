@@ -1135,7 +1135,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         messagingSendRequiresConfirmation: isMessagingSendConfirmationRequired(),
         adapters: getExternalAppAdapters(),
         adapterRegistrySummary: adapterRegistry.summary,
-        adapterRegistry: adapterRegistry.adapters.filter(adapter => ['web', 'messaging', 'cad_bim', 'ai', 'automation'].includes(adapter.category)),
+        adapterRegistry: adapterRegistry.adapters.filter(adapter => ['web', 'finance', 'messaging', 'cad_bim', 'ai', 'automation'].includes(adapter.category)),
       }, null, 2);
     },
     permission: 'user',

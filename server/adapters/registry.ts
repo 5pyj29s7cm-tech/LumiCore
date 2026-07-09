@@ -20,6 +20,7 @@ export type AdapterCategory =
   | 'files'
   | 'knowledge'
   | 'web'
+  | 'finance'
   | 'messaging'
   | 'cad_bim'
   | 'ai'
@@ -97,6 +98,7 @@ const CATEGORY_ORDER: AdapterCategory[] = [
   'files',
   'knowledge',
   'web',
+  'finance',
   'messaging',
   'cad_bim',
   'ai',
@@ -204,7 +206,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'Runs only after an explicit ecommerce/store/account/content-growth request. It generates local deliverables and drafts; real publishing, ad spend, inventory/price changes, first-time login, account switching, verification, and customer-message sending stay off by default unless configured or confirmed.',
+      safety: 'Runs only after an explicit ecommerce/store/account/content-growth request. It generates local deliverables and drafts; foreground user-requested ordinary messages, comments, replies, and non-commercial content posts can proceed. Ad spend, inventory/price changes, first-time login, account switching, verification, payment, purchase, and legal/contractual final commits stay confirmation-gated.',
       notes: 'Use for current-stage ecommerce, short-video content production, and store/account management videos or real work. Lumi should turn the current shop/product/platform brief into a local desktop delivery package: store audit, content matrix, short-video script, image/video generation prompts for external tools, publishing draft, customer-service/WeChat draft, operation report, and verification notes. Prefer external systems and browser pages instead of recreating their functions inside Lumi: image/video generation pages, editing tools, creator platforms, store backends, and already logged-in personal WeChat. Restore already-running/logged-in app and browser sessions before opening fresh pages; stop at QR/OTP/CAPTCHA/account-switch/authorization boundaries. Treat the flow as a reusable work standard, not a fixed script: derive product, platform, audience, budget, deliverables, and confirmation boundaries from the current user message.',
     },
     {
@@ -220,6 +222,43 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         state?.windows?.open?.length ? `open=${state.windows.open.slice(0, 5).join(',')}` : '',
       ].filter(Boolean),
       notes: 'Use when Lumi needs to know, explain, open, close, or choose among her own client interfaces. Prefer this over generic guessing about UI.',
+    },
+    {
+      id: 'system.local_machine_awareness',
+      label: 'Local Machine Awareness',
+      category: 'system',
+      status: 'available',
+      actions: ['client_get_state', 'client_health_check', 'desktop_system_info', 'desktop_list_apps', 'desktop_list_files', 'desktop_path_info', 'desktop_running_processes', 'desktop_active_window', 'desktop_capture_screen', 'adapter_registry_list'],
+      surfaces: ['native desktop client', 'host OS', 'home directory', 'Desktop/Documents/Downloads', 'installed apps', 'running processes', 'foreground window'],
+      requiresConfirmation: false,
+      diagnostics: [
+        state?.platform ? `platform=${state.platform}` : '',
+        state?.runtime?.backendNodeRunning ? 'backendNode=running' : '',
+        staleState ? `clientStateAge=${stateAgeSeconds}s` : '',
+      ].filter(Boolean),
+      safety: 'Observation only: system info, app/file listings, path checks, active-window/process checks, and screenshots are perception. File/app/settings changes, shell commands, and desktop input follow the normal mode and confirmation gates.',
+      notes: 'Use when Lumi needs to know this computer: what host it is running on, what apps are launchable, what files/folders exist, what window is foregrounded, and what processes are running. Refresh these facts through desktop tools before making claims.',
+    },
+    {
+      id: 'system.background_runtime_awareness',
+      label: 'Background Runtime Awareness',
+      category: 'system',
+      status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
+      actions: ['client_get_state', 'client_health_check', 'open_runtime_log', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
+      surfaces: ['runtime log', 'background tray state', 'autostart', 'close-to-background', 'backend processes', 'autonomy policy', 'confirmed workflows'],
+      requiresConfirmation: true,
+      setup: hasState ? [] : ['Open Lumi desktop client so runtime state can report whether the client/server are alive.'],
+      diagnostics: [
+        `autostart=${Boolean(state?.runtime?.autostartEnabled)}`,
+        `closeToBackground=${Boolean(state?.runtime?.closeToBackground)}`,
+        state?.runtime?.startedInBackground ? 'startedInBackground=true' : '',
+        `backendNode=${state?.runtime?.backendNodeRunning ? 'running' : 'unknown'}`,
+        `desktopModeAutonomy=${gate.autonomyLevel}`,
+        `alwaysOnline=${gate.alwaysOnline}`,
+        `autoProcess=${gate.autoProcessEnabled}`,
+      ].filter(Boolean),
+      safety: 'Reading runtime status is safe. Enabling autostart/background settings, changing autonomy policy, or registering/enabling recurring autonomous workflows requires confirmation. Hidden-to-background, live backend health, and autonomous execution are distinct states.',
+      notes: 'Use before promising 24-hour availability, background continuity, restart survival, or unattended task execution. Resident runtime depends on the desktop client/server actually running; autonomous work additionally depends on desktop mode, autonomy policy, idle/time/token gates, and confirmed workflows.',
     },
     {
       id: 'client.visible_execution_habits',
@@ -366,7 +405,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         `autoProcess=${gate.autoProcessEnabled}`,
         `maxConsecutiveTasks=${gate.maxConsecutiveTasks}`,
       ],
-      notes: 'The desktop modes control autonomy: Chat maps to reactive, Assistant maps to semi, and Autonomy maps to full. Approved workflows then run according to that mode.',
+      notes: 'The desktop modes control autonomy: Chat maps to reactive, Assistant maps to semi, and Autonomy maps to full. Launch-at-login and close-to-background only make Lumi resident when the client/server are alive; approved workflows then run according to that mode, policy gates, idle/time/token limits, and user confirmation.',
     },
     {
       id: 'automation.work_takeover_tasks',
@@ -429,7 +468,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       requiresConfirmation: false,
       setup: [],
       diagnostics: ['externalAutomationGate=removed'],
-      safety: 'Prefer explicit adapters and files first. Low- and medium-risk computer_use, UIA, clipboard, and raw input follow the active desktop mode without per-step prompts; sends, submits, payments, installs, shell commands, destructive actions, and other high-risk boundaries still require confirmation.',
+      safety: 'Prefer explicit adapters and files first. Low- and medium-risk computer_use, UIA, clipboard, raw input, and foreground user-requested social/content commits follow the active desktop mode without per-step prompts; payments, purchases, transfers, account-security transitions, legal filings/signatures, ambiguous submits, installs, shell commands, destructive actions, and other high-risk boundaries still require confirmation.',
       notes: 'This is Lumi using the computer, not the default route for Lumi client UI. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, commands, and vision computer_use. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are reserved for controlled demos/workflows and computer_use cleanup. For external desktop work, inspect active window controls with desktop_ui_snapshot when possible, use desktop_ui_focus/click/invoke/type for accessible controls, inspect screen pixels when needed, show and move the visible cursor before raw clicks, explain task intent briefly, verify with screenshot/window/process/file evidence, and report only results, blockers, and needed confirmations. Prefer restoring already-running taskbar/background windows before launching duplicates.',
     },
     {
@@ -441,7 +480,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       surfaces: ['native Windows apps', 'WPS/Office', 'WeChat', 'CAD/Revit launchers', 'installers', 'dialogs'],
       requiresConfirmation: false,
       setup: process.platform === 'win32' ? [] : ['Run Lumi on Windows to use UI Automation snapshots.'],
-      safety: 'Snapshot inspection plus low- and medium-risk focus/click/invoke/type can run under the active desktop mode. Sending, publishing, submitting, payment, and destructive actions remain controlled by their own confirmation rules.',
+      safety: 'Snapshot inspection plus low- and medium-risk focus/click/invoke/type can run under the active desktop mode. Foreground user-requested ordinary messages/comments/replies/posts can proceed; payments, purchases, account-security transitions, legal filings/signatures, ambiguous submits, and destructive actions remain confirmation-gated.',
       notes: 'Use this before raw coordinate control so Lumi can identify and operate real controls, labels, input fields, enabled state, and bounding rectangles.',
     },
     {
@@ -454,7 +493,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       requiresConfirmation: true,
       setup: [],
       diagnostics: ['externalAutomationGate=removed'],
-      safety: 'Allowed after confirmation or inside approved autonomous work: restore and use already logged-in windows/sessions for safe preparation work; learn authorized website logins and store encrypted credentials only after confirmation. Confirmation or handoff required: first-time login, QR/OTP/biometric verification, account switching, third-party authorization, saving credentials, publishing, payment, or sending messages.',
+      safety: 'Allowed after confirmation or inside approved autonomous work: restore and use already logged-in windows/sessions for safe preparation work; learn authorized website logins and store encrypted credentials only after confirmation. Foreground user-requested ordinary messages/comments/replies/posts can proceed. Confirmation or handoff required: first-time login, QR/OTP/biometric verification, account switching, third-party authorization, saving credentials, payment, purchase, legal filing/signature, or other high-consequence commit.',
       notes: 'Use for store/account/video/customer workflows. Lumi should first look for a running personal app window or an existing browser login profile, then continue safe preparation work inside that session. If no profile exists, use web_login_learn_site to create a generic authorized profile for the site. Do not present login completion as autonomous work when the user had to scan, type a password, approve a prompt, or switch accounts.',
     },
     {
@@ -465,7 +504,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       actions: ['browser_open_task', 'web_search', 'url_fetch', 'web_login_site_presets', 'web_login_profile_save_from_preset', 'web_login_profile_save', 'web_login_learn_site', 'web_login_profile_list', 'web_login_run', 'url_fetch_logged_in', 'external_control_candidates', 'external_control_configure_candidate', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click'],
       surfaces: ['browser', 'web search', 'URL fetch'],
       requiresConfirmation: true,
-      safety: 'Opening and reading is allowed when tools permit; already logged-in sessions may be reused visibly. Posts, purchases, submissions, first-time login, account switching, permissions, and sensitive transmissions require confirmation.',
+      safety: 'Opening and reading is allowed when tools permit; already logged-in sessions may be reused visibly. Foreground user-requested ordinary comments/replies/content posts can proceed. Purchases, payments, ambiguous submissions, first-time login, account switching, permissions, and sensitive transmissions require confirmation.',
       notes: 'Use for research, authenticated pages, and handoff to browser tasks. Prefer existing logged-in browser profiles or windows before asking for a new login; for new authorized sites use web_login_learn_site or web_login_profile_save. Configure Playwright MCP when structured DOM/browser control is needed. Stop at QR/OTP/CAPTCHA/authorization boundaries.',
     },
     {
@@ -479,7 +518,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       setup: skillStats.connectedNames.includes('playwright')
         ? []
         : ['Run external_control_configure_candidate with candidateId=playwright-mcp, review the MCP config, then enable/restart the playwright server.'],
-      safety: 'Use for structured browser automation. Account switching, posting, payments, purchases, uploads of sensitive material, and final submissions require confirmation.',
+      safety: 'Use for structured browser automation. Foreground user-requested ordinary comments/replies/content posts can proceed. Account switching, payments, purchases, uploads of sensitive material, legal/business final submissions, and ambiguous submits require confirmation.',
       notes: 'This is the preferred upgrade path for browser-heavy work because Lumi can rely on page structure instead of only screenshot coordinates.',
     },
     {
@@ -494,6 +533,19 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'Use for laws, policies, patents, software copyright, standards, academic papers, technical docs, and current factual claims that need sources.',
     },
     {
+      id: 'finance.stock_watch',
+      label: 'Stock Watch and Paper Trading',
+      category: 'finance',
+      status: skillStats.connectedNames.includes('stockbot') ? 'ready' : 'available',
+      actions: ['mcp_stockbot_stock_search', 'mcp_stockbot_stock_quote', 'mcp_stockbot_stock_kline', 'mcp_stockbot_market_index', 'mcp_stockbot_hot_sectors', 'mcp_stockbot_stock_news', 'mcp_stockbot_stock_trade_plan', 'mcp_stockbot_paper_trade', 'mcp_stockbot_paper_portfolio', 'browser_open_task'],
+      surfaces: ['StockBot MCP', 'public market data', 'watchlists', 'browser quote pages', 'paper portfolio'],
+      requiresConfirmation: false,
+      setup: skillStats.connectedNames.includes('stockbot') ? [] : ['Enable/connect the bundled StockBot skill for live quote, K-line, sector, news, trade-plan, and paper-trading tools.'],
+      diagnostics: [`stockbot=${skillStats.connectedNames.includes('stockbot') ? 'connected' : 'not_connected'}`],
+      safety: 'Quotes, watchlists, intraday alerts, sectors, news, risk plans, and paper trades are observational or simulated and can run when tools permit. This does not provide investment advice and never places real brokerage orders. Real buy/sell/cancel-order actions, trading passwords, brokerage login/security prompts, and fund transfers require confirmation.',
+      notes: 'Use for A-share market watch, stock pools, price alerts, sector heat, K-line/news checks, position-review planning, and simulated paper portfolios. Prefer StockBot public data and paper-trading records before opening external brokerage surfaces. If a user asks for real-money trading, treat it as a high-consequence external action and stop for confirmation.',
+    },
+    {
       id: 'messaging.wechat_feishu',
       label: 'WeChat, Feishu, and Remote Messaging',
       category: 'messaging',
@@ -502,7 +554,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       surfaces: ['WeChat', 'Feishu bot/remote channel', 'clipboard drafts', 'work takeover intake'],
       requiresConfirmation: true,
       diagnostics: [`sendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}`],
-      safety: 'Lumi can read user-provided or copied message text, triage it into work takeover, persist a task, draft replies, and copy drafts. Sending or external posting must stay user-confirmed.',
+      safety: 'Lumi can read user-provided or copied message text, triage it into work takeover, persist a task, draft replies, copy drafts, and send ordinary foreground user-requested replies/messages when supervised. Payments, account-security actions, legal/contractual commitments, and other high-consequence sends stay confirmation-gated.',
       notes: 'Use WeChat intake as the front door for customer, store, account, case-filing, video-publishing, and design-delivery takeover tasks. For a shared local Lumi, remote messages are routed into the same local agent unless a future multi-user router is added.',
     },
     {

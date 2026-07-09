@@ -25,6 +25,12 @@ export interface ToolContext {
   allowLocalFileWrites?: boolean;
   /** Human-readable reason recorded when allowLocalFileWrites is set. */
   localWriteIntentReason?: string;
+  /**
+   * True for foreground, user-present execution surfaces where Lumi can perform
+   * ordinary social/content commits (messages, comments, non-commercial posts)
+   * without a separate confirmation popup. High-consequence actions still gate.
+   */
+  supervisedExternalCommits?: boolean;
   /** Personality's tool policy for security level resolution */
   toolPolicy?: import('../personality/types').ToolPolicy;
   /** Returns true if the task has been cancelled — checked between tool iterations */
