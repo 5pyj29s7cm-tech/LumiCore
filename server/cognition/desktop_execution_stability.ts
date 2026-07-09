@@ -61,6 +61,7 @@ export function buildDesktopExecutionStabilityPolicy(
   }
 
   const evidenceTools = unique([
+    'desktop_list_apps',
     'desktop_active_window',
     'desktop_ui_snapshot',
     hasPreferred(input, 'mcp_playwright_browser_snapshot') ? 'mcp_playwright_browser_snapshot' : '',
@@ -89,6 +90,7 @@ export function buildDesktopExecutionStabilityPolicy(
       'Before acting:',
       '- Read the active window/screen/UI tree first when a visible app, web page, or input field matters.',
       '- If the target app is already running in the taskbar/background, restore or focus it before opening a duplicate.',
+      '- If the target local app path is unknown, use desktop_list_apps and then desktop_open; do not guess Program Files paths or generate a one-off launcher skill.',
       '- Prefer UIA/browser/control-tree actions when available; use raw mouse clicks only after locating the target from screen/UI evidence.',
       'While acting:',
       '- Move/show the visible cursor before click demonstrations when available, then click the resolved target, not a guessed coordinate.',

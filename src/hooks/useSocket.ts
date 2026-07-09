@@ -126,6 +126,13 @@ async function handleDesktopExec(socket: Socket, data: {
         );
         break;
       }
+      case 'desktop_list_apps': {
+        const query: string = args.query || '';
+        const limit = Math.min(Math.max(Number(args.limit) || 80, 1), 200);
+        const apps = await invoke('list_native_apps', { query: query.trim() || null, limit });
+        output = JSON.stringify(apps, null, 2);
+        break;
+      }
       case 'desktop_path_info': {
         const target: string = args.target || args.path || '';
         if (!target.trim()) {

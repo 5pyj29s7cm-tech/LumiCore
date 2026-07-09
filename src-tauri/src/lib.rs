@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
@@ -108,6 +109,25 @@ pub struct NativePathInfo {
     pub is_directory: bool,
     pub size: u64,
     pub modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeAppEntry {
+    pub app_id: String,
+    pub label: String,
+    pub path: String,
+    pub source: String,
+    pub aliases: Vec<String>,
+    pub score: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AppLaunchHistoryEntry {
+    app_id: String,
+    path: String,
+    args: Vec<String>,
+    source: String,
+    last_success_ms: u64,
 }
 
 fn system_time_to_ms(time: std::io::Result<SystemTime>) -> Option<u64> {
@@ -676,10 +696,727 @@ fn spawn_hidden(cmd: &mut Command) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct WindowsAppDefinition {
+    app_id: &'static str,
+    label: &'static str,
+    aliases: Vec<&'static str>,
+    executable_names: Vec<&'static str>,
+    fixed_paths: Vec<&'static str>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct WindowsLaunchCandidate {
+    app_id: String,
+    label: String,
+    path: PathBuf,
+    args: Vec<String>,
+    source: String,
+    aliases: Vec<String>,
+    score: i32,
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
+    vec![
+        WindowsAppDefinition {
+            app_id: "wechat",
+            label: "WeChat",
+            aliases: vec![
+                "wechat",
+                "weixin",
+                "wechat.exe",
+                "weixin.exe",
+                "\u{5fae}\u{4fe1}",
+                "\u{7535}\u{8111}\u{5fae}\u{4fe1}",
+                "\u{4e2a}\u{4eba}\u{5fae}\u{4fe1}",
+                "\u{5fae}\u{4fe1}\u{5ba2}\u{6237}\u{7aef}",
+                "\u{5fae}\u{4fe1}\u{591a}\u{5f00}",
+            ],
+            executable_names: vec!["Weixin.exe", "WeChat.exe", "\u{5fae}\u{4fe1}\u{591a}\u{5f00}.bat", "\u{5fae}\u{4fe1}.lnk"],
+            fixed_paths: vec![
+                r"D:\Weixin\Weixin.exe",
+                r"%ProgramFiles%\Tencent\Weixin\Weixin.exe",
+                r"%ProgramFiles%\Tencent\WeChat\Weixin.exe",
+                r"%ProgramFiles%\Tencent\WeChat\WeChat.exe",
+                r"%ProgramFiles(x86)%\Tencent\Weixin\Weixin.exe",
+                r"%ProgramFiles(x86)%\Tencent\WeChat\Weixin.exe",
+                r"%ProgramFiles(x86)%\Tencent\WeChat\WeChat.exe",
+                r"%LOCALAPPDATA%\Tencent\WeChat\Weixin.exe",
+                r"%LOCALAPPDATA%\Tencent\WeChat\WeChat.exe",
+                r"%USERPROFILE%\Desktop\微信多开.bat",
+                r"%USERPROFILE%\Desktop\微信.lnk",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "wecom",
+            label: "WeCom",
+            aliases: vec![
+                "wecom",
+                "wxwork",
+                "wxwork.exe",
+                "\u{4f01}\u{4e1a}\u{5fae}\u{4fe1}",
+                "\u{4f01}\u{5fae}",
+            ],
+            executable_names: vec!["WXWork.exe", "WeCom.exe", "\u{4f01}\u{4e1a}\u{5fae}\u{4fe1}.lnk"],
+            fixed_paths: vec![
+                r"%ProgramFiles%\Tencent\WXWork\WXWork.exe",
+                r"%ProgramFiles(x86)%\Tencent\WXWork\WXWork.exe",
+                r"%LOCALAPPDATA%\Tencent\WXWork\WXWork.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "wps",
+            label: "WPS Office",
+            aliases: vec![
+                "wps",
+                "wps office",
+                "wps writer",
+                "wps spreadsheets",
+                "\u{91d1}\u{5c71}\u{529e}\u{516c}",
+                "\u{6587}\u{5b57}",
+                "\u{8868}\u{683c}",
+                "\u{6f14}\u{793a}",
+                "word",
+                "excel",
+                "ppt",
+            ],
+            executable_names: vec!["wps.exe", "et.exe", "wpp.exe", "ksolaunch.exe", "WPS Office.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Kingsoft\WPS Office\ksolaunch.exe",
+                r"%ProgramFiles%\Kingsoft\WPS Office\ksolaunch.exe",
+                r"%ProgramFiles(x86)%\Kingsoft\WPS Office\ksolaunch.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "browser",
+            label: "Browser",
+            aliases: vec![
+                "browser",
+                "web browser",
+                "\u{6d4f}\u{89c8}\u{5668}",
+                "edge",
+                "microsoft edge",
+                "chrome",
+                "\u{8c37}\u{6b4c}\u{6d4f}\u{89c8}\u{5668}",
+            ],
+            executable_names: vec!["msedge.exe", "chrome.exe", "Microsoft Edge.lnk", "Google Chrome.lnk"],
+            fixed_paths: vec![
+                r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+                r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+                r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "vscode",
+            label: "Visual Studio Code",
+            aliases: vec!["vscode", "vs code", "visual studio code", "code"],
+            executable_names: vec!["Code.exe", "Visual Studio Code.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe",
+                r"%ProgramFiles%\Microsoft VS Code\Code.exe",
+                r"%ProgramFiles(x86)%\Microsoft VS Code\Code.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "jianying",
+            label: "Jianying",
+            aliases: vec!["jianying", "capcut", "\u{526a}\u{6620}", "\u{526a}\u{6620}\u{4e13}\u{4e1a}\u{7248}"],
+            executable_names: vec!["JianyingPro.exe", "CapCut.exe", "\u{526a}\u{6620}\u{4e13}\u{4e1a}\u{7248}.lnk", "\u{526a}\u{6620}.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\JianyingPro\Apps\JianyingPro.exe",
+                r"%ProgramFiles%\JianyingPro\JianyingPro.exe",
+                r"%ProgramFiles(x86)%\JianyingPro\JianyingPro.exe",
+                r"D:\JianyingPro\JianyingPro.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "autocad",
+            label: "AutoCAD",
+            aliases: vec!["autocad", "cad", "\u{5929}\u{6b63}", "\u{4e2d}\u{671b}cad", "\u{6d69}\u{8fb0}cad"],
+            executable_names: vec!["acad.exe", "AutoCAD.exe", "ZWCAD.exe", "GstarCAD.exe"],
+            fixed_paths: vec![],
+        },
+        WindowsAppDefinition {
+            app_id: "feishu",
+            label: "Feishu",
+            aliases: vec!["feishu", "lark", "\u{98de}\u{4e66}"],
+            executable_names: vec!["Feishu.exe", "Lark.exe", "\u{98de}\u{4e66}.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Feishu\Feishu.exe",
+                r"%ProgramFiles%\Feishu\Feishu.exe",
+                r"%ProgramFiles(x86)%\Feishu\Feishu.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "dingtalk",
+            label: "DingTalk",
+            aliases: vec!["dingtalk", "\u{9489}\u{9489}"],
+            executable_names: vec!["DingTalk.exe", "\u{9489}\u{9489}.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\DingTalk\DingTalk.exe",
+                r"%ProgramFiles%\DingDing\DingtalkLauncher.exe",
+                r"%ProgramFiles(x86)%\DingDing\DingtalkLauncher.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "notepad",
+            label: "Notepad",
+            aliases: vec!["notepad", "notepad.exe", "\u{8bb0}\u{4e8b}\u{672c}"],
+            executable_names: vec!["notepad.exe"],
+            fixed_paths: vec![r"%WINDIR%\System32\notepad.exe"],
+        },
+        WindowsAppDefinition {
+            app_id: "calculator",
+            label: "Calculator",
+            aliases: vec!["calculator", "calc", "calc.exe", "\u{8ba1}\u{7b97}\u{5668}"],
+            executable_names: vec!["calc.exe", "CalculatorApp.exe"],
+            fixed_paths: vec![r"%WINDIR%\System32\calc.exe"],
+        },
+        WindowsAppDefinition {
+            app_id: "explorer",
+            label: "File Explorer",
+            aliases: vec![
+                "explorer",
+                "file explorer",
+                "\u{6587}\u{4ef6}\u{8d44}\u{6e90}\u{7ba1}\u{7406}\u{5668}",
+                "\u{8d44}\u{6e90}\u{7ba1}\u{7406}\u{5668}",
+            ],
+            executable_names: vec!["explorer.exe"],
+            fixed_paths: vec![r"%WINDIR%\explorer.exe"],
+        },
+        WindowsAppDefinition {
+            app_id: "powershell",
+            label: "PowerShell",
+            aliases: vec!["powershell", "pwsh", "\u{7ec8}\u{7aef}", "\u{547d}\u{4ee4}\u{884c}"],
+            executable_names: vec!["powershell.exe", "pwsh.exe", "Windows Terminal.lnk"],
+            fixed_paths: vec![
+                r"%WINDIR%\System32\WindowsPowerShell\v1.0\powershell.exe",
+                r"%ProgramFiles%\PowerShell\7\pwsh.exe",
+                r"%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe",
+            ],
+        },
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn compact_app_text(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_app_query(value: &str) -> String {
+    let mut compact = compact_app_text(value);
+    let prefixes = [
+        "\u{5e2e}\u{6211}\u{6253}\u{5f00}\u{4e00}\u{4e0b}",
+        "\u{5e2e}\u{6211}\u{542f}\u{52a8}\u{4e00}\u{4e0b}",
+        "\u{8bf7}\u{6253}\u{5f00}\u{4e00}\u{4e0b}",
+        "\u{8bf7}\u{542f}\u{52a8}\u{4e00}\u{4e0b}",
+        "\u{6253}\u{5f00}\u{4e00}\u{4e0b}",
+        "\u{542f}\u{52a8}\u{4e00}\u{4e0b}",
+        "\u{5e2e}\u{6211}\u{6253}\u{5f00}",
+        "\u{5e2e}\u{6211}\u{542f}\u{52a8}",
+        "\u{8bf7}\u{6253}\u{5f00}",
+        "\u{8bf7}\u{542f}\u{52a8}",
+        "\u{6253}\u{5f00}",
+        "\u{542f}\u{52a8}",
+        "\u{8fd0}\u{884c}",
+        "\u{8fdb}\u{5165}",
+        "\u{6253}\u{5f00}",
+        "pleaseopen",
+        "launch",
+        "start",
+        "open",
+        "run",
+    ];
+    for prefix in prefixes {
+        let normalized_prefix = compact_app_text(prefix);
+        if compact.starts_with(&normalized_prefix) {
+            compact = compact[normalized_prefix.len()..].to_string();
+            break;
+        }
+    }
+
+    let suffixes = [
+        "\u{5ba2}\u{6237}\u{7aef}",
+        "\u{5e94}\u{7528}",
+        "\u{8f6f}\u{4ef6}",
+        "\u{7a0b}\u{5e8f}",
+        "application",
+        "client",
+        "app",
+    ];
+    for suffix in suffixes {
+        let normalized_suffix = compact_app_text(suffix);
+        if compact.ends_with(&normalized_suffix) && compact.len() > normalized_suffix.len() {
+            compact = compact[..compact.len() - normalized_suffix.len()].to_string();
+            break;
+        }
+    }
+    compact
+}
+
+#[cfg(target_os = "windows")]
+fn looks_like_url(target: &str) -> bool {
+    let lower = target.trim().to_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("file://")
+        || lower.starts_with("mailto:")
+}
+
+#[cfg(target_os = "windows")]
+fn launchable_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| matches!(ext.to_lowercase().as_str(), "exe" | "bat" | "cmd" | "lnk" | "url"))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn should_try_windows_app_index(target: &str) -> bool {
+    let trimmed = target.trim();
+    if trimmed.is_empty() || looks_like_url(trimmed) {
+        return false;
+    }
+
+    let target_path = Path::new(trimmed);
+    if target_path.exists() {
+        return launchable_extension(target_path);
+    }
+
+    if trimmed.contains('\\') || trimmed.contains('/') || trimmed.contains(':') || trimmed.starts_with('.') {
+        return false;
+    }
+
+    match target_path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => matches!(ext.to_lowercase().as_str(), "exe" | "bat" | "cmd" | "lnk" | "url"),
+        None => true,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn expand_windows_path_template(template: &str) -> Option<PathBuf> {
+    let mut expanded = template.to_string();
+    for (token, var) in [
+        ("%ProgramFiles(x86)%", "ProgramFiles(x86)"),
+        ("%ProgramFiles%", "ProgramFiles"),
+        ("%LOCALAPPDATA%", "LOCALAPPDATA"),
+        ("%APPDATA%", "APPDATA"),
+        ("%USERPROFILE%", "USERPROFILE"),
+        ("%PUBLIC%", "PUBLIC"),
+        ("%WINDIR%", "WINDIR"),
+    ] {
+        if expanded.contains(token) {
+            let value = std::env::var(var).ok()?;
+            expanded = expanded.replace(token, &value);
+        }
+    }
+    Some(PathBuf::from(expanded))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_search_roots() -> Vec<(PathBuf, &'static str, i32)> {
+    let mut roots = Vec::new();
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        roots.push((PathBuf::from(user_profile).join("Desktop"), "desktop", 130));
+    }
+    if let Ok(public_dir) = std::env::var("PUBLIC") {
+        roots.push((PathBuf::from(public_dir).join("Desktop"), "public_desktop", 110));
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        roots.push((
+            PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs"),
+            "user_start_menu",
+            90,
+        ));
+    }
+    if let Ok(program_data) = std::env::var("ProgramData") {
+        roots.push((
+            PathBuf::from(program_data).join(r"Microsoft\Windows\Start Menu\Programs"),
+            "system_start_menu",
+            80,
+        ));
+    }
+    roots
+}
+
+#[cfg(target_os = "windows")]
+fn filename_matches_app_definition(file_name: &str, def: &WindowsAppDefinition) -> bool {
+    if def
+        .executable_names
+        .iter()
+        .any(|name| file_name.eq_ignore_ascii_case(name))
+    {
+        return true;
+    }
+
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name);
+    let name_norm = compact_app_text(file_name);
+    let stem_norm = compact_app_text(stem);
+
+    def.aliases.iter().any(|alias| {
+        let alias_norm = normalize_app_query(alias);
+        !alias_norm.is_empty()
+            && (name_norm == alias_norm
+                || stem_norm == alias_norm
+                || (alias_norm.len() >= 3 && stem_norm.contains(&alias_norm)))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn app_query_matches_definition(query: &str, def: &WindowsAppDefinition) -> bool {
+    let normalized = normalize_app_query(query);
+    if normalized.is_empty() {
+        return false;
+    }
+    if normalized == compact_app_text(def.app_id) || normalized == compact_app_text(def.label) {
+        return true;
+    }
+    def.aliases
+        .iter()
+        .any(|alias| normalized == normalize_app_query(alias))
+        || def
+            .executable_names
+            .iter()
+            .any(|name| normalized == compact_app_text(name))
+}
+
+#[cfg(target_os = "windows")]
+fn app_args_for_path(app_id: &str, path: &Path) -> Vec<String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if app_id == "wechat" && file_name.eq_ignore_ascii_case("weixin.exe") {
+        vec!["--scene=desktop".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn candidate_from_path(
+    def: &WindowsAppDefinition,
+    path: PathBuf,
+    source: &str,
+    score: i32,
+) -> WindowsLaunchCandidate {
+    WindowsLaunchCandidate {
+        app_id: def.app_id.to_string(),
+        label: def.label.to_string(),
+        args: app_args_for_path(def.app_id, &path),
+        path,
+        source: source.to_string(),
+        aliases: def.aliases.iter().map(|alias| alias.to_string()).collect(),
+        score,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn app_launch_history_path() -> Option<PathBuf> {
+    let base = std::env::var("APPDATA")
+        .or_else(|_| std::env::var("LOCALAPPDATA"))
+        .ok()?;
+    Some(PathBuf::from(base).join("LumiOS").join("app-launch-history.json"))
+}
+
+#[cfg(target_os = "windows")]
+fn read_app_launch_history() -> Vec<AppLaunchHistoryEntry> {
+    let Some(path) = app_launch_history_path() else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<AppLaunchHistoryEntry>>(&raw).unwrap_or_default()
+}
+
+#[cfg(target_os = "windows")]
+fn write_app_launch_history(history: &[AppLaunchHistoryEntry]) {
+    let Some(path) = app_launch_history_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(raw) = serde_json::to_string_pretty(history) {
+        let _ = std::fs::write(path, raw);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn record_app_launch(candidate: &WindowsLaunchCandidate) {
+    let mut history = read_app_launch_history();
+    let path = candidate.path.to_string_lossy().to_string();
+    history.retain(|entry| {
+        !(entry.app_id == candidate.app_id && entry.path.eq_ignore_ascii_case(&path))
+    });
+    let last_success_ms = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0);
+    history.insert(
+        0,
+        AppLaunchHistoryEntry {
+            app_id: candidate.app_id.clone(),
+            path,
+            args: candidate.args.clone(),
+            source: candidate.source.clone(),
+            last_success_ms,
+        },
+    );
+    if history.len() > 120 {
+        history.truncate(120);
+    }
+    write_app_launch_history(&history);
+}
+
+#[cfg(target_os = "windows")]
+fn history_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLaunchCandidate> {
+    read_app_launch_history()
+        .into_iter()
+        .filter(|entry| entry.app_id == def.app_id)
+        .filter_map(|entry| {
+            let path = PathBuf::from(&entry.path);
+            if !path.exists() {
+                return None;
+            }
+            Some(WindowsLaunchCandidate {
+                app_id: def.app_id.to_string(),
+                label: def.label.to_string(),
+                path,
+                args: entry.args,
+                source: "history".to_string(),
+                aliases: def.aliases.iter().map(|alias| alias.to_string()).collect(),
+                score: 220,
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn shortcut_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLaunchCandidate> {
+    let mut candidates = Vec::new();
+    for (root, source, score) in windows_app_search_roots() {
+        if !root.exists() {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        let mut visited = 0usize;
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 7 || visited > 1600 {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                visited += 1;
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push((path, depth + 1));
+                    continue;
+                }
+                if !launchable_extension(&path) {
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if filename_matches_app_definition(file_name, def) {
+                    candidates.push(candidate_from_path(def, path, source, score));
+                }
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn fixed_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLaunchCandidate> {
+    def.fixed_paths
+        .iter()
+        .filter_map(|template| expand_windows_path_template(template))
+        .filter(|path| path.exists())
+        .map(|path| candidate_from_path(def, path, "known_path", 170))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn dedupe_windows_candidates(mut candidates: Vec<WindowsLaunchCandidate>) -> Vec<WindowsLaunchCandidate> {
+    candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            let key = candidate.path.to_string_lossy().to_lowercase();
+            seen.insert(key)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLaunchCandidate> {
+    let mut candidates = Vec::new();
+    candidates.extend(history_candidates_for_definition(def));
+    candidates.extend(fixed_candidates_for_definition(def));
+    candidates.extend(shortcut_candidates_for_definition(def));
+    dedupe_windows_candidates(candidates)
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_app_definition(target: &str) -> Option<WindowsAppDefinition> {
+    if !should_try_windows_app_index(target) {
+        return None;
+    }
+    windows_app_definitions()
+        .into_iter()
+        .find(|def| app_query_matches_definition(target, def))
+}
+
+#[cfg(target_os = "windows")]
+fn native_app_entry_from_candidate(candidate: WindowsLaunchCandidate) -> NativeAppEntry {
+    NativeAppEntry {
+        app_id: candidate.app_id,
+        label: candidate.label,
+        path: candidate.path.to_string_lossy().to_string(),
+        source: candidate.source,
+        aliases: candidate.aliases,
+        score: candidate.score,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppEntry> {
+    let definitions = windows_app_definitions();
+    let matched: Vec<WindowsAppDefinition> = match query.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => definitions
+            .into_iter()
+            .filter(|def| app_query_matches_definition(q, def))
+            .collect(),
+        None => definitions,
+    };
+
+    let mut candidates = Vec::new();
+    for def in matched {
+        candidates.extend(candidates_for_definition(&def));
+    }
+    dedupe_windows_candidates(candidates)
+        .into_iter()
+        .take(limit.max(1).min(200))
+        .map(native_app_entry_from_candidate)
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let spawned = if matches!(extension.as_str(), "bat" | "cmd" | "lnk" | "url") {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "start", ""]);
+        cmd.arg(path);
+        spawn_hidden(&mut cmd)
+    } else {
+        let mut cmd = Command::new(path);
+        for arg in extra_args {
+            cmd.arg(arg);
+        }
+        spawn_hidden(&mut cmd)
+    };
+
+    match spawned {
+        Ok(_) => CommandResult {
+            success: true,
+            output: format!("Opened: {}", path.display()),
+        },
+        Err(e) => CommandResult {
+            success: false,
+            output: e.to_string(),
+        },
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn try_launch_windows_app_alias(target: &str) -> Option<CommandResult> {
+    let def = resolve_app_definition(target)?;
+    let candidates = candidates_for_definition(&def);
+    if candidates.is_empty() {
+        return Some(CommandResult {
+            success: false,
+            output: format!(
+                "No local app entry found for {}. Checked launch history, Desktop, Start Menu, and known install paths.",
+                def.label
+            ),
+        });
+    }
+
+    let mut last_error: Option<String> = None;
+    for candidate in candidates {
+        let result = launch_windows_path(&candidate.path, &candidate.args);
+        if result.success {
+            record_app_launch(&candidate);
+            return Some(CommandResult {
+                success: true,
+                output: format!(
+                    "Opened app {} via {} ({})",
+                    candidate.label,
+                    candidate.path.display(),
+                    candidate.source
+                ),
+            });
+        }
+        last_error = Some(result.output);
+    }
+
+    Some(CommandResult {
+        success: false,
+        output: last_error.unwrap_or_else(|| format!("Failed to open {}", def.label)),
+    })
+}
+
+#[tauri::command]
+fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<NativeAppEntry> {
+    #[cfg(target_os = "windows")]
+    {
+        return list_windows_native_apps(query.as_deref(), limit.unwrap_or(80));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = query;
+        let _ = limit;
+        Vec::new()
+    }
+}
+
 #[tauri::command]
 fn open_item(target: String, window: tauri::WebviewWindow) -> CommandResult {
     // Open file, folder, app, or URL with the OS default handler
     let _ = window.set_always_on_top(false);
+
+    #[cfg(target_os = "windows")]
+    if let Some(result) = try_launch_windows_app_alias(&target) {
+        return result;
+    }
 
     if cfg!(target_os = "windows") && Path::new(&target).is_dir() {
         let mut cmd = Command::new("explorer.exe");
@@ -2114,6 +2851,7 @@ pub fn run() {
             list_home_files,
             list_directory,
             path_info,
+            list_native_apps,
             create_directory,
             rename_item,
             delete_item,

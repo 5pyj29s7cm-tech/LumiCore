@@ -17,6 +17,16 @@ async function desktopListFiles(args: Record<string, any>, context?: any): Promi
   });
 }
 
+async function desktopListApps(args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) {
+    throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
+  }
+  return context.desktopRelay('desktop_list_apps', {
+    query: args.query || '',
+    limit: args.limit || 80,
+  });
+}
+
 async function desktopOpen(args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
@@ -80,7 +90,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_open',
     description:
-      'Open a file, folder, application, or URL using the OS default handler. Use this to launch apps (e.g., "notepad.exe", "calc.exe"), open folders (e.g., "C:\\Users"), open files with their default app, or open URLs in the browser. This is the preferred way to visibly launch something on the user\'s desktop.',
+      'Open a file, folder, application, or URL using the OS default handler. For common apps, the native client first resolves launch history, Desktop shortcuts, Start Menu shortcuts, and known install paths, so app names like "微信", "WeChat", "WPS", "浏览器", "剪映", or "CAD" should be opened through this tool instead of guessing paths. This is the preferred way to visibly launch something on the user\'s desktop.',
     parameters: {
       type: 'object',
       properties: {
@@ -89,6 +99,23 @@ export function registerDesktopTools(registry: ToolRegistry): void {
       required: ['target'],
     },
     handler: desktopOpen,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'desktop_list_apps',
+    description:
+      'List launchable local desktop applications known by the native client. It checks successful launch history, Desktop shortcuts, Start Menu shortcuts, and common install paths. Use this before opening an app when the exact local path is unknown, especially for Chinese app names or user-specific installs.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional app name or alias to search, such as "微信", "WPS", "浏览器", "剪映", "CAD", "WeChat", or "VS Code".' },
+        limit: { type: 'number', description: 'Maximum entries to return (default 80).' },
+      },
+      required: [],
+    },
+    handler: desktopListApps,
     permission: 'user',
     securityLevel: 'safe',
   });
