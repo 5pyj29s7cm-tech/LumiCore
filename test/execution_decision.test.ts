@@ -12,13 +12,23 @@ const declarations = [
   'url_fetch',
   'create_ppt',
   'write_file',
+  'desktop_list_apps',
+  'desktop_open',
+  'desktop_active_window',
   'desktop_ui_snapshot',
+  'desktop_mouse_click_at',
+  'desktop_cursor_glow_show',
+  'desktop_cursor_glow_update',
+  'desktop_cursor_glow_click',
+  'desktop_cursor_glow_hide',
+  'desktop_keyboard_press',
   'client_health_check',
   'list_skills',
   'install_skill',
   'adapter_registry_list',
   'web_login_run',
   'url_fetch_logged_in',
+  'wechat_send_message',
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
   'work_takeover_task_continue',
@@ -344,6 +354,11 @@ describe('Lumi execution decision', () => {
       'wechat_prepare_reply',
       'wechat_copy_reply_draft',
     ]));
+
+    const wechatSend = decide('\u5fae\u4fe1\u76f4\u63a5\u53d1\u665a\u5b89\u7ed9\u963f\u9646');
+    expect(wechatSend.decision.allowToolUse).toBe(true);
+    expect(wechatSend.decision.toolRoute?.categories).toContain('messaging');
+    expect(wechatSend.decision.toolRoute?.toolNames).toContain('wechat_send_message');
 
     const continueCustomerTask = decide('\u7ee7\u7eed\u90a3\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u4efb\u52a1');
     expect(continueCustomerTask.decision.allowToolUse).toBe(true);

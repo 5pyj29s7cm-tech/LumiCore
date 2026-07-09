@@ -199,6 +199,13 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'desktop_capture_screen',
     'wechat_prepare_reply',
     'wechat_copy_reply_draft',
+    'wechat_send_message',
+    'desktop_mouse_click_at',
+    'desktop_cursor_glow_show',
+    'desktop_cursor_glow_update',
+    'desktop_cursor_glow_click',
+    'desktop_cursor_glow_hide',
+    'desktop_keyboard_press',
     'browser_open_task',
     'external_app_list_adapters',
   ],
@@ -430,6 +437,49 @@ function addNamePattern(out: Set<string>, names: string[], pattern: RegExp): voi
   }
 }
 
+function isDirectMessagingSend(text: string): boolean {
+  return /(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\b(?:send|message)\b)/iu.test(text)
+    && !/(?:\u8349\u7a3f|\u7f16\u8f91\u4e00\u4e0b|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b)/iu.test(text);
+}
+
+function priorityToolsForRoute(categories: string[], text: string): string[] {
+  const priorities: string[] = [];
+  if (categories.includes('messaging')) {
+    if (isDirectMessagingSend(text)) {
+      priorities.push(
+        'wechat_send_message',
+        'desktop_open',
+        'desktop_active_window',
+        'desktop_mouse_click_at',
+        'desktop_cursor_glow_show',
+        'desktop_cursor_glow_update',
+        'desktop_cursor_glow_click',
+        'desktop_cursor_glow_hide',
+        'desktop_keyboard_press',
+      );
+    } else {
+      priorities.push(
+        'wechat_prepare_reply',
+        'wechat_copy_reply_draft',
+        'desktop_open',
+        'desktop_active_window',
+        'desktop_ui_snapshot',
+      );
+    }
+  }
+  return unique(priorities);
+}
+
+function applyRoutePriority(ordered: string[], priorities: string[]): string[] {
+  if (!priorities.length) return ordered;
+  const available = new Set(ordered);
+  const prioritySet = new Set(priorities);
+  return [
+    ...priorities.filter(name => available.has(name)),
+    ...ordered.filter(name => !prioritySet.has(name)),
+  ];
+}
+
 function getMcpServerName(toolName: string): string | null {
   const match = toolName.match(/^mcp_(.+?)_/);
   return match?.[1] || null;
@@ -506,7 +556,10 @@ export function routeToolsForTurn(
     }
   }
 
-  const orderedBeforeHealthGate = availableNames.filter(name => selected.has(name));
+  const orderedBeforeHealthGate = applyRoutePriority(
+    availableNames.filter(name => selected.has(name)),
+    priorityToolsForRoute(categories, text),
+  );
   const connectedMcpGate = getConnectedMcpGate(options);
   const unavailableMcpServers: string[] = [];
   const ordered = connectedMcpGate

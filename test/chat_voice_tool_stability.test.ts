@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { shouldChainTask } from '../server/agents/nl_chainer';
 
 describe('chat and voice tool-call stability', () => {
   it('keeps text and voice on the shared routing and desktop execution path', () => {
@@ -30,5 +31,10 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('emitToolLifecycle');
     expect(voice).toContain('socket.emit("agent:tool"');
     expect(voice).toContain('onProgress');
+  });
+
+  it('routes short foreground WeChat send follow-ups into the task chain', () => {
+    expect(shouldChainTask('\u76f4\u63a5\u53d1\u665a\u5b89')).toBe(true);
+    expect(shouldChainTask('\u5fae\u4fe1\u5e2e\u6211\u7f16\u8f91\u4e00\u6761\u665a\u5b89\u53d1\u7ed9\u963f\u9646')).toBe(true);
   });
 });

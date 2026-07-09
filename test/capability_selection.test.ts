@@ -21,6 +21,12 @@ const declarations = [
   'desktop_ui_type',
   'desktop_ui_invoke',
   'desktop_capture_screen',
+  'desktop_mouse_click_at',
+  'desktop_cursor_glow_show',
+  'desktop_cursor_glow_update',
+  'desktop_cursor_glow_click',
+  'desktop_cursor_glow_hide',
+  'desktop_keyboard_press',
   'desktop_show_lumi_window',
   'desktop_run_command',
   'read_clipboard',
@@ -58,6 +64,7 @@ const declarations = [
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
   'cad_run_autocad_draw_script',
+  'wechat_send_message',
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
 ].map(name => ({
@@ -245,6 +252,22 @@ describe('Lumi capability selection', () => {
 
     expect(selection.lane).toBe('messaging');
     expect(selection.preferredTools).toContain('wechat_prepare_reply');
+  });
+
+  it('selects foreground WeChat sending with the virtual cursor path', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_wechat_send_user',
+      text: '\u5fae\u4fe1\u76f4\u63a5\u53d1\u665a\u5b89\u7ed9\u963f\u9646',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('messaging');
+    expect(execution.toolRoute?.toolNames).toContain('wechat_send_message');
+    expect(selection.preferredTools).toEqual(expect.arrayContaining([
+      'wechat_send_message',
+      'desktop_mouse_click_at',
+      'desktop_cursor_glow_show',
+    ]));
   });
 
   it('keeps chat, voice, and task sockets on the shared capability selection path', () => {

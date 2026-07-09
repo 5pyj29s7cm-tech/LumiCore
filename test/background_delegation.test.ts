@@ -45,6 +45,22 @@ describe('background delegation', () => {
     }).shouldDelegate).toBe(false);
   });
 
+  it('keeps foreground WeChat sends out of background delegation', () => {
+    const send = shouldDelegateWorkInBackground({
+      ...BASE,
+      text: '\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89',
+      complexity: 'moderate',
+    });
+    const followup = shouldDelegateWorkInBackground({
+      ...BASE,
+      text: '\u76f4\u63a5\u53d1\u665a\u5b89',
+      complexity: 'simple',
+    });
+
+    expect(send).toEqual({ shouldDelegate: false, reason: 'foreground_messaging_send' });
+    expect(followup).toEqual({ shouldDelegate: false, reason: 'foreground_messaging_send' });
+  });
+
   it('builds a concise foreground acknowledgement', () => {
     const ack = buildDelegationAck(['法律检索员', '文书整理员'], 'bg_123');
     expect(ack).toContain('法律检索员、文书整理员');

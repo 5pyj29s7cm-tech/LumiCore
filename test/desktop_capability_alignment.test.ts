@@ -121,4 +121,29 @@ describe('desktop capability alignment', () => {
     expect(backgroundRuntime?.notes).toContain('24-hour availability');
     expect(backgroundRuntime?.safety).toContain('Hidden-to-background');
   });
+
+  it('advertises virtual cursor relay as available for controlled foreground WeChat sends', async () => {
+    const { getAdapterRegistry } = await import('../server/adapters/registry');
+    const { getClientCapabilities } = await import('../server/client/self_model');
+
+    const report = getAdapterRegistry({ includePlanned: false });
+    const computerUse = report.adapters.find(adapter => adapter.id === 'automation.computer_use');
+    const visibleExecution = getClientCapabilities().find(capability => capability.id === 'system.visible_execution');
+
+    expect(computerUse?.notes).toContain('foreground WeChat sends');
+    expect(visibleExecution?.notes).toContain('foreground WeChat sends');
+    expect(computerUse?.notes).toContain('desktop_cursor_glow_*');
+    expect(visibleExecution?.notes).toContain('desktop_mouse_click_at');
+  });
+
+  it('advertises WeChat foreground send capability without treating ordinary sends as handoff-only', async () => {
+    const { getClientCapabilities } = await import('../server/client/self_model');
+
+    const wechat = getClientCapabilities().find(capability => capability.id === 'external.messaging');
+
+    expect(wechat?.actions).toContain('wechat_send_message');
+    expect(wechat?.actions).toContain('desktop_mouse_click_at');
+    expect(wechat?.notes).toContain('ordinary foreground user-requested WeChat messages');
+    expect(wechat?.notes).toContain('virtual cursor path');
+  });
 });

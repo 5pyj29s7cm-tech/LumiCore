@@ -64,8 +64,15 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'desktop_ui_focus',
     'desktop_ui_snapshot',
     'desktop_capture_screen',
+    'wechat_send_message',
     'wechat_prepare_reply',
     'wechat_copy_reply_draft',
+    'desktop_mouse_click_at',
+    'desktop_cursor_glow_show',
+    'desktop_cursor_glow_update',
+    'desktop_cursor_glow_click',
+    'desktop_cursor_glow_hide',
+    'desktop_keyboard_press',
     'browser_open_task',
     'external_app_list_adapters',
   ],
@@ -286,7 +293,7 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>): string {
     case 'work_takeover':
       return 'Continue the active task instead of starting over. Preserve context, advance the next safe step, verify evidence, and update the task.';
     case 'messaging':
-      return 'Use messaging tools as a bridge to customer or account communication. Draft before sending unless the user has already granted that boundary.';
+      return 'Use messaging tools as a bridge to customer or account communication. For explicit ordinary foreground sends, use the dedicated send tool and visible cursor path; draft before sending when the boundary is ambiguous.';
     case 'artifact_work':
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':

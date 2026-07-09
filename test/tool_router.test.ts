@@ -38,11 +38,24 @@ const DECLARATIONS = [
   'web_login_run',
   'external_control_candidates',
   'external_control_configure_candidate',
+  'desktop_list_apps',
+  'desktop_open',
+  'desktop_active_window',
   'desktop_ui_snapshot',
   'desktop_ui_focus',
   'desktop_ui_click',
   'desktop_ui_invoke',
   'desktop_ui_type',
+  'desktop_capture_screen',
+  'desktop_mouse_click_at',
+  'desktop_cursor_glow_show',
+  'desktop_cursor_glow_update',
+  'desktop_cursor_glow_click',
+  'desktop_cursor_glow_hide',
+  'desktop_keyboard_press',
+  'wechat_send_message',
+  'wechat_prepare_reply',
+  'wechat_copy_reply_draft',
   'mcp_playwright_browser_snapshot',
   'mcp_playwright_browser_navigate',
   'mcp_playwright_browser_click',
@@ -328,6 +341,24 @@ describe('tool router', () => {
       'mcp_stockbot_stock_news',
       'mcp_stockbot_paper_portfolio',
     ]));
+  });
+
+  it('keeps foreground WeChat sends on the dedicated virtual cursor path', () => {
+    const route = routeToolsForTurn(
+      '\u5fae\u4fe1\u76f4\u63a5\u53d1\u665a\u5b89\u7ed9\u963f\u9646',
+      DECLARATIONS,
+      { maxTools: 8 },
+    );
+
+    expect(route.categories).toContain('messaging');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'wechat_send_message',
+      'desktop_open',
+      'desktop_active_window',
+      'desktop_mouse_click_at',
+      'desktop_cursor_glow_show',
+    ]));
+    expect(route.toolNames.indexOf('wechat_send_message')).toBeLessThan(3);
   });
 
   it('filters unavailable MCP tools when a health gate is provided', () => {

@@ -1323,6 +1323,106 @@ fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppE
 }
 
 #[cfg(target_os = "windows")]
+fn focus_running_windows_app(def: &WindowsAppDefinition) -> Option<CommandResult> {
+    let executable_names: Vec<String> = def
+        .executable_names
+        .iter()
+        .filter(|name| name.to_ascii_lowercase().ends_with(".exe"))
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    if executable_names.is_empty() {
+        return None;
+    }
+
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_all();
+    let pids: Vec<u32> = sys
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let name = process.name().to_string_lossy().to_ascii_lowercase();
+            if executable_names.iter().any(|expected| expected == &name) {
+                Some(pid.as_u32())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if pids.is_empty() {
+        return None;
+    }
+
+    #[repr(C)]
+    struct FocusSearch {
+        pids: Vec<u32>,
+        hwnd: isize,
+        pid: u32,
+        title: String,
+    }
+
+    extern "system" {
+        fn EnumWindows(lpEnumFunc: extern "system" fn(isize, isize) -> i32, lParam: isize) -> i32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn GetWindowTextW(hwnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn GetWindowTextLengthW(hwnd: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
+        fn ShowWindow(hwnd: isize, nCmdShow: i32) -> i32;
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+    }
+
+    extern "system" fn enum_window(hwnd: isize, lparam: isize) -> i32 {
+        unsafe {
+            if IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+
+            let state = &mut *(lparam as *mut FocusSearch);
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if !state.pids.contains(&pid) {
+                return 1;
+            }
+
+            let title_len = GetWindowTextLengthW(hwnd);
+            if title_len <= 0 {
+                return 1;
+            }
+            let mut buf: Vec<u16> = vec![0; title_len as usize + 1];
+            let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            state.hwnd = hwnd;
+            state.pid = pid;
+            state.title = String::from_utf16_lossy(&buf[..len as usize]);
+            0
+        }
+    }
+
+    let mut state = FocusSearch {
+        pids,
+        hwnd: 0,
+        pid: 0,
+        title: String::new(),
+    };
+
+    unsafe {
+        EnumWindows(enum_window, &mut state as *mut FocusSearch as isize);
+        if state.hwnd != 0 {
+            const SW_RESTORE: i32 = 9;
+            ShowWindow(state.hwnd, SW_RESTORE);
+            SetForegroundWindow(state.hwnd);
+            return Some(CommandResult {
+                success: true,
+                output: format!(
+                    "Focused running app {} (pid {}, window \"{}\")",
+                    def.label, state.pid, state.title
+                ),
+            });
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
     let extension = path
         .extension()
@@ -1358,6 +1458,9 @@ fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
 #[cfg(target_os = "windows")]
 fn try_launch_windows_app_alias(target: &str) -> Option<CommandResult> {
     let def = resolve_app_definition(target)?;
+    if let Some(result) = focus_running_windows_app(&def) {
+        return Some(result);
+    }
     let candidates = candidates_for_definition(&def);
     if candidates.is_empty() {
         return Some(CommandResult {

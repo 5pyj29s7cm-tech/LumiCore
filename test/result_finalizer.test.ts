@@ -86,6 +86,29 @@ describe('Lumi result finalizer', () => {
     expect(result.reason).toContain('content-read/open/review');
   });
 
+  it('keeps blocked background delegation results compact', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89',
+      responseText: 'Completed successfully.',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '\u5fae\u4fe1' },
+        result: '',
+        error: 'Desktop tool "desktop_open" timed out (30s)',
+      }],
+      source: 'background_delegation',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
+    expect(result.text).toContain('\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u7a97\u53e3');
+    expect(result.text).toContain('desktop_open');
+    expect(result.text).not.toContain('\u56de\u590d\u58f0\u79f0');
+    expect(result.text).not.toContain('\u76ee\u524d\u80fd\u786e\u8ba4\u7684\u6210\u529f\u6b65\u9aa4');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const socketSources = [

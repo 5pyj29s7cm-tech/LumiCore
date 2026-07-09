@@ -933,7 +933,37 @@ export function registerChatHandler(
         emitAgent("agent:tool", normalized);
       };
 
-      const isDirectDesktopTool = (toolName: string) => toolName.startsWith('desktop_');
+      const directDesktopRelayTools = new Set([
+        'client_action',
+        'desktop_system_info',
+        'desktop_list_files',
+        'desktop_list_apps',
+        'desktop_path_info',
+        'desktop_open',
+        'desktop_show_lumi_window',
+        'desktop_run_command',
+        'desktop_active_window',
+        'desktop_running_processes',
+        'desktop_capture_screen',
+        'desktop_clipboard_read',
+        'desktop_clipboard_write',
+        'desktop_idle_time',
+        'desktop_poll_activity',
+        'desktop_mouse_move',
+        'desktop_mouse_click',
+        'desktop_mouse_drag',
+        'desktop_mouse_click_at',
+        'desktop_mouse_double_click_at',
+        'desktop_mouse_right_click_at',
+        'desktop_keyboard_type',
+        'desktop_keyboard_press',
+        'desktop_set_wallpaper_mode',
+        'desktop_cursor_glow_show',
+        'desktop_cursor_glow_update',
+        'desktop_cursor_glow_click',
+        'desktop_cursor_glow_hide',
+      ]);
+      const isDirectDesktopTool = (toolName: string) => directDesktopRelayTools.has(toolName);
       const persistChatLearning = (
         assistantText: string,
         options: {
@@ -1828,9 +1858,13 @@ export function registerChatHandler(
                   source: 'background_delegation',
                   flow: turnFlow,
                 });
-                if (finalizedBackground.blocked) finalText = finalizedBackground.text;
+                const backgroundBlocked = finalizedBackground.blocked;
+                if (backgroundBlocked) finalText = finalizedBackground.text;
 
-                const completionText = `后台子 agent 完成了：${text.slice(0, 80)}\n\n${finalText}`;
+                const taskPreview = text.slice(0, 80);
+                const completionText = backgroundBlocked
+                  ? `\u8fd9\u6b21\u6ca1\u5b8c\u6210\uff1a${taskPreview}\n\n${finalText}`
+                  : `\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210\uff1a${taskPreview}\n\n${finalText}`;
                 const completedTask = completeBackgroundTask(backgroundTaskId, completionText);
                 if (completedTask) emitTaskUpdate(completedTask);
                 if (completedTask?.status === 'cancelled') {
@@ -1851,7 +1885,7 @@ export function registerChatHandler(
                 emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
                 pushNotification(uid, {
                   type: 'background_result',
-                  title: '后台子 agent 完成',
+                  title: backgroundBlocked ? '\u540e\u53f0\u4efb\u52a1\u672a\u5b8c\u6210' : '\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210',
                   message: completionText.slice(0, 180),
                 });
 

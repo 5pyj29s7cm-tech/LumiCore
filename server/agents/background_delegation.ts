@@ -31,6 +31,12 @@ const BACKGROUND_APP_CONTEXT_RE =
 const EXPLICIT_BACKGROUND_DELEGATION_RE =
   /(?:\u5b50\s*agent|\u5b50\u667a\u80fd\u4f53|\u4ea4\u7ed9.*agent|\u5206\u6d3e|\u6d3e\u7ed9|\u4e0d\u7528\u7b49|\u4e0d\u8981\u7b49|\u5f02\u6b65|\u5e76\u884c|\b(?:background\s+task|sub-?agent|delegate|dispatch|async|parallel|don't wait|do not wait)\b)/iu;
 
+const FOREGROUND_MESSAGING_SEND_RE =
+  /(?:wechat|weixin|\u5fae\u4fe1).*(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1)|(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1).*(?:wechat|weixin|\u5fae\u4fe1)|(?:\u7ed9[^\s,，。.!?！？]{1,24}\u53d1[^\n]{0,80})|(?:\u53d1[^\n]{0,80}\u7ed9[^\s,，。.!?！？]{1,24})/iu;
+
+const SHORT_FOREGROUND_SEND_FOLLOWUP_RE =
+  /^(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u5427|\u53d1\u665a\u5b89|\u76f4\u63a5\u53d1\u665a\u5b89)\s*[\s\S]{0,40}$/u;
+
 const WORK_CATEGORY_ALLOWLIST = new Set(['command', 'code', 'question', 'analysis']);
 
 export function hasExplicitBackgroundDelegationPreference(text: string): boolean {
@@ -38,6 +44,13 @@ export function hasExplicitBackgroundDelegationPreference(text: string): boolean
     return false;
   }
   return BACKGROUND_REQUEST_PATTERNS.some(pattern => pattern.test(text));
+}
+
+export function isForegroundMessagingSend(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (/(?:\u8349\u7a3f|\u5148\u5199|\u7f16\u8f91\u4e00\u4e0b|\u4e0d\u8981\u53d1|\bdraft\b)/iu.test(normalized)) return false;
+  return FOREGROUND_MESSAGING_SEND_RE.test(normalized) || SHORT_FOREGROUND_SEND_FOLLOWUP_RE.test(normalized);
 }
 
 export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisionInput): BackgroundDelegationDecision {
@@ -50,6 +63,7 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (input.directDesktop) return { shouldDelegate: false, reason: 'direct_desktop_visible_work' };
   if (input.prefersSequentialWorkflow) return { shouldDelegate: false, reason: 'artifact_first_sequential_workflow' };
   if (input.availableAgentCount < 1) return { shouldDelegate: false, reason: 'no_available_workers' };
+  if (isForegroundMessagingSend(input.text)) return { shouldDelegate: false, reason: 'foreground_messaging_send' };
   if (!WORK_CATEGORY_ALLOWLIST.has(input.category || '')) return { shouldDelegate: false, reason: 'non_work_category' };
 
   const explicitlyRequested = hasExplicitBackgroundDelegationPreference(input.text);

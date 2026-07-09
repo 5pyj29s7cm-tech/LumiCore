@@ -48,6 +48,38 @@ function buildMessageDraft(args: Record<string, any>): string {
   return lines.filter(Boolean).join('\n');
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parseDesktopJson(raw: string): Record<string, any> {
+  try {
+    return JSON.parse(String(raw || '{}'));
+  } catch {
+    return {};
+  }
+}
+
+function isWeChatActiveWindow(info: Record<string, any>): boolean {
+  const processName = String(info.process_name || info.processName || '').toLowerCase();
+  const title = String(info.title || '').toLowerCase();
+  return processName === 'weixin.exe' ||
+    processName === 'wechat.exe' ||
+    title.includes('wechat') ||
+    title.includes('\u5fae\u4fe1');
+}
+
+function virtualInputPoint(activeWindow: Record<string, any>): { x: number; y: number } {
+  const x = Number(activeWindow.x || 0);
+  const y = Number(activeWindow.y || 0);
+  const width = Math.max(320, Number(activeWindow.width || 0));
+  const height = Math.max(320, Number(activeWindow.height || 0));
+  return {
+    x: Math.round(x + width * 0.58),
+    y: Math.round(y + height - Math.min(96, Math.max(72, height * 0.14))),
+  };
+}
+
 function safeFileName(value: string): string {
   const cleaned = (value || 'cad_drawing')
     .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_')
@@ -1273,6 +1305,102 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         openResult: opened,
         sendAllowed: !isMessagingSendConfirmationRequired(),
         note: 'The draft is ready on the clipboard. Lumi did not send the message.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'wechat_send_message',
+    description: 'Send an ordinary user-requested foreground WeChat message through the real desktop client. It reuses an already-running WeChat window when possible, optionally selects a contact through WeChat search, focuses the input area with the virtual cursor click path, pastes the message, presses the configured send shortcut, and verifies the foreground WeChat window. Use only for low-risk social/content messages requested by the present user; QR/login/account switching, payments, legal/contractual commits, and ambiguous high-consequence sends still require handoff or confirmation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        contact: { type: 'string', description: 'Recipient or group name to select in WeChat. Omit to use the current chat.' },
+        message: { type: 'string', description: 'Exact message text to send.' },
+        draft: { type: 'string', description: 'Alias for message when a previous draft is available.' },
+        applicationTarget: { type: 'string', description: 'Desktop app target. Defaults to wechat.' },
+        useSearch: { type: 'boolean', description: 'Use WeChat search to select contact before sending. Defaults true when contact is provided.' },
+        sendShortcut: { type: 'string', description: 'Key shortcut to send, usually enter or ctrl+enter. Defaults enter.' },
+        useVirtualCursor: { type: 'boolean', description: 'Click the message input area through the independent virtual cursor path. Defaults true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const message = String(args.message || args.draft || '').trim();
+      if (!message) throw new Error('Message text is required.');
+
+      const desktopRelay = requireDesktopRelay(context);
+      const progress = (step: string) => context?.onProgress?.(step);
+      const contact = String(args.contact || '').trim();
+      const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
+      const useSearch = args.useSearch !== false && Boolean(contact);
+      const sendShortcut = String(args.sendShortcut || 'enter').trim() || 'enter';
+      const useVirtualCursor = args.useVirtualCursor !== false;
+
+      progress('\u6b63\u5728\u590d\u7528\u5df2\u8fd0\u884c\u7684\u5fae\u4fe1\u7a97\u53e3\u3002');
+      const openResult = await desktopRelay('desktop_open', { target: appTarget });
+      await sleep(450);
+
+      let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      if (!isWeChatActiveWindow(activeWindow)) {
+        await sleep(600);
+        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      }
+      if (!isWeChatActiveWindow(activeWindow)) {
+        throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+      }
+
+      if (useSearch) {
+        progress(`\u6b63\u5728\u5fae\u4fe1\u91cc\u5b9a\u4f4d\u8054\u7cfb\u4eba: ${contact}`);
+        await desktopRelay('desktop_clipboard_write', { text: contact });
+        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
+        await sleep(250);
+        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
+        await sleep(450);
+        await desktopRelay('desktop_keyboard_press', { key: 'enter' });
+        await sleep(650);
+        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+        if (!isWeChatActiveWindow(activeWindow)) {
+          throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+        }
+      }
+
+      const point = virtualInputPoint(activeWindow);
+      if (useVirtualCursor) {
+        progress('\u6b63\u5728\u7528\u865a\u62df\u5149\u6807\u805a\u7126\u5fae\u4fe1\u8f93\u5165\u533a\u3002');
+        await desktopRelay('desktop_cursor_glow_show', { source: 'wechat_send_message', timeoutMs: 12000 }).catch(() => '');
+        await desktopRelay('desktop_cursor_glow_update', { x: point.x, y: point.y }).catch(() => '');
+        await desktopRelay('desktop_mouse_click_at', { x: point.x, y: point.y, button: 'left' });
+        await desktopRelay('desktop_cursor_glow_click', { x: point.x, y: point.y }).catch(() => '');
+        await sleep(180);
+      }
+
+      progress('\u6b63\u5728\u7c98\u8d34\u5e76\u53d1\u9001\u5fae\u4fe1\u6d88\u606f\u3002');
+      await desktopRelay('desktop_clipboard_write', { text: message });
+      await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
+      await sleep(220);
+      await desktopRelay('desktop_keyboard_press', { key: sendShortcut });
+      await sleep(450);
+      await desktopRelay('desktop_cursor_glow_hide', { source: 'wechat_send_message' }).catch(() => '');
+
+      const finalActiveWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      if (!isWeChatActiveWindow(finalActiveWindow)) {
+        throw new Error(`Message send shortcut was pressed, but WeChat is no longer foreground. Active window: ${JSON.stringify(finalActiveWindow).slice(0, 300)}`);
+      }
+
+      return JSON.stringify({
+        sent: true,
+        contact: contact || null,
+        usedContactSearch: useSearch,
+        sendShortcut,
+        method: useVirtualCursor ? 'virtual_cursor_clipboard_paste_send' : 'clipboard_paste_send',
+        inputPoint: point,
+        openResult,
+        activeWindow: finalActiveWindow,
+        messagePreview: message.slice(0, 80),
+        note: 'Foreground WeChat send shortcut was pressed after focusing the input area. If the local WeChat is configured to send with Ctrl+Enter, call again with sendShortcut=ctrl+enter.',
       }, null, 2);
     },
     permission: 'user',
