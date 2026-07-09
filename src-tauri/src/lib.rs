@@ -711,9 +711,27 @@ fn open_item(target: String, window: tauri::WebviewWindow) -> CommandResult {
         Command::new("xdg-open").arg(&target).output()
     };
     match result {
-        Ok(out) => CommandResult {
-            success: out.status.success(),
-            output: format!("Opened: {}", target),
+        Ok(out) => {
+            if out.status.success() {
+                return CommandResult {
+                    success: true,
+                    output: format!("Opened: {}", target),
+                };
+            }
+
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let detail = if !stderr.is_empty() {
+                stderr
+            } else if !stdout.is_empty() {
+                stdout
+            } else {
+                format!("Open command failed for: {}", target)
+            };
+            CommandResult {
+                success: false,
+                output: detail,
+            }
         },
         Err(e) => CommandResult {
             success: false,

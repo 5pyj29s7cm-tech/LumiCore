@@ -15,6 +15,7 @@ function buildActionPromiseGuardedResponse(
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
   const clientSurfaceTask = isClientSurfaceTask(task);
+  const desktopActionTask = isDesktopActionTask(task);
   const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
@@ -26,6 +27,13 @@ function buildActionPromiseGuardedResponse(
         `I have not actually operated the Lumi client yet: ${reason}`,
         lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: no successful client_get_state/client_action evidence was recorded for this turn.',
         'Next step: inspect client_get_state, then run the matching client_action and trust only its verification result.',
+      ].filter(Boolean).join('\n');
+    }
+    if (desktopActionTask) {
+      return [
+        `I have not verified the desktop action yet: ${reason}`,
+        lastFailure ? `Latest blocker: ${lastFailure}.` : 'What I can verify: no successful desktop action evidence was recorded for this turn.',
+        'Next step: continue the real open/focus/check workflow, then report only after the window or process is verified.',
       ].filter(Boolean).join('\n');
     }
     if (confirmationBlocked) {
@@ -47,6 +55,14 @@ function buildActionPromiseGuardedResponse(
       '我还没有真正操作客户端：这一轮没有记录到成功的 client_get_state / client_action 证据。',
       lastFailure ? `最近的阻塞点：${lastFailure}。` : '现在能确认的是：这次没有完成可验证的客户端状态读取或界面动作。',
       '下一步应该先读取客户端状态；如果是打开中枢世界，就调用 client_action(open_nexus)，并等验证结果后再说完成。',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (desktopActionTask) {
+    return [
+      `\u6211\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u786e\u8ba4\u7684\u684c\u9762\u52a8\u4f5c\u7ed3\u679c\uff1a${reason}\u3002`,
+      lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '\u73b0\u5728\u80fd\u786e\u8ba4\u7684\u662f\uff1a\u8fd9\u4e00\u8f6e\u8fd8\u6ca1\u6709\u6210\u529f\u7684\u684c\u9762\u6253\u5f00\u3001\u805a\u7126\u6216\u8fdb\u7a0b\u9a8c\u8bc1\u8bb0\u5f55\u3002',
+      '\u4e0b\u4e00\u6b65\u5e94\u8be5\u7ee7\u7eed\u6267\u884c\u6253\u5f00\u3001\u5b9a\u4f4d\u6216\u786e\u8ba4\u52a8\u4f5c\uff0c\u770b\u5230\u771f\u5b9e\u7a97\u53e3\u6216\u5de5\u5177\u8fd4\u56de\u6210\u529f\u540e\u518d\u6c47\u62a5\u5b8c\u6210\u3002',
     ].filter(Boolean).join('\n');
   }
 
@@ -102,6 +118,15 @@ const READ_REVIEW_PROMISE_RE =
 const READ_REVIEW_EVIDENCE_TOOL_RE =
   /^(read_|extract_document_text|read_docx|read_pdf|pdf_to_text|ocr_image_file|transcribe_audio_to_text_file|desktop_open|desktop_capture_screen|desktop_ui_snapshot|capture_screen|computer_use|client_get_state|client_action)/i;
 
+const DESKTOP_ACTION_TASK_RE =
+  /\b(?:desktop|screen|app|application|program|software|wechat|weixin|browser|open|launch|start|run)\b|(?:\u684c\u9762|\u5c4f\u5e55|\u5fae\u4fe1|\u5feb\u6377\u65b9\u5f0f|\u5e94\u7528|\u7a0b\u5e8f|\u8f6f\u4ef6|\u6253\u5f00|\u6253\u4e0d\u5f00|\u542f\u52a8|\u8fd0\u884c|\u5f00\u542f)/iu;
+
+const CONTENT_WORK_TASK_RE =
+  /\b(?:file|document|docx|pdf|contract|agreement|attachment|read|review|inspect|analy[sz]e|transcribe|audio|note)\b|(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u9644\u4ef6|\u5408\u540c|\u534f\u8bae|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u8f6c\u5199|\u8bed\u97f3|\u97f3\u9891|\u7b14\u5f55)/iu;
+
+const DESKTOP_ACTION_EVIDENCE_TOOL_RE =
+  /^(desktop_|computer_use|external_app_|browser_open_task|mcp_wechat|mcp_.*wechat|client_action)/i;
+
 const VERIFY_PASS_RE = /"status"\s*:\s*"pass"|status:\s*pass/i;
 
 const ACTION_EVIDENCE_TASK_RE =
@@ -117,6 +142,11 @@ function isClientSurfaceTask(task: string): boolean {
   return CLIENT_SURFACE_TASK_RE.test(task || '');
 }
 
+function isDesktopActionTask(task: string): boolean {
+  const text = task || '';
+  return DESKTOP_ACTION_TASK_RE.test(text) && !CONTENT_WORK_TASK_RE.test(text);
+}
+
 export function needsCompletionEvidence(task: string): boolean {
   return EXTERNAL_WORK_TASK_RE.test(task || '');
 }
@@ -130,16 +160,24 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const toolCalls = input.toolCalls || [];
   const successful = toolCalls.filter(call => !call.error && String(call.result || '').trim());
   const failed = toolCalls.filter(call => call.error);
-  const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(response);
+  const desktopActionTask = isDesktopActionTask(task);
+  const hasDesktopActionEvidence = toolCalls.some(call =>
+    DESKTOP_ACTION_EVIDENCE_TOOL_RE.test(call.name) &&
+    (Boolean(call.error) || Boolean(String(call.result || '').trim()))
+  );
+  const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(response) && !desktopActionTask;
   const hasPromiseEvidence = successful.some(call =>
     ACTION_PROMISE_EVIDENCE_TOOL_RE.test(call.name) ||
     (!INSPECTION_ONLY_TOOL_RE.test(call.name) && Boolean(call.result || call.name))
   );
   const hasReadReviewEvidence = successful.some(call => READ_REVIEW_EVIDENCE_TOOL_RE.test(call.name));
+  const missingPromisedEvidence = desktopActionTask
+    ? !hasDesktopActionEvidence
+    : (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence));
   const promisesActionWithoutEvidence =
     ACTION_PROMISE_RE.test(response) &&
     (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(response)) &&
-    (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence));
+    missingPromisedEvidence;
 
   if (promisesActionWithoutEvidence) {
     const reason = promisesReadReviewAction
@@ -205,11 +243,21 @@ function buildGuardedResponse(
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
   const clientSurfaceTask = isClientSurfaceTask(task);
+  const desktopActionTask = isDesktopActionTask(task);
   const lastSuccess = successful.slice(-3).map(call => call.name).join(', ');
   const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
   );
+
+  if (isZh && desktopActionTask && !clientSurfaceTask) {
+    return [
+      `\u6211\u5df2\u7ecf\u5c1d\u8bd5\u4e86\u684c\u9762\u52a8\u4f5c\uff0c\u4f46\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\uff1a${reason}\u3002`,
+      lastSuccess ? `\u76ee\u524d\u80fd\u786e\u8ba4\u7684\u6210\u529f\u6b65\u9aa4\uff1a${lastSuccess}\u3002` : '\u76ee\u524d\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u684c\u9762\u6253\u5f00\u3001\u805a\u7126\u6216\u8fdb\u7a0b\u9a8c\u8bc1\u3002',
+      lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '',
+      '\u4e0b\u4e00\u6b65\u5e94\u8be5\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\uff0c\u5e76\u5728\u771f\u5b9e\u7a97\u53e3\u6216\u8fdb\u7a0b\u786e\u8ba4\u540e\u518d\u6c47\u62a5\u5b8c\u6210\u3002',
+    ].filter(Boolean).join('\n');
+  }
 
   if (!isZh) {
     if (clientSurfaceTask) {
@@ -218,6 +266,14 @@ function buildGuardedResponse(
         lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful client state/action evidence was recorded.',
         lastFailure ? `Latest blocker: ${lastFailure}.` : '',
         'Next step: run or retry the real client_get_state/client_action path, then report the verified state.',
+      ].filter(Boolean).join('\n');
+    }
+    if (desktopActionTask) {
+      return [
+        `I tried the desktop action, but cannot mark it complete yet: ${reason}.`,
+        lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful desktop action was recorded.',
+        lastFailure ? `Latest blocker: ${lastFailure}.` : '',
+        'Next step: keep locating/opening/focusing the target and verify the real window or process before reporting completion.',
       ].filter(Boolean).join('\n');
     }
     if (confirmationBlocked) {
