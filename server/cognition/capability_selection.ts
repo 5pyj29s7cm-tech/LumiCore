@@ -1,5 +1,6 @@
 import type { LumiExecutionDecision } from './execution_decision';
 import type { LumiTurnDispatch } from './turn_dispatch';
+import { buildActionContract, formatActionContractPrompt } from './action_contract';
 
 export type LumiCapabilityLane =
   | 'conversation'
@@ -312,7 +313,11 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>): string {
 
 export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput): LumiCapabilitySelection {
   const selected = selectLane(input);
-  const preferredTools = availablePreferredTools(input, selected.lane);
+  const actionContract = buildActionContract(input.text || input.dispatch.flow.routeText || '');
+  const preferredTools = unique([
+    ...availablePreferredTools(input, selected.lane),
+    ...(actionContract.applies ? actionContract.preferredTools : []),
+  ]).slice(0, 22);
   const routeCategories = input.execution.toolRoute?.categories || [];
   const promptOverlay = [
     '## Lumi Capability Selection',
@@ -322,8 +327,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     routeCategories.length ? `Tool route categories: ${routeCategories.join(', ')}.` : 'Tool route categories: none.',
     preferredTools.length ? `Preferred tools for this lane: ${preferredTools.join(', ')}.` : 'Preferred tools for this lane: none.',
     laneRule(selected),
+    formatActionContractPrompt(actionContract),
     'This lane is an execution bias, not a fixed script. If the newest user wording contradicts it, follow the newest wording and update task state when work is persistent.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   return {
     ...selected,

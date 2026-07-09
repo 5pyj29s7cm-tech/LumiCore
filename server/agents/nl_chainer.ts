@@ -143,13 +143,25 @@ function extractWeChatMessage(userTask: string): string {
     .trim() || text;
 }
 
-function buildDeterministicPlan(userTask: string, availableTools: Array<{ name: string }>): ChainerPlan | null {
-  const hasTool = (name: string) => availableTools.some(tool => tool.name === name);
+export function buildForegroundWeChatSendArgs(userTask: string): Record<string, any> | null {
   const text = String(userTask || '');
   const isWeChatTask = /wechat|weixin|\u5fae\u4fe1/i.test(text);
   const looksLikeWeChatFollowup = /\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89/u.test(text);
-  const wantsSend = /send|message|reply|\u53d1\u9001|\u53d1\u7ed9|\u4f60\u6765\u53d1|\u76f4\u63a5\u53d1|\u56de\u590d/u.test(text);
-  if (!(isWeChatTask || looksLikeWeChatFollowup) || !wantsSend || !hasTool('wechat_send_message')) return null;
+  const wantsSend = /send|message|reply|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u665a\u5b89|\u7ed9[^\s,锛屻€?!?锛侊紵]{1,24}\u53d1|\u4f60\u6765\u53d1|\u76f4\u63a5\u53d1|\u56de\u590d/u.test(text);
+  if (!(isWeChatTask || looksLikeWeChatFollowup) || !wantsSend) return null;
+
+  return {
+    contact: extractWeChatContact(text),
+    message: extractWeChatMessage(text),
+    applicationTarget: 'wechat',
+    useVirtualCursor: true,
+  };
+}
+
+function buildDeterministicPlan(userTask: string, availableTools: Array<{ name: string }>): ChainerPlan | null {
+  const hasTool = (name: string) => availableTools.some(tool => tool.name === name);
+  const sendArgs = buildForegroundWeChatSendArgs(userTask);
+  if (!sendArgs || !hasTool('wechat_send_message')) return null;
 
   return {
     goal: '\u901a\u8fc7\u5df2\u8fd0\u884c\u7684\u5fae\u4fe1\u524d\u53f0\u53d1\u9001\u666e\u901a\u6d88\u606f',
@@ -157,12 +169,7 @@ function buildDeterministicPlan(userTask: string, availableTools: Array<{ name: 
       {
         description: '\u590d\u7528\u5fae\u4fe1\u7a97\u53e3\uff0c\u7528\u865a\u62df\u5149\u6807\u805a\u7126\u8f93\u5165\u533a\u5e76\u53d1\u9001\u6d88\u606f',
         toolName: 'wechat_send_message',
-        toolArgs: {
-          contact: extractWeChatContact(text),
-          message: extractWeChatMessage(text),
-          applicationTarget: 'wechat',
-          useVirtualCursor: true,
-        },
+        toolArgs: sendArgs,
       },
     ],
   };

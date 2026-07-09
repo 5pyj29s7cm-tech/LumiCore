@@ -51,6 +51,13 @@ describe('Intent Classifier', () => {
       expect(r.entities.target).toBe('Chrome');
     });
 
+    it('foreground WeChat sends are not classified as generic app opens', () => {
+      const r = c('\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89');
+      expect(r.category).toBe('command');
+      expect(r.subIntent).toBe('messaging_send');
+      expect(r.directToolCall).toBeUndefined();
+    });
+
     it('打开 + URL → command:open with directToolCall (URL pattern)', () => {
       const r = c('打开网页 https://example.com');
       expect(r.category).toBe('command');

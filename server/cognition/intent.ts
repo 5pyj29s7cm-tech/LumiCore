@@ -199,10 +199,33 @@ const AGENT_PATTERNS = [
   /(create|make|new)\s*(agent|代理|助手|角色)/i,
 ];
 
+const FOREGROUND_MESSAGING_SEND_RE =
+  /(?:wechat|weixin|\u5fae\u4fe1).*(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1)|(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1).*(?:wechat|weixin|\u5fae\u4fe1)|(?:\u7ed9[^\s,，。?!！？]{1,24}\u53d1[^\n]{0,80})|(?:\u53d1[^\n]{0,80}\u7ed9[^\s,，。?!！？]{1,24})/iu;
+
+const SHORT_FOREGROUND_SEND_FOLLOWUP_RE =
+  /^(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u5427|\u53d1\u665a\u5b89|\u76f4\u63a5\u53d1\u665a\u5b89)\s*[\s\S]{0,40}$/u;
+
+function isForegroundMessagingSendIntent(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (/(?:\u8349\u7a3f|\u5148\u5199|\u7f16\u8f91\u4e00\u4e0b|\u4e0d\u8981\u53d1|\bdraft\b)/iu.test(normalized)) return false;
+  return FOREGROUND_MESSAGING_SEND_RE.test(normalized) || SHORT_FOREGROUND_SEND_FOLLOWUP_RE.test(normalized);
+}
+
 export function classifyIntent(input: string): IntentResult {
   const text = input.trim();
   if (!text) {
     return { category: 'unknown', confidence: 0, entities: {}, needsLLM: true };
+  }
+
+  if (isForegroundMessagingSendIntent(text)) {
+    return {
+      category: 'command',
+      confidence: 0.9,
+      entities: {},
+      subIntent: 'messaging_send',
+      needsLLM: true,
+    };
   }
 
   // 1. Greetings — pure conversation, high confidence

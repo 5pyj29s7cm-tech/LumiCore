@@ -19,6 +19,7 @@ import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import { buildActionContract, summarizeActionContractBlocker } from "../cognition/action_contract";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -51,7 +52,7 @@ import {
   registerBackgroundTask,
   requestCancelBackgroundTask,
 } from "../agents/background_tasks";
-import { runNLChainer, shouldChainTask } from "../agents/nl_chainer";
+import { buildForegroundWeChatSendArgs, runNLChainer, shouldChainTask } from "../agents/nl_chainer";
 import { autoInstallForTask } from "../agents/auto_installer";
 import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { searchKnowledgeBase } from "../org/kb";
@@ -323,6 +324,40 @@ function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): str
     })
     .filter(Boolean);
   return lines.join('\n').slice(-maxLength);
+}
+
+const RECENT_FAILURE_EXPLANATION_RE =
+  /(?:\u4e3a\u4ec0\u4e48|\u600e\u4e48\u56de\u4e8b|\u548b\u56de\u4e8b).*(?:\u6700\u540e\u4e00\u6b65|\u6ca1\u5b8c\u6210|\u6ca1\u53d1\u51fa\u53bb|\u6ca1\u53d1|\u5931\u8d25|\u5361\u4f4f)|(?:\u6700\u540e\u4e00\u6b65).*(?:\u4e3a\u4ec0\u4e48|\u6ca1\u5b8c\u6210|\u5361\u4f4f)/u;
+
+function buildRecentFailureExplanation(userText: string, history: any[] | undefined): string {
+  const clean = String(userText || '').trim();
+  if (!RECENT_FAILURE_EXPLANATION_RE.test(clean)) return '';
+  const recent = getRecentHistoryText(history, 9000);
+  const incompleteContext = /\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210|\u8fd8\u6ca1\u5b8c\u6210|\u6ca1\u5b8c\u6210|\u672a\u5b8c\u6210|\u56de\u590d\u58f0\u79f0|desktop_open|computer_use|keyboard_type|keyboard_press|wechat_send_message|work_product_guard|timed out|failed/i.test(recent);
+  const contract = buildActionContract(recent);
+  if (!incompleteContext || !contract.applies) return '';
+
+  const hasDedicatedSend = /wechat_send_message/i.test(recent);
+  const hasKeyboardOnly = /keyboard_type|keyboard_press/i.test(recent);
+  const hasCompletionNoise = /\u8bfb\u53d6|\u5ba1\u67e5|\u53ef\u8bfb\u53d6\u7684\u6587\u4ef6|\u56de\u590d\u58f0\u79f0/i.test(recent);
+  const contractBlocker = summarizeActionContractBlocker(contract);
+  return [
+    `\u6700\u540e\u4e00\u6b65\u6ca1\u5b8c\u6210\uff0c\u662f\u56e0\u4e3a\u4e0a\u4e00\u8f6e\u6ca1\u6709\u62ff\u5230\u201c${contract.label}\u201d\u7684\u6838\u5fc3\u52a8\u4f5c\u8bc1\u636e\u3002`,
+    contractBlocker,
+    contract.kind === 'messaging_send' && !hasDedicatedSend
+      ? '\u8bb0\u5f55\u91cc\u6ca1\u6709 `wechat_send_message`\uff1b\u53ea\u505a\u4e86\u6253\u5f00/\u805a\u7126\u5fae\u4fe1\u3001\u622a\u56fe/OCR\u3001\u952e\u76d8\u641c\u7d22\u4e4b\u7c7b\u7684\u524d\u7f6e\u6b65\u9aa4\u3002'
+      : '',
+    contract.kind === 'messaging_send' && hasDedicatedSend
+      ? '\u8bb0\u5f55\u91cc\u51fa\u73b0\u4e86\u5fae\u4fe1\u53d1\u9001\u5de5\u5177\uff0c\u4f46\u6ca1\u6709\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684 sent=true \u7ed3\u679c\u3002'
+      : '',
+    contract.kind === 'messaging_send' && hasKeyboardOnly
+      ? '\u6240\u4ee5\u5b83\u6700\u591a\u5230\u4e86\u201c\u5b9a\u4f4d\u6216\u641c\u7d22\u8054\u7cfb\u4eba\u201d\uff0c\u6ca1\u6709\u5b8c\u6210\u201c\u7c98\u8d34\u665a\u5b89\u5e76\u6309\u53d1\u9001\u201d\u3002'
+      : '',
+    hasCompletionNoise
+      ? '\u521a\u624d\u90a3\u53e5\u201c\u8bfb\u53d6\u6216\u5ba1\u67e5\u201d\u662f\u9519\u8bef\u7684\u901a\u7528\u515c\u5e95\u6587\u6848\uff0c\u548c\u5fae\u4fe1\u4efb\u52a1\u4e0d\u5339\u914d\u3002'
+      : '',
+    contract.nextStep ? `\u6b63\u786e\u7684\u4e0b\u4e00\u6b65\uff1a${contract.nextStep}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 const SHORT_CLIENT_CONTINUATION_RE =
@@ -990,6 +1025,26 @@ export function registerChatHandler(
           options,
         );
       };
+
+      const recentFailureExplanation = conversationId
+        ? buildRecentFailureExplanation(visibleUserText, getMessages(conversationId, 24))
+        : '';
+      if (recentFailureExplanation) {
+        emitAgent("agent:status", { status: "responding", agentName: personality.name });
+        emitAgent("agent:response", { text: recentFailureExplanation, agentName: personality.name });
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: recentFailureExplanation, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+        }
+        persistChatLearning(recentFailureExplanation, {
+          sourceInteractionId: `${interactionId}_recent_failure_explanation`,
+          logLabel: 'recent failure explanation',
+        });
+        emitAgent("agent:status", { status: "idle" });
+        chatSessionMap.delete(sessionKey);
+        return;
+      }
 
       // ── Desktop relay: enables 15 tools (mouse/keyboard/clipboard/screenshot/etc) in chat ──
       const desktopRelay = ((toolName: string, args: Record<string, any>): Promise<string> => {
@@ -1675,6 +1730,64 @@ export function registerChatHandler(
           responseText = getMusicFailureMessage(musicErr?.message);
           socket.emit('music:error', { message: responseText });
         }
+      }
+
+      const foregroundWeChatSendArgs = buildForegroundWeChatSendArgs(text);
+      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && foregroundWeChatSendArgs) {
+        const toolName = 'wechat_send_message';
+        const correlationId = `wechat-send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const toolRecord: ToolExecutionRecord = {
+          id: correlationId,
+          name: toolName,
+          arguments: foregroundWeChatSendArgs,
+          result: '',
+        };
+
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: 'foreground_messaging',
+          detail: '\u6b63\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u6d88\u606f',
+        });
+        emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs });
+
+        try {
+          const toolResult = await toolRegistry.execute(toolName, foregroundWeChatSendArgs, {
+            userId: uid,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            desktopRelay,
+            llmGetters,
+            source: 'chat_foreground_messaging',
+            supervisedExternalCommits: true,
+            allowLocalFileWrites,
+            localWriteIntentReason,
+            isCancelled: () => abortController.signal.aborted,
+            requestConfirmation: requestToolConfirmation,
+            toolPolicy: routedToolPolicy || personality.toolPolicy,
+            onProgress: (step: string) => {
+              emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+            },
+          });
+          toolRecord.result = toolResult || '';
+          emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, result: formatToolResultForUi(toolRecord.result) });
+          const contact = String(foregroundWeChatSendArgs.contact || '').trim();
+          const message = String(foregroundWeChatSendArgs.message || foregroundWeChatSendArgs.draft || '').trim();
+          responseText = contact
+            ? `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u7ed9${contact}\uff1a${message}`
+            : `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u91cc\u53d1\u9001\uff1a${message}`;
+          llmWasCalled = false;
+        } catch (sendErr: any) {
+          toolRecord.error = sendErr?.message || String(sendErr);
+          emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, error: toolRecord.error });
+          responseText = [
+            '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
+            `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a\u5fae\u4fe1\u524d\u53f0\u53d1\u9001: ${toolRecord.error}\u3002`,
+            '\u6211\u4e0d\u4f1a\u628a\u672a\u786e\u8ba4\u7684\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001\uff1b\u9700\u8981\u7ee7\u7eed\u5b9a\u4f4d\u5fae\u4fe1\u7a97\u53e3\u5e76\u9a8c\u8bc1\u8f93\u5165\u6846\u3002',
+          ].join('\n');
+          llmWasCalled = false;
+        }
+        allToolRecords.push(toolRecord);
       }
 
       if (!responseText && !actionPreflightContext) {
