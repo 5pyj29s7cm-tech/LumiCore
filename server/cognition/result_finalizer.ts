@@ -31,6 +31,8 @@ function shouldRunCompletionGuard(input: LumiResultFinalizerInput): boolean {
   if (hasToolEvidence(toolRecords)) return true;
   if (input.flow?.completionEvidenceNeeded) return true;
   if (needsCompletionEvidence(input.taskText)) return true;
+  const actionContract = buildActionContract(`${input.taskText}\n${input.responseText}`);
+  if (actionContract.applies && actionContract.kind !== 'none') return true;
 
   const source = String(input.source || '').toLowerCase();
   if (['task', 'workflow', 'background_delegation', 'autonomous'].includes(source)) return true;

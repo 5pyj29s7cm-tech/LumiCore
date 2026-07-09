@@ -76,6 +76,26 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'web_login_run',
     'url_fetch_logged_in',
   ],
+  publicPost: [
+    'browser_open_task',
+    'mcp_playwright_browser_snapshot',
+    'mcp_playwright_browser_navigate',
+    'mcp_playwright_browser_click',
+    'mcp_playwright_browser_fill_form',
+    'mcp_playwright_browser_type',
+    'mcp_playwright_browser_take_screenshot',
+    'desktop_active_window',
+    'desktop_ui_snapshot',
+    'desktop_capture_screen',
+    'desktop_ui_focus',
+    'desktop_ui_click',
+    'desktop_ui_type',
+    'write_clipboard',
+    'computer_use',
+    'web_login_run',
+    'web_login_profile_list',
+    'url_fetch_logged_in',
+  ],
   legal: [
     'legal_search_case',
     'legal_search_statute',
@@ -308,6 +328,17 @@ const ROUTES: RouteDefinition[] = [
     groups: ['web', 'authenticatedWeb'],
   },
   {
+    category: 'public_post',
+    reason: 'public website comment, post, like, or creator-platform publishing request',
+    patterns: [
+      /(?:\u89c6\u9891\u7f51\u7ad9|\u77ed\u89c6\u9891|\u521b\u4f5c\u8005\u5e73\u53f0|\u8d26\u53f7|\u7f51\u7ad9|\u7f51\u9875).*(?:\u8bc4\u8bba|\u53d1\u5e03|\u70b9\u8d5e|\u6295\u7a3f|\u56de\u590d)|(?:\u8bc4\u8bba|\u53d1\u5e03|\u70b9\u8d5e|\u6295\u7a3f|\u56de\u590d).*(?:\u89c6\u9891\u7f51\u7ad9|\u77ed\u89c6\u9891|\u521b\u4f5c\u8005\u5e73\u53f0|\u8d26\u53f7|\u7f51\u7ad9|\u7f51\u9875|\u89c6\u9891)/u,
+      /\b(?:video\s*site|creator\s*platform|social|website|web\s*page|account)\b.*\b(?:comment|post|publish|like|reply)\b/i,
+      /\b(?:comment|post|publish|like|reply)\b.*\b(?:video\s*site|creator\s*platform|social|website|web\s*page|account|video)\b/i,
+    ],
+    namePatterns: [/^mcp_playwright_/],
+    groups: ['publicPost', 'web', 'authenticatedWeb'],
+  },
+  {
     category: 'web_research',
     reason: 'web search, source verification, or current information request',
     patterns: [
@@ -441,7 +472,7 @@ function addNamePattern(out: Set<string>, names: string[], pattern: RegExp): voi
 }
 
 function isDirectMessagingSend(text: string): boolean {
-  return /(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\b(?:send|message)\b)/iu.test(text)
+  return /(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\b(?:send|message)\b|(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}))/iu.test(text)
     && !/(?:\u8349\u7a3f|\u7f16\u8f91\u4e00\u4e0b|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b)/iu.test(text);
 }
 
@@ -483,6 +514,70 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'desktop_ui_snapshot',
       );
     }
+  }
+  if (categories.includes('public_post')) {
+    priorities.push(
+      'browser_open_task',
+      'mcp_playwright_browser_snapshot',
+      'mcp_playwright_browser_navigate',
+      'mcp_playwright_browser_click',
+      'mcp_playwright_browser_fill_form',
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_capture_screen',
+      'write_clipboard',
+    );
+  }
+  if (categories.includes('authenticated_web')) {
+    priorities.push(
+      'web_login_run',
+      'web_login_profile_list',
+      'browser_open_task',
+      'mcp_playwright_browser_snapshot',
+      'mcp_playwright_browser_navigate',
+      'mcp_playwright_browser_click',
+      'mcp_playwright_browser_fill_form',
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_capture_screen',
+    );
+  }
+  if (categories.includes('market_finance')) {
+    priorities.push(
+      'mcp_stockbot_stock_quote',
+      'mcp_stockbot_stock_kline',
+      'mcp_stockbot_market_index',
+      'mcp_stockbot_hot_sectors',
+      'mcp_stockbot_stock_news',
+      'mcp_stockbot_stock_trade_plan',
+      'mcp_stockbot_paper_portfolio',
+      'browser_open_task',
+      'mcp_playwright_browser_snapshot',
+    );
+  }
+  if (categories.includes('cad_design')) {
+    priorities.push(
+      'cad_generate_dxf',
+      'cad_generate_autocad_draw_script',
+      'cad_run_autocad_draw_script',
+      'mcp_cad-drafting_cad_space_program',
+      'mcp_cad-drafting_cad_renovation_folder_workflow',
+      'desktop_capture_screen',
+    );
+  }
+  if (categories.includes('legal')) {
+    priorities.push(
+      'legal_analyze_folder_and_draft_argument',
+      'legal_generate_argument_or_opinion',
+      'legal_extract_dispute_focus',
+      'legal_generate_litigation_packet',
+      'legal_case_strategy',
+      'legal_search_case',
+      'legal_search_statute',
+      'read_docx',
+      'read_pdf',
+      'create_docx',
+    );
   }
   return unique(priorities);
 }
