@@ -142,8 +142,10 @@ describe('desktop capability alignment', () => {
     const wechat = getClientCapabilities().find(capability => capability.id === 'external.messaging');
 
     expect(wechat?.actions).toContain('wechat_send_message');
+    expect(wechat?.actions).toContain('wechat_read_recent_chat');
     expect(wechat?.actions).toContain('desktop_mouse_click_at');
     expect(wechat?.notes).toContain('ordinary foreground user-requested WeChat messages');
+    expect(wechat?.notes).toContain('Reading, drafting, and sending are separate capabilities');
     expect(wechat?.notes).toContain('virtual cursor path');
   });
 });

@@ -50,6 +50,7 @@ function summarizeToolFailure(records: ToolExecutionRecord[]): string {
   const action = (() => {
     if (/^(desktop_open|open_item)$/i.test(name)) return '\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u7a97\u53e3';
     if (/^(desktop_active_window|get_active_window_info)$/i.test(name)) return '\u8bfb\u53d6\u5f53\u524d\u524d\u53f0\u7a97\u53e3';
+    if (/^(wechat_read_recent_chat)$/i.test(name)) return '\u5fae\u4fe1\u524d\u53f0\u804a\u5929\u8bfb\u53d6';
     if (/^(wechat_send_message)$/i.test(name)) return '\u5fae\u4fe1\u524d\u53f0\u53d1\u9001';
     if (/^(computer_use)$/i.test(name)) return '\u89c6\u89c9\u684c\u9762\u6267\u884c';
     if (/keyboard/i.test(name)) return '\u952e\u76d8\u8f93\u5165';
@@ -65,7 +66,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
   const contract = buildActionContract(`${input.taskText}\n${input.responseText}`);
   if (shouldEnforceCoreActionContract(contract, `${input.taskText}\n${input.responseText}`)) return true;
   const hasDesktopOrMessagingTool = records.some(record =>
-    /^(desktop_|wechat_send_message|computer_use|keyboard_|mouse_|cursor_|get_active_window_info|capture_screen|ocr_screen)/i.test(String(record.name || ''))
+    /^(desktop_|wechat_(?:send_message|read_recent_chat)|computer_use|keyboard_|mouse_|cursor_|get_active_window_info|capture_screen|ocr_screen)/i.test(String(record.name || ''))
   );
   if (!hasDesktopOrMessagingTool) return false;
   const text = `${input.taskText}\n${input.responseText}`;
@@ -74,7 +75,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
 
 function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildActionContract>, text: string): boolean {
   if (!contract.applies) return false;
-  if (['messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'stock_monitor', 'desktop_operation'].includes(contract.kind)) {
+  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'stock_monitor', 'desktop_operation'].includes(contract.kind)) {
     return true;
   }
   if (contract.kind === 'legal_document') {
@@ -96,9 +97,11 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
         contractBlocker || (failure
           ? `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a${failure}\u3002`
           : '\u539f\u56e0\uff1a\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5b8c\u6210\u8bc1\u636e\u3002'),
-        /\u5fae\u4fe1|wechat|weixin/i.test(`${input.taskText}\n${input.responseText}`)
+        contract.kind === 'messaging_send'
           ? '\u6211\u4e0d\u4f1a\u628a\u672a\u786e\u8ba4\u7684\u5fae\u4fe1\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002'
-          : '\u6211\u4e0d\u4f1a\u628a\u8fd9\u79cd\u672a\u786e\u8ba4\u7684\u7ed3\u679c\u8bf4\u6210\u5df2\u5b8c\u6210\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002',
+          : contract.kind === 'messaging_read'
+            ? '\u6211\u4e0d\u4f1a\u628a\u53ea\u6253\u5f00\u6216\u805a\u7126\u5fae\u4fe1\u8bf4\u6210\u5df2\u8bfb\u5230\u804a\u5929\u5185\u5bb9\uff1b\u9700\u8981\u7ee7\u7eed\u8bfb\u53d6\u5e76\u9a8c\u8bc1\u53ef\u89c1\u5185\u5bb9\u3002'
+            : '\u6211\u4e0d\u4f1a\u628a\u8fd9\u79cd\u672a\u786e\u8ba4\u7684\u7ed3\u679c\u8bf4\u6210\u5df2\u5b8c\u6210\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002',
       ].join('\n');
     }
     return [
@@ -124,7 +127,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
 
   const actionContract = buildActionContract(`${input.taskText}\n${input.responseText}`);
-  const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u751f\u6210|done|completed|success|sent|opened|created|generated)/iu
+  const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|completed|success|sent|opened|read|viewed|created|generated)/iu
     .test(input.responseText || '');
   if (shouldEnforceCoreActionContract(actionContract, `${input.taskText}\n${input.responseText}`) && claimsActionDone && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
     return {

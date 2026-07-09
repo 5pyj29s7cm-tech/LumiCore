@@ -35,6 +35,26 @@ describe('Lumi action contract', () => {
     }])).toBe(false);
   });
 
+  it('classifies foreground chat reading separately from sending', () => {
+    const contract = buildActionContract('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9');
+
+    expect(contract.kind).toBe('messaging_read');
+    expect(contract.preferredTools).toContain('wechat_read_recent_chat');
+    expect(contract.preferredTools).not.toContain('wechat_send_message');
+    expect(hasCoreActionEvidence(contract, [{
+      id: '1',
+      name: 'desktop_open',
+      arguments: { target: '\u5fae\u4fe1' },
+      result: 'Focused WeChat',
+    }])).toBe(false);
+    expect(hasCoreActionEvidence(contract, [{
+      id: '2',
+      name: 'wechat_read_recent_chat',
+      arguments: { contact: '\u963f\u9646' },
+      result: '{"read":true,"contentSummary":"visible chat"}',
+    }])).toBe(true);
+  });
+
   it('creates non-messaging contracts for other real-world actions', () => {
     expect(buildActionContract('\u6253\u5f00\u6d4f\u89c8\u5668\u81ea\u52a8\u767b\u5f55').kind).toBe('browser_account');
     expect(buildActionContract('\u89c6\u9891\u7f51\u7ad9\u81ea\u52a8\u8bc4\u8bba').kind).toBe('public_post');

@@ -64,6 +64,8 @@ const declarations = [
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
   'cad_run_autocad_draw_script',
+  'ocr_screen',
+  'wechat_read_recent_chat',
   'wechat_send_message',
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
@@ -268,6 +270,19 @@ describe('Lumi capability selection', () => {
       'desktop_mouse_click_at',
       'desktop_cursor_glow_show',
     ]));
+  });
+
+  it('selects foreground WeChat chat reading as a separate messaging action', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_wechat_read_user',
+      text: '\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('messaging');
+    expect(execution.toolRoute?.toolNames).toContain('wechat_read_recent_chat');
+    expect(execution.toolRoute?.toolNames.slice(0, 4)).not.toContain('wechat_send_message');
+    expect(selection.preferredTools).toContain('wechat_read_recent_chat');
   });
 
   it('keeps chat, voice, and task sockets on the shared capability selection path', () => {

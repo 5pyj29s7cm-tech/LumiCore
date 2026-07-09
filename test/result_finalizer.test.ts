@@ -131,6 +131,27 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('\u53ef\u8bfb\u53d6\u7684\u6587\u4ef6');
   });
 
+  it('keeps blocked foreground WeChat chat reads out of send wording', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9',
+      responseText: '\u6211\u5df2\u7ecf\u770b\u5230\u4e86\u6700\u8fd1\u804a\u5929\u5185\u5bb9\u3002',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '\u5fae\u4fe1' },
+        result: 'Focused WeChat',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u6d88\u606f\u8bfb\u53d6');
+    expect(result.text).toContain('wechat_read_recent_chat');
+    expect(result.text).toContain('\u5df2\u8bfb\u5230\u804a\u5929\u5185\u5bb9');
+    expect(result.text).not.toContain('\u5fae\u4fe1\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const socketSources = [

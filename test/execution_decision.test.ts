@@ -22,12 +22,15 @@ const declarations = [
   'desktop_cursor_glow_click',
   'desktop_cursor_glow_hide',
   'desktop_keyboard_press',
+  'desktop_capture_screen',
+  'ocr_screen',
   'client_health_check',
   'list_skills',
   'install_skill',
   'adapter_registry_list',
   'web_login_run',
   'url_fetch_logged_in',
+  'wechat_read_recent_chat',
   'wechat_send_message',
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
@@ -359,6 +362,12 @@ describe('Lumi execution decision', () => {
     expect(wechatSend.decision.allowToolUse).toBe(true);
     expect(wechatSend.decision.toolRoute?.categories).toContain('messaging');
     expect(wechatSend.decision.toolRoute?.toolNames).toContain('wechat_send_message');
+
+    const wechatRead = decide('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9');
+    expect(wechatRead.decision.allowToolUse).toBe(true);
+    expect(wechatRead.decision.toolRoute?.categories).toContain('messaging');
+    expect(wechatRead.decision.toolRoute?.toolNames).toContain('wechat_read_recent_chat');
+    expect(wechatRead.decision.toolRoute?.toolNames.slice(0, 4)).not.toContain('wechat_send_message');
 
     const continueCustomerTask = decide('\u7ee7\u7eed\u90a3\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u4efb\u52a1');
     expect(continueCustomerTask.decision.allowToolUse).toBe(true);

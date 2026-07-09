@@ -47,12 +47,14 @@ const DECLARATIONS = [
   'desktop_ui_invoke',
   'desktop_ui_type',
   'desktop_capture_screen',
+  'ocr_screen',
   'desktop_mouse_click_at',
   'desktop_cursor_glow_show',
   'desktop_cursor_glow_update',
   'desktop_cursor_glow_click',
   'desktop_cursor_glow_hide',
   'desktop_keyboard_press',
+  'wechat_read_recent_chat',
   'wechat_send_message',
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
@@ -359,6 +361,22 @@ describe('tool router', () => {
       'desktop_cursor_glow_show',
     ]));
     expect(route.toolNames.indexOf('wechat_send_message')).toBeLessThan(3);
+  });
+
+  it('routes foreground WeChat chat reading away from send/draft tools', () => {
+    const route = routeToolsForTurn(
+      '\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9',
+      DECLARATIONS,
+      { maxTools: 8 },
+    );
+
+    expect(route.categories).toContain('messaging');
+    expect(route.toolNames.slice(0, 4)).toEqual(expect.arrayContaining([
+      'wechat_read_recent_chat',
+      'desktop_open',
+      'desktop_active_window',
+    ]));
+    expect(route.toolNames.slice(0, 4)).not.toContain('wechat_send_message');
   });
 
   it('filters unavailable MCP tools when a health gate is provided', () => {

@@ -9,6 +9,8 @@ import { getAdapterRegistry } from '../../adapters/registry';
 import { getClientState } from '../../client/self_model';
 import { isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
+import { analyzeScreen } from '../../llm/adapter';
+import { getUserPreferredVisionConfig, type VisionProvider } from '../../llm/vision_preferences';
 
 function requireDesktopRelay(context?: ToolContext) {
   if (!context?.desktopRelay) {
@@ -67,6 +69,29 @@ function isWeChatActiveWindow(info: Record<string, any>): boolean {
     processName === 'wechat.exe' ||
     title.includes('wechat') ||
     title.includes('\u5fae\u4fe1');
+}
+
+function hasVisionProvider(context?: ToolContext): { provider: VisionProvider; model: string; userId: string; maxTokens?: number } | null {
+  const userId = context?.userId || 'anonymous';
+  const config = getUserPreferredVisionConfig(userId, { maxTokens: 1200 });
+  const getters = context?.llmGetters;
+  if (!getters) return null;
+  const available = (
+    (config.provider === 'openai' && getters.getOpenAI?.()) ||
+    (config.provider === 'gemini' && getters.getGemini?.()) ||
+    (config.provider === 'ark' && getters.getArk?.()) ||
+    (config.provider === 'qwen' && getters.getQwen?.()) ||
+    (config.provider === 'ollama' && getters.getOllama?.()) ||
+    (config.provider === 'lmstudio' && getters.getLmStudio?.()) ||
+    (config.provider === 'relay' && getters.getRelay?.())
+  );
+  return available ? config : null;
+}
+
+function compactEvidenceText(value: string, limit = 2400): string {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.floor(limit * 0.7))}\n...\n${text.slice(-Math.floor(limit * 0.25))}`;
 }
 
 function virtualInputPoint(activeWindow: Record<string, any>): { x: number; y: number } {
@@ -1305,6 +1330,126 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         openResult: opened,
         sendAllowed: !isMessagingSendConfirmationRequired(),
         note: 'The draft is ready on the clipboard. Lumi did not send the message.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'wechat_read_recent_chat',
+    description: 'Read the currently visible recent messages from the real foreground WeChat client. It reuses an already-running WeChat window when possible, optionally selects a contact through WeChat search, captures UI/screen evidence, and uses the configured vision model when available. It never sends messages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        contact: { type: 'string', description: 'Contact or group name to select in WeChat. Omit to inspect the current chat.' },
+        applicationTarget: { type: 'string', description: 'Desktop app target. Defaults to wechat.' },
+        useSearch: { type: 'boolean', description: 'Use WeChat search to select contact before reading. Defaults true when contact is provided.' },
+        maxMessages: { type: 'number', description: 'Approximate number of recent visible messages to summarize. Defaults 8.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const desktopRelay = requireDesktopRelay(context);
+      const progress = (step: string) => context?.onProgress?.(step);
+      const contact = String(args.contact || '').trim();
+      const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
+      const useSearch = args.useSearch !== false && Boolean(contact);
+      const maxMessages = Math.max(3, Math.min(Number(args.maxMessages || 8), 20));
+
+      progress('\u6b63\u5728\u590d\u7528\u5df2\u8fd0\u884c\u7684\u5fae\u4fe1\u7a97\u53e3\u3002');
+      const openResult = await desktopRelay('desktop_open', { target: appTarget });
+      await sleep(450);
+
+      let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      if (!isWeChatActiveWindow(activeWindow)) {
+        await sleep(600);
+        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      }
+      if (!isWeChatActiveWindow(activeWindow)) {
+        throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+      }
+
+      if (useSearch) {
+        progress(`\u6b63\u5728\u5fae\u4fe1\u91cc\u5b9a\u4f4d\u804a\u5929: ${contact}`);
+        await desktopRelay('desktop_clipboard_write', { text: contact });
+        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
+        await sleep(250);
+        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
+        await sleep(450);
+        await desktopRelay('desktop_keyboard_press', { key: 'enter' });
+        await sleep(750);
+        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+        if (!isWeChatActiveWindow(activeWindow)) {
+          throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+        }
+      }
+
+      progress('\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u804a\u5929\u53ef\u89c1\u5185\u5bb9\u3002');
+      let uiSnapshot = '';
+      try {
+        uiSnapshot = await desktopRelay('desktop_ui_snapshot', { maxNodes: 120, includeBounds: true });
+      } catch (err: any) {
+        uiSnapshot = `UI snapshot unavailable: ${err?.message || String(err)}`;
+      }
+
+      const screenCapture = await desktopRelay('desktop_capture_screen', { quality: 65 });
+      let contentSummary = '';
+      let visionError = '';
+      const visionConfig = hasVisionProvider(context);
+      if (visionConfig) {
+        const getters = context?.llmGetters;
+        const query = [
+          contact
+            ? `This is a WeChat conversation window. The target contact/group is "${contact}".`
+            : 'This is a WeChat conversation window.',
+          `Read the most recent ${maxMessages} visible chat messages. Return the visible speaker/message content and a concise Chinese summary.`,
+          'Do not infer hidden messages. If the screenshot is not a chat window or text is unreadable, say that clearly.',
+        ].join('\n');
+        try {
+          contentSummary = await analyzeScreen(
+            screenCapture,
+            query,
+            visionConfig,
+            getters?.getDeepSeek,
+            getters?.getGemini,
+            getters?.getOpenAI,
+            getters?.getAnthropic,
+            getters?.getQwen,
+            getters?.getOllama,
+            getters?.getLmStudio,
+            getters?.getArk,
+            getters?.getXiaomi,
+            getters?.getKimi,
+            getters?.getGlm,
+            getters?.getRelay,
+          );
+        } catch (err: any) {
+          visionError = err?.message || String(err);
+        }
+      } else {
+        visionError = 'No configured vision provider is available for reading chat text from the screenshot.';
+      }
+
+      const snapshotText = compactEvidenceText(uiSnapshot, 1800);
+      const hasUsefulSnapshot = /[\u4e00-\u9fffA-Za-z0-9]{12,}/u.test(snapshotText) && !/^UI snapshot unavailable/i.test(snapshotText);
+      const read = Boolean(contentSummary.trim()) || hasUsefulSnapshot;
+
+      return JSON.stringify({
+        read,
+        contact: contact || null,
+        usedContactSearch: useSearch,
+        method: contentSummary.trim() ? 'foreground_wechat_search_screenshot_vision' : 'foreground_wechat_search_ui_snapshot',
+        openResult,
+        activeWindow,
+        contentSummary: contentSummary.trim() || null,
+        uiSnapshotPreview: snapshotText || null,
+        screenCaptured: Boolean(screenCapture),
+        visionProvider: visionConfig?.provider || null,
+        visionError: visionError || null,
+        note: read
+          ? 'Visible WeChat chat evidence was captured and read from the foreground window.'
+          : 'WeChat was opened/focused, but no readable chat content evidence was extracted.',
       }, null, 2);
     },
     permission: 'user',

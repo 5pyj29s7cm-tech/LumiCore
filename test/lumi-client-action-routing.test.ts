@@ -37,6 +37,11 @@ describe('Lumi client action routing', () => {
     expect(hasClientActionOnlyIntent('中枢世界是什么')).toBe(false);
   });
 
+  it('does not treat external app chat surfaces as Lumi client navigation', () => {
+    expect(hasClientActionOnlyIntent('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9')).toBe(false);
+    expect(hasClientActionOnlyIntent('open Chrome and log in')).toBe(false);
+  });
+
   it('keeps client surface continuations in the foreground instead of background agents', () => {
     const decision = shouldDelegateWorkInBackground({
       text: '查',

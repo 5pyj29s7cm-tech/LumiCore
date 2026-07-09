@@ -17,6 +17,7 @@ import {
   type WorkTakeoverContinuityContext,
   type WorkTakeoverTurnSurface,
 } from '../work_takeover/continuity';
+import { buildActionContract } from './action_contract';
 
 export type LumiTurnChannel = 'chat' | 'voice' | 'task';
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
@@ -319,17 +320,21 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     orgId: input.orgId,
     surface,
   });
+  const clientActionIntent = hasClientActionOnlyIntent(input.text);
+  const actionContract = buildActionContract(input.text);
+  const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
   const autoPromoteToAssistant = shouldAutoPromoteWorkTurn(input.text, operationMode, requestedMode, input.channel);
   const taskEntryTurn = input.channel === 'task';
-  const effectiveOperationMode = requestedMode || (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask ? 'assistant' : operationMode);
+  const effectiveOperationMode = requestedMode || (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools ? 'assistant' : operationMode);
   const selfRepairTurn = isDiagnosticOrRepairRequest(input.text);
-  const clientActionOnlyTurn = !selfRepairTurn && hasClientActionOnlyIntent(input.text) && (effectiveOperationMode === 'chat' || effectiveOperationMode === 'meeting');
+  const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent && (effectiveOperationMode === 'chat' || effectiveOperationMode === 'meeting');
   const visionIntent = hasVisionIntent(input.text);
   const workSurfaceRoute = resolveWorkSurfaceRoute(input.text);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
   const allowToolUseForTurn =
     taskEntryTurn ||
     autoPromoteToAssistant ||
+    actionContractRequiresTools ||
     workTakeover.shouldResumeTask ||
     explicitBackgroundDelegation ||
     shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);

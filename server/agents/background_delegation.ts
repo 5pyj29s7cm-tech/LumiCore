@@ -37,6 +37,9 @@ const FOREGROUND_MESSAGING_SEND_RE =
 const SHORT_FOREGROUND_SEND_FOLLOWUP_RE =
   /^(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u5427|\u53d1\u665a\u5b89|\u76f4\u63a5\u53d1\u665a\u5b89)\s*[\s\S]{0,40}$/u;
 
+const FOREGROUND_MESSAGING_READ_RE =
+  /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu;
+
 const WORK_CATEGORY_ALLOWLIST = new Set(['command', 'code', 'question', 'analysis']);
 
 export function hasExplicitBackgroundDelegationPreference(text: string): boolean {
@@ -53,6 +56,13 @@ export function isForegroundMessagingSend(text: string): boolean {
   return FOREGROUND_MESSAGING_SEND_RE.test(normalized) || SHORT_FOREGROUND_SEND_FOLLOWUP_RE.test(normalized);
 }
 
+export function isForegroundMessagingRead(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (isForegroundMessagingSend(normalized)) return false;
+  return FOREGROUND_MESSAGING_READ_RE.test(normalized);
+}
+
 export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisionInput): BackgroundDelegationDecision {
   if (!input.text.trim()) return { shouldDelegate: false, reason: 'empty_text' };
   if (!input.allowToolUse) return { shouldDelegate: false, reason: 'tools_disabled' };
@@ -63,6 +73,7 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (input.directDesktop) return { shouldDelegate: false, reason: 'direct_desktop_visible_work' };
   if (input.prefersSequentialWorkflow) return { shouldDelegate: false, reason: 'artifact_first_sequential_workflow' };
   if (input.availableAgentCount < 1) return { shouldDelegate: false, reason: 'no_available_workers' };
+  if (isForegroundMessagingRead(input.text)) return { shouldDelegate: false, reason: 'foreground_messaging_read' };
   if (isForegroundMessagingSend(input.text)) return { shouldDelegate: false, reason: 'foreground_messaging_send' };
   if (!WORK_CATEGORY_ALLOWLIST.has(input.category || '')) return { shouldDelegate: false, reason: 'non_work_category' };
 

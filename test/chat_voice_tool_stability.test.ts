@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildForegroundWeChatSendArgs, shouldChainTask } from '../server/agents/nl_chainer';
+import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, shouldChainTask } from '../server/agents/nl_chainer';
 
 describe('chat and voice tool-call stability', () => {
   it('keeps text and voice on the shared routing and desktop execution path', () => {
@@ -71,5 +71,18 @@ describe('chat and voice tool-call stability', () => {
       contact: '',
       message: '\u660e\u5929\u89c1',
     });
+  });
+
+  it('extracts foreground WeChat chat reading as a generic contact task', () => {
+    expect(buildForegroundWeChatReadArgs('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9')).toMatchObject({
+      contact: '\u963f\u9646',
+      applicationTarget: 'wechat',
+      useSearch: true,
+      maxMessages: 8,
+    });
+
+    const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    expect(chat).toContain('buildForegroundWeChatReadArgs');
+    expect(chat).toContain("const toolName = 'wechat_read_recent_chat'");
   });
 });

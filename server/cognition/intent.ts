@@ -205,6 +205,9 @@ const FOREGROUND_MESSAGING_SEND_RE =
 const SHORT_FOREGROUND_SEND_FOLLOWUP_RE =
   /^(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u5427|\u53d1\u665a\u5b89|\u76f4\u63a5\u53d1\u665a\u5b89)\s*[\s\S]{0,40}$/u;
 
+const FOREGROUND_MESSAGING_READ_RE =
+  /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu;
+
 function isForegroundMessagingSendIntent(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
@@ -212,10 +215,27 @@ function isForegroundMessagingSendIntent(text: string): boolean {
   return FOREGROUND_MESSAGING_SEND_RE.test(normalized) || SHORT_FOREGROUND_SEND_FOLLOWUP_RE.test(normalized);
 }
 
+function isForegroundMessagingReadIntent(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (isForegroundMessagingSendIntent(normalized)) return false;
+  return FOREGROUND_MESSAGING_READ_RE.test(normalized);
+}
+
 export function classifyIntent(input: string): IntentResult {
   const text = input.trim();
   if (!text) {
     return { category: 'unknown', confidence: 0, entities: {}, needsLLM: true };
+  }
+
+  if (isForegroundMessagingReadIntent(text)) {
+    return {
+      category: 'command',
+      confidence: 0.9,
+      entities: {},
+      subIntent: 'messaging_read',
+      needsLLM: true,
+    };
   }
 
   if (isForegroundMessagingSendIntent(text)) {

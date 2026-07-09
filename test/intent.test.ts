@@ -89,6 +89,12 @@ describe('Intent Classifier', () => {
     it('关闭 + target → command:close', () => {
       expect(c('关闭 VS Code').subIntent).toBe('close');
     });
+    it('foreground WeChat chat reading is not classified as generic app open or sending', () => {
+      const r = c('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9');
+      expect(r.category).toBe('command');
+      expect(r.subIntent).toBe('messaging_read');
+      expect(r.directToolCall).toBeUndefined();
+    });
   });
 
   // ── Web ──

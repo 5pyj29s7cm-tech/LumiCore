@@ -198,6 +198,27 @@ function isDirectedWeChatSend(text: string): boolean {
   return /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u.test(text);
 }
 
+function isWeChatReadTask(text: string): boolean {
+  if (isDirectedWeChatSend(text)) return false;
+  if (/\u53d1\u9001|\u53d1\u7ed9|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\bsend\b/iu.test(text)) return false;
+  return /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu.test(text);
+}
+
+function extractWeChatReadContact(userTask: string): string {
+  const text = stripWeChatTaskPrefix(String(userTask || ''));
+  const patterns = [
+    /(?:\u6211\u548c|\u548c|\u8ddf|\u4e0e)\s*([^\s,\u7684\u6700\u8fd1\u804a\u5929\u5185\u5bb9\u8bb0\u5f55\u6d88\u606f\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})\s*(?:\u7684)?(?:\u6700\u8fd1)?(?:\u7684)?(?:\u804a\u5929|\u6d88\u606f|\u5bf9\u8bdd)/u,
+    /(?:\u770b\u770b|\u67e5\u770b|\u8bfb\u53d6|\u603b\u7ed3)\s*([^\s,\u7684\u6700\u8fd1\u804a\u5929\u5185\u5bb9\u8bb0\u5f55\u6d88\u606f\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})\s*(?:\u7684)?(?:\u6700\u8fd1)?(?:\u7684)?(?:\u804a\u5929|\u6d88\u606f|\u5bf9\u8bdd|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9)/u,
+    /(?:chat|messages?)\s+(?:with|from)\s+([A-Za-z0-9_\-\u4e00-\u9fff]{1,32})/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const contact = cleanWeChatContactSlot(match?.[1] || '');
+    if (contact) return contact;
+  }
+  return '';
+}
+
 function extractWeChatContact(userTask: string): string {
   const directedContact = extractDirectedWeChatContact(userTask);
   if (directedContact) return directedContact;
@@ -246,8 +267,32 @@ export function buildForegroundWeChatSendArgs(userTask: string): Record<string, 
   };
 }
 
+export function buildForegroundWeChatReadArgs(userTask: string): Record<string, any> | null {
+  const text = String(userTask || '');
+  if (!isWeChatReadTask(text)) return null;
+  return {
+    contact: extractWeChatReadContact(text),
+    applicationTarget: 'wechat',
+    useSearch: Boolean(extractWeChatReadContact(text)),
+    maxMessages: 8,
+  };
+}
+
 function buildDeterministicPlan(userTask: string, availableTools: Array<{ name: string }>): ChainerPlan | null {
   const hasTool = (name: string) => availableTools.some(tool => tool.name === name);
+  const readArgs = buildForegroundWeChatReadArgs(userTask);
+  if (readArgs && hasTool('wechat_read_recent_chat')) {
+    return {
+      goal: '\u901a\u8fc7\u5df2\u8fd0\u884c\u7684\u5fae\u4fe1\u524d\u53f0\u8bfb\u53d6\u6700\u8fd1\u53ef\u89c1\u804a\u5929\u5185\u5bb9',
+      steps: [
+        {
+          description: '\u590d\u7528\u5fae\u4fe1\u7a97\u53e3\uff0c\u5b9a\u4f4d\u76ee\u6807\u4f1a\u8bdd\u5e76\u7528\u622a\u56fe/OCR\u8bfb\u53d6\u53ef\u89c1\u804a\u5929',
+          toolName: 'wechat_read_recent_chat',
+          toolArgs: readArgs,
+        },
+      ],
+    };
+  }
   const sendArgs = buildForegroundWeChatSendArgs(userTask);
   if (!sendArgs || !hasTool('wechat_send_message')) return null;
 

@@ -65,6 +65,8 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'desktop_ui_focus',
     'desktop_ui_snapshot',
     'desktop_capture_screen',
+    'ocr_screen',
+    'wechat_read_recent_chat',
     'wechat_send_message',
     'wechat_prepare_reply',
     'wechat_copy_reply_draft',
