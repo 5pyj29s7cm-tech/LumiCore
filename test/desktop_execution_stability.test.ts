@@ -77,7 +77,12 @@ describe('desktop execution stability policy', () => {
     expect(capabilitySelection.lane).toBe('desktop_control');
     expect(policy.applies).toBe(true);
     expect(policy.evidenceTools).toContain('desktop_active_window');
+    expect(policy.actuationTools).toContain('mouse_drag');
+    expect(policy.actuationTools).toContain('keyboard_press');
+    expect(policy.actuationTools).toContain('computer_use');
+    expect(policy.verificationTools).toContain('desktop_capture_screen');
     expect(policy.promptOverlay).toContain('screen is the source of truth');
+    expect(policy.promptOverlay).toContain('Actuation tools to prefer');
     expect(policy.promptOverlay).toContain('verify focus before typing');
     expect(policy.promptOverlay).toContain('If the target app is already running');
   });
@@ -110,6 +115,7 @@ describe('desktop execution stability policy', () => {
     for (const source of sources) {
       expect(source).toContain('buildDesktopExecutionStabilityPolicy');
       expect(source).toContain('agent:desktop_execution_policy');
+      expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
     }
   });
 });

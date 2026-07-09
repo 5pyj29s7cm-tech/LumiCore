@@ -12,6 +12,7 @@ export interface DesktopExecutionStabilityPolicy {
   applies: boolean;
   reason: string;
   evidenceTools: string[];
+  actuationTools: string[];
   verificationTools: string[];
   promptOverlay: string;
 }
@@ -55,6 +56,7 @@ export function buildDesktopExecutionStabilityPolicy(
       applies: false,
       reason: 'no visible desktop lane selected',
       evidenceTools: [],
+      actuationTools: [],
       verificationTools: [],
       promptOverlay: '',
     };
@@ -67,9 +69,24 @@ export function buildDesktopExecutionStabilityPolicy(
     hasPreferred(input, 'mcp_playwright_browser_snapshot') ? 'mcp_playwright_browser_snapshot' : '',
     'desktop_capture_screen',
   ]);
+  const actuationTools = unique([
+    'desktop_ui_focus',
+    'desktop_ui_click',
+    'desktop_ui_invoke',
+    'desktop_ui_type',
+    'write_clipboard',
+    'mouse_move',
+    'mouse_click',
+    'mouse_drag',
+    'keyboard_type',
+    'keyboard_press',
+    'computer_use',
+  ]);
   const verificationTools = unique([
     'desktop_active_window',
     'desktop_ui_snapshot',
+    'read_clipboard',
+    'desktop_capture_screen',
     input.capabilitySelection.lane === 'web_or_account' ? 'mcp_playwright_browser_snapshot' : '',
     input.flow?.workTakeover.latestTask ? 'work_takeover_task_verify_result' : '',
     input.flow?.workSurfaceRoute.artifactFirst ? 'work_product_verify' : '',
@@ -81,6 +98,7 @@ export function buildDesktopExecutionStabilityPolicy(
     applies: true,
     reason: inferReason(input),
     evidenceTools,
+    actuationTools,
     verificationTools,
     promptOverlay: [
       '## Desktop Execution Stability',
@@ -93,6 +111,7 @@ export function buildDesktopExecutionStabilityPolicy(
       '- If the target local app path is unknown, use desktop_list_apps and then desktop_open; do not guess Program Files paths or generate a one-off launcher skill.',
       '- Prefer UIA/browser/control-tree actions when available; use raw mouse clicks only after locating the target from screen/UI evidence.',
       'While acting:',
+      '- Use the appropriate actuation layer: UIA/browser controls first, clipboard for draft transfer, raw mouse/keyboard for visible targets, and vision computer_use when pixels are the only reliable route.',
       '- Move/show the visible cursor before click demonstrations when available, then click the resolved target, not a guessed coordinate.',
       '- For input fields, verify focus before typing; if typing does not appear, stop, refocus, and report the recovery attempt.',
       '- Close temporary windows/panels after their explanation in demos unless the user asked to leave them open.',
@@ -100,6 +119,7 @@ export function buildDesktopExecutionStabilityPolicy(
       '- Verify the active window, visible content, generated files, or draft text before saying it worked.',
       '- If an app did not open, an input field was missed, login was unavailable, or screen evidence is missing, say that exact blocker and the next recovery step.',
       evidenceTools.length ? `Evidence tools to prefer: ${evidenceTools.join(', ')}.` : '',
+      actuationTools.length ? `Actuation tools to prefer: ${actuationTools.join(', ')}.` : '',
       verificationTools.length ? `Verification tools to prefer: ${verificationTools.join(', ')}.` : '',
       compact(input.text) ? `Newest user request: ${compact(input.text).slice(0, 220)}` : '',
     ].filter(Boolean).join('\n'),

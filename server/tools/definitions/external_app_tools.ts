@@ -1150,21 +1150,21 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       properties: {
         url: { type: 'string', description: 'URL to open. If omitted, query is converted to a Bing search URL.' },
         query: { type: 'string', description: 'Search query when no URL is provided.' },
-        open: { type: 'boolean', description: 'Open the URL in the desktop browser. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
+        open: { type: 'boolean', description: 'Open the URL in the desktop browser. High-risk submits, payments, publishing, and account transitions still require confirmation.' },
       },
       required: [],
     },
     handler: async (args, context) => {
       const target = normalizeUrl(args);
       if (!args.open) {
-        return JSON.stringify({ target, opened: false, note: 'Set open=true after user confirmation to open the browser.' }, null, 2);
+        return JSON.stringify({ target, opened: false, note: 'Set open=true to open the browser when the user wants visible browser work.' }, null, 2);
       }
       const desktopRelay = requireDesktopRelay(context);
       const result = await desktopRelay('desktop_open', { target });
       return JSON.stringify({ target, opened: true, result }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -1252,7 +1252,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         draft: { type: 'string', description: 'Reply draft to copy.' },
-        openWechat: { type: 'boolean', description: 'Open WeChat after copying the draft. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
+        openWechat: { type: 'boolean', description: 'Open WeChat after copying the draft. This does not send; sending remains confirmation-gated.' },
         applicationTarget: { type: 'string', description: 'Optional app target, default wechat.exe.' },
       },
       required: ['draft'],
@@ -1276,7 +1276,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({

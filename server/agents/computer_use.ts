@@ -7,13 +7,13 @@
  *   3. Parse structured action JSON
  *   4. Execute via desktopRelay (enigo mouse/keyboard from Rust)
  *   5. Brief pause for UI to settle
- *   6. Repeat until DONE or max iterations (15)
+ *   6. Repeat until DONE or the active tool-policy iteration limit
  *
  * Safety:
  *   - Each action is a single mouse/keyboard operation (not arbitrary code)
  *   - Coordinates are validated to be within reasonable screen bounds
  *   - Cancellable between any iteration via isCancelled callback
- *   - Max 15 iterations to prevent infinite loops
+ *   - Iteration limit is provided by the active chat/assistant/autonomy policy
  */
 
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
@@ -38,6 +38,15 @@ export interface ComputerUseOptions {
   maxIterations?: number;
   onProgress?: (step: string) => void;
   isCancelled?: () => boolean;
+}
+
+const DEFAULT_COMPUTER_USE_ITERATIONS = 12;
+const MAX_COMPUTER_USE_ITERATIONS = 50;
+
+function clampIterations(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_COMPUTER_USE_ITERATIONS;
+  return Math.max(1, Math.min(Math.floor(n), MAX_COMPUTER_USE_ITERATIONS));
 }
 
 // ── System prompt for vision model ──
@@ -280,7 +289,7 @@ export async function computerUseLoop(
   task: string,
   options: ComputerUseOptions,
 ): Promise<string> {
-  const maxIter = options.maxIterations || 12;
+  const maxIter = clampIterations(options.maxIterations);
   const actionHistory: string[] = [];
   let consecutiveErrors = 0;
   let wallpaperModeEnabled = false;

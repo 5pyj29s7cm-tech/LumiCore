@@ -8,11 +8,28 @@ const declarations = [
   'client_action',
   'client_health_check',
   'client_self_repair',
+  'desktop_active_window',
+  'desktop_running_processes',
+  'desktop_idle_time',
+  'desktop_poll_activity',
+  'desktop_list_apps',
+  'desktop_open',
+  'desktop_path_info',
   'desktop_ui_snapshot',
   'desktop_ui_focus',
   'desktop_ui_click',
   'desktop_ui_type',
   'desktop_ui_invoke',
+  'desktop_capture_screen',
+  'desktop_show_lumi_window',
+  'desktop_run_command',
+  'read_clipboard',
+  'write_clipboard',
+  'mouse_move',
+  'mouse_click',
+  'mouse_drag',
+  'keyboard_type',
+  'keyboard_press',
   'computer_use',
   'work_product_plan',
   'work_product_verify',
@@ -203,6 +220,9 @@ describe('Lumi capability selection', () => {
 
     expect(selection.lane).toBe('desktop_control');
     expect(selection.preferredTools).toContain('desktop_ui_snapshot');
+    expect(selection.preferredTools).toContain('mouse_drag');
+    expect(selection.preferredTools).toContain('keyboard_press');
+    expect(selection.preferredTools).toContain('computer_use');
   });
 
   it('selects browser/account work for saved-login dashboards', async () => {

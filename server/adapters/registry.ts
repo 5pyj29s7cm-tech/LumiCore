@@ -426,10 +426,10 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: 'available',
       actions: ['computer_use', 'desktop_show_lumi_window', 'desktop_open', 'desktop_run_command', 'read_clipboard', 'write_clipboard', 'mouse_move', 'mouse_click', 'mouse_drag', 'keyboard_type', 'keyboard_press', 'desktop_active_window', 'desktop_running_processes', 'desktop_idle_time', 'desktop_poll_activity', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen'],
       surfaces: ['desktop apps', 'browser UI', 'CAD/Revit UI', 'messaging UI'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: [],
       diagnostics: ['externalAutomationGate=removed'],
-      safety: 'Prefer explicit adapters and files first. Foreground computer_use and raw input require confirmation; autonomous/background execution requires approved autonomous work and still follows tool risk boundaries. Use visible cursor movement, internal cursor-glow/wallpaper workflow helpers when available, and verification after actions.',
+      safety: 'Prefer explicit adapters and files first. Low- and medium-risk computer_use, UIA, clipboard, and raw input follow the active desktop mode without per-step prompts; sends, submits, payments, installs, shell commands, destructive actions, and other high-risk boundaries still require confirmation.',
       notes: 'This is Lumi using the computer, not the default route for Lumi client UI. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, commands, and vision computer_use. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are reserved for controlled demos/workflows and computer_use cleanup. For external desktop work, inspect active window controls with desktop_ui_snapshot when possible, use desktop_ui_focus/click/invoke/type for accessible controls, inspect screen pixels when needed, show and move the visible cursor before raw clicks, explain task intent briefly, verify with screenshot/window/process/file evidence, and report only results, blockers, and needed confirmations. Prefer restoring already-running taskbar/background windows before launching duplicates.',
     },
     {
@@ -441,7 +441,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       surfaces: ['native Windows apps', 'WPS/Office', 'WeChat', 'CAD/Revit launchers', 'installers', 'dialogs'],
       requiresConfirmation: false,
       setup: process.platform === 'win32' ? [] : ['Run Lumi on Windows to use UI Automation snapshots.'],
-      safety: 'Snapshot inspection is safe; focus/click/invoke/type require confirmation. Sending, publishing, submitting, payment, and destructive actions remain controlled by their own confirmation rules.',
+      safety: 'Snapshot inspection plus low- and medium-risk focus/click/invoke/type can run under the active desktop mode. Sending, publishing, submitting, payment, and destructive actions remain controlled by their own confirmation rules.',
       notes: 'Use this before raw coordinate control so Lumi can identify and operate real controls, labels, input fields, enabled state, and bounding rectangles.',
     },
     {

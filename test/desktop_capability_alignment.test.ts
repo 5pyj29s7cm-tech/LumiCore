@@ -38,6 +38,15 @@ describe('desktop capability alignment', () => {
     ]));
   });
 
+  it('lets vision computer use follow the active desktop/autonomy tool policy', async () => {
+    const { resolveComputerUseSteps } = await import('../server/tools/definitions/computer_use_tool');
+
+    expect(resolveComputerUseSteps({}, { toolPolicy: { maxIterations: 25 } })).toBe(25);
+    expect(resolveComputerUseSteps({ max_steps: 40 }, { toolPolicy: { maxIterations: 50 } })).toBe(40);
+    expect(resolveComputerUseSteps({ max_steps: 80 }, { toolPolicy: { maxIterations: 50 } })).toBe(50);
+    expect(resolveComputerUseSteps({ max_steps: 40 }, { toolPolicy: { maxIterations: 25 } })).toBe(25);
+  });
+
   it('keeps desktop/account automation available after removing the autonomous external-app gate', async () => {
     const { saveGateConfig } = await import('../server/autonomy/safety_gate');
     const { getAdapterRegistry } = await import('../server/adapters/registry');
@@ -48,7 +57,7 @@ describe('desktop capability alignment', () => {
     const accountReuse = report.adapters.find(adapter => adapter.id === 'automation.account_session_reuse');
 
     expect(computerUse?.status).toBe('available');
-    expect(computerUse?.requiresConfirmation).toBe(true);
+    expect(computerUse?.requiresConfirmation).toBe(false);
     expect(computerUse?.diagnostics).toContain('externalAutomationGate=removed');
     expect(computerUse?.setup || []).toEqual([]);
     expect(accountReuse?.status).toBe('available');

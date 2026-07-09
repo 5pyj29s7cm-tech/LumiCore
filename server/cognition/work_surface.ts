@@ -65,7 +65,7 @@ export function resolveWorkSurfaceRoute(text: string): WorkSurfaceRoute {
         '- For floor plans, renovation sketches, CAD reference images, or folders containing plan images: locate the source file, call floorplan_extract_geometry first when available, then call cad_generate_dxf with the extracted rooms/walls/doors/windows/dimensions. Use ocr_image_file only as a fallback or for non-floor-plan images.',
         '- If scale, dimensions, wall thickness, or room boundaries are inferred, mark the DXF as a calibrated draft/base drawing and ask for one confirmed dimension before claiming precision.',
         '- Do not use mouse/keyboard desktop control for this task unless the user explicitly asked to use the cursor, mouse, keyboard, a CAD desktop app, or to operate the computer directly.',
-        '- If the user explicitly asks for desktop/CAD-app operation, first prepare draft files and an action guide, then use computer_use only after confirmation.',
+        '- If the user explicitly asks for desktop/CAD-app operation, first prepare draft files and an action guide, then operate the visible app through UIA/browser controls, clipboard, raw mouse/keyboard, or vision computer_use according to the active desktop mode and confirmation/autonomy boundary.',
         '- Mention generated file paths and unfinished parts. Do not claim production CAD completion unless a verified CAD app workflow produced it.',
       ].join('\n')
     : '';

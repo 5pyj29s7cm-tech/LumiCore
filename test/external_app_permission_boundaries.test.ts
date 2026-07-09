@@ -14,18 +14,22 @@ describe('external app permission boundaries', () => {
     });
   });
 
-  it('allows confirmed foreground browser opening when the legacy external automation flag is off', async () => {
+  it('allows foreground browser opening without the legacy external automation flag or a permission popup', async () => {
     const { ToolRegistry } = await import('../server/tools/registry');
     const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
     const registry = new ToolRegistry();
     registerExternalAppTools(registry);
     const relayCalls: Array<{ name: string; args: Record<string, any> }> = [];
+    let confirmationCalls = 0;
 
     const raw = await registry.execute('browser_open_task', {
       url: 'example.com',
       open: true,
     }, {
-      requestConfirmation: async () => true,
+      requestConfirmation: async () => {
+        confirmationCalls++;
+        return true;
+      },
       desktopRelay: async (name, args) => {
         relayCalls.push({ name, args });
         return 'opened';
@@ -35,21 +39,26 @@ describe('external app permission boundaries', () => {
     const result = JSON.parse(raw);
     expect(result.target).toBe('https://example.com');
     expect(result.opened).toBe(true);
+    expect(confirmationCalls).toBe(0);
     expect(relayCalls).toEqual([{ name: 'desktop_open', args: { target: 'https://example.com' } }]);
   });
 
-  it('allows confirmed draft clipboard preparation without treating it as external app automation', async () => {
+  it('allows draft clipboard preparation without treating it as external app automation or a permission popup', async () => {
     const { ToolRegistry } = await import('../server/tools/registry');
     const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
     const registry = new ToolRegistry();
     registerExternalAppTools(registry);
     const relayCalls: Array<{ name: string; args: Record<string, any> }> = [];
+    let confirmationCalls = 0;
 
     const raw = await registry.execute('wechat_copy_reply_draft', {
       draft: 'Received. I will prepare the plan first.',
       openWechat: false,
     }, {
-      requestConfirmation: async () => true,
+      requestConfirmation: async () => {
+        confirmationCalls++;
+        return true;
+      },
       desktopRelay: async (name, args) => {
         relayCalls.push({ name, args });
         return 'copied';
@@ -59,6 +68,7 @@ describe('external app permission boundaries', () => {
     const result = JSON.parse(raw);
     expect(result.copied).toBe(true);
     expect(result.opened).toBe(false);
+    expect(confirmationCalls).toBe(0);
     expect(relayCalls).toEqual([{ name: 'desktop_clipboard_write', args: { text: 'Received. I will prepare the plan first.' } }]);
   });
 

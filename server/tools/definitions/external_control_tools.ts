@@ -101,7 +101,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -139,7 +139,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'focus' }), null, 2),
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -152,7 +152,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'click' }), null, 2),
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -168,7 +168,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'invoke' }), null, 2),
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -185,6 +185,6 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'type', text: String(args.text || '') }), null, 2),
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 }

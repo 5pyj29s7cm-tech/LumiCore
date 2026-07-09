@@ -244,6 +244,13 @@ function buildVoiceReplyStyleOverlay(): string {
   ].join('\n');
 }
 
+function shouldAllowVoiceLocalFileWriteForTurn(userText: string): boolean {
+  const clean = String(userText || '').trim();
+  if (!clean) return false;
+  return /\b(?:create|generate|write|save|export|make|draft|draw|build)\b.{0,80}\b(?:file|document|docx|word|pdf|txt|markdown|transcript|notes|minutes|report|pptx?|xlsx?|cad|dxf|dwg|drawing|floor\s*plan|blueprint)\b/i.test(clean)
+    || /(?:生成|创建|新建|制作|写成|做成|整理成|汇总成|保存|导出|输出|画|绘制).{0,60}(?:文件|文档|材料|报告|笔记|纪要|记录|文本|文字|清单|方案|表格|图纸|平面图|CAD|DXF|DWG|PPT|PDF|Word|Excel|TXT|MD)/u.test(clean);
+}
+
 function isVoiceProactiveFollowup(text: string): boolean {
   const raw = String(text || '').trim();
   if (!raw) return false;
@@ -450,6 +457,10 @@ async function processVoiceInput(
   const routedUserText = proactiveContextPrompt
     ? `${userText}\n\n${proactiveContextPrompt}`
     : userText;
+  const allowLocalFileWrites = shouldAllowVoiceLocalFileWriteForTurn(routedUserText);
+  const localWriteIntentReason = allowLocalFileWrites
+    ? `Current voice request explicitly asked Lumi to generate/export a local deliverable: "${userText.slice(0, 120)}"`
+    : undefined;
   if (proactiveContextPrompt) {
     logger.info(`[Audio] Using recent proactive context for voice follow-up: type=${recentProactiveSuggestion?.type} action=${recentProactiveSuggestion?.action || 'none'}`);
     socket.emit('agent:proactive_context', {
@@ -601,6 +612,7 @@ async function processVoiceInput(
     socket.emit('agent:desktop_execution_policy', {
       reason: desktopExecutionPolicy.reason,
       evidenceTools: desktopExecutionPolicy.evidenceTools,
+      actuationTools: desktopExecutionPolicy.actuationTools,
       verificationTools: desktopExecutionPolicy.verificationTools,
       source: 'voice',
     });
@@ -641,15 +653,31 @@ async function processVoiceInput(
     || 'deepseek-chat';
 
   const maxIterations = executionDecision.maxIterations || personality.toolPolicy.maxIterations || 5;
+  const toolResultPreviewLimit = 500;
+  const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
+  const emitToolLifecycle = (payload: {
+    correlationId: string;
+    name: string;
+    arguments: Record<string, any>;
+    result?: string;
+    error?: string;
+  }) => {
+    const normalized = { ...payload, args: payload.arguments, source: 'voice' };
+    socket.emit("agent:tool_call", normalized);
+    socket.emit("agent:tool", normalized);
+  };
+  const isDirectDesktopTool = (toolName: string) => toolName.startsWith('desktop_');
 
   const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
     return new Promise((resolve, reject) => {
       const cid = Math.random().toString(36).substring(2, 11);
+      const uiCid = `desktop-${cid}`;
       const eventName = `tool:desktop_result:${cid}`;
       let settled = false;
       const timeout = setTimeout(() => {
         finishWithError(`Desktop tool "${toolName}" timed out (30s)`);
       }, 30000);
+      emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args });
 
       function cleanup() {
         clearTimeout(timeout);
@@ -661,6 +689,7 @@ async function processVoiceInput(
         if (settled) return;
         settled = true;
         cleanup();
+        emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: message });
         reject(new Error(message));
       }
 
@@ -668,8 +697,14 @@ async function processVoiceInput(
         if (settled) return;
         settled = true;
         cleanup();
-        if (data.error) reject(new Error(data.error));
-        else resolve(data.output || '');
+        if (data.error) {
+          emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: data.error });
+          reject(new Error(data.error));
+        } else {
+          const output = data.output || '';
+          emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, result: formatToolResultForUi(output) });
+          resolve(output);
+        }
       }
 
       function onDisconnect() {
@@ -729,8 +764,13 @@ async function processVoiceInput(
     desktopRelay,
     llmGetters,
     source: 'voice',
+    allowLocalFileWrites,
+    localWriteIntentReason,
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
     isCancelled: () => pipelineAbort?.signal.aborted ?? false,
+    onProgress: (step: string) => {
+      socket.emit("agent:progress", { text: step, agentName: "Lumi", source: "voice" });
+    },
     toolPolicy: routedToolPolicy,
   };
   const ttsProvider = getTTSProvider();
@@ -1328,7 +1368,9 @@ async function processVoiceInput(
       for (const tc of streamResult.toolCalls) {
         if (pipelineAbort?.signal.aborted) break;
         const cid = `${tc.name}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        socket.emit("agent:tool_call", { correlationId: cid, name: tc.name, arguments: tc.arguments });
+        if (!isDirectDesktopTool(tc.name)) {
+          emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: tc.arguments });
+        }
 
         let execResult: string;
         let execError: string | undefined;
@@ -1347,11 +1389,13 @@ async function processVoiceInput(
           error: execError,
         });
 
-        if (execError) {
-          socket.emit("agent:tool_call", { correlationId: cid, name: tc.name, arguments: tc.arguments, error: execError });
-        } else {
-          const short = typeof execResult === 'string' ? execResult.slice(0, 500) : JSON.stringify(execResult).slice(0, 500);
-          socket.emit("agent:tool_call", { correlationId: cid, name: tc.name, arguments: tc.arguments, result: short });
+        if (!isDirectDesktopTool(tc.name)) {
+          if (execError) {
+            emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: tc.arguments, error: execError });
+          } else {
+            const short = typeof execResult === 'string' ? execResult.slice(0, toolResultPreviewLimit) : JSON.stringify(execResult).slice(0, toolResultPreviewLimit);
+            emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: tc.arguments, result: short });
+          }
         }
 
         messages.push({

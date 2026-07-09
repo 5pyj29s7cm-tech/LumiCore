@@ -18,7 +18,7 @@ export interface ActionConstitutionPolicy {
 }
 
 const DESTRUCTIVE_ARG_PATTERN = /\b(rm\s+-rf|del\s+\/[sqf]|format\b|shutdown\b|reboot\b|reg\s+delete|erase\b|remove-item\b.*-recurse|drop\s+table|delete\s+from|mkfs\b|diskpart\b|cipher\s+\/w|docker\s+system\s+prune)\b/i;
-const MESSAGE_SEND_PATTERN = /\b(send|post|submit|publish|reply|purchase|buy|transfer|pay|付款|支付|转账|购买|下单|提交|发布|发送|回复)\b/i;
+const EXTERNAL_COMMIT_PATTERN = /(send|post|submit|publish|purchase|buy|transfer|pay|checkout)|付款|支付|转账|购买|下单|提交|发布|发送/i;
 const PACKAGE_INSTALL_PATTERN = /\b(npm|pnpm|yarn|bun|pip|pip3|uv|cargo|go|gem|winget|choco|scoop|brew)\s+(?:i|install|add|update|upgrade|remove|uninstall|audit\s+fix)\b/i;
 const GIT_MUTATION_PATTERN = /\bgit\s+(?:commit|push|tag|merge|rebase|reset|checkout|clean|branch\s+-d|branch\s+-D)\b/i;
 const SHELL_DOWNLOAD_EXEC_PATTERN = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[\s\S]*(?:\||;|&&)\s*(?:sh|bash|powershell|pwsh|iex|invoke-expression)\b/i;
@@ -32,7 +32,9 @@ export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
     confirmationDomains: ['local_write', 'desktop_control', 'external_app', 'messaging', 'system', 'destructive'],
     rules: [
       'Observation, reading, search, and analysis tools may run automatically when tool policy allows them.',
-      'Local writes, file generation, desktop control, browser/external app automation, and system operations require confirmation unless a narrower trusted policy already exists or the current turn explicitly requests a low-risk local file deliverable.',
+      'Low- and medium-risk desktop control, browser/external app preparation, and clipboard handoff may run under the active chat/assistant/autonomy tool policy without a per-step prompt.',
+      'Local writes and file generation may run automatically only when the current turn explicitly requests a local deliverable or a narrower trusted policy exists.',
+      'System commands, installs, package changes, git mutations, and high-risk external actions require confirmation.',
       'Messaging send/post/submit/purchase/payment actions require confirmation.',
       'Destructive commands are forbidden unless implemented as an explicitly confirmed safe tool.',
       'Autonomous background work must run under semi or full autonomy and still obey messaging, destructive-action, and tool risk boundaries.',
@@ -49,6 +51,7 @@ export function evaluateActionConstitution(
 ): ActionConstitutionDecision {
   const domain = classifyAction(toolName, args);
   const argText = JSON.stringify(args || {});
+  const actionText = `${toolName} ${argText}`;
   const risk = classifyActionRisk(toolName, args);
 
   const sensitiveClientAction = getSensitiveClientAction(args);
@@ -77,7 +80,7 @@ export function evaluateActionConstitution(
     }
   }
 
-  if (domain === 'messaging' && (isMessagingSendConfirmationRequired() || MESSAGE_SEND_PATTERN.test(argText))) {
+  if (domain === 'messaging' && isMessagingSendConfirmationRequired() && EXTERNAL_COMMIT_PATTERN.test(actionText)) {
     return confirm(domain, 'Messaging actions require user confirmation');
   }
 
@@ -98,9 +101,12 @@ export function evaluateActionConstitution(
     };
   }
 
-  if (domain === 'system' || domain === 'desktop_control' || domain === 'external_app' || domain === 'local_write') {
-    if (currentLevel === 'safe') {
-      return confirm(domain, `${domain} action requires confirmation by Action Constitution`);
+  if (currentLevel === 'safe') {
+    if (domain === 'system') {
+      return confirm(domain, 'System actions require confirmation by Action Constitution');
+    }
+    if (domain === 'local_write') {
+      return confirm(domain, 'Local write actions require confirmation unless the current turn explicitly requested a local deliverable');
     }
   }
 
@@ -116,12 +122,13 @@ export function classifyActionRisk(toolName: string, args: Record<string, any> =
   const domain = classifyAction(toolName, args);
   const name = toolName.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
+  const actionText = `${name} ${argText}`;
 
   if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'high';
   if (name.includes('install') || name.includes('uninstall') || name.includes('delete') || name.includes('remove')) return 'high';
   if (GIT_MUTATION_PATTERN.test(argText) || PACKAGE_INSTALL_PATTERN.test(argText) || SHELL_DOWNLOAD_EXEC_PATTERN.test(argText)) return 'high';
-  if ((domain === 'messaging' || domain === 'external_app' || domain === 'desktop_control') && MESSAGE_SEND_PATTERN.test(argText)) return 'high';
-  if ((domain === 'external_app' || domain === 'desktop_control') && EXTERNAL_SEND_TARGET_PATTERN.test(argText)) return 'high';
+  if ((domain === 'messaging' || domain === 'external_app' || domain === 'desktop_control') && EXTERNAL_COMMIT_PATTERN.test(actionText)) return 'high';
+  if ((domain === 'external_app' || domain === 'desktop_control') && EXTERNAL_SEND_TARGET_PATTERN.test(argText) && EXTERNAL_COMMIT_PATTERN.test(actionText)) return 'high';
   if (domain === 'system') return 'high';
   if (domain === 'desktop_control' || domain === 'external_app' || domain === 'messaging' || domain === 'local_write') return 'medium';
   return 'low';
@@ -131,7 +138,7 @@ export function canAutoApproveAction(toolName: string, args: Record<string, any>
   const domain = classifyAction(toolName, args);
   const risk = classifyActionRisk(toolName, args);
   if (risk === 'high') return false;
-  return !['system', 'desktop_control', 'external_app', 'messaging', 'destructive'].includes(domain);
+  return !['system', 'destructive'].includes(domain);
 }
 
 export function classifyAction(toolName: string, args: Record<string, any> = {}): ActionDomain {
@@ -144,6 +151,9 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (name.includes('run_command') || name.includes('terminal') || name.includes('shell') || name.includes('code_execution')) return 'system';
   if (name.includes('wechat') || name.includes('feishu') || name.includes('wecom') || name.includes('message')) return 'messaging';
   if (name === 'computer_use' || name.startsWith('desktop_') || name.includes('mouse') || name.includes('keyboard') || name.includes('screenshot')) return 'desktop_control';
+  if (name === 'cad_generate_dxf') return 'local_write';
+  if (name === 'cad_generate_autocad_draw_script') return args.launchAutoCAD === true ? 'system' : 'local_write';
+  if (name === 'cad_run_autocad_draw_script') return 'system';
   if (name.includes('external_app') || name.includes('web_login') || name.includes('logged_in') || name.includes('cad_') || name.includes('browser_open') || name.includes('playwright') || name.includes('browser_')) return 'external_app';
   if (name === 'authority_research') return 'network';
   if (name === 'authority_research_save') return 'local_write';

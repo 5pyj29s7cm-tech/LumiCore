@@ -126,11 +126,28 @@ function enhanceToolRouteForFlow(
 
   if (flow.workSurfaceRoute.directDesktop) {
     addAvailable(additions, available, [
+      'desktop_active_window',
+      'desktop_running_processes',
+      'desktop_idle_time',
+      'desktop_poll_activity',
+      'desktop_list_apps',
+      'desktop_open',
+      'desktop_path_info',
       'desktop_ui_snapshot',
       'desktop_ui_focus',
       'desktop_ui_click',
       'desktop_ui_type',
       'desktop_ui_invoke',
+      'desktop_capture_screen',
+      'desktop_show_lumi_window',
+      'desktop_run_command',
+      'read_clipboard',
+      'write_clipboard',
+      'mouse_move',
+      'mouse_click',
+      'mouse_drag',
+      'keyboard_type',
+      'keyboard_press',
       'computer_use',
     ]);
     categories.push('desktop_control');

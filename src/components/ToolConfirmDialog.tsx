@@ -27,10 +27,14 @@ function getToolRisk(name: string, args: Record<string, any> = {}): ToolRisk {
   const normalized = name.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
   if (normalized === 'client_action' && getSensitiveClientAction(args)) return 'high';
-  if (normalized.includes('delete') || normalized.includes('remove') || normalized.includes('rm') || normalized.includes('uninstall')) return 'high';
+  if (normalized.includes('delete') || normalized.includes('remove') || normalized.includes('rm') || normalized.includes('install') || normalized.includes('uninstall')) return 'high';
   if (/\b(rm\s+-rf|format\b|shutdown\b|reboot\b|reg\s+delete|drop\s+table|delete\s+from)\b/i.test(argText)) return 'high';
-  if (normalized === 'computer_use' || normalized.includes('run_command') || normalized.includes('terminal') || normalized.includes('shell')) return 'high';
+  if (/\b(?:npm|pnpm|yarn|bun|pip|pip3|uv|cargo|go|gem|winget|choco|scoop|brew)\s+(?:i|install|add|update|upgrade|remove|uninstall|audit\s+fix)\b/i.test(argText)) return 'high';
+  if (/\bgit\s+(?:commit|push|tag|merge|rebase|reset|checkout|clean|branch\s+-d|branch\s+-D)\b/i.test(argText) || /^git_(?:commit|push|tag|merge|rebase|reset)/i.test(normalized)) return 'high';
+  if (normalized.includes('run_command') || normalized.includes('terminal') || normalized.includes('shell')) return 'high';
+  if (/(send|post|submit|publish|purchase|buy|transfer|pay|checkout)/i.test(normalized) || /(send|post|submit|publish|purchase|buy|transfer|pay|checkout|付款|支付|转账|购买|下单|提交|发布|发送)/i.test(argText)) return 'high';
   if (normalized.includes('wechat') || normalized.includes('message') || normalized.includes('desktop_') || normalized.includes('mouse') || normalized.includes('keyboard')) return 'medium';
+  if (normalized === 'computer_use' || normalized.startsWith('desktop_ui_') || normalized.includes('playwright') || normalized.includes('browser_')) return 'medium';
   if (normalized.includes('write') || normalized.includes('save') || normalized.includes('publish') || normalized.includes('install')) return 'medium';
   return 'low';
 }

@@ -160,6 +160,7 @@ export function registerTaskHandler(
       socket.emit('agent:desktop_execution_policy', {
         reason: desktopExecutionPolicy.reason,
         evidenceTools: desktopExecutionPolicy.evidenceTools,
+        actuationTools: desktopExecutionPolicy.actuationTools,
         verificationTools: desktopExecutionPolicy.verificationTools,
         source: 'task',
       });

@@ -42,6 +42,6 @@ export function registerClipboardTools(registry: ToolRegistry): void {
     },
     handler: writeClipboard,
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 }

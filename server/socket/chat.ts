@@ -274,7 +274,7 @@ function shouldAllowLocalFileWriteForTurn(userText: string, attachments: ChatInc
     attachments.length > 0 &&
     /(?:整理|汇总|总结|提炼|转写|转成|做成|生成|创建|保存|导出).{0,48}(?:文本|文字|文档|文件|材料|笔录|纪要|记录|报告|DOCX|docx|Word|PDF|pdf|TXT|txt|MD|md)/iu.test(clean);
   const directEnglishRequest =
-    /\b(?:create|generate|write|save|export|turn|make)\b.{0,48}\b(?:file|document|docx|word|pdf|txt|markdown|transcript|notes|minutes|report)\b/i.test(clean);
+    /\b(?:create|generate|write|save|export|turn|make|draw|draft)\b.{0,64}\b(?:file|document|docx|word|pdf|txt|markdown|transcript|notes|minutes|report|cad|dxf|dwg|drawing|floor\s*plan|blueprint)\b/i.test(clean);
 
   return explicitDeliverable || attachedArtifactRequest || directEnglishRequest;
 }
@@ -1205,6 +1205,7 @@ export function registerChatHandler(
         emitAgent('agent:desktop_execution_policy', {
           reason: desktopExecutionPolicy.reason,
           evidenceTools: desktopExecutionPolicy.evidenceTools,
+          actuationTools: desktopExecutionPolicy.actuationTools,
           verificationTools: desktopExecutionPolicy.verificationTools,
           source: eventSource,
         });

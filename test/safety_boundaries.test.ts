@@ -61,6 +61,8 @@ describe('Action Constitution', () => {
     expect(classifyAction('desktop_poll_activity')).toBe('observe');
     expect(classifyAction('mouse_click')).toBe('desktop_control');
     expect(classifyAction('keyboard_type')).toBe('desktop_control');
+    expect(classifyAction('cad_generate_dxf')).toBe('local_write');
+    expect(classifyAction('cad_generate_autocad_draw_script', { launchAutoCAD: true })).toBe('system');
   });
 
   it('upgrades safe local writes to confirmation', () => {
@@ -84,19 +86,83 @@ describe('Action Constitution', () => {
     expect(classifyActionRisk('run_command', { command: 'npm install left-pad' })).toBe('high');
 
     const wechatOpen = evaluateActionConstitution('desktop_open', { target: 'wechat.exe' }, 'safe');
-    expect(wechatOpen.level).toBe('confirm');
-    expect(classifyActionRisk('desktop_open', { target: 'wechat.exe' })).toBe('high');
+    expect(wechatOpen.level).toBe('safe');
+    expect(classifyActionRisk('desktop_open', { target: 'wechat.exe' })).toBe('medium');
 
     const browserSubmit = evaluateActionConstitution('mcp_playwright_browser_click', { name: 'Submit payment' }, 'safe');
     expect(browserSubmit.level).toBe('confirm');
     expect(classifyActionRisk('mcp_playwright_browser_click', { name: 'Submit payment' })).toBe('high');
   });
 
+  it('keeps low and medium desktop control quiet unless the action is high-risk', () => {
+    const openApp = evaluateActionConstitution('desktop_open', { target: 'calc.exe' }, 'safe');
+    expect(openApp.level).toBe('safe');
+    expect(openApp.requiresUserConfirmation).toBe(false);
+
+    const mouseClick = evaluateActionConstitution('mouse_click', { button: 'left' }, 'safe');
+    expect(mouseClick.level).toBe('safe');
+    expect(mouseClick.requiresUserConfirmation).toBe(false);
+
+    const uiType = evaluateActionConstitution('desktop_ui_type', { name: 'Search', text: 'hello' }, 'safe');
+    expect(uiType.level).toBe('safe');
+    expect(uiType.requiresUserConfirmation).toBe(false);
+
+    const publishClick = evaluateActionConstitution('desktop_ui_click', { name: 'Publish' }, 'safe');
+    expect(publishClick.level).toBe('confirm');
+    expect(publishClick.requiresUserConfirmation).toBe(true);
+  });
+
+  it('does not prompt for messaging drafts or clipboard handoff before sending', () => {
+    const draft = evaluateActionConstitution('wechat_prepare_reply', {
+      context: 'Customer asked for the quote.',
+      intent: 'prepare a helpful reply draft',
+    }, 'safe');
+    expect(draft.level).toBe('safe');
+    expect(draft.requiresUserConfirmation).toBe(false);
+
+    const copyDraft = evaluateActionConstitution('wechat_copy_reply_draft', {
+      draft: 'Thanks, I will check and get back to you.',
+      openWechat: true,
+    }, 'safe');
+    expect(copyDraft.level).toBe('safe');
+    expect(copyDraft.requiresUserConfirmation).toBe(false);
+
+    const send = evaluateActionConstitution('wechat_send_message', {
+      text: 'Thanks, I will check this.',
+    }, 'safe');
+    expect(send.level).toBe('confirm');
+    expect(send.requiresUserConfirmation).toBe(true);
+  });
+
+  it('allows explicit CAD file generation but confirms CAD app execution', () => {
+    const dxf = evaluateActionConstitution('cad_generate_dxf', {
+      title: 'draft_floor_plan',
+      width: 12000,
+      height: 8000,
+    }, 'confirm', {
+      allowLocalFileWrites: true,
+      localWriteIntentReason: 'User requested a DXF deliverable',
+    });
+    expect(dxf.level).toBe('safe');
+    expect(dxf.requiresUserConfirmation).toBe(false);
+
+    const runCad = evaluateActionConstitution('cad_generate_autocad_draw_script', {
+      title: 'visible_playback',
+      width: 12000,
+      height: 8000,
+      launchAutoCAD: true,
+    }, 'safe', {
+      allowLocalFileWrites: true,
+    });
+    expect(runCad.level).toBe('confirm');
+    expect(runCad.requiresUserConfirmation).toBe(true);
+  });
+
   it('limits trusted auto-approval to lower-risk actions', () => {
     expect(canAutoApproveAction('write_file', { path: 'notes.txt' })).toBe(true);
-    expect(canAutoApproveAction('desktop_open', { target: 'calc.exe' })).toBe(false);
+    expect(canAutoApproveAction('desktop_open', { target: 'calc.exe' })).toBe(true);
     expect(canAutoApproveAction('desktop_run_command', { command: 'git commit -m test' })).toBe(false);
-    expect(canAutoApproveAction('wechat_copy_reply_draft', { openWechat: true })).toBe(false);
+    expect(canAutoApproveAction('wechat_copy_reply_draft', { openWechat: true })).toBe(true);
     expect(canAutoApproveAction('install_skill', { directory: 'D:\\tmp\\skill' })).toBe(false);
   });
 
@@ -128,18 +194,18 @@ describe('Action Constitution', () => {
     await expect(registry.execute('desktop_run_command', { command: 'whoami' })).rejects.toThrow(/requires user confirmation/);
   });
 
-  it('does not execute confirmed tools when the user declines', async () => {
+  it('does not execute high-risk constitution-confirmed tools when the user declines', async () => {
     const registry = new ToolRegistry();
     registry.register({
-      name: 'desktop_open',
-      description: 'Open something',
+      name: 'desktop_ui_click',
+      description: 'Click something',
       parameters: {},
       permission: 'user',
       securityLevel: 'safe',
-      handler: async () => 'opened',
+      handler: async () => 'clicked',
     });
 
-    await expect(registry.execute('desktop_open', { target: 'calc.exe' }, {
+    await expect(registry.execute('desktop_ui_click', { name: 'Submit payment' }, {
       requestConfirmation: async () => false,
     })).resolves.toContain('declined by the user');
   });
