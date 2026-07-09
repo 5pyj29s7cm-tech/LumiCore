@@ -22,6 +22,19 @@ describe('Lumi action contract', () => {
     }])).toBe(true);
   });
 
+  it('treats directed person-to-person sends as real messaging work', () => {
+    const contract = buildActionContract('\u7ed9\u5f20\u4e09\u53d1\u4e0b\u5348\u4e09\u70b9\u5f00\u4f1a');
+
+    expect(contract.kind).toBe('messaging_send');
+    expect(contract.coreAction).toContain('\u6536\u4ef6\u4eba');
+    expect(hasCoreActionEvidence(contract, [{
+      id: '1',
+      name: 'desktop_active_window',
+      arguments: {},
+      result: 'WeChat is active',
+    }])).toBe(false);
+  });
+
   it('creates non-messaging contracts for other real-world actions', () => {
     expect(buildActionContract('\u6253\u5f00\u6d4f\u89c8\u5668\u81ea\u52a8\u767b\u5f55').kind).toBe('browser_account');
     expect(buildActionContract('\u89c6\u9891\u7f51\u7ad9\u81ea\u52a8\u8bc4\u8bba').kind).toBe('public_post');

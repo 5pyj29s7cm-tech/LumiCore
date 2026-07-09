@@ -53,4 +53,23 @@ describe('chat and voice tool-call stability', () => {
     expect(chat).toContain('buildRecentFailureExplanation');
     expect(chat).toContain('recent_failure_explanation');
   });
+
+  it('extracts foreground message recipients and content without hard-coded samples', () => {
+    expect(buildForegroundWeChatSendArgs('\u5fae\u4fe1\u7ed9\u5f20\u4e09\u53d1\u4e0b\u5348\u4e09\u70b9\u5f00\u4f1a')).toMatchObject({
+      contact: '\u5f20\u4e09',
+      message: '\u4e0b\u5348\u4e09\u70b9\u5f00\u4f1a',
+      applicationTarget: 'wechat',
+      useVirtualCursor: true,
+    });
+
+    expect(buildForegroundWeChatSendArgs('\u53d1\u7ed9\u674e\u56db\u300c\u6211\u5230\u4e86\u300d')).toMatchObject({
+      contact: '\u674e\u56db',
+      message: '\u6211\u5230\u4e86',
+    });
+
+    expect(buildForegroundWeChatSendArgs('\u76f4\u63a5\u53d1\u660e\u5929\u89c1')).toMatchObject({
+      contact: '',
+      message: '\u660e\u5929\u89c1',
+    });
+  });
 });

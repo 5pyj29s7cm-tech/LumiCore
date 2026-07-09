@@ -116,7 +116,91 @@ function getDomainHints(userTask: string): string[] | undefined {
 
 // ── Planning phase ──
 
+function cleanWeChatSlot(value: string): string {
+  return String(value || '')
+    .replace(/^[\s,.\u3002\uFF0C\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]+/u, '')
+    .replace(/[\s,.\u3002\uFF0C\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]+$/u, '')
+    .trim();
+}
+
+function cleanWeChatContactSlot(value: string): string {
+  return cleanWeChatSlot(value)
+    .split(/["'\u201c\u201d\u2018\u2019\u300c\u300d\u300e\u300f]/u)[0]
+    .trim();
+}
+
+function stripWeChatTaskPrefix(value: string): string {
+  let text = String(value || '').trim();
+  for (let i = 0; i < 4; i += 1) {
+    const next = text
+      .replace(/^(?:\u8bf7|\u9ebb\u70e6|\u5e2e\u6211|\u5e2e\u5fd9|\u66ff\u6211|\u4f60\u6765|\u76f4\u63a5|\u73b0\u5728)\s*/u, '')
+      .replace(/^(?:\u6253\u5f00|\u6253\u5f00\u4e00\u4e0b|\u542f\u52a8|\u7528|\u5728)?\s*(?:wechat|weixin|\u5fae\u4fe1)(?:\u91cc|\u4e0a|\u4e2d)?\s*/iu, '')
+      .trim();
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
+function extractQuotedWeChatText(text: string): string {
+  const quoted = String(text || '').match(/["'\u201c\u2018\u300c\u300e]([^"'\u201d\u2019\u300d\u300f]{1,1000})["'\u201d\u2019\u300d\u300f]/u);
+  return cleanWeChatSlot(quoted?.[1] || '');
+}
+
+function extractDirectedWeChatContact(userTask: string): string {
+  const text = String(userTask || '');
+  const patterns = [
+    /\u53d1\u7ed9\s*([^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u,
+    /\u7ed9\s*([^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9)/u,
+    /\u56de\u590d\s*([^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u,
+    /(?:to|message|reply)\s+([A-Za-z0-9_\-\u4e00-\u9fff]{1,32})/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const contact = cleanWeChatContactSlot(match?.[1] || '');
+    if (contact) return contact;
+  }
+  return '';
+}
+
+function cleanDirectedWeChatMessage(value: string): string {
+  return cleanWeChatSlot(value)
+    .replace(/^(?:\u4e00\u6761|\u4e00\u4e2a)?(?:\u5fae\u4fe1|\u6d88\u606f|\u5185\u5bb9|\u8bdd)\s*/u, '')
+    .trim();
+}
+
+function extractDirectedWeChatMessage(userTask: string): string {
+  const original = String(userTask || '').trim();
+  const quoted = extractQuotedWeChatText(original);
+  if (quoted) return quoted;
+
+  const text = stripWeChatTaskPrefix(original);
+  const messagePatterns = [
+    /(?:\u7f16\u8f91|\u5199|\u51c6\u5907)\s*(?:\u4e00\u6761|\u4e00\u4e2a)?(?:\u5fae\u4fe1|\u6d88\u606f)?\s*([\s\S]{1,1000}?)\s*\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}/u,
+    /\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9)\s*([\s\S]{1,1000})/u,
+    /\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*([\s\S]{1,1000})/u,
+    /(?:\u53d1\u9001|\u53d1)\s*([\s\S]{1,1000}?)\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}(?:\s|$)/u,
+    /\u56de\u590d\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*([\s\S]{1,1000})/u,
+    /(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u9001|\u53d1)\s*([\s\S]{1,1000})/u,
+    /(?:send|message|reply)\s+(?:to\s+)?[A-Za-z0-9_\-\u4e00-\u9fff]{0,32}\s*:?\s*([\s\S]{1,1000})/iu,
+  ];
+
+  for (const pattern of messagePatterns) {
+    const match = text.match(pattern);
+    const message = cleanDirectedWeChatMessage(match?.[1] || '');
+    if (message) return message;
+  }
+
+  return '';
+}
+
+function isDirectedWeChatSend(text: string): boolean {
+  return /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u.test(text);
+}
+
 function extractWeChatContact(userTask: string): string {
+  const directedContact = extractDirectedWeChatContact(userTask);
+  if (directedContact) return directedContact;
   const text = String(userTask || '');
   const patterns = [
     /\u53d1\u7ed9\s*([^\s,，。.!?！？]{1,24})/u,
@@ -131,6 +215,9 @@ function extractWeChatContact(userTask: string): string {
 }
 
 function extractWeChatMessage(userTask: string): string {
+  const directedMessage = extractDirectedWeChatMessage(userTask);
+  if (directedMessage) return directedMessage;
+
   const text = String(userTask || '').trim();
   if (/\u665a\u5b89/u.test(text)) {
     return '\u665a\u5b89\uff0c\u65e9\u70b9\u4f11\u606f\uff0c\u613f\u4f60\u4eca\u665a\u7761\u4e2a\u597d\u89c9\u3002';
@@ -146,9 +233,10 @@ function extractWeChatMessage(userTask: string): string {
 export function buildForegroundWeChatSendArgs(userTask: string): Record<string, any> | null {
   const text = String(userTask || '');
   const isWeChatTask = /wechat|weixin|\u5fae\u4fe1/i.test(text);
+  const directedSend = isDirectedWeChatSend(text);
   const looksLikeWeChatFollowup = /\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89/u.test(text);
   const wantsSend = /send|message|reply|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u665a\u5b89|\u7ed9[^\s,锛屻€?!?锛侊紵]{1,24}\u53d1|\u4f60\u6765\u53d1|\u76f4\u63a5\u53d1|\u56de\u590d/u.test(text);
-  if (!(isWeChatTask || looksLikeWeChatFollowup) || !wantsSend) return null;
+  if (!(isWeChatTask || looksLikeWeChatFollowup || directedSend) || !(wantsSend || directedSend)) return null;
 
   return {
     contact: extractWeChatContact(text),
