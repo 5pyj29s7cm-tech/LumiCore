@@ -86,6 +86,21 @@ function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildAction
   return false;
 }
 
+function hasContinuousStockWatchIntent(text: string): boolean {
+  return /(?:\u6301\u7eed|\u4e00\u76f4|\u5b9e\u65f6|\u76d8\u4e2d|\u5f00\u59cb|\u6b63\u5728)?.{0,12}(?:\u76ef\u76d8|\u76d1\u63a7|\u9884\u8b66|\u63d0\u9192)|(?:watch|monitor|track|alert|watchlist|price\s*alert|market\s*alert)/iu
+    .test(text || '');
+}
+
+function hasContinuousStockWatchEvidence(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => {
+    if (record.error) return false;
+    const name = String(record.name || '');
+    const result = String(record.result || '');
+    return /(?:alert|watchlist|reminder|autonomy_(?:register|set|list)_workflow|work_takeover_task_(?:create|advance|autorun|verify_result))/i.test(name)
+      || /(?:alert|watchlist|reminder|scheduled|monitoring|workflow|price\s*alert|market\s*alert|\u9884\u8b66|\u63d0\u9192|\u76ef\u76d8\u4efb\u52a1|\u76d1\u63a7\u4efb\u52a1)/iu.test(result);
+  });
+}
+
 function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: string): string {
   const zh = isChineseText(input.taskText) || isChineseText(input.responseText);
   const failure = summarizeToolFailure(input.toolRecords || []);
@@ -131,6 +146,26 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const actionContract = buildActionContract(`${input.taskText}\n${input.responseText}`);
   const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|completed|success|sent|opened|read|viewed|created|generated)/iu
     .test(input.responseText || '');
+  const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
+    .test(input.responseText || '');
+  const stockWatchText = `${input.taskText}\n${input.responseText}`;
+  if (
+    actionContract.kind === 'stock_monitor' &&
+    (claimsActionDone || claimsStockWatchStarted) &&
+    hasContinuousStockWatchIntent(stockWatchText) &&
+    !hasContinuousStockWatchEvidence(input.toolRecords || [])
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing continuous stock watch evidence.'),
+      blocked: true,
+      reason: 'Missing continuous stock watch evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing continuous stock watch evidence.',
+      },
+    };
+  }
   if (shouldEnforceCoreActionContract(actionContract, `${input.taskText}\n${input.responseText}`) && claimsActionDone && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
     return {
       text: formatCompactBlockedResponse(input, `Missing core evidence for ${actionContract.kind}.`),

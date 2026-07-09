@@ -4,9 +4,41 @@ import {
   buildPortfolioSnapshot,
   buildTradingPlan,
   createPortfolio,
+  parseSinaQuoteText,
+  parseTencentQuoteText,
+  stockExchangeSymbol,
 } from '../server/skills/bundled/stockbot/logic';
 
 describe('stockbot trading helpers', () => {
+  it('parses Tencent and Sina quote fallback payloads', () => {
+    const tencent = parseTencentQuoteText(
+      'v_sh600519="1~\u8d35\u5dde\u8305\u53f0~600519~1182.19~1199.30~1191.00~34096~15394~18706~1182.19~2~1182.18~1~1182.17~7~1182.16~14~1182.15~113~1182.20~33~1182.26~5~1182.35~1~1182.36~1~1182.42~1~~20260709161445~-17.11~-1.43~1191.99~1178.00~1182.19/34096/4035216946~34096~403522~0.27~17.87";',
+      '600519',
+    );
+    const sina = parseSinaQuoteText(
+      'var hq_str_sh600519="\u8d35\u5dde\u8305\u53f0,1191.000,1199.300,1182.190,1191.990,1178.000,1182.190,1182.200,3409634,4035216946.000,173,1182.190,100,1182.180,700,1182.170,1400,1182.160,11300,1182.150,3300,1182.200,500,1182.260,100,1182.350,100,1182.360,100,1182.420,2026-07-09,15:34:59,00,D|400|472876.00";',
+      'sh600519',
+    );
+
+    expect(stockExchangeSymbol('600519')).toBe('sh600519');
+    expect(stockExchangeSymbol('000001')).toBe('sz000001');
+    expect(tencent).toMatchObject({
+      code: '600519',
+      name: '\u8d35\u5dde\u8305\u53f0',
+      price: 1182.19,
+      changePercent: -1.43,
+      dataSource: 'tencent',
+    });
+    expect(sina).toMatchObject({
+      code: '600519',
+      name: '\u8d35\u5dde\u8305\u53f0',
+      price: 1182.19,
+      high: 1191.99,
+      low: 1178,
+      dataSource: 'sina',
+    });
+  });
+
   it('builds a risk-managed trading plan with A-share lot sizing', () => {
     const plan = buildTradingPlan(
       {

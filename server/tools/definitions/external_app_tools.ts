@@ -34,20 +34,40 @@ function buildMessageDraft(args: Record<string, any>): string {
   const explicitDraft = String(args.draft || '').trim();
   if (explicitDraft) return explicitDraft;
 
-  const contact = String(args.contact || '').trim();
   const context = String(args.context || '').trim();
-  const intent = String(args.intent || 'reply clearly and helpfully').trim();
+  const intent = String(args.intent || '').trim();
   const tone = String(args.tone || 'warm and concise').trim();
+  const source = `${intent}\n${context}`;
+  const formal = /formal|\u6b63\u5f0f|\u5ba2\u6c14|\u793c\u8c8c/i.test(tone);
+  const concise = /concise|\u7b80\u77ed|\u7b80\u6d01/i.test(tone);
 
-  const lines = [
-    contact ? `${contact}，` : '',
-    `我看到了，我这边会按“${intent}”来处理。`,
-  ];
-  if (context) {
-    lines.push(`关于你提到的“${context.slice(0, 160)}”，我会先确认关键点，再推进下一步。`);
+  if (/(?:\u665a\u5b89|\u65e9\u70b9\u4f11\u606f|\bgood\s*night\b)/i.test(source)) {
+    return formal
+      ? '\u665a\u5b89\uff0c\u795d\u60a8\u4eca\u665a\u597d\u597d\u4f11\u606f\u3002'
+      : '\u665a\u5b89\uff0c\u65e9\u70b9\u4f11\u606f\u3002';
   }
-  lines.push(tone.includes('formal') ? '如有变动我会及时同步。' : '有变化我马上同步你。');
-  return lines.filter(Boolean).join('\n');
+
+  if (/(?:\u8c22\u8c22|\u611f\u8c22|\bthanks?\b)/i.test(source)) {
+    return formal
+      ? '\u6536\u5230\uff0c\u8c22\u8c22\u60a8\uff0c\u6211\u4f1a\u5c3d\u5feb\u5904\u7406\u5e76\u540c\u6b65\u8fdb\u5c55\u3002'
+      : '\u6536\u5230\uff0c\u8c22\u8c22\uff0c\u6211\u5148\u5904\u7406\uff0c\u6709\u8fdb\u5c55\u9a6c\u4e0a\u540c\u6b65\u3002';
+  }
+
+  const topic = (context || intent)
+    .replace(/\s+/g, ' ')
+    .replace(/(?:\u5f53\u524d\u662f\u538b\u6d4b|\u4e0d\u8981\u5b9e\u9645\u53d1\u9001)[^。.!?\n]*/gu, '')
+    .trim()
+    .slice(0, concise ? 80 : 140);
+
+  if (topic) {
+    return formal
+      ? `\u60a8\u597d\uff0c\u5173\u4e8e\u201c${topic}\u201d\uff0c\u6211\u5df2\u6536\u5230\uff0c\u4f1a\u5c3d\u5feb\u5904\u7406\u5e76\u540c\u6b65\u8fdb\u5c55\u3002`
+      : `\u6536\u5230\uff0c\u5173\u4e8e\u201c${topic}\u201d\uff0c\u6211\u5148\u5904\u7406\uff0c\u6709\u8fdb\u5c55\u9a6c\u4e0a\u540c\u6b65\u3002`;
+  }
+
+  return formal
+    ? '\u60a8\u597d\uff0c\u6211\u5df2\u6536\u5230\uff0c\u4f1a\u5c3d\u5feb\u5904\u7406\u5e76\u540c\u6b65\u8fdb\u5c55\u3002'
+    : '\u6536\u5230\uff0c\u6211\u5148\u5904\u7406\uff0c\u6709\u8fdb\u5c55\u9a6c\u4e0a\u540c\u6b65\u3002';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -94,11 +114,35 @@ function compactEvidenceText(value: string, limit = 2400): string {
   return `${text.slice(0, Math.floor(limit * 0.7))}\n...\n${text.slice(-Math.floor(limit * 0.25))}`;
 }
 
+function hasReadableUiEvidence(snapshotText: string): boolean {
+  if (!snapshotText || /^UI snapshot unavailable/i.test(snapshotText)) return false;
+  const withoutUiBoilerplate = snapshotText.replace(
+    /\b(?:window|text|edit|button|pane|group|document|control|name|role|automationid|classname|bounds)\b/gi,
+    ' ',
+  );
+  const readableChars = withoutUiBoilerplate.match(/[\u4e00-\u9fffA-Za-z0-9]/gu) || [];
+  return readableChars.length >= 12;
+}
+
+function firstFiniteNumber(...values: any[]): number | null {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 function virtualInputPoint(activeWindow: Record<string, any>): { x: number; y: number } {
-  const x = Number(activeWindow.x || 0);
-  const y = Number(activeWindow.y || 0);
-  const width = Math.max(320, Number(activeWindow.width || 0));
-  const height = Math.max(320, Number(activeWindow.height || 0));
+  const bounds = activeWindow.bounds || activeWindow.rect || activeWindow.windowBounds || {};
+  const x = firstFiniteNumber(activeWindow.x, activeWindow.left, bounds.x, bounds.left, 0) ?? 0;
+  const y = firstFiniteNumber(activeWindow.y, activeWindow.top, bounds.y, bounds.top, 0) ?? 0;
+  const right = firstFiniteNumber(activeWindow.right, bounds.right);
+  const bottom = firstFiniteNumber(activeWindow.bottom, bounds.bottom);
+  const width = Math.max(320, firstFiniteNumber(activeWindow.width, bounds.width, right !== null ? right - x : null, 0) ?? 0);
+  const height = Math.max(320, firstFiniteNumber(activeWindow.height, bounds.height, bottom !== null ? bottom - y : null, 0) ?? 0);
+  if (x < -10000 || y < -10000) {
+    throw new Error('WeChat window is still minimized or offscreen after opening; cannot safely click the input area.');
+  }
   return {
     x: Math.round(x + width * 0.58),
     y: Math.round(y + height - Math.min(96, Math.max(72, height * 0.14))),
@@ -1432,7 +1476,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       }
 
       const snapshotText = compactEvidenceText(uiSnapshot, 1800);
-      const hasUsefulSnapshot = /[\u4e00-\u9fffA-Za-z0-9]{12,}/u.test(snapshotText) && !/^UI snapshot unavailable/i.test(snapshotText);
+      const hasUsefulSnapshot = hasReadableUiEvidence(snapshotText);
       const read = Boolean(contentSummary.trim()) || hasUsefulSnapshot;
 
       return JSON.stringify({

@@ -1,7 +1,7 @@
 {
   "name": "lumi-skill-stockbot",
-  "version": "1.1.1",
-  "description": "Chinese A-stock market assistant — quotes, watchlists, intraday alerts, K-lines, indices, sectors, news, risk-managed trade planning, and paper trading. Data sourced from public exchanges via East Money.",
+  "version": "1.1.2",
+  "description": "Chinese A-stock market assistant — quotes, watchlists, intraday alerts, K-lines, indices, sectors, news, risk-managed trade planning, and paper trading. Data sourced from public market endpoints with fallback quote providers.",
   "type": "module",
   "main": "index.ts",
   "scripts": { "start": "npx tsx index.ts" },

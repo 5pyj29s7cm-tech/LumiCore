@@ -9,6 +9,9 @@ import {
   buildPortfolioSnapshot,
   buildTradingPlan,
   createPortfolio,
+  parseSinaQuoteText,
+  parseTencentQuoteText,
+  stockExchangeSymbol,
 } from './logic';
 import type { KlineBar, PaperPortfolio, QuoteLike } from './logic';
 
@@ -30,7 +33,13 @@ async function fetchJSON(url: string): Promise<any> {
   return res.json();
 }
 
-async function fetchQuoteData(raw: string): Promise<QuoteLike & Record<string, any>> {
+async function fetchGbkText(url: string, referer: string): Promise<string> {
+  const res = await fetch(url, { headers: { 'User-Agent': UA, Referer: referer } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return new TextDecoder('gbk').decode(await res.arrayBuffer());
+}
+
+async function fetchEastMoneyQuoteData(raw: string): Promise<QuoteLike & Record<string, any>> {
   const secid = raw.includes('.') ? raw : marketCode(raw);
   const fields = 'f43,f44,f45,f46,f47,f48,f50,f51,f52,f57,f58,f60,f116,f117,f162,f167,f169,f170,f171';
   const data = await fetchJSON(
@@ -58,7 +67,42 @@ async function fetchQuoteData(raw: string): Promise<QuoteLike & Record<string, a
     floatCap: d.f117,
     turnoverRate: d.f162 != null ? d.f162 / 100 : null,
     volumeRatio: d.f50 != null ? d.f50 / 100 : null,
+    dataSource: 'eastmoney',
   };
+}
+
+async function fetchTencentQuoteData(raw: string): Promise<QuoteLike & Record<string, any>> {
+  const symbol = stockExchangeSymbol(raw);
+  const text = await fetchGbkText(`https://qt.gtimg.cn/q=${symbol}`, 'https://gu.qq.com/');
+  return parseTencentQuoteText(text, raw);
+}
+
+async function fetchSinaQuoteData(raw: string): Promise<QuoteLike & Record<string, any>> {
+  const symbol = stockExchangeSymbol(raw);
+  const text = await fetchGbkText(`https://hq.sinajs.cn/list=${symbol}`, 'https://finance.sina.com.cn/');
+  return parseSinaQuoteText(text, raw);
+}
+
+async function fetchQuoteData(raw: string): Promise<QuoteLike & Record<string, any>> {
+  const errors: string[] = [];
+  try {
+    return await fetchEastMoneyQuoteData(raw);
+  } catch (e: any) {
+    errors.push(`eastmoney: ${e.message}`);
+  }
+  try {
+    const quote = await fetchTencentQuoteData(raw);
+    return { ...quote, fallbackFrom: 'eastmoney', fallbackErrors: errors };
+  } catch (e: any) {
+    errors.push(`tencent: ${e.message}`);
+  }
+  try {
+    const quote = await fetchSinaQuoteData(raw);
+    return { ...quote, fallbackFrom: 'eastmoney,tencent', fallbackErrors: errors };
+  } catch (e: any) {
+    errors.push(`sina: ${e.message}`);
+  }
+  throw new Error(errors.join('; '));
 }
 
 async function fetchKlineData(raw: string, period = 'daily', limit = 30) {
@@ -357,7 +401,7 @@ function err(message: string) {
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
-const server = new McpServer({ name: 'stockbot', version: '1.1.1' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'stockbot', version: '1.1.2' }, { capabilities: { tools: {} } });
 
 server.registerTool('stock_search', {
   description: 'Search A-stock by name or code. Returns matching stocks with code, name, and market.',

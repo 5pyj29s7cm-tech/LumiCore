@@ -93,6 +93,72 @@ function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function stockCodeFromRaw(raw: string): string {
+  const digits = String(raw || '').replace(/\D/g, '');
+  return digits.slice(-6);
+}
+
+function numericField(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function stockExchangeSymbol(raw: string): string {
+  const code = stockCodeFromRaw(raw);
+  if (!code) throw new Error('stock code is required');
+  return `${/^6/.test(code) ? 'sh' : 'sz'}${code}`;
+}
+
+export function parseTencentQuoteText(text: string, raw = ''): QuoteLike & Record<string, any> {
+  const match = String(text || '').match(/="([^"]*)"/);
+  if (!match) throw new Error('Tencent quote response was not recognized');
+  const parts = match[1].split('~');
+  const code = parts[2] || stockCodeFromRaw(raw);
+  const price = numericField(parts[3]);
+  if (!code || price === null) throw new Error('Tencent quote response did not include code and price');
+  return {
+    code,
+    name: parts[1] || code,
+    price,
+    open: numericField(parts[5]),
+    high: numericField(parts[33]),
+    low: numericField(parts[34]),
+    volume: numericField(parts[6]),
+    turnover: numericField(parts[37]),
+    changeAmount: numericField(parts[31]),
+    changePercent: numericField(parts[32]),
+    dataSource: 'tencent',
+    quoteTime: parts[30] || undefined,
+  };
+}
+
+export function parseSinaQuoteText(text: string, raw = ''): QuoteLike & Record<string, any> {
+  const match = String(text || '').match(/="([^"]*)"/);
+  if (!match) throw new Error('Sina quote response was not recognized');
+  const parts = match[1].split(',');
+  const code = stockCodeFromRaw(raw);
+  const price = numericField(parts[3]);
+  const previousClose = numericField(parts[2]);
+  if (!code || !parts[0] || price === null) throw new Error('Sina quote response did not include name, code, and price');
+  const changeAmount = previousClose === null ? null : roundMoney(price - previousClose);
+  return {
+    code,
+    name: parts[0],
+    price,
+    open: numericField(parts[1]),
+    high: numericField(parts[4]),
+    low: numericField(parts[5]),
+    volume: numericField(parts[8]),
+    turnover: numericField(parts[9]),
+    changeAmount,
+    changePercent: previousClose && previousClose > 0 ? roundMoney((price - previousClose) / previousClose * 100) : null,
+    dataSource: 'sina',
+    quoteDate: parts[30] || undefined,
+    quoteTime: parts[31] || undefined,
+  };
+}
+
 function toRiskRate(value: unknown, fallback: number): number {
   if (value === undefined || value === null || value === '') return fallback;
   const text = String(value).trim();

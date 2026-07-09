@@ -175,8 +175,21 @@ export function buildActionContract(input: string): LumiActionContract {
       coreAction: '\u83b7\u53d6\u5b9e\u65f6\u6216\u8fd1\u671f\u884c\u60c5\uff0c\u8bbe\u5b9a\u76ef\u76d8\u76ee\u6807\u548c\u63d0\u9192\u8fb9\u754c',
       preparationIsNotCompletion: ['\u8bc6\u522b\u80a1\u7968\u540d\u79f0', '\u751f\u6210\u89c2\u5bdf\u6e05\u5355', '\u53ea\u56de\u7b54\u5e38\u8bc6'],
       requiredEvidence: ['fresh quote/kline/market data timestamp', '\u6216\u5df2\u521b\u5efa\u7684\u76ef\u76d8\u4efb\u52a1/\u63d0\u9192\u8bb0\u5f55'],
-      preferredTools: ['stock_quote', 'stock_kline', 'market_index', 'stock_news', 'reminder_create'],
-      verificationTools: ['stock_quote', 'stock_kline', 'market_index', 'reminder_list'],
+      preferredTools: [
+        'mcp_stockbot_stock_quote',
+        'mcp_stockbot_stock_kline',
+        'mcp_stockbot_market_index',
+        'mcp_stockbot_stock_news',
+        'mcp_stockbot_paper_portfolio',
+        'autonomy_register_workflow',
+      ],
+      verificationTools: [
+        'mcp_stockbot_stock_quote',
+        'mcp_stockbot_stock_kline',
+        'mcp_stockbot_market_index',
+        'mcp_stockbot_paper_portfolio',
+        'autonomy_list_workflows',
+      ],
       nextStep: '\u5148\u786e\u8ba4\u6807\u7684\u3001\u5468\u671f\u548c\u89e6\u53d1\u6761\u4ef6\uff0c\u518d\u8bfb\u53d6\u5e26\u65f6\u95f4\u6233\u7684\u884c\u60c5\u6216\u521b\u5efa\u76ef\u76d8\u4efb\u52a1\u3002',
       caution: '\u4e0d\u80fd\u628a\u4e00\u6b21\u6027\u884c\u60c5\u56de\u7b54\u8bf4\u6210\u6b63\u5728\u6301\u7eed\u76ef\u76d8\u3002',
     });
@@ -249,7 +262,10 @@ export function hasCoreActionEvidence(contract: LumiActionContract, records: Too
     return successful.some(record => /cad_|desktop_path_info|work_product_verify/i.test(record.name));
   }
   if (contract.kind === 'stock_monitor') {
-    return successful.some(record => /stock_|market_index|reminder_/i.test(record.name));
+    return successful.some(record =>
+      /stock_|market_index|reminder_|alert|watchlist|autonomy_(?:register|list|set)_workflow|work_takeover_task/i.test(record.name) ||
+      /(?:alert|watchlist|reminder|scheduled|monitoring|workflow|price\s*alert|market\s*alert|\u9884\u8b66|\u63d0\u9192|\u76ef\u76d8\u4efb\u52a1|\u76d1\u63a7\u4efb\u52a1)/iu.test(String(record.result || ''))
+    );
   }
   if (contract.kind === 'legal_document') {
     return successful.some(record => /legal_|read_|create_docx|write_file|desktop_path_info|work_product_verify/i.test(record.name));

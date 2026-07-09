@@ -117,4 +117,100 @@ describe('external app permission boundaries', () => {
       desktopRelay: async () => 'opened',
     } as any)).rejects.toThrow(/Autonomous work is disabled in reactive mode/);
   });
+
+  it('prepares direct human message drafts instead of process notes', async () => {
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
+    const registry = new ToolRegistry();
+    registerExternalAppTools(registry);
+
+    const raw = await registry.execute('wechat_prepare_reply', {
+      contact: '\u963f\u9646',
+      context: '\u7528\u6237\u60f3\u53d1\u4e00\u6761\u7b80\u77ed\u7684\u665a\u5b89\u6d88\u606f\u3002',
+      intent: '\u8868\u8fbe\u665a\u5b89\u548c\u5173\u5fc3',
+      tone: '\u6e29\u6696\u3001\u7b80\u77ed',
+    });
+
+    const result = JSON.parse(raw);
+    expect(result.sendAllowed).toBe(false);
+    expect(result.draft).toContain('\u665a\u5b89');
+    expect(result.draft).not.toContain('\u6309\u201c');
+    expect(result.draft).not.toContain('\u5173\u952e\u70b9');
+  });
+
+  it('treats sparse foreground WeChat UI text as readable chat evidence', async () => {
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
+    const registry = new ToolRegistry();
+    registerExternalAppTools(registry);
+    const relayCalls: string[] = [];
+
+    const raw = await registry.execute('wechat_read_recent_chat', {
+      contact: '\u963f\u9646',
+      maxMessages: 6,
+    }, {
+      desktopRelay: async (name, args) => {
+        relayCalls.push(name);
+        if (name === 'desktop_open') return JSON.stringify({ ok: true, target: args.target, reusedRunningWindow: true });
+        if (name === 'desktop_active_window') {
+          return JSON.stringify({
+            title: '\u5fae\u4fe1',
+            processName: 'Weixin.exe',
+            bounds: { x: 120, y: 80, width: 1100, height: 780 },
+          });
+        }
+        if (name === 'desktop_ui_snapshot') {
+          return [
+            'Window: \u5fae\u4fe1',
+            '[1] Text: \u963f\u9646',
+            '[2] Text: \u597d\u7684',
+            '[3] Text: \u665a\u4e0a\u89c1',
+            '[4] Edit: \u8f93\u5165\u6d88\u606f',
+          ].join('\n');
+        }
+        if (name === 'desktop_capture_screen') return 'data:image/png;base64,iVBORw0KGgo=';
+        return JSON.stringify({ ok: true });
+      },
+    } as any);
+
+    const result = JSON.parse(raw);
+    expect(result.read).toBe(true);
+    expect(result.method).toBe('foreground_wechat_search_ui_snapshot');
+    expect(relayCalls).toContain('desktop_ui_snapshot');
+    expect(relayCalls).not.toContain('wechat_send_message');
+  });
+
+  it('uses nested desktop window bounds for the WeChat virtual cursor point', async () => {
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
+    const registry = new ToolRegistry();
+    registerExternalAppTools(registry);
+    const relayCalls: Array<{ name: string; args: Record<string, any> }> = [];
+
+    const raw = await registry.execute('wechat_send_message', {
+      message: '\u665a\u5b89',
+      useSearch: false,
+      useVirtualCursor: true,
+    }, {
+      requestConfirmation: async () => true,
+      desktopRelay: async (name, args) => {
+        relayCalls.push({ name, args });
+        if (name === 'desktop_open') return JSON.stringify({ ok: true, target: args.target, reusedRunningWindow: true });
+        if (name === 'desktop_active_window') {
+          return JSON.stringify({
+            title: '\u5fae\u4fe1',
+            processName: 'Weixin.exe',
+            bounds: { x: 120, y: 80, width: 1100, height: 780 },
+          });
+        }
+        return JSON.stringify({ ok: true });
+      },
+    } as any);
+
+    const result = JSON.parse(raw);
+    expect(result.method).toBe('virtual_cursor_clipboard_paste_send');
+    expect(result.inputPoint).toEqual({ x: 758, y: 764 });
+    expect(relayCalls.some(call => call.name === 'desktop_mouse_click_at')).toBe(true);
+    expect(relayCalls.find(call => call.name === 'desktop_cursor_glow_update')?.args).toEqual({ x: 758, y: 764 });
+  });
 });
