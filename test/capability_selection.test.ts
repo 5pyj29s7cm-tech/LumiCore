@@ -12,6 +12,7 @@ const declarations = [
   'desktop_running_processes',
   'desktop_idle_time',
   'desktop_poll_activity',
+  'desktop_list_files',
   'desktop_list_apps',
   'desktop_open',
   'desktop_path_info',
@@ -64,6 +65,7 @@ const declarations = [
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
   'cad_run_autocad_draw_script',
+  'mcp_cad-drafting_cad_renovation_folder_workflow',
   'ocr_screen',
   'wechat_read_recent_chat',
   'wechat_send_message',
@@ -207,6 +209,31 @@ describe('Lumi capability selection', () => {
 
     expect(selection.lane).toBe('design_cad');
     expect(selection.preferredTools).toContain('cad_generate_dxf');
+  });
+
+  it('keeps local AutoCAD folder work on reusable CAD routing instead of the delivery demo', async () => {
+    const { dispatch, selection, execution } = await selectCapability({
+      userId: 'capability_selection_cad_folder_user',
+      text: '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u8bf7\u5148\u8bfb\u53d6\u5e76\u6574\u7406\u91cc\u9762\u7684\u6587\u4ef6\u5185\u5bb9\uff0c\u7136\u540e\u6839\u636e\u91cc\u9762\u7684\u4fe1\u606f\u751f\u6210 CAD \u56fe\u7eb8\u65b9\u6848\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765',
+      operationMode: 'assistant',
+    });
+
+    expect(dispatch.boundary).toBe('tool_action');
+    expect(dispatch.flow.specialWorkflow).toBeNull();
+    expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(true);
+    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
+    expect(selection.lane).toBe('design_cad');
+    expect(selection.preferredTools.slice(0, 8)).toEqual(expect.arrayContaining([
+      'desktop_path_info',
+      'desktop_list_files',
+      'floorplan_extract_geometry',
+      'cad_generate_dxf',
+      'cad_generate_autocad_draw_script',
+      'cad_run_autocad_draw_script',
+    ]));
+    expect(execution.toolRoute?.toolNames.indexOf('desktop_list_files')).toBeLessThan(
+      execution.toolRoute?.toolNames.indexOf('cad_generate_dxf') ?? Number.MAX_SAFE_INTEGER,
+    );
   });
 
   it('selects artifact work for reports and local files', async () => {

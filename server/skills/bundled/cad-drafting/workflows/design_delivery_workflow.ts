@@ -403,9 +403,26 @@ function normalizeIntentText(text: string): string {
   return text.replace(/\s+/g, '');
 }
 
+function isLocalSourceCadExecutionRequest(text: string): boolean {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  const hasLocalSource =
+    /\b(?:desktop|local|folder|directory|path|files?)\b/i.test(raw)
+    || /(?:\u684c\u9762|\u672c\u5730|\u6587\u4ef6\u5939|\u76ee\u5f55|\u8def\u5f84|\u91cc\u9762|\u5185\u5bb9|\u8d44\u6599)/u.test(raw);
+  const hasSourceReading =
+    /\b(?:read|scan|inspect|according\s+to|based\s+on|from)\b/i.test(raw)
+    || /(?:\u8bfb\u53d6|\u8bfb|\u626b\u63cf|\u67e5\u770b|\u6574\u7406|\u6309\u7167|\u6839\u636e|\u4f9d\u636e|\u91cc\u9762\u7684|\u5185\u5bb9)/u.test(raw);
+  const hasCadExecution =
+    /\b(?:cad|dxf|dwg|autocad|draw|draft|floor\s*plan)\b/i.test(raw)
+    || /(?:\u56fe\u7eb8|\u753b\u56fe|\u753b\u51fa\u6765|\u7ed8\u5236|\u5b9e\u64cd|\u5b9e\u9645\u753b|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe)/u.test(raw);
+
+  return hasLocalSource && hasSourceReading && hasCadExecution;
+}
+
 export function isDesignDeliveryRequest(text: string): boolean {
   const normalized = normalizeIntentText(text || '');
   if (!normalized) return false;
+  if (isLocalSourceCadExecutionRequest(text)) return false;
   return DESIGN_DELIVERY_PATTERNS.some(pattern => pattern.test(normalized));
 }
 

@@ -298,6 +298,7 @@ const LOCAL_READABLE_EXT_RE = /\.(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?|mp3|mpe
 const LOCAL_READABLE_EXT_PATTERN = '(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?|mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm|png|jpe?g|webp|bmp|gif|tiff?)';
 const EXPLICIT_LOCAL_PATH_RE = new RegExp(`[A-Za-z]:[\\\\/][^\\n\\r"'<>|]+?\\.${LOCAL_READABLE_EXT_PATTERN}`, 'gi');
 const DESKTOP_RELATIVE_PATH_RE = new RegExp(`(?:Desktop|\\u684c\\u9762)[\\\\/][^\\n\\r"'<>|]+?\\.${LOCAL_READABLE_EXT_PATTERN}`, 'gi');
+const DESKTOP_RELATIVE_FOLDER_RE = /(?:Desktop|\u684c\u9762)[\\/][^\n\r"'<>|.,;\]\u3002\uff0c\uff1b]+/gi;
 const LOCAL_ACTION_VERB_RE =
   /\b(?:open|read|review|inspect|analy[sz]e|summari[sz]e|compare|transcribe|extract|ocr|check|look\s+at|look\s+over)\b|(?:\u6253\u5f00|\u8bfb\u53d6|\u8bfb\u4e00\u4e0b|\u8bfb\u4e0b|\u770b\u4e00\u4e0b|\u770b\u770b|\u67e5\u770b|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u68c0\u67e5|\u6574\u7406|\u603b\u7ed3|\u8f6c\u6587\u5b57|\u8f6c\u5199|\u8bc6\u522b|\u63d0\u53d6|\u5bf9\u6bd4|\u505a\u6210|\u751f\u6210)/iu;
 const LOCAL_ACTION_OBJECT_RE =
@@ -308,6 +309,8 @@ const DOCUMENT_REVIEW_REQUEST_RE =
   /\b(?:contract|agreement|review|inspect|analy[sz]e|document|docx|pdf)\b|(?:\u5408\u540c|\u534f\u8bae|\u5ba1\u67e5|\u5ba1\u9605|\u4e59\u65b9|\u7532\u65b9|\u4fee\u6539\u610f\u89c1|\u6587\u4ef6|\u6587\u6863|\u8d44\u6599)/iu;
 const OCR_REQUEST_RE =
   /\b(?:ocr|image|picture|screenshot|photo)\b|(?:\u8bc6\u522b|\u63d0\u53d6|\u622a\u56fe|\u56fe\u7247|\u7167\u7247)/iu;
+const LOCAL_CAD_IMAGE_REQUEST_RE =
+  /\b(?:cad|dxf|dwg|autocad|floor\s*plan|blueprint|draft|drawing|renovation)\b|(?:\u56fe\u7eb8|\u6237\u578b|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u8bbe\u8ba1\u56fe|\u8349\u7a3f\u56fe|\u753b\u56fe|\u753b\u51fa\u6765|\u7ed8\u5236|\u88c5\u4fee|\u5b9e\u64cd|\u5b9e\u9645\u753b)/iu;
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
@@ -408,6 +411,35 @@ function shouldRunVisibleActionPreflight(userText: string, attachments: ChatInco
   return LOCAL_ACTION_VERB_RE.test(text) && LOCAL_ACTION_OBJECT_RE.test(text) && (mentionsFileLocation || namesSpecificFile);
 }
 
+function cleanLocalPathSegment(input: string): string {
+  return String(input || '')
+    .trim()
+    .replace(/^[\s"'`“”‘’「」『』《》]+|[\s"'`“”‘’「」『』《》]+$/g, '')
+    .replace(/^(?:\u6709(?:\u4e2a|\u4e00\u4e2a)?|\u53eb|\u540d\u4e3a|\u7684)\s*/u, '')
+    .replace(/[\s),.;\]\u3002\uff0c\uff1b\uff1a:!?]+$/g, '')
+    .trim();
+}
+
+function extractNamedDesktopFolders(input: string): string[] {
+  const text = String(input || '');
+  const homeDesktop = path.join(os.homedir(), 'Desktop');
+  const out: string[] = [];
+  const patterns = [
+    /(?:\u684c\u9762(?:\u4e0a|\u91cc|\u4e0b)?(?:\u6709(?:\u4e2a|\u4e00\u4e2a)?|\u7684|\u53eb|\u540d\u4e3a)?\s*)["'`“”‘’「」『』《》]([^"'`“”‘’「」『』《》\n\r]{1,80})["'`“”‘’「」『』《》]\s*(?:\u6587\u4ef6\u5939|\u76ee\u5f55)/giu,
+    /(?:\u684c\u9762(?:\u4e0a|\u91cc|\u4e0b)?(?:\u6709(?:\u4e2a|\u4e00\u4e2a)?|\u7684|\u53eb|\u540d\u4e3a)?\s*)([^\s"'`“”‘’「」『』《》,，。！？!?:：;；、\n\r]{1,80})\s*(?:\u6587\u4ef6\u5939|\u76ee\u5f55)/giu,
+    /\b(?:desktop\s+)?(?:folder|directory)\s+(?:named|called)?\s*["'`]?([^"'`,.;\n\r]{1,80})["'`]?/giu,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const name = cleanLocalPathSegment(match[1] || '');
+      if (!name || /^(?:desktop|folder|directory)$/i.test(name)) continue;
+      if (/^(?:\u684c\u9762|\u6587\u4ef6\u5939|\u76ee\u5f55|\u91cc\u9762|\u5185\u5bb9|\u8fd9\u4e2a|\u90a3\u4e2a)$/u.test(name)) continue;
+      out.push(path.join(homeDesktop, name));
+    }
+  }
+  return uniqueStrings(out).slice(0, 4);
+}
+
 function extractExplicitLocalPaths(input: string): string[] {
   const out: string[] = [];
   const text = String(input || '');
@@ -420,6 +452,13 @@ function extractExplicitLocalPaths(input: string): string[] {
     const relative = cleaned.replace(/^(?:Desktop|\u684c\u9762)[\\/]/i, '');
     out.push(path.join(homeDesktop, relative));
   }
+  for (const match of text.match(DESKTOP_RELATIVE_FOLDER_RE) || []) {
+    const cleaned = cleanLocalPathSegment(match);
+    if (!cleaned || LOCAL_READABLE_EXT_RE.test(cleaned)) continue;
+    const relative = cleaned.replace(/^(?:Desktop|\u684c\u9762)[\\/]/i, '');
+    if (relative && relative !== cleaned) out.push(path.join(homeDesktop, relative));
+  }
+  out.push(...extractNamedDesktopFolders(text));
   return uniqueStrings(out).slice(0, 6);
 }
 
@@ -491,6 +530,7 @@ function scoreLocalFileCandidate(entry: NativeFileEntry, searchText: string): nu
   if (TRANSCRIPTION_REQUEST_RE.test(query) && isAudio) score += 34;
   if (DOCUMENT_REVIEW_REQUEST_RE.test(query) && isDoc) score += 18;
   if (OCR_REQUEST_RE.test(query) && isImage) score += 20;
+  if (LOCAL_CAD_IMAGE_REQUEST_RE.test(query) && isImage) score += 30;
   if (/\b(?:contract|agreement)\b|(?:\u5408\u540c|\u534f\u8bae)/iu.test(query) && /\b(?:contract|agreement)\b|(?:\u5408\u540c|\u534f\u8bae)/iu.test(nameLower)) score += 30;
   if (/\b(?:transcript|recording|audio|voice)\b|(?:\u7b14\u5f55|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/iu.test(query) && /\b(?:recording|audio|voice)\b|(?:\u7b14\u5f55|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3)/iu.test(nameLower)) score += 24;
   if (baseComparable.length >= 4 && queryComparable.includes(baseComparable.slice(0, Math.min(18, baseComparable.length)))) score += 45;
@@ -529,6 +569,15 @@ function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncom
     };
   }
   if (kind === 'image' || LOCAL_IMAGE_EXT_RE.test(filePath)) {
+    if (LOCAL_CAD_IMAGE_REQUEST_RE.test(searchText)) {
+      return {
+        name: 'floorplan_extract_geometry',
+        arguments: {
+          imagePath: filePath,
+          projectName: path.basename(path.dirname(filePath)) || fileName,
+        },
+      };
+    }
     return {
       name: 'ocr_image_file',
       arguments: {
@@ -541,6 +590,11 @@ function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncom
     return { name: 'extract_document_text', arguments: { filePath } };
   }
   return { name: 'read_file', arguments: { path: filePath } };
+}
+
+function toolForLocalPath(localPath: string, searchText: string, kind?: ChatIncomingAttachment['kind']): { name: string; arguments: Record<string, any> } {
+  if (kind || LOCAL_READABLE_EXT_RE.test(localPath)) return toolForLocalFile(localPath, searchText, kind);
+  return { name: 'desktop_list_files', arguments: { path: localPath, limit: 120 } };
 }
 
 function shouldSkipPreflightForAttachment(item: ChatIncomingAttachment): boolean {
@@ -1640,8 +1694,16 @@ export function registerChatHandler(
 
         if (pathKinds.size > 0) {
           for (const [localPath, kind] of Array.from(pathKinds.entries()).slice(0, 4)) {
-            const toolCall = toolForLocalFile(localPath, preflightSearchText, kind);
-            await runPreflightTool(toolCall.name, toolCall.arguments);
+            const toolCall = toolForLocalPath(localPath, preflightSearchText, kind);
+            const record = await runPreflightTool(toolCall.name, toolCall.arguments);
+            if (toolCall.name === 'desktop_list_files' && !record.error) {
+              const entries = parseNativeFiles(record.result || '');
+              const candidate = selectBestLocalFileCandidate(entries, preflightSearchText);
+              if (candidate?.path) {
+                const candidateTool = toolForLocalFile(candidate.path, preflightSearchText);
+                await runPreflightTool(candidateTool.name, candidateTool.arguments);
+              }
+            }
           }
         } else {
           const discovered: NativeFileEntry[] = [];

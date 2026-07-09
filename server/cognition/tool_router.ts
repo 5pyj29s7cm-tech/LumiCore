@@ -488,6 +488,20 @@ function isMessagingRead(text: string): boolean {
   return /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu.test(text);
 }
 
+function isLocalCadSourceRequest(text: string): boolean {
+  const raw = String(text || '');
+  const hasLocalSource =
+    /\b(?:desktop|local|folder|directory|path|files?)\b/i.test(raw)
+    || /(?:\u684c\u9762|\u672c\u5730|\u6587\u4ef6\u5939|\u76ee\u5f55|\u8def\u5f84|\u91cc\u9762|\u5185\u5bb9|\u8d44\u6599)/u.test(raw);
+  const hasSourceReading =
+    /\b(?:read|scan|inspect|according\s+to|based\s+on|from)\b/i.test(raw)
+    || /(?:\u8bfb\u53d6|\u8bfb|\u626b\u63cf|\u67e5\u770b|\u6574\u7406|\u6309\u7167|\u6839\u636e|\u4f9d\u636e|\u91cc\u9762\u7684|\u5185\u5bb9)/u.test(raw);
+  const hasCadTarget =
+    /\b(?:cad|dxf|dwg|autocad|draw|draft|floor\s*plan)\b/i.test(raw)
+    || /(?:\u56fe\u7eb8|\u753b\u56fe|\u753b\u51fa\u6765|\u7ed8\u5236|\u5b9e\u64cd|\u5b9e\u9645\u753b|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe)/u.test(raw);
+  return hasLocalSource && hasSourceReading && hasCadTarget;
+}
+
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
   if (categories.includes('messaging')) {
@@ -566,14 +580,28 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     );
   }
   if (categories.includes('cad_design')) {
-    priorities.push(
-      'cad_generate_dxf',
-      'cad_generate_autocad_draw_script',
-      'cad_run_autocad_draw_script',
-      'mcp_cad-drafting_cad_space_program',
-      'mcp_cad-drafting_cad_renovation_folder_workflow',
-      'desktop_capture_screen',
-    );
+    if (isLocalCadSourceRequest(text)) {
+      priorities.push(
+        'desktop_path_info',
+        'desktop_list_files',
+        'floorplan_extract_geometry',
+        'ocr_image_file',
+        'mcp_cad-drafting_cad_renovation_folder_workflow',
+        'cad_generate_dxf',
+        'cad_generate_autocad_draw_script',
+        'cad_run_autocad_draw_script',
+        'desktop_capture_screen',
+      );
+    } else {
+      priorities.push(
+        'cad_generate_dxf',
+        'cad_generate_autocad_draw_script',
+        'cad_run_autocad_draw_script',
+        'mcp_cad-drafting_cad_space_program',
+        'mcp_cad-drafting_cad_renovation_folder_workflow',
+        'desktop_capture_screen',
+      );
+    }
   }
   if (categories.includes('legal')) {
     priorities.push(

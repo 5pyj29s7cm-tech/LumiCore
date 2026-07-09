@@ -38,6 +38,8 @@ const DECLARATIONS = [
   'web_login_run',
   'external_control_candidates',
   'external_control_configure_candidate',
+  'desktop_list_files',
+  'desktop_path_info',
   'desktop_list_apps',
   'desktop_open',
   'desktop_active_window',
@@ -99,6 +101,7 @@ const DECLARATIONS = [
   'mcp_stockbot_paper_portfolio',
   'mcp_cad-drafting_cad_space_program',
   'mcp_cad-drafting_cad_renovation_folder_workflow',
+  'floorplan_extract_geometry',
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
   'cad_run_autocad_draw_script',
@@ -440,6 +443,26 @@ describe('tool router', () => {
       'ocr_image_file',
     ]));
     expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
+  });
+
+  it('routes local desktop CAD folders through source discovery before drafting', () => {
+    const route = routeToolsForTurn(
+      '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u8bf7\u5148\u8bfb\u53d6\u5e76\u6574\u7406\u91cc\u9762\u7684\u6587\u4ef6\u5185\u5bb9\uff0c\u7136\u540e\u6839\u636e\u91cc\u9762\u7684\u4fe1\u606f\u751f\u6210 CAD \u56fe\u7eb8\u65b9\u6848\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('cad_design');
+    expect(route.toolNames.slice(0, 9)).toEqual(expect.arrayContaining([
+      'desktop_path_info',
+      'desktop_list_files',
+      'floorplan_extract_geometry',
+      'mcp_cad-drafting_cad_renovation_folder_workflow',
+      'cad_generate_dxf',
+      'cad_generate_autocad_draw_script',
+      'cad_run_autocad_draw_script',
+    ]));
+    expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
+    expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
   });
 
   it('routes skill questions to skill management tools', () => {

@@ -80,7 +80,16 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'external_app_list_adapters',
   ],
   artifact_work: ['work_product_plan', 'create_docx', 'create_ppt', 'create_pdf', 'write_file', 'work_product_verify'],
-  design_cad: ['floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'],
+  design_cad: [
+    'desktop_path_info',
+    'desktop_list_files',
+    'floorplan_extract_geometry',
+    'ocr_image_file',
+    'mcp_cad-drafting_cad_renovation_folder_workflow',
+    'cad_generate_dxf',
+    'cad_generate_autocad_draw_script',
+    'cad_run_autocad_draw_script',
+  ],
   desktop_control: [
     'desktop_active_window',
     'desktop_list_apps',
@@ -143,6 +152,11 @@ function fallbackPrimary(input: LumiCapabilitySelectionInput): string {
   if (input.dispatch.flow.workSurfaceRoute.directDesktop) return 'desktop/software control';
   if (input.dispatch.flow.workSurfaceRoute.artifactFirst) return 'artifact production';
   return input.dispatch.boundary;
+}
+
+function asksForRawDesktopOperation(text: string): boolean {
+  return /\b(?:mouse|keyboard|cursor|click|drag|type|uia|computer_use|coordinate|screen\s+control|desktop\s+control)\b/i.test(text)
+    || /(?:\u9f20\u6807|\u952e\u76d8|\u5149\u6807|\u70b9\u51fb|\u62d6\u62fd|\u8f93\u5165|\u5750\u6807|\u63a5\u7ba1\u684c\u9762|\u684c\u9762\u63a7\u5236|\u5c4f\u5e55\u63a7\u5236|\u539f\u751f\u63a7\u4ef6)/u.test(text);
 }
 
 function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySelection, 'lane' | 'primary' | 'reasons'> {
@@ -221,6 +235,14 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
       lane: 'messaging',
       primary: 'message handoff and reply drafting',
       reasons: [...reasons, 'message or account communication tools matched'],
+    };
+  }
+
+  if (routeHas(input, 'cad_design') && flow.workSurfaceRoute.directDesktop && !asksForRawDesktopOperation(text)) {
+    return {
+      lane: 'design_cad',
+      primary: 'design/CAD production with visible CAD-app execution',
+      reasons: [...reasons, 'CAD/design tools matched and the visible app is an execution target, not the whole plan'],
     };
   }
 
