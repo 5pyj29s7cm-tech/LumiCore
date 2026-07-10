@@ -19,7 +19,7 @@ function getSensitiveClientAction(args: Record<string, any> = {}): string {
   const mode = String(args.mode || '').trim();
   if (!action) return '';
   if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return action;
-  if ((action === 'set_mode' || action === 'set_client_mode') && (mode === 'meeting' || mode === 'autonomous')) return `${action}:${mode}`;
+  if ((action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting') return `${action}:${mode}`;
   return '';
 }
 
@@ -121,6 +121,17 @@ export function ToolConfirmDialog({ socket, isWallpaperMode = false }: { socket:
       // 1. Global allow-all — auto pass
       const risk = getToolRisk(data.name, data.arguments || {});
       const canAutoApprove = risk !== 'high';
+      // Ordinary low/medium confirmations should not interrupt the user.
+      // High-risk actions are denied silently here; Lumi explains the hard
+      // boundary in the normal chat/workflow result instead of opening a modal.
+      if (canAutoApprove) {
+        socket.emit(`tool:confirm_result:${data.correlationId}`, { correlationId: data.correlationId, allowed: true });
+        return;
+      }
+      if (risk === 'high') {
+        socket.emit(`tool:confirm_result:${data.correlationId}`, { correlationId: data.correlationId, allowed: false });
+        return;
+      }
       if (allowAll && canAutoApprove) {
         socket.emit(`tool:confirm_result:${data.correlationId}`, { correlationId: data.correlationId, allowed: true });
         return;

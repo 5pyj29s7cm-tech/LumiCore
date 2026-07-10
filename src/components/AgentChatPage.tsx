@@ -381,7 +381,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (operationMode === 'chat') {
       return {
         label: t.modeChat || ui('聊天', 'Chat'),
-        detail: t.modeChatHint || ui('安静交流', 'Quiet chat'),
+        detail: t.modeChatHint || ui('纯聊天', 'Conversation only'),
         badgeClass: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200',
         subtleClass: 'border-emerald-400/15 bg-emerald-400/10 text-emerald-100/75',
         dotClass: 'bg-emerald-300',
@@ -391,7 +391,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (operationMode === 'autonomous') {
       return {
         label: t.modeAutonomy || t.modeAutoExecute || ui('自主', 'Autonomy'),
-        detail: t.modeAutonomyHint || t.modeAutoExecuteHint || ui('自主推进', 'Visible autonomous work'),
+        detail: t.modeAutonomyHint || t.modeAutoExecuteHint || ui('24h 自主运行', '24h autonomous work'),
         badgeClass: 'border-cyan-300/30 bg-cyan-400/12 text-cyan-100',
         subtleClass: 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100/80',
         dotClass: 'bg-cyan-300 animate-pulse',
@@ -410,7 +410,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     }
     return {
       label: t.modeAssistant || ui('助理', 'Assistant'),
-      detail: t.modeAssistantHint || ui('引导执行', 'Guided execution'),
+      detail: t.modeAssistantHint || ui('现场全权限', 'Foreground full access'),
       badgeClass: 'border-celestial-saturn/30 bg-celestial-saturn/12 text-celestial-saturn',
       subtleClass: 'border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn/85',
       dotClass: 'bg-celestial-saturn',
@@ -1196,21 +1196,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
     const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; requestId?: string; source?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      setWorkflowStatus('waiting_confirmation');
-      pushChatProgress(
-        isZh ? '这一步需要你确认后我才能继续。' : 'This step needs your confirmation before I continue.',
-        'confirmation'
-      );
-      const argsSummary = data.arguments
-        ? Object.entries(data.arguments).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
-        : '';
-      setWorkflowSteps(prev => [...prev, {
-        id: `chat-confirm-${data.correlationId || Date.now()}`,
-        type: 'confirmation',
-        text: `${t.workflowWaitingConfirm || 'Waiting for approval'}: ${data.name}`,
-        detail: argsSummary || (t.workflowConfirmHint || 'Review the permission dialog to continue.'),
-        time: Date.now(),
-      }]);
+      currentRequestHadToolRef.current = true;
     };
 
     const onResponse = (data: { text: string; agentName: string; source?: string; requestId?: string }) => {
@@ -1610,6 +1596,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       domain: activeDomain,
       orgId: activeOrgId || null,
       source: 'chat',
+      operationMode,
       requestId,
     };
 

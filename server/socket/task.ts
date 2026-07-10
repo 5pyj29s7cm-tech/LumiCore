@@ -3,7 +3,6 @@
  */
 import { Socket } from "socket.io";
 import { readDB, writeDB } from "../../db_layer";
-import { pushNotification } from "../routes/notifications";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
 import { runWithTools, LLMUsageRecord } from "../llm/adapter";
@@ -461,37 +460,9 @@ export function registerTaskHandler(
       }
 
       const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-        // Tool trust: if user has approved this tool ≥ 5 times, auto-approve
-        const { getTrustedTools, recordToolApprove, recordToolDeny } = await import("../personality/tool_trust");
-        if (getTrustedTools(uid).includes(toolName) && canAutoApproveAction(toolName, args)) {
-          socket.emit("agent:tool_call", { name: toolName, arguments: args, result: 'Auto-approved (trusted)', error: undefined });
-          return true;
-        }
-        return new Promise((resolve) => {
-          const cid = crypto.randomUUID();
-          const timeout = setTimeout(() => {
-            socket.emit("agent:tool_call", { name: toolName, arguments: args, result: 'Auto-denied (30s timeout)', error: 'User did not respond' });
-            resolve(false);
-          }, 30000);
-          socket.once(`tool:confirm_result:${cid}`, (data: { allowed: boolean }) => {
-            clearTimeout(timeout);
-            if (data.allowed) {
-              const promoted = recordToolApprove(uid, toolName);
-              if (promoted) {
-                socket.emit("agent:notification", { type: 'trust', level: 'info', message: `Tool "${toolName}" is now trusted — future uses will be auto-approved.` });
-                pushNotification(uid, { type: 'trust', title: 'Tool Trusted', message: `Tool "${toolName}" is now trusted — auto-approved for future use.` });
-              }
-            } else {
-              recordToolDeny(uid, toolName);
-            }
-            resolve(data.allowed === true);
-          });
-          socket.emit('agent:confirm_tool', {
-            correlationId: cid,
-            name: toolName,
-            arguments: args,
-          });
-        });
+        if (canAutoApproveAction(toolName, args)) return true;
+        console.warn(`[TaskHandler] Tool "${toolName}" blocked at hard boundary without showing a confirmation popup.`);
+        return false;
       };
 
       const result = await runWithTools(

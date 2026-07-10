@@ -2788,7 +2788,7 @@ export function DesktopUI({
 
   const requestOperationModeChange = useCallback((nextMode: OperationMode) => {
     if (nextMode === operationMode) return;
-    if (nextMode === 'meeting' || nextMode === 'autonomous') {
+    if (nextMode === 'meeting') {
       setPendingOperationMode(nextMode);
       return;
     }
@@ -3131,18 +3131,7 @@ export function DesktopUI({
     };
 
     const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; source?: string }) => {
-      if (data.source !== 'chat') showWallpaperWorkPrompt();
-      setAgentStatus('waiting_confirmation');
-      const argsSummary = data.arguments
-        ? Object.entries(data.arguments).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
-        : '';
-      setWorkflowSteps(prev => [...prev, {
-        id: workflowStepId('confirm', data.correlationId),
-        type: 'confirmation',
-        text: `${t.workflowWaitingConfirm || 'Waiting for approval'}: ${data.name}`,
-        detail: argsSummary || (t.workflowConfirmHint || 'Review the permission dialog to continue.'),
-        time: Date.now(),
-      }]);
+      console.warn(`[DesktopUI] Tool confirmation event suppressed without popup: ${data.name}`);
     };
 
     const onResponse = (data: { text: string; agentName?: string; source?: string; requestId?: string }) => {
@@ -3825,7 +3814,7 @@ export function DesktopUI({
         }
         const allowed = ['chat', 'meeting', 'assistant', 'autonomous'];
         if (!allowed.includes(value)) throw new Error(`Unsupported mode: ${value}`);
-        if ((value === 'autonomous' || value === 'meeting') && !confirmed) {
+        if (value === 'meeting' && !confirmed) {
           throw new Error(`${value} mode requires explicit user confirmation`);
         }
         setOperationMode(value as OperationMode);
@@ -4298,24 +4287,24 @@ export function DesktopUI({
       id: 'chat' as const,
       label: t.modeChat || (lang === 'zh' ? '聊天' : 'Chat'),
       title: t.modeChatTitle || (lang === 'zh' ? '聊天模式' : 'Chat mode'),
-      description: t.modeChatDesc || (lang === 'zh' ? '默认安静交流；明确给出工作指令时，Lumi 会先说明行动方式再调用能力。' : 'Quiet conversation by default. With a clear work command, Lumi explains the route before acting.'),
-      hint: t.modeChatHint || (lang === 'zh' ? '安静交流' : 'Quiet chat'),
+      description: t.modeChatDesc || (lang === 'zh' ? '纯聊天，只回答、解释和讨论；不调用工具、不控制桌面、不打开外部软件。' : 'Pure conversation: answers and discussion only; no tools, desktop control, or external apps.'),
+      hint: t.modeChatHint || (lang === 'zh' ? '纯聊天' : 'Conversation only'),
       icon: <MessageSquare size={16} />,
     },
     {
       id: 'assistant' as const,
       label: t.modeAssistant || (lang === 'zh' ? '助手' : 'Assistant'),
       title: t.modeAssistantTitle || (lang === 'zh' ? '助手模式' : 'Assistant mode'),
-      description: t.modeAssistantDesc || (lang === 'zh' ? '按任务选择聊天、运行日志、文件工具或桌面操作；开始前先给行动指南。' : 'Chooses chat, run logs, file tools, or desktop control by task, with an action guide first.'),
-      hint: t.modeAssistantHint || (lang === 'zh' ? '引导执行' : 'Guided execution'),
+      description: t.modeAssistantDesc || (lang === 'zh' ? '人在场的全权限助理：可用工具、浏览器、文件、桌面和外部软件执行普通任务，少弹权限确认。' : 'User-present full-permission helper: tools, browser, files, desktop, and external apps with minimal permission prompts.'),
+      hint: t.modeAssistantHint || (lang === 'zh' ? '现场全权限' : 'Foreground full access'),
       icon: <Sparkles size={16} />,
     },
     {
       id: 'autonomous' as const,
       label: t.modeAutonomy || t.modeAutoExecute || (lang === 'zh' ? '自主' : 'Autonomy'),
       title: t.modeAutonomyTitle || t.modeAutoExecuteTitle || (lang === 'zh' ? '自主模式' : 'Autonomy mode'),
-      description: t.modeAutonomyDesc || t.modeAutoExecuteDesc || (lang === 'zh' ? '适合多步任务；Lumi 会先给行动指南，再用运行日志、桌面控制、命令、工具和团队推进，并展示进度。' : 'For multi-step work. Lumi gives an action guide, then uses run logs, desktop control, commands, tools, and teams with visible progress.'),
-      hint: t.modeAutonomyHint || t.modeAutoExecuteHint || (lang === 'zh' ? '自主推进' : 'Visible autonomous work'),
+      description: t.modeAutonomyDesc || t.modeAutoExecuteDesc || (lang === 'zh' ? '和助理模式同权限，但可以 24 小时自主运行、监控、整理吸收、学习和推进超长任务。' : 'Same permissions as Assistant, plus 24h autonomous running, monitoring, absorption, learning, and ultra-long task continuation.'),
+      hint: t.modeAutonomyHint || t.modeAutoExecuteHint || (lang === 'zh' ? '24h 自主运行' : '24h autonomous work'),
       icon: <Zap size={16} />,
     },
   ];
@@ -6086,7 +6075,7 @@ function ThemeWidget({
       label: t?.celestial || 'Celestial',
       mode: 'chat' as OperationMode,
       modeLabel: t?.modeChat || (lang === 'zh' ? '聊天' : 'Chat'),
-      accessLabel: lang === 'zh' ? '请求批准' : 'Request Approval',
+      accessLabel: lang === 'zh' ? '纯聊天' : 'Chat Only',
       icon: <Sparkles size={16} />,
       glow: 'from-celestial-saturn/35 to-cyan-300/20',
       orb: 'from-celestial-saturn to-cyan-200',
@@ -6097,7 +6086,7 @@ function ThemeWidget({
       label: t?.nebula || 'Nebula',
       mode: 'assistant' as OperationMode,
       modeLabel: t?.modeAssistant || (lang === 'zh' ? '助手' : 'Assistant'),
-      accessLabel: lang === 'zh' ? '替我审批' : 'Approve For Me',
+      accessLabel: lang === 'zh' ? '现场全权限' : 'Foreground Full Access',
       icon: <Moon size={16} />,
       glow: 'from-indigo-500/35 to-fuchsia-400/20',
       orb: 'from-indigo-500 to-fuchsia-400',
@@ -6108,7 +6097,7 @@ function ThemeWidget({
       label: t?.cyber || 'Cyber',
       mode: 'autonomous' as OperationMode,
       modeLabel: t?.modeAutonomy || t?.modeAutoExecute || (lang === 'zh' ? '自主' : 'Autonomy'),
-      accessLabel: lang === 'zh' ? '完全访问' : 'Full Access',
+      accessLabel: lang === 'zh' ? '24h 自主运行' : '24h Autonomous',
       icon: <Zap size={16} />,
       glow: 'from-emerald-400/30 to-teal-300/20',
       orb: 'from-emerald-400 to-teal-300',

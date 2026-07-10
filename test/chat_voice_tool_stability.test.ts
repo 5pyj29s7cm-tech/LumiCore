@@ -33,6 +33,20 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('onProgress');
   });
 
+  it('keeps ordinary tool confirmations silent across chat, voice, and task entry points', () => {
+    const root = process.cwd();
+    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+
+    for (const source of [chat, voice, task]) {
+      expect(source).toContain('canAutoApproveAction(toolName, args)) return true');
+      expect(source).toContain('blocked at hard boundary without showing a confirmation popup');
+      expect(source).not.toContain("socket.emit('agent:confirm_tool'");
+      expect(source).not.toContain('socket.emit("agent:confirm_tool"');
+    }
+  });
+
   it('routes short foreground WeChat send follow-ups into the task chain', () => {
     expect(shouldChainTask('\u76f4\u63a5\u53d1\u665a\u5b89')).toBe(true);
     expect(shouldChainTask('\u5fae\u4fe1\u5e2e\u6211\u7f16\u8f91\u4e00\u6761\u665a\u5b89\u53d1\u7ed9\u963f\u9646')).toBe(true);

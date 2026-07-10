@@ -208,8 +208,8 @@ export function isDiagnosticOrRepairRequest(text: string): boolean {
 
 export function shouldAllowToolUseForTurn(text: string, source?: string, operationMode?: string): boolean {
   const mode = normalizeOperationMode(operationMode);
+  if (mode === 'chat') return hasClientActionIntent(text);
   if (isDiagnosticOrRepairRequest(text)) return true;
-  if (mode === 'chat') return hasClientActionIntent(text) || hasExplicitToolIntent(text) || hasVisionIntent(text);
   if (mode === 'meeting') return hasClientActionIntent(text);
   if (hasVisionIntent(text)) return true;
   if (mode === 'autonomous' && AUTONOMOUS_TASK_PATTERNS.some((pattern) => pattern.test(text.trim()))) return true;
@@ -265,14 +265,14 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   let decisionReason = 'no action signal matched';
   if (!normalized) {
     decisionReason = 'empty turn';
+  } else if (mode === 'chat') {
+    allowToolUse = clientActionIntent;
+    decisionReason = allowToolUse
+      ? 'chat mode client-control signal matched'
+      : 'chat mode is pure conversation unless the user controls Lumi client mode';
   } else if (diagnosticOrRepair) {
     allowToolUse = true;
     decisionReason = 'diagnostic or repair wording enables self-inspection tools';
-  } else if (mode === 'chat') {
-    allowToolUse = clientActionIntent || explicitToolIntent || visionIntent;
-    decisionReason = allowToolUse
-      ? 'chat mode action signal matched'
-      : 'chat mode without client, tool, or vision action signal';
   } else if (mode === 'meeting') {
     allowToolUse = clientActionIntent;
     decisionReason = allowToolUse
@@ -294,8 +294,8 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     if (!normalized) blockedBy.push('empty-text');
     if (informationOnlyQuestion) blockedBy.push('information-only-question');
     if (mode === 'meeting' && !clientActionIntent) blockedBy.push('meeting-mode-client-actions-only');
-    if (mode === 'chat' && !clientActionIntent && !explicitToolIntent && !visionIntent) {
-      blockedBy.push('chat-mode-without-action-signal');
+    if (mode === 'chat' && !clientActionIntent) {
+      blockedBy.push('chat-mode-conversation-only');
     }
     if (!blockedBy.length) blockedBy.push('no-tool-intent');
   }

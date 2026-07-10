@@ -753,32 +753,9 @@ async function processVoiceInput(
   };
 
   const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-    // Tool trust learning: auto-approve tools the user has trusted
-    const { getTrustedTools, recordToolApprove, recordToolDeny } = await import("../personality/tool_trust");
-    if (getTrustedTools(session.userId).includes(toolName) && canAutoApproveAction(toolName, args)) {
-      socket.emit("agent:tool_call", { name: toolName, arguments: args, result: 'Auto-approved (trusted)', error: undefined });
-      return true;
-    }
-    return new Promise((resolve) => {
-      const cid = Math.random().toString(36).substring(2, 11);
-      const timeout = setTimeout(() => {
-        socket.emit("agent:tool_call", { name: toolName, arguments: args, result: 'Auto-denied (30s timeout)', error: 'User did not respond' });
-        resolve(false);
-      }, 30000);
-      socket.once(`tool:confirm_result:${cid}`, (data: { allowed: boolean }) => {
-        clearTimeout(timeout);
-        if (data.allowed) {
-          const promoted = recordToolApprove(session.userId, toolName);
-          if (promoted) {
-            socket.emit("agent:notification", { type: 'trust', level: 'info', message: `Tool "${toolName}" is now trusted — future uses will be auto-approved.` });
-          }
-        } else {
-          recordToolDeny(session.userId, toolName);
-        }
-        resolve(data.allowed === true);
-      });
-      socket.emit('agent:confirm_tool', { correlationId: cid, name: toolName, arguments: args });
-    });
+    if (canAutoApproveAction(toolName, args)) return true;
+    logger.warn(`[Audio] Tool "${toolName}" blocked at hard boundary without showing a confirmation popup.`);
+    return false;
   };
 
   // ── Capture abort controller refs BEFORE anything that checks them ──

@@ -78,6 +78,32 @@ describe('Lumi execution decision', () => {
     expect(decision.toolRoute).toBeNull();
   });
 
+  it('keeps explicit external actions tool-free in pure chat mode', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+
+    const text = '\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_pure_chat_action_user',
+      text,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.boundary).toBe('conversation');
+    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(decision.allowToolUse).toBe(false);
+    expect(decision.toolPolicy.forbiddenTools).toContain('*');
+    expect(decision.toolRoute).toBeNull();
+  });
+
   it('restricts client action turns to client state/action tools', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
@@ -199,7 +225,7 @@ describe('Lumi execution decision', () => {
       text: stockAssistant,
       channel: 'chat',
       source: 'chat',
-      operationMode: 'chat',
+      operationMode: 'assistant',
       targetIsLumi: true,
     });
     const stockDecision = buildLumiExecutionDecision({
@@ -219,7 +245,7 @@ describe('Lumi execution decision', () => {
       text: checkMcp,
       channel: 'chat',
       source: 'chat',
-      operationMode: 'chat',
+      operationMode: 'assistant',
       targetIsLumi: true,
     });
     const mcpDecision = buildLumiExecutionDecision({
@@ -235,7 +261,7 @@ describe('Lumi execution decision', () => {
       text: installThisSkill,
       channel: 'chat',
       source: 'chat',
-      operationMode: 'chat',
+      operationMode: 'assistant',
       targetIsLumi: true,
     });
     const installDecision = buildLumiExecutionDecision({
@@ -271,13 +297,13 @@ describe('Lumi execution decision', () => {
   it('routes natural follow-up wording to action paths instead of empty chat', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
-    const decide = (text: string) => {
+    const decide = (text: string, operationMode = 'assistant') => {
       const dispatch = buildLumiTurnDispatch({
         userId: 'execution_decision_natural_probe_user',
         text,
         channel: 'chat',
         source: 'chat',
-        operationMode: 'chat',
+        operationMode,
         targetIsLumi: true,
       });
       const decision = buildLumiExecutionDecision({
@@ -288,7 +314,7 @@ describe('Lumi execution decision', () => {
       return { dispatch, decision };
     };
 
-    const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f');
+    const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f', 'chat');
     expect(autonomousMode.dispatch.boundary).toBe('client_action');
     expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(autonomousMode.decision.promptOverlay).toContain('verification.status');
@@ -431,13 +457,13 @@ describe('Lumi execution decision', () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
     const { buildLumiIntentTrace } = await import('../server/cognition/intent_trace');
-    const decide = (text: string) => {
+    const decide = (text: string, operationMode = 'assistant') => {
       const dispatch = buildLumiTurnDispatch({
         userId: 'execution_decision_trace_user',
         text,
         channel: 'chat',
         source: 'chat',
-        operationMode: 'chat',
+        operationMode,
         targetIsLumi: true,
       });
       const decision = buildLumiExecutionDecision({
@@ -454,7 +480,7 @@ describe('Lumi execution decision', () => {
       return { dispatch, decision, trace };
     };
 
-    const openSkillHall = decide('\u6253\u5f00\u6280\u80fd\u5927\u5385');
+    const openSkillHall = decide('\u6253\u5f00\u6280\u80fd\u5927\u5385', 'chat');
     expect(openSkillHall.trace.boundary).toBe('client_action');
     expect(openSkillHall.trace.allowed).toBe(true);
     expect(openSkillHall.trace.matched.clientActionOnlyTurn).toBe(true);
@@ -464,7 +490,7 @@ describe('Lumi execution decision', () => {
       expect.objectContaining({ layer: 'turn_flow', name: 'client-action-only-turn' }),
     ]));
 
-    const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417');
+    const skillInstallQuestion = decide('\u6280\u80fd\u5927\u5385\u7684\u5b89\u88c5\u53ef\u4ee5\u7528\u5417', 'chat');
     expect(skillInstallQuestion.trace.boundary).toBe('conversation');
     expect(skillInstallQuestion.trace.allowed).toBe(false);
     expect(skillInstallQuestion.trace.matched.informationOnlyQuestion).toBe(true);
@@ -493,7 +519,7 @@ describe('Lumi execution decision', () => {
     expect(mcpBrokenQuestion.trace.allowed).toBe(true);
     expect(mcpBrokenQuestion.trace.matched.diagnosticOrRepair).toBe(true);
 
-    const mcpConceptQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP');
+    const mcpConceptQuestion = decide('lumi \u4e3a\u4ec0\u4e48\u8981\u63a5\u5165\u5916\u90e8 MCP', 'chat');
     expect(mcpConceptQuestion.trace.boundary).toBe('conversation');
     expect(mcpConceptQuestion.trace.allowed).toBe(false);
     expect(mcpConceptQuestion.trace.matched.informationOnlyQuestion).toBe(true);

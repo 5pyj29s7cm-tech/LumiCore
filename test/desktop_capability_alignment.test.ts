@@ -111,7 +111,7 @@ describe('desktop capability alignment', () => {
     ]));
     expect(localMachine?.safety).toContain('Observation only');
     expect(backgroundRuntime?.status).toBe('ready');
-    expect(backgroundRuntime?.requiresConfirmation).toBe(true);
+    expect(backgroundRuntime?.requiresConfirmation).toBe(false);
     expect(backgroundRuntime?.diagnostics).toEqual(expect.arrayContaining([
       'autostart=true',
       'closeToBackground=true',
@@ -120,6 +120,7 @@ describe('desktop capability alignment', () => {
     ]));
     expect(backgroundRuntime?.notes).toContain('24-hour availability');
     expect(backgroundRuntime?.safety).toContain('Hidden-to-background');
+    expect(backgroundRuntime?.safety).toContain('do not need per-tool permission popups');
   });
 
   it('advertises virtual cursor relay as available for controlled foreground WeChat sends', async () => {

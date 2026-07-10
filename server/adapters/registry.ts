@@ -142,9 +142,9 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: hasState ? 'ready' : 'available',
       actions: ['set_client_mode(chat)', 'set_client_mode(assistant)', 'set_client_mode(autonomous)', 'start_meeting_mode'],
       surfaces: ['mode switcher', 'voice', 'chat', 'meeting'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       diagnostics: state?.mode ? [`Current mode: ${state.mode}`] : [],
-      notes: 'Chat is conversation-first, Assistant is guided work, Autonomous is visible execution, Meeting is transcription/reporting.',
+      notes: 'Chat is pure conversation. Assistant is user-present high-permission work. Autonomous has the same practical permissions plus continuous/background work. Switching between Chat, Assistant, and Autonomous does not need tool permission popups; Meeting capture remains explicit.',
     },
     {
       id: 'client.self_intro_demo',
@@ -168,13 +168,13 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
       actions: ['customer_takeover_workflow', 'customer_takeover_panel', 'close_customer_takeover_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press'],
       surfaces: ['Lumi desktop', 'large customer result panel', 'WeChat', 'WPS or editor', 'browser'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client so the customer takeover workflow can control client surfaces.'],
       diagnostics: [
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'Runs only after an explicit customer-takeover or customer-advance request. It prepares WeChat drafts and business materials; sending to WeChat is off by default unless configured or confirmed.',
+      safety: 'Runs only after an explicit customer-takeover or customer-advance request. It prepares WeChat drafts and business materials without per-tool permission popups; ordinary supervised sends may proceed when requested. Payments, legal commitments, credential changes, and destructive actions remain hard boundaries.',
       notes: 'Use for current-stage customer work takeover where Lumi follows user work rules, uses external software, shows the large result panel, and advances customer work to a visible result. The learned ability is not the fixed demo order; Lumi should convert customer intent into concrete artifacts, next actions, and a draft reply, then operate the available desktop tools to move the work forward within confirmation boundaries.',
     },
     {
@@ -184,13 +184,13 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
       actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'],
       surfaces: ['Lumi desktop', 'large design delivery panel', 'WPS or editor', 'client-facing PPT/PDF proposal files', 'desktop CAD apps', 'CAD DXF draft', 'AutoCAD stroke-by-stroke script', 'Revit/Dynamo handoff files', 'personal WeChat or WeCom'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client so the design delivery workflow can control client surfaces.'],
       diagnostics: [
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'Runs only after an explicit renovation/design/CAD/Revit delivery request. It prepares local delivery files and WeChat drafts; sending to WeChat is off by default unless configured or confirmed.',
+      safety: 'Runs only after an explicit renovation/design/CAD/Revit delivery request. It prepares local delivery files, opens/uses available CAD or office tools, and handles WeChat drafts without per-tool permission popups. Production drawings, legal commitments, payments, installs, and account/security prompts remain hard boundaries.',
       notes: 'Use for current-stage industry videos and real design delivery tasks where Lumi turns a design request into external-system artifacts: proposal, budget/material list, client-facing design proposal PPTX/PDF with layout/material/budget visuals, CAD DXF opened in a desktop CAD tool when available, AutoCAD visible drawing playback scripts that create entities stroke by stroke and can be executed through AutoCAD /b with completion-marker verification, Revit/Dynamo handoff files, and a WeChat delivery draft. Prefer restoring an already logged-in personal WeChat window before falling back to WeCom. Treat the video flow as a reusable delivery standard, not a fixed script: derive the deliverables from the current client/project and use the available external tools to reach a visible result.',
     },
     {
@@ -200,13 +200,13 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
       actions: ['ecommerce_growth_workflow', 'ecommerce_growth_panel', 'close_ecommerce_growth_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_mouse_click_at', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press'],
       surfaces: ['Lumi desktop', 'large ecommerce growth panel', 'browser', 'WPS or spreadsheet', 'external image/video tools', 'creator platforms', 'store admin pages', 'personal WeChat or WeCom'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client so the ecommerce growth workflow can control client surfaces.'],
       diagnostics: [
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'Runs only after an explicit ecommerce/store/account/content-growth request. It generates local deliverables and drafts; foreground user-requested ordinary messages, comments, replies, and non-commercial content posts can proceed. Ad spend, inventory/price changes, first-time login, account switching, verification, payment, purchase, and legal/contractual final commits stay confirmation-gated.',
+      safety: 'Runs only after an explicit ecommerce/store/account/content-growth request. It generates local deliverables and drafts without per-tool permission popups; foreground user-requested ordinary messages, comments, replies, and non-commercial content posts can proceed. Ad spend, inventory/price changes, first-time login, account switching, verification, payment, purchase, and legal/contractual final commits stay hard-boundary gated.',
       notes: 'Use for current-stage ecommerce, short-video content production, and store/account management videos or real work. Lumi should turn the current shop/product/platform brief into a local desktop delivery package: store audit, content matrix, short-video script, image/video generation prompts for external tools, publishing draft, customer-service/WeChat draft, operation report, and verification notes. Prefer external systems and browser pages instead of recreating their functions inside Lumi: image/video generation pages, editing tools, creator platforms, store backends, and already logged-in personal WeChat. Restore already-running/logged-in app and browser sessions before opening fresh pages; stop at QR/OTP/CAPTCHA/account-switch/authorization boundaries. Treat the flow as a reusable work standard, not a fixed script: derive product, platform, audience, budget, deliverables, and confirmation boundaries from the current user message.',
     },
     {
@@ -246,7 +246,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
       actions: ['client_get_state', 'client_health_check', 'open_runtime_log', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
       surfaces: ['runtime log', 'background tray state', 'autostart', 'close-to-background', 'backend processes', 'autonomy policy', 'confirmed workflows'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client so runtime state can report whether the client/server are alive.'],
       diagnostics: [
         `autostart=${Boolean(state?.runtime?.autostartEnabled)}`,
@@ -257,8 +257,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         `alwaysOnline=${gate.alwaysOnline}`,
         `autoProcess=${gate.autoProcessEnabled}`,
       ].filter(Boolean),
-      safety: 'Reading runtime status is safe. Enabling autostart/background settings, changing autonomy policy, or registering/enabling recurring autonomous workflows requires confirmation. Hidden-to-background, live backend health, and autonomous execution are distinct states.',
-      notes: 'Use before promising 24-hour availability, background continuity, restart survival, or unattended task execution. Resident runtime depends on the desktop client/server actually running; autonomous work additionally depends on desktop mode, autonomy policy, token budget, and confirmed workflows. Assistant/semi is low-friction by default instead of waiting for idle time.',
+      safety: 'Reading runtime status is safe. Assistant and Autonomous execution do not need per-tool permission popups. Changing startup/runtime settings, enabling recurring workflows, or crossing high-consequence boundaries still requires explicit confirmation or handoff. Hidden-to-background, live backend health, and autonomous execution are distinct states.',
+      notes: 'Use before promising 24-hour availability, background continuity, restart survival, or unattended task execution. Resident runtime depends on the desktop client/server actually running; autonomous work additionally depends on desktop mode, autonomy policy, token budget, and enabled workflow limits. Assistant is low-friction by default instead of waiting for idle time.',
     },
     {
       id: 'client.visible_execution_habits',
@@ -267,12 +267,12 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: hasState && !staleState ? 'ready' : 'available',
       actions: ['client_get_state', 'client_action', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_active_window', 'desktop_capture_screen'],
       surfaces: ['Lumi surfaces', 'wallpaper mode', 'cursor glow', 'runtime log', 'external desktop'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       diagnostics: [
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'This is the behavioral pattern for visible work: explain the task, choose the right surface, use cursor glow for desktop clicks, verify outcomes, and close temporary surfaces. External app control still follows confirmation, workflow, and risk gates.',
+      safety: 'This is the behavioral pattern for visible work: explain the task, choose the right surface, use cursor glow for desktop clicks, verify outcomes, and close temporary surfaces. External app control follows mode, workflow, and hard-boundary gates without ordinary tool permission popups.',
       notes: 'Use whenever Lumi needs to act like a visible desktop partner rather than a text-only assistant.',
     },
     {
@@ -321,7 +321,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
           : 'requires_setup',
       actions: ['open_skills', 'client_health_check', 'client_repair_skill'],
       surfaces: ['skill hall', 'MCP servers', 'GitHub MCP discovery'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: skillStats.total ? [] : ['Install or enable skills/MCP servers in the Skill Hall.'],
       diagnostics: [
         `skills=${skillStats.total}`,
@@ -332,7 +332,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         skillStats.unavailableEnabled ? `unavailableEnabled=${skillStats.unavailableEnabled}` : '',
         skillStats.issueNames.length ? `issues=${skillStats.issueNames.slice(0, 5).join(', ')}` : '',
       ].filter(Boolean),
-      notes: 'Skills are Lumi expansion points. Repair/install actions need confirmation.',
+      notes: 'Skills are Lumi expansion points. Calling connected skills, inspecting skill health, and safe skill repair run without per-tool permission popups. Installing or executing untrusted third-party code remains a hard boundary.',
     },
     {
       id: 'workspace.knowledge_files',
@@ -398,14 +398,14 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: gate.alwaysOnline ? (gate.autonomyLevel === 'reactive' ? 'available' : 'ready') : 'blocked',
       actions: ['open_plans', 'open_work_queue', 'autonomy_get_policy', 'autonomy_register_workflow'],
       surfaces: ['Plans', 'work queue', 'autonomy settings'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       diagnostics: [
         `desktopModeAutonomy=${gate.autonomyLevel}`,
         `alwaysOnline=${gate.alwaysOnline}`,
         `autoProcess=${gate.autoProcessEnabled}`,
         `maxConsecutiveTasks=${gate.maxConsecutiveTasks}`,
       ],
-      notes: 'The desktop modes control autonomy: Chat maps to reactive, Assistant maps to low-friction semi, and Autonomy maps to continuous full. Launch-at-login and close-to-background only make Lumi resident when the client/server are alive; approved workflows then run according to that mode, token budgets, enabled workflow limits, and high-consequence confirmation boundaries.',
+      notes: 'The desktop has three permission modes: Chat is pure conversation, Assistant is user-present high-permission execution without ordinary tool prompts, and Autonomy has the same practical permissions plus continuous 24h/background operation. Launch-at-login and close-to-background only make Lumi resident when the client/server are alive; workflows then run according to autonomy policy, token budgets, enabled workflow limits, and high-consequence hard boundaries.',
     },
     {
       id: 'automation.work_takeover_tasks',
@@ -425,8 +425,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: 'ready',
       actions: ['self_extension_plan', 'capability_gap_autofix', 'capability_learning_list', 'adapter_registry_list', 'capability_research', 'generate_skill', 'install_skill', 'client_repair_skill'],
       surfaces: ['Skill Hall', 'Adapter Registry', 'MCP runtime', 'capability research', 'capability learning memory'],
-      requiresConfirmation: true,
-      safety: 'Planning and listing learned routes are safe. Capability autofix is only for absent or failed/brittle coverage and may write local experiment files or run confirmation-gated tool probes. Generating, installing, repairing, connecting, executing third-party code, and modifying Lumi core remain confirmation-sensitive.',
+      requiresConfirmation: false,
+      safety: 'Planning and listing learned routes are safe. Capability autofix is only for absent or failed/brittle coverage and may write local experiment files or run hard-boundary-gated tool probes without ordinary permission popups. Generating safe local skills, repairing connected skills, and capability probes may proceed; installing or executing untrusted third-party code and modifying Lumi core remain hard boundaries.',
       notes: 'Use when Lumi notices a missing capability or brittle raw mouse/script fallback: first inspect learned routes, adapters, tools, installed skills, and marketplace skills through self_extension_plan. Reuse existing coverage when it exists. Run capability_gap_autofix only when the unified plan says a new route is needed or real failure evidence exists, then prepare or run one minimal verification experiment and persist one reusable route instead of creating parallel wrappers.',
     },
     {
@@ -514,11 +514,11 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: skillStats.connectedNames.includes('playwright') ? 'ready' : 'requires_setup',
       actions: ['external_control_candidates', 'external_control_configure_candidate', 'client_repair_skill', 'browser_open_task', 'web_login_run', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_click', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_type', 'mcp_playwright_browser_take_screenshot'],
       surfaces: ['browser DOM', 'logged-in web apps', 'store backends', 'creator centers', 'web forms'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: skillStats.connectedNames.includes('playwright')
         ? []
         : ['Run external_control_configure_candidate with candidateId=playwright-mcp, review the MCP config, then enable/restart the playwright server.'],
-      safety: 'Use for structured browser automation. Foreground user-requested ordinary comments/replies/content posts can proceed. Account switching, payments, purchases, uploads of sensitive material, legal/business final submissions, and ambiguous submits require confirmation.',
+      safety: 'Use for structured browser automation without per-tool permission popups. Foreground user-requested ordinary comments/replies/content posts can proceed. Account switching, payments, purchases, uploads of sensitive material, legal/business final submissions, and ambiguous submits require explicit confirmation or handoff.',
       notes: 'This is the preferred upgrade path for browser-heavy work because Lumi can rely on page structure instead of only screenshot coordinates.',
     },
     {
@@ -575,12 +575,12 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: externalToolbox.hasCadInstallers ? 'available' : 'requires_setup',
       actions: ['mcp_cad-drafting_cad_renovation_folder_workflow', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script', 'floorplan_extract_geometry', 'desktop_open', 'external_app_list_adapters', 'computer_use'],
       surfaces: ['LibreCAD', 'Sweet Home 3D', 'FreeCAD', 'Blender', externalToolbox.installersDir],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: externalToolbox.hasCadInstallers
         ? [`Install the selected package from ${externalToolbox.installersDir} before Lumi claims direct app control.`, 'Prefer explicit MCP/plugin adapters over raw mouse control.']
         : [`Download or install verified CAD/interior-design tools into ${externalToolbox.installersDir}.`],
       diagnostics: externalToolbox.diagnostics,
-      safety: 'Installers and source candidates are staged only. Opening, installing, plugin activation, and UI control all need user confirmation.',
+      safety: 'Installers and source candidates are staged only. Opening installed CAD/interior tools and visible UI control can run under Assistant/Autonomy without per-tool permission popups. Installing software, plugin activation, credential prompts, and destructive system changes remain hard boundaries.',
       notes: 'Current staged toolchain covers 2D DXF editing, AutoCAD command-script playback, interior layout, scriptable CAD/BIM, and 3D rendering handoff.',
     },
     {
@@ -601,9 +601,9 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: skillStats.connected > 0 ? 'available' : 'requires_setup',
       actions: ['external_app_list_adapters', 'adapter_registry_list', 'capability_research', 'computer_use'],
       surfaces: ['MCP', 'browser', 'files', 'clipboard', 'local AI apps'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: skillStats.connected > 0 ? [] : ['Connect a specific AI app, MCP server, browser account, or file workflow before delegating real work.'],
-      notes: 'Lumi can research and draft adapters. Installing or running third-party code requires confirmation.',
+      notes: 'Lumi can research, draft adapters, and coordinate connected AI apps without per-tool permission popups. Installing or running untrusted third-party code remains a hard boundary.',
     },
     {
       id: 'ai.nano_banana',
@@ -612,13 +612,13 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: 'requires_setup',
       actions: ['browser_open_task', 'web_login_profile_save_from_preset', 'web_login_profile_save', 'web_login_learn_site', 'web_login_run', 'capability_research', 'generate_image'],
       surfaces: ['Google AI Studio', 'Gemini app', 'Gemini API image generation docs'],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       setup: ['Use official Google AI Studio or Gemini pages.', 'Configure a browser login profile or Gemini API key before real API work.', 'Do not install unofficial Nano Banana wrapper clients without review.'],
       diagnostics: [
         `catalog=${externalToolbox.catalogExists ? 'present' : 'missing'}`,
         'localInstaller=not_applicable',
       ],
-      safety: 'Image generation can create or edit visual assets, but account actions, paid API use, uploads of private client material, and publishing need confirmation.',
+      safety: 'Image generation can create or edit visual assets without per-tool permission popups, but account actions, paid API use, uploads of private client material, and publishing need explicit confirmation or handoff.',
       notes: 'Nano Banana is best treated as a web/API capability for room restyling, material previews, and image-editing workflows, not as a local CAD program.',
     },
     {

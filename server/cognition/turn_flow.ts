@@ -332,21 +332,26 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const clientActionIntent = hasClientActionOnlyIntent(input.text);
   const actionContract = buildActionContract(input.text);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
-  const autoPromoteToAssistant = shouldAutoPromoteWorkTurn(input.text, operationMode, requestedMode, input.channel);
+  const autoPromoteToAssistant = false;
   const taskEntryTurn = input.channel === 'task';
-  const effectiveOperationMode = requestedMode || (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools ? 'assistant' : operationMode);
-  const selfRepairTurn = isDiagnosticOrRepairRequest(input.text);
+  const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn;
+  const shouldPromoteForAction =
+    !chatModePureConversation &&
+    (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools);
+  const effectiveOperationMode = requestedMode || (shouldPromoteForAction ? 'assistant' : operationMode);
+  const selfRepairTurn = !chatModePureConversation && isDiagnosticOrRepairRequest(input.text);
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent && (effectiveOperationMode === 'chat' || effectiveOperationMode === 'meeting');
   const visionIntent = hasVisionIntent(input.text);
   const workSurfaceRoute = resolveWorkSurfaceRoute(input.text);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
-  const allowToolUseForTurn =
-    taskEntryTurn ||
-    autoPromoteToAssistant ||
-    actionContractRequiresTools ||
-    workTakeover.shouldResumeTask ||
-    explicitBackgroundDelegation ||
-    shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
+  const allowToolUseForTurn = chatModePureConversation
+    ? clientActionOnlyTurn
+    : taskEntryTurn ||
+      autoPromoteToAssistant ||
+      actionContractRequiresTools ||
+      workTakeover.shouldResumeTask ||
+      explicitBackgroundDelegation ||
+      shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
   const specialWorkflow = matchSkillWorkflow(input.text, { targetIsLumi: input.targetIsLumi });
   const exposeAgentWork = shouldExposeAgentWork(input.text);
   const execution = buildExecutionGovernance({

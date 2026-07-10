@@ -32,7 +32,7 @@ describe('Lumi turn flow', () => {
     expect(flow.promptOverlay).toContain('Do not force a task/tool path');
   });
 
-  it('binds work-surface follow-ups to the task center', async () => {
+  it('binds assistant work-surface follow-ups to the task center', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
@@ -53,7 +53,7 @@ describe('Lumi turn flow', () => {
       channel: 'chat',
       source: 'org-chat',
       category: 'organization',
-      operationMode: 'chat',
+      operationMode: 'assistant',
       domain: 'work',
       orgId: 'org-a',
     });
@@ -66,7 +66,7 @@ describe('Lumi turn flow', () => {
     expect(flow.routeText).toContain('工作接管');
   });
 
-  it('lets voice chat stay conversational unless the wording is work-directed', async () => {
+  it('keeps chat mode conversational and lets assistant voice continue work', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
@@ -96,7 +96,7 @@ describe('Lumi turn flow', () => {
       text: '继续推进这个任务',
       channel: 'voice',
       source: 'voice',
-      operationMode: 'chat',
+      operationMode: 'assistant',
     });
     expect(working.workTakeover.shouldResumeTask).toBe(true);
     expect(working.effectiveOperationMode).toBe('assistant');

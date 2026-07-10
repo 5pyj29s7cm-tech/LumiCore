@@ -134,7 +134,7 @@ function buildReasons(input: {
   if (!flow.allowToolUseForTurn) reasons.push('turn flow did not detect an action signal');
   if (flow.clientActionOnlyTurn) reasons.push('client action turn is restricted to client_get_state/client_action');
   if (flow.selfRepairTurn) reasons.push('self-repair turn should inspect, repair once when safe, then verify');
-  if (flow.autoPromoteToAssistant) reasons.push('work wording auto-promoted chat mode to assistant mode');
+  if (flow.autoPromoteToAssistant) reasons.push('work wording requested assistant execution');
   if (flow.workTakeover.shouldResumeTask) reasons.push('active work takeover context is being resumed');
   if (flow.specialWorkflow) reasons.push(`skill workflow matched:${flow.specialWorkflow.id}`);
   if (flow.completionEvidenceNeeded) reasons.push('completion evidence is needed before claiming done');

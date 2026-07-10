@@ -299,7 +299,7 @@ function getSensitiveClientAction(args: Record<string, any> = {}): string {
   const mode = String(args.mode || '').trim();
   if (!action) return '';
   if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return action;
-  if ((action === 'set_mode' || action === 'set_client_mode') && (mode === 'meeting' || mode === 'autonomous')) {
+  if ((action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting') {
     return `${action}:${mode}`;
   }
   return '';

@@ -93,7 +93,7 @@ function evaluate(text: string, userId: string) {
     text,
     channel: 'chat',
     source: 'chat',
-    operationMode: 'chat',
+    operationMode: 'assistant',
     targetIsLumi: true,
   });
   const execution = buildLumiExecutionDecision({

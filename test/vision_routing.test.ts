@@ -14,9 +14,9 @@ describe('vision routing intent', () => {
     expect(shouldAllowToolUseForTurn('你觉得这个想法怎么样', undefined, 'chat')).toBe(false);
   });
 
-  it('allows visual tools from chat while preserving meeting mode boundaries', () => {
+  it('keeps visual tools out of pure chat while preserving assistant and meeting boundaries', () => {
     const text = '识别一下这个人是谁';
-    expect(shouldAllowToolUseForTurn(text, undefined, 'chat')).toBe(true);
+    expect(shouldAllowToolUseForTurn(text, undefined, 'chat')).toBe(false);
     expect(shouldAllowToolUseForTurn(text, undefined, 'assistant')).toBe(true);
     expect(shouldAllowToolUseForTurn(text, undefined, 'meeting')).toBe(false);
   });

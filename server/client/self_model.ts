@@ -211,7 +211,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Chat mode',
     kind: 'mode',
     actions: ['set_client_mode(chat)'],
-    notes: 'Conversation-first state. Lumi answers naturally by default, but explicit user commands can still use the local client and tools.',
+    notes: 'Pure conversation state. Lumi answers, explains, and discusses; it does not use tools, files, desktop control, external apps, teams, or background work except explicit Lumi client mode control.',
     stateKeys: ['mode', 'voice'],
   },
   {
@@ -228,7 +228,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Assistant mode',
     kind: 'mode',
     actions: ['set_client_mode(assistant)'],
-    notes: 'Guided execution. Lumi can use tools when the user asks for action.',
+    notes: 'User-present high-permission execution. Lumi can use tools, files, browser, saved/authorized sessions, external apps, desktop control, skills, and teams for requested ordinary work without per-tool permission popups; hard boundaries stop for explicit confirmation or handoff.',
     stateKeys: ['mode', 'tools'],
   },
   {
@@ -236,8 +236,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Autonomy mode',
     kind: 'mode',
     actions: ['set_client_mode(autonomous)', 'open_runtime_log'],
-    notes: 'Visible multi-step execution through tools, run logs, desktop control, and teams.',
-    requiresConfirmation: true,
+    notes: 'Same practical permissions as Assistant, plus 24h continuous/background operation, proactive questions, monitoring, memory absorption, learning, sorting, task checkpoints, and ultra-long continuation.',
     stateKeys: ['mode', 'runtimeLog', 'tools'],
   },
   {
@@ -325,8 +324,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Background runtime awareness',
     kind: 'runtime',
     actions: ['client_get_state', 'client_health_check', 'open_runtime_log', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
-    notes: 'Lumi distinguishes visible window state, hidden-to-background resident client state, backend process health, launch-at-login, close-to-background, and autonomous workflow execution. Resident background availability requires the desktop client/server to be alive; autonomous background work follows the desktop mode/autonomy policy, token budget, and a user-confirmed workflow. Assistant/semi is low-friction for user-present work; Autonomy/full is for continuous execution. Verify runtime state before promising that Lumi will keep working after the window is hidden or after restart.',
-    requiresConfirmation: true,
+    notes: 'Lumi distinguishes visible window state, hidden-to-background resident client state, backend process health, launch-at-login, close-to-background, and autonomous workflow execution. Resident background availability requires the desktop client/server to be alive; autonomous background work follows the desktop mode/autonomy policy, token budget, and enabled workflow rules. Assistant is low-friction for user-present work; Autonomy is for continuous execution. Verify runtime state before promising that Lumi will keep working after the window is hidden or after restart.',
+    requiresConfirmation: false,
     stateKeys: ['runtime', 'runtimeLog', 'autonomy', 'mode', 'permissions', 'tools'],
   },
   {
@@ -334,8 +333,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Visible task execution',
     kind: 'system',
     actions: ['client_get_state', 'client_action', 'desktop_show_lumi_window', 'desktop_active_window', 'desktop_running_processes', 'desktop_idle_time', 'desktop_poll_activity', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen', 'read_clipboard', 'write_clipboard', 'mouse_move', 'mouse_click', 'mouse_drag', 'keyboard_type', 'keyboard_press', 'computer_use'],
-    notes: 'For visible work Lumi should state the task goal, choose the right interface, inspect the active window with desktop_ui_snapshot when native controls are available, use desktop_ui_focus/click/invoke/type for real accessible controls, inspect the screen/current window when pixels are needed, move the visible cursor to the real target before raw desktop clicks, perform real desktop input when appropriate, verify outcomes, report only results/blockers/needed confirmations, and close temporary surfaces after they are explained. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, command execution, and vision computer_use. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are available to controlled workflows including foreground WeChat sends, desktop demos, and computer_use cleanup. Prebuilt workflows are reusable operating patterns, not fake demos: adapt the sequence to the current user goal, screen state, installed apps, and required deliverables.',
-    requiresConfirmation: true,
+    notes: 'For visible work Lumi should state the task goal, choose the right interface, inspect the active window with desktop_ui_snapshot when native controls are available, use desktop_ui_focus/click/invoke/type for real accessible controls, inspect the screen/current window when pixels are needed, move the visible cursor to the real target before raw desktop clicks, perform real desktop input when appropriate, verify outcomes, report only results/blockers/needed hard-boundary handoffs, and close temporary surfaces after they are explained. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, command execution, and vision computer_use without per-tool permission popups in Assistant/Autonomy. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are available to controlled workflows including foreground WeChat sends, desktop demos, and computer_use cleanup. Prebuilt workflows are reusable operating patterns, not fake demos: adapt the sequence to the current user goal, screen state, installed apps, and required deliverables.',
+    requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'tools', 'permissions'],
   },
   {
@@ -369,8 +368,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Customer work takeover',
     kind: 'system',
     actions: ['customer_takeover_workflow', 'customer_takeover_panel', 'close_customer_takeover_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press'],
-    notes: 'In this stage, when the user asks Lumi to take over or advance a customer, Lumi can run a bounded customer work takeover: classify a WeChat lead, explain authorization boundaries, create quote and contract draft materials in external office software, prepare a WeChat reply draft without sending by default, and show the large customer-result panel. The durable ability is to turn customer intent into artifacts, next actions, and a visible result, not to replay one fixed demo order.',
-    requiresConfirmation: true,
+    notes: 'In this stage, when the user asks Lumi to take over or advance a customer, Lumi can run a bounded customer work takeover without tool permission popups: classify a WeChat lead, explain hard boundaries, create quote and contract draft materials in external office software, prepare or send ordinary requested WeChat replies when supervised, and show the large customer-result panel. The durable ability is to turn customer intent into artifacts, next actions, and a visible result, not to replay one fixed demo order.',
+    requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
@@ -378,8 +377,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Renovation design delivery takeover',
     kind: 'system',
     actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'],
-    notes: 'In this stage, when the user asks Lumi to take over a renovation/design delivery task, Lumi can generate a local desktop delivery package: proposal, budget/material list, customer-facing PPTX/PDF design deck with layout/material/budget visuals, CAD DXF draft, AutoCAD stroke-by-stroke drawing playback scripts, execute those scripts through AutoCAD /b with completion-marker verification, Revit/Dynamo handoff files, and a WeChat delivery draft. Lumi should open real external tools where available: WPS/Office for documents, desktop CAD software such as AutoCAD/FreeCAD for DXF or visible draw scripts, Dynamo/Revit entry points or handoff files for BIM, and an already logged-in personal WeChat window before falling back to enterprise WeChat. Production drawings still require confirmed site dimensions, structure, utilities, and user sign-off. The durable ability is the delivery standard and tool handoff logic, not a one-off video script.',
-    requiresConfirmation: true,
+    notes: 'In this stage, when the user asks Lumi to take over a renovation/design delivery task, Lumi can generate a local desktop delivery package and open/use external design tools without per-tool permission popups: proposal, budget/material list, customer-facing PPTX/PDF design deck with layout/material/budget visuals, CAD DXF draft, AutoCAD stroke-by-stroke drawing playback scripts, execute those scripts through AutoCAD /b with completion-marker verification, Revit/Dynamo handoff files, and a WeChat delivery draft. Lumi should open real external tools where available: WPS/Office for documents, desktop CAD software such as AutoCAD/FreeCAD for DXF or visible draw scripts, Dynamo/Revit entry points or handoff files for BIM, and an already logged-in personal WeChat window before falling back to enterprise WeChat. Production drawings still require confirmed site dimensions, structure, utilities, and user sign-off. The durable ability is the delivery standard and tool handoff logic, not a one-off video script.',
+    requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
@@ -387,8 +386,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'E-commerce growth takeover',
     kind: 'system',
     actions: ['ecommerce_growth_workflow', 'ecommerce_growth_panel', 'close_ecommerce_growth_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_mouse_click_at', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press'],
-    notes: 'In this stage, when the user asks Lumi to take over ecommerce, short-video content production, store account management, product publishing, or customer-service handoff, Lumi can generate a local desktop delivery package: store audit, content matrix, short-video script, image generation prompts, video generation prompts, publish draft, customer-service/WeChat draft, operation report, and verification record. Lumi should use real external surfaces where available: browser pages for image/video/generative tools, WPS/Excel for content matrices, creator platforms and store backends for publishing/account work, and an already logged-in personal WeChat before falling back to enterprise WeChat. Restore already-running/logged-in app and browser sessions before opening fresh pages; reuse saved/authorized login profiles without extra permission prompts; stop at QR/OTP/CAPTCHA/passkey/account-switch/authorization/credential-storage boundaries. Foreground user-present ordinary comments, replies, messages, and non-commercial content posts can proceed when requested; ad spend, price/inventory changes, purchases, payments, first-time login/security verification, and legal/contractual final commits still require confirmation. The durable ability is to convert a shop/product/platform brief into visible external-tool work and checked results, not to replay one fixed video script.',
-    requiresConfirmation: true,
+    notes: 'In this stage, when the user asks Lumi to take over ecommerce, short-video content production, store account management, product publishing, or customer-service handoff, Lumi can generate a local desktop delivery package without per-tool permission popups: store audit, content matrix, short-video script, image generation prompts, video generation prompts, publish draft, customer-service/WeChat draft, operation report, and verification record. Lumi should use real external surfaces where available: browser pages for image/video/generative tools, WPS/Excel for content matrices, creator platforms and store backends for publishing/account work, and an already logged-in personal WeChat before falling back to enterprise WeChat. Restore already-running/logged-in app and browser sessions before opening fresh pages; reuse saved/authorized login profiles without extra permission prompts; stop at QR/OTP/CAPTCHA/passkey/account-switch/authorization/credential-storage boundaries. Foreground user-present ordinary comments, replies, messages, and non-commercial content posts can proceed when requested; ad spend, price/inventory changes, purchases, payments, first-time login/security verification, and legal/contractual final commits still require explicit confirmation or handoff. The durable ability is to convert a shop/product/platform brief into visible external-tool work and checked results, not to replay one fixed video script.',
+    requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
@@ -487,8 +486,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Desktop modes and autonomous work',
     kind: 'system',
     actions: ['open_plans', 'open_work_queue', 'open_settings(section=autonomy)', 'autonomy_get_policy', 'autonomy_update_policy', 'autonomy_list_workflows', 'autonomy_register_workflow', 'autonomy_set_workflow_enabled'],
-    notes: 'Lumi uses the three desktop modes as the autonomy permission source: Chat maps to reactive, Assistant maps to low-friction semi, and Autonomy maps to continuous full. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That is resident runtime, not permission to invent automatic work; background task generation still comes from confirmed workflows and autonomy policy. There is no separate external-app automation gate.',
-    requiresConfirmation: true,
+    notes: 'Lumi uses three desktop permission modes. Chat is pure conversation: no tools, external apps, desktop control, files, teams, or background execution except explicit Lumi client mode control. Assistant is user-present high-permission execution: tools, browser, saved/authorized login sessions, files, desktop control, external apps, skills, and teams may run for requested ordinary work without per-tool permission popups; hard boundaries still stop for confirmation or handoff. Autonomy has the same practical permissions as Assistant plus 24h continuous/background operation, proactive questions, monitoring, sorting, absorption, learning, task checkpoints, and ultra-long continuation. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That is resident runtime, not permission to invent unrelated automatic work; background task generation still follows workflow/autonomy policy. There is no separate external-app automation gate.',
+    requiresConfirmation: false,
     stateKeys: ['mode', 'autonomy', 'runtime'],
   },
   {
@@ -504,8 +503,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Local self-governance and self-repair',
     kind: 'system',
     actions: ['client_health_check', 'client_self_repair', 'client_repair_skill', 'client_get_state', 'client_action(refresh_client_state)'],
-    notes: 'Lumi is not a voice-only assistant. She can inspect her own client body, diagnose client failures, refresh state, open recovery surfaces, and repair skills with confirmation when needed.',
-    requiresConfirmation: true,
+    notes: 'Lumi is not a voice-only assistant. She can inspect her own client body, diagnose client failures, refresh state, open recovery surfaces, and repair skills without per-tool permission popups; third-party installs, credential changes, destructive repairs, and other hard boundaries stop for explicit confirmation or handoff.',
+    requiresConfirmation: false,
     stateKeys: ['mode', 'windows', 'surfaces', 'music', 'meeting', 'runtimeLog', 'permissions', 'runtime', 'errors'],
   },
   {
@@ -521,8 +520,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Self extension pipeline',
     kind: 'system',
     actions: ['self_extension_plan', 'capability_gap_autofix', 'capability_learning_list', 'capability_research', 'generate_skill', 'install_skill', 'client_repair_skill'],
-    notes: 'When a capability seems missing, Lumi should first inspect learned routes, adapters, tools, installed skills, and marketplace skills. Use capability_gap_autofix only when there is no sufficient coverage or when a brittle/manual path has real failure evidence; then prepare or run a minimal verification experiment and persist one reusable route.',
-    requiresConfirmation: true,
+    notes: 'When a capability seems missing, Lumi should first inspect learned routes, adapters, tools, installed skills, and marketplace skills. Skill calls, route planning, safe local skill generation, and capability probes run without per-tool permission popups. Use capability_gap_autofix only when there is no sufficient coverage or when a brittle/manual path has real failure evidence; then prepare or run a minimal verification experiment and persist one reusable route. Installing or executing untrusted third-party code remains a hard boundary.',
+    requiresConfirmation: false,
     stateKeys: ['tools', 'permissions', 'runtime'],
   },
   {
@@ -581,8 +580,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Other local AI and agent tools',
     kind: 'external_app',
     actions: ['external_app_list_adapters', 'desktop_list_apps', 'desktop_open', 'computer_use'],
-    notes: 'Lumi can coordinate other AI apps through files, browser, clipboard, MCP, and confirmed computer-use sessions. Prefer the native app index and explicit integrations before visual control.',
-    requiresConfirmation: true,
+    notes: 'Lumi can coordinate other AI apps through files, browser, clipboard, MCP, and visible computer-use sessions without per-tool permission popups in Assistant/Autonomy. Prefer the native app index and explicit integrations before visual control; stop at login/security, payment, installation, credential, or destructive boundaries.',
+    requiresConfirmation: false,
     stateKeys: ['permissions', 'tools', 'windows'],
   },
   {
@@ -931,10 +930,9 @@ export function getClientHealthReport(userId: string): ClientHealthReport {
         'Retry non-destructive client actions when the cause is clear.',
       ],
       confirmFirst: [
-        'Repair or reinstall skills.',
-        'Clone, install, connect, or execute third-party code from GitHub, npm, Python, Revit add-ins, CAD plugins, or MCP servers.',
-        'Start meeting capture, autonomous execution, or wallpaper mode.',
-        'Operate shell/system commands, first-time login/security verification/credential storage/account switching, CAD app execution, ambiguous external submits, high-consequence external commits, or file writes without explicit deliverable intent.',
+        'Install or execute untrusted third-party code from GitHub, npm, Python, Revit add-ins, CAD plugins, or MCP servers.',
+        'Start meeting capture or wallpaper mode.',
+        'Operate generic shell/system commands, first-time login/security verification/credential storage/account switching, ambiguous external submits, high-consequence external commits, or file writes without explicit deliverable intent.',
         'Change settings, model providers, permissions, or runtime startup behavior.',
       ],
       forbidden: [
@@ -1409,7 +1407,7 @@ export function getClientSelfAwarenessReport(userId: string): ClientSelfAwarenes
 
 function isConfirmationSensitiveClientAction(action: string, mode?: string): boolean {
   if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return true;
-  return (action === 'set_mode' || action === 'set_client_mode') && (mode === 'meeting' || mode === 'autonomous');
+  return (action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting';
 }
 
 function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: string): boolean {
@@ -1519,14 +1517,14 @@ export function formatClientSelfPrompt(userId: string): string {
   const desktopAwareness = formatDesktopAwarenessForPrompt();
   const learnedCapabilityLines = formatLearnedCapabilityRoutes(userId);
   const capabilityLines = CLIENT_CAPABILITIES.map(cap => (
-    `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (confirmation-sensitive)' : ''}`
+    `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (hard-boundary-sensitive)' : ''}`
   ));
   const interfaceLines = CLIENT_INTERFACE_SURFACES.map(surface => (
     `- ${surface.label} (${surface.id}): ${surface.useWhen} Actions: ${surface.actions.join(', ')}${surface.closeAfterUse ? ' Close after temporary explanation/inspection.' : ''}`
   ));
   const executionHabitLines = VISIBLE_EXECUTION_HABITS.map(habit => `- ${habit.rule}`);
   const adapterLines = adapterRegistry.adapters.map(adapter => (
-    `- ${adapter.label} (${adapter.id}) [${adapter.category}/${adapter.status}]: Actions: ${adapter.actions.join(', ')}${adapter.requiresConfirmation ? ' (confirmation-sensitive)' : ''}${adapter.diagnostics?.length ? ` Diagnostics: ${adapter.diagnostics.slice(0, 3).join('; ')}` : ''}`
+    `- ${adapter.label} (${adapter.id}) [${adapter.category}/${adapter.status}]: Actions: ${adapter.actions.join(', ')}${adapter.requiresConfirmation ? ' (hard-boundary-sensitive)' : ''}${adapter.diagnostics?.length ? ` Diagnostics: ${adapter.diagnostics.slice(0, 3).join('; ')}` : ''}`
   ));
 
   const stateLines = state ? [

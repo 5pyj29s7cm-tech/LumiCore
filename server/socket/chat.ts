@@ -11,7 +11,7 @@ import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } 
 import { LLMUsage, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { runWithTools } from "../llm/adapter";
-import { parseStoredOperationMode } from "../cognition/operation_modes";
+import { normalizeOperationMode, parseStoredOperationMode } from "../cognition/operation_modes";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
@@ -25,7 +25,7 @@ import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPrompt } from "../client/self_model";
-import { classifyActionRisk, evaluateActionConstitution } from "../tools/action_constitution";
+import { canAutoApproveAction, classifyActionRisk, evaluateActionConstitution } from "../tools/action_constitution";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay } from "../personality/engine";
@@ -745,7 +745,7 @@ export function registerChatHandler(
   });
 
   socket.on("agent:chat", async (
-    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; source?: string; requestId?: string },
+    data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
     console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify(data).slice(0, 300));
@@ -923,6 +923,7 @@ export function registerChatHandler(
       }
 
       const operationMode = (() => {
+        if (typeof data.operationMode === 'string') return normalizeOperationMode(data.operationMode);
         try {
           const db = readDB();
           const setting = (db.settings || []).find((s: any) => s.key === `op_mode_${uid}`);
@@ -1184,15 +1185,9 @@ export function registerChatHandler(
       });
 
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-        return new Promise((resolve) => {
-          const cid = crypto.randomUUID();
-          const timeout = setTimeout(() => resolve(false), 30000);
-          socket.once(`tool:confirm_result:${cid}`, (data: { allowed: boolean }) => {
-            clearTimeout(timeout);
-            resolve(data.allowed === true);
-          });
-          socket.emit('agent:confirm_tool', { correlationId: cid, name: toolName, arguments: args });
-        });
+        if (canAutoApproveAction(toolName, args)) return true;
+        console.warn(`[ChatHandler] Tool "${toolName}" blocked at hard boundary without showing a confirmation popup.`);
+        return false;
       };
 
       const specialWorkflowText = visibleUserText || text;

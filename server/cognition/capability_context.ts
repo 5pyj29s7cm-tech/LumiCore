@@ -99,7 +99,7 @@ function relevantAdapters(flow: LumiTurnFlow, userId: string): string[] {
     return registry.adapters
       .filter(adapter => desired.has(adapter.category) || adapter.id.includes('work_takeover') || adapter.id.includes('self_extension'))
       .slice(0, 8)
-      .map(adapter => `${adapter.label} (${adapter.id}) status=${adapter.status}${adapter.requiresConfirmation ? ', confirm' : ''}`);
+      .map(adapter => `${adapter.label} (${adapter.id}) status=${adapter.status}${adapter.requiresConfirmation ? ', hard-boundary' : ''}`);
   } catch {
     return ['Adapter registry unavailable.'];
   }
