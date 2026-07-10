@@ -7,6 +7,7 @@ import { parseDocument, extractLegalMetadata } from '../../legal/parser';
 import {
   createLegalArticle, indexLegalArticle,
   searchSimilarCases, searchStatutes, verifyCitation, verifyMultipleCitations,
+  type CitationCheck,
   type LegalArticleType,
 } from '../../legal/kb';
 import {
@@ -17,6 +18,7 @@ import {
 import { generateEmbedding } from '../../memory/store';
 import { makeLLMCall, type NormalizedMessage } from '../../llm/providers';
 import { getUserPreferredLLMConfig } from '../../llm/user_preferences';
+import * as LegalCases from '../../org/legal_cases';
 
 async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Promise<string | null> {
   const getters = context?.llmGetters;
@@ -95,8 +97,9 @@ const EXTERNAL_LEGAL_SOURCES = [
 ];
 
 const LEGAL_REASONING_BASELINE = [
-  '内部法律处理约束：先核验现行有效法律、司法解释和可比类案，再将事实、证据、举证责任和质证风险对应到具体法律要件，最后生成用户要求的工作产物。',
-  '不要把“大前提/小前提/结论”“三段论”等方法论标题作为交付内容输出，除非用户明确要求法律分析底稿。',
+  '三段论是 Lumi 法律工作的核心基础：所有法律任务都必须先形成内部“大前提/小前提/涵摄结论”，再生成用户要求的工作产物。',
+  '大前提：先核验现行有效法律、司法解释和可比类案；小前提：将事实、证据、举证责任和质证风险对应到具体法律要件；结论：完成涵摄、风险提示和文书表达。',
+  '普通文书和聊天结果不要把“大前提/小前提/结论”“三段论”等方法论标题作为交付内容输出，除非用户明确要求法律分析底稿。',
   '所有未核验法条、未确认类案、未绑定证据的事实必须标注“待检索/待核验/待补证”。',
 ].join('\n');
 
@@ -345,6 +348,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
   const caseChecks = checks.filter(item => item.type === 'case');
   const missing = checks.filter(item => !item.exists);
   const repealed = checks.filter(item => item.isEffective === false);
+  const statuteGateRisks = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
   const valid = checks.filter(item => item.exists && item.isEffective !== false);
 
   const rows = checks.length
@@ -369,6 +373,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
     `- 已确认或可继续使用：${valid.length}`,
     `- 未确认存在：${missing.length}`,
     `- 已废止/失效风险：${repealed.length}`,
+    `- 现行有效法律硬门槛：${statuteGateRisks.length === 0 ? '通过' : '未通过'}`,
     '',
     '## 明细',
     '',
@@ -383,6 +388,695 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
     '- 最终文书应保留来源名称、发布日期/裁判日期、案号、法院层级、链接或下载文件路径。',
     '',
   ].join('\n');
+}
+
+interface CurrentLawGateResult {
+  passed: boolean;
+  checks: CitationCheck[];
+  statuteChecks: CitationCheck[];
+  blockingStatutes: CitationCheck[];
+  missingCaseChecks: CitationCheck[];
+}
+
+function evaluateCurrentLawGate(text: string, orgId?: string): CurrentLawGateResult {
+  const checks = verifyMultipleCitations(text, orgId);
+  const statuteChecks = checks.filter(item => item.type === 'statute');
+  const blockingStatutes = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
+  const missingCaseChecks = checks.filter(item => item.type === 'case' && !item.exists);
+  return {
+    passed: blockingStatutes.length === 0,
+    checks,
+    statuteChecks,
+    blockingStatutes,
+    missingCaseChecks,
+  };
+}
+
+function formatCitationList(items: CitationCheck[]): string[] {
+  if (items.length === 0) return ['- 无'];
+  return items.map(item => `- ${item.citation} | exists=${item.exists ? 'yes' : 'no'} | effective=${item.isEffective === null ? 'n/a' : item.isEffective ? 'yes' : 'no'} | source=${item.source || 'N/A'} | ${item.detail}`);
+}
+
+function formatCurrentLawGateBlock(args: {
+  caseName: string;
+  documentType: string;
+  outputDir: string;
+  reportPath: string;
+  sourcePath: string;
+  gate: CurrentLawGateResult;
+}): string {
+  return [
+    `# ${args.caseName} current-law gate blocked`,
+    '',
+    `- Document type: ${args.documentType}`,
+    `- Checked at: ${new Date().toISOString()}`,
+    `- Output directory: ${args.outputDir}`,
+    `- Citation report: ${args.reportPath}`,
+    `- Source register: ${args.sourcePath}`,
+    `- Statute citations checked: ${args.gate.statuteChecks.length}`,
+    `- Blocking statute citations: ${args.gate.blockingStatutes.length}`,
+    `- Missing case citations for lawyer review: ${args.gate.missingCaseChecks.length}`,
+    '',
+    '## Blocking Statutes',
+    '',
+    ...formatCitationList(args.gate.blockingStatutes),
+    '',
+    '## Missing Case Citations',
+    '',
+    ...formatCitationList(args.gate.missingCaseChecks),
+    '',
+    '## Required Fix',
+    '',
+    '- Replace repealed statutes with current effective law or judicial interpretations.',
+    '- Verify unknown statutes against an authoritative source before generating the formal delivery package.',
+    '- Re-run legal_finalize_delivery_package after the legal authority text is corrected.',
+    '',
+  ].join('\n');
+}
+
+const LEGAL_CASE_SEARCH_ORDER = ['最高人民法院', '高级人民法院', '中级人民法院', '基层人民法院'];
+
+function normalizeLegalCaseStage(input: string): LegalCases.LegalCaseStage {
+  if (/立案|filing/i.test(input)) return 'filing';
+  if (/开庭|庭审|trial/i.test(input)) return 'trial';
+  if (/判决|judgment/i.test(input)) return 'judgment';
+  if (/执行|enforcement/i.test(input)) return 'enforcement';
+  if (/结案|closed/i.test(input)) return 'closed';
+  return 'consultation';
+}
+
+function legalWorkspaceStatus(value: string, done = '已归集'): string {
+  return value.trim() ? done : '待补充';
+}
+
+function splitWorkspaceItems(value: string): string[] {
+  return String(value || '')
+    .split(/\r?\n|[;；]/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .slice(0, 30);
+}
+
+interface EvidenceReviewRow {
+  index: number;
+  name: string;
+  fact: string;
+  proofPurpose: string;
+  authenticity: string;
+  legality: string;
+  relevance: string;
+  gap: string;
+}
+
+function inferEvidenceFact(name: string, args: Record<string, any>): string {
+  const caseType = textArg(args, 'caseType') || textArg(args, 'cause');
+  const facts = textArg(args, 'facts') || textArg(args, 'materials');
+  const text = `${name} ${caseType} ${facts}`;
+  if (/合同|协议|订单|要约|确认书|contract|agreement|order/i.test(text)) return '合同关系、交易基础、权利义务内容';
+  if (/发货|送货|签收|物流|收货|交付|delivery|receipt/i.test(text)) return '履行交付、收货确认、付款条件是否成就';
+  if (/发票|银行|流水|转账|付款|收款|对账|invoice|bank|payment/i.test(text)) return '付款事实、欠款金额、资金往来和损失计算';
+  if (/微信|聊天|短信|邮件|通知|催告|沟通|wechat|message|email/i.test(text)) return '通知催告、协商过程、质量异议或对方确认';
+  if (/质量|验收|检测|异议|退货|维修|鉴定|inspection|quality/i.test(text)) return '质量异议、验收状态、拒付或减损抗辩基础';
+  if (/起诉状|答辩状|证据目录|庭审|笔录|complaint|answer|transcript/i.test(text)) return '对方主张、争议焦点、程序事实和质证对象';
+  return facts ? facts.slice(0, 80) : '待匹配待证事实';
+}
+
+function buildEvidenceReviewRows(args: Record<string, any>): EvidenceReviewRow[] {
+  const evidence = textArg(args, 'evidence');
+  const items = splitWorkspaceItems(evidence);
+  const sourceItems = items.length > 0 ? items : ['待整理证据材料'];
+  return sourceItems.map((rawName, index) => {
+    const name = rawName.replace(/\|/g, ' ');
+    const fact = inferEvidenceFact(name, args);
+    return {
+      index: index + 1,
+      name,
+      fact,
+      proofPurpose: fact === '待匹配待证事实' ? '待填写证明目的' : `证明${fact}`,
+      authenticity: '核对原件/形成时间/签章或电子数据原始载体',
+      legality: '核对取得方式、授权来源、隐私与平台规则',
+      relevance: '对应争议焦点和待证事实，排除无关材料',
+      gap: name === '待整理证据材料' ? '需补充证据名称、来源、页码和原件状态' : '待补页码、原件状态、来源登记和反证风险',
+    };
+  });
+}
+
+function formatEvidenceReviewRows(rows: EvidenceReviewRow[]): string {
+  return rows.map(row =>
+    `| ${row.index} | ${row.name} | ${row.fact} | ${row.proofPurpose} | ${row.authenticity} | ${row.legality} | ${row.relevance} | ${row.gap} |`,
+  ).join('\n');
+}
+
+function formatEvidenceGapList(rows: EvidenceReviewRow[]): string {
+  return rows.map(row => `- ${row.index}. ${row.name}：${row.gap}`).join('\n');
+}
+
+function workspaceMaterialIndexRows(materials: LegalCases.OrgLegalCaseMaterial[]): string {
+  if (!materials.length) return '| 1 | 待归集 | 待归集 | 待归集 | 待归集 |';
+  return materials.slice(0, 20).map((material, index) =>
+    `| ${index + 1} | ${material.type} | ${material.title.replace(/\|/g, ' ')} | ${material.source} | ${material.createdAt} |`,
+  ).join('\n');
+}
+
+function workspaceMaterialInputs(args: Record<string, any>): Array<{ type: LegalCases.LegalCaseMaterialType; title: string; content: string }> {
+  const entries: Array<{ type: LegalCases.LegalCaseMaterialType; title: string; content: string }> = [
+    { type: 'note', title: '案件事实与时间线', content: textArg(args, 'facts') },
+    { type: 'evidence', title: '证据材料与证明目的', content: textArg(args, 'evidence') },
+    { type: 'pleading', title: '起诉状/答辩状/对方材料', content: textArg(args, 'complaint') || textArg(args, 'opponentMaterials') },
+    { type: 'consultation', title: '庭审/会议/沟通记录', content: textArg(args, 'transcript') || textArg(args, 'trialNotes') },
+    { type: 'note', title: '法条、类案与外部检索记录', content: textArg(args, 'legalAuthorities') || textArg(args, 'similarCases') },
+  ];
+  return entries.filter(item => item.content.trim());
+}
+
+function courtLevelRank(value: string): number {
+  const text = String(value || '');
+  if (/最高人民法院|最高法/.test(text)) return 0;
+  if (/高级人民法院|高院/.test(text)) return 1;
+  if (/中级人民法院|中院/.test(text)) return 2;
+  if (/基层人民法院|基层法院|区人民法院|县人民法院|旗人民法院|市人民法院|人民法庭/.test(text)) return 3;
+  return 4;
+}
+
+function appendLegalCaseMaterial(args: {
+  orgId: string;
+  userId: string;
+  caseId: string;
+  type: LegalCases.LegalCaseMaterialType;
+  title: string;
+  content: string;
+  localPath?: string;
+}): LegalCases.OrgLegalCaseMaterial | null {
+  if (!args.caseId) return null;
+  const caseFile = LegalCases.getCase(args.orgId, args.caseId);
+  if (!caseFile) return null;
+  return LegalCases.addMaterial(args.orgId, args.userId, args.caseId, {
+    type: args.type,
+    title: args.title,
+    content: args.content,
+    localPath: args.localPath,
+    source: 'tool',
+  });
+}
+
+function archiveLegalReportToCase(args: Record<string, any>, params: {
+  orgId: string;
+  userId: string;
+  caseName: string;
+  title: string;
+  content: string;
+  type?: LegalCases.LegalCaseMaterialType;
+  cause?: string;
+  court?: string;
+  localPath?: string;
+}): string {
+  if (args.persistCase === false) return '- 案件空间：未归档（persistCase=false）';
+
+  const explicitCaseId = textArg(args, 'caseId');
+  const explicitCaseName = textArg(args, 'caseName') || textArg(args, 'title');
+  const shouldArchive = args.persistCase === true || !!explicitCaseId || !!explicitCaseName;
+  if (!shouldArchive) return '- 案件空间：未归档（未提供 caseId/caseName；设置 persistCase=true 可创建案件）';
+
+  let caseFile = explicitCaseId ? LegalCases.getCase(params.orgId, explicitCaseId) : null;
+  if (!caseFile && explicitCaseName) {
+    caseFile = LegalCases.listCases(params.orgId, explicitCaseName, 1)[0] || null;
+  }
+  if (!caseFile && explicitCaseId && !explicitCaseName && args.persistCase !== true) {
+    return '- 案件空间：未归档（caseId 不存在或无权限）';
+  }
+  if (!caseFile) {
+    caseFile = LegalCases.createCase(params.orgId, params.userId, {
+      title: explicitCaseName || params.caseName,
+      party: textArg(args, 'parties') || roleLabel(textArg(args, 'role')),
+      cause: params.cause || textArg(args, 'caseType') || textArg(args, 'cause'),
+      court: params.court || textArg(args, 'court'),
+      stage: normalizeLegalCaseStage(textArg(args, 'stage')),
+      notes: params.content.slice(0, 3000),
+    });
+  }
+
+  const material = LegalCases.addMaterial(params.orgId, params.userId, caseFile.id, {
+    type: params.type || 'note',
+    title: params.title,
+    content: params.content,
+    localPath: params.localPath,
+    source: 'tool',
+  });
+  return material
+    ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
+    : `- 案件空间：未归档 caseId=${caseFile.id}`;
+}
+
+function appendLegalWorkProductArchiveSection(
+  report: string,
+  args: Record<string, any>,
+  context: any,
+  params: {
+    caseName: string;
+    title: string;
+    type?: LegalCases.LegalCaseMaterialType;
+    cause?: string;
+    court?: string;
+    localPath?: string;
+  },
+): string {
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName: params.caseName,
+    title: params.title,
+    content: report,
+    type: params.type || 'note',
+    cause: params.cause,
+    court: params.court,
+    localPath: params.localPath,
+  });
+
+  return `${report}
+
+## 案件归档与交付边界
+${caseLine}
+- 内部法律分析：已完成基础事实、证据、法源和风险的工作稿衔接；正式对外使用前必须完成现行有效法律、证据三性、类案和来源复核。
+- 正式交付：继续使用 legal_finalize_delivery_package 触发现行有效法律硬门槛和来源登记。`;
+}
+
+function meetingSignalBullets(text: string, keywords: RegExp, fallback: string): string[] {
+  const lines = String(text || '')
+    .split(/\r?\n|[。！？；;]+/)
+    .map(line => line.trim())
+    .filter(line => line.length >= 6);
+  const picked = lines.filter(line => keywords.test(line)).slice(0, 10);
+  const source = picked.length ? picked : lines.slice(0, 8);
+  return source.length ? source.map(line => `- ${line.slice(0, 180)}`) : [`- ${fallback}`];
+}
+
+function buildLegalMeetingMinutesMarkdown(args: Record<string, any>): string {
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
+  const participants = textArg(args, 'participants') || '待补充';
+  const meetingTime = textArg(args, 'meetingTime') || new Date().toISOString();
+  const objective = textArg(args, 'objective') || textArg(args, 'claims') || '待律师确认';
+  const factSignals = meetingSignalBullets(transcript, /合同|付款|交付|质量|借款|工资|解除|侵权|损失|时间|经过|事实|争议|claim|fact/i, '待从会议记录中补充事实线索');
+  const evidenceSignals = meetingSignalBullets(transcript, /证据|合同|发票|流水|转账|聊天|微信|短信|邮件|录音|照片|签收|送货|检测|鉴定|原件|evidence|document/i, '待从会议记录中补充证据线索');
+  const issueSignals = meetingSignalBullets(transcript, /争议|焦点|对方|抗辩|质证|管辖|时效|责任|违约|赔偿|风险|issue|risk/i, '待从会议记录中提炼争议焦点');
+  const deadlineSignals = meetingSignalBullets(transcript, /开庭|举证|答辩|上诉|立案|提交|缴费|送达|截止|期限|日期|deadline|hearing|file/i, '暂未识别明确期限，需人工确认');
+
+  return `# ${caseName} 法律会议纪要
+
+- 会议时间：${meetingTime}
+- 参会/沟通人员：${participants}
+- 办理目标：${objective}
+- 生成时间：${new Date().toISOString()}
+- 状态：律师复核稿；不得直接作为最终法律意见、承诺或对外提交文本。
+
+## 一、沟通要点
+${meetingSignalBullets(transcript, /./, '待补充会议沟通内容').join('\n')}
+
+## 二、案件事实线索
+${factSignals.join('\n')}
+
+## 三、证据线索与三性提示
+${evidenceSignals.join('\n')}
+
+| 核验项 | 会议后处理 |
+| --- | --- |
+| 真实性 | 核对原件、形成时间、签章、电子数据原始载体、聊天/邮件导出方式 |
+| 合法性 | 核对取得方式、授权来源、隐私边界、平台规则和证据提交限制 |
+| 关联性 | 对应争议焦点、待证事实、证明目的和证明力大小 |
+
+## 四、争议焦点/风险线索
+${issueSignals.join('\n')}
+
+## 五、期限和待办
+${deadlineSignals.join('\n')}
+
+## 六、建议下一步
+1. 使用 legal_case_workspace 更新案件空间。
+2. 使用 legal_extract_dispute_focus 提炼争议焦点。
+3. 使用 legal_generate_litigation_packet 生成原告/被告诉讼文书包草稿。
+4. 使用 legal_external_research_plan 生成法条、类案、主体信息检索行动单。
+5. 正式交付前使用 legal_finalize_delivery_package，并接受现行有效法律硬门槛。
+
+## 七、原始转写/沟通记录
+${transcript || '待补充'}
+`;
+}
+
+async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
+  if (!transcript) return '请提供 transcript / meetingText / notes，用于生成法律会议纪要。';
+
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const persist = args.persistCase !== false;
+  let caseFile: LegalCases.OrgLegalCaseFile | null = null;
+  if (persist) {
+    const explicitCaseId = textArg(args, 'caseId');
+    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId) : null;
+    if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+    if (!caseFile) {
+      caseFile = LegalCases.createCase(orgId, userId, {
+        title: caseName,
+        party: textArg(args, 'participants'),
+        cause: textArg(args, 'caseType') || textArg(args, 'cause'),
+        stage: normalizeLegalCaseStage(textArg(args, 'stage')),
+        notes: transcript.slice(0, 3000),
+      });
+    }
+  }
+
+  const outputDir = resolveWritableOutputDir(
+    textArg(args, 'outputDir'),
+    ensureLegalDeliveryRoot(orgId),
+    caseName,
+    'meeting_minutes',
+  );
+  const markdown = buildLegalMeetingMinutesMarkdown(args);
+  const minutesPath = path.join(outputDir, 'legal-meeting-minutes.md');
+  fs.writeFileSync(minutesPath, markdown, 'utf-8');
+
+  let archiveLine = '- 案件空间：未归档（persistCase=false）';
+  if (persist && caseFile) {
+    const material = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+      type: 'consultation',
+      title: `${caseName}法律会议纪要`,
+      content: markdown,
+      localPath: minutesPath,
+      source: 'meeting',
+    });
+    archiveLine = material
+      ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
+      : `- 案件空间：未归档 caseId=${caseFile.id}`;
+  }
+
+  return [
+    '# 法律会议纪要已生成',
+    '',
+    `- 案件：${caseName}`,
+    `- 输出目录：${outputDir}`,
+    `- 纪要文件：${minutesPath}`,
+    archiveLine,
+    '',
+    '## 下一步',
+    '- 用 legal_case_workspace 查看案件闭环状态。',
+    '- 用 legal_extract_dispute_focus 提炼争议焦点。',
+    '- 用 legal_generate_litigation_packet 或 legal_generate_argument_or_opinion 生成律师复核稿。',
+  ].join('\n');
+}
+
+function legalReasoningGateStatus(gate: CurrentLawGateResult): string {
+  if (gate.statuteChecks.length === 0) return '待检索/未引用具体法条';
+  return gate.passed ? '通过' : '未通过';
+}
+
+function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: string): string {
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const role = roleLabel(textArg(args, 'role'));
+  const caseType = textArg(args, 'caseType') || textArg(args, 'cause') || '待确认案由';
+  const facts = textArg(args, 'facts') || textArg(args, 'materials') || textArg(args, 'transcript') || '待补充案件事实';
+  const evidence = textArg(args, 'evidence') || '待整理证据材料';
+  const legalAuthorities = textArg(args, 'legalAuthorities') || textArg(args, 'statutes') || '待检索现行有效法律、司法解释和裁判规则';
+  const similarCases = textArg(args, 'similarCases') || '待按法院层级检索类案';
+  const issues = (listArg(args, 'issues').length ? listArg(args, 'issues') : inferDisputeFocuses({ ...args, facts, caseType })).slice(0, 12);
+  const queries = buildSearchQueries({ ...args, facts, caseType, issues });
+  const evidenceRows = buildEvidenceReviewRows({ ...args, facts, evidence, caseType });
+  const lawGate = evaluateCurrentLawGate([
+    legalAuthorities,
+    textArg(args, 'content'),
+    textArg(args, 'documentText'),
+  ].filter(Boolean).join('\n'), orgId);
+  const gateStatus = legalReasoningGateStatus(lawGate);
+  const searchOrder = LEGAL_CASE_SEARCH_ORDER.join(' > ');
+  const majorRows = issues.map(issue =>
+    `| ${issue.replace(/\|/g, ' ')} | ${legalAuthorities.replace(/\|/g, ' ').slice(0, 160)} | 围绕请求权基础、抗辩构成、举证责任和裁判规则解释适用边界 | ${similarCases.replace(/\|/g, ' ').slice(0, 120)}；检索顺序：${searchOrder} | ${gateStatus} |`,
+  ).join('\n');
+  const minorRows = evidenceRows.map(row =>
+    `| ${row.index} | ${row.fact.replace(/\|/g, ' ')} | ${row.name.replace(/\|/g, ' ')} | ${row.proofPurpose.replace(/\|/g, ' ')} | ${row.authenticity}；${row.legality}；${row.relevance} | ${row.gap} |`,
+  ).join('\n');
+  const conclusionRows = issues.map(issue =>
+    `| ${issue.replace(/\|/g, ' ')} | 以已归集事实和证据目录为基础，未能证明部分标注“待补证” | 将大前提规则适用于小前提事实，形成可复核的支持/抗辩路径 | 可转入答辩状、代理词、法律意见书或诉讼策略；正式交付前必须通过现行有效法律硬门槛 |`,
+  ).join('\n');
+
+  return `# ${caseName} 法律分析三段论底稿
+
+- 案由/类型：${caseType}
+- 我方身份：${role}
+- 生成时间：${new Date().toISOString()}
+- 状态：律师复核稿；用于办案分析、文书起草和外部检索，不得直接作为最终对外法律意见。
+
+## 一、大前提：检索法律、解释法律、类案补强
+
+- 现行有效法律预检：${gateStatus}
+- 法源处理：先检索现行有效法律和司法解释，再按类案层级补强裁判规则。
+- 类案检索顺序：${searchOrder}
+- 未核验法条和类案不得进入正式交付包；正式文书需经 legal_finalize_delivery_package 硬门槛。
+
+| 争议焦点 | 检索法律 | 解释法律 | 类案补强 | 当前状态 |
+| --- | --- | --- | --- | --- |
+${majorRows}
+
+## 二、小前提：待证事实、证据材料、举证质证
+
+- 事实摘要：${facts.slice(0, 800)}
+- 证据摘要：${evidence.slice(0, 800)}
+
+| 序号 | 待证事实 | 证据材料 | 证明目的 | 举证/质证处理 | 缺口或风险 |
+| --- | --- | --- | --- | --- | --- |
+${minorRows}
+
+## 三、结论：涵摄、文书表达、风险
+
+| 争议焦点 | 事实基础 | 涵摄结论 | 可转化成果 |
+| --- | --- | --- | --- |
+${conclusionRows}
+
+## 四、阻断项和复核项
+
+- 现行有效法律阻断项：${lawGate.blockingStatutes.length}
+- 未确认案例引用：${lawGate.missingCaseChecks.length}
+- 证据缺口：${evidenceRows.filter(row => /待|缺|补|风险/.test(row.gap)).length}
+
+### 阻断法条
+${formatCitationList(lawGate.blockingStatutes).join('\n')}
+
+### 未确认案例
+${formatCitationList(lawGate.missingCaseChecks).join('\n')}
+
+## 五、下一步工具链
+
+1. legal_external_research_plan：生成外部法条、类案、主体信息检索行动单。
+2. legal_search_external_authorities：在已授权 API 或网页协作结果中登记法源和类案。
+3. legal_generate_litigation_packet：生成起诉状、答辩状、质证意见和证据目录工作底稿。
+4. legal_generate_argument_or_opinion：生成代理词、法律意见书、庭审提纲或应对策略。
+5. legal_finalize_delivery_package：正式交付前强制核验现行有效法律。
+
+## 六、检索关键词
+${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
+`;
+}
+
+async function reasoningMatrixHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const hasInput = textArg(args, 'facts') || textArg(args, 'materials') || textArg(args, 'evidence') ||
+    textArg(args, 'legalAuthorities') || textArg(args, 'complaint') || textArg(args, 'transcript') ||
+    listArg(args, 'issues').length > 0;
+  if (!hasInput) return '请提供 facts / evidence / legalAuthorities / issues / materials 中至少一项，用于生成法律分析三段论底稿。';
+
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const persist = args.persistCase !== false;
+  const writeFiles = args.writeFiles !== false && args.writeFile !== false;
+  const markdown = buildLegalReasoningMatrixMarkdown(args, orgId);
+  const lawGate = evaluateCurrentLawGate([
+    textArg(args, 'legalAuthorities'),
+    textArg(args, 'content'),
+    textArg(args, 'documentText'),
+  ].filter(Boolean).join('\n'), orgId);
+
+  let reasoningPath = '';
+  if (writeFiles) {
+    const outputDir = resolveWritableOutputDir(
+      textArg(args, 'outputDir'),
+      ensureLegalDeliveryRoot(orgId),
+      caseName,
+      'reasoning_matrix',
+    );
+    reasoningPath = path.join(outputDir, 'legal-reasoning-matrix.md');
+    fs.writeFileSync(reasoningPath, markdown, 'utf-8');
+  }
+
+  let caseFile: LegalCases.OrgLegalCaseFile | null = null;
+  let archiveLine = '- 案件空间：未归档（persistCase=false）';
+  if (persist) {
+    const explicitCaseId = textArg(args, 'caseId');
+    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId) : null;
+    if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+    if (!caseFile) {
+      caseFile = LegalCases.createCase(orgId, userId, {
+        title: caseName,
+        party: textArg(args, 'parties') || roleLabel(textArg(args, 'role')),
+        cause: textArg(args, 'caseType') || textArg(args, 'cause'),
+        court: textArg(args, 'court'),
+        stage: normalizeLegalCaseStage(textArg(args, 'stage')),
+        notes: (textArg(args, 'facts') || textArg(args, 'materials') || '').slice(0, 3000),
+      });
+    }
+    const material = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+      type: 'note',
+      title: `${caseName}法律分析三段论底稿`,
+      content: markdown,
+      localPath: reasoningPath || undefined,
+      source: 'tool',
+    });
+    archiveLine = material
+      ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
+      : `- 案件空间：未归档 caseId=${caseFile.id}`;
+  }
+
+  return [
+    '# 法律分析三段论底稿已生成',
+    '',
+    `- 案件：${caseName}`,
+    `- 现行有效法律预检：${legalReasoningGateStatus(lawGate)}`,
+    reasoningPath ? `- 底稿文件：${reasoningPath}` : '- 底稿文件：未写入（writeFiles=false）',
+    archiveLine,
+    '',
+    '## 下一步',
+    '- 用 legal_external_research_plan 补齐法条、类案和主体检索。',
+    '- 用 legal_generate_argument_or_opinion 生成代理词/法律意见书律师复核稿。',
+    '- 正式交付前用 legal_finalize_delivery_package 触发现行有效法律硬门槛。',
+  ].join('\n');
+}
+
+async function caseWorkspaceHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || textArg(args, 'title') || '未命名案件';
+  const role = roleLabel(textArg(args, 'role'));
+  const caseType = textArg(args, 'caseType') || textArg(args, 'cause') || '待确认案由';
+  const court = textArg(args, 'court');
+  const parties = textArg(args, 'parties');
+  const claims = textArg(args, 'claims') || textArg(args, 'objective');
+  const facts = textArg(args, 'facts') || textArg(args, 'materials');
+  const evidence = textArg(args, 'evidence');
+  const stage = normalizeLegalCaseStage(textArg(args, 'stage'));
+  const persist = args.persistCase !== false;
+  const focuses = inferDisputeFocuses({ ...args, caseType, facts });
+  const queries = buildSearchQueries({ ...args, caseType, facts, issues: focuses });
+  const lawGate = evaluateCurrentLawGate([
+    textArg(args, 'legalAuthorities'),
+    textArg(args, 'content'),
+    textArg(args, 'documentText'),
+    facts,
+  ].filter(Boolean).join('\n'), orgId);
+
+  let caseFile: LegalCases.OrgLegalCaseFile | null = null;
+  if (persist) {
+    const explicitCaseId = textArg(args, 'caseId');
+    caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId) : null;
+    if (!caseFile) {
+      caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+    }
+    const patch = {
+      title: caseName,
+      party: parties || role,
+      cause: caseType,
+      court,
+      stage,
+      notes: [
+        claims ? `办理目标：${claims}` : '',
+        facts ? `事实摘要：${facts.slice(0, 2000)}` : '',
+        evidence ? `证据摘要：${evidence.slice(0, 1200)}` : '',
+      ].filter(Boolean).join('\n'),
+    };
+    caseFile = caseFile
+      ? LegalCases.updateCase(orgId, userId, caseFile.id, patch) || caseFile
+      : LegalCases.createCase(orgId, userId, patch);
+
+    for (const material of workspaceMaterialInputs(args)) {
+      LegalCases.addMaterial(orgId, userId, caseFile.id, {
+        ...material,
+        source: 'tool',
+      });
+    }
+    caseFile = LegalCases.getCase(orgId, caseFile.id) || caseFile;
+  }
+
+  const caseIdLine = caseFile ? `- 案件ID：${caseFile.id}` : '- 案件ID：未持久化（persistCase=false）';
+  const materialRows = workspaceMaterialIndexRows(caseFile?.materials || []);
+  const currentLawStatus = lawGate.statuteChecks.length === 0
+    ? '待补充法条引用后核验'
+    : lawGate.passed ? '通过' : '未通过';
+  const evidenceReviewRows = buildEvidenceReviewRows({ ...args, caseType, facts, evidence });
+
+  return `# ${caseName} 案件工作台
+
+## 一、案件空间
+${caseIdLine}
+- 组织：${orgId}
+- 阶段：${stage}
+- 我方身份：${role}
+- 案由/类型：${caseType}
+- 法院/机构：${court || '待确认'}
+- 当事人：${parties || '待补充'}
+- 办理目标：${claims || '待补充'}
+
+## 二、闭环状态
+| 模块 | 状态 | 下一步 |
+| --- | --- | --- |
+| 身份信息 | ${legalWorkspaceStatus(parties)} | 补齐身份证/营业执照、统一社会信用代码、送达地址、联系方式 |
+| 案件事实 | ${legalWorkspaceStatus(facts)} | 按时间线拆成主体、行为、金额、通知、履行结果 |
+| 证据目录 | ${legalWorkspaceStatus(evidence)} | 逐项绑定待证事实、证明目的、原件/复印件、页码和三性核验 |
+| 三段论分析 | 底层必经 | 使用 legal_case_reasoning_matrix 展开大前提、小前提和涵摄结论底稿 |
+| 争议焦点 | 已生成初稿 | 使用 legal_extract_dispute_focus 继续细化 |
+| 现行有效法律 | ${currentLawStatus} | 使用 legal_search_statute / legal_generate_citation_verification_report 核验 |
+| 类案检索 | 待授权检索/登记 | 按法院层级顺序登记来源和有利/不利点 |
+| 文书包 | 待生成/待复核 | 使用 legal_generate_litigation_packet 或 legal_generate_argument_or_opinion 起草 |
+| 正式交付 | 受硬门槛控制 | 使用 legal_finalize_delivery_package，法条未通过不得生成正式包 |
+| 网上立案 | 半自动协作 | 使用 legal_prepare_filing_handoff，提交/签名/缴费/送达必须人工确认 |
+
+## 三、材料索引
+| 序号 | 类型 | 标题 | 来源 | 归档时间 |
+| --- | --- | --- | --- | --- |
+${materialRows}
+
+## 四、争议焦点
+${focuses.map((focus, index) => `${index + 1}. ${focus}`).join('\n')}
+
+## 五、证据目录与三性审查矩阵
+| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+${formatEvidenceReviewRows(evidenceReviewRows)}
+
+## 六、证据缺口与补强清单
+${formatEvidenceGapList(evidenceReviewRows)}
+
+## 七、法源与类案检索顺序
+1. 国家法律法规数据库/已授权权威库：先确认法律、司法解释现行有效。
+2. 人民法院案例库：优先检索指导性/参考性/权威案例。
+3. 中国裁判文书网：按法院层级筛选，顺序为 ${LEGAL_CASE_SEARCH_ORDER.join(' > ')}。
+4. 法蝉 / Alpha：在律所授权账号内补充商业库案例和裁判规则。
+5. 企查查 / 国家企业信用信息公示系统 / 执行信息公开网：核验主体、股东、涉诉、被执行人和财产线索。
+6. 人民法院在线服务：仅做立案材料核对和人工提交协作。
+
+## 八、推荐检索词
+${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
+
+## 九、下一步工具链
+1. legal_case_reasoning_matrix：展开三段论法律分析底稿，作为后续文书和策略的核心基础。
+2. legal_extract_dispute_focus：提炼争议焦点、待证事实和质证点。
+3. legal_external_research_plan：生成外部检索行动单和来源登记字段。
+4. legal_generate_litigation_packet：按原告/被告生成诉讼文书包草稿。
+5. legal_prepare_filing_handoff：生成法院在线服务平台字段映射和上传清单。
+6. legal_finalize_delivery_package：生成正式交付包；未通过现行有效法律硬门槛时自动阻断。
+
+## 十、边界
+- Lumi 可以归集材料、生成草稿、打开授权网页登录、记录来源和生成交付包。
+- 自动立案、签名、盖章、缴费、确认送达、撤回、和解承诺、最终法律意见必须由律师或当事人确认。
+`;
 }
 
 async function writeDocxFromMarkdown(markdown: string, filePath: string): Promise<void> {
@@ -565,7 +1259,11 @@ function stripHtmlToText(html: string): string {
 
 function extractNoticeHints(input: string): { caseNumber?: string; court?: string; hearingDate?: string } {
   const caseNumber = input.match(/[（(]\d{4}[）)][^，。；;\n]{2,80}(?:号|字第?\d+号?)/)?.[0];
-  const court = input.match(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/)?.[0];
+  const court = Array.from(input.matchAll(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/g))
+    .map(match => match[0])
+    .filter(candidate => !['人民法院', '法院'].includes(candidate))
+    .sort((a, b) => b.length - a.length)[0]
+    || input.match(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/)?.[0];
   const dateMatch = input.match(/(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?(?:\s*(\d{1,2})[:：时](\d{1,2})?分?)?/);
   const hearingDate = dateMatch
     ? `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}${dateMatch[4] ? ` ${dateMatch[4].padStart(2, '0')}:${(dateMatch[5] || '00').padStart(2, '0')}` : ''}`
@@ -868,10 +1566,93 @@ async function searchStatuteHandler(args: Record<string, any>): Promise<string> 
 
 // ── legal_generate_bid ──────────────────────────────────────────────────
 
+async function readBidRequirementInput(args: Record<string, any>): Promise<{
+  requirements: string;
+  sources: string[];
+  skipped: string[];
+}> {
+  const sources: string[] = [];
+  const skipped: string[] = [];
+  const chunks: string[] = [];
+  const maxChars = Math.max(5000, Math.min(Number(args.maxChars) || 180000, 600000));
+
+  const addText = (title: string, text: string) => {
+    const clean = String(text || '').replace(/\r/g, '').trim();
+    if (!clean) return;
+    const used = chunks.join('\n\n').length;
+    if (used >= maxChars) {
+      skipped.push(`${title}: 已达到本次读取字数上限`);
+      return;
+    }
+    const clipped = clean.slice(0, maxChars - used);
+    chunks.push(`# ${title}\n${clipped}`);
+    sources.push(title);
+  };
+
+  addText('粘贴的招标要求', textArg(args, 'requirements') || textArg(args, 'content') || textArg(args, 'text'));
+
+  const filePaths = Array.from(new Set([
+    textArg(args, 'filePath'),
+    ...listArg(args, 'filePaths'),
+  ].filter(Boolean)));
+
+  const addFile = async (rawPath: string) => {
+    const resolved = path.resolve(expandLocalPath(rawPath));
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      skipped.push(`${rawPath}: 文件不存在或不可访问`);
+      return;
+    }
+    const ext = path.extname(resolved).toLowerCase();
+    if (!LEGAL_MATERIAL_EXTENSIONS.has(ext)) {
+      skipped.push(`${resolved}: 暂不支持该格式 ${ext || '(无扩展名)'}`);
+      return;
+    }
+    const parsed = await parseDocument(resolved);
+    if (!parsed?.text?.trim()) {
+      skipped.push(`${resolved}: 未提取到可用文本`);
+      return;
+    }
+    addText(`招标文件 ${path.basename(resolved)}`, parsed.text);
+  };
+
+  for (const filePath of filePaths) {
+    await addFile(filePath);
+  }
+
+  if (textArg(args, 'folderPath') || textArg(args, 'folderName')) {
+    const folder = resolveLegalFolderPath(textArg(args, 'folderPath'), textArg(args, 'folderName'));
+    if (!folder || !fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+      skipped.push(`${textArg(args, 'folderPath') || textArg(args, 'folderName')}: 文件夹不存在或不可访问`);
+    } else {
+      const files = collectMaterialFiles(
+        folder,
+        args.recursive !== false,
+        Math.max(1, Math.min(Number(args.maxFiles) || 30, 100)),
+      );
+      for (const file of files) {
+        await addFile(file);
+      }
+    }
+  }
+
+  return {
+    requirements: chunks.join('\n\n').trim(),
+    sources,
+    skipped,
+  };
+}
+
 async function generateBidHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const requirements = args.requirements as string;
+  const bidInput = await readBidRequirementInput(args);
+  const requirements = bidInput.requirements;
   const projectName = (args.projectName as string) || '项目';
-  if (!requirements) return '请提供招标要求内容（requirements参数）';
+  if (!requirements) {
+    const skipped = bidInput.skipped.length ? `\n\n## 未读取材料\n${bidInput.skipped.map(item => `- ${item}`).join('\n')}` : '';
+    return `请提供招标要求内容（requirements参数），或提供可读取的 filePath / filePaths / folderPath。${skipped}`;
+  }
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || projectName;
 
   // Try to find relevant templates
   const templates = await searchMOHURDTemplates('施工');
@@ -894,12 +1675,14 @@ ${templates.slice(0, 3).map(t => `- ${t.title}`).join('\n')}
 请用中文输出，格式清晰。`;
 
   // Try to use LLM
+  let report = '';
   try {
     const text = await runLegalLLM(prompt, context, 2048);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) report = sanitizeLegalWorkProductOutput(text);
   } catch { /* LLM unavailable, return structured outline */ }
 
-  return `[标书生成 — 无LLM可用时的结构化大纲]
+  if (!report) {
+    report = `[标书生成 — 无LLM可用时的结构化大纲]
 
 # ${projectName} 投标书
 
@@ -923,13 +1706,38 @@ ${templates.slice(0, 3).map(t => `- ${t.title}`).join('\n')}
 [基于招标文件的评分规则分析]
 
 *注: 请连接LLM以生成完整标书内容。标注"[待填写]"处需根据实际公司资料补充。*`;
+  }
+
+  const sourceSection = [
+    '## 招标文件来源',
+    bidInput.sources.length ? bidInput.sources.map(source => `- ${source}`).join('\n') : '- 粘贴文本',
+    bidInput.skipped.length ? ['', '## 未读取材料', bidInput.skipped.map(item => `- ${item}`).join('\n')].join('\n') : '',
+  ].filter(Boolean).join('\n');
+  const archivedReport = `${report}\n\n${sourceSection}`;
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName,
+    title: `${projectName} 投标书工作底稿`,
+    content: archivedReport,
+    type: 'note',
+    cause: textArg(args, 'caseType') || '投标/招标文件响应',
+  });
+  return `${archivedReport}
+
+## 案件归档与交付边界
+${caseLine}
+- 三段论核心基础：已作为内部合规和风险分析逻辑使用；正式投标文件仍需人工补齐资质、业绩、报价和签章材料。
+- 正式交付：如需生成律所/团队正式交付包，请继续使用 legal_finalize_delivery_package 进行现行有效法律硬门槛和来源登记。`;
 }
 
 // ── legal_review_contract ───────────────────────────────────────────────
 
 async function reviewContractHandler(args: Record<string, any>, context?: any): Promise<string> {
   const contractText = args.contract as string;
-  const orgId = (args.orgId as string) || 'default';
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || textArg(args, 'title') || '合同审查';
   if (!contractText) return '请提供合同文本（contract参数）';
 
   // Search for similar cases to identify risk areas
@@ -963,12 +1771,14 @@ ${LEGAL_REASONING_BASELINE}
 
 请用中文输出。`;
 
+  let report = '';
   try {
     const text = await runLegalLLM(prompt, context, 2048);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) report = sanitizeLegalWorkProductOutput(text);
   } catch { /* fall through */ }
 
-  return `[合同审查 — 基于规则分析]
+  if (!report) {
+    report = `[合同审查 — 基于规则分析]
 
 ## 自动检测的风险条款
 
@@ -982,6 +1792,23 @@ ${detectRiskClauses(contractText)}
 3. 建议人工审查后定稿
 
 *注: 连接LLM以进行深度合同审查分析。*`;
+  }
+
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName,
+    title: `${caseName} 合同审查报告`,
+    content: report,
+    type: 'contract',
+    cause: textArg(args, 'caseType') || '合同审查',
+  });
+  return `${report}
+
+## 案件归档与交付边界
+${caseLine}
+- 三段论核心基础：已作为内部审查逻辑使用；风险条款需继续对应现行有效法律、合同事实和证据材料。
+- 正式交付：如需形成正式法律意见书/合同审查意见，请继续使用 legal_finalize_delivery_package 触发现行有效法律硬门槛。`;
 }
 
 function detectRiskClauses(text: string): string {
@@ -1009,6 +1836,9 @@ function detectRiskClauses(text: string): string {
 async function draftContractHandler(args: Record<string, any>, context?: any): Promise<string> {
   const contractType = (args.type as string) || '';
   const details = (args.details as string) || '';
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || `${contractType || '合同'}起草`;
   const templates = await searchMOHURDTemplates(contractType);
 
   if (templates.length === 0) {
@@ -1035,25 +1865,45 @@ ${LEGAL_REASONING_BASELINE}
 
 请输出完整合同文本。`;
 
+  let report = '';
   try {
     const text = await runLegalLLM(prompt, context, 2048);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) report = sanitizeLegalWorkProductOutput(text);
   } catch { /* fall through */ }
 
-  return `[合同起草 — 模板]
+  if (!report) {
+    report = `[合同起草 — 模板]
 
 使用住建部示范文本: **${templates[0].title}** (${templates[0].publishDate})
 
 请访问 ${templates[0].url} 下载完整模板。
 
 *注: 连接LLM可自动填充合同具体条款。*`;
+  }
+
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName,
+    title: `${caseName} 合同起草底稿`,
+    content: report,
+    type: 'contract',
+    cause: textArg(args, 'caseType') || contractType || '合同起草',
+  });
+  return `${report}
+
+## 案件归档与交付边界
+${caseLine}
+- 三段论核心基础：已作为内部条款构造和风险配置逻辑使用；空白项、主体信息、价款、期限、违约责任仍需人工补齐。
+- 正式交付：如需形成正式合同文本，请继续使用 legal_finalize_delivery_package 触发现行有效法律硬门槛。`;
 }
 
 // ── legal_trace_assets ──────────────────────────────────────────────────
 
-async function traceAssetsHandler(args: Record<string, any>): Promise<string> {
+async function traceAssetsHandler(args: Record<string, any>, context?: any): Promise<string> {
   const subjectName = args.name as string;
   if (!subjectName) return '请提供被执行主体名称（name参数）';
+  const caseName = textArg(args, 'caseName') || `${subjectName}财产线索`;
 
   const lines: string[] = [`# 被执行人"${subjectName}"财产线索报告\n`];
 
@@ -1104,18 +1954,25 @@ async function traceAssetsHandler(args: Record<string, any>): Promise<string> {
   lines.push('6. **知识产权**: 建议查询被执行人名下专利、商标、著作权');
   lines.push(`\n*数据来源: ${company?.sourceName || '授权网页登录协作/待人工确认'} | 全国法院被执行人信息(zhixing.court.gov.cn) | ${new Date().toISOString().slice(0, 10)}*`);
 
-  return lines.join('\n');
+  const report = lines.join('\n');
+  return appendLegalWorkProductArchiveSection(report, args, context, {
+    caseName,
+    title: `${subjectName}财产线索报告`,
+    type: 'evidence',
+    cause: textArg(args, 'caseType') || '执行/财产保全线索',
+  });
 }
 
 // ── legal_equity_penetration ─────────────────────────────────────────────
 
-async function equityPenetrationHandler(args: Record<string, any>): Promise<string> {
+async function equityPenetrationHandler(args: Record<string, any>, context?: any): Promise<string> {
   const companyName = args.name as string;
   if (!companyName) return '请提供公司名称（name参数）';
+  const caseName = textArg(args, 'caseName') || `${companyName}股权穿透`;
 
   const company = await searchCompany(companyName);
   if (!company) {
-    return `未通过已配置 API 查询到"${companyName}"的企业信息，或尚未配置企查查官方 API 凭证。
+    const report = `未通过已配置 API 查询到"${companyName}"的企业信息，或尚未配置企查查官方 API 凭证。
 
 可执行以下授权网页登录协作：
 1. web_login_profile_save_from_preset {"presetId":"qichacha"}
@@ -1123,6 +1980,12 @@ async function equityPenetrationHandler(args: Record<string, any>): Promise<stri
 3. 律师在网页内确认股东、对外投资、风险信息后，使用 legal_import_materials_to_kb 导入 Lumi 知识库。
 
 边界：这不是平台数据接入；不自动抓取、不批量同步、不绕过验证码、付费墙、账号权限或频控。`;
+    return appendLegalWorkProductArchiveSection(report, args, context, {
+      caseName,
+      title: `${companyName}股权穿透协作报告`,
+      type: 'evidence',
+      cause: textArg(args, 'caseType') || '主体/股权穿透',
+    });
   }
 
   const lines: string[] = [`# ${companyName} 股权穿透分析\n`];
@@ -1150,14 +2013,22 @@ async function equityPenetrationHandler(args: Record<string, any>): Promise<stri
   lines.push('\n*注意: 股权穿透信息基于公开工商数据，实际控制关系需综合判断。*');
   lines.push(`*数据来源: ${company.sourceName || '企查查授权数据源'} | ${new Date().toISOString().slice(0, 10)}*`);
 
-  return lines.join('\n');
+  const report = lines.join('\n');
+  return appendLegalWorkProductArchiveSection(report, args, context, {
+    caseName,
+    title: `${companyName}股权穿透分析报告`,
+    type: 'evidence',
+    cause: textArg(args, 'caseType') || '主体/股权穿透',
+  });
 }
 
 // ── legal_case_strategy ─────────────────────────────────────────────────
 
 async function caseStrategyHandler(args: Record<string, any>, context?: any): Promise<string> {
   const facts = args.facts as string;
-  const orgId = (args.orgId as string) || 'default';
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const caseName = textArg(args, 'caseName') || '诉讼策略分析';
+  const caseType = textArg(args, 'caseType') || '诉讼策略';
   if (!facts) return '请提供案件事实描述（facts参数）';
 
   // Search similar cases
@@ -1200,10 +2071,18 @@ ${LEGAL_REASONING_BASELINE}
 
   try {
     const text = await runLegalLLM(prompt, context, 2048);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) {
+      const report = sanitizeLegalWorkProductOutput(text);
+      return appendLegalWorkProductArchiveSection(report, args, context, {
+        caseName,
+        title: `${caseName}诉讼策略分析`,
+        type: 'note',
+        cause: caseType,
+      });
+    }
   } catch { /* fall through */ }
 
-  return `[诉讼策略分析 — 无LLM可用时的结构化框架]
+  const report = `[诉讼策略分析 — 无LLM可用时的结构化框架]
 
 ## 案件初步分析
 
@@ -1222,6 +2101,12 @@ ${statuteRefs || '未找到直接相关法条'}
 4. 诉讼时效 — 核实是否在诉讼时效期间内（民法典第188条: 3年）
 
 *注: 连接LLM以进行完整诉讼策略分析。*`;
+  return appendLegalWorkProductArchiveSection(report, args, context, {
+    caseName,
+    title: `${caseName}诉讼策略分析`,
+    type: 'note',
+    cause: caseType,
+  });
 }
 
 // ── legal_generate_litigation_packet ────────────────────────────────────
@@ -1233,6 +2118,16 @@ async function generateLitigationPacketHandler(args: Record<string, any>, contex
   const evidence = textArg(args, 'evidence');
   const caseContext = buildCaseContext(args);
   if (!facts && !evidence) return '请至少提供案件事实 facts 或证据材料 evidence。';
+  const evidenceReviewRows = buildEvidenceReviewRows({ ...args, facts, evidence });
+  const evidenceReviewTable = formatEvidenceReviewRows(evidenceReviewRows);
+  const evidenceGapList = formatEvidenceGapList(evidenceReviewRows);
+  const finish = (report: string) => appendLegalWorkProductArchiveSection(report, args, context, {
+    caseName,
+    title: `${caseName}半自动诉讼文书包`,
+    type: 'pleading',
+    cause: textArg(args, 'caseType') || '诉讼文书包',
+    court: textArg(args, 'court'),
+  });
 
   const prompt = `你是一名律所诉讼支持律师。请生成半自动诉讼文书包草稿，所有内容均用于律师复核，不得宣称可直接提交。
 
@@ -1242,20 +2137,26 @@ ${caseContext}
 ## 底层处理逻辑
 ${LEGAL_REASONING_BASELINE}
 
+## 证据三性审查底稿
+| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+${evidenceReviewTable}
+
 ## 输出要求
 1. 明确区分“系统草稿”“律师待确认”“当事人/法院系统填写项”。
 2. 我方为${role}时，生成相应文书包：
    - 原告：起诉状、要素式诉状要点、委托手续、立案材料清单、证据目录、证明目的、法院立案系统填写项。
    - 被告：答辩状、质证意见、证据反驳表、管辖/时效/主体资格等程序抗辩检查项、代理词框架。
    - 通用：案件摘要、证据清单、争议焦点、待补材料、法律检索清单。
-3. 所有事实必须绑定证据或标注“待补证”。
-4. 所有法律依据只写“待检索/待核验”或引用已确认法律名称，不得编造条文。
-5. 保留提交、签字、盖章、立案、发送给对方等人工确认节点。
+3. 证据目录必须逐项包含真实性、合法性、关联性、证明目的、补强缺口和质证风险。
+4. 所有事实必须绑定证据或标注“待补证”。
+5. 所有法律依据只写“待检索/待核验”或引用已确认法律名称，不得编造条文。
+6. 保留提交、签字、盖章、立案、发送给对方等人工确认节点。
 请用中文 Markdown 输出。`;
 
   try {
     const text = await runLegalLLM(prompt, context, 3000);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) return finish(sanitizeLegalWorkProductOutput(text));
   } catch { /* fall through */ }
 
   const plaintiffDocs = [
@@ -1273,7 +2174,7 @@ ${LEGAL_REASONING_BASELINE}
   ];
   const docs = role === '原告' ? plaintiffDocs : role === '被告' ? defendantDocs : [...plaintiffDocs, ...defendantDocs.slice(0, 2)];
 
-  return `# ${caseName} 半自动诉讼文书包
+  return finish(`# ${caseName} 半自动诉讼文书包
 
 ## 一、人工边界
 - 本文书包为系统草稿，只能作为律师工作底稿。
@@ -1286,22 +2187,28 @@ ${caseContext}
 ## 三、文书包清单
 ${docs.map((item, index) => `${index + 1}. ${item}`).join('\n')}
 
-## 四、证据目录草稿
-| 编号 | 证据名称 | 来源 | 待证事实 | 证明目的 | 原件/复印件 | 复核状态 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | 待拆分证据材料 | 案件材料 | 待证事实 | 待补充 | 待核对 | 律师复核 |
+## 四、证据目录与三性审查矩阵
+| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+${evidenceReviewTable}
 
-## 五、立案/提交前确认点
+## 五、证据缺口与补强清单
+${evidenceGapList}
+
+## 六、立案/提交前确认点
 - 当事人身份信息、统一社会信用代码、送达地址和联系方式。
 - 管辖法院、案由、诉讼请求、金额计算、诉讼费和保全需求。
-- 法条引用、类案引用、证据页码、附件份数。
+- 法条引用、类案引用、证据三性、证明目的、证据页码、附件份数。
 - 提交平台：如需网上立案，使用 web_login_run 打开“人民法院在线服务”，由律师人工核对并提交。
-`;
+`);
 }
 
 // ── legal_prepare_filing_handoff ────────────────────────────────────────
 
 async function prepareFilingHandoffHandler(args: Record<string, any>): Promise<string> {
+  const orgId = textArg(args, 'orgId') || 'default';
+  const userId = textArg(args, 'userId') || 'system';
+  const caseId = textArg(args, 'caseId');
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const role = roleLabel(textArg(args, 'role'));
   const court = textArg(args, 'court') || '待确认法院';
@@ -1322,7 +2229,7 @@ async function prepareFilingHandoffHandler(args: Record<string, any>): Promise<s
       '| 5 | 送达地址确认、收款账户、保全材料 | 其他材料 | 按法院要求补充 |',
     ].join('\n');
 
-  return `# ${caseName} 半自动立案网交接单
+  const handoff = `# ${caseName} 半自动立案网交接单
 
 ## 一、边界
 - 本单用于人民法院在线服务/地方在线诉讼服务平台的材料准备和人工提交交接。
@@ -1375,6 +2282,21 @@ ${materialRows}
 
 ## 八、告知模板
 材料已按半自动立案口径整理完毕，当前状态为“待律师登录法院平台人工核对并提交”。Lumi 未自动提交、未签名、未缴费、未确认送达；提交结果以法院平台回执为准。`;
+  const archivedMaterial = appendLegalCaseMaterial({
+    orgId,
+    userId,
+    caseId,
+    type: 'note',
+    title: `${caseName}半自动立案交接单`,
+    content: handoff,
+  });
+  const archiveLine = caseId
+    ? archivedMaterial ? `已归档到案件空间 materialId=${archivedMaterial.id}` : '未归档（caseId 不存在或无权限）'
+    : '未归档（未提供 caseId）';
+  return `${handoff}
+
+## 九、案件空间归档
+${archiveLine}`;
 }
 
 // ── legal_extract_dispute_focus ─────────────────────────────────────────
@@ -1389,6 +2311,12 @@ async function extractDisputeFocusHandler(args: Record<string, any>, context?: a
     textArg(args, 'evidence') || textArg(args, 'transcript') || textArg(args, 'trialNotes');
 
   if (!hasInput) return '请提供起诉状、证据材料、庭审笔录、案件事实或其他案件材料。';
+  const finish = (report: string) => appendLegalWorkProductArchiveSection(report, args, context, {
+    caseName,
+    title: `${caseName}争议焦点提炼`,
+    type: 'note',
+    cause: caseType,
+  });
 
   const prompt = `你是一名律所诉讼支持律师。请根据案件材料提炼争议焦点，输出律师可复核的办案工作稿。
 
@@ -1411,14 +2339,14 @@ ${LEGAL_REASONING_BASELINE}
 
   try {
     const text = await runLegalLLM(prompt, context, 2500);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) return finish(sanitizeLegalWorkProductOutput(text));
   } catch { /* fall through */ }
 
   const focuses = inferDisputeFocuses(args);
   const queries = buildSearchQueries({ ...args, caseType, facts, issues: focuses });
   const evidence = textArg(args, 'evidence') || '待拆分并编号';
 
-  return sanitizeLegalWorkProductOutput(`# ${caseName} 争议焦点提炼稿
+  return finish(sanitizeLegalWorkProductOutput(`# ${caseName} 争议焦点提炼稿
 
 ## 一、材料范围
 ${materials}
@@ -1442,7 +2370,7 @@ ${focuses.map((focus, index) => `### ${index + 1}. ${focus}
 ## 四、律师确认
 - 本稿仅用于办案梳理，不能直接作为最终法律意见或庭审发言。
 - 争议焦点、证据取舍、法条引用、类案引用和对外提交文本必须由律师复核确认。
-`);
+`));
 }
 
 // ── legal_generate_argument_or_opinion ─────────────────────────────────
@@ -1470,6 +2398,12 @@ async function generateArgumentOrOpinionHandler(args: Record<string, any>, conte
   if (!hasInput) {
     return '请提供案件事实、争议焦点、证据材料或对方材料，以便生成代理词/法律意见书草稿。';
   }
+  const finish = (report: string) => appendLegalWorkProductArchiveSection(report, args, context, {
+    caseName,
+    title: `${caseName}${documentType}草稿`,
+    type: 'pleading',
+    cause: caseType,
+  });
 
   const prompt = `你是一名资深诉讼律师。请生成“${documentType}”草稿，供律师复核后使用。
 
@@ -1501,7 +2435,7 @@ ${LEGAL_REASONING_BASELINE}
 
   try {
     const text = await runLegalLLM(prompt, context, 3000);
-    if (text) return sanitizeLegalWorkProductOutput(text);
+    if (text) return finish(sanitizeLegalWorkProductOutput(text));
   } catch { /* fall through */ }
 
   const focusLines = issues.map((issue, index) => `${index + 1}. ${issue}`).join('\n');
@@ -1513,7 +2447,7 @@ ${LEGAL_REASONING_BASELINE}
   ];
 
   if (documentType === '法律意见书') {
-    return sanitizeLegalWorkProductOutput(`# ${caseName} 法律意见书草稿
+    return finish(sanitizeLegalWorkProductOutput(`# ${caseName} 法律意见书草稿
 
 ## 一、委托事项
 围绕${caseType}，就“${objective}”形成初步法律意见，供律师复核。
@@ -1542,11 +2476,11 @@ ${focusLines}
 
 ## 七、复核清单
 ${commonReview.map(item => `- ${item}`).join('\n')}
-`);
+`));
   }
 
   if (documentType === '庭审提纲') {
-    return sanitizeLegalWorkProductOutput(`# ${caseName} 庭审提纲草稿
+    return finish(sanitizeLegalWorkProductOutput(`# ${caseName} 庭审提纲草稿
 
 ## 一、庭审目标
 以${role}立场围绕“${objective}”组织发问、举证、质证和争点回应。
@@ -1570,11 +2504,11 @@ ${focusLines}
 
 ## 六、复核清单
 ${commonReview.map(item => `- ${item}`).join('\n')}
-`);
+`));
   }
 
   if (documentType === '应对策略') {
-    return sanitizeLegalWorkProductOutput(`# ${caseName} 应对策略草稿
+    return finish(sanitizeLegalWorkProductOutput(`# ${caseName} 应对策略草稿
 
 ## 一、办理目标
 ${objective}
@@ -1599,10 +2533,10 @@ ${focusLines}
 
 ## 六、复核清单
 ${commonReview.map(item => `- ${item}`).join('\n')}
-`);
+`));
   }
 
-  return sanitizeLegalWorkProductOutput(`# ${caseName} 代理词草稿
+  return finish(sanitizeLegalWorkProductOutput(`# ${caseName} 代理词草稿
 
 ## 一、首部
 代理人接受委托，依据已提交材料和庭审情况，就${caseType}发表代理意见。本稿为系统草稿，需律师复核后使用。
@@ -1628,7 +2562,7 @@ ${focusLines}
 
 ## 七、复核清单
 ${commonReview.map(item => `- ${item}`).join('\n')}
-`);
+`));
 }
 
 // ── legal_analyze_folder_and_draft_argument ────────────────────────────
@@ -2037,7 +2971,20 @@ async function processNoticeLinkHandler(args: Record<string, any>, context?: any
     '4. 下载后的 PDF/DOCX/网页摘录，再用 legal_import_materials_to_kb 导入组织知识库。',
   ].join('\n');
 
-  const authFallback = (reason: string) => `# ${resultTitle}
+  const archiveNoticeReport = (report: string, localPath?: string) => {
+    const archiveLine = archiveLegalReportToCase(args, {
+      orgId,
+      userId,
+      caseName: caseName || materialTitle,
+      title: caseName ? `${caseName} ${materialTitle}` : materialTitle,
+      content: report,
+      type: 'note',
+      localPath,
+    });
+    return `${report}\n\n## 案件空间归档\n${archiveLine}`;
+  };
+
+  const authFallback = (reason: string) => archiveNoticeReport(`# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -2052,7 +2999,7 @@ async function processNoticeLinkHandler(args: Record<string, any>, context?: any
 
 ## 三、建议动作
 ${browserSteps}
-`;
+`);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
@@ -2138,7 +3085,7 @@ ${browserSteps}
       ? `\n## 四、文书内容摘录\n${(extractedText || '未提取到可读文本。').slice(0, extractedTextLimit)}\n`
       : '';
 
-    return `# ${resultTitle}
+    const output = `# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -2155,6 +3102,7 @@ ${kbLine}
 ## 三、边界
 - 当前保存的是网页/文本留痕，不等同于法院系统下载的正式 PDF。
 - 如法院页面提供正式 PDF 下载，请用授权浏览器打开并人工下载，再导入知识库或案件材料。${excerptSection}`;
+    return archiveNoticeReport(output, reportPath);
   }
 
   if (!response.ok || noticeNeedsBrowser(response.status, contentType, '')) {
@@ -2229,7 +3177,7 @@ ${kbLine}
     ? `\n## 四、文书内容摘录\n${(parsedText || '未提取到可读文本。若这是扫描件或图片型 PDF，请使用 OCR 后再导入。').slice(0, extractedTextLimit)}\n`
     : '';
 
-  return `# ${resultTitle}
+  const output = `# ${resultTitle}
 
 ## 一、处理结论
 - 链接：${target.href}
@@ -2249,6 +3197,7 @@ ${kbLine}
 ## 三、人工确认
 - 请律师核对链接来源、下载文件是否为法院或平台正式文书，以及是否需要补充签收/送达时间记录。
 - 若需提交、签收、撤回、缴费或确认送达，必须由律师或当事人在授权页面人工完成。${excerptSection}`;
+  return archiveNoticeReport(output, reportPath);
 }
 
 // ── legal_external_source_status ────────────────────────────────────────
@@ -2286,11 +3235,16 @@ async function searchExternalAuthoritiesHandler(args: Record<string, any>, conte
     limit,
     includeOfficialWeb,
   });
+  const orderedResults = [...results].sort((a, b) => {
+    const aRank = courtLevelRank([a.court, a.title, a.summary].filter(Boolean).join(' '));
+    const bRank = courtLevelRank([b.court, b.title, b.summary].filter(Boolean).join(' '));
+    return aRank - bRank;
+  });
   const capabilities = listLegalSourceCapabilities()
     .filter(source => ['pkulaw', 'farui', 'people-court-case-library', 'china-judgments-online'].includes(source.id));
 
-  const resultRows = results.length
-    ? results.map((item, index) =>
+  const resultRows = orderedResults.length
+    ? orderedResults.map((item, index) =>
       `| ${index + 1} | ${mdCell(item.sourceName)} | ${mdCell(item.title)} | ${mdCell(item.caseNumber || item.effectiveStatus)} | ${mdCell(item.publishDate || item.court)} | ${mdCell(item.url || item.summary)} | 律师复核 |`,
     ).join('\n')
     : '| 1 | 未命中 | 未通过已配置 API 返回结果 | 待补充 | 待补充 | 请配置授权 API 或使用网页登录协作 | 律师复核 |';
@@ -2298,6 +3252,11 @@ async function searchExternalAuthoritiesHandler(args: Record<string, any>, conte
   const statusRows = capabilities.map(source =>
     `| ${mdCell(source.label)} | ${source.accessMode} | ${source.configured ? '已配置/可用' : '未配置或网页登录'} | ${source.canAutoQuery ? '可以' : '不承诺'} | ${mdCell(source.nextAction)} |`,
   ).join('\n');
+  const sourceRegisterRows = orderedResults.length
+    ? orderedResults.map((item, index) =>
+      `| ${index + 1} | ${mdCell(item.sourceName)} | ${mdCell(query)} | ${mdCell(item.title)} | ${mdCell(item.caseNumber || item.effectiveStatus)} | ${mdCell(item.court || item.publishDate)} | ${mdCell(item.url)} | ${mdCell(item.summary || '待摘录')} | 律师复核 |`,
+    ).join('\n')
+    : '| 1 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待摘录 | 律师复核 |';
 
   const report = `# ${caseName} 外部法律数据库检索
 
@@ -2306,24 +3265,30 @@ async function searchExternalAuthoritiesHandler(args: Record<string, any>, conte
 - 检索类型：${type}
 - 指定数据源：${sourceIds.join('；') || '自动选择已配置 API'}
 - 官方网页兜底：${includeOfficialWeb ? '启用' : '未启用'}
+- 类案排序：${LEGAL_CASE_SEARCH_ORDER.join(' > ')}；无法识别法院层级的结果列后。
 
 ## 二、API 查询结果
 | 序号 | 数据源 | 标题 | 案号/效力 | 日期/法院 | 链接或摘要 | 复核状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 ${resultRows}
 
-## 三、接入状态
+## 三、来源登记回填
+| 序号 | 来源 | 检索词 | 标题 | 案号/效力 | 法院/发布日期 | 链接 | 关键摘录 | 复核状态 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+${sourceRegisterRows}
+
+## 四、接入状态
 | 数据源 | 模式 | 状态 | 自动查询 | 下一步 |
 | --- | --- | --- | --- | --- |
 ${statusRows}
 
-## 四、边界
+## 五、边界
 - 仅调用已配置且授权的 API/网关；未配置的数据源不承诺自动查询。
 - 人民法院案例库、裁判文书网、法蝉、Alpha 默认仍按授权网页登录协作和材料导入处理。
 - 所有法条效力、案例适用性和引用表述必须由律师最终复核。`;
 
   let kbLine = '- 知识库：未导入。律师确认来源和授权范围后，可设置 confirmedForKb=true 入库。';
-  if (args.confirmedForKb === true && results.length > 0) {
+  if (args.confirmedForKb === true && orderedResults.length > 0) {
     const article = createLegalArticle(orgId, userId, {
       title: `${caseName} 外部法律数据库检索`,
       content: report,
@@ -2332,7 +3297,7 @@ ${statusRows}
       tags: [
         'legal:external-api',
         `query:${query.slice(0, 40)}`,
-        ...Array.from(new Set(results.map(item => `source:${item.sourceId}`))),
+        ...Array.from(new Set(orderedResults.map(item => `source:${item.sourceId}`))),
       ],
       metadata: {
         articleType: 'research_note',
@@ -2342,7 +3307,17 @@ ${statusRows}
     kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
   }
 
-  return `${report}\n\n## 五、入库状态\n${kbLine}`;
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName,
+    title: `${caseName} 外部法律数据库检索`,
+    content: report,
+    type: type === 'case' ? 'judgment' : 'note',
+    cause: textArg(args, 'caseType') || query,
+  });
+
+  return `${report}\n\n## 六、入库与案件归档\n${kbLine}\n${caseLine}`;
 }
 
 async function companyDatabaseLookupHandler(args: Record<string, any>, context?: any): Promise<string> {
@@ -2371,6 +3346,11 @@ async function companyDatabaseLookupHandler(args: Record<string, any>, context?:
   const statusRows = capabilities.map(source =>
     `| ${mdCell(source.label)} | ${source.accessMode} | ${source.configured ? '已配置/可用' : '未配置或网页登录'} | ${source.canAutoQuery ? '可以' : '不承诺'} | ${mdCell(source.nextAction)} |`,
   ).join('\n');
+  const sourceRegisterRows = companies.length
+    ? companies.map((company, index) =>
+      `| ${index + 1} | ${mdCell(company.sourceName)} | ${mdCell(company.name)} | ${mdCell(company.unifiedCode)} | ${mdCell(company.legalPerson)} | ${mdCell(company.status)} | ${mdCell(company.url)} | 股东、涉诉、被执行和限制高消费信息待律师继续核验 | 律师复核 |`,
+    ).join('\n')
+    : '| 1 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 授权网页核验后回填 | 律师复核 |';
 
   const report = `# ${caseName} 企业/被执行主体数据库查询
 
@@ -2383,12 +3363,17 @@ async function companyDatabaseLookupHandler(args: Record<string, any>, context?:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 ${companyRows}
 
-## 三、接入状态
+## 三、主体信息来源登记
+| 序号 | 来源 | 主体名称 | 统一社会信用代码 | 法定代表人 | 状态 | 链接 | 后续核验 | 复核状态 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+${sourceRegisterRows}
+
+## 四、接入状态
 | 数据源 | 模式 | 状态 | 自动查询 | 下一步 |
 | --- | --- | --- | --- | --- |
 ${statusRows}
 
-## 四、下一步
+## 五、下一步
 - 若 API 未命中或未配置，请使用 web_login_profile_save_from_preset {"presetId":"qichacha"} 或 {"presetId":"national-enterprise-credit"} 打开授权网页核验。
 - 律师确认股东、涉诉、被执行、失信和限制高消费信息后，再用 legal_import_materials_to_kb 导入组织知识库。
 - Lumi 不绕过验证码、付费墙、账号权限、平台频控或下载限制。`;
@@ -2413,7 +3398,17 @@ ${statusRows}
     kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
   }
 
-  return `${report}\n\n## 五、入库状态\n${kbLine}`;
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName,
+    title: `${caseName} 企业/被执行主体数据库查询`,
+    content: report,
+    type: 'evidence',
+    cause: textArg(args, 'caseType') || '主体信息核验',
+  });
+
+  return `${report}\n\n## 六、入库与案件归档\n${kbLine}\n${caseLine}`;
 }
 
 async function externalSourceStatusHandler(): Promise<string> {
@@ -2435,7 +3430,10 @@ ${rows}
 
 // ── legal_external_research_plan ────────────────────────────────────────
 
-async function externalResearchPlanHandler(args: Record<string, any>): Promise<string> {
+async function externalResearchPlanHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseName = textArg(args, 'caseName') || '半自动外部检索行动单';
   const facts = textArg(args, 'facts');
   const caseType = textArg(args, 'caseType') || '民事纠纷';
   const issues = listArg(args, 'issues');
@@ -2451,7 +3449,7 @@ async function externalResearchPlanHandler(args: Record<string, any>): Promise<s
   3. 律师在网页内检索、筛选、摘录，并回填来源登记表。`)
     .join('\n');
 
-  return `# 半自动外部检索行动单
+  const report = `# ${caseName}
 
 ## 一、检索边界
 - Lumi 不复制第三方平台数据，不绕过验证码、付费墙、账号权限或频控。
@@ -2493,6 +3491,16 @@ ${queries.map((q, index) => `${index + 1}. ${q}`).join('\n')}
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 | 待登记 |
 `;
+  const caseLine = archiveLegalReportToCase(args, {
+    orgId,
+    userId,
+    caseName,
+    title: `${caseName} 外部检索行动单`,
+    content: report,
+    type: 'note',
+    cause: caseType,
+  });
+  return `${report}\n## 八、案件空间归档\n${caseLine}`;
 }
 
 // ── legal_generate_citation_verification_report ─────────────────────────
@@ -2581,6 +3589,8 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   if (!content) return '请提供 content / packetText / documentText，用于生成正式交付包。';
 
   const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const caseId = textArg(args, 'caseId');
   const caseName = textArg(args, 'caseName') || markdownTitle(content, '未命名案件');
   const documentType = normalizeFormalDocumentType(textArg(args, 'documentType') || textArg(args, 'type'));
   const outputDir = resolveWritableOutputDir(
@@ -2592,6 +3602,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
 
   const formalMarkdown = buildFormalLegalMarkdown({ ...args, caseName, documentType }, content);
   const citationReport = formatCitationReportMarkdown({ ...args, caseName, orgId }, formalMarkdown, 'formal_delivery_document');
+  const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId);
   const sourceRegister = [
     `# ${caseName} 来源登记表`,
     '',
@@ -2611,7 +3622,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     `- 文书类型：${documentType}`,
     `- 生成时间：${new Date().toISOString()}`,
     `- 输出目录：${outputDir}`,
-    `- 状态：律师复核稿`,
+    `- 状态：律师复核稿（现行有效法律硬门槛已通过）`,
     '',
     '## 文件清单',
     '- 01_formal-document.md：正式文书复核稿',
@@ -2621,6 +3632,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     '',
     '## 边界',
     '- Lumi 只生成本地文件和复核清单，不自动提交、签名、盖章、缴费、发送或确认送达。',
+    '- 已废止、失效或未确认的法条引用会阻断正式交付包生成。',
     '- 若需 PDF，请在安装 Microsoft Word 的 Windows 环境中设置 includePdf=true 生成，或由律师确认后另行导出。',
     '',
   ].join('\n');
@@ -2641,6 +3653,53 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   const sourcePath = path.join(outputDir, '03_source-register.md');
   const checklistPath = path.join(outputDir, '04_filing-and-signature-checklist.md');
   const manifestPath = path.join(outputDir, '00_manifest.md');
+  const gatePath = path.join(outputDir, '00_current-law-gate-blocked.md');
+
+  if (!currentLawGate.passed) {
+    const gateReport = formatCurrentLawGateBlock({
+      caseName,
+      documentType,
+      outputDir,
+      reportPath,
+      sourcePath,
+      gate: currentLawGate,
+    });
+    fs.writeFileSync(reportPath, citationReport, 'utf-8');
+    fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
+    fs.writeFileSync(gatePath, gateReport, 'utf-8');
+    const blockedMaterial = appendLegalCaseMaterial({
+      orgId,
+      userId,
+      caseId,
+      type: 'note',
+      title: `${documentType}交付包阻断记录`,
+      content: gateReport,
+      localPath: outputDir,
+    });
+    const caseArchiveLine = caseId
+      ? blockedMaterial ? `- 案件空间：已归档阻断记录 materialId=${blockedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
+      : '- 案件空间：未归档（未提供 caseId）';
+
+    return [
+      '# 正式交付包未生成',
+      '',
+      `- 案件：${caseName}`,
+      `- 文书类型：${documentType}`,
+      `- 输出目录：${outputDir}`,
+      `- 阻断原因：现行有效法律硬门槛未通过。存在已废止、失效或未确认的法条引用。`,
+      `- 阻断法条数：${currentLawGate.blockingStatutes.length}`,
+      `- 引用核验报告：${reportPath}`,
+      `- 来源登记表：${sourcePath}`,
+      `- 阻断记录：${gatePath}`,
+      caseArchiveLine,
+      '',
+      '## 阻断项',
+      ...formatCitationList(currentLawGate.blockingStatutes),
+      '',
+      '请先替换或核验法条，再重新运行 legal_finalize_delivery_package。',
+    ].join('\n');
+  }
+
   fs.writeFileSync(manifestPath, manifest, 'utf-8');
   fs.writeFileSync(formalPath, formalMarkdown, 'utf-8');
   fs.writeFileSync(reportPath, citationReport, 'utf-8');
@@ -2658,8 +3717,29 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     }
   }
 
-  const checks = verifyMultipleCitations(formalMarkdown, orgId);
-  const riskCount = checks.filter(item => !item.exists || item.isEffective === false).length;
+  const riskCount = currentLawGate.checks.filter(item => !item.exists || item.isEffective === false).length;
+  const archivedMaterial = appendLegalCaseMaterial({
+    orgId,
+    userId,
+    caseId,
+    type: 'pleading',
+    title: `${documentType}正式交付包`,
+    content: [
+      formalMarkdown,
+      '',
+      '---',
+      '',
+      citationReport,
+      '',
+      '---',
+      '',
+      sourceRegister,
+    ].join('\n'),
+    localPath: outputDir,
+  });
+  const caseArchiveLine = caseId
+    ? archivedMaterial ? `- 案件空间：已归档正式交付包 materialId=${archivedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
+    : '- 案件空间：未归档（未提供 caseId）';
 
   return [
     '# 正式交付包已生成',
@@ -2672,7 +3752,9 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     `- 引用核验报告：${reportPath}`,
     `- 来源登记表：${sourcePath}`,
     `- 提交确认清单：${checklistPath}`,
+    caseArchiveLine,
     ...docxLines,
+    '- 现行有效法律硬门槛：通过',
     `- 引用风险项：${riskCount}`,
     '',
     '## 人工边界',
@@ -2924,9 +4006,23 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         requirements: { type: 'string', description: '招标文件中的技术要求/评分标准/合同条款要求' },
+        content: { type: 'string', description: 'requirements 的别名，可粘贴招标文件正文' },
+        text: { type: 'string', description: 'requirements 的别名，可粘贴招标文件正文' },
+        filePath: { type: 'string', description: '单个招标文件路径，支持 PDF/DOCX/XLSX/PPTX/RTF/TXT/MD/CSV' },
+        filePaths: { type: 'array', items: { type: 'string' }, description: '多个招标文件路径' },
+        folderPath: { type: 'string', description: '招标文件夹路径，会批量读取支持的文档格式' },
+        folderName: { type: 'string', description: '桌面/文档/下载目录中的招标文件夹名称或关键词' },
+        recursive: { type: 'boolean', description: '读取文件夹时是否递归子目录，默认 true' },
+        maxFiles: { type: 'number', description: '文件夹读取最大文件数，默认 30，最高 100' },
+        maxChars: { type: 'number', description: '最多提取文本字数，默认 180000，最高 600000' },
         projectName: { type: 'string', description: '项目名称' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把标书工作底稿归档到该案件空间' },
+        caseName: { type: 'string', description: '案件、项目或工作空间名称' },
+        caseType: { type: 'string', description: '事项类型，例如投标/招标文件响应' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
-      required: ['requirements'],
     },
     handler: generateBidHandler,
     permission: 'user',
@@ -2940,7 +4036,13 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         contract: { type: 'string', description: '待审查的合同全文' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把合同审查报告归档到该案件空间' },
+        caseName: { type: 'string', description: '案件、项目或合同审查事项名称' },
+        title: { type: 'string', description: 'caseName 的别名' },
+        caseType: { type: 'string', description: '案由、事项类型或合同类型' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         orgId: { type: 'string', description: '组织ID' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
       required: ['contract'],
     },
@@ -2957,6 +4059,12 @@ export function registerLegalTools(registry: ToolRegistry): void {
       properties: {
         type: { type: 'string', description: '合同类型：建设工程施工合同 / 商品房买卖合同 / 工程总承包合同 / 建筑工人劳动合同' },
         details: { type: 'string', description: '合同具体要求（项目信息、工期、价款等）' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把合同起草底稿归档到该案件空间' },
+        caseName: { type: 'string', description: '案件、项目或合同起草事项名称' },
+        caseType: { type: 'string', description: '案由、事项类型或合同类型' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
       required: ['type'],
     },
@@ -2972,6 +4080,12 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         name: { type: 'string', description: '被执行主体名称（个人姓名/公司名称）' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把财产线索报告归档到该案件空间' },
+        caseName: { type: 'string', description: '关联案件名称或简称' },
+        caseType: { type: 'string', description: '案由或事项类型；用于新建案件或归档标记' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
       required: ['name'],
     },
@@ -2987,6 +4101,12 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         name: { type: 'string', description: '公司名称' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把股权穿透报告归档到该案件空间' },
+        caseName: { type: 'string', description: '关联案件名称或简称' },
+        caseType: { type: 'string', description: '案由或事项类型；用于新建案件或归档标记' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
       required: ['name'],
     },
@@ -3002,11 +4122,117 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         facts: { type: 'string', description: '案件事实描述（时间、地点、主体、行为、争议焦点）' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把策略分析归档到该案件空间' },
+        caseName: { type: 'string', description: '关联案件名称或简称' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         orgId: { type: 'string', description: '组织ID' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
       required: ['facts'],
     },
     handler: caseStrategyHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_case_workspace',
+    description: '统一案件工作台 — 创建或更新案件空间，归集身份信息、事实、证据、争议焦点、法源、类案、文书包、立案状态，并输出下一步工具链。用于把会议、聊天、材料、诉讼文书和外部检索串成同一个案件闭环。',
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: { type: 'string', description: '已有案件 ID；提供时更新该案件空间' },
+        caseName: { type: 'string', description: '案件名称或简称' },
+        title: { type: 'string', description: 'caseName 的别名' },
+        stage: { type: 'string', description: '阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段' },
+        role: { type: 'string', description: '我方身份：原告/被告/申请人/被申请人等' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        cause: { type: 'string', description: 'caseType 的别名' },
+        court: { type: 'string', description: '法院、仲裁机构或拟提交平台' },
+        parties: { type: 'string', description: '当事人身份信息、主体信息和联系方式摘要' },
+        claims: { type: 'string', description: '诉讼请求、抗辩目标或办理目标' },
+        objective: { type: 'string', description: 'claims 的别名' },
+        facts: { type: 'string', description: '案件事实、时间线或沟通记录摘要' },
+        materials: { type: 'string', description: '综合案件材料摘要，facts 的补充来源' },
+        evidence: { type: 'string', description: '证据材料、证据目录或零碎证据列表' },
+        complaint: { type: 'string', description: '起诉状、申请书、答辩状或对方文书摘要' },
+        opponentMaterials: { type: 'string', description: '对方起诉状、证据、答辩意见或代理意见摘要' },
+        transcript: { type: 'string', description: '会议、庭审、沟通或询问笔录' },
+        trialNotes: { type: 'string', description: 'transcript 的别名' },
+        legalAuthorities: { type: 'string', description: '已检索或拟引用的法条、司法解释、裁判规则' },
+        similarCases: { type: 'string', description: '已检索类案、案号、法院层级和有利/不利点' },
+        persistCase: { type: 'boolean', description: '是否写入组织案件档案，默认 true' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
+      },
+    },
+    handler: caseWorkspaceHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_meeting_minutes_to_case',
+    description: '法律会议纪要入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，提取事实、证据三性提示、争议焦点和期限待办，并归档到统一案件空间。',
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: { type: 'string', description: '已有案件 ID；提供时归档到该案件空间' },
+        caseName: { type: 'string', description: '案件名称或简称' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        cause: { type: 'string', description: 'caseType 的别名' },
+        stage: { type: 'string', description: '阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段' },
+        participants: { type: 'string', description: '参会、沟通或咨询人员' },
+        meetingTime: { type: 'string', description: '会议或沟通时间' },
+        objective: { type: 'string', description: '办理目标、咨询目标或会议目标' },
+        claims: { type: 'string', description: 'objective 的别名；也可填写诉求或抗辩目标' },
+        transcript: { type: 'string', description: '会议、语音、咨询或庭审转写全文' },
+        meetingText: { type: 'string', description: 'transcript 的别名' },
+        notes: { type: 'string', description: 'transcript 的别名；可填写沟通笔记' },
+        outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_delivery/{orgId}' },
+        persistCase: { type: 'boolean', description: '是否写入组织案件档案，默认 true' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
+      },
+    },
+    handler: meetingMinutesToCaseHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_case_reasoning_matrix',
+    description: '法律分析三段论底稿 — 围绕争议焦点生成“大前提/小前提/涵摄结论”办案分析矩阵，覆盖检索法律、解释法律、类案补强、待证事实、证据材料、举证质证和可转化文书成果，并可归档到案件空间。',
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: { type: 'string', description: '已有案件 ID；提供时归档到该案件空间' },
+        caseName: { type: 'string', description: '案件名称或简称' },
+        role: { type: 'string', description: '我方身份：原告/被告/申请人/被申请人等' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        cause: { type: 'string', description: 'caseType 的别名' },
+        court: { type: 'string', description: '法院、仲裁机构或拟提交平台' },
+        parties: { type: 'string', description: '当事人身份信息、主体信息和联系方式摘要' },
+        claims: { type: 'string', description: '诉讼请求、抗辩目标或办理目标' },
+        objective: { type: 'string', description: 'claims 的别名' },
+        facts: { type: 'string', description: '案件事实、时间线或沟通记录摘要' },
+        materials: { type: 'string', description: '综合案件材料摘要，facts 的补充来源' },
+        evidence: { type: 'string', description: '证据材料、证据目录或零碎证据列表' },
+        complaint: { type: 'string', description: '起诉状、申请书、答辩状或对方文书摘要' },
+        opponentMaterials: { type: 'string', description: '对方起诉状、证据、答辩意见或代理意见摘要' },
+        transcript: { type: 'string', description: '会议、庭审、沟通或询问笔录' },
+        issues: { type: 'array', items: { type: 'string' }, description: '争议焦点列表；未提供时由工具从材料中推断' },
+        legalAuthorities: { type: 'string', description: '已检索或拟引用的法条、司法解释、裁判规则' },
+        similarCases: { type: 'string', description: '已检索类案、案号、法院层级和有利/不利点' },
+        outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_delivery/{orgId}' },
+        writeFiles: { type: 'boolean', description: '是否写入 Markdown 底稿，默认 true' },
+        persistCase: { type: 'boolean', description: '是否写入组织案件档案，默认 true' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
+      },
+    },
+    handler: reasoningMatrixHandler,
     permission: 'user',
     securityLevel: 'safe',
   });
@@ -3017,6 +4243,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把诉讼文书包归档到该案件空间' },
         caseName: { type: 'string', description: '案件名称或简称' },
         role: { type: 'string', description: '我方身份：原告/被告/申请人/被申请人等' },
         caseType: { type: 'string', description: '案由或案件类型' },
@@ -3026,6 +4253,9 @@ export function registerLegalTools(registry: ToolRegistry): void {
         facts: { type: 'string', description: '案件事实和时间线' },
         evidence: { type: 'string', description: '已有证据材料摘要' },
         opponentMaterials: { type: 'string', description: '对方起诉状、证据或其他材料摘要' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
     handler: generateLitigationPacketHandler,
@@ -3040,6 +4270,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         caseName: { type: 'string', description: '案件名称或简称' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把立案交接单归档到该案件空间' },
         role: { type: 'string', description: '我方身份：原告/申请人/被告等' },
         caseType: { type: 'string', description: '案由或案件类型' },
         court: { type: 'string', description: '拟立案法院或审理法院' },
@@ -3049,6 +4280,8 @@ export function registerLegalTools(registry: ToolRegistry): void {
         evidence: { type: 'string', description: '已有证据材料摘要' },
         materials: { type: 'array', items: { type: 'string' }, description: '已准备或待上传的材料名称列表' },
         portalUrl: { type: 'string', description: '法院在线服务或地方诉讼服务平台 URL，默认人民法院在线服务' },
+        orgId: { type: 'string', description: '组织 ID，默认 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认 system' },
       },
     },
     handler: prepareFilingHandoffHandler,
@@ -3062,6 +4295,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把争议焦点底稿归档到该案件空间' },
         caseName: { type: 'string', description: '案件名称或简称' },
         role: { type: 'string', description: '我方身份：原告/被告/申请人/被申请人等' },
         caseType: { type: 'string', description: '案由或案件类型' },
@@ -3073,6 +4307,9 @@ export function registerLegalTools(registry: ToolRegistry): void {
         transcript: { type: 'string', description: '庭审笔录、会议纪要或语音转写内容' },
         trialNotes: { type: 'string', description: '庭审记录、律师笔记或沟通记录' },
         opponentMaterials: { type: 'string', description: '对方起诉状、证据、代理意见等材料' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
     handler: extractDisputeFocusHandler,
@@ -3086,6 +4323,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把文书草稿归档到该案件空间' },
         caseName: { type: 'string', description: '案件名称或简称' },
         role: { type: 'string', description: '我方身份：原告/被告/申请人/被申请人等' },
         documentType: { type: 'string', description: '文书类型：代理词 / 法律意见书 / 庭审提纲 / 应对策略' },
@@ -3096,6 +4334,9 @@ export function registerLegalTools(registry: ToolRegistry): void {
         opponentArguments: { type: 'string', description: '对方主张、起诉状、答辩意见或代理意见摘要' },
         objective: { type: 'string', description: '我方办理目标、诉请或抗辩目标' },
         materials: { type: 'string', description: '综合案件材料摘要' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
     handler: generateArgumentOrOpinionHandler,
@@ -3170,8 +4411,12 @@ export function registerLegalTools(registry: ToolRegistry): void {
         url: { type: 'string', description: '短信或通知中的 http(s) 链接；未提供时会从 message/noticeText 中提取第一个链接' },
         message: { type: 'string', description: '完整短信原文，可用于提取案号、法院、开庭/通知日期和链接' },
         noticeText: { type: 'string', description: '法院通知或送达通知文本' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把短信/通知处理结果归档到该案件空间' },
         caseName: { type: 'string', description: '关联案件名称或简称' },
         title: { type: 'string', description: '材料标题，默认“短信/法院通知链接材料”' },
+        includeExtractedText: { type: 'boolean', description: '是否在返回结果中包含正文摘录，默认 true' },
+        extractedTextLimit: { type: 'number', description: '返回正文摘录最大字符数，默认 4000，最高 20000' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         confirmedForKb: { type: 'boolean', description: '律师已确认来源、授权和使用权限后设为 true，工具会导入组织知识库' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
         userId: { type: 'string', description: '导入人 ID，默认上下文 userId 或 system' },
@@ -3191,10 +4436,12 @@ export function registerLegalTools(registry: ToolRegistry): void {
         url: { type: 'string', description: '需要下载和提取正文的 http(s) 文书链接；未提供时会从 message/linkText 中提取第一个链接' },
         message: { type: 'string', description: '包含链接的用户消息、短信或网页摘录' },
         linkText: { type: 'string', description: '包含链接的文本' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把文书链接处理结果归档到该案件空间' },
         caseName: { type: 'string', description: '关联案件名称或简称' },
         title: { type: 'string', description: '材料标题，默认“链接文书材料”' },
         includeExtractedText: { type: 'boolean', description: '是否在返回结果中包含正文摘录，默认 true' },
         extractedTextLimit: { type: 'number', description: '返回正文摘录最大字符数，默认 4000，最高 20000' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         confirmedForKb: { type: 'boolean', description: '律师已确认来源、授权和使用权限后设为 true，工具会导入组织知识库' },
         importToKb: { type: 'boolean', description: 'confirmedForKb 的别名' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
@@ -3232,8 +4479,11 @@ export function registerLegalTools(registry: ToolRegistry): void {
         platforms: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
         includeOfficialWeb: { type: 'boolean', description: '是否同时尝试国家法律法规数据库公开网页检索，默认 false' },
         limit: { type: 'number', description: '返回结果数量上限，默认 5，最高 20' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把检索报告和来源登记归档到该案件空间' },
         caseName: { type: 'string', description: '关联案件名称或简称' },
+        caseType: { type: 'string', description: '案由或案件类型；用于新建案件或归档标记' },
         confirmedForKb: { type: 'boolean', description: '律师确认来源和授权后设为 true，可将检索报告导入组织知识库' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
@@ -3256,8 +4506,11 @@ export function registerLegalTools(registry: ToolRegistry): void {
         sourceIds: { type: 'array', items: { type: 'string' }, description: '指定数据源，如 qichacha、tianyancha' },
         sources: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
         platforms: { type: 'array', items: { type: 'string' }, description: 'sourceIds 的别名' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把主体信息报告归档到该案件空间' },
         caseName: { type: 'string', description: '关联案件名称或简称' },
+        caseType: { type: 'string', description: '案由或案件类型；用于新建案件或归档标记' },
         confirmedForKb: { type: 'boolean', description: '律师确认来源和授权后设为 true，可将报告导入组织知识库' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
@@ -3274,10 +4527,15 @@ export function registerLegalTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把外部检索行动单归档到该案件空间' },
+        caseName: { type: 'string', description: '案件名称或简称' },
         caseType: { type: 'string', description: '案由或案件类型' },
         facts: { type: 'string', description: '案件事实摘要' },
         issues: { type: 'array', items: { type: 'string' }, description: '争议焦点列表' },
         companyNames: { type: 'array', items: { type: 'string' }, description: '需要查询的公司或被执行人名称' },
+        persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
     handler: externalResearchPlanHandler,
@@ -3317,6 +4575,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
         content: { type: 'string', description: '需要整理成正式交付包的文书草稿或工作底稿' },
         packetText: { type: 'string', description: 'content 的别名，用于诉讼文书包结果' },
         documentText: { type: 'string', description: 'content 的别名，用于单份文书结果' },
+        caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把交付包或阻断记录归档到该案件空间' },
         caseName: { type: 'string', description: '案件名称或简称' },
         documentType: { type: 'string', description: '文书类型：起诉状/答辩状/质证意见/代理词/法律意见书/证据目录/合同文本/投标书等' },
         role: { type: 'string', description: '我方身份' },
@@ -3329,6 +4588,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
         includePdf: { type: 'boolean', description: '是否尝试用 Microsoft Word 转 PDF，默认 false' },
         markDraft: { type: 'boolean', description: '是否标记为律师复核稿，默认 true' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+        userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
     handler: finalizeDeliveryPackageHandler,

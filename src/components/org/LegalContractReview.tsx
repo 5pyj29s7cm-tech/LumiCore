@@ -3,6 +3,7 @@ import { AlertCircle, AlertTriangle, Check, FileText, HelpCircle, Loader2, Shiel
 import { toast } from 'sonner';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
+import type { LegalCaseFile } from '../../lib/legalCaseStore';
 
 interface RiskItem {
   level: 'high' | 'medium' | 'low';
@@ -12,7 +13,7 @@ interface RiskItem {
   statuteRef: string;
 }
 
-export function LegalContractReview() {
+export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | null }) {
   const t = useT();
   const { workDomain, orgConnection } = useApp();
   const isZh = t.langCode !== 'en';
@@ -66,6 +67,11 @@ export function LegalContractReview() {
           contract: contract.slice(0, 10000),
           domain: workDomain,
           orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
+          caseId: caseFile?.id,
+          caseName: caseFile ? (caseFile.title || caseFile.party || caseFile.caseNumber || undefined) : undefined,
+          caseType: caseFile?.cause || '合同审查',
+          court: caseFile?.court,
+          persistCase: Boolean(caseFile),
         }),
         credentials: 'include',
       });

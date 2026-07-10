@@ -12,6 +12,7 @@ import { LegalContractReview } from './LegalContractReview';
 import { LegalDataSourcesSettings } from './LegalDataSourcesSettings';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
+import { runLegalTool } from '../../lib/legalToolClient';
 import {
   clearLegalConsultationCaseId,
   createEmptyLegalCase,
@@ -98,6 +99,114 @@ function inferLegalMaterialTitle(content: string, fallback: string): string {
   if (caseNumber) return `${fallback} ${caseNumber}`;
   const firstLine = content.split(/\r?\n/).map(line => line.trim()).find(Boolean);
   return firstLine ? firstLine.slice(0, 80) : fallback;
+}
+
+interface LegalCaseReadinessItem {
+  key: string;
+  label: string;
+  detail: string;
+  done: boolean;
+  view?: LegalView;
+}
+
+function legalCaseMaterialText(caseFile: LegalCaseFile): string {
+  return [
+    caseFile.notes,
+    ...(caseFile.materials || []).map(material => [
+      material.type,
+      material.title,
+      material.source || '',
+      material.content || '',
+    ].join('\n')),
+  ].join('\n').toLowerCase();
+}
+
+function legalCaseHasSignal(caseFile: LegalCaseFile, patterns: RegExp[]): boolean {
+  const text = legalCaseMaterialText(caseFile);
+  return patterns.some(pattern => pattern.test(text));
+}
+
+function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: string) => string): LegalCaseReadinessItem[] {
+  const materials = caseFile.materials || [];
+  const hasIntake = Boolean(caseFile.notes.trim() || materials.length > 0);
+  const hasReasoning = legalCaseHasSignal(caseFile, [/三段论|大前提|小前提|涵摄|legal_case_reasoning_matrix|法律分析三段论/i]);
+  const hasEvidence = materials.some(material => material.type === 'evidence')
+    || legalCaseHasSignal(caseFile, [/证据目录|证明目的|三性|真实性|合法性|关联性|质证/i]);
+  const hasSources = legalCaseHasSignal(caseFile, [/来源登记|外部检索|法源|类案|裁判文书|人民法院案例库|legal_external_research_plan|legal_search_external_authorities/i]);
+  const hasWorkProduct = materials.some(material => material.type === 'pleading' || material.type === 'contract')
+    || legalCaseHasSignal(caseFile, [/起诉状|答辩状|质证意见|代理词|法律意见书|合同审查|合同起草|投标书|标书|诉讼策略/i]);
+  const hasDeliveryGate = legalCaseHasSignal(caseFile, [/正式交付包|现行有效法律硬门槛|引用核验|引用校验|source-register|来源登记表|legal_finalize_delivery_package/i]);
+
+  return [
+    {
+      key: 'intake',
+      label: ui('会谈/材料', 'Intake'),
+      detail: hasIntake ? ui('已入案', 'Archived') : ui('待导入', 'Missing'),
+      done: hasIntake,
+      view: 'import',
+    },
+    {
+      key: 'reasoning',
+      label: ui('三段论底稿', 'Reasoning Matrix'),
+      detail: hasReasoning ? ui('已形成', 'Ready') : ui('底层必经', 'Required'),
+      done: hasReasoning,
+      view: 'strategy',
+    },
+    {
+      key: 'evidence',
+      label: ui('证据三性', 'Evidence Review'),
+      detail: hasEvidence ? ui('已整理', 'Prepared') : ui('待整理', 'Missing'),
+      done: hasEvidence,
+      view: 'packet',
+    },
+    {
+      key: 'sources',
+      label: ui('法源类案', 'Sources'),
+      detail: hasSources ? ui('有登记', 'Logged') : ui('待检索', 'Missing'),
+      done: hasSources,
+      view: 'external-research',
+    },
+    {
+      key: 'work-product',
+      label: ui('文书策略', 'Drafts'),
+      detail: hasWorkProduct ? ui('有底稿', 'Drafted') : ui('待生成', 'Missing'),
+      done: hasWorkProduct,
+      view: 'packet',
+    },
+    {
+      key: 'delivery',
+      label: ui('交付核验', 'Delivery Gate'),
+      detail: hasDeliveryGate ? ui('有记录', 'Recorded') : ui('未核验', 'Missing'),
+      done: hasDeliveryGate,
+      view: 'verify',
+    },
+  ];
+}
+
+function legalCaseToolArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
+  if (!caseFile) return orgId ? { orgId } : {};
+  return {
+    caseId: caseFile.id,
+    caseName: legalCaseTitle(caseFile),
+    caseType: caseFile.cause || undefined,
+    court: caseFile.court || undefined,
+    parties: caseFile.party || undefined,
+    stage: caseFile.stage || undefined,
+    orgId,
+    persistCase: true,
+  };
+}
+
+function inferLegalDocumentType(title: string, type?: LegalCaseMaterial['type']): string {
+  if (/起诉状/.test(title)) return '起诉状';
+  if (/答辩状/.test(title)) return '答辩状';
+  if (/质证/.test(title)) return '质证意见';
+  if (/代理词/.test(title)) return '代理词';
+  if (/法律意见/.test(title)) return '法律意见书';
+  if (/合同/.test(title) || type === 'contract') return '合同文本';
+  if (/标书|投标/.test(title)) return '投标书';
+  if (/证据目录/.test(title) || type === 'evidence') return '证据目录';
+  return '法律工作底稿';
 }
 
 export function LegalHub() {
@@ -196,6 +305,7 @@ export function LegalHub() {
   const activeStepIndex = isWorkflowView ? workflowStepIndex : 0;
   const currentStep = isWorkflowView ? workflowNavItems[activeStepIndex] : navItems.find(item => item.id === view);
   const nextStep = isWorkflowView ? (workflowNavItems[activeStepIndex + 1] || null) : null;
+  const legalOrgId = useOrgCases ? orgConnection?.orgId : undefined;
 
   const saveCases = (next: LegalCaseFile[], nextActiveId = activeCaseId) => {
     setCases(next);
@@ -385,20 +495,21 @@ export function LegalHub() {
             onAddMaterial={addMaterial}
             onRefreshCases={refreshCases}
             orgBacked={useOrgCases}
+            orgId={legalOrgId}
             refreshing={orgCasesLoading}
             ui={ui}
           />
       );
-      case 'packet': return <LegalPacketView caseFile={activeCase} onAddMaterial={addMaterial} />;
-      case 'external-research': return <LegalExternalResearchView caseFile={activeCase} onAddMaterial={addMaterial} />;
+      case 'packet': return <LegalPacketView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'external-research': return <LegalExternalResearchView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'data-sources': return <LegalDataSourcesPanel />;
-      case 'bid': return <LegalBidWorkbench onSwitchView={setView} />;
+      case 'bid': return <LegalBidWorkbench onSwitchView={setView} caseFile={activeCase} orgId={legalOrgId} />;
       case 'case-search': return <LegalCaseSearch />;
-      case 'asset-trace': return <LegalAssetTrace />;
-      case 'contract-review': return <LegalContractReview />;
-      case 'strategy': return <LegalStrategyView caseFile={activeCase} onAddMaterial={addMaterial} />;
-      case 'verify': return <LegalVerifyView caseFile={activeCase} onAddMaterial={addMaterial} />;
-      case 'import': return <LegalImportView caseFile={activeCase} onAddMaterial={addMaterial} />;
+      case 'asset-trace': return <LegalAssetTrace caseFile={activeCase} orgId={legalOrgId} />;
+      case 'contract-review': return <LegalContractReview caseFile={activeCase} />;
+      case 'strategy': return <LegalStrategyView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'verify': return <LegalVerifyView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'import': return <LegalImportView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'knowledge-sync': return <LegalKnowledgeSyncView caseFile={activeCase} />;
       default: return <LegalCaseSearch />;
     }
@@ -555,6 +666,7 @@ function LegalCaseWorkspace({
   onAddMaterial,
   onRefreshCases,
   orgBacked,
+  orgId,
   refreshing,
   ui,
 }: {
@@ -572,13 +684,15 @@ function LegalCaseWorkspace({
   onAddMaterial: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
   onRefreshCases: () => void;
   orgBacked: boolean;
+  orgId?: string;
   refreshing: boolean;
   ui: (zh: string, en: string) => string;
 }) {
   const [noticeText, setNoticeText] = useState('');
   const [noticeStatus, setNoticeStatus] = useState('');
+  const [noticeLoading, setNoticeLoading] = useState(false);
   const [documentStatus, setDocumentStatus] = useState('');
-  const [documentLoading, setDocumentLoading] = useState<'engagement' | ''>('');
+  const [documentLoading, setDocumentLoading] = useState<'engagement' | 'reasoning' | 'delivery' | ''>('');
   const [selectedMaterialId, setSelectedMaterialId] = useState('');
   const [caseFilter, setCaseFilter] = useState('');
 
@@ -656,6 +770,36 @@ function LegalCaseWorkspace({
     setNoticeStatus(ui('已提取通知信息，请复核案号、法院和日期。', 'Notice extracted. Review case number, court, and date.'));
   };
 
+  const processNoticeLink = async () => {
+    if (!activeCase || !noticeText.trim() || noticeLoading) return;
+    if (!/https?:\/\/\S+/i.test(noticeText)) {
+      extractNotice();
+      setNoticeStatus(ui('已提取通知信息，未发现可下载链接。', 'Notice extracted; no downloadable link found.'));
+      return;
+    }
+    setNoticeLoading(true);
+    setNoticeStatus('');
+    try {
+      extractNotice();
+      const report = await runLegalTool('legal_process_notice_link', {
+        ...legalCaseToolArgs(activeCase, orgId),
+        message: noticeText,
+        noticeText,
+        title: '短信/法院通知链接材料',
+        confirmedForKb: false,
+        includeExtractedText: true,
+        extractedTextLimit: 8000,
+      });
+      if (!report.trim()) throw new Error(ui('短信链接处理结果为空', 'Notice link result is empty'));
+      onAddMaterial('note', ui('短信/通知链接处理结果', 'Notice link processing result'), report, 'tool');
+      setNoticeStatus(ui('短信/通知链接已处理并归档；如遇登录或验证码，请按报告中的授权浏览器步骤继续。', 'Notice link processed and archived; follow the browser handoff if login or verification is required.'));
+    } catch (err: any) {
+      setNoticeStatus(err?.message || ui('短信链接处理失败', 'Notice link processing failed'));
+    } finally {
+      setNoticeLoading(false);
+    }
+  };
+
   const generateEngagementLetter = async () => {
     if (!activeCase || documentLoading) return;
     setDocumentLoading('engagement');
@@ -673,23 +817,77 @@ function LegalCaseWorkspace({
     ].filter(Boolean).join('\n');
 
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          message: `请基于下面案件档案生成一份律师委托/代理手续草稿，供律师复核后使用。\n\n要求：\n1. 使用正式法律文书结构，保留需要人工补充的字段并标注【待填写】。\n2. 不要声称已经完成正式签署或出具最终法律意见。\n3. 输出包含：委托事项、授权范围、费用/风险提示占位、双方信息、签署栏、附件清单。\n4. 如案件信息不足，仍生成可编辑草稿，并列出待补信息。\n\n## 案件档案\n${caseProfile || '当前案件档案信息较少，请生成通用委托书草稿。'}`,
-          stream: false,
-        }),
+      const draft = await runLegalTool('legal_generate_litigation_packet', {
+        ...legalCaseToolArgs(activeCase, orgId),
+        role: activeCase.party ? '委托人/当事人' : '当事人',
+        facts: caseProfile || activeCase.notes || '当前案件档案信息较少，请生成通用委托书/代理手续草稿。',
+        claims: '生成律师委托/代理手续草稿，包含委托事项、授权范围、费用/风险提示占位、双方信息、签署栏和附件清单。',
+        evidence: (activeCase.materials || []).slice(0, 8).map(item => `${item.title}（${item.type}）`).join('\n'),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('委托书草稿生成失败', 'Failed to draft engagement letter'));
-      const draft = data.text || data.response || data.reply || data.message || '';
       if (!draft.trim()) throw new Error(ui('委托书草稿为空', 'Engagement letter draft is empty'));
       onAddMaterial('pleading', ui('委托书草稿', 'Engagement letter draft'), draft, 'tool');
       setDocumentStatus(ui('委托书草稿已生成并归档到当前案件材料。', 'Engagement letter draft generated and archived to current case materials.'));
     } catch (err: any) {
       setDocumentStatus(err?.message || ui('委托书草稿生成失败', 'Failed to draft engagement letter'));
+    } finally {
+      setDocumentLoading('');
+    }
+  };
+
+  const generateReasoningMatrix = async () => {
+    if (!activeCase || documentLoading) return;
+    setDocumentLoading('reasoning');
+    setDocumentStatus('');
+    try {
+      const profile = legalCaseDraftContext(activeCase);
+      const draft = await runLegalTool('legal_case_reasoning_matrix', {
+        ...legalCaseToolArgs(activeCase, orgId),
+        facts: profile || activeCase.notes || '当前案件材料较少，请先形成可复核的三段论分析框架，并列出待补事实、证据和法源。',
+        materials: profile,
+        writeFiles: true,
+      });
+      if (!draft.trim()) throw new Error(ui('三段论底稿为空', 'Reasoning matrix is empty'));
+      onAddMaterial('note', ui('法律分析三段论底稿', 'Legal reasoning matrix'), draft, 'tool');
+      setDocumentStatus(ui('三段论底稿已生成并归档，后续文书会以它作为内部办案基础。', 'Reasoning matrix generated and archived as the internal basis for later work products.'));
+    } catch (err: any) {
+      setDocumentStatus(err?.message || ui('三段论底稿生成失败', 'Reasoning matrix generation failed'));
+    } finally {
+      setDocumentLoading('');
+    }
+  };
+
+  const runDeliveryGate = async () => {
+    if (!activeCase || documentLoading) return;
+    const pickedMaterial = (activeCase.materials || []).find(material => material.id === selectedMaterialId) || null;
+    const candidate = pickedMaterial?.content
+      ? pickedMaterial
+      : (activeCase.materials || []).find(material => (
+        material.content && (
+          material.type === 'pleading'
+          || material.type === 'contract'
+          || /起诉状|答辩状|质证|代理词|法律意见|证据目录|合同|标书|投标/.test(material.title)
+        )
+      ));
+    if (!candidate?.content?.trim()) {
+      toast.info(ui('请先生成或选择一份文书/合同/证据目录底稿', 'Generate or select a draft document first'));
+      onSetView('packet');
+      return;
+    }
+    setDocumentLoading('delivery');
+    setDocumentStatus('');
+    try {
+      const report = await runLegalTool('legal_finalize_delivery_package', {
+        ...legalCaseToolArgs(activeCase, orgId),
+        documentType: inferLegalDocumentType(candidate.title, candidate.type),
+        content: candidate.content.slice(0, 24000),
+        includeDocx: true,
+        includePdf: false,
+      });
+      if (!report.trim()) throw new Error(ui('交付核验结果为空', 'Delivery gate result is empty'));
+      onAddMaterial('note', `${candidate.title} ${ui('正式交付核验记录', 'delivery gate record')}`, report, 'tool');
+      setDocumentStatus(ui('正式交付前核验已完成并归档；若报告显示阻断，需要先修正法源或材料。', 'Delivery gate completed and archived; fix sources or materials if the report blocks delivery.'));
+    } catch (err: any) {
+      setDocumentStatus(err?.message || ui('交付核验失败', 'Delivery gate failed'));
     } finally {
       setDocumentLoading('');
     }
@@ -720,6 +918,8 @@ function LegalCaseWorkspace({
 
   const caseTitle = activeCase.title || activeCase.party || activeCase.caseNumber || ui('未命名案件', 'Untitled case');
   const selectedMaterial = (activeCase.materials || []).find(material => material.id === selectedMaterialId) || (activeCase.materials || [])[0] || null;
+  const readinessItems = buildLegalCaseReadiness(activeCase, ui);
+  const readinessDone = readinessItems.filter(item => item.done).length;
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto p-5">
@@ -848,6 +1048,62 @@ function LegalCaseWorkspace({
           </section>
 
           <section className="lumi-panel p-4">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-white/78">
+                <CheckCircle size={16} className="text-emerald-300" />
+                <h3 className="text-sm font-bold">{ui('办案闭环', 'Case Loop')}</h3>
+              </div>
+              <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-white/45">
+                {readinessDone}/{readinessItems.length}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+              {readinessItems.map(item => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => item.view && onSetView(item.view)}
+                  className={`min-h-[72px] rounded-lg border px-3 py-2 text-left transition-colors ${
+                    item.done
+                      ? 'border-emerald-400/18 bg-emerald-500/[0.07] text-emerald-100'
+                      : 'border-white/10 bg-black/18 text-white/58 hover:border-amber-400/20 hover:bg-amber-500/[0.06]'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-xs font-bold">
+                    {item.done ? <CheckCircle size={12} /> : <AlertTriangle size={12} />}
+                    <span className="min-w-0 truncate">{item.label}</span>
+                  </div>
+                  <div className="mt-2 text-[11px] text-white/42">{item.detail}</div>
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={generateReasoningMatrix}
+                disabled={documentLoading === 'reasoning'}
+                className="lumi-button h-9 px-3 text-xs"
+              >
+                {documentLoading === 'reasoning' ? ui('生成中...', 'Generating...') : ui('生成三段论底稿', 'Reasoning matrix')}
+              </button>
+              <button type="button" onClick={() => onSetView('external-research')} className="lumi-button h-9 px-3 text-xs">
+                {ui('法源/类案检索', 'Sources')}
+              </button>
+              <button type="button" onClick={() => onSetView('packet')} className="lumi-button h-9 px-3 text-xs">
+                {ui('文书包', 'Packet')}
+              </button>
+              <button
+                type="button"
+                onClick={runDeliveryGate}
+                disabled={documentLoading === 'delivery'}
+                className="lumi-button h-9 px-3 text-xs"
+              >
+                {documentLoading === 'delivery' ? ui('核验中...', 'Checking...') : ui('正式交付核验', 'Delivery gate')}
+              </button>
+            </div>
+          </section>
+
+          <section className="lumi-panel p-4">
             <div className="mb-4 flex items-center gap-2 text-white/78">
               <Calendar size={16} className="text-cyan-300" />
               <h3 className="text-sm font-bold">{ui('期限与开庭', 'Deadlines and Hearings')}</h3>
@@ -884,10 +1140,17 @@ function LegalCaseWorkspace({
               <div className="mt-3 flex items-center gap-3">
                 <button
                   onClick={extractNotice}
-                  disabled={!noticeText.trim()}
+                  disabled={!noticeText.trim() || noticeLoading}
                   className="lumi-button-primary h-9 border-amber-400/25 bg-amber-500/15 px-4 text-xs text-amber-200 hover:bg-amber-500/25"
                 >
                   {ui('提取到案件', 'Extract')}
+                </button>
+                <button
+                  onClick={processNoticeLink}
+                  disabled={!noticeText.trim() || noticeLoading}
+                  className="lumi-button h-9 px-3 text-xs"
+                >
+                  {noticeLoading ? ui('处理中...', 'Processing...') : ui('处理短信链接', 'Process link')}
                 </button>
                 {noticeStatus && <span className="text-xs text-emerald-300/70">{noticeStatus}</span>}
               </div>
@@ -1067,9 +1330,11 @@ function legalCaseDraftContext(caseFile?: LegalCaseFile | null): string {
 
 function LegalPacketView({
   caseFile,
+  orgId,
   onAddMaterial,
 }: {
   caseFile?: LegalCaseFile | null;
+  orgId?: string;
   onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
 }) {
   const t = useT();
@@ -1093,27 +1358,14 @@ function LegalPacketView({
     setLoading(true);
     setResult('');
     try {
-      const message = [
-        '请使用 legal_generate_litigation_packet 工具生成半自动诉讼文书包。',
-        `案件名称：${caseFile?.title || caseFile?.caseNumber || '未命名案件'}`,
-        `我方身份：${role}`,
-        `案由：${caseFile?.cause || ''}`,
-        `法院：${caseFile?.court || ''}`,
-        `当事人：${caseFile?.party || ''}`,
-        `诉请/目标：${claims}`,
-        `事实：\n${facts}`,
-        `证据：\n${evidence}`,
-        '要求：输出必须保留律师确认点，不要自动提交或宣称可直接使用。',
-      ].join('\n\n');
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, stream: false }),
-        credentials: 'include',
+      const text = await runLegalTool('legal_generate_litigation_packet', {
+        ...legalCaseToolArgs(caseFile, orgId),
+        role,
+        claims,
+        facts,
+        evidence,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('文书包生成失败', 'Packet generation failed'));
-      setResult(data.text || data.response || data.reply || data.message || JSON.stringify(data));
+      setResult(text);
     } catch (err: any) {
       setResult(`Error: ${err.message}`);
     } finally {
@@ -1156,9 +1408,11 @@ function LegalPacketView({
 
 function LegalExternalResearchView({
   caseFile,
+  orgId,
   onAddMaterial,
 }: {
   caseFile?: LegalCaseFile | null;
+  orgId?: string;
   onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
 }) {
   const t = useT();
@@ -1183,23 +1437,13 @@ function LegalExternalResearchView({
     setLoading(true);
     setResult('');
     try {
-      const message = [
-        '请使用 legal_external_research_plan 工具生成半自动外部检索行动单。',
-        `案由：${caseFile?.cause || ''}`,
-        `事实：\n${facts}`,
-        `争议焦点：${issues}`,
-        `公司/被执行人：${companies}`,
-        '要求：输出网页登录预设、检索顺序、检索词和来源登记表。不要要求把第三方平台数据导入 Lumi。',
-      ].join('\n\n');
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, stream: false }),
-        credentials: 'include',
+      const text = await runLegalTool('legal_external_research_plan', {
+        ...legalCaseToolArgs(caseFile, orgId),
+        facts,
+        issues: issues.split(/[，,；;\n]/).map(item => item.trim()).filter(Boolean),
+        companyNames: companies.split(/[，,；;\n]/).map(item => item.trim()).filter(Boolean),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('外部检索计划生成失败', 'Research plan failed'));
-      setResult(data.text || data.response || data.reply || data.message || JSON.stringify(data));
+      setResult(text);
     } catch (err: any) {
       setResult(`Error: ${err.message}`);
     } finally {
@@ -1308,9 +1552,11 @@ function LegalTwoPaneTool({
 
 function LegalStrategyView({
   caseFile,
+  orgId,
   onAddMaterial,
 }: {
   caseFile?: LegalCaseFile | null;
+  orgId?: string;
   onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
 }) {
   const t = useT();
@@ -1342,18 +1588,11 @@ function LegalStrategyView({
     setLoading(true);
     setResult('');
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: `请使用 legal_case_strategy 工具分析以下案件事实：\n\n${facts}`,
-          stream: false,
-        }),
-        credentials: 'include',
+      const text = await runLegalTool('legal_case_strategy', {
+        ...legalCaseToolArgs(caseFile, orgId),
+        facts,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('案件策略分析失败', 'Case strategy analysis failed'));
-      setResult(data.text || data.response || data.reply || data.message || JSON.stringify(data));
+      setResult(text);
     } catch (e: any) {
       setResult(`Error: ${e.message}`);
     } finally {
@@ -1428,9 +1667,11 @@ function LegalStrategyView({
 
 function LegalVerifyView({
   caseFile,
+  orgId,
   onAddMaterial,
 }: {
   caseFile?: LegalCaseFile | null;
+  orgId?: string;
   onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
 }) {
   const t = useT();
@@ -1444,18 +1685,11 @@ function LegalVerifyView({
     if (!text.trim() || loading) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: `请使用 legal_verify_citation 验证以下文本中所有法条与案例引用：\n\n${text}`,
-          stream: false,
-        }),
-        credentials: 'include',
+      const verification = await runLegalTool('legal_verify_citation', {
+        ...legalCaseToolArgs(caseFile, orgId),
+        text,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('引用核验失败', 'Citation verification failed'));
-      setResults([{ content: data.text || data.response || data.reply || data.message || ui('校验完成', 'Verification complete') }]);
+      setResults([{ content: verification || ui('校验完成', 'Verification complete') }]);
     } catch (e: any) {
       setResults([{ error: e.message }]);
     } finally {
@@ -1675,9 +1909,11 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
 
 function LegalImportView({
   caseFile,
+  orgId,
   onAddMaterial,
 }: {
   caseFile?: LegalCaseFile | null;
+  orgId?: string;
   onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
 }) {
   const t = useT();
@@ -1692,18 +1928,10 @@ function LegalImportView({
     setLoading(true);
     setStatus('');
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: `请使用 legal_import_judgment 导入以下裁判文书：\n\n${content}`,
-          stream: false,
-        }),
-        credentials: 'include',
+      const reply = await runLegalTool('legal_import_judgment', {
+        ...legalCaseToolArgs(caseFile, orgId),
+        content,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('裁判文书导入失败', 'Judgment import failed'));
-      const reply = data.text || data.response || data.reply || data.message || ui('导入请求已发送', 'Import request sent');
       if (caseFile && onAddMaterial) {
         const title = inferLegalMaterialTitle(content, ui('裁判文书', 'Judgment document'));
         onAddMaterial('judgment', title, content, 'import');

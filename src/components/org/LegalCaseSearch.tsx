@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { AlertCircle, FileText, Hash, Loader2, MapPin, Search, Scale } from 'lucide-react';
 import { useT } from '../../lib/useT';
+import { useApp } from '../../contexts/AppContext';
+import { runLegalTool } from '../../lib/legalToolClient';
 
 interface CaseResult {
   articleId: string;
@@ -14,6 +16,7 @@ interface CaseResult {
 
 export function LegalCaseSearch() {
   const t = useT();
+  const { workDomain, orgConnection } = useApp();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [query, setQuery] = useState('');
@@ -28,18 +31,10 @@ export function LegalCaseSearch() {
     setSearched(true);
     setSelected(null);
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: `使用 legal_search_case 工具检索：${query}`,
-          stream: false,
-        }),
-        credentials: 'include',
+      const text = await runLegalTool('legal_search_case', {
+        query,
+        orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('类案检索失败', 'Case search failed'));
-      const text = data.text || data.response || data.reply || data.message || '';
       const parsed = parseCaseResults(text);
       setResults(parsed.length > 0 ? parsed : [{ articleId: 'raw', title: t.legalCaseSearchResults || ui('检索结果', 'Search Results'), chunk: text, score: 0 }]);
     } catch (e: any) {

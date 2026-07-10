@@ -72,6 +72,9 @@ const DECLARATIONS = [
   'legal_trace_assets',
   'legal_equity_penetration',
   'legal_case_strategy',
+  'legal_case_workspace',
+  'legal_meeting_minutes_to_case',
+  'legal_case_reasoning_matrix',
   'legal_generate_litigation_packet',
   'legal_extract_dispute_focus',
   'legal_generate_argument_or_opinion',
@@ -157,6 +160,40 @@ describe('tool router', () => {
       'legal_search_statute',
       'legal_search_case',
     ]));
+  });
+
+  it('routes legal meeting minutes into the case workspace chain', () => {
+    const route = routeToolsForTurn(
+      '把这次办案会议转写整理成案件会议纪要，提炼证据线索、争议焦点和下一步待办',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('legal');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_case_workspace',
+      'legal_meeting_minutes_to_case',
+      'legal_extract_dispute_focus',
+      'legal_generate_litigation_packet',
+    ]));
+    expect(route.toolNames.indexOf('legal_meeting_minutes_to_case')).toBeGreaterThan(-1);
+    expect(route.toolNames.indexOf('legal_meeting_minutes_to_case')).toBeLessThan(route.toolNames.indexOf('legal_generate_litigation_packet'));
+  });
+
+  it('routes explicit legal syllogism analysis to the reasoning matrix tool', () => {
+    const route = routeToolsForTurn(
+      '按三段论分析这个买卖合同案件，大前提检索法律和类案，小前提整理证据，最后给出涵摄结论',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('legal');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_case_workspace',
+      'legal_case_reasoning_matrix',
+      'legal_extract_dispute_focus',
+      'legal_generate_argument_or_opinion',
+    ]));
+    expect(route.toolNames.indexOf('legal_case_reasoning_matrix')).toBeGreaterThan(-1);
+    expect(route.toolNames.indexOf('legal_case_reasoning_matrix')).toBeLessThan(route.toolNames.indexOf('legal_generate_argument_or_opinion'));
   });
 
   it('routes dispute-focus extraction from trial materials through chat and voice', () => {
@@ -299,12 +336,16 @@ describe('tool router', () => {
     expect(bidRoute.categories).toContain('legal');
     expect(bidRoute.toolNames).toContain('legal_generate_bid');
     expect(bidRoute.toolNames).toContain('read_pdf');
+    expect(bidRoute.toolNames.indexOf('legal_generate_bid')).toBeLessThan(bidRoute.toolNames.indexOf('legal_generate_litigation_packet'));
 
     expect(assetRoute.categories).toContain('legal');
     expect(assetRoute.toolNames).toEqual(expect.arrayContaining([
       'legal_trace_assets',
       'legal_equity_penetration',
+      'legal_company_database_lookup',
     ]));
+    expect(assetRoute.toolNames.indexOf('legal_trace_assets')).toBeLessThan(assetRoute.toolNames.indexOf('legal_generate_argument_or_opinion'));
+    expect(assetRoute.toolNames.indexOf('legal_equity_penetration')).toBeLessThan(assetRoute.toolNames.indexOf('legal_generate_argument_or_opinion'));
   });
 
   it('routes music requests away from legal tools', () => {

@@ -70,7 +70,13 @@ const declarations = [
   'mcp_stockbot_paper_portfolio',
   'legal_search_case',
   'legal_search_statute',
+  'legal_trace_assets',
+  'legal_equity_penetration',
+  'legal_company_database_lookup',
   'legal_case_strategy',
+  'legal_case_workspace',
+  'legal_meeting_minutes_to_case',
+  'legal_case_reasoning_matrix',
   'legal_generate_litigation_packet',
   'legal_extract_dispute_focus',
   'legal_generate_argument_or_opinion',
@@ -179,6 +185,14 @@ describe('Lumi runtime action pressure coverage', () => {
         categories: ['legal'],
         tools: ['legal_generate_argument_or_opinion', 'legal_analyze_folder_and_draft_argument', 'read_docx', 'create_docx'],
         earlyTools: ['legal_analyze_folder_and_draft_argument', 'legal_generate_argument_or_opinion'],
+      },
+      {
+        id: 'legal-asset-trace',
+        text: '\u67e5\u88ab\u6267\u884c\u4eba\u8d22\u4ea7\u7ebf\u7d22\u548c\u80a1\u6743\u7a7f\u900f',
+        kind: 'legal_document',
+        categories: ['legal'],
+        tools: ['legal_trace_assets', 'legal_equity_penetration', 'legal_company_database_lookup'],
+        earlyTools: ['legal_trace_assets', 'legal_equity_penetration'],
       },
     ];
 

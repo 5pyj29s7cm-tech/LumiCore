@@ -3,7 +3,7 @@
  * Supports: Feishu, Telegram, WeChat, Web Chat
  */
 
-export type MessagingPlatform = 'feishu' | 'telegram' | 'wechat' | 'web';
+export type MessagingPlatform = 'feishu' | 'telegram' | 'wechat' | 'wecom' | 'web';
 
 export interface IncomingMessage {
   platform: MessagingPlatform;

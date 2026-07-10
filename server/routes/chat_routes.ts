@@ -11,6 +11,32 @@ import { optionalAuth } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 
+const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
+  'legal_search_case',
+  'legal_search_statute',
+  'legal_case_workspace',
+  'legal_meeting_minutes_to_case',
+  'legal_case_reasoning_matrix',
+  'legal_generate_litigation_packet',
+  'legal_prepare_filing_handoff',
+  'legal_extract_dispute_focus',
+  'legal_generate_argument_or_opinion',
+  'legal_generate_bid',
+  'legal_review_contract',
+  'legal_draft_contract',
+  'legal_process_notice_link',
+  'legal_download_and_extract_document',
+  'legal_trace_assets',
+  'legal_equity_penetration',
+  'legal_external_research_plan',
+  'legal_search_external_authorities',
+  'legal_company_database_lookup',
+  'legal_generate_citation_verification_report',
+  'legal_finalize_delivery_package',
+  'legal_verify_citation',
+  'legal_import_judgment',
+]);
+
 export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
   const noteItems = Array.isArray(notes) ? notes : [];
   return noteItems
@@ -37,6 +63,17 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const prompt = rawPrompt ?? message;
     const userKey = req.headers["x-api-key"] as string;
     const userId = req.user?.uid || 'anonymous';
+    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
+    const orgId = domain === 'work'
+      ? String(req.body?.orgId || req.user?.orgId || '').trim()
+      : '';
+    const toolContext = {
+      userId,
+      domain,
+      orgId,
+      llmGetters: llm,
+      source: 'rest_chat',
+    };
 
     const isBYOK = userKey && userKey.length > 5;
     const preferred = getUserPreferredLLMConfig(userId);
@@ -103,12 +140,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           const result = await runWithTools(
             normalizedMessages,
             toolRegistry,
-            { provider, model, userId },
+            { provider, model, userId, domain, orgId },
             undefined, 3,
             llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
             (chunk) => {
               res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
             },
+            toolContext,
           );
 
           responseText = result.text || '';
@@ -130,9 +168,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         const result = await runWithTools(
           normalizedMessages,
           toolRegistry,
-          { provider, model, userId },
+          { provider, model, userId, domain, orgId },
           undefined, 3,
           llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
+          undefined,
+          toolContext,
         );
 
         responseText = result.text || '';
@@ -160,6 +200,41 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   router.post("/ai/chat", optionalAuth, handleChat);
   router.post("/chat", optionalAuth, handleChat);
 
+  router.post("/legal/tool/:toolName", optionalAuth, asyncHandler(async (req, res) => {
+    const toolName = String(req.params?.toolName || '').trim();
+    if (!DIRECT_LEGAL_TOOL_ALLOWLIST.has(toolName)) {
+      return res.status(404).json({ error: 'Unknown or unavailable legal tool' });
+    }
+    if (!toolRegistry.get(toolName)) {
+      return res.status(404).json({ error: `Legal tool "${toolName}" is not registered` });
+    }
+
+    const rawArgs = req.body?.args && typeof req.body.args === 'object'
+      ? req.body.args
+      : (req.body || {});
+    const userId = req.user?.uid || String(rawArgs.userId || 'anonymous');
+    const domain = rawArgs.domain === 'work' || req.body?.domain === 'work' ? 'work' : 'personal';
+    const orgId = String(rawArgs.orgId || req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
+    const args = {
+      ...rawArgs,
+      orgId,
+      userId,
+    };
+
+    if (args.persistCase === undefined && (args.caseId || args.caseName || args.title)) {
+      args.persistCase = true;
+    }
+
+    const text = await toolRegistry.execute(toolName, args, {
+      userId,
+      domain,
+      orgId,
+      llmGetters: llm,
+      source: 'legal-direct-tool',
+    });
+    return res.json({ text, toolName });
+  }));
+
   router.post("/legal/contract-review", optionalAuth, asyncHandler(async (req, res) => {
     const contract = String(req.body?.contract || '').trim();
     if (!contract) {
@@ -169,7 +244,16 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const userId = req.user?.uid || 'anonymous';
     const domain = req.body?.domain === 'work' ? 'work' : 'personal';
     const orgId = String(req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
-    const args = { contract, orgId };
+    const args = {
+      contract,
+      orgId,
+      userId,
+      caseId: String(req.body?.caseId || '').trim(),
+      caseName: String(req.body?.caseName || '').trim(),
+      caseType: String(req.body?.caseType || req.body?.cause || '').trim(),
+      court: String(req.body?.court || '').trim(),
+      persistCase: req.body?.persistCase === true || Boolean(req.body?.caseId || req.body?.caseName),
+    };
     const llmReview = toolRegistry.execute('legal_review_contract', args, {
       userId,
       domain,

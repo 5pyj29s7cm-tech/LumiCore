@@ -2,8 +2,35 @@ import React, { useRef, useState } from 'react';
 import { Download, FileText, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
+import type { LegalCaseFile } from '../../lib/legalCaseStore';
+import { runLegalTool } from '../../lib/legalToolClient';
 
-export function LegalBidWorkbench({ onSwitchView: _onSwitchView }: { onSwitchView?: (view: any) => void }) {
+function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
+  if (!caseFile) return '未命名案件';
+  return caseFile.title || caseFile.party || caseFile.caseNumber || '未命名案件';
+}
+
+function bidCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
+  if (!caseFile) return orgId ? { orgId } : {};
+  return {
+    caseId: caseFile.id,
+    caseName: legalCaseTitle(caseFile),
+    caseType: caseFile.cause || '投标/招标文件响应',
+    parties: caseFile.party || undefined,
+    orgId,
+    persistCase: true,
+  };
+}
+
+export function LegalBidWorkbench({
+  onSwitchView: _onSwitchView,
+  caseFile,
+  orgId,
+}: {
+  onSwitchView?: (view: any) => void;
+  caseFile?: LegalCaseFile | null;
+  orgId?: string;
+}) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
@@ -46,18 +73,12 @@ export function LegalBidWorkbench({ onSwitchView: _onSwitchView }: { onSwitchVie
     setLoading(true);
     setResult('');
     try {
-      const msg = projectName
-        ? `请使用 legal_generate_bid 工具为项目“${projectName}”生成标书：\n\n${requirements}`
-        : `请使用 legal_generate_bid 工具根据以下招标要求生成标书：\n\n${requirements}`;
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, stream: false }),
-        credentials: 'include',
+      const text = await runLegalTool('legal_generate_bid', {
+        ...bidCaseArgs(caseFile, orgId),
+        projectName,
+        requirements,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('标书生成失败', 'Bid generation failed'));
-      setResult(data.text || data.response || data.reply || data.message || JSON.stringify(data));
+      setResult(text);
     } catch (e: any) {
       setResult(`${ui('错误', 'Error')}: ${e.message}`);
     } finally {

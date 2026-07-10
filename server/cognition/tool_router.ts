@@ -106,6 +106,9 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'legal_trace_assets',
     'legal_equity_penetration',
     'legal_case_strategy',
+    'legal_case_workspace',
+    'legal_meeting_minutes_to_case',
+    'legal_case_reasoning_matrix',
     'legal_generate_litigation_packet',
     'legal_prepare_filing_handoff',
     'legal_extract_dispute_focus',
@@ -273,7 +276,7 @@ const ROUTES: RouteDefinition[] = [
     category: 'legal',
     reason: 'legal casework or legal research request',
     patterns: [
-      /法律|律师|律所|案件|案号|案由|类案|法条|法院|裁判文书|人民法院案例库|法信|法蝉|企查查|天眼查|北大法宝|法睿|通义法睿|法律数据库|权威库|国家企业信用|委托书|代理词|证据目录|起诉状|要素式诉状|答辩状|质证|文书包|正式文书|交付包|引用核验|核验报告|校验报告|来源登记|浏览器工作区|网页登录工作区|立案|网上立案|立案网|法院在线服务|外部检索|法律意见书|合同审查|合同模板|标书|投标书|财产线索|被执行人|股权穿透|诉讼|仲裁|争议焦点|庭审笔录|庭审提纲|法律分析|应对策略|焦点提炼|案件文件夹|材料文件夹|文件夹.*代理词|文书链接|发送链接|下载文书|提取文书|提取正文|链接.*下载|链接.*提取|材料入库|导入知识库|知识库导入|外部数据源|数据源接入|开庭通知|法院通知|送达通知|短信链接|通知链接|送达链接/u,
+      /法律|律师|律所|案件|案号|案由|类案|法条|法院|裁判文书|人民法院案例库|法信|法蝉|企查查|天眼查|北大法宝|法睿|通义法睿|法律数据库|权威库|国家企业信用|委托书|代理词|证据目录|起诉状|要素式诉状|答辩状|质证|文书包|正式文书|交付包|引用核验|核验报告|校验报告|来源登记|浏览器工作区|网页登录工作区|立案|网上立案|立案网|法院在线服务|外部检索|法律意见书|合同审查|合同模板|标书|投标书|财产线索|被执行人|股权穿透|诉讼|仲裁|争议焦点|庭审笔录|庭审提纲|三段论|大前提|小前提|涵摄|法律会议|律师会议|办案会议|案件会议|会议纪要.*案件|沟通记录.*案件|法律分析|应对策略|焦点提炼|案件文件夹|材料文件夹|文件夹.*代理词|文书链接|发送链接|下载文书|提取文书|提取正文|链接.*下载|链接.*提取|材料入库|导入知识库|知识库导入|外部数据源|数据源接入|开庭通知|法院通知|送达通知|短信链接|通知链接|送达链接/u,
       /\b(legal|lawyer|lawsuit|court|judgment|casework|contract\s+review|power\s+of\s+attorney|complaint|defense|pleading|evidence|filing|bid|tender|qichacha|tianyancha|pkulaw|pku\s*law|beida\s*fabo|farui|tongyi\s*farui|legal\s+database|authority\s+database|external\s+authority|alpha|fachan|notice\s+link|court\s+notice|document\s+link|extract\s+document|delivery\s+package|citation\s+verification|source\s+register|browser\s+workspace)\b/i,
     ],
     exact: ['mcp_legal-casework_legal_case_folder_workflow'],
@@ -620,7 +623,27 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     }
   }
   if (categories.includes('legal')) {
+    if (/合同审查|合同模板|合同起草|审查合同|起草合同|标书|投标|招标|bid|tender|contract\s+(review|draft)/i.test(text)) {
+      priorities.push(
+        'legal_review_contract',
+        'legal_draft_contract',
+        'legal_generate_bid',
+      );
+    }
+    if (/财产线索|被执行人|执行线索|财产保全|诉前保全|股权穿透|实际控制人|关联企业|失信|限制消费|asset|enforcement|equity|shareholder/i.test(text)) {
+      priorities.push(
+        'legal_trace_assets',
+        'legal_equity_penetration',
+        'legal_company_database_lookup',
+      );
+    }
     priorities.push(
+      'legal_case_workspace',
+      'legal_meeting_minutes_to_case',
+      'legal_case_reasoning_matrix',
+      'legal_external_research_plan',
+      'legal_search_external_authorities',
+      'legal_company_database_lookup',
       'legal_analyze_folder_and_draft_argument',
       'legal_generate_argument_or_opinion',
       'legal_extract_dispute_focus',

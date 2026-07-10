@@ -28,6 +28,7 @@ import { parseDocument } from '../legal/parser';
 import { getMember } from '../org/db';
 import * as OrgKB from '../org/kb';
 import * as LegalCases from '../org/legal_cases';
+import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 
 // Dedup cache: prevent duplicate processing when Feishu retries events
 // Feishu retries if no 200 within 1s, but AI reply may take 5-30s
@@ -103,6 +104,12 @@ export function createMessagingRoutes(
 
       const boundMsg = applyMessagingBinding(msg);
       const enrichedMsg = await enrichFeishuAttachments(boundMsg, adapter);
+      const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMsg);
+      if (legalNoticeReply) {
+        await adapter.replyMessage(msg.messageId, legalNoticeReply).catch(() =>
+          adapter.sendMessage(msg.chatId, { text: legalNoticeReply, platform: 'feishu' }));
+        return;
+      }
       const remoteOrgReply = await handleRemoteOrgCommand(enrichedMsg);
       if (remoteOrgReply) {
         await adapter.replyMessage(msg.messageId, remoteOrgReply).catch(() =>
@@ -948,14 +955,27 @@ export function createWeComRoutes(
       res.type('text/plain').send('success');
 
       // Process AI reply async
+      const bindingReply = handleWeComBindingCommand(msg);
+      if (bindingReply) {
+        await adapter.sendMessage(msg.chatId, { text: bindingReply, platform: 'wecom' });
+        return;
+      }
+
+      const boundMsg = applyWeComBinding(msg);
+      const legalNoticeReply = await handleRemoteLegalNoticeIntake(boundMsg);
+      if (legalNoticeReply) {
+        await adapter.sendMessage(msg.chatId, { text: legalNoticeReply, platform: 'wecom' });
+        return;
+      }
+
       if (options?.onMessage) {
-        const reply = await options.onMessage(msg);
+        const reply = await options.onMessage(boundMsg);
         if (reply) {
-          await adapter.sendMessage(msg.chatId, { text: reply.text, platform: 'wechat' });
+          await adapter.sendMessage(msg.chatId, { text: reply.text, platform: 'wecom' });
         }
       } else {
-        const replyText = await processWithPersonality(msg, options);
-        await adapter.sendMessage(msg.chatId, { text: replyText, platform: 'wechat' });
+        const replyText = await processWithPersonality(boundMsg, options);
+        await adapter.sendMessage(msg.chatId, { text: replyText, platform: 'wecom' });
       }
     } catch (err: any) {
       console.error('[WeCom] Event error:', err.message);
@@ -971,7 +991,7 @@ export function createWeComRoutes(
       const { userId, text } = req.body;
       if (!userId) return res.status(400).json({ error: 'userId required' });
       if (!text) return res.status(400).json({ error: 'text required' });
-      const messageId = await adapter.sendMessage(userId, { text, platform: 'wechat' });
+      const messageId = await adapter.sendMessage(userId, { text, platform: 'wecom' });
       res.json({ success: true, messageId });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1015,5 +1035,50 @@ export function createWeComRoutes(
     }
   });
 
+  router.post('/wecom/bindings/code', requireAuth, (req, res) => {
+    try {
+      const code = createBindingCode('wecom', req.user!.uid, String(req.body?.orgId || req.user?.orgId || ''));
+      res.json({
+        code: code.code,
+        expiresAt: code.expiresAt,
+        instruction: `在企业微信 Lumi 应用里发送：绑定 Lumi ${code.code}`,
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to create binding code' });
+    }
+  });
+
+  router.get('/wecom/bindings', requireAuth, (req, res) => {
+    res.json({ bindings: listBindingsForUser(req.user!.uid).filter(item => item.platform === 'wecom') });
+  });
+
+  router.delete('/wecom/bindings/:bindingId', requireAuth, (req, res) => {
+    const ok = deleteBindingForUser(req.user!.uid, req.params.bindingId);
+    res.json({ success: ok });
+  });
+
   return router;
+}
+
+function handleWeComBindingCommand(msg: IncomingMessage): string | null {
+  const text = msg.text.trim();
+  const match = text.match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
+  if (!match) return null;
+  const binding = consumeBindingCode('wecom', match[1], msg.userId);
+  if (!binding) {
+    return '绑定码无效或已过期。请在 Lumi 桌面端重新生成企微绑定码。';
+  }
+  return '绑定成功。之后你可以通过企业微信转发法院短信链接、查询案件或发送案件材料，Lumi 会按组织案件空间处理。';
+}
+
+function applyWeComBinding(msg: IncomingMessage): IncomingMessage {
+  const binding = getBinding('wecom', msg.userId);
+  if (!binding) return msg;
+  const membership = getMember(binding.orgId, binding.lumiUserId);
+  if (!membership || membership.status !== 'active') return msg;
+  return {
+    ...msg,
+    boundUserId: binding.lumiUserId,
+    boundOrgId: binding.orgId,
+  };
 }

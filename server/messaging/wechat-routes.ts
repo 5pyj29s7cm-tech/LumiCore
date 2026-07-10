@@ -3,9 +3,18 @@ import { Router } from 'express';
 import { WeChatClawBotAdapter, type WeChatClawBotConfig } from './wechat-clawbot';
 import { getMessagingConfig, updateMessagingConfig } from './config';
 import { requireAuth } from '../middleware/auth';
-import type { MessageHandler } from './types';
+import type { IncomingMessage, MessageHandler } from './types';
 import { makeLLMCall, type NormalizedMessage } from '../llm/providers';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
+import {
+  consumeBindingCode,
+  createBindingCode,
+  deleteBindingForUser,
+  getBinding,
+  listBindingsForUser,
+} from './bindings';
+import { getMember } from '../org/db';
+import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 
 export function createWeChatRoutes(
   config: WeChatClawBotConfig,
@@ -95,6 +104,28 @@ export function createWeChatRoutes(
     }
   });
 
+  router.post('/wechat/bindings/code', requireAuth, (req, res) => {
+    try {
+      const code = createBindingCode('wechat', req.user!.uid, String(req.body?.orgId || req.user?.orgId || ''));
+      res.json({
+        code: code.code,
+        expiresAt: code.expiresAt,
+        instruction: `在微信 Lumi Bot 里发送：绑定 Lumi ${code.code}`,
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to create binding code' });
+    }
+  });
+
+  router.get('/wechat/bindings', requireAuth, (req, res) => {
+    res.json({ bindings: listBindingsForUser(req.user!.uid).filter(item => item.platform === 'wechat') });
+  });
+
+  router.delete('/wechat/bindings/:bindingId', requireAuth, (req, res) => {
+    const ok = deleteBindingForUser(req.user!.uid, req.params.bindingId);
+    res.json({ success: ok });
+  });
+
   // Auto-start polling if already configured (survives restarts)
   if (config?.botToken) {
     if (!config.botId) config.botId = (config.botToken.split(':')[0] || config.botToken);
@@ -119,10 +150,17 @@ function startWeChatPolling(
   },
 ): void {
   adapter.startPolling(async (msg) => {
+    const bindingReply = handleWeChatBindingCommand(msg);
+    if (bindingReply) return { text: bindingReply, platform: 'wechat' as const };
+
+    const boundMsg = applyWeChatBinding(msg);
+    const legalNoticeReply = await handleRemoteLegalNoticeIntake(boundMsg);
+    if (legalNoticeReply) return { text: legalNoticeReply, platform: 'wechat' as const };
+
     if (options?.onMessage) {
-      return options.onMessage(msg);
+      return options.onMessage(boundMsg);
     }
-    const reply = await processWeChatMessage(msg, options);
+    const reply = await processWeChatMessage(boundMsg, options);
     return reply ? { text: reply.text, platform: 'wechat' as const } : null;
   });
 }
@@ -131,8 +169,30 @@ function startWeChatPolling(
 
 const DEFAULT_SYSTEM_PROMPT = `你是一个名为 Lumi 的 AI 助手，通过微信与用户交流。保持回复简洁、温暖、有帮助。用中文回复。`;
 
+function handleWeChatBindingCommand(msg: IncomingMessage): string | null {
+  const match = msg.text.trim().match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
+  if (!match) return null;
+  const binding = consumeBindingCode('wechat', match[1], msg.userId);
+  if (!binding) {
+    return '绑定码无效或已过期。请在 Lumi 桌面端重新生成微信绑定码。';
+  }
+  return '绑定成功。之后你可以把法院短信链接、案件材料或查询指令发给我，我会按组织案件空间处理。';
+}
+
+function applyWeChatBinding(msg: IncomingMessage): IncomingMessage {
+  const binding = getBinding('wechat', msg.userId);
+  if (!binding) return msg;
+  const membership = getMember(binding.orgId, binding.lumiUserId);
+  if (!membership || membership.status !== 'active') return msg;
+  return {
+    ...msg,
+    boundUserId: binding.lumiUserId,
+    boundOrgId: binding.orgId,
+  };
+}
+
 async function processWeChatMessage(
-  msg: { userId: string; text: string },
+  msg: IncomingMessage,
   options?: { llmGetters?: Record<string, () => any> },
 ): Promise<{ text: string } | null> {
   const llm = options?.llmGetters;

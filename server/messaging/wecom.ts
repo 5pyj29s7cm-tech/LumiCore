@@ -26,7 +26,7 @@ export interface WeComConfig {
 }
 
 export class WeComAdapter implements MessageAdapter {
-  readonly platform: MessagingPlatform = 'wechat';
+  readonly platform: MessagingPlatform = 'wecom';
   private config: WeComConfig;
   private accessToken: string | null = null;
   private tokenExpiry: number = 0;
@@ -143,7 +143,7 @@ export class WeComAdapter implements MessageAdapter {
     const msgId = this.getTag(xml, 'MsgId') || `${Date.now()}`;
 
     return {
-      platform: 'wechat',
+      platform: 'wecom',
       userId: fromUser,
       userName: fromUser,
       chatId: fromUser, // WeCom uses user ID as chat ID for single chat

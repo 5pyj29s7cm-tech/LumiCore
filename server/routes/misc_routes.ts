@@ -101,6 +101,10 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
     }
 
     const userId = req.user?.uid || 'anonymous';
+    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
+    const orgId = domain === 'work'
+      ? String(req.body?.orgId || req.user?.orgId || '').trim()
+      : '';
     const preferred = getUserPreferredLLMConfig(userId);
     const provider = preferred.provider;
     const model = preferred.model;
@@ -112,9 +116,17 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
       const result = await runWithTools(
         messages,
         toolRegistry,
-        { provider, model, userId },
+        { provider, model, userId, domain, orgId },
         undefined, 3,
         llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
+        undefined,
+        {
+          userId,
+          domain,
+          orgId,
+          llmGetters: llm,
+          source: 'misc_chat',
+        },
       );
 
       const responseText = result.text || '';

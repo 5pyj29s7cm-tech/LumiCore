@@ -51,6 +51,8 @@ describe('semi-automated legal workflows', () => {
     expect(output).not.toMatch(/底层三段论|三段论|大前提|小前提|涵摄/);
     expect(output).toMatch(/起诉状|要素式诉状|诉讼文书包/);
     expect(output).toMatch(/证据目录|证明目的/);
+    expect(output).toMatch(/三性审查|真实性|合法性|关联性/);
+    expect(output).toMatch(/缺口|补强|质证风险/);
     expect(output).toMatch(/律师|人工|确认/);
     expect(output).toContain('web_login_run');
   });
@@ -70,6 +72,7 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('Defense Contract Case');
     expect(output).not.toMatch(/底层三段论|三段论|大前提|小前提|涵摄/);
     expect(output).toMatch(/答辩状|质证意见/);
+    expect(output).toMatch(/真实性|合法性|关联性|证明目的/);
     expect(output).toMatch(/程序抗辩|时效|主体资格/);
     expect(output).toMatch(/提交|签字|盖章|发送/);
     expect(output).toMatch(/律师|人工|确认/);
@@ -92,6 +95,438 @@ describe('semi-automated legal workflows', () => {
     expect(output).toMatch(/争议焦点|待证事实|质证|抗辩/);
     expect(output).toMatch(/已有证据|待补证据|外部检索关键词/);
     expect(output).toMatch(/律师|复核|确认/);
+  });
+
+  it('creates unified legal case workspaces with case state and search order', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-workspace-${Date.now()}`;
+
+    const output = await registry.execute('legal_case_workspace', {
+      orgId,
+      userId: 'vitest',
+      caseName: '统一案件工作台测试案',
+      stage: '立案',
+      role: '原告',
+      caseType: '买卖合同纠纷',
+      court: '上海市黄浦区人民法院',
+      parties: '原告 Alpha Trading Co.; 被告 Beta Retail Co.',
+      claims: '请求支付货款及违约金',
+      facts: '2026年1月签订买卖合同，被告收货后未按约付款。',
+      evidence: '买卖合同；送货单；微信催款记录；银行流水',
+      legalAuthorities: '拟引用《民法典》第五百八十五条。',
+    });
+
+    expect(output).toContain('案件工作台');
+    expect(output).toContain('案件ID：');
+    expect(output).toContain('闭环状态');
+    expect(output).toContain('三段论分析');
+    expect(output).toContain('底层必经');
+    expect(output).toContain('证据目录与三性审查矩阵');
+    expect(output).toContain('三性审查矩阵');
+    expect(output).toContain('真实性核验');
+    expect(output).toContain('合法性核验');
+    expect(output).toContain('关联性核验');
+    expect(output).toContain('现行有效法律');
+    expect(output).toContain('最高人民法院 > 高级人民法院 > 中级人民法院 > 基层人民法院');
+    expect(output).toContain('legal_case_reasoning_matrix');
+    expect(output).toContain('legal_generate_litigation_packet');
+    expect(output).toContain('legal_finalize_delivery_package');
+    expect(output).toContain('人民法院在线服务');
+  });
+
+  it('archives filing handoffs and delivery packages into the same legal case workspace', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-archive-${Date.now()}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_archive_'));
+
+    try {
+      const workspace = await registry.execute('legal_case_workspace', {
+        orgId,
+        userId: 'vitest',
+        caseName: '案件归档闭环测试案',
+        role: '原告',
+        caseType: '买卖合同纠纷',
+        facts: '被告收货后未付款。',
+        evidence: '合同；送货单；银行流水',
+      });
+      const caseId = workspace.match(/案件ID：([0-9a-f-]+)/)?.[1];
+      expect(caseId).toBeTruthy();
+
+      const filing = await registry.execute('legal_prepare_filing_handoff', {
+        orgId,
+        userId: 'vitest',
+        caseId,
+        caseName: '案件归档闭环测试案',
+        role: '原告',
+        caseType: '买卖合同纠纷',
+        facts: '被告收货后未付款。',
+        evidence: '合同；送货单；银行流水',
+      });
+      expect(filing).toContain('已归档到案件空间');
+
+      const delivery = await registry.execute('legal_finalize_delivery_package', {
+        orgId,
+        userId: 'vitest',
+        caseId,
+        caseName: '案件归档闭环测试案',
+        documentType: '代理词',
+        outputDir: dir,
+        includeDocx: false,
+        content: [
+          '# 代理词草稿',
+          '根据《民法典》第五百八十五条，被告应承担违约责任。',
+        ].join('\n'),
+      });
+      expect(delivery).toContain('案件空间：已归档正式交付包');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.getCase(orgId, caseId!);
+      expect(caseFile?.materials.some(material => material.title.includes('半自动立案交接单'))).toBe(true);
+      expect(caseFile?.materials.some(material => material.title.includes('正式交付包'))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('turns legal meeting transcripts into archived case minutes', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-meeting-${Date.now()}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_meeting_'));
+    const caseName = '法律会议闭环测试案';
+
+    try {
+      const output = await registry.execute('legal_meeting_minutes_to_case', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        caseType: '买卖合同纠纷',
+        stage: '咨询',
+        participants: '承办律师、原告法务、业务负责人',
+        meetingTime: '2026-07-10 09:30',
+        objective: '整理立案前事实、证据和期限',
+        outputDir: dir,
+        transcript: [
+          '双方在2026年3月签订买卖合同，被告收货后只支付部分货款。',
+          '现有证据包括合同原件、送货单、发票、银行流水和微信催款聊天记录。',
+          '争议焦点是付款条件是否成就、逾期付款责任以及违约金是否过高。',
+          '需要在7月15日前提交立案材料，并确认电子数据导出方式。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('法律会议纪要已生成');
+      expect(output).toContain('纪要文件');
+      expect(output).toContain('案件空间：已归档');
+
+      const minutesPath = path.join(dir, 'legal-meeting-minutes.md');
+      expect(fs.existsSync(minutesPath)).toBe(true);
+      const markdown = fs.readFileSync(minutesPath, 'utf8');
+      expect(markdown).toContain('沟通要点');
+      expect(markdown).toContain('证据线索与三性提示');
+      expect(markdown).toContain('真实性');
+      expect(markdown).toContain('合法性');
+      expect(markdown).toContain('关联性');
+      expect(markdown).toContain('期限和待办');
+      expect(markdown).toContain('legal_case_workspace');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.source === 'meeting'
+        && material.type === 'consultation'
+        && material.title.includes('法律会议纪要')
+        && material.localPath === minutesPath
+      ))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates archived legal reasoning matrices for syllogism-style case analysis', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-reasoning-${Date.now()}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_reasoning_'));
+    const caseName = '三段论分析闭环测试案';
+
+    try {
+      const output = await registry.execute('legal_case_reasoning_matrix', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        role: '原告',
+        caseType: '买卖合同纠纷',
+        facts: '双方签订买卖合同后，原告完成供货，被告收货后拖欠剩余货款。',
+        evidence: '买卖合同；送货单；签收单；银行流水；微信催款记录',
+        issues: ['付款条件是否成就', '被告是否应承担逾期付款违约责任'],
+        legalAuthorities: '拟引用《民法典》第五百八十五条。',
+        similarCases: '待检索最高人民法院、高级人民法院、中级人民法院和基层人民法院类案。',
+        outputDir: dir,
+      });
+
+      expect(output).toContain('法律分析三段论底稿已生成');
+      expect(output).toContain('现行有效法律预检：通过');
+      expect(output).toContain('底稿文件');
+      expect(output).toContain('案件空间：已归档');
+
+      const matrixPath = path.join(dir, 'legal-reasoning-matrix.md');
+      expect(fs.existsSync(matrixPath)).toBe(true);
+      const markdown = fs.readFileSync(matrixPath, 'utf8');
+      expect(markdown).toContain('法律分析三段论底稿');
+      expect(markdown).toContain('大前提：检索法律、解释法律、类案补强');
+      expect(markdown).toContain('小前提：待证事实、证据材料、举证质证');
+      expect(markdown).toContain('结论：涵摄、文书表达、风险');
+      expect(markdown).toContain('最高人民法院 > 高级人民法院 > 中级人民法院 > 基层人民法院');
+      expect(markdown).toContain('legal_finalize_delivery_package');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.source === 'tool'
+        && material.type === 'note'
+        && material.title.includes('法律分析三段论底稿')
+        && material.localPath === matrixPath
+      ))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('archives contract and bid work products into the case workspace', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-contract-bid-${Date.now()}`;
+    const caseName = '合同标书闭环测试案';
+
+    const review = await registry.execute('legal_review_contract', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      caseType: '合同审查',
+      contract: [
+        '建设工程施工合同',
+        '发包人逾期付款的，承包人每日按合同总价30%收取违约金。',
+        '任一方可单方解除合同，无需通知对方。',
+      ].join('\n'),
+    });
+    expect(review).toContain('案件归档与交付边界');
+    expect(review).toContain('案件空间：已归档');
+    expect(review).toContain('legal_finalize_delivery_package');
+
+    const draft = await registry.execute('legal_draft_contract', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      caseType: '合同起草',
+      type: '建设工程施工合同',
+      details: '项目名称：测试工程；工期：90日；价款：待填写；需要违约责任和付款节点。',
+    });
+    expect(draft).toContain('合同起草');
+    expect(draft).toContain('案件空间：已归档');
+
+    const bid = await registry.execute('legal_generate_bid', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      caseType: '投标/招标文件响应',
+      projectName: '测试工程投标项目',
+      requirements: '招标要求：提交商务标、技术标、项目管理机构、施工组织设计、授权委托书和报价清单。',
+    });
+    expect(bid).toContain('投标书');
+    expect(bid).toContain('案件空间：已归档');
+    expect(bid).toContain('三段论核心基础');
+
+    const LegalCases = await import('../server/org/legal_cases');
+    const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+    expect(caseFile?.materials.some(material => (
+      material.type === 'contract'
+      && material.title.includes('合同审查报告')
+    ))).toBe(true);
+    expect(caseFile?.materials.some(material => (
+      material.type === 'contract'
+      && material.title.includes('合同起草底稿')
+    ))).toBe(true);
+    expect(caseFile?.materials.some(material => (
+      material.type === 'note'
+      && material.title.includes('投标书工作底稿')
+    ))).toBe(true);
+  });
+
+  it('archives core litigation work products into the same case workspace', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-core-products-${Date.now()}`;
+    const caseName = '核心办案产物闭环测试案';
+
+    const packet = await registry.execute('legal_generate_litigation_packet', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      role: '原告',
+      caseType: '买卖合同纠纷',
+      facts: '被告收货后未付剩余货款。',
+      evidence: '买卖合同；送货单；签收单；银行流水。',
+    });
+    const focus = await registry.execute('legal_extract_dispute_focus', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      role: '原告',
+      caseType: '买卖合同纠纷',
+      complaint: '请求支付货款及违约金。',
+      evidence: '合同、送货单、签收单、银行流水。',
+    });
+    const argument = await registry.execute('legal_generate_argument_or_opinion', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      role: '原告',
+      documentType: '代理词',
+      caseType: '买卖合同纠纷',
+      facts: '原告已完成供货，被告收货后拖欠货款。',
+      issues: ['付款条件是否成就', '被告是否应承担违约责任'],
+      evidence: '合同、送货单、签收单、银行流水。',
+      objective: '请求支持货款和违约金。',
+    });
+    const strategy = await registry.execute('legal_case_strategy', {
+      orgId,
+      userId: 'vitest',
+      caseName,
+      caseType: '买卖合同纠纷',
+      facts: '原告已完成供货，被告以质量问题拒付剩余货款。',
+    });
+
+    for (const output of [packet, focus, argument, strategy]) {
+      expect(output).toContain('案件归档与交付边界');
+      expect(output).toContain('案件空间：已归档');
+      expect(output).toContain('legal_finalize_delivery_package');
+    }
+
+    const LegalCases = await import('../server/org/legal_cases');
+    const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+    const titles = caseFile?.materials.map(material => material.title).join('\n') || '';
+    expect(titles).toContain('半自动诉讼文书包');
+    expect(titles).toContain('争议焦点提炼');
+    expect(titles).toContain('代理词草稿');
+    expect(titles).toContain('诉讼策略分析');
+  });
+
+  it('archives asset tracing and equity penetration reports into case workspaces', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-asset-equity-${Date.now()}`;
+    const caseName = '执行财产线索闭环测试案';
+    const subjectName = `测试被执行人${Date.now()}`;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('', { status: 404, headers: { 'content-type': 'text/plain' } }),
+    );
+
+    try {
+      const assets = await registry.execute('legal_trace_assets', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        caseType: '执行/财产保全',
+        name: subjectName,
+      });
+      const equity = await registry.execute('legal_equity_penetration', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        caseType: '主体/股权穿透',
+        name: `${subjectName}有限公司`,
+      });
+
+      expect(assets).toContain('财产线索报告');
+      expect(assets).toContain('案件空间：已归档');
+      expect(equity).toContain('授权网页登录协作');
+      expect(equity).toContain('案件空间：已归档');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.type === 'evidence'
+        && material.title.includes('财产线索报告')
+      ))).toBe(true);
+      expect(caseFile?.materials.some(material => (
+        material.type === 'evidence'
+        && material.title.includes('股权穿透')
+      ))).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('generates bid work products directly from local tender files', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-bid-file-${Date.now()}`;
+    const caseName = '招标文件直读闭环测试案';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_bid_file_'));
+    const tenderPath = path.join(dir, 'tender-requirements.txt');
+
+    try {
+      fs.writeFileSync(tenderPath, [
+        '招标要求：提交商务标、技术标、项目管理机构、施工组织设计。',
+        '评分标准：企业资质、类似业绩、技术方案、报价清单、授权委托书。',
+        '合同条款：需响应付款节点、违约责任、工期、质量标准。',
+      ].join('\n'), 'utf8');
+
+      const output = await registry.execute('legal_generate_bid', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        caseType: '投标/招标文件响应',
+        projectName: '直读招标文件测试项目',
+        filePath: tenderPath,
+      });
+
+      expect(output).toContain('直读招标文件测试项目');
+      expect(output).toContain('招标文件来源');
+      expect(output).toContain('tender-requirements.txt');
+      expect(output).toContain('案件空间：已归档');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.type === 'note'
+        && material.title.includes('投标书工作底稿')
+        && material.content.includes('招标文件来源')
+        && material.content.includes('tender-requirements.txt')
+      ))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('processes SMS and court notice links with case archive records', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-notice-link-${Date.now()}`;
+    const caseName = '短信通知链接闭环测试案';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html><body>上海市黄浦区人民法院 开庭通知 （2026）沪0101民初123号 2026年7月15日开庭。</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    );
+
+    try {
+      const output = await registry.execute('legal_process_notice_link', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        noticeText: '【人民法院】你有一份开庭通知，请查看 https://court.example.test/notice/123',
+      });
+
+      expect(output).toContain('短信/通知链接处理结果');
+      expect(output).toContain('留痕报告');
+      expect(output).toContain('案件空间归档');
+      expect(output).toContain('案件空间：已归档');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.type === 'note'
+        && material.title.includes('短信/法院通知链接材料')
+        && material.content.includes('开庭通知')
+      ))).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('generates argument and legal-opinion drafts as lawyer-reviewed work products', async () => {
@@ -130,8 +565,13 @@ describe('semi-automated legal workflows', () => {
 
   it('builds external research plans around authorized browser sessions', async () => {
     const registry = createLegalRegistry();
+    const orgId = `test-legal-research-plan-${Date.now()}`;
+    const caseName = '外部检索行动单归档测试案';
 
     const output = await registry.execute('legal_external_research_plan', {
+      orgId,
+      userId: 'vitest',
+      caseName,
       caseType: '买卖合同纠纷',
       facts: '合同履行后拖欠货款，争议集中在质量异议、付款条件和违约金调整。',
       issues: ['货款支付条件', '质量异议抗辩', '违约金调整'],
@@ -150,6 +590,15 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('national-enterprise-credit');
     expect(output).toContain('court-online-service');
     expect(output).toMatch(/来源登记表|来源.*登记/);
+    expect(output).toContain('案件空间：已归档');
+
+    const LegalCases = await import('../server/org/legal_cases');
+    const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+    expect(caseFile?.materials.some(material => (
+      material.source === 'tool'
+      && material.type === 'note'
+      && material.title.includes('外部检索行动单')
+    ))).toBe(true);
   });
 
   it('writes formal legal delivery packages with DOCX and citation reports', async () => {
@@ -170,7 +619,7 @@ describe('semi-automated legal workflows', () => {
         includePdf: false,
         content: [
           '# 代理词草稿',
-          '根据《合同法》第六十条和《民法典》第五百八十五条，结合（2025）沪0101民初123号案件材料，形成如下意见。',
+          '根据《民法典》第五百八十五条，结合（2025）沪0101民初123号案件材料，形成如下意见。',
           '一、双方存在买卖合同关系。',
           '二、被告应支付货款并承担违约责任。',
         ].join('\n'),
@@ -186,8 +635,76 @@ describe('semi-automated legal workflows', () => {
 
       const report = fs.readFileSync(path.join(dir, '02_citation-verification-report.md'), 'utf-8');
       expect(report).toContain('引用核验报告');
-      expect(report).toMatch(/合同法|已废止/);
+      expect(output).toContain('现行有效法律硬门槛：通过');
+      expect(report).toContain('现行有效法律硬门槛：通过');
+      expect(report).toMatch(/民法典|现行有效/);
+      expect(report).not.toContain('合同法');
+      expect(report).toContain('已废止/失效风险：0');
       expect(report).toContain('律师最终检索');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks formal legal delivery packages when statute citations are repealed or unverified', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_blocked_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        caseName: '废止法阻断测试案',
+        documentType: '代理词',
+        caseType: '买卖合同纠纷',
+        role: '原告',
+        outputDir: dir,
+        includeDocx: true,
+        content: [
+          '# 代理词草稿',
+          '根据《合同法》第六十条，原告请求被告承担违约责任。',
+          '本段故意引用已废止法律，用于验证正式交付包硬门槛。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包未生成');
+      expect(output).toContain('现行有效法律硬门槛未通过');
+      expect(output).toContain('合同法');
+      expect(fs.existsSync(path.join(dir, '00_current-law-gate-blocked.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '03_source-register.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '00_manifest.md'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(false);
+      expect(fs.readdirSync(dir).some(file => file.endsWith('.docx'))).toBe(false);
+
+      const report = fs.readFileSync(path.join(dir, '02_citation-verification-report.md'), 'utf-8');
+      expect(report).toContain('现行有效法律硬门槛：未通过');
+      expect(report).toMatch(/合同法|已废止/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks formal legal delivery packages when statute citations cannot be verified', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_unverified_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        caseName: '未知法条阻断测试案',
+        documentType: '法律意见书',
+        outputDir: dir,
+        includeDocx: true,
+        content: [
+          '# 法律意见书草稿',
+          '根据《不存在特别保护法》第十条，形成如下法律意见。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包未生成');
+      expect(output).toContain('现行有效法律硬门槛未通过');
+      expect(output).toContain('不存在特别保护法');
+      expect(fs.existsSync(path.join(dir, '00_current-law-gate-blocked.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(false);
+      expect(fs.readdirSync(dir).some(file => file.endsWith('.docx'))).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -317,17 +834,42 @@ describe('semi-automated legal workflows', () => {
       PKULAW_BASE_URL: process.env.PKULAW_BASE_URL,
     };
     const query = `authority-api-test-${Date.now()}`;
+    const orgId = `test-legal-authority-archive-${Date.now()}`;
+    const caseName = '外部类案检索归档测试案';
     process.env.PKULAW_API_KEY = 'test-pkulaw-key';
     process.env.PKULAW_BASE_URL = 'https://pkulaw.local/search';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({
-        items: [{
-          title: 'Contract dispute authority',
-          caseNumber: '(2026) Test Case No.1',
-          court: 'Supreme Test Court',
-          summary: 'A controlled mocked authority result.',
-          url: 'https://pkulaw.local/case/1',
-        }],
+        items: [
+          {
+            title: '基层法院买卖合同案例',
+            caseNumber: '(2026) Test Case No.4',
+            court: '上海市黄浦区人民法院',
+            summary: 'A controlled mocked basic court result.',
+            url: 'https://pkulaw.local/case/4',
+          },
+          {
+            title: '最高院买卖合同案例',
+            caseNumber: '(2026) Test Case No.1',
+            court: '最高人民法院',
+            summary: 'A controlled mocked supreme court result.',
+            url: 'https://pkulaw.local/case/1',
+          },
+          {
+            title: '中院买卖合同案例',
+            caseNumber: '(2026) Test Case No.3',
+            court: '上海市第一中级人民法院',
+            summary: 'A controlled mocked intermediate court result.',
+            url: 'https://pkulaw.local/case/3',
+          },
+          {
+            title: '高院买卖合同案例',
+            caseNumber: '(2026) Test Case No.2',
+            court: '上海市高级人民法院',
+            summary: 'A controlled mocked high court result.',
+            url: 'https://pkulaw.local/case/2',
+          },
+        ],
       }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -336,17 +878,35 @@ describe('semi-automated legal workflows', () => {
 
     try {
       const output = await registry.execute('legal_search_external_authorities', {
+        orgId,
+        userId: 'vitest',
+        caseName,
         query,
         type: 'case',
         sourceIds: ['pkulaw'],
-        limit: 1,
+        limit: 4,
       });
 
       expect(fetchMock).toHaveBeenCalled();
-      expect(output).toContain('Contract dispute authority');
+      expect(output).toContain('最高院买卖合同案例');
       expect(output).toContain('(2026) Test Case No.1');
       expect(output).toContain('pkulaw');
+      expect(output).toContain('最高人民法院 > 高级人民法院 > 中级人民法院 > 基层人民法院');
+      expect(output.indexOf('最高院买卖合同案例')).toBeLessThan(output.indexOf('高院买卖合同案例'));
+      expect(output.indexOf('高院买卖合同案例')).toBeLessThan(output.indexOf('中院买卖合同案例'));
+      expect(output.indexOf('中院买卖合同案例')).toBeLessThan(output.indexOf('基层法院买卖合同案例'));
       expect(output).toMatch(/授权|API|复核/);
+      expect(output).toContain('来源登记回填');
+      expect(output).toContain('案件空间：已归档');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.source === 'tool'
+        && material.type === 'judgment'
+        && material.title.includes('外部法律数据库检索')
+        && material.content.includes('(2026) Test Case No.1')
+      ))).toBe(true);
     } finally {
       fetchMock.mockRestore();
       if (original.PKULAW_API_KEY === undefined) delete process.env.PKULAW_API_KEY;
@@ -363,6 +923,8 @@ describe('semi-automated legal workflows', () => {
       TIANYANCHA_BASE_URL: process.env.TIANYANCHA_BASE_URL,
     };
     const companyName = `Demo Tech Co ${Date.now()}`;
+    const orgId = `test-legal-company-archive-${Date.now()}`;
+    const caseName = '企业主体查询归档测试案';
     process.env.TIANYANCHA_API_KEY = 'test-tyc-key';
     process.env.TIANYANCHA_BASE_URL = 'https://tianyancha.local/company';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
@@ -385,6 +947,9 @@ describe('semi-automated legal workflows', () => {
 
     try {
       const output = await registry.execute('legal_company_database_lookup', {
+        orgId,
+        userId: 'vitest',
+        caseName,
         name: companyName,
         sourceIds: ['tianyancha'],
       });
@@ -394,6 +959,17 @@ describe('semi-automated legal workflows', () => {
       expect(output).toContain('Jane Test');
       expect(output).toContain('91310000TESTCODE');
       expect(output).toMatch(/天眼查|API|网页登录/);
+      expect(output).toContain('主体信息来源登记');
+      expect(output).toContain('案件空间：已归档');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.source === 'tool'
+        && material.type === 'evidence'
+        && material.title.includes('企业/被执行主体数据库查询')
+        && material.content.includes(companyName)
+      ))).toBe(true);
     } finally {
       fetchMock.mockRestore();
       if (original.TIANYANCHA_API_KEY === undefined) delete process.env.TIANYANCHA_API_KEY;
@@ -403,16 +979,35 @@ describe('semi-automated legal workflows', () => {
     }
   });
 
-  it('keeps triad reasoning as underlying logic rather than a standalone UI tab', () => {
+  it('keeps triad reasoning as core legal logic rather than a standalone UI tab', () => {
     const registry = createLegalRegistry();
     const legalHubSource = fs.readFileSync(path.join(process.cwd(), 'src/components/org/LegalHub.tsx'), 'utf-8');
     const toolRouterSource = fs.readFileSync(path.join(process.cwd(), 'server/cognition/tool_router.ts'), 'utf-8');
+    const legalToolsSource = fs.readFileSync(path.join(process.cwd(), 'server/tools/definitions/legal_tools.ts'), 'utf-8');
+    const chatRoutesSource = fs.readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf-8');
 
     expect(legalHubSource).not.toContain("id: 'triad'");
     expect(legalHubSource).not.toContain('LegalTriadView');
     expect(legalHubSource).toContain('legal_generate_litigation_packet');
     expect(legalHubSource).toContain('legal_external_research_plan');
+    expect(legalHubSource).toContain('buildLegalCaseReadiness');
+    expect(legalHubSource).toContain('legalCaseToolArgs');
+    expect(legalHubSource).toContain("runLegalTool('legal_case_reasoning_matrix'");
+    expect(legalHubSource).toContain('办案闭环');
+    expect(legalHubSource).toContain('persistCase: true');
+    expect(legalHubSource).toContain('legal_finalize_delivery_package');
+    expect(legalHubSource).toContain('legal_process_notice_link');
+    expect(legalHubSource).toContain('处理短信链接');
+    expect(fs.readFileSync(path.join(process.cwd(), 'src/lib/legalToolClient.ts'), 'utf-8')).toContain('/api/legal/tool/');
+    expect(chatRoutesSource).toContain('DIRECT_LEGAL_TOOL_ALLOWLIST');
+    expect(chatRoutesSource).toContain('/legal/tool/:toolName');
+    expect(chatRoutesSource).toContain('legal_generate_litigation_packet');
+    expect(chatRoutesSource).toContain('legal_finalize_delivery_package');
+    expect(chatRoutesSource).toContain('legal_process_notice_link');
     expect(registry.get('legal_triad_analysis')).toBeUndefined();
+    expect(registry.get('legal_case_reasoning_matrix')).toBeTruthy();
+    expect(legalToolsSource).toContain('三段论是 Lumi 法律工作的核心基础');
+    expect(toolRouterSource).toContain('legal_case_reasoning_matrix');
     expect(toolRouterSource).not.toContain('legal_triad_analysis');
   });
 });

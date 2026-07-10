@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { AlertCircle, Building2, FileText, Loader2, Network, Search, Target } from 'lucide-react';
 import { useT } from '../../lib/useT';
+import type { LegalCaseFile } from '../../lib/legalCaseStore';
+import { runLegalTool } from '../../lib/legalToolClient';
 
 interface TraceResult {
   company?: string;
@@ -14,7 +16,30 @@ interface TraceResult {
   raw?: string;
 }
 
-export function LegalAssetTrace() {
+function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
+  if (!caseFile) return '未命名案件';
+  return caseFile.title || caseFile.party || caseFile.caseNumber || '未命名案件';
+}
+
+function assetTraceCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
+  if (!caseFile) return orgId ? { orgId } : {};
+  return {
+    caseId: caseFile.id,
+    caseName: legalCaseTitle(caseFile),
+    caseType: caseFile.cause || '执行/财产保全',
+    parties: caseFile.party || undefined,
+    orgId,
+    persistCase: true,
+  };
+}
+
+export function LegalAssetTrace({
+  caseFile,
+  orgId,
+}: {
+  caseFile?: LegalCaseFile | null;
+  orgId?: string;
+}) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
@@ -28,18 +53,16 @@ export function LegalAssetTrace() {
     setLoading(true);
     setResult(null);
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: `使用 legal_trace_assets 工具追踪被执行人"${name}"的财产线索，然后再使用 legal_equity_penetration 工具分析其股权结构。`,
-          stream: false,
-        }),
-        credentials: 'include',
+      const commonArgs = assetTraceCaseArgs(caseFile, orgId);
+      const assetText = await runLegalTool('legal_trace_assets', {
+        ...commonArgs,
+        name,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('财产线索追踪失败', 'Asset trace failed'));
-      const text = data.text || data.response || data.reply || data.message || '';
+      const equityText = await runLegalTool('legal_equity_penetration', {
+        ...commonArgs,
+        name,
+      });
+      const text = [assetText, equityText].filter(Boolean).join('\n\n---\n\n');
       const parsed = parseTraceResult(text);
       setResult(parsed);
       setActiveTab(parsed.company ? 'info' : 'raw');
