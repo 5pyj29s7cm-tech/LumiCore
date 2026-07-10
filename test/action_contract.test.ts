@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildActionContract, formatActionContractPrompt, hasCoreActionEvidence } from '../server/cognition/action_contract';
+import {
+  buildActionContract,
+  formatActionContractPrompt,
+  hasCoreActionEvidence,
+  hasVisibleAutoCadExecutionEvidence,
+  requiresVisibleAutoCadExecution,
+} from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
   it('classifies foreground messaging as a send contract', () => {
@@ -61,6 +67,24 @@ describe('Lumi action contract', () => {
     expect(buildActionContract('CAD\u81ea\u52a8\u753b\u56fe').kind).toBe('cad_drafting');
     expect(buildActionContract('\u5e2e\u6211\u76ef\u76d8\u80a1\u7968').kind).toBe('stock_monitor');
     expect(buildActionContract('\u5f8b\u5e08\u7684\u4ee3\u7406\u8bcd').kind).toBe('legal_document');
+  });
+
+  it('requires stronger evidence when the user asks for visible AutoCAD execution', () => {
+    const text = '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u6839\u636e\u91cc\u9762\u7684\u56fe\u7247\u751f\u6210 CAD \u56fe\u7eb8\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765';
+
+    expect(requiresVisibleAutoCadExecution(text)).toBe(true);
+    expect(hasVisibleAutoCadExecutionEvidence([{
+      id: 'folder',
+      name: 'mcp_cad-drafting_cad_renovation_folder_workflow',
+      arguments: {},
+      result: '{"cadFiles":[{"path":"C:\\\\Users\\\\me\\\\Desktop\\\\plan.dxf"}]}',
+    }])).toBe(false);
+    expect(hasVisibleAutoCadExecutionEvidence([{
+      id: 'run',
+      name: 'cad_run_autocad_draw_script',
+      arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
+      result: '{"status":"completed","completionMarkerExists":true}',
+    }])).toBe(true);
   });
 
   it('renders a reusable prompt section with stages and evidence', () => {

@@ -152,6 +152,48 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('\u5fae\u4fe1\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001');
   });
 
+  it('does not treat a CAD folder workflow as visible AutoCAD completion evidence', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u8bf7\u6839\u636e\u91cc\u9762\u7684\u56fe\u7247\u751f\u6210 CAD \u56fe\u7eb8\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765',
+      responseText: '\u6211\u5df2\u7ecf\u751f\u6210\u4e86 DXF\uff0c\u5e76\u5728 AutoCAD \u91cc\u753b\u5b8c\u4e86\u3002',
+      toolRecords: [{
+        name: 'mcp_cad-drafting_cad_renovation_folder_workflow',
+        arguments: { folderPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\\u963f\u9646' },
+        result: '{"ok":true,"cadFiles":[{"path":"C:\\\\Users\\\\me\\\\Desktop\\\\\u963f\u9646\\\\LumiCAD\\\\plan.dxf"}]}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
+    expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
+    expect(result.text).toContain('cad_run_autocad_draw_script');
+  });
+
+  it('allows visible AutoCAD completion after the draw script run is completed', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u8bf7\u6839\u636e\u91cc\u9762\u7684\u56fe\u7247\u751f\u6210 CAD \u56fe\u7eb8\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765',
+      responseText: 'AutoCAD drawing completed.',
+      toolRecords: [{
+        name: 'cad_generate_autocad_draw_script',
+        arguments: { width: 7800, height: 6200 },
+        result: '{"scriptPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr","completionMarkerPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan.done","operationCount":12}',
+      }, {
+        name: 'cad_run_autocad_draw_script',
+        arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
+        result: '{"status":"completed","completionMarkerExists":true}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('AutoCAD drawing completed.');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const socketSources = [

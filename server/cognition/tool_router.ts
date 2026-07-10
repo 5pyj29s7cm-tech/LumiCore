@@ -1,6 +1,7 @@
 import { ToolPolicy } from '../personality/types';
 import { ToolRegistry } from '../tools/registry';
 import { mcpManager } from '../mcp/client';
+import { requiresVisibleAutoCadExecution } from './action_contract';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -581,17 +582,30 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   }
   if (categories.includes('cad_design')) {
     if (isLocalCadSourceRequest(text)) {
-      priorities.push(
-        'desktop_path_info',
-        'desktop_list_files',
-        'floorplan_extract_geometry',
-        'ocr_image_file',
-        'mcp_cad-drafting_cad_renovation_folder_workflow',
-        'cad_generate_dxf',
-        'cad_generate_autocad_draw_script',
-        'cad_run_autocad_draw_script',
-        'desktop_capture_screen',
-      );
+      const localCadSourceTools = requiresVisibleAutoCadExecution(text)
+        ? [
+            'desktop_path_info',
+            'desktop_list_files',
+            'floorplan_extract_geometry',
+            'ocr_image_file',
+            'cad_generate_dxf',
+            'cad_generate_autocad_draw_script',
+            'cad_run_autocad_draw_script',
+            'mcp_cad-drafting_cad_renovation_folder_workflow',
+            'desktop_capture_screen',
+          ]
+        : [
+            'desktop_path_info',
+            'desktop_list_files',
+            'floorplan_extract_geometry',
+            'ocr_image_file',
+            'mcp_cad-drafting_cad_renovation_folder_workflow',
+            'cad_generate_dxf',
+            'cad_generate_autocad_draw_script',
+            'cad_run_autocad_draw_script',
+            'desktop_capture_screen',
+          ];
+      priorities.push(...localCadSourceTools);
     } else {
       priorities.push(
         'cad_generate_dxf',

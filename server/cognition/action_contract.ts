@@ -50,6 +50,54 @@ function matches(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
 }
 
+export function requiresVisibleAutoCadExecution(input: string): boolean {
+  const text = compact(input);
+  if (!text) return false;
+  const mentionsCadSurface =
+    /(?:\bAutoCAD\b|\bacad(?:\.exe)?\b|(?:CAD|cad)\s*(?:\u8f6f\u4ef6|\u7a97\u53e3|\u754c\u9762|\u91cc|\u4e2d|app)|(?:\u5728|\u7528).{0,16}(?:AutoCAD|CAD|cad))/iu.test(text);
+  const wantsVisibleDrawing =
+    /(?:\u5b9e\u9645|\u771f\u6b63|\u53ef\u89c1|\u5b9e\u64cd|\u64cd\u4f5c|\u6253\u5f00|\u542f\u52a8|\u8fdb\u5165).{0,32}(?:\u753b|\u7ed8\u5236|\u6267\u884c|\u8dd1)|(?:\u753b\u51fa\u6765|\u7ed8\u5236\u51fa\u6765|\u4e00\u7b14\u4e00\u7b14|\u53ef\u89c1\u7ed8\u56fe|\u5b9e\u64cd\u753b\u56fe)/u.test(text)
+    || /\b(?:actually|visible|visibly|real|run|execute|open|launch|stroke[-\s]?by[-\s]?stroke|step[-\s]?by[-\s]?step).{0,32}(?:draw|drawing|script|AutoCAD|CAD)\b/i.test(text)
+    || /\b(?:draw|draft|render)\b.{0,32}\b(?:in|inside|through|with)\s+(?:AutoCAD|CAD)\b/i.test(text);
+  return mentionsCadSurface && wantsVisibleDrawing;
+}
+
+function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | null {
+  try {
+    const parsed = JSON.parse(String(record.result || ''));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : null;
+  } catch {
+    return null;
+  }
+}
+
+export function hasVisibleAutoCadExecutionEvidence(records: ToolExecutionRecord[] = []): boolean {
+  const successful = records.filter(record => !record.error && String(record.result || '').trim());
+  if (successful.length === 0) return false;
+
+  const generatedVisibleScript = successful.some(record =>
+    /^cad_generate_autocad_draw_script$/i.test(record.name) &&
+    /scriptPath|lispPath|completionMarkerPath|operationCount/i.test(String(record.result || ''))
+  );
+
+  const completedRun = successful.some(record => {
+    if (!/^cad_run_autocad_draw_script$/i.test(record.name)) return false;
+    const payload = parseRecordJson(record);
+    const result = String(record.result || '');
+    return payload?.status === 'completed'
+      || payload?.completionMarkerExists === true
+      || /"status"\s*:\s*"completed"|"completionMarkerExists"\s*:\s*true/i.test(result);
+  });
+  if (completedRun) return true;
+
+  const visibleCadSurface = successful.some(record => {
+    if (!/^(desktop_capture_screen|desktop_active_window|desktop_ui_snapshot|desktop_running_processes)$/i.test(record.name)) return false;
+    return /AutoCAD|Autodesk|acad(?:\.exe)?|\bDWG\b|\bDXF\b|model\s*space/i.test(String(record.result || ''));
+  });
+
+  return generatedVisibleScript && visibleCadSurface;
+}
+
 function withDefaults(contract: Omit<LumiActionContract, 'applies'>): LumiActionContract {
   return {
     ...contract,
@@ -159,12 +207,12 @@ export function buildActionContract(input: string): LumiActionContract {
       kind: 'cad_drafting',
       label: 'CAD/\u56fe\u7eb8\u4f5c\u6218',
       coreAction: '\u751f\u6210\u6216\u64cd\u4f5c CAD \u56fe\u7eb8\uff0c\u786e\u8ba4\u6587\u4ef6\u4ea7\u7269\u6216\u53ef\u89c1\u8f6f\u4ef6\u7ed8\u5236\u7ed3\u679c',
-      preparationIsNotCompletion: ['\u8ba1\u7b97\u65b9\u6848', '\u5199\u51fa\u811a\u672c', '\u6253\u5f00 CAD \u8f6f\u4ef6', '\u67e5\u770b\u6587\u4ef6\u5939'],
-      requiredEvidence: ['created CAD/DXF/script file path with nonzero size', '\u6216 CAD \u8f6f\u4ef6\u4e2d\u53ef\u89c1\u56fe\u5f62\u7684\u684c\u9762\u8bc1\u636e'],
-      preferredTools: ['cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script', 'desktop_path_info', 'desktop_capture_screen'],
-      verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen'],
-      nextStep: '\u7528\u7ed3\u6784\u5316 CAD \u5de5\u5177\u751f\u6210\u4ea7\u7269\uff0c\u518d\u9a8c\u8bc1\u6587\u4ef6\u6216\u53ef\u89c1\u7ed8\u5236\u7ed3\u679c\u3002',
-      caution: '\u4e0d\u80fd\u628a\u8bbe\u8ba1\u601d\u8def\u3001\u811a\u672c\u8349\u7a3f\u6216\u6253\u5f00\u8f6f\u4ef6\u8bf4\u6210\u56fe\u7eb8\u5df2\u5b8c\u6210\u3002',
+      preparationIsNotCompletion: ['\u8ba1\u7b97\u65b9\u6848', '\u5199\u51fa\u811a\u672c', '\u6253\u5f00 CAD \u8f6f\u4ef6', '\u67e5\u770b\u6587\u4ef6\u5939', '\u53ea\u751f\u6210 DXF/\u65b9\u6848\u5305'],
+      requiredEvidence: ['created CAD/DXF/script file path with nonzero size', '\u82e5\u7528\u6237\u8981\u5728 AutoCAD/CAD \u91cc\u5b9e\u9645\u753b\uff1acad_run_autocad_draw_script completed/marker evidence or visible AutoCAD drawing evidence', '\u6216 CAD \u8f6f\u4ef6\u4e2d\u53ef\u89c1\u56fe\u5f62\u7684\u684c\u9762\u8bc1\u636e'],
+      preferredTools: ['floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script', 'desktop_path_info', 'desktop_capture_screen'],
+      verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen', 'desktop_active_window'],
+      nextStep: '\u5148\u8bfb\u53d6\u56fe\u7247/\u6587\u4ef6\u5f62\u6210\u7ed3\u6784\u5316\u51e0\u4f55\uff0c\u518d\u751f\u6210 CAD/DXF\uff1b\u82e5\u7528\u6237\u660e\u8bf4 AutoCAD \u5b9e\u753b\uff0c\u5fc5\u987b\u7ee7\u7eed\u5230 AutoCAD \u811a\u672c\u6267\u884c\u548c\u53ef\u89c1\u9a8c\u8bc1\u3002',
+      caution: '\u4e0d\u80fd\u628a\u8bbe\u8ba1\u601d\u8def\u3001DXF/\u65b9\u6848\u5305\u3001\u811a\u672c\u8349\u7a3f\u6216\u6253\u5f00\u8f6f\u4ef6\u8bf4\u6210\u5df2\u5728 AutoCAD \u91cc\u753b\u5b8c\u3002',
     });
   }
 

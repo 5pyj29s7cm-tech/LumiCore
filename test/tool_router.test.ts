@@ -463,6 +463,7 @@ describe('tool router', () => {
     ]));
     expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
     expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
+    expect(route.toolNames.indexOf('cad_run_autocad_draw_script')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_cad_renovation_folder_workflow'));
   });
 
   it('routes skill questions to skill management tools', () => {

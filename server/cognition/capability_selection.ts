@@ -1,6 +1,6 @@
 import type { LumiExecutionDecision } from './execution_decision';
 import type { LumiTurnDispatch } from './turn_dispatch';
-import { buildActionContract, formatActionContractPrompt } from './action_contract';
+import { buildActionContract, formatActionContractPrompt, requiresVisibleAutoCadExecution } from './action_contract';
 
 export type LumiCapabilityLane =
   | 'conversation'
@@ -301,7 +301,7 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
   };
 }
 
-function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>): string {
+function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): string {
   switch (selection.lane) {
     case 'conversation':
       return 'Answer as Lumi. Do not invent work, tool calls, or hidden task progress.';
@@ -322,6 +322,9 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>): string {
     case 'artifact_work':
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':
+      if (requiresVisibleAutoCadExecution(text)) {
+        return 'Use the source files/images to derive structured geometry, then generate CAD/DXF and continue to AutoCAD visible drawing execution. A DXF, folder workflow, or design package alone is not completion evidence for this wording; call cad_generate_autocad_draw_script and cad_run_autocad_draw_script, then verify the AutoCAD run or state the exact blocker.';
+      }
       return 'Prefer structured design/CAD tools over raw cursor work; use desktop CAD only when the user asks to operate visible software or a tool needs it.';
     case 'desktop_control':
       return 'Use screen/window state as evidence. Move through visible UI deliberately and verify the app/result before claiming completion.';
@@ -350,7 +353,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     `Why: ${unique(selected.reasons).join('; ')}.`,
     routeCategories.length ? `Tool route categories: ${routeCategories.join(', ')}.` : 'Tool route categories: none.',
     preferredTools.length ? `Preferred tools for this lane: ${preferredTools.join(', ')}.` : 'Preferred tools for this lane: none.',
-    laneRule(selected),
+    laneRule(selected, input.text || input.dispatch.flow.routeText || ''),
     formatActionContractPrompt(actionContract),
     'This lane is an execution bias, not a fixed script. If the newest user wording contradicts it, follow the newest wording and update task state when work is persistent.',
   ].filter(Boolean).join('\n');

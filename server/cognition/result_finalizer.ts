@@ -1,7 +1,13 @@
 import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
-import { buildActionContract, hasCoreActionEvidence, summarizeActionContractBlocker } from './action_contract';
+import {
+  buildActionContract,
+  hasCoreActionEvidence,
+  hasVisibleAutoCadExecutionEvidence,
+  requiresVisibleAutoCadExecution,
+  summarizeActionContractBlocker,
+} from './action_contract';
 
 export interface LumiResultFinalizerInput {
   taskText: string;
@@ -148,11 +154,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     .test(input.responseText || '');
   const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
     .test(input.responseText || '');
-  const stockWatchText = `${input.taskText}\n${input.responseText}`;
+  const actionText = `${input.taskText}\n${input.responseText}`;
   if (
     actionContract.kind === 'stock_monitor' &&
     (claimsActionDone || claimsStockWatchStarted) &&
-    hasContinuousStockWatchIntent(stockWatchText) &&
+    hasContinuousStockWatchIntent(actionText) &&
     !hasContinuousStockWatchEvidence(input.toolRecords || [])
   ) {
     return {
@@ -166,7 +172,24 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  if (shouldEnforceCoreActionContract(actionContract, `${input.taskText}\n${input.responseText}`) && claimsActionDone && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
+  if (
+    actionContract.kind === 'cad_drafting' &&
+    claimsActionDone &&
+    requiresVisibleAutoCadExecution(actionText) &&
+    !hasVisibleAutoCadExecutionEvidence(input.toolRecords || [])
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing visible AutoCAD execution evidence.'),
+      blocked: true,
+      reason: 'Missing visible AutoCAD execution evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing visible AutoCAD execution evidence.',
+      },
+    };
+  }
+  if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
     return {
       text: formatCompactBlockedResponse(input, `Missing core evidence for ${actionContract.kind}.`),
       blocked: true,

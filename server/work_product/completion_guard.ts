@@ -104,7 +104,7 @@ const INSPECTION_ONLY_TOOL_RE =
   /^(read_|list_|search_|grep_|desktop_path_info|desktop_list_files|client_get_state|adapter_health_check|usage_get_summary|calendar_|lumi_constitution|agent_list|get_|path_info)/i;
 
 const FILE_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|cad_generate_autocad_draw_script|cad_run_autocad_draw_script|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
 
 const OPEN_TOOL_RE =
   /^(desktop_open|client_action|computer_use|external_app_.*open|open_)/i;
@@ -229,7 +229,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
 }
 
 function extractLocalPaths(text: string): string[] {
-  const matches = text.match(/[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi) || [];
+  const matches = text.match(/[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|scr|lsp|ps1|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi) || [];
   return matches
     .map(item => path.normalize(item.trim().replace(/[),.;，。；]+$/g, '')))
     .slice(0, 12);

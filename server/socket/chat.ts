@@ -465,7 +465,20 @@ function extractExplicitLocalPaths(input: string): string[] {
 function parseNativeFiles(raw: string): NativeFileEntry[] {
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed)) return parsed;
+    if (typeof parsed === 'string') return parseNativeFiles(parsed);
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, any>;
+      for (const key of ['entries', 'files', 'items', 'data', 'result', 'output']) {
+        const value = obj[key];
+        if (Array.isArray(value)) return value;
+        if (typeof value === 'string') {
+          const nested = parseNativeFiles(value);
+          if (nested.length) return nested;
+        }
+      }
+    }
+    return [];
   } catch {
     return [];
   }
@@ -553,6 +566,21 @@ function selectBestLocalFileCandidate(entries: NativeFileEntry[], searchText: st
   if (scored.length === 1 && best.score >= 14) return best.entry;
   if (best.score >= 22 && (!second || best.score - second.score >= 8)) return best.entry;
   return null;
+}
+
+function selectLocalCadImageCandidates(entries: NativeFileEntry[], searchText: string, limit = 2): NativeFileEntry[] {
+  if (!LOCAL_CAD_IMAGE_REQUEST_RE.test(searchText)) return [];
+  return entries
+    .map(entry => ({ entry, score: scoreLocalFileCandidate(entry, searchText) }))
+    .filter(item => (
+      Number.isFinite(item.score) &&
+      item.score > 0 &&
+      !isNativeDirectory(item.entry) &&
+      LOCAL_IMAGE_EXT_RE.test(item.entry.path || item.entry.name || '')
+    ))
+    .sort((a, b) => b.score - a.score || getNativeModifiedMs(b.entry) - getNativeModifiedMs(a.entry))
+    .map(item => item.entry)
+    .slice(0, Math.max(1, limit));
 }
 
 function toolForLocalFile(filePath: string, searchText: string, kind?: ChatIncomingAttachment['kind']): { name: string; arguments: Record<string, any> } {
@@ -1698,10 +1726,19 @@ export function registerChatHandler(
             const record = await runPreflightTool(toolCall.name, toolCall.arguments);
             if (toolCall.name === 'desktop_list_files' && !record.error) {
               const entries = parseNativeFiles(record.result || '');
-              const candidate = selectBestLocalFileCandidate(entries, preflightSearchText);
-              if (candidate?.path) {
-                const candidateTool = toolForLocalFile(candidate.path, preflightSearchText);
-                await runPreflightTool(candidateTool.name, candidateTool.arguments);
+              const cadImageCandidates = selectLocalCadImageCandidates(entries, preflightSearchText);
+              if (cadImageCandidates.length > 0) {
+                for (const candidate of cadImageCandidates) {
+                  if (!candidate.path) continue;
+                  const candidateTool = toolForLocalFile(candidate.path, preflightSearchText);
+                  await runPreflightTool(candidateTool.name, candidateTool.arguments);
+                }
+              } else {
+                const candidate = selectBestLocalFileCandidate(entries, preflightSearchText);
+                if (candidate?.path) {
+                  const candidateTool = toolForLocalFile(candidate.path, preflightSearchText);
+                  await runPreflightTool(candidateTool.name, candidateTool.arguments);
+                }
               }
             }
           }
@@ -1728,10 +1765,19 @@ export function registerChatHandler(
             }
           }
 
-          const candidate = selectBestLocalFileCandidate(discovered, visibleUserText);
-          if (candidate?.path) {
-            const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
-            await runPreflightTool(toolCall.name, toolCall.arguments);
+          const cadImageCandidates = selectLocalCadImageCandidates(discovered, preflightSearchText);
+          if (cadImageCandidates.length > 0) {
+            for (const candidate of cadImageCandidates) {
+              if (!candidate.path) continue;
+              const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
+              await runPreflightTool(toolCall.name, toolCall.arguments);
+            }
+          } else {
+            const candidate = selectBestLocalFileCandidate(discovered, visibleUserText);
+            if (candidate?.path) {
+              const toolCall = toolForLocalFile(candidate.path, preflightSearchText);
+              await runPreflightTool(toolCall.name, toolCall.arguments);
+            }
           }
         }
 

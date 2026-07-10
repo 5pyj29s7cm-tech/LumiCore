@@ -223,6 +223,7 @@ describe('Lumi capability selection', () => {
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(selection.lane).toBe('design_cad');
+    expect(selection.promptOverlay).toContain('A DXF, folder workflow, or design package alone is not completion evidence');
     expect(selection.preferredTools.slice(0, 8)).toEqual(expect.arrayContaining([
       'desktop_path_info',
       'desktop_list_files',

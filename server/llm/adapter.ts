@@ -7,6 +7,7 @@ import { recordTokenUsage } from './token_tracker';
 import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
+import { hasVisibleAutoCadExecutionEvidence, requiresVisibleAutoCadExecution } from '../cognition/action_contract';
 
 export interface LLMConfig {
   provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
@@ -300,10 +301,10 @@ interface ReadyArtifact {
 }
 
 const ARTIFACT_PATH_RE =
-  /[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi;
+  /[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|scr|lsp|ps1|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi;
 
 const ARTIFACT_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|cad_generate_autocad_draw_script|cad_run_autocad_draw_script|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
 
 function normalizeArtifactPath(raw: string): string {
   return path.normalize(String(raw || '').trim().replace(/[)\].,;，。；]+$/g, ''));
@@ -311,7 +312,7 @@ function normalizeArtifactPath(raw: string): string {
 
 function artifactKind(filePath: string): ReadyArtifact['kind'] {
   const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.dxf' || ext === '.dwg') return 'cad';
+  if (ext === '.dxf' || ext === '.dwg' || ext === '.scr' || ext === '.lsp' || ext === '.ps1') return 'cad';
   if (ext === '.pptx' || ext === '.ppt') return 'ppt';
   if (ext === '.svg') return 'preview';
   if (ext === '.pdf' || ext === '.docx' || ext === '.xlsx' || ext === '.md' || ext === '.txt' || ext === '.csv') return 'document';
@@ -405,6 +406,9 @@ function buildReadyWorkProductSummary(messages: NormalizedMessage[], executionLo
   const wantsDesktop = /\bdesktop\b|桌面/i.test(task);
   const wantsArtifact = wantsCad || wantsPpt || /\b(file|save|export|output)\b|(?:文件|保存|导出|输出|生成|创建)/i.test(task);
   if (!wantsArtifact) return null;
+  if (wantsCad && requiresVisibleAutoCadExecution(task) && !hasVisibleAutoCadExecutionEvidence(executionLog)) {
+    return null;
+  }
 
   const artifacts = collectExistingArtifacts(executionLog);
   const hasCad = artifacts.some(artifact => artifact.kind === 'cad');
