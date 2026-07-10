@@ -32,8 +32,9 @@ function extractCaseTarget(input: string): string {
 
 export function isLegalNoticeIntakeCandidate(input: string): boolean {
   const body = text(input);
-  if (!extractFirstUrl(body)) return false;
-  return /(人民法院|法院|12368|开庭|传票|送达|应诉|举证|立案|审判|诉讼|案号|民初|民终|执|裁定|判决|通知|短信)/.test(body);
+  const hasLegalSignal = /(人民法院|法院|12368|开庭|传票|送达|应诉|举证|立案|审判|诉讼|案号|民初|民终|执|裁定|判决|通知|短信|起诉|答辩|证据|律师|法律|合同纠纷|侵权|仲裁)/.test(body);
+  if (extractFirstUrl(body) && hasLegalSignal) return true;
+  return hasLegalSignal && /(入案|归档|保存|导入|收录|放入|放到|加入|新建|创建|发给\s*Lumi|给\s*Lumi|Lumi\s*bot)/i.test(body);
 }
 
 function findOrCreateCaseFromNotice(params: {
@@ -105,10 +106,10 @@ function platformLabel(platform: IncomingMessage['platform']): string {
 function bindingPrompt(platform: IncomingMessage['platform']): string {
   const label = platformLabel(platform);
   return [
-    `我识别到这是一条法院短信/通知链接，但当前${label}账号还没有绑定 Lumi 组织工作域，所以不会自动写入案件。`,
+    `我识别到这是一条法院短信/通知链接或法律材料入案请求，但当前${label}账号还没有绑定 Lumi 组织工作域，所以不会自动写入案件。`,
     '',
     `请先在 Lumi 桌面端生成${label}绑定码，然后在${label}里发送：绑定 Lumi <绑定码>。`,
-    '绑定后，再把这条短信或链接转发给我，我会自动入案、留痕并处理链接。',
+    '绑定后，再把短信、链接或案件材料转发给我，我会自动入案、留痕并处理链接。',
   ].join('\n');
 }
 
@@ -120,7 +121,27 @@ export async function handleRemoteLegalNoticeIntake(msg: IncomingMessage): Promi
     return bindingPrompt(msg.platform);
   }
 
+  if (toolRegistry.get('legal_message_intake_to_case')) {
+    return await toolRegistry.execute('legal_message_intake_to_case', {
+      orgId: msg.boundOrgId,
+      userId: msg.boundUserId,
+      platform: msg.platform,
+      sender: msg.userName || msg.userId,
+      message: messageText,
+      attachments: msg.attachments || [],
+      receivedAt: msg.timestamp,
+      processLinks: true,
+      persistCase: true,
+    }, {
+      userId: msg.boundUserId,
+      orgId: msg.boundOrgId,
+      domain: 'work',
+      source: `${msg.platform}-legal-notice-intake`,
+    });
+  }
+
   const url = extractFirstUrl(messageText);
+  if (!url) return null;
   const { caseFile, hints, rawMaterialId } = findOrCreateCaseFromNotice({
     orgId: msg.boundOrgId,
     userId: msg.boundUserId,

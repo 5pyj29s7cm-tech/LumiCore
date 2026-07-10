@@ -74,12 +74,17 @@ const DECLARATIONS = [
   'legal_case_strategy',
   'legal_case_workspace',
   'legal_case_workflow_status',
+  'legal_message_intake_to_case',
   'legal_meeting_minutes_to_case',
   'legal_case_reasoning_matrix',
   'legal_generate_litigation_packet',
+  'legal_prepare_filing_handoff',
   'legal_extract_dispute_focus',
   'legal_generate_argument_or_opinion',
+  'legal_analyze_folder_and_draft_argument',
   'legal_import_materials_to_kb',
+  'legal_process_notice_link',
+  'legal_download_and_extract_document',
   'legal_external_source_status',
   'legal_search_external_authorities',
   'legal_company_database_lookup',
@@ -213,6 +218,24 @@ describe('tool router', () => {
     ]));
     expect(route.toolNames.indexOf('legal_case_workflow_status')).toBeGreaterThan(-1);
     expect(route.toolNames.indexOf('legal_case_workflow_status')).toBeLessThan(route.toolNames.indexOf('legal_case_workspace'));
+  });
+
+  it('routes remote legal bot intake to the message intake tool first', () => {
+    const route = routeToolsForTurn(
+      '飞书发给 Lumi bot 的法院短信链接和案件材料，自动入案并看看下一步',
+      DECLARATIONS,
+      { maxTools: 12 },
+    );
+
+    expect(route.categories).toEqual(expect.arrayContaining(['legal', 'messaging']));
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_message_intake_to_case',
+      'legal_process_notice_link',
+      'legal_case_workflow_status',
+    ]));
+    expect(route.toolNames.indexOf('legal_message_intake_to_case')).toBeGreaterThan(-1);
+    expect(route.toolNames.indexOf('legal_message_intake_to_case')).toBeLessThan(route.toolNames.indexOf('legal_process_notice_link'));
+    expect(route.toolNames.indexOf('legal_message_intake_to_case')).toBeLessThan(route.toolNames.indexOf('legal_case_workflow_status'));
   });
 
   it('routes dispute-focus extraction from trial materials through chat and voice', () => {

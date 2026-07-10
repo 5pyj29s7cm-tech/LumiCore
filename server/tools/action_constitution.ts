@@ -180,6 +180,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   const name = toolName.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
 
+  if (name === 'legal_message_intake_to_case') return 'observe';
   if (name === 'client_action') return getSensitiveClientAction(args) ? 'desktop_control' : 'observe';
   if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
   if (name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';

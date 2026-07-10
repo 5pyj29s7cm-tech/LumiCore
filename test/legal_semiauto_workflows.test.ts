@@ -613,6 +613,45 @@ describe('semi-automated legal workflows', () => {
     }
   });
 
+  it('archives remote legal bot messages into the case workflow', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-message-intake-${Date.now()}`;
+    const caseName = '远程消息入案闭环测试案';
+
+    const output = await registry.execute('legal_message_intake_to_case', {
+      orgId,
+      userId: 'vitest',
+      platform: 'wechat',
+      sender: '阿陆',
+      caseName,
+      message: [
+        '请发给 Lumi 入案：买卖合同纠纷。',
+        '被告收货后未支付尾款，证据包括合同、送货单、微信催款记录。',
+        '法院短信链接 https://court.example.test/notice/456',
+      ].join('\n'),
+      fileNames: ['微信聊天记录导出.pdf'],
+      processLinks: false,
+    });
+
+    expect(output).toContain('远程法律消息已入案');
+    expect(output).toContain('平台：微信');
+    expect(output).toContain('发送人：阿陆');
+    expect(output).toContain('案件闭环状态');
+    expect(output).toContain('processLinks=false');
+    expect(output).toContain('下一动作');
+
+    const LegalCases = await import('../server/org/legal_cases');
+    const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+    expect(caseFile).toBeTruthy();
+    expect(caseFile.materials.some(material => (
+      material.source === 'import'
+      && material.type === 'consultation'
+      && material.title.includes('微信法律消息原文')
+      && material.content.includes('court.example.test/notice/456')
+      && material.content.includes('阿陆')
+    ))).toBe(true);
+  });
+
   it('generates argument and legal-opinion drafts as lawyer-reviewed work products', async () => {
     const registry = createLegalRegistry();
 
@@ -1087,14 +1126,17 @@ describe('semi-automated legal workflows', () => {
     expect(chatRoutesSource).toContain('/legal/tool/:toolName');
     expect(chatRoutesSource).toContain('legal_generate_litigation_packet');
     expect(chatRoutesSource).toContain('legal_case_workflow_status');
+    expect(chatRoutesSource).toContain('legal_message_intake_to_case');
     expect(chatRoutesSource).toContain('legal_finalize_delivery_package');
     expect(chatRoutesSource).toContain('legal_process_notice_link');
     expect(registry.get('legal_triad_analysis')).toBeUndefined();
     expect(registry.get('legal_case_reasoning_matrix')).toBeTruthy();
     expect(registry.get('legal_case_workflow_status')).toBeTruthy();
+    expect(registry.get('legal_message_intake_to_case')).toBeTruthy();
     expect(legalToolsSource).toContain('三段论是 Lumi 法律工作的核心基础');
     expect(toolRouterSource).toContain('legal_case_reasoning_matrix');
     expect(toolRouterSource).toContain('legal_case_workflow_status');
+    expect(toolRouterSource).toContain('legal_message_intake_to_case');
     expect(toolRouterSource).not.toContain('legal_triad_analysis');
   });
 });

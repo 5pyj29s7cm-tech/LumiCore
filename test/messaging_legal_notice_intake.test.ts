@@ -27,7 +27,7 @@ describe('remote messaging legal notice intake', () => {
   beforeAll(async () => {
     const app = await makeApp();
     cleanup = app.cleanup;
-    if (!toolRegistry.get('legal_process_notice_link')) {
+    if (!toolRegistry.get('legal_process_notice_link') || !toolRegistry.get('legal_message_intake_to_case')) {
       registerLegalTools(toolRegistry);
     }
   });
@@ -51,8 +51,10 @@ describe('remote messaging legal notice intake', () => {
         text: '【人民法院】上海市黄浦区人民法院通知：（2026）沪0101民初123号将于2026年7月15日开庭，请查看 https://court.example.test/notice/123',
       }));
 
-      expect(reply).toContain('已收到飞书转发的法院短信链接');
-      expect(reply).toContain('已读取或下载并保存留痕');
+      expect(reply).toContain('远程法律消息已入案');
+      expect(reply).toContain('平台：飞书');
+      expect(reply).toContain('链接已读取/下载并保存留痕');
+      expect(reply).toContain('案件闭环状态');
       expect(reply).toContain('上海市黄浦区人民法院');
 
       const cases = LegalCases.listCases(orgId, '沪0101民初123号', 3);
@@ -60,16 +62,41 @@ describe('remote messaging legal notice intake', () => {
       const caseFile = cases[0];
       expect(caseFile.court).toContain('上海市黄浦区人民法院');
       expect(caseFile.materials.some(material =>
-        material.title.includes('微信/飞书转发法院短信原文')
+        material.title.includes('飞书法律消息原文')
         && material.content.includes('court.example.test'),
       )).toBe(true);
       expect(caseFile.materials.some(material =>
-        material.title.includes('微信/飞书转发法院通知链接材料')
+        material.title.includes('远程消息链接材料')
         && material.content.includes('开庭通知'),
       )).toBe(true);
     } finally {
       fetchMock.mockRestore();
     }
+  });
+
+  it('archives explicit bound WeChat legal intake messages even without a notice link', async () => {
+    const orgId = `remote-legal-message-${Date.now()}`;
+    const userId = 'remote-lawyer';
+
+    const reply = await handleRemoteLegalNoticeIntake(message({
+      platform: 'wechat',
+      userName: '阿陆',
+      boundOrgId: orgId,
+      boundUserId: userId,
+      text: '请发给 Lumi 入案：张三诉李四买卖合同纠纷，证据有合同、送货单、微信催款记录，后续需要整理起诉材料。',
+    }));
+
+    expect(reply).toContain('远程法律消息已入案');
+    expect(reply).toContain('平台：微信');
+    expect(reply).toContain('发送人：阿陆');
+    expect(reply).toContain('案件闭环状态');
+
+    const cases = LegalCases.listCases(orgId, '买卖合同纠纷', 3);
+    expect(cases.length).toBeGreaterThan(0);
+    expect(cases[0].materials.some(material =>
+      material.title.includes('微信法律消息原文')
+      && material.content.includes('微信催款记录'),
+    )).toBe(true);
   });
 
   it('asks unbound WeChat users to bind before writing legal notice links into cases', async () => {
