@@ -58,6 +58,8 @@ const declarations = [
   'write_file',
   'web_search',
   'url_fetch_logged_in',
+  'web_login_profile_list',
+  'web_login_profile_save_from_preset',
   'web_login_run',
   'browser_open_task',
   'mcp_playwright_browser_snapshot',
@@ -246,6 +248,25 @@ describe('Lumi capability selection', () => {
 
     expect(selection.lane).toBe('artifact_work');
     expect(selection.preferredTools).toContain('create_ppt');
+  });
+
+  it('keeps court website login/search work on the browser account lane', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_court_login_user',
+      text: '\u6253\u5f00\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51\uff0c\u81ea\u52a8\u767b\u5f55\u8d26\u53f7\u627e\u4e00\u4e0b\u6d59\u6c5f\u7701\u7684\u6848\u4ef6',
+      operationMode: 'autonomous',
+    });
+
+    expect(selection.lane).toBe('web_or_account');
+    expect(selection.primary).toContain('browser/account');
+    expect(selection.preferredTools.slice(0, 8)).toEqual(expect.arrayContaining([
+      'web_login_profile_list',
+      'web_login_profile_save_from_preset',
+      'web_login_run',
+      'mcp_playwright_browser_snapshot',
+    ]));
+    expect(selection.promptOverlay).toContain('First inspect saved login profiles');
+    expect(execution.toolRoute?.categories).toEqual(expect.arrayContaining(['legal', 'authenticated_web']));
   });
 
   it('selects desktop control for visible external software operation', async () => {

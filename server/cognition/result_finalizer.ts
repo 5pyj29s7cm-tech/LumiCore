@@ -3,8 +3,10 @@ import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import {
   buildActionContract,
+  hasAuthenticatedWebResultEvidence,
   hasCoreActionEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
   summarizeActionContractBlocker,
 } from './action_contract';
@@ -51,6 +53,8 @@ function isChineseText(value: string): boolean {
 }
 
 function summarizeToolFailure(records: ToolExecutionRecord[]): string {
+  const webAccountBlocker = summarizeWebAccountBlocker(records);
+  if (webAccountBlocker) return webAccountBlocker;
   const failed = [...records].reverse().find(record => record.error);
   if (!failed) return '';
   const name = String(failed.name || '');
@@ -66,6 +70,24 @@ function summarizeToolFailure(records: ToolExecutionRecord[]): string {
     return name || '\u5de5\u5177\u6267\u884c';
   })();
   return error ? `${action}: ${error}` : action;
+}
+
+function summarizeWebAccountBlocker(records: ToolExecutionRecord[]): string {
+  for (const record of [...records].reverse()) {
+    const name = String(record.name || '');
+    const result = String(record.result || '');
+    const error = String(record.error || '');
+    if (/^web_login_profile_list$/i.test(name) && /"profiles"\s*:\s*\[\s*\]/i.test(result)) {
+      return '\u6ca1\u6709\u627e\u5230\u5df2\u4fdd\u5b58\u7684\u7f51\u9875\u767b\u5f55 profile/\u4f1a\u8bdd';
+    }
+    if (/^web_login_run$/i.test(name) && /manual_required|captcha|2FA|QR|passkey|\u9a8c\u8bc1\u7801|\u626b\u7801|\u4e8c\u6b21\u9a8c\u8bc1/i.test(`${result}\n${error}`)) {
+      return '\u767b\u5f55\u9700\u8981\u624b\u52a8\u5b8c\u6210\u626b\u7801\u3001\u9a8c\u8bc1\u7801\u30012FA \u6216\u8d26\u53f7\u786e\u8ba4';
+    }
+    if (/mcp_playwright_browser_(?:evaluate|run_code_unsafe)/i.test(name) && /cross-origin|Blocked a frame|iframe|contentFrame/i.test(`${result}\n${error}`)) {
+      return '\u767b\u5f55\u6846\u5728\u8de8\u57df iframe \u91cc\uff0c\u666e\u901a\u9875\u9762 JS \u4e0d\u80fd\u76f4\u63a5\u63a5\u7ba1\uff1b\u9700\u8981\u8d70\u53ef\u89c1 web_login_run \u4f1a\u8bdd\u6216\u7528\u6237\u5b8c\u6210\u9a8c\u8bc1';
+    }
+  }
+  return '';
 }
 
 function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput): boolean {
@@ -186,6 +208,23 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         type: 'work_product_guard',
         level: 'warning',
         message: 'Missing visible AutoCAD execution evidence.',
+      },
+    };
+  }
+  if (
+    actionContract.kind === 'browser_account' &&
+    claimsActionDone &&
+    requiresAuthenticatedWebResult(actionText) &&
+    !hasAuthenticatedWebResultEvidence(input.toolRecords || [], input.taskText)
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing authenticated browser result evidence.'),
+      blocked: true,
+      reason: 'Missing authenticated browser result evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing authenticated browser result evidence.',
       },
     };
   }

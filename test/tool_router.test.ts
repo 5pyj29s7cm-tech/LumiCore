@@ -466,6 +466,24 @@ describe('tool router', () => {
     expect(route.toolNames.indexOf('cad_run_autocad_draw_script')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_cad_renovation_folder_workflow'));
   });
 
+  it('routes court website login searches through saved web login profiles before browser clicks', () => {
+    const route = routeToolsForTurn(
+      '\u6253\u5f00\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51\uff0c\u81ea\u52a8\u767b\u5f55\u8d26\u53f7\u627e\u4e00\u4e0b\u6d59\u6c5f\u7701\u7684\u6848\u4ef6',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toEqual(expect.arrayContaining(['legal', 'authenticated_web']));
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'web_login_profile_list',
+      'web_login_profile_save_from_preset',
+      'web_login_run',
+      'mcp_playwright_browser_navigate',
+    ]));
+    expect(route.toolNames.indexOf('web_login_profile_list')).toBeLessThan(route.toolNames.indexOf('web_login_run'));
+    expect(route.toolNames.indexOf('web_login_profile_save_from_preset')).toBeLessThan(route.toolNames.indexOf('web_login_run'));
+    expect(route.toolNames.indexOf('web_login_run')).toBeLessThan(route.toolNames.indexOf('mcp_playwright_browser_navigate'));
+  });
+
   it('routes skill questions to skill management tools', () => {
     const route = routeToolsForTurn('这些技能 Lumi 会调用吗，帮我看看技能大厅和 MCP', DECLARATIONS);
 

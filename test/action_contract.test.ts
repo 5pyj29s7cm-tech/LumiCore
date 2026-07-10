@@ -3,7 +3,9 @@ import {
   buildActionContract,
   formatActionContractPrompt,
   hasCoreActionEvidence,
+  hasAuthenticatedWebResultEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
 } from '../server/cognition/action_contract';
 
@@ -85,6 +87,31 @@ describe('Lumi action contract', () => {
       arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
       result: '{"status":"completed","completionMarkerExists":true}',
     }])).toBe(true);
+  });
+
+  it('requires authenticated result evidence for login-then-search browser work', () => {
+    const text = '\u6253\u5f00\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51\uff0c\u81ea\u52a8\u767b\u5f55\u8d26\u53f7\u627e\u4e00\u4e0b\u6d59\u6c5f\u7701\u7684\u6848\u4ef6';
+
+    expect(buildActionContract(text).kind).toBe('browser_account');
+    expect(requiresAuthenticatedWebResult(text)).toBe(true);
+    expect(buildActionContract(text).preferredTools.slice(0, 4)).toEqual([
+      'web_login_profile_list',
+      'web_login_profile_save_from_preset',
+      'web_login_run',
+      'url_fetch_logged_in',
+    ]);
+    expect(hasAuthenticatedWebResultEvidence([{
+      id: 'login-page',
+      name: 'mcp_playwright_browser_snapshot',
+      arguments: {},
+      result: 'Page URL: https://wenshu.court.gov.cn/website/wenshu/181010CARHS5BS3C/index.html?open=login\\n登录/注册',
+    }], text)).toBe(false);
+    expect(hasAuthenticatedWebResultEvidence([{
+      id: 'result-page',
+      name: 'mcp_playwright_browser_snapshot',
+      arguments: {},
+      result: 'Page URL: https://wenshu.court.gov.cn/search\\n浙江省 案件 检索结果 列表 裁判文书',
+    }], text)).toBe(true);
   });
 
   it('renders a reusable prompt section with stages and evidence', () => {

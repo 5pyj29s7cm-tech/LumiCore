@@ -552,8 +552,10 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   }
   if (categories.includes('authenticated_web')) {
     priorities.push(
-      'web_login_run',
       'web_login_profile_list',
+      'web_login_profile_save_from_preset',
+      'web_login_run',
+      'url_fetch_logged_in',
       'browser_open_task',
       'mcp_playwright_browser_snapshot',
       'mcp_playwright_browser_navigate',

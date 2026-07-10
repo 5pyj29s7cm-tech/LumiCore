@@ -98,6 +98,41 @@ export function hasVisibleAutoCadExecutionEvidence(records: ToolExecutionRecord[
   return generatedVisibleScript && visibleCadSurface;
 }
 
+export function requiresAuthenticatedWebResult(input: string): boolean {
+  const text = compact(input);
+  if (!text) return false;
+  const hasAccountSurface = /\u767b\u5f55|\u81ea\u52a8\u767b\u5f55|\u8d26\u53f7|\u8d26\u6237|\u4f1a\u8bdd|login|log\s*in|sign\s*in|account|session/i.test(text);
+  const hasTargetWork = /\u67e5|\u627e|\u641c|\u68c0\u7d22|\u8bfb|\u4e0b\u8f7d|\u6253\u5f00|find|search|query|look\s*up|fetch|download/i.test(text);
+  return hasAccountSurface && hasTargetWork;
+}
+
+export function hasAuthenticatedWebResultEvidence(records: ToolExecutionRecord[] = [], text = ''): boolean {
+  const successful = records.filter(record => !record.error && String(record.result || '').trim());
+  if (successful.length === 0) return false;
+  const task = compact(text);
+  const searchIntent = /\u67e5|\u627e|\u641c|\u68c0\u7d22|find|search|query|look\s*up/i.test(task);
+  const targetTerms = Array.from(new Set((task.match(/[\u4e00-\u9fff]{2,8}(?:省|市|自治区|案件|案号|法院|裁判|文书)?/g) || [])
+    .filter(term => !/打开|登录|账号|自动登录|浏览器|网站|一下|这个|那个|案件$|裁判$|文书$/.test(term))
+    .slice(0, 6)));
+
+  const loggedIn = successful.some(record => {
+    if (!/^web_login_run$/i.test(record.name)) return false;
+    const result = String(record.result || '');
+    const payload = parseRecordJson(record);
+    return payload?.status === 'logged_in' || /"status"\s*:\s*"logged_in"|Login\/session is available/i.test(result);
+  });
+
+  if (!searchIntent) return loggedIn;
+
+  return successful.some(record => {
+    if (!/^(url_fetch_logged_in|mcp_playwright_browser_snapshot|mcp_playwright_browser_navigate|mcp_playwright_browser_evaluate|browser_open_task)$/i.test(record.name)) return false;
+    const result = String(record.result || '');
+    if (/open=login|登录\/注册|登录链接|please\s+login|requires authentication|captcha|验证码|2FA|manual_required/i.test(result)) return false;
+    const hasTargetTerm = targetTerms.length === 0 || targetTerms.some(term => result.includes(term));
+    return hasTargetTerm && /结果|列表|案件|裁判|文书|法院|Page URL|title|content|result|case|search/i.test(result);
+  });
+}
+
 function withDefaults(contract: Omit<LumiActionContract, 'applies'>): LumiActionContract {
   return {
     ...contract,
@@ -194,10 +229,10 @@ export function buildActionContract(input: string): LumiActionContract {
       label: '\u6d4f\u89c8\u5668/\u8d26\u53f7\u64cd\u4f5c',
       coreAction: '\u6253\u5f00\u76ee\u6807\u7ad9\u70b9\uff0c\u68c0\u67e5\u5f53\u524d\u4f1a\u8bdd\uff0c\u4f7f\u7528\u53ef\u63a7\u6d4f\u89c8\u5668\u6216\u684c\u9762\u8fdb\u884c\u767b\u5f55\u540e\u64cd\u4f5c',
       preparationIsNotCompletion: ['\u6253\u5f00\u6d4f\u89c8\u5668', '\u6253\u5f00\u767b\u5f55\u9875', '\u770b\u5230\u7f51\u7ad9\u9996\u9875'],
-      requiredEvidence: ['logged-in page/session evidence', '\u76ee\u6807\u9875\u9762\u72b6\u6001\u6216\u8d26\u53f7\u72b6\u6001\u9a8c\u8bc1'],
-      preferredTools: ['mcp_playwright_browser_snapshot', 'browser_open_task', 'web_login_run', 'desktop_active_window', 'desktop_capture_screen'],
-      verificationTools: ['mcp_playwright_browser_snapshot', 'desktop_capture_screen'],
-      nextStep: '\u5148\u68c0\u67e5\u5f53\u524d\u4f1a\u8bdd\u548c\u767b\u5f55\u72b6\u6001\uff1b\u9047\u5230\u5bc6\u7801\u3001\u9a8c\u8bc1\u7801\u6216 2FA \u5c31\u505c\u4e0b\u8bf4\u660e\u3002',
+      requiredEvidence: ['logged-in page/session evidence', '\u76ee\u6807\u9875\u9762\u72b6\u6001\u6216\u8d26\u53f7\u72b6\u6001\u9a8c\u8bc1', '\u82e5\u8bf7\u6c42\u5305\u542b\u68c0\u7d22/\u67e5\u627e\uff1b\u8fd8\u9700\u8981\u76ee\u6807\u68c0\u7d22\u7ed3\u679c\u6216\u660e\u786e\u7684\u672a\u767b\u5f55/\u9a8c\u8bc1\u963b\u585e\u8bc1\u636e'],
+      preferredTools: ['web_login_profile_list', 'web_login_profile_save_from_preset', 'web_login_run', 'url_fetch_logged_in', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_click', 'browser_open_task', 'desktop_active_window', 'desktop_capture_screen'],
+      verificationTools: ['web_login_profile_list', 'web_login_run', 'url_fetch_logged_in', 'mcp_playwright_browser_snapshot', 'desktop_capture_screen'],
+      nextStep: '\u5148\u68c0\u67e5\u5df2\u4fdd\u5b58\u7684\u767b\u5f55 profile/\u4f1a\u8bdd\uff1b\u5df2\u77e5\u7ad9\u70b9\u53ef\u5148\u521b\u5efa\u5bf9\u5e94 preset profile \u5e76\u8fd0\u884c web_login_run\uff1b\u9047\u5230\u5bc6\u7801\u3001\u626b\u7801\u3001\u9a8c\u8bc1\u7801\u30012FA \u6216\u672a\u4fdd\u5b58\u51ed\u636e\u5c31\u505c\u4e0b\u8bf4\u660e\u3002',
       caution: '\u4e0d\u80fd\u628a\u6253\u5f00\u7f51\u9875\u8bf4\u6210\u5df2\u767b\u5f55\u6216\u5df2\u5b8c\u6210\u8d26\u53f7\u64cd\u4f5c\u3002',
     });
   }

@@ -194,6 +194,29 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toBe('AutoCAD drawing completed.');
   });
 
+  it('blocks login-then-search claims without authenticated result evidence', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51\uff0c\u81ea\u52a8\u767b\u5f55\u8d26\u53f7\u627e\u4e00\u4e0b\u6d59\u6c5f\u7701\u7684\u6848\u4ef6',
+      responseText: '\u5df2\u7ecf\u767b\u5f55\u5e76\u627e\u5230\u4e86\u6d59\u6c5f\u7701\u7684\u6848\u4ef6\u3002',
+      toolRecords: [{
+        name: 'web_login_profile_list',
+        arguments: {},
+        result: '{"profiles":[]}',
+      }, {
+        name: 'mcp_playwright_browser_snapshot',
+        arguments: {},
+        result: 'Page URL: https://wenshu.court.gov.cn/website/wenshu/181010CARHS5BS3C/index.html?open=login\\n登录/注册',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing authenticated browser result evidence.');
+    expect(result.text).toContain('\u6ca1\u6709\u627e\u5230\u5df2\u4fdd\u5b58\u7684\u7f51\u9875\u767b\u5f55 profile');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const socketSources = [

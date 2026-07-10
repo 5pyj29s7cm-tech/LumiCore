@@ -115,7 +115,19 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'desktop_poll_activity',
     'desktop_run_command',
   ],
-  web_or_account: ['desktop_active_window', 'web_login_run', 'url_fetch_logged_in', 'web_search', 'browser_open_task', 'mcp_playwright_browser_snapshot'],
+  web_or_account: [
+    'web_login_profile_list',
+    'web_login_profile_save_from_preset',
+    'web_login_run',
+    'url_fetch_logged_in',
+    'web_search',
+    'browser_open_task',
+    'mcp_playwright_browser_snapshot',
+    'mcp_playwright_browser_navigate',
+    'mcp_playwright_browser_click',
+    'mcp_playwright_browser_fill_form',
+    'desktop_active_window',
+  ],
   external_tool: [],
   blocked_no_tools: [],
 };
@@ -238,6 +250,18 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
+  const actionContract = buildActionContract(text);
+  if (
+    actionContract.kind === 'browser_account' ||
+    routeHas(input, 'authenticated_web', 'web_research')
+  ) {
+    return {
+      lane: 'web_or_account',
+      primary: actionContract.kind === 'browser_account' ? 'browser/account session work' : 'browser web work',
+      reasons: [...reasons, 'browser, login, saved-session, or authenticated web tools matched before artifact handling'],
+    };
+  }
+
   if (routeHas(input, 'cad_design') && flow.workSurfaceRoute.directDesktop && !asksForRawDesktopOperation(text)) {
     return {
       lane: 'design_cad',
@@ -267,14 +291,6 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
       lane: 'artifact_work',
       primary: 'local artifact production',
       reasons: [...reasons, 'the task should produce or inspect files before claiming results'],
-    };
-  }
-
-  if (routeHas(input, 'authenticated_web', 'web_research') || routeHasTool(input, /^(web_|url_fetch|browser_|mcp_playwright_)/)) {
-    return {
-      lane: 'web_or_account',
-      primary: 'browser/account web work',
-      reasons: [...reasons, 'browser, search, or saved-login tools matched'],
     };
   }
 
@@ -329,7 +345,7 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
     case 'desktop_control':
       return 'Use screen/window state as evidence. Move through visible UI deliberately and verify the app/result before claiming completion.';
     case 'web_or_account':
-      return 'Use browser/login/session capabilities when available. Stop at captcha, 2FA, payment, irreversible publish, or missing credentials.';
+      return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
     case 'external_tool':
       return 'Use the selected external tools as Lumi hands, keep ownership of the result, and verify before final claims.';
     case 'blocked_no_tools':
