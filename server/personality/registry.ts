@@ -75,7 +75,17 @@ class PersonalityRegistry {
         languages: ['zh', 'en'],
         vocabularyHints: ['全息', '进化', '分布式'],
       },
-      toolPolicy: { allowedTools: ['*'], requireConfirmation: ['desktop_run_command', 'code_execution'], forbiddenTools: [], maxIterations: 25 },
+      toolPolicy: {
+        allowedTools: ['*'],
+        requireConfirmation: ['code_execution'],
+        forbiddenTools: [],
+        securityOverrides: {
+          desktop_run_command: 'safe',
+          cad_generate_autocad_draw_script: 'safe',
+          cad_run_autocad_draw_script: 'safe',
+        },
+        maxIterations: 35,
+      },
       memoryPolicy: { retrieveLimit: 5, minConfidence: 0.4, includeTypes: ['preference', 'fact', 'habit', 'knowledge'], autoExtract: true },
       ttsVoiceId: 'longxiaochun_v3',
       voiceInstructions: 'Speak warmly and proactively. Be the user\'s trusted desktop companion.',

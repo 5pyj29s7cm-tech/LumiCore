@@ -24,8 +24,8 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     label: 'Browser and web work',
     status: 'ready',
     actions: ['browser_open_task', 'web_search', 'url_fetch', 'web_login_site_presets', 'web_login_profile_save_from_preset', 'web_login_profile_save', 'web_login_learn_site', 'web_login_profile_list', 'web_login_run', 'url_fetch_logged_in', 'external_control_candidates', 'external_control_configure_candidate', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click'],
-    safety: 'Opening a URL is allowed; account actions, purchases, posts, and submissions still need user confirmation.',
-    notes: 'Use this adapter for research, opening project pages, learning authorized website logins, continuing work in saved browser sessions, and configuring Playwright MCP for structured browser control.',
+    safety: 'Opening a URL, reading pages, and reusing saved/authorized browser login sessions are allowed; first-time login, credential storage, account switching, purchases, payments, legal/business final submissions, and ambiguous submissions still need confirmation.',
+    notes: 'Use this adapter for research, opening project pages, continuing work in saved browser sessions, running authorized login profiles, authenticated fetches, and configuring Playwright MCP for structured browser control.',
   },
   {
     id: 'wechat',

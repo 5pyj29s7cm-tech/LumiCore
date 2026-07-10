@@ -1754,12 +1754,12 @@ const DEFAULT_AUTONOMY_GATE: AutonomyGateConfig = {
   autonomyLevel: 'semi',
   alwaysOnline: true,
   autoProcessEnabled: true,
-  messagingSendRequiresConfirmation: true,
-  maxConsecutiveTasks: 3,
-  allowedHours: [{ start: 8, end: 22 }],
-  requireIdle: true,
-  minIdleSeconds: 60,
-  maxTokensPerHour: 10000,
+  messagingSendRequiresConfirmation: false,
+  maxConsecutiveTasks: 6,
+  allowedHours: [{ start: 0, end: 24 }],
+  requireIdle: false,
+  minIdleSeconds: 0,
+  maxTokensPerHour: 30000,
 };
 
 function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: OperationMode }) {

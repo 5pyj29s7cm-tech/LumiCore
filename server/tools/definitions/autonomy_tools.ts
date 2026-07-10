@@ -61,7 +61,7 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       return JSON.stringify({
         updated,
         reason: args.reason || '',
-        note: 'Autonomy policy updated. Background execution still checks mode, idle/time, token budget, and tool safety gates.',
+        note: 'Autonomy policy updated. Background execution still checks desktop mode, the active policy fields, token budget, confirmed workflows, and tool safety gates.',
       }, null, 2);
     },
     permission: 'user',

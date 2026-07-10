@@ -7,6 +7,7 @@ import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from '
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry } from '../tools/registry';
 import { ToolContext } from '../tools/types';
+import { canAutoApproveAction } from '../tools/action_constitution';
 import { Server as SocketIOServer } from 'socket.io';
 import type { AutonomousTask } from './task_queue';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
@@ -34,7 +35,7 @@ const AUTONOMOUS_POLICY = {
     'run_command',   // shell remains available but gated below
     'system_command',
   ],
-  maxIterations: 25,
+  maxIterations: 50,
 };
 
 const pendingDesktopResults = new Map<string, {
@@ -146,7 +147,7 @@ export async function executeNextAutonomousTask(
 
   try {
     const currentGate = getGateConfig();
-    const maxIterations = currentGate.autonomyLevel === 'full' ? 25 : 15;
+    const maxIterations = currentGate.autonomyLevel === 'full' ? 50 : 30;
     // Build desktop relay using socket.io broadcast
     const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
       return new Promise((resolve, reject) => {
@@ -166,7 +167,7 @@ export async function executeNextAutonomousTask(
     const context: ToolContext = {
       userId: task.userId,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
-      requestConfirmation: async () => true, // Auto-approve in autonomous mode
+      requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args),
       toolPolicy: { ...AUTONOMOUS_POLICY, maxIterations },
       isCancelled: () => cancelled,
       autonomous: true,

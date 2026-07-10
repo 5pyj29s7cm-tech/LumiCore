@@ -28,12 +28,12 @@ const DEFAULT_CONFIG: SafetyGateConfig = {
   alwaysOnline: true,
   autoProcessEnabled: true,
   externalAppAutomationEnabled: false,
-  messagingSendRequiresConfirmation: true,
-  maxConsecutiveTasks: 3,
-  allowedHours: [{ start: 8, end: 22 }],
-  requireIdle: true,
-  minIdleSeconds: 60,
-  maxTokensPerHour: 10000,
+  messagingSendRequiresConfirmation: false,
+  maxConsecutiveTasks: 6,
+  allowedHours: [{ start: 0, end: 24 }],
+  requireIdle: false,
+  minIdleSeconds: 0,
+  maxTokensPerHour: 30000,
   quietHoursEnabled: false,
   quietHoursStart: 22,
   quietHoursEnd: 8,
@@ -55,23 +55,23 @@ const AUTONOMY_LEVEL_PRESETS: Record<AutonomyLevel, Partial<SafetyGateConfig>> =
     autonomyLevel: 'semi',
     alwaysOnline: true,
     autoProcessEnabled: true,
-    messagingSendRequiresConfirmation: true,
-    maxConsecutiveTasks: 3,
-    allowedHours: [{ start: 8, end: 22 }],
-    requireIdle: true,
-    minIdleSeconds: 60,
-    maxTokensPerHour: 10000,
+    messagingSendRequiresConfirmation: false,
+    maxConsecutiveTasks: 6,
+    allowedHours: [{ start: 0, end: 24 }],
+    requireIdle: false,
+    minIdleSeconds: 0,
+    maxTokensPerHour: 30000,
   },
   full: {
     autonomyLevel: 'full',
     alwaysOnline: true,
     autoProcessEnabled: true,
     messagingSendRequiresConfirmation: false,
-    maxConsecutiveTasks: 10,
+    maxConsecutiveTasks: 25,
     allowedHours: [{ start: 0, end: 24 }],
     requireIdle: false,
     minIdleSeconds: 0,
-    maxTokensPerHour: 100000,
+    maxTokensPerHour: 250000,
   },
 };
 
@@ -117,7 +117,12 @@ export function saveGateConfig(partial: Partial<SafetyGateConfig>): SafetyGateCo
 
 function normalizeGateConfig(input: Partial<SafetyGateConfig>): SafetyGateConfig {
   const next = { ...DEFAULT_CONFIG, ...input };
-  next.autonomyLevel = normalizeAutonomyLevel(input.autonomyLevel) || deriveAutonomyLevel(next);
+  const explicitLevel = normalizeAutonomyLevel(input.autonomyLevel);
+  const hasLegacyShape =
+    Object.prototype.hasOwnProperty.call(input, 'autoProcessEnabled') ||
+    Object.prototype.hasOwnProperty.call(input, 'requireIdle') ||
+    Object.prototype.hasOwnProperty.call(input, 'allowedHours');
+  next.autonomyLevel = explicitLevel || (hasLegacyShape ? deriveAutonomyLevel(next) : DEFAULT_CONFIG.autonomyLevel);
   next.allowedHours = Array.isArray(next.allowedHours) && next.allowedHours.length > 0
     ? next.allowedHours
         .map(range => ({
@@ -127,8 +132,8 @@ function normalizeGateConfig(input: Partial<SafetyGateConfig>): SafetyGateConfig
         .filter(range => range.end > range.start)
     : DEFAULT_CONFIG.allowedHours;
   next.minIdleSeconds = Math.max(0, Math.min(3600, Number(next.minIdleSeconds) || DEFAULT_CONFIG.minIdleSeconds));
-  next.maxTokensPerHour = Math.max(100, Math.min(100000, Number(next.maxTokensPerHour) || DEFAULT_CONFIG.maxTokensPerHour));
-  next.maxConsecutiveTasks = Math.max(1, Math.min(10, Number(next.maxConsecutiveTasks) || DEFAULT_CONFIG.maxConsecutiveTasks));
+  next.maxTokensPerHour = Math.max(100, Math.min(250000, Number(next.maxTokensPerHour) || DEFAULT_CONFIG.maxTokensPerHour));
+  next.maxConsecutiveTasks = Math.max(1, Math.min(50, Number(next.maxConsecutiveTasks) || DEFAULT_CONFIG.maxConsecutiveTasks));
   next.alwaysOnline = Boolean(next.alwaysOnline);
   next.autoProcessEnabled = Boolean(next.autoProcessEnabled);
   next.externalAppAutomationEnabled = Boolean(next.externalAppAutomationEnabled);

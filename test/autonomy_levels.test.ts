@@ -17,7 +17,7 @@ describe('autonomy levels', () => {
     expect(config.autoProcessEnabled).toBe(true);
     expect(config.requireIdle).toBe(false);
     expect(config.allowedHours).toEqual([{ start: 0, end: 24 }]);
-    expect(config.maxConsecutiveTasks).toBe(10);
+    expect(config.maxConsecutiveTasks).toBe(25);
     expect(config.messagingSendRequiresConfirmation).toBe(false);
     expect(isAutonomousWorkAllowed('level_full_user').allowed).toBe(true);
   });
@@ -34,15 +34,18 @@ describe('autonomy levels', () => {
     expect(decision.reason).toContain('reactive');
   });
 
-  it('keeps semi mode bounded without adding extra external-app gates', async () => {
-    const { saveGateConfig } = await import('../server/autonomy/safety_gate');
+  it('keeps semi mode low-friction without adding extra external-app gates', async () => {
+    const { isAutonomousWorkAllowed, saveGateConfig } = await import('../server/autonomy/safety_gate');
 
     const config = saveGateConfig({ autonomyLevel: 'semi', externalAppAutomationEnabled: false });
 
     expect(config.autonomyLevel).toBe('semi');
     expect(config.autoProcessEnabled).toBe(true);
-    expect(config.requireIdle).toBe(true);
-    expect(config.maxConsecutiveTasks).toBe(3);
+    expect(config.requireIdle).toBe(false);
+    expect(config.allowedHours).toEqual([{ start: 0, end: 24 }]);
+    expect(config.maxConsecutiveTasks).toBe(6);
+    expect(config.messagingSendRequiresConfirmation).toBe(false);
     expect(config.externalAppAutomationEnabled).toBe(false);
+    expect(isAutonomousWorkAllowed('level_semi_user').allowed).toBe(true);
   });
 });

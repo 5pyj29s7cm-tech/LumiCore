@@ -79,11 +79,13 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
           notes: mergedNotes,
         }, scopeFromContext(context)),
         preset,
-        note: 'Saved from preset. Run web_login_run with this profile id to open the visible login session and complete captcha/2FA if needed.',
+        note: args.password
+          ? 'Saved from preset with encrypted credentials. Run web_login_run with this profile id to open the visible login session and complete captcha/2FA if needed.'
+          : 'Saved from preset. Run web_login_run with this profile id to reuse the authorized browser session and complete captcha/2FA manually if needed.',
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -239,7 +241,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       waitForManualMs: Number(args.waitForManualMs) || undefined,
     }, scopeFromContext(context)), null, 2),
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -261,6 +263,6 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       Number(args.maxChars) || 12000,
     ), null, 2),
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 }

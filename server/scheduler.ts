@@ -1710,7 +1710,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
 
           // Execute pending tasks, bounded by the current safety gate.
           const { executeNextAutonomousTask } = await import('./autonomy/task_executor');
-          const maxTasks = Math.max(1, Math.min(10, getGateConfig().maxConsecutiveTasks || 1));
+          const maxTasks = Math.max(1, Math.min(50, getGateConfig().maxConsecutiveTasks || 1));
           for (let i = 0; i < maxTasks; i++) {
             const result = await executeNextAutonomousTask(scheduler.io!, getters);
             if (!result.executed) break;

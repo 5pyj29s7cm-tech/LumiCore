@@ -62,7 +62,9 @@ describe('Action Constitution', () => {
     expect(classifyAction('mouse_click')).toBe('desktop_control');
     expect(classifyAction('keyboard_type')).toBe('desktop_control');
     expect(classifyAction('cad_generate_dxf')).toBe('local_write');
-    expect(classifyAction('cad_generate_autocad_draw_script', { launchAutoCAD: true })).toBe('system');
+    expect(classifyAction('cad_generate_autocad_draw_script', { launchAutoCAD: true })).toBe('desktop_control');
+    expect(classifyAction('cad_run_autocad_draw_script')).toBe('desktop_control');
+    expect(classifyAction('desktop_run_command', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\me\\Desktop\\plan_run_autocad.ps1"' })).toBe('desktop_control');
   });
 
   it('upgrades safe local writes to confirmation', () => {
@@ -181,6 +183,51 @@ describe('Action Constitution', () => {
     expect(payment.requiresUserConfirmation).toBe(true);
   });
 
+  it('allows authorized web login reuse while keeping credential and verification boundaries', () => {
+    const presets = evaluateActionConstitution('web_login_site_presets', { category: 'legal' }, 'safe');
+    expect(presets.level).toBe('safe');
+    expect(presets.requiresUserConfirmation).toBe(false);
+
+    const presetProfile = evaluateActionConstitution('web_login_profile_save_from_preset', {
+      presetId: 'court_cases',
+    }, 'safe');
+    expect(presetProfile.level).toBe('safe');
+    expect(presetProfile.requiresUserConfirmation).toBe(false);
+
+    const runSavedProfile = evaluateActionConstitution('web_login_run', {
+      profileId: 'court_cases',
+    }, 'safe');
+    expect(runSavedProfile.level).toBe('safe');
+    expect(runSavedProfile.requiresUserConfirmation).toBe(false);
+    expect(classifyActionRisk('web_login_run', { profileId: 'court_cases' })).toBe('medium');
+    expect(canAutoApproveAction('web_login_run', { profileId: 'court_cases' })).toBe(true);
+
+    const authenticatedFetch = evaluateActionConstitution('url_fetch_logged_in', {
+      profileId: 'court_cases',
+      url: 'https://example.com/case',
+    }, 'safe');
+    expect(authenticatedFetch.level).toBe('safe');
+    expect(authenticatedFetch.requiresUserConfirmation).toBe(false);
+
+    const savePassword = evaluateActionConstitution('web_login_profile_save_from_preset', {
+      presetId: 'court_cases',
+      username: 'lawyer',
+      password: 'secret',
+    }, 'safe');
+    expect(savePassword.level).toBe('confirm');
+    expect(savePassword.requiresUserConfirmation).toBe(true);
+    expect(canAutoApproveAction('web_login_profile_save_from_preset', {
+      presetId: 'court_cases',
+      password: 'secret',
+    })).toBe(false);
+
+    const learnNewSite = evaluateActionConstitution('web_login_learn_site', {
+      url: 'https://example.com/login',
+    }, 'safe');
+    expect(learnNewSite.level).toBe('confirm');
+    expect(learnNewSite.requiresUserConfirmation).toBe(true);
+  });
+
   it('allows stock watching and paper trading while gating real brokerage orders', () => {
     const quote = evaluateActionConstitution('mcp_stockbot_stock_quote', {
       code: '600519',
@@ -225,7 +272,7 @@ describe('Action Constitution', () => {
     expect(cancelOrder.requiresUserConfirmation).toBe(true);
   });
 
-  it('allows explicit CAD file generation but confirms CAD app execution', () => {
+  it('allows explicit CAD file generation and visible CAD playback while keeping production review separate', () => {
     const dxf = evaluateActionConstitution('cad_generate_dxf', {
       title: 'draft_floor_plan',
       width: 12000,
@@ -245,8 +292,15 @@ describe('Action Constitution', () => {
     }, 'safe', {
       allowLocalFileWrites: true,
     });
-    expect(runCad.level).toBe('confirm');
-    expect(runCad.requiresUserConfirmation).toBe(true);
+    expect(runCad.level).toBe('safe');
+    expect(runCad.requiresUserConfirmation).toBe(false);
+
+    const playback = evaluateActionConstitution('cad_run_autocad_draw_script', {
+      scriptPath: 'C:\\Users\\me\\Desktop\\plan.scr',
+      launch: true,
+    }, 'safe');
+    expect(playback.level).toBe('safe');
+    expect(playback.requiresUserConfirmation).toBe(false);
   });
 
   it('limits trusted auto-approval to lower-risk actions', () => {

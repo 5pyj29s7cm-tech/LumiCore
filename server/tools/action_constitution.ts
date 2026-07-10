@@ -31,7 +31,12 @@ const PACKAGE_INSTALL_PATTERN = /\b(npm|pnpm|yarn|bun|pip|pip3|uv|cargo|go|gem|w
 const GIT_MUTATION_PATTERN = /\bgit\s+(?:commit|push|tag|merge|rebase|reset|checkout|clean|branch\s+-d|branch\s+-D)\b/i;
 const SHELL_DOWNLOAD_EXEC_PATTERN = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[\s\S]*(?:\||;|&&)\s*(?:sh|bash|powershell|pwsh|iex|invoke-expression)\b/i;
 const TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE =
-  /^(write_file|create_(?:docx|pdf|ppt|pptx|xlsx|txt|markdown|md)|transcribe_audio_to_text_file|cad_generate_dxf|document_|export_|save_)/i;
+  /^(write_file|create_(?:docx|pdf|ppt|pptx|xlsx|txt|markdown|md)|transcribe_audio_to_text_file|cad_generate_dxf|cad_generate_autocad_draw_script|document_|export_|save_)/i;
+
+const LOW_RISK_DESKTOP_COMMAND_PATTERN =
+  /^(?:cmd(?:\.exe)?\s+\/c\s+start\b|start\s+|explorer(?:\.exe)?\b|rundll32\b|powershell(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|pwsh(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|acad(?:\.exe)?\b|".+?\\(?:acad|wps|weixin|wechat|winword|excel|powerpnt|notepad)\.exe")/i;
+const DESKTOP_COMMAND_HIGH_RISK_PATTERN =
+  /\b(?:setup|installer|install|uninstall|msiexec|reg\s+add|reg\s+delete|schtasks|sc\s+create|net\s+user|takeown|icacls|bcdedit|powershell\s+-enc|encodedcommand)\b/i;
 
 export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
   return {
@@ -43,7 +48,7 @@ export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
       'User-present foreground social/content commits such as ordinary messages, comments, replies, and non-commercial posts may run without a separate confirmation popup when the user asked for that action.',
       'Market watch actions such as stock quotes, watchlists, alerts, K-line/news/sector checks, risk plans, and paper trading are observational or simulated and may run when tools are allowed.',
       'Local writes and file generation may run automatically only when the current turn explicitly requests a local deliverable or a narrower trusted policy exists.',
-      'Payments, purchases, transfers, real brokerage orders, buy/sell/cancel-order clicks, order/price/inventory/ad-spend changes, account-security transitions, legal filings/signatures, system commands, installs, package changes, git mutations, and destructive actions require confirmation or are forbidden.',
+      'Payments, purchases, transfers, real brokerage orders, buy/sell/cancel-order clicks, order/price/inventory/ad-spend changes, first-time login/security verification/credential storage/account switching, legal filings/signatures, system commands, installs, package changes, git mutations, and destructive actions require confirmation or are forbidden.',
       'Background autonomous work must run under semi or full autonomy and still obey high-consequence and destructive-action boundaries.',
       'Lumi should prefer explicit client actions and adapters over raw mouse/keyboard control.',
     ],
@@ -85,6 +90,10 @@ export function evaluateActionConstitution(
         requiresUserConfirmation: true,
       };
     }
+  }
+
+  if (isLowFrictionAuthorizedWebLoginAction(toolName, args)) {
+    return allow('external_app', 'Saved or preset web login/session reuse is allowed by the active desktop mode');
   }
 
   if (isHighConsequenceExternalCommit(actionText, toolName) && isExternalStateChangingDomain(domain)) {
@@ -150,6 +159,8 @@ export function classifyActionRisk(toolName: string, args: Record<string, any> =
   if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'high';
   if (name.includes('install') || name.includes('uninstall') || name.includes('delete') || name.includes('remove')) return 'high';
   if (GIT_MUTATION_PATTERN.test(argText) || PACKAGE_INSTALL_PATTERN.test(argText) || SHELL_DOWNLOAD_EXEC_PATTERN.test(argText)) return 'high';
+  if (isLowFrictionAuthorizedWebLoginAction(toolName, args)) return 'medium';
+  if (isTrustedDesktopRunCommand(toolName, args) || isAutocadPlaybackAction(toolName, args)) return 'medium';
   if (externalStateChanging && isHighConsequenceExternalCommit(actionText, toolName)) return 'high';
   if (externalStateChanging && GENERIC_EXTERNAL_COMMIT_PATTERN.test(actionText) && !isSocialContentCommit(actionText, toolName)) return 'high';
   if (externalStateChanging && isSocialContentCommit(actionText, toolName)) return 'medium';
@@ -172,12 +183,13 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (name === 'client_action') return getSensitiveClientAction(args) ? 'desktop_control' : 'observe';
   if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
   if (name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';
+  if (isTrustedDesktopRunCommand(toolName, args)) return 'desktop_control';
+  if (name === 'cad_generate_autocad_draw_script') return args.launchAutoCAD === true ? 'desktop_control' : 'local_write';
+  if (name === 'cad_run_autocad_draw_script') return 'desktop_control';
   if (name.includes('run_command') || name.includes('terminal') || name.includes('shell') || name.includes('code_execution')) return 'system';
   if (name.includes('wechat') || name.includes('feishu') || name.includes('wecom') || name.includes('message')) return 'messaging';
   if (name === 'computer_use' || name.startsWith('desktop_') || name.includes('mouse') || name.includes('keyboard') || name.includes('screenshot')) return 'desktop_control';
   if (name === 'cad_generate_dxf') return 'local_write';
-  if (name === 'cad_generate_autocad_draw_script') return args.launchAutoCAD === true ? 'system' : 'local_write';
-  if (name === 'cad_run_autocad_draw_script') return 'system';
   if (name.includes('external_app') || name.includes('web_login') || name.includes('logged_in') || name.includes('cad_') || name.includes('browser_open') || name.includes('playwright') || name.includes('browser_')) return 'external_app';
   if (name === 'authority_research') return 'network';
   if (name === 'authority_research_save') return 'local_write';
@@ -212,6 +224,45 @@ function buildActionText(toolName: string, args: Record<string, any> = {}): stri
 
 function isExternalStateChangingDomain(domain: ActionDomain): boolean {
   return domain === 'messaging' || domain === 'external_app' || domain === 'desktop_control';
+}
+
+function isTrustedDesktopRunCommand(toolName: string, args: Record<string, any> = {}): boolean {
+  if (toolName.toLowerCase() !== 'desktop_run_command') return false;
+  const command = String(args.command || '').trim();
+  if (!command) return false;
+  if (
+    DESTRUCTIVE_ARG_PATTERN.test(command) ||
+    DESKTOP_COMMAND_HIGH_RISK_PATTERN.test(command) ||
+    GIT_MUTATION_PATTERN.test(command) ||
+    PACKAGE_INSTALL_PATTERN.test(command) ||
+    SHELL_DOWNLOAD_EXEC_PATTERN.test(command)
+  ) {
+    return false;
+  }
+  return LOW_RISK_DESKTOP_COMMAND_PATTERN.test(command) || /_run_autocad\.ps1"?$/i.test(command);
+}
+
+function isAutocadPlaybackAction(toolName: string, args: Record<string, any> = {}): boolean {
+  const name = toolName.toLowerCase();
+  return name === 'cad_run_autocad_draw_script' ||
+    (name === 'cad_generate_autocad_draw_script' && args.launchAutoCAD === true);
+}
+
+function hasSecretCredentialArgs(args: Record<string, any> = {}): boolean {
+  return Boolean(
+    String(args.password || '').trim() ||
+    String(args.passkey || '').trim() ||
+    String(args.secret || '').trim() ||
+    String(args.apiKey || args.api_key || '').trim(),
+  );
+}
+
+function isLowFrictionAuthorizedWebLoginAction(toolName: string, args: Record<string, any> = {}): boolean {
+  const name = toolName.toLowerCase();
+  if (name === 'web_login_site_presets' || name === 'web_login_profile_list') return true;
+  if (name === 'web_login_run' || name === 'url_fetch_logged_in') return true;
+  if (name === 'web_login_profile_save_from_preset') return !hasSecretCredentialArgs(args);
+  return false;
 }
 
 function isSocialContentCommit(actionText: string, toolName = ''): boolean {

@@ -1615,7 +1615,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         outputPath: { type: 'string', description: 'Optional exact output base path. Extensions .lsp/.scr/.ps1 are generated from it.' },
         strokeDelayMs: { type: 'number', description: 'Delay in milliseconds after each visible operation. Defaults to 250, max 5000.' },
         autocadExecutable: { type: 'string', description: 'Optional AutoCAD executable path/name for the generated PowerShell runner. Defaults to acad.exe.' },
-        launchAutoCAD: { type: 'boolean', description: 'Optionally launch AutoCAD with the generated .scr via desktop_run_command. Requires desktop relay plus foreground confirmation, or an approved autonomous workflow when used in the background.' },
+        launchAutoCAD: { type: 'boolean', description: 'Optionally launch AutoCAD with the generated .scr via desktop_run_command. Runs under the active desktop mode; destructive/system boundaries still apply.' },
         walls: {
           type: 'array',
           description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
@@ -1722,7 +1722,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -1810,7 +1810,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 
   registry.register({
@@ -1935,6 +1935,6 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'confirm',
+    securityLevel: 'safe',
   });
 }
