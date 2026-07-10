@@ -13,7 +13,7 @@ interface FileEntry {
   orgId?: string;
   size?: string;
   rawSize?: number;
-  source?: 'upload' | 'generated' | 'ingested';
+  source?: 'upload' | 'generated' | 'ingested' | 'obsidian';
   agentIds?: string[];
   status?: 'ready' | 'indexing' | 'indexed' | 'partial' | 'unsupported' | 'failed';
   extractionStatus?: 'indexed' | 'partial' | 'unsupported' | 'failed';
@@ -29,6 +29,11 @@ interface FileEntry {
   sourceLinks?: string[];
   sourceBacklinks?: string[];
   sourceProperties?: Record<string, unknown>;
+  obsidianVaultId?: string;
+  obsidianVaultName?: string;
+  obsidianVaultPath?: string;
+  obsidianRelativePath?: string;
+  obsidianSourcePath?: string;
   updatedAt?: string;
   createdAt?: string;
 }
@@ -279,6 +284,16 @@ export function NodeDetailPanel({
                       <span className="inline-block px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[12px] font-bold text-white/50 uppercase">
                         {node.fileData.source}
                       </span>
+                    </div>
+                  )}
+                  {node.fileData.source === 'obsidian' && (node.fileData.obsidianVaultName || node.fileData.obsidianRelativePath) && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-white/45 uppercase tracking-widest">Obsidian</label>
+                      <div className="rounded-xl border border-indigo-300/12 bg-indigo-300/[0.06] p-3 text-xs leading-5 text-white/58">
+                        {node.fileData.obsidianVaultName && <p className="truncate text-indigo-100/72">Vault: {node.fileData.obsidianVaultName}</p>}
+                        {node.fileData.obsidianRelativePath && <p className="truncate">Note: {node.fileData.obsidianRelativePath}</p>}
+                        {node.fileData.obsidianSourcePath && <p className="truncate text-white/34">Path: {node.fileData.obsidianSourcePath}</p>}
+                      </div>
                     </div>
                   )}
                   {node.fileData.status && (

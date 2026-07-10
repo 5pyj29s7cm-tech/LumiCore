@@ -27,7 +27,7 @@ export interface FileEntry {
   orgId?: string;
   size?: string;
   rawSize?: number;
-  source?: 'upload' | 'generated' | 'ingested';
+  source?: 'upload' | 'generated' | 'ingested' | 'obsidian';
   agentIds?: string[];
   status?: 'ready' | 'indexing' | 'indexed' | 'partial' | 'unsupported' | 'failed';
   extractionStatus?: 'indexed' | 'partial' | 'unsupported' | 'failed';
@@ -43,6 +43,11 @@ export interface FileEntry {
   sourceLinks?: string[];
   sourceBacklinks?: string[];
   sourceProperties?: Record<string, unknown>;
+  obsidianVaultId?: string;
+  obsidianVaultName?: string;
+  obsidianVaultPath?: string;
+  obsidianRelativePath?: string;
+  obsidianSourcePath?: string;
   updatedAt?: string;
   createdAt?: string;
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Loader2, Search, Sparkles, TrendingUp, Network, GitMerge, Upload, ArrowRight, File, FileText, Trash2, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen } from 'lucide-react';
+import { X, Loader2, Search, Sparkles, TrendingUp, Network, GitMerge, Upload, ArrowRight, File, FileText, Trash2, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen, BookOpen, RefreshCw, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { appConfirm } from '@/lib/appConfirm';
@@ -15,6 +15,23 @@ interface KnowledgeBaseProps {
   isOpen: boolean;
   onClose: () => void;
   domain?: 'personal' | 'work';
+}
+
+interface ObsidianVault {
+  id: string;
+  name: string;
+  path: string;
+  enabled?: boolean;
+  isObsidianVault?: boolean;
+  exists?: boolean;
+  noteCount?: number;
+  lastSyncAt?: string;
+  lastSyncResult?: {
+    synced: number;
+    skipped: number;
+    failed: number;
+    noteCount: number;
+  };
 }
 
 const BROKEN_FILENAME_MARKERS = [
@@ -80,6 +97,10 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
   const [uploading, setUploading] = useState(false);
   const [bulkIngesting, setBulkIngesting] = useState(false);
   const [ingestingFiles, setIngestingFiles] = useState<Set<string>>(() => new Set());
+  const [obsidianOpen, setObsidianOpen] = useState(false);
+  const [obsidianPath, setObsidianPath] = useState('');
+  const [obsidianVaults, setObsidianVaults] = useState<ObsidianVault[]>([]);
+  const [obsidianSyncing, setObsidianSyncing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const lastLoadErrorRef = React.useRef<string | null>(null);
 
@@ -104,6 +125,16 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', { detail: { domain, files } }));
     window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
   }, [domain]);
+
+  const fetchObsidianStatus = useCallback(async () => {
+    try {
+      const res = await fetch(scopedFileUrl('/api/files/obsidian/status'), { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setObsidianVaults(Array.isArray(data.vaults) ? data.vaults : []);
+    } catch {
+      // Keep the knowledge base usable even if the optional Obsidian bridge is unavailable.
+    }
+  }, [scopedFileUrl]);
 
   // Fetch data — parallel, no dependency between files and memory tree
   const fetchAll = useCallback(async () => {
@@ -157,6 +188,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
   }, [domain, reportLoadError, scopedFileUrl, scopedMemoryUrl, t.kbFilesLoadFailed, t.kbMemoriesLoadFailed]);
 
   useEffect(() => { if (isOpen) fetchAll(); }, [isOpen, fetchAll]);
+  useEffect(() => { if (isOpen) void fetchObsidianStatus(); }, [isOpen, fetchObsidianStatus]);
 
   // Socket
   useEffect(() => {
@@ -401,6 +433,99 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
       toast.error(err?.message || (isZh ? '打开知识库文件夹失败' : 'Open knowledge folder failed'));
     }
   };
+
+  const syncObsidianVault = useCallback(async (vaultId?: string) => {
+    setObsidianSyncing(true);
+    try {
+      const res = await fetch(scopedFileUrl('/api/files/obsidian/sync'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vaultId, maxFiles: 500 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || (isZh ? 'Obsidian 同步失败' : 'Obsidian sync failed'));
+
+      const synced = Number(data.synced || 0);
+      const skipped = Number(data.skipped || 0);
+      const failed = Number(data.failed || 0);
+      const syncedFiles = Array.isArray(data.files) ? data.files : [];
+      notifyKnowledgeUpdated(syncedFiles.map((file: any) => ({
+        id: file.id,
+        name: file.name,
+        displayName: file.displayName,
+      })));
+      await fetchAll();
+      await fetchObsidianStatus();
+
+      const message = isZh
+        ? `Obsidian 同步完成：${synced} 更新，${skipped} 跳过${failed ? `，${failed} 失败` : ''}`
+        : `Obsidian sync complete: ${synced} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''}`;
+      if (failed > 0) toast.warning(message);
+      else toast.success(message);
+      return true;
+    } catch (err: any) {
+      toast.error(err?.message || (isZh ? 'Obsidian 同步失败' : 'Obsidian sync failed'));
+      return false;
+    } finally {
+      setObsidianSyncing(false);
+    }
+  }, [fetchAll, fetchObsidianStatus, isZh, notifyKnowledgeUpdated, scopedFileUrl]);
+
+  const handleObsidianConnect = useCallback(async () => {
+    const vaultPath = obsidianPath.trim();
+    if (!vaultPath) {
+      toast.info(isZh ? '请输入 Obsidian vault 文件夹路径' : 'Enter an Obsidian vault folder path');
+      return;
+    }
+    setObsidianSyncing(true);
+    let connectedVaultId = '';
+    try {
+      const res = await fetch(scopedFileUrl('/api/files/obsidian/connect'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vaultPath, maxFiles: 500 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || (isZh ? '连接 Obsidian 失败' : 'Failed to connect Obsidian'));
+      connectedVaultId = data?.vault?.id || '';
+      setObsidianPath('');
+      if (data.warning) toast.warning(isZh ? '已按 Markdown 文件夹接入' : data.warning);
+      else toast.success(isZh ? 'Obsidian 已连接，开始同步' : 'Obsidian connected. Syncing now.');
+      await fetchObsidianStatus();
+    } catch (err: any) {
+      toast.error(err?.message || (isZh ? '连接 Obsidian 失败' : 'Failed to connect Obsidian'));
+    } finally {
+      setObsidianSyncing(false);
+    }
+    if (connectedVaultId) void syncObsidianVault(connectedVaultId);
+  }, [fetchObsidianStatus, isZh, obsidianPath, scopedFileUrl, syncObsidianVault]);
+
+  const handleObsidianDisconnect = useCallback(async (vault: ObsidianVault) => {
+    const ok = await appConfirm({
+      title: isZh ? '断开 Obsidian' : 'Disconnect Obsidian',
+      message: isZh
+        ? `只移除「${vault.name}」的连接设置，不删除已经进入知识库的笔记。`
+        : `This removes the connection for "${vault.name}" without deleting notes already in the knowledge base.`,
+      confirmText: isZh ? '断开' : 'Disconnect',
+      cancelText: t.cancel || 'Cancel',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(scopedFileUrl(`/api/files/obsidian/${encodeURIComponent(vault.id)}`), {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || (isZh ? '断开失败' : 'Disconnect failed'));
+      toast.success(isZh ? 'Obsidian 连接已断开' : 'Obsidian disconnected');
+      await fetchObsidianStatus();
+    } catch (err: any) {
+      toast.error(err?.message || (isZh ? '断开失败' : 'Disconnect failed'));
+    }
+  }, [fetchObsidianStatus, isZh, scopedFileUrl, t.cancel]);
 
   const handleAutoOrganize = async () => {
     setOrganizing(true);
@@ -712,6 +837,19 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   <FolderOpen size={13} />
                   {isZh ? '文件夹' : 'Folder'}
                 </button>
+                <button
+                  onClick={() => setObsidianOpen(value => !value)}
+                  className={`flex items-center gap-1.5 bg-black/40 backdrop-blur-xl rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+                    obsidianOpen || obsidianVaults.length > 0
+                      ? 'border-indigo-400/35 text-indigo-200/80 hover:text-indigo-100'
+                      : 'border-white/10 text-white/55 hover:text-white/80 hover:border-white/20'
+                  }`}
+                  title={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
+                  aria-label={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
+                >
+                  <BookOpen size={13} />
+                  Obsidian
+                </button>
                 {ingestableFiles.length > 0 && (
                   <button
                     onClick={() => void handleIngestAll()}
@@ -776,6 +914,118 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
               </div>
             </div>
           </div>
+
+          {obsidianOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              className="absolute right-6 top-20 z-30 w-[420px] max-w-[calc(100vw-3rem)] rounded-2xl border border-indigo-300/14 bg-zinc-950/92 p-4 shadow-2xl backdrop-blur-2xl"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-black text-white/82">
+                    <BookOpen size={15} className="text-indigo-200/75" />
+                    <span>Obsidian</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-white/45">
+                    {isZh ? '把本机 vault 中的 Markdown、标签和双链同步进 Lumi 知识库。' : 'Sync local vault Markdown, tags, and links into Lumi knowledge.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchObsidianStatus()}
+                  disabled={obsidianSyncing}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/55 transition-colors hover:text-white disabled:pointer-events-none disabled:opacity-50"
+                  title={isZh ? '刷新连接状态' : 'Refresh status'}
+                  aria-label={isZh ? '刷新连接状态' : 'Refresh status'}
+                >
+                  <RefreshCw size={13} className={obsidianSyncing ? 'animate-spin' : ''} />
+                </button>
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <input
+                  value={obsidianPath}
+                  onChange={event => setObsidianPath(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter') void handleObsidianConnect();
+                  }}
+                  placeholder={isZh ? 'Vault 文件夹路径，例如 D:\\Notes' : 'Vault folder path, e.g. D:\\Notes'}
+                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-xs text-white/75 outline-none placeholder:text-white/28 focus:border-indigo-300/35"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleObsidianConnect()}
+                  disabled={obsidianSyncing}
+                  className="flex shrink-0 items-center gap-1.5 rounded-xl border border-indigo-300/25 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100/80 transition-colors hover:bg-indigo-300/16 disabled:pointer-events-none disabled:opacity-55"
+                >
+                  {obsidianSyncing ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
+                  {isZh ? '连接' : 'Connect'}
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {obsidianVaults.length === 0 ? (
+                  <div className="rounded-xl border border-white/[0.06] bg-white/[0.035] px-3 py-4 text-center text-xs text-white/38">
+                    {isZh ? '还没有连接 Obsidian vault' : 'No Obsidian vault connected yet'}
+                  </div>
+                ) : (
+                  obsidianVaults.map(vault => {
+                    const lastSync = vault.lastSyncAt ? new Date(vault.lastSyncAt).toLocaleString() : (isZh ? '未同步' : 'Not synced');
+                    const noteCount = Number(vault.noteCount || vault.lastSyncResult?.noteCount || 0);
+                    return (
+                      <div key={vault.id} className="rounded-xl border border-white/[0.07] bg-white/[0.04] p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-xs font-bold text-white/78">{vault.name}</span>
+                              {!vault.exists && (
+                                <span className="shrink-0 rounded-full border border-red-300/20 bg-red-300/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-red-100/75">
+                                  {isZh ? '失联' : 'missing'}
+                                </span>
+                              )}
+                              {vault.exists && !vault.isObsidianVault && (
+                                <span className="shrink-0 rounded-full border border-amber-300/20 bg-amber-300/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-amber-100/75">
+                                  Markdown
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 truncate text-[11px] text-white/36">{vault.path}</p>
+                            <p className="mt-2 text-[11px] text-white/42">
+                              {isZh ? `${noteCount} 条笔记 · 上次同步 ${lastSync}` : `${noteCount} notes · Last sync ${lastSync}`}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void syncObsidianVault(vault.id)}
+                              disabled={obsidianSyncing || vault.exists === false}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-300/18 bg-emerald-300/10 text-emerald-100/72 transition-colors hover:bg-emerald-300/16 disabled:pointer-events-none disabled:opacity-45"
+                              title={isZh ? '同步这个 vault' : 'Sync this vault'}
+                              aria-label={isZh ? '同步这个 vault' : 'Sync this vault'}
+                            >
+                              <RefreshCw size={13} className={obsidianSyncing ? 'animate-spin' : ''} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleObsidianDisconnect(vault)}
+                              disabled={obsidianSyncing}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl border border-red-300/14 bg-red-300/8 text-red-100/58 transition-colors hover:bg-red-300/14 hover:text-red-100 disabled:pointer-events-none disabled:opacity-45"
+                              title={isZh ? '断开连接' : 'Disconnect'}
+                              aria-label={isZh ? '断开连接' : 'Disconnect'}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </motion.div>
+          )}
 
           {/* Floating detail card */}
           <NodeDetailPanel

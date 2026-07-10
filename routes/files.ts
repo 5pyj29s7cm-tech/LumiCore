@@ -2,7 +2,7 @@
  * AI Knowledge Base API — manages files in Lumi's knowledge vault.
  *
  * Files stored in data/knowledge/. Each file tracked with metadata:
- *   - source: 'upload' | 'generated' | 'ingested'
+ *   - source: 'upload' | 'generated' | 'ingested' | 'obsidian'
  *   - agentIds: which agents have ingested this file
  *   - status: 'ready' | 'indexing' | 'indexed'
  */
@@ -12,6 +12,7 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { readDB, writeDB } from '../db_layer';
@@ -125,7 +126,7 @@ interface KnowledgeEntry {
   size: string;
   rawSize: number;
   type: 'file';
-  source: 'upload' | 'generated' | 'ingested';
+  source: KnowledgeFileSource;
   agentIds: string[];
   status: KnowledgeStatus;
   extractionStatus?: KnowledgeExtractionResult['status'];
@@ -141,8 +142,44 @@ interface KnowledgeEntry {
   sourceLinks?: string[];
   sourceBacklinks?: string[];
   sourceProperties?: Record<string, unknown>;
+  obsidianVaultId?: string;
+  obsidianVaultName?: string;
+  obsidianVaultPath?: string;
+  obsidianRelativePath?: string;
+  obsidianSourcePath?: string;
   updatedAt: string;
   createdAt: string;
+}
+
+type KnowledgeFileSource = 'upload' | 'generated' | 'ingested' | 'obsidian';
+
+interface ObsidianVaultConfig {
+  id: string;
+  userId: string;
+  domain: 'personal' | 'work';
+  orgId: string;
+  name: string;
+  path: string;
+  enabled: boolean;
+  isObsidianVault: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastSyncAt?: string;
+  lastScanAt?: string;
+  lastNoteCount?: number;
+  lastSyncResult?: {
+    synced: number;
+    skipped: number;
+    failed: number;
+    noteCount: number;
+  };
+}
+
+interface ObsidianNoteFile {
+  absolutePath: string;
+  relativePath: string;
+  size: number;
+  mtimeMs: number;
 }
 
 interface FileScope {
@@ -223,6 +260,18 @@ const EXTRACTABLE_KNOWLEDGE_EXTS = /\.(docx|xlsx|xls|pptx|pdf)$/i;
 const IMAGE_KNOWLEDGE_EXTS = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i;
 const AUDIO_KNOWLEDGE_EXTS = AUDIO_FILE_EXTS;
 const GENERATED_FILE_EXTS = /\.(docx?|pptx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg)$/i;
+const OBSIDIAN_NOTE_EXTS = /\.(md|markdown)$/i;
+const OBSIDIAN_MAX_NOTE_BYTES = Math.max(256 * 1024, Number(process.env.OBSIDIAN_NOTE_MAX_BYTES || 5 * 1024 * 1024));
+const OBSIDIAN_DEFAULT_MAX_FILES = Math.max(50, Number(process.env.OBSIDIAN_SYNC_MAX_FILES || 500));
+const OBSIDIAN_HARD_MAX_FILES = Math.max(OBSIDIAN_DEFAULT_MAX_FILES, Number(process.env.OBSIDIAN_SYNC_HARD_MAX_FILES || 2000));
+const OBSIDIAN_SKIP_DIRS = new Set([
+  '.obsidian',
+  '.git',
+  '.trash',
+  '.recycle',
+  'node_modules',
+  '.DS_Store',
+]);
 
 const DOWNLOAD_MIME_TYPES: Record<string, string> = {
   '.txt': 'text/plain',
@@ -926,11 +975,307 @@ function resolveLocalImportPath(value: unknown): string {
   return fs.realpathSync.native(resolved);
 }
 
+function stableHash(value: string, length = 12): string {
+  return crypto.createHash('sha1').update(value).digest('hex').slice(0, length);
+}
+
+function obsidianSettingsKey(userId: string, scope: FileScope): string {
+  return `obsidian_vaults:${userId}:${scope.domain}:${scope.orgId || 'personal'}`;
+}
+
+function readObsidianVaults(db: any, userId: string, scope: FileScope): ObsidianVaultConfig[] {
+  const key = obsidianSettingsKey(userId, scope);
+  const row = (db.settings || []).find((s: any) => s.key === key);
+  if (!row?.value) return [];
+  try {
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed) ? parsed.filter(v => v?.id && v?.path) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeObsidianVaults(db: any, userId: string, scope: FileScope, vaults: ObsidianVaultConfig[]): void {
+  if (!db.settings) db.settings = [];
+  const key = obsidianSettingsKey(userId, scope);
+  const value = JSON.stringify(vaults);
+  const idx = db.settings.findIndex((s: any) => s.key === key);
+  if (idx >= 0) db.settings[idx].value = value;
+  else db.settings.push({ key, value });
+}
+
+function resolveObsidianVaultPath(value: unknown): { path: string; isObsidianVault: boolean } {
+  const resolved = resolveLocalImportPath(value);
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) {
+    const err: any = new Error('Obsidian vault path must be a folder');
+    err.status = 400;
+    throw err;
+  }
+  return {
+    path: resolved,
+    isObsidianVault: fs.existsSync(path.join(resolved, '.obsidian')),
+  };
+}
+
+function defaultObsidianVaultName(vaultPath: string): string {
+  return repairFilename(path.basename(vaultPath)) || 'Obsidian Vault';
+}
+
+function makeObsidianVaultId(userId: string, scope: FileScope, vaultPath: string): string {
+  return `obs_${stableHash(`${userId}|${scope.domain}|${scope.orgId || ''}|${vaultPath}`, 16)}`;
+}
+
+function upsertObsidianVault(
+  db: any,
+  userId: string,
+  scope: FileScope,
+  input: { vaultPath: string; name?: string },
+): ObsidianVaultConfig {
+  const resolved = resolveObsidianVaultPath(input.vaultPath);
+  const now = new Date().toISOString();
+  const vaults = readObsidianVaults(db, userId, scope);
+  const id = makeObsidianVaultId(userId, scope, resolved.path);
+  const existing = vaults.find(v => v.id === id || v.path === resolved.path);
+  const name = String(input.name || existing?.name || defaultObsidianVaultName(resolved.path)).trim();
+  const vault: ObsidianVaultConfig = {
+    ...(existing || {}),
+    id,
+    userId,
+    domain: scope.domain,
+    orgId: scope.orgId || '',
+    name,
+    path: resolved.path,
+    enabled: true,
+    isObsidianVault: resolved.isObsidianVault,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  const next = existing
+    ? vaults.map(v => (v.id === existing.id ? vault : v))
+    : [...vaults, vault];
+  writeObsidianVaults(db, userId, scope, next);
+  return vault;
+}
+
+function scanObsidianVault(vaultPath: string, maxFiles = OBSIDIAN_DEFAULT_MAX_FILES): {
+  notes: ObsidianNoteFile[];
+  skipped: Array<{ path: string; error: string }>;
+  truncated: boolean;
+} {
+  const limit = Math.max(1, Math.min(Math.floor(Number(maxFiles) || OBSIDIAN_DEFAULT_MAX_FILES), OBSIDIAN_HARD_MAX_FILES));
+  const root = fs.realpathSync.native(vaultPath);
+  const notes: ObsidianNoteFile[] = [];
+  const skipped: Array<{ path: string; error: string }> = [];
+  let truncated = false;
+
+  const walk = (dir: string) => {
+    if (notes.length >= limit) {
+      truncated = true;
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err: any) {
+      skipped.push({ path: path.relative(root, dir) || '.', error: err?.message || String(err) });
+      return;
+    }
+    for (const entry of entries) {
+      if (notes.length >= limit) {
+        truncated = true;
+        return;
+      }
+      if (entry.isSymbolicLink()) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (OBSIDIAN_SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile() || !OBSIDIAN_NOTE_EXTS.test(entry.name)) continue;
+      const relativePath = path.relative(root, full).replace(/\\/g, '/');
+      try {
+        const stat = fs.statSync(full);
+        if (stat.size > OBSIDIAN_MAX_NOTE_BYTES) {
+          skipped.push({ path: relativePath, error: `Note is larger than ${formatSize(OBSIDIAN_MAX_NOTE_BYTES)}` });
+          continue;
+        }
+        notes.push({
+          absolutePath: full,
+          relativePath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        });
+      } catch (err: any) {
+        skipped.push({ path: relativePath, error: err?.message || String(err) });
+      }
+    }
+  };
+
+  walk(root);
+  notes.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  return { notes, skipped, truncated };
+}
+
+function obsidianDestinationName(vault: ObsidianVaultConfig, relativePath: string): string {
+  const parsed = path.posix.parse(relativePath.replace(/\\/g, '/'));
+  const folder = parsed.dir ? `${parsed.dir.replace(/[\\/]+/g, ' - ')} - ` : '';
+  const readable = sanitizeKnowledgeFilename(`${folder}${parsed.name}`, 'note')
+    .replace(/\s+/g, ' ')
+    .slice(0, 110)
+    .trim() || 'note';
+  const vaultSlug = sanitizeKnowledgeFilename(vault.name || defaultObsidianVaultName(vault.path), 'obsidian')
+    .replace(/\s+/g, ' ')
+    .slice(0, 48)
+    .trim() || 'obsidian';
+  const hash = stableHash(`${vault.path}|${relativePath}`, 10);
+  return sanitizeKnowledgeFilename(`${vaultSlug} - ${readable} [obsidian-${hash}].md`, `${hash}.md`);
+}
+
+function removeExistingFileMemories(db: any, filename: string, scope: FileScope, options: { userId?: string; agentId?: string } = {}): void {
+  const existing = findExistingFileMemories(db, filename, scope, options);
+  if (existing.length === 0) return;
+  const ids = new Set(existing.map((m: any) => m.id));
+  db.memories = (db.memories || []).filter((m: any) => !ids.has(m.id));
+}
+
+async function syncObsidianNote(
+  vault: ObsidianVaultConfig,
+  note: ObsidianNoteFile,
+  userId: string,
+  scope: FileScope,
+  db: any,
+): Promise<{ status: 'synced' | 'skipped'; file?: any }> {
+  const finalName = obsidianDestinationName(vault, note.relativePath);
+  const dest = path.join(scope.dir, finalName);
+  const existingMemories = scope.domain === 'personal'
+    ? findExistingFileMemories(db, finalName, scope, { userId, agentId: 'lumi' })
+    : [];
+  if (fs.existsSync(dest)) {
+    const destStat = fs.statSync(dest);
+    const unchanged = destStat.mtimeMs >= note.mtimeMs - 1000
+      && (scope.domain === 'work' || existingMemories.length > 0);
+    if (unchanged) {
+      const meta = findFileMeta(db, finalName, scope);
+      const agentIds = Array.isArray(meta?.agentIds) && meta.agentIds.length > 0
+        ? meta.agentIds
+        : scope.domain === 'work' ? ['org-kb'] : ['lumi'];
+      return { status: 'skipped', file: buildEntry(finalName, 'obsidian', agentIds, scope, meta?.status || 'indexed', meta) };
+    }
+  }
+
+  fs.copyFileSync(note.absolutePath, dest);
+  const sourceStat = fs.statSync(note.absolutePath);
+  try { fs.utimesSync(dest, sourceStat.atime, sourceStat.mtime); } catch {}
+
+  if (!db.knowledgeFiles) db.knowledgeFiles = [];
+  let meta = findFileMeta(db, finalName, scope);
+  if (!meta) {
+    meta = {
+      filename: finalName,
+      displayName: repairFilename(finalName),
+      domain: scope.domain,
+      orgId: scope.orgId || '',
+      source: 'obsidian',
+      agentIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    db.knowledgeFiles.push(meta);
+  }
+  if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
+  meta.source = 'obsidian';
+  meta.obsidianVaultId = vault.id;
+  meta.obsidianVaultName = vault.name;
+  meta.obsidianVaultPath = vault.path;
+  meta.obsidianRelativePath = note.relativePath;
+  meta.obsidianSourcePath = note.absolutePath;
+  meta.updatedAt = new Date().toISOString();
+
+  const extraction = extractTextKnowledge(dest);
+  const content = extraction.content || '';
+  applyExtractionMeta(meta, extraction, content);
+
+  if (scope.domain === 'work') {
+    const article = ensureOrgArticleFromFile(scope, userId, finalName, content, meta.orgArticleId, extraction.sourceMetadata);
+    meta.orgArticleId = article?.id;
+    if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
+    meta.status = 'indexed';
+  } else {
+    removeExistingFileMemories(db, finalName, scope, { userId, agentId: 'lumi' });
+    const result = await ingestDocument(userId, 'lumi', finalName, content, {
+      filePath: dest,
+      domain: scope.domain,
+      orgId: scope.orgId || '',
+      sourceMetadata: extraction.sourceMetadata,
+    });
+    if (!meta.agentIds.includes('lumi')) meta.agentIds.push('lumi');
+    meta.status = 'indexed';
+    meta.chunkCount = result.chunkCount;
+  }
+
+  return { status: 'synced', file: buildEntry(finalName, 'obsidian', meta.agentIds, scope, meta.status, meta) };
+}
+
+async function syncObsidianVault(
+  vault: ObsidianVaultConfig,
+  userId: string,
+  scope: FileScope,
+  db: any,
+  options: { maxFiles?: number } = {},
+): Promise<{
+  vault: ObsidianVaultConfig;
+  noteCount: number;
+  synced: number;
+  skipped: number;
+  failed: number;
+  truncated: boolean;
+  files: any[];
+  errors: Array<{ path: string; error: string }>;
+}> {
+  const scan = scanObsidianVault(vault.path, options.maxFiles);
+  let synced = 0;
+  let skipped = 0;
+  let failed = 0;
+  const files: any[] = [];
+  const errors = [...scan.skipped];
+
+  for (const note of scan.notes) {
+    try {
+      const result = await syncObsidianNote(vault, note, userId, scope, db);
+      if (result.status === 'synced') synced++;
+      else skipped++;
+      if (result.file) files.push(result.file);
+    } catch (err: any) {
+      failed++;
+      errors.push({ path: note.relativePath, error: err?.message || String(err) });
+    }
+  }
+
+  const now = new Date().toISOString();
+  vault.lastScanAt = now;
+  vault.lastSyncAt = now;
+  vault.lastNoteCount = scan.notes.length;
+  vault.lastSyncResult = { synced, skipped, failed, noteCount: scan.notes.length };
+  vault.updatedAt = now;
+
+  return {
+    vault,
+    noteCount: scan.notes.length,
+    synced,
+    skipped,
+    failed,
+    truncated: scan.truncated,
+    files,
+    errors,
+  };
+}
+
 function sendRouteError(res: Response, err: any, fallbackStatus = 400): void {
   res.status(err?.status || fallbackStatus).json({ error: err?.message || 'Request failed' });
 }
 
-function buildEntry(filename: string, source: 'upload' | 'generated' | 'ingested', agentIds: string[] = [], scope: FileScope, status?: KnowledgeStatus, meta?: any): KnowledgeEntry {
+function buildEntry(filename: string, source: KnowledgeFileSource, agentIds: string[] = [], scope: FileScope, status?: KnowledgeStatus, meta?: any): KnowledgeEntry {
   const filePath = path.join(scope.dir, filename);
   const displayName = repairFilename(filename);
   let st: fs.Stats;
@@ -962,6 +1307,11 @@ function buildEntry(filename: string, source: 'upload' | 'generated' | 'ingested
     sourceLinks: Array.isArray(meta?.sourceLinks) ? meta.sourceLinks : undefined,
     sourceBacklinks: Array.isArray(meta?.sourceBacklinks) ? meta.sourceBacklinks : undefined,
     sourceProperties: meta?.sourceProperties || undefined,
+    obsidianVaultId: meta?.obsidianVaultId || undefined,
+    obsidianVaultName: meta?.obsidianVaultName || undefined,
+    obsidianVaultPath: meta?.obsidianVaultPath || undefined,
+    obsidianRelativePath: meta?.obsidianRelativePath || undefined,
+    obsidianSourcePath: meta?.obsidianSourcePath || undefined,
     updatedAt: st.mtime.toISOString(),
     createdAt: st.birthtime.toISOString(),
   };
@@ -1071,7 +1421,7 @@ router.get('/files/list', (req: Request, res: Response) => {
       if (inferredMemories.length > 0 && (!meta.status || meta.status === 'ready' || meta.status === 'failed')) {
         meta.status = 'indexed';
       }
-      const source = (meta.source as 'upload' | 'generated' | 'ingested') || 'upload';
+      const source = (meta.source as KnowledgeFileSource) || 'upload';
       files.push(buildEntry(name, source, meta.agentIds, scope, meta.status, meta));
     }
 
@@ -1079,6 +1429,119 @@ router.get('/files/list', (req: Request, res: Response) => {
     res.json({ files });
   } catch (err: any) {
     sendRouteError(res, err, 500);
+  }
+});
+
+// ── Obsidian vault connection and sync ──
+router.get('/files/obsidian/status', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const scope = getFileScope(req);
+    const db = readDB();
+    const vaults = readObsidianVaults(db, userId, scope).map(vault => {
+      const exists = fs.existsSync(vault.path);
+      const isDirectory = exists && fs.statSync(vault.path).isDirectory();
+      const isObsidianVault = isDirectory && fs.existsSync(path.join(vault.path, '.obsidian'));
+      let noteCount = vault.lastNoteCount || 0;
+      if (isDirectory && req.query.scan === '1') {
+        try {
+          noteCount = scanObsidianVault(vault.path, Number(req.query.maxFiles) || OBSIDIAN_DEFAULT_MAX_FILES).notes.length;
+        } catch {}
+      }
+      return {
+        ...vault,
+        exists,
+        isDirectory,
+        isObsidianVault,
+        noteCount,
+      };
+    });
+    res.json({ success: true, vaults });
+  } catch (err: any) {
+    sendRouteError(res, err, 500);
+  }
+});
+
+router.post('/files/obsidian/connect', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const scope = getFileScope(req);
+    const { vaultPath, name } = req.body || {};
+    if (!vaultPath) return res.status(400).json({ error: 'vaultPath is required' });
+    const db = readDB();
+    const vault = upsertObsidianVault(db, userId, scope, { vaultPath, name });
+    const scan = scanObsidianVault(vault.path, Number(req.body?.maxFiles) || OBSIDIAN_DEFAULT_MAX_FILES);
+    vault.lastScanAt = new Date().toISOString();
+    vault.lastNoteCount = scan.notes.length;
+    writeObsidianVaults(db, userId, scope, readObsidianVaults(db, userId, scope).map(v => v.id === vault.id ? vault : v));
+    writeDB(db);
+    res.json({
+      success: true,
+      vault,
+      noteCount: scan.notes.length,
+      skipped: scan.skipped,
+      truncated: scan.truncated,
+      warning: vault.isObsidianVault ? undefined : 'This folder has no .obsidian directory; Lumi will treat it as a Markdown notes folder.',
+    });
+  } catch (err: any) {
+    sendRouteError(res, err);
+  }
+});
+
+router.post('/files/obsidian/sync', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const scope = getFileScope(req);
+    const db = readDB();
+    const vaultId = String(req.body?.vaultId || req.query.vaultId || '').trim();
+    const vaults = readObsidianVaults(db, userId, scope);
+    const targets = vaultId
+      ? vaults.filter(v => v.id === vaultId)
+      : vaults.filter(v => v.enabled !== false);
+    if (targets.length === 0) {
+      return res.status(404).json({ error: vaultId ? 'Obsidian vault not found' : 'No enabled Obsidian vault is connected' });
+    }
+
+    const results = [];
+    const updatedVaults = [...vaults];
+    for (const vault of targets) {
+      const sync = await syncObsidianVault(vault, userId, scope, db, {
+        maxFiles: Number(req.body?.maxFiles) || OBSIDIAN_DEFAULT_MAX_FILES,
+      });
+      const idx = updatedVaults.findIndex(v => v.id === vault.id);
+      if (idx >= 0) updatedVaults[idx] = sync.vault;
+      results.push(sync);
+    }
+    writeObsidianVaults(db, userId, scope, updatedVaults);
+    writeDB(db);
+
+    res.json({
+      success: true,
+      results,
+      synced: results.reduce((sum, item) => sum + item.synced, 0),
+      skipped: results.reduce((sum, item) => sum + item.skipped, 0),
+      failed: results.reduce((sum, item) => sum + item.failed, 0),
+      files: results.flatMap(item => item.files),
+      errors: results.flatMap(item => item.errors),
+    });
+  } catch (err: any) {
+    sendRouteError(res, err, 500);
+  }
+});
+
+router.delete('/files/obsidian/:id', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const scope = getFileScope(req);
+    const db = readDB();
+    const vaults = readObsidianVaults(db, userId, scope);
+    const next = vaults.filter(v => v.id !== req.params.id);
+    if (next.length === vaults.length) return res.status(404).json({ error: 'Obsidian vault not found' });
+    writeObsidianVaults(db, userId, scope, next);
+    writeDB(db);
+    res.json({ success: true });
+  } catch (err: any) {
+    sendRouteError(res, err);
   }
 });
 
@@ -1409,6 +1872,11 @@ router.get('/files/info/:id', (req: Request, res: Response) => {
       sourceLinks: Array.isArray(meta?.sourceLinks) ? meta.sourceLinks : undefined,
       sourceBacklinks: getSourceBacklinks(db, scope, safeName),
       sourceProperties: meta?.sourceProperties || undefined,
+      obsidianVaultId: meta?.obsidianVaultId || undefined,
+      obsidianVaultName: meta?.obsidianVaultName || undefined,
+      obsidianVaultPath: meta?.obsidianVaultPath || undefined,
+      obsidianRelativePath: meta?.obsidianRelativePath || undefined,
+      obsidianSourcePath: meta?.obsidianSourcePath || undefined,
       updatedAt: st.mtime.toISOString(),
       createdAt: meta?.createdAt || st.birthtime.toISOString(),
     });
