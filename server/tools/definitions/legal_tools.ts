@@ -528,8 +528,59 @@ function normalizeLegalCaseStage(input: string): LegalCases.LegalCaseStage {
   return 'consultation';
 }
 
-function legalWorkspaceStatus(value: string, done = '已归集'): string {
-  return value.trim() ? done : '待补充';
+function legalWorkflowStateLabel(state: LegalCases.LegalCaseWorkflowStepState): string {
+  if (state === 'done') return '已完成';
+  if (state === 'ready') return '可推进';
+  if (state === 'blocked') return '阻断';
+  if (state === 'manual') return '待人工确认';
+  return '待补充';
+}
+
+function formatLegalWorkflowRows(steps: LegalCases.LegalCaseWorkflowStep[]): string {
+  return steps.map(step => [
+    step.label,
+    legalWorkflowStateLabel(step.state),
+    step.summary,
+    step.nextStep,
+    step.tool,
+  ].map(value => String(value || '').replace(/\|/g, ' ')).join(' | ')).map(row => `| ${row} |`).join('\n');
+}
+
+function makeWorkspaceWorkflowCase(args: Record<string, any>, params: {
+  orgId: string;
+  caseName: string;
+  role: string;
+  caseType: string;
+  court: string;
+  parties: string;
+  claims: string;
+  facts: string;
+  evidence: string;
+  stage: LegalCases.LegalCaseStage;
+}): Partial<LegalCases.OrgLegalCaseFile> {
+  const materials = workspaceMaterialInputs(args).map((material, index) => ({
+    id: `input-${index + 1}`,
+    type: material.type,
+    title: material.title,
+    content: material.content,
+    source: 'tool' as const,
+    createdBy: 'system',
+    createdAt: new Date().toISOString(),
+  }));
+  return {
+    orgId: params.orgId,
+    title: params.caseName,
+    party: params.parties || params.role,
+    cause: params.caseType,
+    court: params.court,
+    stage: params.stage,
+    notes: [
+      params.claims ? `办理目标：${params.claims}` : '',
+      params.facts ? `事实摘要：${params.facts.slice(0, 2000)}` : '',
+      params.evidence ? `证据摘要：${params.evidence.slice(0, 1200)}` : '',
+    ].filter(Boolean).join('\n'),
+    materials,
+  };
 }
 
 function splitWorkspaceItems(value: string): string[] {
@@ -1075,10 +1126,28 @@ async function caseWorkspaceHandler(args: Record<string, any>, context?: any): P
   }
 
   const caseIdLine = caseFile ? `- 案件ID：${caseFile.id}` : '- 案件ID：未持久化（persistCase=false）';
+  const workflowCase = caseFile || makeWorkspaceWorkflowCase(args, {
+    orgId,
+    caseName,
+    role,
+    caseType,
+    court,
+    parties,
+    claims,
+    facts,
+    evidence,
+    stage,
+  });
+  const workflow = LegalCases.evaluateCaseWorkflow(workflowCase, {
+    currentLawGate: lawGate.statuteChecks.length === 0 ? 'none' : lawGate.passed ? 'passed' : 'blocked',
+    currentLawBlockingSummary: lawGate.blockingStatutes.length
+      ? formatCitationList(lawGate.blockingStatutes).join('；')
+      : '',
+  });
+  const workflowNext = workflow.nextStep
+    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}（推荐 ${workflow.nextStep.tool}）`
+    : '闭环已完成，进入持续复核和归档。';
   const materialRows = workspaceMaterialIndexRows(caseFile?.materials || []);
-  const currentLawStatus = lawGate.statuteChecks.length === 0
-    ? '待补充法条引用后核验'
-    : lawGate.passed ? '通过' : '未通过';
   const evidenceReviewRows = buildEvidenceReviewRows({ ...args, caseType, facts, evidence });
 
   return `# ${caseName} 案件工作台
@@ -1094,18 +1163,14 @@ ${caseIdLine}
 - 办理目标：${claims || '待补充'}
 
 ## 二、闭环状态
-| 模块 | 状态 | 下一步 |
-| --- | --- | --- |
-| 身份信息 | ${legalWorkspaceStatus(parties)} | 补齐身份证/营业执照、统一社会信用代码、送达地址、联系方式 |
-| 案件事实 | ${legalWorkspaceStatus(facts)} | 按时间线拆成主体、行为、金额、通知、履行结果 |
-| 证据目录 | ${legalWorkspaceStatus(evidence)} | 逐项绑定待证事实、证明目的、原件/复印件、页码和三性核验 |
-| 三段论分析 | 底层必经 | 使用 legal_case_reasoning_matrix 展开大前提、小前提和涵摄结论底稿 |
-| 争议焦点 | 已生成初稿 | 使用 legal_extract_dispute_focus 继续细化 |
-| 现行有效法律 | ${currentLawStatus} | 使用 legal_search_statute / legal_generate_citation_verification_report 核验 |
-| 类案检索 | 待授权检索/登记 | 按法院层级顺序登记来源和有利/不利点 |
-| 文书包 | 待生成/待复核 | 使用 legal_generate_litigation_packet 或 legal_generate_argument_or_opinion 起草 |
-| 正式交付 | 受硬门槛控制 | 使用 legal_finalize_delivery_package，法条未通过不得生成正式包 |
-| 网上立案 | 半自动协作 | 使用 legal_prepare_filing_handoff，提交/签名/缴费/送达必须人工确认 |
+- 完成度：${workflow.doneCount}/${workflow.steps.length}（${workflow.completionRatio}%）
+- 阻断项：${workflow.blockedCount}
+- 待补项：${workflow.missingCount}
+- 下一动作：${workflowNext}
+
+| 模块 | 状态 | 判断依据 | 下一步 | 推荐工具 |
+| --- | --- | --- | --- | --- |
+${formatLegalWorkflowRows(workflow.steps)}
 
 ## 三、材料索引
 | 序号 | 类型 | 标题 | 来源 | 归档时间 |

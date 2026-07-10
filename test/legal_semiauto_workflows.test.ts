@@ -122,6 +122,9 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('案件工作台');
     expect(output).toContain('案件ID：');
     expect(output).toContain('闭环状态');
+    expect(output).toContain('完成度：');
+    expect(output).toContain('下一动作：');
+    expect(output).toContain('推荐工具');
     expect(output).toContain('三段论分析');
     expect(output).toContain('底层必经');
     expect(output).toContain('证据目录与三性审查矩阵');
@@ -135,6 +138,30 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('legal_generate_litigation_packet');
     expect(output).toContain('legal_finalize_delivery_package');
     expect(output).toContain('人民法院在线服务');
+  });
+
+  it('marks blocked current-law steps in the case workflow state machine', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-workflow-block-${Date.now()}`;
+
+    const output = await registry.execute('legal_case_workspace', {
+      orgId,
+      userId: 'vitest',
+      caseName: '闭环阻断测试案',
+      role: '原告',
+      caseType: '买卖合同纠纷',
+      parties: '原告 Alpha；被告 Beta',
+      facts: '双方签订买卖合同，被告收货后未付款。',
+      evidence: '买卖合同；送货单；银行流水',
+      legalAuthorities: '拟引用《合同法》第六十条作为请求权基础。',
+    });
+
+    expect(output).toContain('闭环状态');
+    expect(output).toContain('阻断项：');
+    expect(output).toMatch(/\| 现行有效法律 \| 阻断 \|/);
+    expect(output).toContain('合同法');
+    expect(output).toContain('legal_search_statute / legal_generate_citation_verification_report');
+    expect(output).toContain('未通过现行有效法律硬门槛时自动阻断');
   });
 
   it('archives filing handoffs and delivery packages into the same legal case workspace', async () => {

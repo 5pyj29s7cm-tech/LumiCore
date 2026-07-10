@@ -105,6 +105,8 @@ interface LegalCaseReadinessItem {
   key: string;
   label: string;
   detail: string;
+  status: 'done' | 'ready' | 'missing' | 'blocked' | 'manual';
+  nextStep: string;
   done: boolean;
   view?: LegalView;
 }
@@ -129,12 +131,19 @@ function legalCaseHasSignal(caseFile: LegalCaseFile, patterns: RegExp[]): boolea
 function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: string) => string): LegalCaseReadinessItem[] {
   const materials = caseFile.materials || [];
   const hasIntake = Boolean(caseFile.notes.trim() || materials.length > 0);
+  const hasIdentity = Boolean(caseFile.party.trim())
+    && legalCaseHasSignal(caseFile, [/身份证|营业执照|统一社会信用代码|主体资格|授权委托|律所函|律师证/i]);
+  const hasFacts = Boolean(caseFile.notes.trim().length >= 20)
+    || legalCaseHasSignal(caseFile, [/事实摘要|案件事实|时间线|履行|付款|交付|解除|侵权|庭审|会议纪要/i]);
   const hasReasoning = legalCaseHasSignal(caseFile, [/三段论|大前提|小前提|涵摄|legal_case_reasoning_matrix|法律分析三段论/i]);
   const hasEvidence = materials.some(material => material.type === 'evidence')
     || legalCaseHasSignal(caseFile, [/证据目录|证明目的|三性|真实性|合法性|关联性|质证/i]);
   const hasSources = legalCaseHasSignal(caseFile, [/来源登记|外部检索|法源|类案|裁判文书|人民法院案例库|legal_external_research_plan|legal_search_external_authorities/i]);
   const hasWorkProduct = materials.some(material => material.type === 'pleading' || material.type === 'contract')
     || legalCaseHasSignal(caseFile, [/起诉状|答辩状|质证意见|代理词|法律意见书|合同审查|合同起草|投标书|标书|诉讼策略/i]);
+  const hasLawBlocked = legalCaseHasSignal(caseFile, [/现行有效法律预检：未通过|硬门槛未通过|正式交付包未生成|不得标记为正式成果|已废止/i]);
+  const hasLawPassed = !hasLawBlocked && legalCaseHasSignal(caseFile, [/现行有效法律预检：通过|现行有效法律硬门槛：通过|引用核验|引用校验|citation-verification-report/i]);
+  const hasFiling = legalCaseHasSignal(caseFile, [/半自动立案交接单|立案网交接单|法院在线服务|legal_prepare_filing_handoff/i]);
   const hasDeliveryGate = legalCaseHasSignal(caseFile, [/正式交付包|现行有效法律硬门槛|引用核验|引用校验|source-register|来源登记表|legal_finalize_delivery_package/i]);
 
   return [
@@ -142,13 +151,35 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
       key: 'intake',
       label: ui('会谈/材料', 'Intake'),
       detail: hasIntake ? ui('已入案', 'Archived') : ui('待导入', 'Missing'),
+      status: hasIntake ? 'done' : 'missing',
+      nextStep: ui('导入会谈、起诉状、证据或本地案件文件夹', 'Import meeting notes, pleadings, evidence, or a local case folder'),
       done: hasIntake,
       view: 'import',
+    },
+    {
+      key: 'identity',
+      label: ui('身份主体', 'Identity'),
+      detail: hasIdentity ? ui('已核验', 'Checked') : caseFile.party ? ui('待核验', 'Needs check') : ui('待补充', 'Missing'),
+      status: hasIdentity ? 'done' : caseFile.party ? 'ready' : 'missing',
+      nextStep: ui('补齐主体资格、授权委托和送达信息', 'Add identity, authority, and service information'),
+      done: hasIdentity,
+      view: 'workspace',
+    },
+    {
+      key: 'facts',
+      label: ui('事实时间线', 'Facts'),
+      detail: hasFacts ? ui('已整理', 'Prepared') : hasIntake ? ui('可整理', 'Ready') : ui('待补充', 'Missing'),
+      status: hasFacts ? 'done' : hasIntake ? 'ready' : 'missing',
+      nextStep: ui('按时间线拆解主体、行为、金额、通知和结果', 'Build a timeline of parties, conduct, amounts, notices, and results'),
+      done: hasFacts,
+      view: 'workspace',
     },
     {
       key: 'reasoning',
       label: ui('三段论底稿', 'Reasoning Matrix'),
       detail: hasReasoning ? ui('已形成', 'Ready') : ui('底层必经', 'Required'),
+      status: hasReasoning ? 'done' : hasFacts || hasEvidence ? 'ready' : 'missing',
+      nextStep: ui('生成法律依据、事实证据、适用结论矩阵', 'Generate the authority, evidence, and application matrix'),
       done: hasReasoning,
       view: 'strategy',
     },
@@ -156,13 +187,28 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
       key: 'evidence',
       label: ui('证据三性', 'Evidence Review'),
       detail: hasEvidence ? ui('已整理', 'Prepared') : ui('待整理', 'Missing'),
+      status: hasEvidence ? 'done' : hasIntake ? 'ready' : 'missing',
+      nextStep: ui('逐项绑定证明目的、原件状态、页码和质证风险', 'Map proof purpose, original status, pages, and challenge risks'),
       done: hasEvidence,
       view: 'packet',
+    },
+    {
+      key: 'law',
+      label: ui('现行法源', 'Current Law'),
+      detail: hasLawBlocked ? ui('阻断', 'Blocked') : hasLawPassed ? ui('已通过', 'Passed') : ui('待核验', 'Missing'),
+      status: hasLawBlocked ? 'blocked' : hasLawPassed ? 'done' : hasReasoning || hasWorkProduct ? 'ready' : 'missing',
+      nextStep: hasLawBlocked
+        ? ui('先替换或核验阻断法条', 'Replace or verify blocking authorities first')
+        : ui('核验所有法条、司法解释和引用来源', 'Verify all statutes, interpretations, and citations'),
+      done: hasLawPassed,
+      view: 'verify',
     },
     {
       key: 'sources',
       label: ui('法源类案', 'Sources'),
       detail: hasSources ? ui('有登记', 'Logged') : ui('待检索', 'Missing'),
+      status: hasSources ? 'done' : hasFacts || hasReasoning ? 'ready' : 'missing',
+      nextStep: ui('按最高院、高院、中院、基层法院顺序登记类案', 'Log authorities from Supreme, High, Intermediate, then Basic courts'),
       done: hasSources,
       view: 'external-research',
     },
@@ -170,17 +216,45 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
       key: 'work-product',
       label: ui('文书策略', 'Drafts'),
       detail: hasWorkProduct ? ui('有底稿', 'Drafted') : ui('待生成', 'Missing'),
+      status: hasWorkProduct ? 'done' : hasEvidence && hasReasoning ? 'ready' : 'missing',
+      nextStep: ui('生成起诉/答辩/质证/代理词/法律意见书', 'Generate complaint, answer, cross-exam notes, argument, or opinion'),
       done: hasWorkProduct,
+      view: 'packet',
+    },
+    {
+      key: 'filing',
+      label: ui('立案协作', 'Filing'),
+      detail: hasFiling ? ui('有交接单', 'Handoff ready') : hasWorkProduct ? ui('待人工', 'Manual') : ui('未到阶段', 'Not ready'),
+      status: hasFiling ? 'done' : hasWorkProduct ? 'manual' : 'missing',
+      nextStep: ui('生成法院平台字段映射和上传清单', 'Prepare court-platform fields and upload checklist'),
+      done: hasFiling,
       view: 'packet',
     },
     {
       key: 'delivery',
       label: ui('交付核验', 'Delivery Gate'),
-      detail: hasDeliveryGate ? ui('有记录', 'Recorded') : ui('未核验', 'Missing'),
-      done: hasDeliveryGate,
+      detail: hasLawBlocked ? ui('被阻断', 'Blocked') : hasDeliveryGate ? ui('有记录', 'Recorded') : ui('未核验', 'Missing'),
+      status: hasLawBlocked ? 'blocked' : hasDeliveryGate ? 'done' : hasLawPassed && hasWorkProduct ? 'ready' : 'missing',
+      nextStep: hasLawBlocked
+        ? ui('修正法源后再生成正式交付包', 'Fix authorities before formal delivery')
+        : ui('运行正式交付 gate 并生成来源登记', 'Run the formal delivery gate and source register'),
+      done: hasDeliveryGate && !hasLawBlocked,
       view: 'verify',
     },
   ];
+}
+
+function legalReadinessTone(status: LegalCaseReadinessItem['status']): string {
+  if (status === 'done') return 'border-emerald-400/18 bg-emerald-500/[0.07] text-emerald-100';
+  if (status === 'blocked') return 'border-rose-400/24 bg-rose-500/[0.08] text-rose-100';
+  if (status === 'ready') return 'border-amber-400/22 bg-amber-500/[0.07] text-amber-100 hover:border-amber-300/35';
+  if (status === 'manual') return 'border-cyan-400/20 bg-cyan-500/[0.06] text-cyan-100 hover:border-cyan-300/35';
+  return 'border-white/10 bg-black/18 text-white/58 hover:border-white/16 hover:bg-white/[0.05]';
+}
+
+function legalReadinessIcon(item: LegalCaseReadinessItem) {
+  if (item.status === 'done') return <CheckCircle size={12} />;
+  return <AlertTriangle size={12} />;
 }
 
 function legalCaseToolArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
@@ -920,6 +994,11 @@ function LegalCaseWorkspace({
   const selectedMaterial = (activeCase.materials || []).find(material => material.id === selectedMaterialId) || (activeCase.materials || [])[0] || null;
   const readinessItems = buildLegalCaseReadiness(activeCase, ui);
   const readinessDone = readinessItems.filter(item => item.done).length;
+  const readinessNext = readinessItems.find(item => item.status === 'blocked')
+    || readinessItems.find(item => item.status === 'ready')
+    || readinessItems.find(item => item.status === 'missing')
+    || readinessItems.find(item => item.status === 'manual')
+    || null;
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto p-5">
@@ -1057,23 +1136,32 @@ function LegalCaseWorkspace({
                 {readinessDone}/{readinessItems.length}
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+            {readinessNext && (
+              <button
+                type="button"
+                onClick={() => readinessNext.view && onSetView(readinessNext.view)}
+                className="mb-3 w-full rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-left text-xs text-white/58 transition-colors hover:border-amber-400/18 hover:bg-amber-500/[0.05]"
+              >
+                <span className="font-semibold text-white/76">{ui('下一步', 'Next')}</span>
+                <span className="mx-2 text-white/22">/</span>
+                <span className={readinessNext.status === 'blocked' ? 'text-rose-200' : 'text-amber-100/80'}>{readinessNext.label}</span>
+                <span className="ml-2 text-white/45">{readinessNext.nextStep}</span>
+              </button>
+            )}
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
               {readinessItems.map(item => (
                 <button
                   key={item.key}
                   type="button"
                   onClick={() => item.view && onSetView(item.view)}
-                  className={`min-h-[72px] rounded-lg border px-3 py-2 text-left transition-colors ${
-                    item.done
-                      ? 'border-emerald-400/18 bg-emerald-500/[0.07] text-emerald-100'
-                      : 'border-white/10 bg-black/18 text-white/58 hover:border-amber-400/20 hover:bg-amber-500/[0.06]'
-                  }`}
+                  title={item.nextStep}
+                  className={`min-h-[76px] rounded-lg border px-3 py-2 text-left transition-colors ${legalReadinessTone(item.status)}`}
                 >
                   <div className="flex items-center gap-1.5 text-xs font-bold">
-                    {item.done ? <CheckCircle size={12} /> : <AlertTriangle size={12} />}
+                    {legalReadinessIcon(item)}
                     <span className="min-w-0 truncate">{item.label}</span>
                   </div>
-                  <div className="mt-2 text-[11px] text-white/42">{item.detail}</div>
+                  <div className="mt-2 text-[11px] text-white/50">{item.detail}</div>
                 </button>
               ))}
             </div>
