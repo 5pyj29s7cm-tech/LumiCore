@@ -73,6 +73,7 @@ const DECLARATIONS = [
   'legal_equity_penetration',
   'legal_case_strategy',
   'legal_case_workspace',
+  'legal_case_workflow_status',
   'legal_meeting_minutes_to_case',
   'legal_case_reasoning_matrix',
   'legal_generate_litigation_packet',
@@ -171,6 +172,7 @@ describe('tool router', () => {
     expect(route.categories).toContain('legal');
     expect(route.toolNames).toEqual(expect.arrayContaining([
       'legal_case_workspace',
+      'legal_case_workflow_status',
       'legal_meeting_minutes_to_case',
       'legal_extract_dispute_focus',
       'legal_generate_litigation_packet',
@@ -194,6 +196,23 @@ describe('tool router', () => {
     ]));
     expect(route.toolNames.indexOf('legal_case_reasoning_matrix')).toBeGreaterThan(-1);
     expect(route.toolNames.indexOf('legal_case_reasoning_matrix')).toBeLessThan(route.toolNames.indexOf('legal_generate_argument_or_opinion'));
+  });
+
+  it('routes legal next-step and gap questions to the workflow status tool first', () => {
+    const route = routeToolsForTurn(
+      '看一下这个买卖合同案件现在闭环状态怎么样，还缺什么，下一步应该先做什么，能不能进入正式交付',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('legal');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_case_workflow_status',
+      'legal_case_workspace',
+      'legal_case_reasoning_matrix',
+      'legal_finalize_delivery_package',
+    ]));
+    expect(route.toolNames.indexOf('legal_case_workflow_status')).toBeGreaterThan(-1);
+    expect(route.toolNames.indexOf('legal_case_workflow_status')).toBeLessThan(route.toolNames.indexOf('legal_case_workspace'));
   });
 
   it('routes dispute-focus extraction from trial materials through chat and voice', () => {

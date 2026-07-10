@@ -1213,6 +1213,97 @@ ${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
 `;
 }
 
+async function caseWorkflowStatusHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const caseName = textArg(args, 'caseName') || textArg(args, 'title') || textArg(args, 'query');
+  const caseId = textArg(args, 'caseId');
+  const role = roleLabel(textArg(args, 'role'));
+  const caseType = textArg(args, 'caseType') || textArg(args, 'cause') || '待确认案由';
+  const court = textArg(args, 'court');
+  const parties = textArg(args, 'parties');
+  const claims = textArg(args, 'claims') || textArg(args, 'objective');
+  const facts = textArg(args, 'facts') || textArg(args, 'materials');
+  const evidence = textArg(args, 'evidence');
+  const stage = normalizeLegalCaseStage(textArg(args, 'stage'));
+
+  let caseFile = caseId ? LegalCases.getCase(orgId, caseId) : null;
+  if (!caseFile && caseName) {
+    caseFile = LegalCases.listCases(orgId, caseName, 1)[0] || null;
+  }
+
+  const hasInlineMaterial = [
+    caseName,
+    parties,
+    claims,
+    facts,
+    evidence,
+    textArg(args, 'complaint'),
+    textArg(args, 'opponentMaterials'),
+    textArg(args, 'transcript'),
+    textArg(args, 'trialNotes'),
+    textArg(args, 'legalAuthorities'),
+    textArg(args, 'similarCases'),
+    textArg(args, 'content'),
+    textArg(args, 'documentText'),
+  ].some(Boolean);
+
+  if (!caseFile && !hasInlineMaterial) {
+    return '请提供 caseId / caseName，或直接提供 facts、evidence、legalAuthorities 等案件材料，用于评估案件闭环状态。';
+  }
+
+  const workflowCase = caseFile || makeWorkspaceWorkflowCase(args, {
+    orgId,
+    caseName: caseName || '未命名案件',
+    role,
+    caseType,
+    court,
+    parties,
+    claims,
+    facts,
+    evidence,
+    stage,
+  });
+  const gateText = [
+    textArg(args, 'legalAuthorities'),
+    textArg(args, 'content'),
+    textArg(args, 'documentText'),
+    textArg(args, 'facts'),
+    textArg(args, 'materials'),
+    caseFile?.notes || '',
+    ...(caseFile?.materials || []).map(material => material.content || ''),
+  ].filter(Boolean).join('\n');
+  const lawGate = evaluateCurrentLawGate(gateText, orgId);
+  const workflow = LegalCases.evaluateCaseWorkflow(workflowCase, {
+    currentLawGate: lawGate.statuteChecks.length === 0 ? 'none' : lawGate.passed ? 'passed' : 'blocked',
+    currentLawBlockingSummary: lawGate.blockingStatutes.length
+      ? formatCitationList(lawGate.blockingStatutes).join('；')
+      : '',
+  });
+  const next = workflow.nextStep
+    ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}（推荐 ${workflow.nextStep.tool}）`
+    : '闭环已完成，进入持续复核和归档。';
+  const title = caseFile?.title || caseName || '未命名案件';
+
+  return `# ${title} 案件闭环状态
+
+- 案件ID：${caseFile?.id || '未持久化/未匹配'}
+- 组织：${orgId}
+- 完成度：${workflow.doneCount}/${workflow.steps.length}（${workflow.completionRatio}%）
+- 阻断项：${workflow.blockedCount}
+- 待补项：${workflow.missingCount}
+- 可进入文书起草：${workflow.readyForDraft ? '是' : '否'}
+- 可进入正式交付：${workflow.readyForFormalDelivery ? '是' : '否'}
+- 下一动作：${next}
+
+| 模块 | 状态 | 判断依据 | 下一步 | 推荐工具 |
+| --- | --- | --- | --- | --- |
+${formatLegalWorkflowRows(workflow.steps)}
+
+## 边界
+- 本状态用于办案推进和工具选择，不替代律师对事实、证据、法源和程序风险的最终判断。
+- 状态为“阻断”的模块必须先处理；状态为“待人工确认”的模块不得由 Lumi 自动提交、签名、缴费或对外承诺。`;
+}
+
 async function writeDocxFromMarkdown(markdown: string, filePath: string): Promise<void> {
   const {
     Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
@@ -4313,6 +4404,43 @@ export function registerLegalTools(registry: ToolRegistry): void {
       },
     },
     handler: caseWorkspaceHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_case_workflow_status',
+    description: '案件闭环状态评估 — 只读取已有案件或临时案件材料，不创建文书；输出材料入案、身份主体、事实时间线、证据三性、三段论、现行有效法律、类案来源、文书策略、立案协作、正式交付的完成度、阻断项、待补项和下一步推荐工具。适合聊天、语音、飞书/企微里询问“这个案子还缺什么/下一步做什么/能不能正式交付”。',
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: { type: 'string', description: '已有案件 ID；提供时优先读取该案件空间' },
+        caseName: { type: 'string', description: '案件名称或简称；未提供 caseId 时按名称查找' },
+        title: { type: 'string', description: 'caseName 的别名' },
+        query: { type: 'string', description: 'caseName 的别名，适合自然语言查找' },
+        stage: { type: 'string', description: '阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段' },
+        role: { type: 'string', description: '我方身份：原告/被告/申请人/被申请人等' },
+        caseType: { type: 'string', description: '案由或案件类型' },
+        cause: { type: 'string', description: 'caseType 的别名' },
+        court: { type: 'string', description: '法院、仲裁机构或拟提交平台' },
+        parties: { type: 'string', description: '当事人身份信息、主体信息和联系方式摘要' },
+        claims: { type: 'string', description: '诉讼请求、抗辩目标或办理目标' },
+        objective: { type: 'string', description: 'claims 的别名' },
+        facts: { type: 'string', description: '案件事实、时间线或沟通记录摘要' },
+        materials: { type: 'string', description: '综合案件材料摘要，facts 的补充来源' },
+        evidence: { type: 'string', description: '证据材料、证据目录或零碎证据列表' },
+        complaint: { type: 'string', description: '起诉状、申请书、答辩状或对方文书摘要' },
+        opponentMaterials: { type: 'string', description: '对方起诉状、证据、答辩意见或代理意见摘要' },
+        transcript: { type: 'string', description: '会议、庭审、沟通或询问笔录' },
+        trialNotes: { type: 'string', description: 'transcript 的别名' },
+        legalAuthorities: { type: 'string', description: '已检索或拟引用的法条、司法解释、裁判规则' },
+        similarCases: { type: 'string', description: '已检索类案、案号、法院层级和有利/不利点' },
+        content: { type: 'string', description: '需要纳入法源预检的文书或材料内容' },
+        documentText: { type: 'string', description: 'content 的别名' },
+        orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
+      },
+    },
+    handler: caseWorkflowStatusHandler,
     permission: 'user',
     securityLevel: 'safe',
   });

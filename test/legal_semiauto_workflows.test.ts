@@ -164,6 +164,38 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('未通过现行有效法律硬门槛时自动阻断');
   });
 
+  it('reports legal case workflow status without creating work products', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-workflow-status-${Date.now()}`;
+
+    const workspace = await registry.execute('legal_case_workspace', {
+      orgId,
+      userId: 'vitest',
+      caseName: '直接状态查询测试案',
+      role: '原告',
+      caseType: '买卖合同纠纷',
+      parties: '原告 Alpha；被告 Beta',
+      facts: '双方签订买卖合同，被告收货后未付款。',
+      evidence: '买卖合同；送货单；银行流水',
+    });
+    const caseId = workspace.match(/案件ID：([0-9a-f-]+)/)?.[1];
+    expect(caseId).toBeTruthy();
+
+    const output = await registry.execute('legal_case_workflow_status', {
+      orgId,
+      caseId,
+      legalAuthorities: '拟引用《合同法》第六十条。',
+    });
+
+    expect(output).toContain('案件闭环状态');
+    expect(output).toContain('直接状态查询测试案');
+    expect(output).toContain('完成度：');
+    expect(output).toContain('下一动作：');
+    expect(output).toMatch(/\| 现行有效法律 \| 阻断 \|/);
+    expect(output).toContain('合同法');
+    expect(output).not.toContain('正式交付包已生成');
+  });
+
   it('archives filing handoffs and delivery packages into the same legal case workspace', async () => {
     const registry = createLegalRegistry();
     const orgId = `test-legal-archive-${Date.now()}`;
@@ -1054,12 +1086,15 @@ describe('semi-automated legal workflows', () => {
     expect(chatRoutesSource).toContain('DIRECT_LEGAL_TOOL_ALLOWLIST');
     expect(chatRoutesSource).toContain('/legal/tool/:toolName');
     expect(chatRoutesSource).toContain('legal_generate_litigation_packet');
+    expect(chatRoutesSource).toContain('legal_case_workflow_status');
     expect(chatRoutesSource).toContain('legal_finalize_delivery_package');
     expect(chatRoutesSource).toContain('legal_process_notice_link');
     expect(registry.get('legal_triad_analysis')).toBeUndefined();
     expect(registry.get('legal_case_reasoning_matrix')).toBeTruthy();
+    expect(registry.get('legal_case_workflow_status')).toBeTruthy();
     expect(legalToolsSource).toContain('三段论是 Lumi 法律工作的核心基础');
     expect(toolRouterSource).toContain('legal_case_reasoning_matrix');
+    expect(toolRouterSource).toContain('legal_case_workflow_status');
     expect(toolRouterSource).not.toContain('legal_triad_analysis');
   });
 });

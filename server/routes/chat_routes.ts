@@ -15,6 +15,7 @@ const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
   'legal_search_case',
   'legal_search_statute',
   'legal_case_workspace',
+  'legal_case_workflow_status',
   'legal_meeting_minutes_to_case',
   'legal_case_reasoning_matrix',
   'legal_generate_litigation_packet',

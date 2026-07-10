@@ -107,6 +107,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'legal_equity_penetration',
     'legal_case_strategy',
     'legal_case_workspace',
+    'legal_case_workflow_status',
     'legal_meeting_minutes_to_case',
     'legal_case_reasoning_matrix',
     'legal_generate_litigation_packet',
@@ -637,8 +638,15 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'legal_company_database_lookup',
       );
     }
+    if (/下一步|下.?一步|缺什么|还缺|完成度|闭环|状态|进度|能不能.*(交付|立案|起草)|case\s*(status|progress|next)|what.*next/i.test(text)) {
+      priorities.push(
+        'legal_case_workflow_status',
+        'legal_case_workspace',
+      );
+    }
     priorities.push(
       'legal_case_workspace',
+      'legal_case_workflow_status',
       'legal_meeting_minutes_to_case',
       'legal_case_reasoning_matrix',
       'legal_external_research_plan',
