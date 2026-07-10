@@ -26,15 +26,29 @@ function openProactiveChat(data: ProactivePayload) {
   }));
 }
 
-function toastOptions(data: ProactivePayload, duration: number, actionLabel: string) {
-  return {
-    duration,
-    id: `proactive-${data.timestamp || Date.now()}`,
-    action: {
-      label: actionLabel,
-      onClick: () => openProactiveChat(data),
-    },
+type ProactiveToastTone = 'default' | 'info' | 'warning' | 'success' | 'evening';
+
+function showProactiveToast(data: ProactivePayload, duration: number, tone: ProactiveToastTone = 'default') {
+  const id = `proactive-${data.timestamp || Date.now()}`;
+  const toneClass: Record<ProactiveToastTone, string> = {
+    default: 'border-white/10 bg-zinc-950/95 text-white',
+    info: 'border-blue-300/20 bg-zinc-950/95 text-blue-50',
+    warning: 'border-amber-300/25 bg-zinc-950/95 text-amber-50',
+    success: 'border-emerald-300/20 bg-zinc-950/95 text-emerald-50',
+    evening: 'border-indigo-300/25 bg-indigo-950/95 text-indigo-50',
   };
+  toast.custom((toastId) => (
+    <button
+      type="button"
+      onClick={() => {
+        toast.dismiss(toastId);
+        openProactiveChat(data);
+      }}
+      className={`block w-[min(360px,calc(100vw-2rem))] rounded-xl border px-4 py-3 text-left text-sm leading-5 shadow-2xl backdrop-blur-xl transition-transform hover:scale-[1.01] ${toneClass[tone]}`}
+    >
+      {data.message}
+    </button>
+  ), { duration, id });
 }
 
 /**
@@ -53,7 +67,6 @@ export function ProactiveNotifications() {
       const taskId = data.type || data.taskId || 'unknown';
       const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
       if (taskId === 'greeting' && !proactiveGreetingEnabled) return;
-      const actionLabel = t.langCode === 'en' ? 'Continue' : '继续';
       const notify = (item: { type: string; title: string; message: string }) => {
         addNotification({
           ...item,
@@ -71,31 +84,31 @@ export function ProactiveNotifications() {
       switch (taskId) {
         case 'greeting':
           notify({ type: 'system', title: t.notifLumi || 'Lumi', message: data.message });
-          toast(data.message, toastOptions(data, 8000, actionLabel));
+          showProactiveToast(data, 8000);
           break;
         case 'reminder_check':
           notify({ type: 'info', title: t.notifReminder || 'Reminder', message: data.message });
-          toast.info(data.message, toastOptions(data, 8000, actionLabel));
+          showProactiveToast(data, 8000, 'info');
           break;
         case 'memory_decay':
           notify({ type: 'warning', title: t.notifMemoryAlert || 'Memory Alert', message: data.message });
-          toast.warning(data.message, toastOptions(data, 6000, actionLabel));
+          showProactiveToast(data, 6000, 'warning');
           break;
         case 'daily_summary':
           notify({ type: 'success', title: t.notifDailySummary || 'Daily Summary', message: data.message });
-          toast.success(data.message, toastOptions(data, 12000, actionLabel));
+          showProactiveToast(data, 12000, 'success');
           break;
         case 'evening_wrapup':
           notify({ type: 'system', title: t.notifEveningWrapup || 'Evening Wrap-up', message: data.message });
-          toast(data.message, { ...toastOptions(data, 10000, actionLabel), style: { background: '#1e1b4b', color: '#e0e7ff' } });
+          showProactiveToast(data, 10000, 'evening');
           break;
         case 'behavioral_analysis':
           notify({ type: 'success', title: t.notifBehavioralInsight || 'Behavioral Insight', message: data.message });
-          toast.success(data.message, toastOptions(data, 8000, actionLabel));
+          showProactiveToast(data, 8000, 'success');
           break;
         default:
           notify({ type: 'info', title: t.notifLumi || 'Lumi', message: data.message });
-          toast(data.message, toastOptions(data, 5000, actionLabel));
+          showProactiveToast(data, 5000);
       }
     };
 

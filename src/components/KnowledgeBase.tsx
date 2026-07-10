@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Loader2, Search, Sparkles, TrendingUp, Network, GitMerge, Upload, ArrowRight, File, FileText, Trash2, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen, BookOpen, RefreshCw, Link2 } from 'lucide-react';
+import { X, Loader2, Search, Upload, ArrowRight, File, FileText, Trash2, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen, BookOpen, RefreshCw, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { appConfirm } from '@/lib/appConfirm';
@@ -90,10 +90,6 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [cardPos, setCardPos] = useState<{ x: number; y: number } | null>(null);
-  const [organizing, setOrganizing] = useState(false);
-  const [consolidating, setConsolidating] = useState(false);
-  const [reflecting, setReflecting] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [bulkIngesting, setBulkIngesting] = useState(false);
   const [ingestingFiles, setIngestingFiles] = useState<Set<string>>(() => new Set());
@@ -527,50 +523,6 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     }
   }, [fetchObsidianStatus, isZh, scopedFileUrl, t.cancel]);
 
-  const handleAutoOrganize = async () => {
-    setOrganizing(true);
-    try {
-      const res = await fetch(scopedMemoryUrl('/api/memory/auto-organize'), { method: 'POST' });
-      const d = await res.json();
-      if (d.success) { toast.success(`Organized: ${d.branchesCreated} branches, ${d.memoriesAssigned} memories`); fetchAll(); }
-      else toast.info(d.reason || (t.kbNotEnoughMemories || 'Not enough unorganized memories'));
-    } catch { toast.error(t.kbOrganizationFailed || 'Organization failed'); }
-    finally { setOrganizing(false); }
-  };
-
-  const handleConsolidate = async () => {
-    setConsolidating(true);
-    try {
-      const res = await fetch(scopedMemoryUrl('/api/memory/consolidate'), { method: 'POST' });
-      const d = await res.json();
-      if (d.success) { toast.success(t.kbConsolidated || 'Consolidated'); fetchAll(); }
-      else toast.info(d.reason || `${t.kbNeedMemories || 'Need'} ${d.threshold || 10} ${t.kbMem || 'memories'}`);
-    } catch { toast.error(t.kbConsolidationFailed || 'Consolidation failed'); }
-    finally { setConsolidating(false); }
-  };
-
-  const handleSelfReflect = async () => {
-    setReflecting(true);
-    try {
-      const res = await fetch(scopedMemoryUrl('/api/memory/self-reflect'), { method: 'POST' });
-      const d = await res.json();
-      if (d.success) { toast.success(t.kbReflectionComplete || 'Reflection complete'); fetchAll(); }
-      else toast.info(d.reason || 'Nothing to reflect on');
-    } catch { toast.error(t.kbReflectionFailed || 'Reflection failed'); }
-    finally { setReflecting(false); }
-  };
-
-  const handleAnalyze = async () => {
-    setAnalyzing(true);
-    try {
-      const res = await fetch(scopedMemoryUrl('/api/memory/analyze-behavior'), { method: 'POST' });
-      const d = await res.json();
-      if (d.patternsFound > 0) { toast.success(`${t.kbPatternsFound || 'Found'} ${d.patternsFound} ${t.kbPatterns || 'patterns'}`); fetchAll(); }
-      else toast.info(t.kbNoNewPatterns || 'No new patterns');
-    } catch { toast.error(t.kbAnalysisFailed || 'Analysis failed'); }
-    finally { setAnalyzing(false); }
-  };
-
   // ESC to close
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && isOpen && !selectedId) onClose(); };
@@ -750,7 +702,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
 
           {/* Top bar — controls */}
           <div className="absolute top-6 left-6 right-6 z-20 pointer-events-none">
-            <div className="flex items-center gap-3 justify-between pointer-events-auto">
+            <div className="flex items-start gap-3 justify-between pointer-events-auto">
               {/* Left: title */}
               <div className="flex items-center gap-3 bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl px-4 py-2">
                 <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.5)]" />
@@ -758,7 +710,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
               </div>
 
               {/* Search */}
-              <div className="relative flex items-center gap-2 bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl px-4 py-2 flex-1 max-w-[320px]">
+              <div className="relative flex min-w-[220px] max-w-[320px] flex-1 items-center gap-2 rounded-2xl border border-white/[0.08] bg-black/40 px-4 py-2 backdrop-blur-xl">
                 <Search size={13} className="text-white/45 shrink-0" />
                 <input
                   value={search}
@@ -811,7 +763,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
               </div>
 
               {/* Center: actions */}
-              <div className="flex items-center gap-2">
+              <div className="flex max-w-[620px] items-center justify-end">
                 {/* Hidden file input */}
                 <input
                   ref={fileInputRef}
@@ -820,83 +772,71 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   onChange={handleUpload}
                   className="hidden"
                 />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-green-500/20 rounded-xl px-3 py-2 text-xs font-bold text-green-400/70 hover:text-green-300 hover:border-green-400/40 transition-all"
-                >
-                  {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                  {t.kbImport || 'Import'}
-                </button>
-                <button
-                  onClick={() => void handleOpenKnowledgeFolder()}
-                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-xl px-3 py-2 text-xs font-bold text-white/55 hover:text-white/80 hover:border-white/20 transition-all"
-                  title={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
-                  aria-label={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
-                >
-                  <FolderOpen size={13} />
-                  {isZh ? '文件夹' : 'Folder'}
-                </button>
-                <button
-                  onClick={() => setObsidianOpen(value => !value)}
-                  className={`flex items-center gap-1.5 bg-black/40 backdrop-blur-xl rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
-                    obsidianOpen || obsidianVaults.length > 0
-                      ? 'border-indigo-400/35 text-indigo-200/80 hover:text-indigo-100'
-                      : 'border-white/10 text-white/55 hover:text-white/80 hover:border-white/20'
-                  }`}
-                  title={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
-                  aria-label={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
-                >
-                  <BookOpen size={13} />
-                  Obsidian
-                </button>
-                {ingestableFiles.length > 0 && (
+                <div className="flex items-center gap-1 rounded-2xl border border-white/[0.08] bg-black/35 p-1 shadow-[0_18px_45px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                   <button
-                    onClick={() => void handleIngestAll()}
-                    disabled={bulkIngesting}
-                    className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-amber-500/20 rounded-xl px-3 py-2 text-xs font-bold text-amber-300/75 hover:text-amber-200 hover:border-amber-300/40 transition-all disabled:pointer-events-none disabled:opacity-60"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    title={t.kbImport || (isZh ? '导入资料' : 'Import files')}
+                    aria-label={t.kbImport || (isZh ? '导入资料' : 'Import files')}
+                    className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl px-2.5 text-[11px] font-bold text-emerald-100/72 transition-all hover:bg-emerald-300/10 hover:text-emerald-100 disabled:pointer-events-none disabled:opacity-60 xl:px-3"
                   >
-                    {bulkIngesting ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                    {bulkIngesting ? (t.loading || (isZh ? '读取中' : 'Loading')) : `${t.kbIngestAll || (isZh ? '全部吸收' : 'Absorb all')} (${ingestableFiles.length})`}
+                    <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-emerald-300/12 text-emerald-100/80 transition-colors group-hover:bg-emerald-300/18">
+                      {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                    </span>
+                    <span className="hidden xl:inline">{t.kbImport || (isZh ? '导入' : 'Import')}</span>
                   </button>
-                )}
-                <button
-                  onClick={handleAutoOrganize}
-                  disabled={organizing}
-                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-cyan-500/20 rounded-xl px-3 py-2 text-xs font-bold text-cyan-400/70 hover:text-cyan-300 hover:border-cyan-400/40 transition-all"
-                >
-                  {organizing ? <Loader2 size={13} className="animate-spin" /> : <Network size={13} />}
-                  {t.kbOrganize || 'Organize'}
-                </button>
-                <button
-                  onClick={handleConsolidate}
-                  disabled={consolidating}
-                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-emerald-500/20 rounded-xl px-3 py-2 text-xs font-bold text-emerald-400/70 hover:text-emerald-300 hover:border-emerald-400/40 transition-all"
-                >
-                  {consolidating ? <Loader2 size={13} className="animate-spin" /> : <GitMerge size={13} />}
-                  {t.kbMerge || 'Merge'}
-                </button>
-                <button
-                  onClick={handleSelfReflect}
-                  disabled={reflecting}
-                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-violet-500/20 rounded-xl px-3 py-2 text-xs font-bold text-violet-400/70 hover:text-violet-300 hover:border-violet-400/40 transition-all"
-                >
-                  {reflecting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  {t.kbReflect || 'Reflect'}
-                </button>
-                <button
-                  onClick={handleAnalyze}
-                  disabled={analyzing}
-                  className="flex items-center gap-1.5 bg-black/40 backdrop-blur-xl border border-amber-500/20 rounded-xl px-3 py-2 text-xs font-bold text-amber-400/70 hover:text-amber-300 hover:border-amber-400/40 transition-all"
-                >
-                  {analyzing ? <Loader2 size={13} className="animate-spin" /> : <TrendingUp size={13} />}
-                  {t.kbPatterns || 'Patterns'}
-                </button>
+                  <button
+                    onClick={() => void handleOpenKnowledgeFolder()}
+                    className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl px-2.5 text-[11px] font-bold text-white/62 transition-all hover:bg-white/[0.07] hover:text-white/88 xl:px-3"
+                    title={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
+                    aria-label={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
+                  >
+                    <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-white/[0.06] text-white/68 transition-colors group-hover:bg-white/[0.1] group-hover:text-white/88">
+                      <FolderOpen size={13} />
+                    </span>
+                    <span className="hidden xl:inline">{isZh ? '文件夹' : 'Folder'}</span>
+                  </button>
+                  <button
+                    onClick={() => setObsidianOpen(value => !value)}
+                    className={`group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl px-2.5 text-[11px] font-bold transition-all xl:px-3 ${
+                      obsidianOpen || obsidianVaults.length > 0
+                        ? 'bg-indigo-300/12 text-indigo-50/86 shadow-[inset_0_0_0_1px_rgba(165,180,252,0.18)] hover:bg-indigo-300/16'
+                        : 'text-white/62 hover:bg-white/[0.07] hover:text-white/88'
+                    }`}
+                    title={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
+                    aria-label={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
+                  >
+                    <span className={`flex h-5 w-5 items-center justify-center rounded-lg transition-colors ${
+                      obsidianOpen || obsidianVaults.length > 0
+                        ? 'bg-indigo-300/18 text-indigo-100'
+                        : 'bg-white/[0.06] text-white/68 group-hover:bg-white/[0.1] group-hover:text-white/88'
+                    }`}>
+                      <BookOpen size={13} />
+                    </span>
+                    <span className="hidden xl:inline">Obsidian</span>
+                  </button>
+                  {ingestableFiles.length > 0 && (
+                    <button
+                      onClick={() => void handleIngestAll()}
+                      disabled={bulkIngesting}
+                      title={`${t.kbIngestAll || (isZh ? '全部吸收' : 'Absorb all')} (${ingestableFiles.length})`}
+                      aria-label={`${t.kbIngestAll || (isZh ? '全部吸收' : 'Absorb all')} (${ingestableFiles.length})`}
+                      className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl bg-amber-300/10 px-2.5 text-[11px] font-bold text-amber-100/84 shadow-[inset_0_0_0_1px_rgba(252,211,77,0.13)] transition-all hover:bg-amber-300/15 hover:text-amber-50 disabled:pointer-events-none disabled:opacity-60 xl:px-3"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-amber-300/15 text-amber-100 transition-colors group-hover:bg-amber-300/22">
+                        {bulkIngesting ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                      </span>
+                      <span className="hidden xl:inline">
+                        {bulkIngesting ? (t.loading || (isZh ? '读取中' : 'Loading')) : `${t.kbIngestAll || (isZh ? '吸收' : 'Absorb')} ${ingestableFiles.length}`}
+                      </span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Right: close + stats */}
               <div className="flex items-center gap-3">
-                <div className="flex items-center gap-3 bg-black/40 backdrop-blur-xl border border-white/[0.08] rounded-2xl px-4 py-2">
+                <div className="hidden items-center gap-3 rounded-2xl border border-white/[0.08] bg-black/40 px-4 py-2 backdrop-blur-xl xl:flex">
                   <span className="text-[12px] font-bold text-blue-400/60">{totalFiles} {t.kbFiles || 'files'}</span>
                   <span className="w-px h-3 bg-white/[0.08]" />
                   <span className="text-[12px] font-bold text-emerald-400/60">{absorbedFileCount} {t.kbIngested || 'absorbed'}</span>
