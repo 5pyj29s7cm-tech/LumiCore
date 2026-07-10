@@ -54,6 +54,8 @@ describe('semi-automated legal workflows', () => {
     expect(output).toMatch(/三性审查|真实性|合法性|关联性/);
     expect(output).toMatch(/缺口|补强|质证风险/);
     expect(output).toMatch(/律师|人工|确认/);
+    expect(output).toContain('法律成果预检');
+    expect(output).toContain('现行有效法律预检');
     expect(output).toContain('web_login_run');
   });
 
@@ -76,6 +78,7 @@ describe('semi-automated legal workflows', () => {
     expect(output).toMatch(/程序抗辩|时效|主体资格/);
     expect(output).toMatch(/提交|签字|盖章|发送/);
     expect(output).toMatch(/律师|人工|确认/);
+    expect(output).toContain('法律成果预检');
   });
 
   it('extracts dispute focuses from complaint, evidence, and trial notes', async () => {
@@ -163,6 +166,7 @@ describe('semi-automated legal workflows', () => {
         evidence: '合同；送货单；银行流水',
       });
       expect(filing).toContain('已归档到案件空间');
+      expect(filing).toContain('法律成果预检');
 
       const delivery = await registry.execute('legal_finalize_delivery_package', {
         orgId,
@@ -216,6 +220,7 @@ describe('semi-automated legal workflows', () => {
       expect(output).toContain('法律会议纪要已生成');
       expect(output).toContain('纪要文件');
       expect(output).toContain('案件空间：已归档');
+      expect(output).toContain('法律成果预检');
 
       const minutesPath = path.join(dir, 'legal-meeting-minutes.md');
       expect(fs.existsSync(minutesPath)).toBe(true);
@@ -226,6 +231,7 @@ describe('semi-automated legal workflows', () => {
       expect(markdown).toContain('合法性');
       expect(markdown).toContain('关联性');
       expect(markdown).toContain('期限和待办');
+      expect(markdown).toContain('法律成果预检');
       expect(markdown).toContain('legal_case_workspace');
 
       const LegalCases = await import('../server/org/legal_cases');
@@ -347,6 +353,25 @@ describe('semi-automated legal workflows', () => {
       material.type === 'note'
       && material.title.includes('投标书工作底稿')
     ))).toBe(true);
+  });
+
+  it('preflights draft legal work products before formal delivery', async () => {
+    const registry = createLegalRegistry();
+
+    const output = await registry.execute('legal_generate_argument_or_opinion', {
+      caseName: '草稿法源预检测试案',
+      role: '原告',
+      caseType: '买卖合同纠纷',
+      facts: '双方发生买卖合同纠纷，草稿材料中仍写有根据《合同法》第六十条主张继续履行。',
+      evidence: '买卖合同、发货单、聊天记录。',
+      objective: '生成代理词草稿并提示法源风险。',
+    });
+
+    expect(output).toContain('法律成果预检');
+    expect(output).toContain('现行有效法律预检：未通过');
+    expect(output).toContain('合同法');
+    expect(output).toContain('不得标记为正式成果');
+    expect(output).toContain('legal_finalize_delivery_package');
   });
 
   it('archives core litigation work products into the same case workspace', async () => {

@@ -454,6 +454,69 @@ function formatCurrentLawGateBlock(args: {
   ].join('\n');
 }
 
+const LEGAL_WORK_PRODUCT_GATE_FIELDS = [
+  'legalAuthorities',
+  'statutes',
+  'authorities',
+  'laws',
+  'content',
+  'text',
+  'requirements',
+  'contract',
+  'details',
+  'facts',
+  'evidence',
+  'materials',
+  'complaint',
+  'opponentMaterials',
+  'opponentArguments',
+  'transcript',
+  'trialNotes',
+  'claims',
+  'objective',
+];
+
+function collectLegalWorkProductGateText(report: string, args: Record<string, any>): string {
+  const parts = [report];
+  for (const key of LEGAL_WORK_PRODUCT_GATE_FIELDS) {
+    const value = args[key];
+    if (Array.isArray(value)) parts.push(value.map(String).join('\n'));
+    else if (value !== undefined && value !== null) parts.push(String(value));
+  }
+  return parts.join('\n\n');
+}
+
+function compactCitationListForPreflight(items: CitationCheck[], max = 6): string {
+  if (items.length === 0) return '无';
+  return items
+    .slice(0, max)
+    .map(item => item.citation)
+    .join('；') + (items.length > max ? `；另 ${items.length - max} 项` : '');
+}
+
+function buildLegalWorkProductPreflightSection(
+  report: string,
+  args: Record<string, any>,
+  orgId?: string,
+): string {
+  const gate = evaluateCurrentLawGate(collectLegalWorkProductGateText(report, args), orgId);
+  const statuteStatus = legalReasoningGateStatus(gate);
+  const blocking = compactCitationListForPreflight(gate.blockingStatutes);
+  const missingCases = compactCitationListForPreflight(gate.missingCaseChecks);
+  const deliveryRule = gate.passed
+    ? '草稿可继续进入律师复核；正式对外文件仍必须运行 legal_finalize_delivery_package 生成来源登记和交付包。'
+    : '存在已废止、失效或未确认的法条引用，不得标记为正式成果；需先替换或核验后再运行 legal_finalize_delivery_package。';
+
+  return [
+    '## 法律成果预检',
+    `- 内部分析链路：已按“法律依据 / 事实证据 / 适用结论”组织工作稿；普通文书不展开方法论标题。`,
+    `- 现行有效法律预检：${statuteStatus}（识别法条 ${gate.statuteChecks.length} 项，阻断 ${gate.blockingStatutes.length} 项）。`,
+    `- 法条阻断项：${blocking}。`,
+    `- 类案待复核项：${missingCases}。`,
+    `- 正式交付规则：${deliveryRule}`,
+  ].join('\n');
+}
+
 const LEGAL_CASE_SEARCH_ORDER = ['最高人民法院', '高级人民法院', '中级人民法院', '基层人民法院'];
 
 function normalizeLegalCaseStage(input: string): LegalCases.LegalCaseStage {
@@ -642,19 +705,21 @@ function appendLegalWorkProductArchiveSection(
 ): string {
   const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
   const userId = textArg(args, 'userId') || context?.userId || 'system';
+  const preflightSection = buildLegalWorkProductPreflightSection(report, args, orgId);
+  const archivedContent = `${report}\n\n${preflightSection}`;
   const caseLine = archiveLegalReportToCase(args, {
     orgId,
     userId,
     caseName: params.caseName,
     title: params.title,
-    content: report,
+    content: archivedContent,
     type: params.type || 'note',
     cause: params.cause,
     court: params.court,
     localPath: params.localPath,
   });
 
-  return `${report}
+  return `${archivedContent}
 
 ## 案件归档与交付边界
 ${caseLine}
@@ -754,7 +819,9 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
     caseName,
     'meeting_minutes',
   );
-  const markdown = buildLegalMeetingMinutesMarkdown(args);
+  const baseMarkdown = buildLegalMeetingMinutesMarkdown(args);
+  const preflightSection = buildLegalWorkProductPreflightSection(baseMarkdown, args, orgId);
+  const markdown = `${baseMarkdown}\n\n${preflightSection}`;
   const minutesPath = path.join(outputDir, 'legal-meeting-minutes.md');
   fs.writeFileSync(minutesPath, markdown, 'utf-8');
 
@@ -779,6 +846,8 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
     `- 输出目录：${outputDir}`,
     `- 纪要文件：${minutesPath}`,
     archiveLine,
+    '',
+    preflightSection,
     '',
     '## 下一步',
     '- 用 legal_case_workspace 查看案件闭环状态。',
@@ -1714,16 +1783,19 @@ ${templates.slice(0, 3).map(t => `- ${t.title}`).join('\n')}
     bidInput.skipped.length ? ['', '## 未读取材料', bidInput.skipped.map(item => `- ${item}`).join('\n')].join('\n') : '',
   ].filter(Boolean).join('\n');
   const archivedReport = `${report}\n\n${sourceSection}`;
+  const preflightSection = buildLegalWorkProductPreflightSection(archivedReport, args, orgId);
   const caseLine = archiveLegalReportToCase(args, {
     orgId,
     userId,
     caseName,
     title: `${projectName} 投标书工作底稿`,
-    content: archivedReport,
+    content: `${archivedReport}\n\n${preflightSection}`,
     type: 'note',
     cause: textArg(args, 'caseType') || '投标/招标文件响应',
   });
   return `${archivedReport}
+
+${preflightSection}
 
 ## 案件归档与交付边界
 ${caseLine}
@@ -1794,16 +1866,19 @@ ${detectRiskClauses(contractText)}
 *注: 连接LLM以进行深度合同审查分析。*`;
   }
 
+  const preflightSection = buildLegalWorkProductPreflightSection(report, args, orgId);
   const caseLine = archiveLegalReportToCase(args, {
     orgId,
     userId,
     caseName,
     title: `${caseName} 合同审查报告`,
-    content: report,
+    content: `${report}\n\n${preflightSection}`,
     type: 'contract',
     cause: textArg(args, 'caseType') || '合同审查',
   });
   return `${report}
+
+${preflightSection}
 
 ## 案件归档与交付边界
 ${caseLine}
@@ -1881,16 +1956,19 @@ ${LEGAL_REASONING_BASELINE}
 *注: 连接LLM可自动填充合同具体条款。*`;
   }
 
+  const preflightSection = buildLegalWorkProductPreflightSection(report, args, orgId);
   const caseLine = archiveLegalReportToCase(args, {
     orgId,
     userId,
     caseName,
     title: `${caseName} 合同起草底稿`,
-    content: report,
+    content: `${report}\n\n${preflightSection}`,
     type: 'contract',
     cause: textArg(args, 'caseType') || contractType || '合同起草',
   });
   return `${report}
+
+${preflightSection}
 
 ## 案件归档与交付边界
 ${caseLine}
@@ -2282,18 +2360,20 @@ ${materialRows}
 
 ## 八、告知模板
 材料已按半自动立案口径整理完毕，当前状态为“待律师登录法院平台人工核对并提交”。Lumi 未自动提交、未签名、未缴费、未确认送达；提交结果以法院平台回执为准。`;
+  const preflightSection = buildLegalWorkProductPreflightSection(handoff, args, orgId);
+  const archivedHandoff = `${handoff}\n\n${preflightSection}`;
   const archivedMaterial = appendLegalCaseMaterial({
     orgId,
     userId,
     caseId,
     type: 'note',
     title: `${caseName}半自动立案交接单`,
-    content: handoff,
+    content: archivedHandoff,
   });
   const archiveLine = caseId
     ? archivedMaterial ? `已归档到案件空间 materialId=${archivedMaterial.id}` : '未归档（caseId 不存在或无权限）'
     : '未归档（未提供 caseId）';
-  return `${handoff}
+  return `${archivedHandoff}
 
 ## 九、案件空间归档
 ${archiveLine}`;
