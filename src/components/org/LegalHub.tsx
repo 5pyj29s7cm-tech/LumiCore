@@ -109,6 +109,7 @@ interface LegalCaseReadinessItem {
   nextStep: string;
   done: boolean;
   view?: LegalView;
+  tool?: string;
 }
 
 interface LegalCaseActionSummary {
@@ -127,6 +128,19 @@ interface LegalCaseActionSummary {
   gaps: LegalCaseReadinessItem[];
   nextActions: LegalCaseReadinessItem[];
 }
+
+const LEGAL_CASE_READINESS_TOOLS: Record<string, string> = {
+  intake: 'legal_message_intake_to_case / legal_import_materials_to_kb',
+  identity: 'legal_case_workspace / legal_import_materials_to_kb',
+  facts: 'legal_meeting_minutes_to_case / legal_case_workspace',
+  reasoning: 'legal_case_reasoning_matrix',
+  evidence: 'legal_generate_litigation_packet',
+  law: 'legal_search_statute / legal_generate_citation_verification_report',
+  sources: 'legal_external_research_plan / legal_search_external_authorities',
+  'work-product': 'legal_generate_litigation_packet / legal_generate_argument_or_opinion',
+  filing: 'legal_prepare_filing_handoff',
+  delivery: 'legal_finalize_delivery_package',
+};
 
 function legalCaseMaterialText(caseFile: LegalCaseFile): string {
   return [
@@ -163,7 +177,7 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
   const hasFiling = legalCaseHasSignal(caseFile, [/半自动立案交接单|立案网交接单|法院在线服务|legal_prepare_filing_handoff/i]);
   const hasDeliveryGate = legalCaseHasSignal(caseFile, [/正式交付包|现行有效法律硬门槛|引用核验|引用校验|source-register|来源登记表|legal_finalize_delivery_package/i]);
 
-  return [
+  const items: LegalCaseReadinessItem[] = [
     {
       key: 'intake',
       label: ui('会谈/材料', 'Intake'),
@@ -259,6 +273,7 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
       view: 'verify',
     },
   ];
+  return items.map(item => ({ ...item, tool: LEGAL_CASE_READINESS_TOOLS[item.key] }));
 }
 
 function buildLegalCaseActionSummary(
@@ -1170,6 +1185,19 @@ function LegalCaseWorkspace({
                 </div>
                 <div className="mt-2 text-lg font-semibold text-white">{actionSummary.statusLabel}</div>
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-white/45">{actionSummary.statusDetail}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                  <span className={`rounded-md border px-2 py-1 ${actionSummary.canDraft ? 'border-emerald-400/18 bg-emerald-500/[0.07] text-emerald-100' : 'border-white/10 bg-white/[0.035] text-white/45'}`}>
+                    {ui('\u8d77\u8349 gate', 'Draft gate')}: <b className="font-semibold">{actionSummary.canDraft ? ui('\u53ef\u8d77\u8349', 'Ready') : ui('\u672a\u5230\u4f4d', 'Not ready')}</b>
+                  </span>
+                  <span className={`rounded-md border px-2 py-1 ${actionSummary.canDeliver ? 'border-cyan-400/18 bg-cyan-500/[0.06] text-cyan-100' : 'border-white/10 bg-white/[0.035] text-white/45'}`}>
+                    {ui('\u4ea4\u4ed8 gate', 'Delivery gate')}: <b className="font-semibold">{actionSummary.canDeliver ? ui('\u53ef\u8fdb\u5165', 'Ready') : ui('\u672a\u5230\u4f4d', 'Not ready')}</b>
+                  </span>
+                  {actionSummary.primary?.tool && (
+                    <span className="max-w-full truncate rounded-md border border-amber-400/14 bg-amber-500/[0.055] px-2 py-1 text-amber-100/78">
+                      {ui('\u5efa\u8bae\u5de5\u5177', 'Tool')}: <b className="font-semibold">{actionSummary.primary.tool}</b>
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex min-w-[132px] items-center justify-end gap-2">
                 <div className="text-right">
@@ -1214,7 +1242,14 @@ function LegalCaseWorkspace({
                   <span className="block text-xs font-semibold text-white/80">{ui('下一步', 'Next action')}</span>
                   <span className="mt-1 block truncate text-sm font-bold">{actionSummary.primary.label}</span>
                 </span>
-                <ArrowRight size={15} className="shrink-0" />
+                <span className="flex shrink-0 items-center gap-2">
+                  {actionSummary.primary.tool && (
+                    <span className="hidden max-w-[220px] truncate rounded-md border border-white/10 bg-black/18 px-2 py-1 text-[11px] text-white/52 sm:block">
+                      {actionSummary.primary.tool}
+                    </span>
+                  )}
+                  <ArrowRight size={15} className="shrink-0" />
+                </span>
               </button>
             )}
 
@@ -1252,9 +1287,23 @@ function LegalCaseWorkspace({
                 </div>
                 <div className="space-y-1.5 text-xs text-white/48">
                   {(actionSummary.nextActions.length ? actionSummary.nextActions : [null]).map((item, index) => (
-                    <div key={item?.key || index} className="truncate">
-                      {item ? `${index + 1}. ${item.label}` : ui('闭环已完成，继续复核归档', 'Loop complete; continue review and archive')}
-                    </div>
+                    item ? (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => item.view && onSetView(item.view)}
+                        title={`${item.nextStep} ${item.tool || ''}`}
+                        className="block w-full rounded-lg border border-white/8 bg-white/[0.025] px-2.5 py-2 text-left transition-colors hover:border-amber-400/18 hover:bg-amber-500/[0.045]"
+                      >
+                        <span className="block truncate font-semibold text-white/76">{index + 1}. {item.label}</span>
+                        <span className="mt-1 block truncate text-white/42">{item.nextStep}</span>
+                        {item.tool && <span className="mt-1 block truncate text-amber-100/55">{item.tool}</span>}
+                      </button>
+                    ) : (
+                      <div key={index} className="truncate">
+                        {ui('闭环已完成，继续复核归档', 'Loop complete; continue review and archive')}
+                      </div>
+                    )
                   ))}
                 </div>
               </div>
