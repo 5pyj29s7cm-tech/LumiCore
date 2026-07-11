@@ -50,10 +50,11 @@ export function buildPublicWebLearningTaskDescription(contextParts: string[]): s
   const context = contextParts.length > 0 ? contextParts.join('\n') : '暂无额外上下文。';
   return [
     '自主联网学习任务：根据当前上下文选择 1 个对用户近期目标最有价值、且需要时效更新的主题。',
-    '优先主题包括：现行有效法律/政策更新、Lumi 桌面自动化与外部 AI 协作稳定性、知识库/组织库连接、用户最近反复提到的工作流。',
+    '优先主题包括：现行有效法律/政策更新、Lumi 桌面自动化与外部 AI 协作稳定性、桌面 AI/桌面工具目标目录更新、知识库/组织库连接、用户最近反复提到的工作流。',
+    '如果主题涉及“其他桌面 AI/桌面工具目标”，先用 desktop_ai_list_targets 查看现有目录，再用 desktop_ai_discovery_plan 生成候选结构，并结合 web_search、url_fetch、authority_research 检索公开/官方来源。',
     '可用工具边界：可以使用 web_search、url_fetch、authority_research 检索公开网页、公开文档和权威来源；不要使用需要登录、付费、验证码、扫码、二次验证或账号授权的页面作为已完成来源。',
-    '输出要求：给出来源 URL、检索时间、可信度、不确定点、可吸收的候选知识、对 Lumi 能力/工作流的更新建议；不能把未核验信息写成确定事实。',
-    '写入边界：除非任务里已有明确用户授权，不要调用 authority_research_save 或其他长期知识写入工具；先把候选知识和来源整理为摘要。',
+    '输出要求：给出来源 URL、检索时间、可信度、不确定点、可吸收的候选知识、对 Lumi 能力/工作流的更新建议；涉及桌面 AI/工具时额外输出可供 desktop_ai_register_target 使用的候选 JSON（id、label、aliases、openTargets、surface、sourceUrls、notes）。不能把未核验信息写成确定事实。',
+    '写入边界：除非任务里已有明确用户授权，不要调用 authority_research_save、desktop_ai_register_target 或其他长期知识/配置写入工具；先把候选知识和来源整理为摘要。',
     '',
     '当前上下文：',
     context,
@@ -253,9 +254,10 @@ export async function generateAutonomousTasks(
 - 任务 mode 必须在对应工作流的 allowedModes 内
 - 如果任务需要外部应用，而工作流 externalApps=not_allowed，则不要生成该任务
 - 公开网页搜索、url_fetch、authority_research 属于网络观察，不算外部应用自动化；只有工作流 allowedActions 包含 public_web_search、web_search 或 authority_research 时才可生成联网学习任务
+- 如果用户上下文涉及“其他桌面 AI、桌面工具、外部 AI 目标、AI 客户端”，优先生成桌面 AI/工具目标目录更新任务：查看 desktop_ai_list_targets，使用 desktop_ai_discovery_plan 设计候选结构，再联网查公开/官方来源
 - 联网学习任务只能检索公开来源；遇到登录、付费、验证码、扫码、二次验证、账号授权或私有页面，要记录阻塞和替代公开来源，不要假装完成
 - 联网学习任务必须要求输出 URL、检索时间、可信度、不确定点和可吸收的候选知识
-- 除非用户已明确授权长期写入，不要生成需要静默调用 authority_research_save 的任务
+- 除非用户已明确授权长期写入，不要生成需要静默调用 authority_research_save、desktop_ai_register_target 的任务
 - 优先生成学习、知识吸收、记忆整理、资料消化、能力补齐类任务
 - 每个任务完成后应产出可沉淀的摘要、索引、记忆线索或下一步建议
 - 安全无害（不删除文件、不执行危险命令）

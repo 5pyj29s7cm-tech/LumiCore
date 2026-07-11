@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import './helpers';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { ToolRegistry } from '../server/tools/registry';
 import { registerDesktopAiTools } from '../server/tools/definitions/desktop_ai_tools';
 
@@ -9,6 +10,11 @@ function createRegistry() {
 }
 
 describe('desktop AI collaboration tools', () => {
+  beforeEach(async () => {
+    const { initDatabase } = await import('../db_layer');
+    await initDatabase();
+  });
+
   it('lists common local and browser AI targets, not only WorkBuddy and Codex', async () => {
     const registry = createRegistry();
     const raw = await registry.execute('desktop_ai_list_targets', {});
@@ -30,6 +36,76 @@ describe('desktop AI collaboration tools', () => {
       'ollama',
     ]));
     expect(result.boundary).toContain('Desktop-only targets');
+  });
+
+  it('plans source-grounded discovery for missing desktop AI targets', async () => {
+    const registry = createRegistry();
+    const raw = await registry.execute('desktop_ai_discovery_plan', {
+      focus: 'Windows desktop AI coding tools',
+    });
+    const result = JSON.parse(raw);
+
+    expect(result.focus).toBe('Windows desktop AI coding tools');
+    expect(result.suggestedQueries.some((query: string) => query.includes('official site'))).toBe(true);
+    expect(result.candidateSchema).toMatchObject({
+      id: 'stable-lowercase-id',
+      label: 'Human readable app/tool name',
+    });
+    expect(result.evaluationChecklist.join('\n')).toContain('desktop_ai_register_target');
+    expect(result.boundary).toContain('does not install software');
+  });
+
+  it('registers confirmed desktop AI targets for later reuse', async () => {
+    const registry = createRegistry();
+    const userId = 'desktop_ai_registered_user';
+    await registry.execute('desktop_ai_register_target', {
+      id: 'windsurf',
+      label: 'Windsurf',
+      aliases: ['Codeium Windsurf'],
+      openTargets: ['Windsurf', 'Windsurf.exe'],
+      surface: 'developer_tool',
+      sourceUrls: ['https://windsurf.com/'],
+      notes: 'Source-grounded candidate from official site.',
+    }, {
+      userId,
+      userConfirmed: true,
+    });
+
+    const listRaw = await registry.execute('desktop_ai_list_targets', {}, { userId });
+    const list = JSON.parse(listRaw);
+    const registered = list.targets.find((target: any) => target.id === 'windsurf');
+    expect(registered).toMatchObject({
+      label: 'Windsurf',
+      source: 'registered',
+      surface: 'developer_tool',
+    });
+
+    let foreground = 'Lumi';
+    const askRaw = await registry.execute('desktop_ai_ask', {
+      question: 'Give me a short implementation plan.',
+      targets: ['windsurf'],
+      send: false,
+    }, {
+      userId,
+      desktopRelay: async (name, args) => {
+        if (name === 'desktop_active_window') return JSON.stringify({ title: foreground, process_name: foreground });
+        if (name === 'desktop_open') {
+          foreground = 'Windsurf';
+          return JSON.stringify({ ok: true, target: args.target });
+        }
+        if (name === 'desktop_clipboard_write') return 'Clipboard updated';
+        if (name === 'desktop_keyboard_press') return `Pressed: ${args.key}`;
+        return 'ok';
+      },
+    });
+    const ask = JSON.parse(askRaw);
+
+    expect(ask.preparedCount).toBe(1);
+    expect(ask.results[0]).toMatchObject({
+      target: 'windsurf',
+      label: 'Windsurf',
+      status: 'prepared',
+    });
   });
 
   it('sends the same question to WorkBuddy and Codex through foreground windows', async () => {

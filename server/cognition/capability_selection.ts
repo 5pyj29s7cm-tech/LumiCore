@@ -95,8 +95,10 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
   ],
   desktop_control: [
     'desktop_ai_list_targets',
+    'desktop_ai_discovery_plan',
     'desktop_ai_ask',
     'desktop_ai_collect_answer',
+    'desktop_ai_register_target',
     'desktop_active_window',
     'desktop_list_apps',
     'desktop_open',
@@ -134,7 +136,7 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'mcp_playwright_browser_fill_form',
     'desktop_active_window',
   ],
-  external_tool: ['desktop_ai_list_targets', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'adapter_registry_list'],
+  external_tool: ['desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'desktop_ai_register_target', 'external_app_list_adapters', 'adapter_registry_list'],
   blocked_no_tools: [],
 };
 

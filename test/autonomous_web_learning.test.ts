@@ -27,6 +27,9 @@ describe('autonomous public web learning', () => {
       'web_search',
       'url_fetch',
       'authority_research',
+      'desktop_ai_list_targets',
+      'desktop_ai_discovery_plan',
+      'desktop_tool_target_discovery',
       'source_grounded_digest',
       'knowledge_update_candidate',
     ]));
@@ -53,6 +56,8 @@ describe('autonomous public web learning', () => {
     expect(seeded?.mode).toBe('analysis');
     expect(seeded?.description).toContain('web_search');
     expect(seeded?.description).toContain('authority_research');
+    expect(seeded?.description).toContain('desktop_ai_discovery_plan');
+    expect(seeded?.description).toContain('desktop_ai_register_target');
     expect(seeded?.description).toContain('不要使用需要登录');
 
     const second = await generateAutonomousTasks(userId, LLM_GETTERS);

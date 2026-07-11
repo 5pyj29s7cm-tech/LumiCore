@@ -59,6 +59,9 @@ describe('Action Constitution', () => {
     expect(classifyAction('desktop_show_lumi_window')).toBe('observe');
     expect(classifyAction('desktop_idle_time')).toBe('observe');
     expect(classifyAction('desktop_poll_activity')).toBe('observe');
+    expect(classifyAction('desktop_ai_list_targets')).toBe('observe');
+    expect(classifyAction('desktop_ai_discovery_plan')).toBe('observe');
+    expect(classifyAction('desktop_ai_register_target')).toBe('local_write');
     expect(classifyAction('mouse_click')).toBe('desktop_control');
     expect(classifyAction('keyboard_type')).toBe('desktop_control');
     expect(classifyAction('cad_generate_dxf')).toBe('local_write');

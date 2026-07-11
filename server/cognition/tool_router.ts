@@ -197,6 +197,8 @@ const TOOL_GROUPS: Record<string, string[]> = {
   ],
   externalControl: [
     'desktop_ai_list_targets',
+    'desktop_ai_discovery_plan',
+    'desktop_ai_register_target',
     'desktop_ai_ask',
     'desktop_ai_collect_answer',
     'external_control_candidates',
@@ -522,8 +524,10 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   if (isDesktopAiCollaboration(text)) {
     priorities.push(
       'desktop_ai_list_targets',
+      'desktop_ai_discovery_plan',
       'desktop_ai_ask',
       'desktop_ai_collect_answer',
+      'desktop_ai_register_target',
       'desktop_open',
       'desktop_active_window',
       'desktop_capture_screen',

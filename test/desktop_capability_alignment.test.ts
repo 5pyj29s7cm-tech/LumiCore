@@ -28,6 +28,8 @@ describe('desktop capability alignment', () => {
       'desktop_ui_invoke',
       'desktop_ui_type',
       'desktop_ai_list_targets',
+      'desktop_ai_discovery_plan',
+      'desktop_ai_register_target',
       'desktop_ai_ask',
       'desktop_ai_collect_answer',
       'read_clipboard',

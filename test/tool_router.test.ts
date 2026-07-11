@@ -50,6 +50,8 @@ const DECLARATIONS = [
   'desktop_ui_type',
   'desktop_capture_screen',
   'desktop_ai_list_targets',
+  'desktop_ai_discovery_plan',
+  'desktop_ai_register_target',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
   'ocr_screen',
@@ -406,6 +408,7 @@ describe('tool router', () => {
     expect(route.categories).toContain('external_control');
     expect(route.toolNames).toEqual(expect.arrayContaining([
       'desktop_ai_list_targets',
+      'desktop_ai_discovery_plan',
       'desktop_ai_ask',
       'desktop_ai_collect_answer',
       'desktop_open',

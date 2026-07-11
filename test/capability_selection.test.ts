@@ -23,6 +23,8 @@ const declarations = [
   'desktop_ui_invoke',
   'desktop_capture_screen',
   'desktop_ai_list_targets',
+  'desktop_ai_discovery_plan',
+  'desktop_ai_register_target',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
   'desktop_mouse_click_at',
@@ -325,6 +327,7 @@ describe('Lumi capability selection', () => {
     expect(selection.lane).toBe('desktop_control');
     expect(selection.preferredTools.slice(0, 6)).toEqual(expect.arrayContaining([
       'desktop_ai_list_targets',
+      'desktop_ai_discovery_plan',
       'desktop_ai_ask',
       'desktop_ai_collect_answer',
     ]));

@@ -2,6 +2,9 @@ import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { analyzeScreen } from '../../llm/adapter';
 import { getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
+import { readDB, writeDB } from '../../../db_layer';
+
+type DesktopAiSurface = 'desktop_app' | 'browser_app' | 'local_runtime' | 'developer_tool';
 
 interface DesktopAiTarget {
   id: string;
@@ -9,7 +12,20 @@ interface DesktopAiTarget {
   aliases?: string[];
   openTargets: string[];
   match: RegExp;
-  surface?: 'desktop_app' | 'browser_app' | 'local_runtime' | 'developer_tool';
+  surface?: DesktopAiSurface;
+}
+
+interface StoredDesktopAiTarget {
+  id: string;
+  label: string;
+  aliases: string[];
+  openTargets: string[];
+  surface: DesktopAiSurface;
+  sourceUrls: string[];
+  notes: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface DesktopAiTargetRun {
@@ -162,6 +178,16 @@ const TARGETS: DesktopAiTarget[] = [
   },
 ];
 
+const STORED_TARGETS_SETTING_PREFIX = 'desktop_ai_targets:';
+
+const DISCOVERY_QUERIES = [
+  'Windows desktop AI assistant app official site',
+  'AI coding desktop app Windows official site',
+  'local LLM desktop app Windows official site',
+  'AI chat desktop client Windows official site',
+  'browser AI assistant web app official site',
+];
+
 function requireDesktopRelay(context?: ToolContext): NonNullable<ToolContext['desktopRelay']> {
   if (!context?.desktopRelay) throw new Error('Desktop AI tools require the Lumi desktop client relay.');
   return context.desktopRelay;
@@ -180,6 +206,101 @@ function targetText(value: unknown): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeSurface(value: unknown): DesktopAiSurface {
+  const surface = String(value || '').trim();
+  if (surface === 'browser_app' || surface === 'local_runtime' || surface === 'developer_tool') return surface;
+  return 'desktop_app';
+}
+
+function normalizeTargetId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+function storedTargetsKey(userId: string): string {
+  return `${STORED_TARGETS_SETTING_PREFIX}${userId || 'anonymous'}`;
+}
+
+function normalizeStoredTarget(raw: Record<string, any>, existing?: StoredDesktopAiTarget): StoredDesktopAiTarget {
+  const label = String(raw.label || raw.name || existing?.label || '').trim().slice(0, 80);
+  const id = normalizeTargetId(String(raw.id || raw.name || label || existing?.id || ''));
+  const openTargets = listArg(raw.openTargets || raw.openTarget || raw.target || raw.url || raw.path || existing?.openTargets);
+  const aliases = listArg(raw.aliases || raw.alias || raw.matchText || raw.windowTitle || existing?.aliases);
+  if (!id) throw new Error('Desktop AI target id or label is required.');
+  if (!label) throw new Error('Desktop AI target label is required.');
+  if (openTargets.length === 0) throw new Error('At least one open target, URL, app name, or executable path is required.');
+
+  const now = new Date().toISOString();
+  return {
+    id,
+    label,
+    aliases: Array.from(new Set([...(aliases || []), label].filter(Boolean))).slice(0, 16),
+    openTargets: Array.from(new Set(openTargets)).slice(0, 8),
+    surface: normalizeSurface(raw.surface || existing?.surface),
+    sourceUrls: listArg(raw.sourceUrls || raw.sourceUrl || raw.sources || existing?.sourceUrls).slice(0, 12),
+    notes: String(raw.notes || raw.note || existing?.notes || '').trim().slice(0, 1000),
+    enabled: raw.enabled === undefined ? existing?.enabled !== false : raw.enabled !== false,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function storedTargetToRuntime(target: StoredDesktopAiTarget): DesktopAiTarget | null {
+  if (!target.enabled) return null;
+  const matchTerms = [
+    target.label,
+    target.id,
+    ...target.aliases,
+    ...target.openTargets.filter(openTarget => !/^https?:\/\//i.test(openTarget)),
+  ].filter(Boolean);
+  if (matchTerms.length === 0 || target.openTargets.length === 0) return null;
+  return {
+    id: target.id,
+    label: target.label,
+    aliases: target.aliases,
+    openTargets: target.openTargets,
+    match: new RegExp(matchTerms.map(escapeRegExp).join('|'), 'i'),
+    surface: target.surface,
+  };
+}
+
+function loadStoredTargetRecords(userId = 'anonymous'): StoredDesktopAiTarget[] {
+  try {
+    const db = readDB();
+    const row = (db.settings || []).find((item: any) => item.key === storedTargetsKey(userId));
+    const parsed = row?.value ? JSON.parse(row.value) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item: any) => {
+        try { return normalizeStoredTarget(item, item); } catch { return null; }
+      })
+      .filter((item): item is StoredDesktopAiTarget => Boolean(item));
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredTargetRecords(userId: string, targets: StoredDesktopAiTarget[]) {
+  const db = readDB();
+  if (!db.settings) db.settings = [];
+  const key = storedTargetsKey(userId);
+  const row = db.settings.find((item: any) => item.key === key);
+  const value = JSON.stringify(targets.slice(0, 80));
+  if (row) row.value = value;
+  else db.settings.push({ key, value });
+  writeDB(db);
+}
+
+function storedTargetsFromDb(userId = 'anonymous'): DesktopAiTarget[] {
+  return loadStoredTargetRecords(userId)
+    .map(storedTargetToRuntime)
+    .filter((target): target is DesktopAiTarget => Boolean(target));
 }
 
 function customTargetsFromArgs(value: unknown): DesktopAiTarget[] {
@@ -203,7 +324,7 @@ function customTargetsFromArgs(value: unknown): DesktopAiTarget[] {
       aliases,
       openTargets,
       match: new RegExp(matchTerms.map(escapeRegExp).join('|'), 'i'),
-      surface: 'desktop_app' as const,
+      surface: normalizeSurface(raw.surface),
     };
   }).filter((target): target is DesktopAiTarget => Boolean(target));
 }
@@ -217,6 +338,11 @@ function allTargets(customTargets?: DesktopAiTarget[]): DesktopAiTarget[] {
     else merged.push(target);
   }
   return merged;
+}
+
+function runtimeTargetsFromContext(args: Record<string, any>, context?: ToolContext): DesktopAiTarget[] {
+  const stored = args.includeStored === false ? [] : storedTargetsFromDb(context?.userId || 'anonymous');
+  return [...stored, ...customTargetsFromArgs(args.customTargets)];
 }
 
 function resolveTargets(value: unknown, customTargets: DesktopAiTarget[] = []): DesktopAiTarget[] {
@@ -338,7 +464,7 @@ async function focusTarget(
 async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
   if (!question) return 'Error: question is required.';
-  const customTargets = customTargetsFromArgs(args.customTargets);
+  const customTargets = runtimeTargetsFromContext(args, context);
   const targets = resolveTargets(args.targets || args.target, customTargets);
   if (targets.length === 0) return 'Error: no supported desktop AI targets matched. Try targets=["workbuddy","codex"].';
 
@@ -407,7 +533,7 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
 }
 
 async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolContext): Promise<string> {
-  const customTargets = customTargetsFromArgs(args.customTargets);
+  const customTargets = runtimeTargetsFromContext(args, context);
   const targets = resolveTargets(args.targets || args.target, customTargets);
   const target = targets[0];
   if (!target) return 'Error: target is required. Try target="workbuddy" or target="codex".';
@@ -496,25 +622,119 @@ async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolC
 export function registerDesktopAiTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_ai_list_targets',
-    description: 'List supported local desktop AI collaboration targets such as WorkBuddy and Codex.',
+    description: 'List supported local desktop AI collaboration targets such as WorkBuddy, Codex, registered user targets, and common browser/local AI tools.',
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        includeStored: { type: 'boolean', description: 'Include user-registered targets. Defaults true.' },
+        customTargets: { type: 'array', description: 'Optional one-off targets to include in this listing.' },
+      },
       required: [],
     },
-    handler: async () => JSON.stringify({
-      targets: allTargets().map(target => ({
-        id: target.id,
-        label: target.label,
-        aliases: target.aliases || [],
-        surface: target.surface || 'desktop_app',
-        openTargets: target.openTargets,
-        route: 'desktop window, clipboard paste, optional submit shortcut, then visible-screen answer collection',
-      })),
-      boundary: 'Use API/MCP/CLI integrations when available. Desktop-only targets are controlled through visible windows and require screenshot or vision evidence for answer collection.',
-    }, null, 2),
+    handler: async (args, context) => {
+      const stored = args.includeStored === false ? [] : storedTargetsFromDb(context?.userId || 'anonymous');
+      const custom = customTargetsFromArgs(args.customTargets);
+      const storedIds = new Set(stored.map(target => target.id));
+      const customIds = new Set(custom.map(target => target.id));
+      return JSON.stringify({
+        targets: allTargets([...stored, ...custom]).map(target => ({
+          id: target.id,
+          label: target.label,
+          aliases: target.aliases || [],
+          surface: target.surface || 'desktop_app',
+          openTargets: target.openTargets,
+          source: storedIds.has(target.id) ? 'registered' : customIds.has(target.id) ? 'custom' : 'built_in',
+          route: 'desktop window, clipboard paste, optional submit shortcut, then visible-screen answer collection',
+        })),
+        discovery: 'Use desktop_ai_discovery_plan plus web_search/url_fetch/authority_research to research missing desktop AI tools, then register confirmed targets with desktop_ai_register_target.',
+        boundary: 'Use API/MCP/CLI integrations when available. Desktop-only targets are controlled through visible windows and require screenshot or vision evidence for answer collection.',
+      }, null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'desktop_ai_discovery_plan',
+    description: 'Create a source-grounded discovery plan for new desktop AI or desktop tool targets that Lumi can later register and control through the generic desktop_ai_* route. Use with web_search/url_fetch/authority_research during autonomous public-source learning or when the user asks what other desktop AI/tools can be supported.',
+    parameters: {
+      type: 'object',
+      properties: {
+        focus: { type: 'string', description: 'Discovery focus, e.g. desktop AI tools, coding agents, local LLM apps, browser AI apps.' },
+        includeKnownTargets: { type: 'boolean', description: 'Include the current built-in and registered target catalog. Defaults true.' },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const focus = String(args.focus || 'desktop AI and desktop automation tools').trim();
+      const knownTargets = args.includeKnownTargets === false
+        ? []
+        : allTargets(storedTargetsFromDb(context?.userId || 'anonymous')).map(target => ({
+            id: target.id,
+            label: target.label,
+            surface: target.surface || 'desktop_app',
+            openTargets: target.openTargets,
+          }));
+      return JSON.stringify({
+        focus,
+        knownTargets,
+        suggestedQueries: DISCOVERY_QUERIES.map(query => `${focus} ${query}`),
+        candidateSchema: {
+          id: 'stable-lowercase-id',
+          label: 'Human readable app/tool name',
+          aliases: ['window title alias', 'brand alias'],
+          openTargets: ['app name, executable, localhost URL, or official web URL'],
+          surface: 'desktop_app | browser_app | local_runtime | developer_tool',
+          sourceUrls: ['official product page or documentation URL'],
+          notes: 'What it is, how to open it, login/API limits, and evidence from sources.',
+        },
+        evaluationChecklist: [
+          'Prefer official product pages, docs, GitHub repos, or vendor download pages.',
+          'Record whether the target is a desktop app, browser app, local runtime, or developer tool.',
+          'Find a stable open target: app name, executable name, localhost URL, or official web URL.',
+          'Name login, payment, captcha, account switching, or install requirements as blockers, not completed capability.',
+          'After user confirmation, call desktop_ai_register_target so future desktop_ai_ask calls can use the target without one-off customTargets.',
+        ],
+        boundary: 'Discovery is public-source research. It does not install software, log into accounts, bypass verification, or activate a target without confirmation.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'desktop_ai_register_target',
+    description: 'Register or update a user-confirmed desktop AI target discovered by research so future desktop_ai_ask and desktop_ai_collect_answer calls can use it without one-off customTargets.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Stable lowercase id, e.g. raycast-ai, windsurf, open-webui.' },
+        label: { type: 'string', description: 'Human readable target name.' },
+        aliases: { type: 'array', description: 'Window title, brand, or user aliases.' },
+        openTargets: { type: 'array', description: 'App names, executable names, localhost URLs, or official web URLs to try in order.' },
+        surface: { type: 'string', enum: ['desktop_app', 'browser_app', 'local_runtime', 'developer_tool'], description: 'Target surface type.' },
+        sourceUrls: { type: 'array', description: 'Official source URLs used to verify this target.' },
+        notes: { type: 'string', description: 'Source-grounded notes, limits, login/install requirements, and control assumptions.' },
+        enabled: { type: 'boolean', description: 'Whether the target should be active. Defaults true.' },
+      },
+      required: ['label', 'openTargets'],
+    },
+    handler: async (args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const existing = loadStoredTargetRecords(userId);
+      const existingIndex = existing.findIndex(target => target.id === normalizeTargetId(String(args.id || args.label || '')));
+      const target = normalizeStoredTarget(args, existingIndex >= 0 ? existing[existingIndex] : undefined);
+      if (existingIndex >= 0) existing[existingIndex] = target;
+      else existing.push(target);
+      saveStoredTargetRecords(userId, existing);
+      return JSON.stringify({
+        registered: true,
+        target,
+        note: 'Target registered locally. Future desktop_ai_list_targets, desktop_ai_ask, and desktop_ai_collect_answer calls can resolve it by id, label, alias, or open target.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'confirm',
   });
 
   registry.register({
