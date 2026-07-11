@@ -65,6 +65,21 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('legalCaseArchived');
   });
 
+  it('keeps personal direct legal tools out of the shared default organization scope', () => {
+    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+
+    expect(restChat).toContain('function resolveLegalCaseworkOrgId');
+    expect(restChat).toContain('function validateLegalWorkOrgScope');
+    expect(restChat).toContain("return `personal:${safeLegalScopeSegment(input.userId)}`");
+    expect(restChat).toContain('Organization legal work requires an active organization session');
+    expect(restChat).toContain('Requested organization does not match the active organization session');
+    expect(restChat).toContain('if (scopeError) return res.status(403).json({ error: scopeError })');
+    expect(restChat).toContain('explicitOrgId: rawArgs.orgId || req.body?.orgId');
+    expect(restChat).toContain("source: 'legal-direct-tool'");
+    expect(restChat).toContain('explicitOrgId: req.body?.orgId');
+    expect(restChat).toContain("source: 'legal-contract-review'");
+  });
+
   it('binds legal meeting analysis to the current case and organization scope in the desktop client', () => {
     const desktop = readFileSync(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
 

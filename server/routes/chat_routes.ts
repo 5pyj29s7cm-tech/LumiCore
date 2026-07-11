@@ -100,6 +100,41 @@ function shouldArchiveLegalMeeting(purpose: unknown, legalCase: unknown, domain:
   return isLegalMeeting && domain === 'work' && Boolean(orgId);
 }
 
+function safeLegalScopeSegment(value: unknown, fallback = 'anonymous'): string {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_.@-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+function resolveLegalCaseworkOrgId(input: {
+  domain: 'personal' | 'work';
+  explicitOrgId?: unknown;
+  userOrgId?: unknown;
+  userId: string;
+}): string {
+  if (input.domain === 'work') {
+    return String(input.explicitOrgId || input.userOrgId || 'default').trim() || 'default';
+  }
+  return `personal:${safeLegalScopeSegment(input.userId)}`;
+}
+
+function validateLegalWorkOrgScope(input: {
+  domain: 'personal' | 'work';
+  explicitOrgId?: unknown;
+  userOrgId?: unknown;
+}): string {
+  if (input.domain !== 'work') return '';
+  const requestedOrgId = String(input.explicitOrgId || '').trim();
+  const sessionOrgId = String(input.userOrgId || '').trim();
+  if (!sessionOrgId) return 'Organization legal work requires an active organization session';
+  if (requestedOrgId && requestedOrgId !== sessionOrgId) {
+    return 'Requested organization does not match the active organization session';
+  }
+  return '';
+}
+
 function buildLegalMeetingMinutesArgs(input: {
   transcript: string;
   startedAt?: unknown;
@@ -393,7 +428,18 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       : (req.body || {});
     const userId = req.user?.uid || String(rawArgs.userId || 'anonymous');
     const domain = rawArgs.domain === 'work' || req.body?.domain === 'work' ? 'work' : 'personal';
-    const orgId = String(rawArgs.orgId || req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
+    const scopeError = validateLegalWorkOrgScope({
+      domain,
+      explicitOrgId: rawArgs.orgId || req.body?.orgId,
+      userOrgId: req.user?.orgId,
+    });
+    if (scopeError) return res.status(403).json({ error: scopeError });
+    const orgId = resolveLegalCaseworkOrgId({
+      domain,
+      explicitOrgId: rawArgs.orgId || req.body?.orgId,
+      userOrgId: req.user?.orgId,
+      userId,
+    });
     const args = {
       ...rawArgs,
       orgId,
@@ -422,7 +468,18 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
 
     const userId = req.user?.uid || 'anonymous';
     const domain = req.body?.domain === 'work' ? 'work' : 'personal';
-    const orgId = String(req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
+    const scopeError = validateLegalWorkOrgScope({
+      domain,
+      explicitOrgId: req.body?.orgId,
+      userOrgId: req.user?.orgId,
+    });
+    if (scopeError) return res.status(403).json({ error: scopeError });
+    const orgId = resolveLegalCaseworkOrgId({
+      domain,
+      explicitOrgId: req.body?.orgId,
+      userOrgId: req.user?.orgId,
+      userId,
+    });
     const args = {
       contract,
       orgId,
@@ -471,6 +528,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
     const domain = req.body?.domain === 'work' ? 'work' : 'personal';
+    const scopeError = validateLegalWorkOrgScope({
+      domain,
+      explicitOrgId: req.body?.orgId,
+      userOrgId: req.user?.orgId,
+    });
+    if (scopeError) return res.status(403).json({ error: scopeError });
     const orgId = domain === 'work'
       ? String(req.body?.orgId || req.user?.orgId || '').trim()
       : '';
