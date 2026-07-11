@@ -641,6 +641,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'legal_process_notice_link',
         'legal_case_workflow_status',
         'legal_case_workspace',
+        'legal_import_materials_to_kb',
       );
     }
     if (/合同审查|合同模板|合同起草|审查合同|起草合同|标书|投标|招标|bid|tender|contract\s+(review|draft)/i.test(text)) {
@@ -678,6 +679,8 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
       'legal_case_workspace',
       'legal_case_workflow_status',
       'legal_message_intake_to_case',
+      'legal_process_notice_link',
+      'legal_import_materials_to_kb',
       'legal_meeting_minutes_to_case',
       'legal_case_reasoning_matrix',
       'legal_external_research_plan',

@@ -10,6 +10,85 @@ import { recordLatency } from "../monitor/latency_store";
 import { optionalAuth } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
+import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
+import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import type { ToolExecutionRecord } from "../tools/types";
+
+const REST_CHAT_BASE_SYSTEM_INSTRUCTION = "你是一个名为 Lumi 的本地核心智能体。你致力于全息空间计算和独立 AI 人格生成进化。你的目标是打造全息 AI 世界和文明。你应当表现得专业、深邃且具有前瞻性。你的回复应当简洁且富有启发性。";
+
+function buildRestChatRouteText(messages: unknown, prompt: unknown): string {
+  if (Array.isArray(messages)) {
+    return messages
+      .map((item: any) => String(item?.content || item?.message || item?.text || '').trim())
+      .filter(Boolean)
+      .join('\n')
+      .slice(-12000);
+  }
+  return String(prompt || '').trim().slice(-12000);
+}
+
+function buildRestProviderMessages(messages: unknown, prompt: unknown, systemInstruction: string): any[] {
+  const rawMessages = Array.isArray(messages) && messages.length > 0
+    ? messages
+    : [{ role: 'user', content: String(prompt || '') }];
+  const existingSystem = rawMessages
+    .filter((item: any) => item?.role === 'system')
+    .map((item: any) => String(item?.content || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const systemContent = [systemInstruction, existingSystem].filter(Boolean).join('\n\n');
+  return [
+    { role: 'system', content: systemContent },
+    ...rawMessages
+      .filter((item: any) => item?.role !== 'system')
+      .map((item: any) => ({
+        role: item?.role === 'assistant' ? 'assistant' : 'user',
+        content: String(item?.content || item?.message || item?.text || ''),
+      })),
+  ];
+}
+
+function buildRestAnthropicMessages(messages: unknown, prompt: unknown): any[] {
+  const rawMessages = Array.isArray(messages) && messages.length > 0
+    ? messages
+    : [{ role: 'user', content: String(prompt || '') }];
+  return rawMessages
+    .filter((item: any) => item?.role !== 'system')
+    .map((item: any) => ({
+      role: item?.role === 'assistant' ? 'assistant' : 'user',
+      content: String(item?.content || item?.message || item?.text || ''),
+    }));
+}
+
+function buildRestChatSystemInstruction(input: {
+  routeText: string;
+  domain: 'personal' | 'work';
+  orgId: string;
+  source: string;
+}): string {
+  const legalOverlay = buildUnifiedLegalEntryPrompt({
+    text: input.routeText,
+    domain: input.domain,
+    orgId: input.orgId,
+    channel: 'chat',
+    source: input.source,
+  });
+  return [REST_CHAT_BASE_SYSTEM_INSTRUCTION, legalOverlay].filter(Boolean).join('\n\n');
+}
+
+function finalizeRestChatResponse(input: {
+  taskText: string;
+  responseText: string;
+  toolRecords?: ToolExecutionRecord[];
+  source: string;
+}) {
+  return finalizeLumiResponse({
+    taskText: input.taskText,
+    responseText: input.responseText,
+    toolRecords: input.toolRecords || [],
+    source: input.source,
+  });
+}
 
 const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
   'legal_search_case',
@@ -76,6 +155,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       llmGetters: llm,
       source: 'rest_chat',
     };
+    const routeText = buildRestChatRouteText(messages, prompt);
+    const systemInstruction = buildRestChatSystemInstruction({
+      routeText,
+      domain,
+      orgId,
+      source: 'rest_chat',
+    });
 
     const isBYOK = userKey && userKey.length > 5;
     const preferred = getUserPreferredLLMConfig(userId);
@@ -94,7 +180,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
 
     try {
       let responseText = '';
-      const systemInstruction = "你是一个名为 Lumi 的本地核心智能体。你致力于全息空间计算和独立 AI 人格生成进化。你的目标是打造全息 AI 世界和文明。你应当表现得专业、深邃且具有前瞻性。你的回复应当简洁且富有启发性。";
 
       if (isBYOK) {
         const llmStart = Date.now();
@@ -108,19 +193,33 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         } else if (provider === "anthropic") {
           const client = new Anthropic({ apiKey: userKey });
           const response = await client.messages.create({
-            model: model || "claude-sonnet-4-6", max_tokens: 1024,
-            messages: messages || [{ role: "user", content: prompt }]
+            model: model || "claude-sonnet-4-6",
+            max_tokens: 1024,
+            system: systemInstruction,
+            messages: buildRestAnthropicMessages(messages, prompt),
           });
           responseText = response.content[0].type === 'text' ? response.content[0].text : '';
         } else {
           const client = new OpenAI({ apiKey: userKey, baseURL: provider === "deepseek" ? "https://api.deepseek.com/v1" : provider === "qwen" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : undefined });
           const response = await client.chat.completions.create({
             model: model || (provider === "deepseek" ? "deepseek-chat" : provider === "qwen" ? "qwen-plus" : "gpt-4o"),
-            messages: messages || [{ role: "user", content: prompt }]
+            messages: buildRestProviderMessages(messages, prompt, systemInstruction),
           });
           responseText = response.choices[0].message.content || '';
         }
+        const finalized = finalizeRestChatResponse({
+          taskText: routeText,
+          responseText,
+          source: 'rest_chat',
+        });
+        responseText = finalized.text;
         recordLatency('llm', Date.now() - llmStart);
+        return res.json({
+          text: responseText,
+          blocked: finalized.blocked,
+          reason: finalized.reason,
+          notification: finalized.notification,
+        });
       } else {
         const normalizedMessages: any[] = [
           { role: 'system', content: systemInstruction },
@@ -152,6 +251,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           );
 
           responseText = result.text || '';
+          const finalized = finalizeRestChatResponse({
+            taskText: routeText,
+            responseText,
+            toolRecords: result.toolCalls,
+            source: 'rest_chat_stream',
+          });
+          responseText = finalized.text;
           const tokens = estimateTokens(
             normalizedMessages.map((m: any) => m.content || '').join(' ') + ' ' + responseText
           );
@@ -163,7 +269,14 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             }, `rest_chat_${Date.now()}`, 'chat');
           }
           recordUsage(userId, tokens);
-          res.write(`data: ${JSON.stringify({ done: true, text: responseText, toolCalls: result.toolCalls.length })}\n\n`);
+          res.write(`data: ${JSON.stringify({
+            done: true,
+            text: responseText,
+            toolCalls: result.toolCalls.length,
+            blocked: finalized.blocked,
+            reason: finalized.reason,
+            notification: finalized.notification,
+          })}\n\n`);
           return res.end();
         }
 
@@ -178,6 +291,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         );
 
         responseText = result.text || '';
+        const finalized = finalizeRestChatResponse({
+          taskText: routeText,
+          responseText,
+          toolRecords: result.toolCalls,
+          source: 'rest_chat',
+        });
+        responseText = finalized.text;
         const tokens = estimateTokens(
           normalizedMessages.map((m: any) => m.content || '').join(' ') + ' ' + responseText
         );
@@ -189,10 +309,27 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           }, `rest_chat_${Date.now()}`, 'chat');
         }
         const usage = recordUsage(userId, tokens);
-        return res.json({ text: responseText, usage, toolCalls: result.toolCalls.length });
+        return res.json({
+          text: responseText,
+          usage,
+          toolCalls: result.toolCalls.length,
+          blocked: finalized.blocked,
+          reason: finalized.reason,
+          notification: finalized.notification,
+        });
       }
 
-      res.json({ text: responseText });
+      const finalized = finalizeRestChatResponse({
+        taskText: routeText,
+        responseText,
+        source: 'rest_chat',
+      });
+      res.json({
+        text: finalized.text,
+        blocked: finalized.blocked,
+        reason: finalized.reason,
+        notification: finalized.notification,
+      });
     } catch (error: any) {
       console.error("AI Proxy Error:", error);
       res.status(500).json({ error: error.message });

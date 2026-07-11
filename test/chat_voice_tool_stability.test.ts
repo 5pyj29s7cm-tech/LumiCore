@@ -38,6 +38,19 @@ describe('chat and voice tool-call stability', () => {
     expect(legalEntry).toContain('personal chat, company/work chat, voice, task center');
   });
 
+  it('keeps REST chat on the same legal entry and finalizer path', () => {
+    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+
+    expect(restChat).toContain('buildUnifiedLegalEntryPrompt');
+    expect(restChat).toContain('buildRestChatSystemInstruction');
+    expect(restChat).toContain('buildRestProviderMessages');
+    expect(restChat).toContain('buildRestAnthropicMessages');
+    expect(restChat).toContain('finalizeRestChatResponse');
+    expect(restChat).toContain('finalizeLumiResponse');
+    expect(restChat).toContain("source: 'rest_chat'");
+    expect(restChat).toContain('blocked: finalized.blocked');
+  });
+
   it('keeps voice tool execution visible and aligned with chat permission behavior', () => {
     const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
 

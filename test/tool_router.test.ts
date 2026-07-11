@@ -289,6 +289,28 @@ describe('tool router', () => {
     ]));
   });
 
+  it('routes Feishu, WeCom, and Lumi bot legal intake into the shared case workspace', () => {
+    const feishuRoute = routeToolsForTurn(
+      '飞书发给 Lumi bot 的法院短信链接和案件材料，自动入案，处理通知链接，然后告诉我这个案子下一步缺什么',
+      DECLARATIONS,
+    );
+    const wecomRoute = routeToolsForTurn(
+      '企微里客户转发了一组合同纠纷证据，发给 Lumi bot 后归档到公司案件工作台并更新闭环状态',
+      DECLARATIONS,
+    );
+
+    for (const route of [feishuRoute, wecomRoute]) {
+      expect(route.categories).toContain('legal');
+      expect(route.toolNames).toEqual(expect.arrayContaining([
+        'legal_message_intake_to_case',
+        'legal_case_workspace',
+        'legal_case_workflow_status',
+        'legal_import_materials_to_kb',
+      ]));
+    }
+    expect(feishuRoute.toolNames).toContain('legal_process_notice_link');
+  });
+
   it('routes voice-style legal commands to external research and browser login tools', () => {
     const route = routeToolsForTurn(
       'Lumi 帮我查这个买卖合同纠纷的类案，先去人民法院案例库、裁判文书网、法蝉和企查查，整理外部检索行动单',
