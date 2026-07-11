@@ -3,6 +3,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import http from "http";
 import { Server } from "socket.io";
+import { getJwtSecret } from "../config/local_identity";
 
 export const asyncHandler = (fn: (req: express.Request, res: express.Response, next?: express.NextFunction) => Promise<any>) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) =>
@@ -19,6 +20,28 @@ export interface AppContext {
   getCookieOptions: () => { httpOnly: true; secure: boolean; sameSite: "none" | "lax"; maxAge: number };
 }
 
+export function resolveBindHost(): string {
+  return String(process.env.HOST || '').trim() || '127.0.0.1';
+}
+
+export function isAllowedClientOrigin(origin?: string): boolean {
+  if (!origin) return true;
+
+  const configured = String(process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (configured.includes('*') || configured.includes(origin)) return true;
+
+  try {
+    const url = new URL(origin);
+    if (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1' || url.hostname === 'tauri.localhost') return true;
+    return url.protocol === 'tauri:' && url.hostname === 'localhost';
+  } catch {
+    return false;
+  }
+}
+
 export function createApp(): AppContext {
   const app = express();
   const server = http.createServer(app);
@@ -26,17 +49,19 @@ export function createApp(): AppContext {
     pingInterval: 25_000,
     pingTimeout: 60_000,
     cors: {
-      origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => cb(null, true),
+      origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => cb(null, isAllowedClientOrigin(origin)),
       methods: ["GET", "POST"],
       credentials: true
     }
   });
 
   const PORT = Number.parseInt(process.env.PORT || '', 10) || 3000;
-  const HOST = process.env.HOST || "0.0.0.0";
+  const HOST = resolveBindHost();
 
-  // Allow credentials from any origin (Tauri webview, localhost, etc.)
-  app.use(cors({ origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => cb(null, true), credentials: true }));
+  app.use(cors({
+    origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => cb(null, isAllowedClientOrigin(origin)),
+    credentials: true,
+  }));
   // Capture raw body before JSON parse (needed for WeCom XML webhooks)
   app.use(express.json({
     limit: '10mb',
@@ -67,7 +92,7 @@ export function createApp(): AppContext {
     res.status(500).json({ error: err?.message || 'Internal server error' });
   });
 
-  const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
+  const JWT_SECRET = getJwtSecret();
 
   // Serialize personality file writes to prevent concurrent overwrites
   // SameSite=None requires Secure (Chromium silently rejects otherwise).

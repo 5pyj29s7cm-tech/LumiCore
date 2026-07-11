@@ -53,7 +53,7 @@ export function mountSkillRoutes(
   };
 
   // List all installed skills (local + external MCP servers)
-  router.get("/skills", (req, res) => {
+  router.get("/skills", requireAuth, (req, res) => {
     try {
       const localSkills = mcpManager.listLocalSkills();
       const mcpConfig = getMCPConfig();
@@ -90,7 +90,7 @@ export function mountSkillRoutes(
   });
 
   // Generate a skill from description or workflows
-  router.post("/skills/generate", asyncHandler(async (req, res) => {
+  router.post("/skills/generate", requireAuth, asyncHandler(async (req, res) => {
     try {
       const { description, provider, model } = req.body;
 
@@ -155,7 +155,7 @@ export function mountSkillRoutes(
   }));
 
   // Install a skill from git/npm/local
-  router.post("/skills/install", async (req, res) => {
+  router.post("/skills/install", requireAuth, async (req, res) => {
     try {
       const { source, url, package: pkgName, path: localPath, name } = req.body;
 
@@ -203,7 +203,7 @@ export function mountSkillRoutes(
   });
 
   // Repair a local skill by reinstalling known sources or restarting it
-  router.post("/skills/:name/repair", async (req, res) => {
+  router.post("/skills/:name/repair", requireAuth, async (req, res) => {
     try {
       const result = await mcpManager.repairSkill(req.params.name);
       if (!result.success) return res.status(400).json(result);
@@ -215,7 +215,7 @@ export function mountSkillRoutes(
   });
 
   // Explicitly clean incomplete local skills
-  router.delete("/skills/broken", async (_req, res) => {
+  router.delete("/skills/broken", requireAuth, async (_req, res) => {
     try {
       const removed = mcpManager.cleanupBrokenSkills();
       for (const name of removed) {
@@ -229,7 +229,7 @@ export function mountSkillRoutes(
   });
 
   // Uninstall a skill
-  router.delete("/skills/:name", async (req, res) => {
+  router.delete("/skills/:name", requireAuth, async (req, res) => {
     try {
       mcpManager.uninstallSkill(req.params.name);
       io.emit('skill:uninstalled', { name: req.params.name });
@@ -241,7 +241,7 @@ export function mountSkillRoutes(
   });
 
   // Enable a skill
-  router.post("/skills/:name/enable", async (req, res) => {
+  router.post("/skills/:name/enable", requireAuth, async (req, res) => {
     try {
       const config = getMCPConfig();
       if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
@@ -268,7 +268,7 @@ export function mountSkillRoutes(
   });
 
   // Disable a skill
-  router.post("/skills/:name/disable", async (req, res) => {
+  router.post("/skills/:name/disable", requireAuth, async (req, res) => {
     try {
       const config = getMCPConfig();
       if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
@@ -282,7 +282,7 @@ export function mountSkillRoutes(
   });
 
   // Workflow inspection (for debugging / manual generation)
-  router.get("/skills/workflows", (req, res) => {
+  router.get("/skills/workflows", requireAuth, (req, res) => {
     const workflows = getRecentWorkflows((req as any).user?.uid);
     res.json({ workflows: workflows.slice(-20), total: workflows.length });
   });

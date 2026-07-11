@@ -35,6 +35,32 @@ migrateDataFromOldLocation();
 const DB_PATH = getDataPath('lumi.db');
 
 let db: sqlite3.Database | null = null;
+
+const PERFORMANCE_INDEX_SQL = [
+  `CREATE INDEX IF NOT EXISTS idx_interactions_user_conv ON interactions(userId, conversationId)`,
+  `CREATE INDEX IF NOT EXISTS idx_interactions_agent ON interactions(agentId)`,
+  `CREATE INDEX IF NOT EXISTS idx_memories_user_type_tier ON memories(userId, type, tier)`,
+  `CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(userId, agentId)`,
+  `CREATE INDEX IF NOT EXISTS idx_memories_user_parent ON memories(userId, parentId)`,
+  `CREATE INDEX IF NOT EXISTS idx_conversations_user_status ON conversations(userId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_token_usage_user_ts ON token_usage(userId, timestamp)`,
+  `CREATE INDEX IF NOT EXISTS idx_memories_user_domain ON memories(userId, domain)`,
+  `CREATE INDEX IF NOT EXISTS idx_memories_org ON memories(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_interactions_user_domain ON interactions(userId, domain)`,
+  `CREATE INDEX IF NOT EXISTS idx_interactions_org ON interactions(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_agents_user_domain ON agents(userId, domain)`,
+  `CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_conversations_user_domain ON conversations(userId, domain)`,
+  `CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
+  `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_memberships_org_status ON org_memberships(orgId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_kb_articles_org_category ON org_kb_articles(orgId, category, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_org_kb_embeddings_article ON org_kb_embeddings(articleId)`,
+  `CREATE INDEX IF NOT EXISTS idx_notifications_user_ts ON notifications(userId, timestamp)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_org_ts ON audit_log(orgId, timestamp)`,
+];
 let memoryDB: any = null;
 const SYSTEM_FLAGS_SETTING = '__lumi_system_flags';
 const SYSTEM_SNAPSHOTS_SETTING = '__lumi_system_snapshots';
@@ -205,24 +231,8 @@ function migrateSchema(): Promise<void> {
       createdAt TEXT NOT NULL,
       firedAt TEXT
     )`, onAlter);
-    // Indexes — safe to create repeatedly with IF NOT EXISTS
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_interactions_user_conv ON interactions(userId, conversationId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_interactions_agent ON interactions(agentId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_memories_user_type_tier ON memories(userId, type, tier)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(userId, agentId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_memories_user_parent ON memories(userId, parentId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_conversations_user_status ON conversations(userId, status)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_token_usage_user_ts ON token_usage(userId, timestamp)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_memories_user_domain ON memories(userId, domain)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_memories_org ON memories(orgId, userId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_interactions_user_domain ON interactions(userId, domain)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_interactions_org ON interactions(orgId, userId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_agents_user_domain ON agents(userId, domain)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(orgId, userId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_conversations_user_domain ON conversations(userId, domain)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(orgId, userId)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`, onAlter);
-    db!.run(`CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`, onAlter);
+    // Indexes are recreated here and after every atomic table replacement.
+    for (const sql of PERFORMANCE_INDEX_SQL) db!.run(sql, onAlter);
       db!.run('SELECT 1', () => resolve());
     });
   });
@@ -916,6 +926,12 @@ async function persistMemoryDB(): Promise<void> {
     // Phase 3: Rename temp tables to original names (atomic in SQLite within a transaction)
     for (const spec of allSpecs) {
       await run(`ALTER TABLE _temp_${spec.name} RENAME TO ${spec.name}`);
+    }
+
+    // Replacing tables drops their indexes. Recreate all query indexes in the
+    // same transaction so no persisted snapshot is left unindexed.
+    for (const sql of PERFORMANCE_INDEX_SQL) {
+      await run(sql);
     }
 
     await run('COMMIT');

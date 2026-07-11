@@ -8,6 +8,7 @@ import { getMember, listUserOrgs } from "../org/db";
 import { saveVoiceprint, saveFace, getVoiceprints, getFaces, deleteVoiceprint, deleteFace } from "../biometrics/store";
 import { verifyVoiceprintAudio } from "../biometrics/voiceprint_verify";
 import { extractSpeechBrainEmbedding } from "../biometrics/voiceprint_provider";
+import { getLocalAdminPassword, isLoopbackAddress } from "../config/local_identity";
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -124,11 +125,13 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     res.json({ success: true });
   });
 
-  // Bootstrap endpoint: auto-login for local admin account
-  // Only active when AUTO_LOGIN_PASSWORD env var is configured
+  // Bootstrap endpoint: silent local identity for the desktop client.
   router.get("/auth/bootstrap", async (req, res) => {
     try {
-    const adminPassword = process.env.AUTO_LOGIN_PASSWORD || 'lumi_admin_2026';
+    if (!isLoopbackAddress(req.socket.remoteAddress)) {
+      return res.status(403).json({ error: "Local identity bootstrap is only available from this computer" });
+    }
+    const adminPassword = getLocalAdminPassword();
 
     const db = readDB();
     let admin = db.users.find((u: any) => u.username === "admin");

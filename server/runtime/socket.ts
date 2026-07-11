@@ -28,23 +28,26 @@ interface SocketContext {
   };
 }
 
-function getUserIdFromSocket(socket: any, jwtSecret: string): string {
+function getUserIdFromSocket(socket: any, jwtSecret: string): string | null {
+  if (typeof socket.data?.authenticatedUserId === 'string') {
+    return socket.data.authenticatedUserId;
+  }
   try {
     const authToken = socket.handshake?.auth?.token;
     if (authToken) {
       const decoded: any = jwt.verify(authToken, jwtSecret);
-      return decoded.uid || 'anonymous';
+      return decoded.uid || null;
     }
     const cookies = socket.handshake.headers.cookie;
     if (cookies) {
       const token = cookies.split(';').find((c: string) => c.trim().startsWith('token='))?.split('=')[1];
       if (token) {
         const decoded: any = jwt.verify(token, jwtSecret);
-        return decoded.uid || 'anonymous';
+        return decoded.uid || null;
       }
     }
   } catch {}
-  return 'anonymous';
+  return null;
 }
 
 export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
@@ -67,6 +70,16 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
   initMemorySync(io);
   initMemoryAssociations();
 
+  io.use((socket, next) => {
+    const uid = getUserIdFromSocket(socket, jwtSecret);
+    if (!uid) {
+      next(new Error('Authentication required'));
+      return;
+    }
+    socket.data.authenticatedUserId = uid;
+    next();
+  });
+
   const llmGetters = {
     getDeepSeek: llm.getDeepSeek,
     getGemini: llm.getGemini,
@@ -85,18 +98,18 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
   };
 
   io.on("connection", (socket) => {
-    const uid = getUserIdFromSocket(socket, jwtSecret);
+    const uid = getUserIdFromSocket(socket, jwtSecret)!;
     // Join user room so all this user's sockets (DesktopUI, AgentChatPage, etc.) share events
     socket.join(`user:${uid}`);
     console.log(`[Socket] Client connected: ${socket.id} (uid=${uid})`);
 
-    const getUserId = (s: any) => getUserIdFromSocket(s, jwtSecret);
+    const getUserId = (s: any) => getUserIdFromSocket(s, jwtSecret) || uid;
 
     // DEBUG: log all incoming events
     socket.onAny((event, ...args) => {
       if (event.startsWith('tool:desktop_result:')) {
         const correlationId = event.slice('tool:desktop_result:'.length);
-        handleDesktopRelayResult(correlationId, args[0] || {});
+        handleDesktopRelayResult(correlationId, args[0] || {}, socket.id);
       }
       const noisyEvents = new Set([
         'audio:chunk',

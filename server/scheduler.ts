@@ -518,7 +518,7 @@ export function registerScheduledTasks(
           if (report.status === 'dreamed') {
             messages.push(`[${userId}] ${report.dreamTitle || '梦境整理'}: ${String(report.dreamSummary || '').slice(0, 120)}`);
             if (scheduler.io) {
-              scheduler.io.to(userId).emit('lumi:sleep_cycle', report);
+              scheduler.io.to(`user:${userId}`).emit('lumi:sleep_cycle', report);
             }
           }
         } catch (err: any) {
@@ -1055,7 +1055,7 @@ Rules:
           const userIds = getAllUserIds();
           for (const userId of userIds) {
             if (scheduler.io) {
-              scheduler.io.to(userId).emit('agent:proactive', {
+              scheduler.io.to(`user:${userId}`).emit('agent:proactive', {
                 type: 'workflow_auto_generated',
                 message: `我发现了你的 ${created} 个操作习惯模式，已自动创建为工作流。你可以说"运行[名称]"来快速复用。`,
                 count: created,
@@ -1084,7 +1084,7 @@ Rules:
         for (const userId of userIds) {
           const report = runHealthAudit(userId);
           if (report.recommendations.length > 0 && scheduler.io) {
-            scheduler.io.to(userId).emit('agent:proactive', {
+            scheduler.io.to(`user:${userId}`).emit('agent:proactive', {
               type: 'health_audit',
               report: {
                 overallStatus: report.overallStatus,
@@ -1710,9 +1710,9 @@ Output ONLY the prediction message — no preamble, no labels.`;
 
           // Execute pending tasks, bounded by the current safety gate.
           const { executeNextAutonomousTask } = await import('./autonomy/task_executor');
-          const maxTasks = Math.max(1, Math.min(50, getGateConfig().maxConsecutiveTasks || 1));
+          const maxTasks = Math.max(1, Math.min(50, getGateConfig(userId).maxConsecutiveTasks || 1));
           for (let i = 0; i < maxTasks; i++) {
-            const result = await executeNextAutonomousTask(scheduler.io!, getters);
+            const result = await executeNextAutonomousTask(scheduler.io!, getters, userId);
             if (!result.executed) break;
             totalExecuted++;
           }

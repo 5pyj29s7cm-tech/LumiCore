@@ -8,28 +8,28 @@ export function autonomyRoutes(): Router {
   const router = Router();
 
   // Safety gate config
-  router.get('/gate_config', requireAuth, (_req, res) => {
-    res.json(getGateConfig());
+  router.get('/gate_config', requireAuth, (req, res) => {
+    res.json(getGateConfig(req.user!.uid));
   });
 
   router.put('/gate_config', requireAuth, (req, res) => {
-    const updated = saveGateConfig(req.body || {});
+    const updated = saveGateConfig(req.body || {}, req.user!.uid);
     res.json(updated);
   });
 
   // Task queue
-  router.get('/queue', requireAuth, (_req, res) => {
-    res.json({ queue: getTaskQueue() });
+  router.get('/queue', requireAuth, (req, res) => {
+    res.json({ queue: getTaskQueue(req.user!.uid) });
   });
 
   router.get('/history', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = parseInt(req.query.offset as string) || 0;
-    res.json({ tasks: getTaskHistory(limit, offset) });
+    res.json({ tasks: getTaskHistory(limit, offset, req.user!.uid) });
   });
 
   router.post('/tasks/:id/cancel', requireAuth, (req, res) => {
-    const ok = cancelTask(req.params.id);
+    const ok = cancelTask(req.params.id, req.user!.uid);
     if (!ok) return res.status(404).json({ error: 'Task not found or not cancellable' });
     res.json({ id: req.params.id, cancelled: true });
   });

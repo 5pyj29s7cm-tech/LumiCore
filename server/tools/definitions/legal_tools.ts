@@ -5026,7 +5026,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'legal_search_statute',
-    description: '法条检索 — 按关键词或法条号搜索现行有效法律法规。数据来源：国家法律法规数据库 (flk.npc.gov.cn) 及本地法条库。自动标注已废止法条。',
+    description: '法条检索候选 — 按关键词或法条号搜索法名状态、权威网页结果及本地法条库。正式交付仅接受带权威来源和已核验条文范围的引用；未核验结果不得标记为现行有效。',
     parameters: {
       type: 'object',
       properties: {

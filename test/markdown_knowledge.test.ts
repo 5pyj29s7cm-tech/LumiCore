@@ -72,6 +72,11 @@ describe('RAG markdown source metadata', () => {
     cleanup();
   });
 
+  it('does not expose the personal knowledge list without the local identity token', async () => {
+    const response = await fetch(`${testUrl}/api/files/list?domain=personal`);
+    expect(response.status).toBe(401);
+  });
+
   it('stores tags, aliases, and links as retrievable memory keywords', async () => {
     const { ingestDocument } = await import('../server/agents/rag');
     const { readDB } = await import('../db_layer');

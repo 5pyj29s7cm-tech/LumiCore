@@ -76,7 +76,7 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
       }
       writeDB(db);
       const autonomyLevel = autonomyLevelForOperationMode(normalizedMode);
-      if (autonomyLevel) saveGateConfig({ autonomyLevel });
+      if (autonomyLevel) saveGateConfig({ autonomyLevel }, uid);
       broadcastPreferenceChange(uid, 'operation_mode', { mode: normalizedMode });
       res.json({ ok: true, autonomyLevel: autonomyLevel || undefined });
     } catch (e: any) {

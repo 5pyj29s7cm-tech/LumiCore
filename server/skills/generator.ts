@@ -432,6 +432,10 @@ export async function autoGenerateSkill(
   getAnthropic?: () => any,
   getQwen?: () => any,
 ): Promise<SkillGenerateResult | null> {
+  if (!isAutomaticSkillGenerationEnabled()) {
+    console.log('[SkillGen] Automatic executable skill generation is disabled; repeated patterns remain reusable workflows until the user explicitly creates a skill.');
+    return null;
+  }
   const { findWorkflowClusters, getRecentWorkflows, removeWorkflows } = await import('./worklog');
 
   const all = getRecentWorkflows();
@@ -579,6 +583,10 @@ ${indentedBody}
     content: [{ type: 'text', text: result }],
   };
 }`;
+}
+
+export function isAutomaticSkillGenerationEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(String(process.env.LUMI_AUTO_GENERATE_EXECUTABLE_SKILLS || '').trim());
 }
 
 function sanitizeHandlerBody(handlerCode: string, paramNames: string[]): string {

@@ -52,7 +52,7 @@ function persist() {
 }
 
 export function enqueue(task: Omit<AutonomousTask, 'id' | 'createdAt' | 'status'>): AutonomousTask | null {
-  if (queue.filter(t => t.status === 'pending').length >= MAX_QUEUE_SIZE) return null;
+  if (queue.filter(t => t.userId === task.userId && t.status === 'pending').length >= MAX_QUEUE_SIZE) return null;
 
   const newTask: AutonomousTask = {
     ...task,
@@ -66,9 +66,9 @@ export function enqueue(task: Omit<AutonomousTask, 'id' | 'createdAt' | 'status'
   return newTask;
 }
 
-export function dequeue(): AutonomousTask | null {
+export function dequeue(userId?: string): AutonomousTask | null {
   const pending = queue
-    .filter(t => t.status === 'pending')
+    .filter(t => t.status === 'pending' && (!userId || t.userId === userId))
     .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
   return pending[0] || null;
 }
@@ -106,8 +106,8 @@ export function markFailed(id: string, error: string): AutonomousTask | null {
   return task;
 }
 
-export function cancelTask(id: string): boolean {
-  const task = findTask(id);
+export function cancelTask(id: string, userId?: string): boolean {
+  const task = findTask(id, userId);
   if (!task || (task.status !== 'pending' && task.status !== 'running')) return false;
   task.status = 'cancelled';
   task.completedAt = new Date().toISOString();
@@ -116,22 +116,23 @@ export function cancelTask(id: string): boolean {
   return true;
 }
 
-export function getTaskQueue(): AutonomousTask[] {
-  return queue.filter(t => t.status === 'pending' || t.status === 'running');
+export function getTaskQueue(userId?: string): AutonomousTask[] {
+  return queue.filter(t => (t.status === 'pending' || t.status === 'running') && (!userId || t.userId === userId));
 }
 
-export function getTaskHistory(limit: number = 50, offset: number = 0): AutonomousTask[] {
+export function getTaskHistory(limit: number = 50, offset: number = 0, userId?: string): AutonomousTask[] {
   return history
+    .filter(task => !userId || task.userId === userId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(offset, offset + limit);
 }
 
-export function getRunningTask(): AutonomousTask | null {
-  return queue.find(t => t.status === 'running') || null;
+export function getRunningTask(userId?: string): AutonomousTask | null {
+  return queue.find(t => t.status === 'running' && (!userId || t.userId === userId)) || null;
 }
 
-function findTask(id: string): AutonomousTask | null {
-  return queue.find(t => t.id === id) || null;
+function findTask(id: string, userId?: string): AutonomousTask | null {
+  return queue.find(t => t.id === id && (!userId || t.userId === userId)) || null;
 }
 
 function moveToHistory(task: AutonomousTask) {

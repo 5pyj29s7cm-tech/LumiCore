@@ -155,7 +155,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         stateDigest: getClientStateDigest(state),
         health: getClientHealthReport(userId),
         skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: getGateConfig(),
+        autonomyGate: getGateConfig(userId),
         autonomyWorkflows: listAutonomousWorkflows(userId),
       }, null, 2);
     },
@@ -296,7 +296,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       return JSON.stringify({
         report: getClientHealthReport(context?.userId || 'anonymous'),
         skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: getGateConfig(),
+        autonomyGate: getGateConfig(context?.userId),
         autonomyWorkflows: listAutonomousWorkflows(context?.userId || 'anonymous'),
       }, null, 2);
     },

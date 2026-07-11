@@ -162,21 +162,44 @@ export interface StatuteResult {
   content?: string;
 }
 
-/** Built-in database of commonly referenced PRC statutes with status */
-const STATUTE_REGISTRY: Record<string, { title: string; effective: boolean; repealedDate?: string }> = {
-  '民法典': { title: '中华人民共和国民法典', effective: true },
+interface StatuteVerificationSnapshot {
+  source: string;
+  sourceUrl: string;
+  verifiedAt: string;
+  articleMin?: number;
+  articleMax?: number;
+}
+
+interface StatuteRegistryEntry {
+  title: string;
+  effective: boolean;
+  repealedDate?: string;
+  verification?: StatuteVerificationSnapshot;
+}
+
+const CIVIL_CODE_VERIFICATION: StatuteVerificationSnapshot = {
+  source: '国家法律法规数据库',
+  sourceUrl: 'https://flk.npc.gov.cn/detail?fileId=&id=ff808081729d1efe01729d50b5c500bf&title=%E4%B8%AD%E5%8D%8E%E4%BA%BA%E6%B0%91%E5%85%B1%E5%92%8C%E5%9B%BD%E6%B0%91%E6%B3%95%E5%85%B8&type=',
+  verifiedAt: '2026-07-12',
+  articleMin: 1,
+  articleMax: 1260,
+};
+
+/** Law-name registry. Formal article verification requires a sourced snapshot. */
+const STATUTE_REGISTRY: Record<string, StatuteRegistryEntry> = {
+  '民法典': { title: '中华人民共和国民法典', effective: true, verification: CIVIL_CODE_VERIFICATION },
   '刑法': { title: '中华人民共和国刑法', effective: true },
   '刑事诉讼法': { title: '中华人民共和国刑事诉讼法', effective: true },
   '民事诉讼法': { title: '中华人民共和国民事诉讼法', effective: true },
   '行政诉讼法': { title: '中华人民共和国行政诉讼法', effective: true },
   '公司法': { title: '中华人民共和国公司法（2023修订）', effective: true },
-  '合同法': { title: '中华人民共和国合同法', effective: false, repealedDate: '2021-01-01' },
-  '物权法': { title: '中华人民共和国物权法', effective: false, repealedDate: '2021-01-01' },
-  '侵权责任法': { title: '中华人民共和国侵权责任法', effective: false, repealedDate: '2021-01-01' },
-  '婚姻法': { title: '中华人民共和国婚姻法', effective: false, repealedDate: '2021-01-01' },
-  '继承法': { title: '中华人民共和国继承法', effective: false, repealedDate: '2021-01-01' },
-  '民法通则': { title: '中华人民共和国民法通则', effective: false, repealedDate: '2021-01-01' },
-  '担保法': { title: '中华人民共和国担保法', effective: false, repealedDate: '2021-01-01' },
+  '合同法': { title: '中华人民共和国合同法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
+  '物权法': { title: '中华人民共和国物权法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
+  '侵权责任法': { title: '中华人民共和国侵权责任法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
+  '婚姻法': { title: '中华人民共和国婚姻法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
+  '继承法': { title: '中华人民共和国继承法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
+  '民法通则': { title: '中华人民共和国民法通则', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
+  '担保法': { title: '中华人民共和国担保法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
   '劳动合同法': { title: '中华人民共和国劳动合同法', effective: true },
   '知识产权法': { title: '中华人民共和国著作权法', effective: true },
   '商标法': { title: '中华人民共和国商标法', effective: true },
@@ -194,6 +217,52 @@ const STATUTE_REGISTRY: Record<string, { title: string; effective: boolean; repe
   '民法典侵权责任编': { title: '中华人民共和国民法典 第七编 侵权责任', effective: true },
 };
 
+const CHINESE_DIGITS: Record<string, number> = {
+  零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
+  五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+
+function parseArticleNumber(value: string): number | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return Number(raw);
+
+  const units: Record<string, number> = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
+  let total = 0;
+  let section = 0;
+  let number = 0;
+  let sawNumber = false;
+
+  for (const char of raw) {
+    if (char in CHINESE_DIGITS) {
+      number = number * 10 + CHINESE_DIGITS[char];
+      sawNumber = true;
+      continue;
+    }
+    const unit = units[char];
+    if (!unit) return null;
+    sawNumber = true;
+    if (unit === 10000) {
+      total += (section + number) * unit;
+      section = 0;
+    } else {
+      section += (number || 1) * unit;
+    }
+    number = 0;
+  }
+
+  return sawNumber ? total + section + number : null;
+}
+
+function extractArticleNumber(citation: string): number | null {
+  const match = citation.match(/第([零〇一二两三四五六七八九十百千万\d]+)条/);
+  return match ? parseArticleNumber(match[1]) : null;
+}
+
+function verificationSource(snapshot: StatuteVerificationSnapshot): string {
+  return `${snapshot.source}（核验快照 ${snapshot.verifiedAt}，${snapshot.sourceUrl}）`;
+}
+
 export async function searchStatutes(
   orgId: string,
   query: string,
@@ -207,7 +276,7 @@ export async function searchStatutes(
       results.push({
         articleId: `statute:${key}`,
         title: info.title,
-        chunk: `${info.title}${info.effective ? ' — 现行有效' : ` — 已废止${info.repealedDate ? `（${info.repealedDate}起）` : ''}`}`,
+        chunk: `${info.title}${info.effective ? ' — 法名状态候选' : ` — 已废止${info.repealedDate ? `（${info.repealedDate}起）` : ''}`}${info.verification ? `；来源核验于 ${info.verification.verifiedAt}` : '；正式交付前需权威来源核验'}`,
         score: 1.0,
         isEffective: info.effective,
       });
@@ -277,15 +346,58 @@ export function verifyCitation(citation: string, orgId?: string): CitationCheck 
       s => s.title.includes(statuteName) || statuteName.includes(s.title),
     );
     if (found) {
+      const articleNumber = extractArticleNumber(citation);
+      const verification = found.verification;
+
+      if (!found.effective) {
+        return {
+          citation,
+          type: 'statute',
+          exists: true,
+          isEffective: false,
+          source: verification ? verificationSource(verification) : '内置法名状态表（待权威来源复核）',
+          detail: `${found.title} 已于${found.repealedDate || '民法典施行日'}废止，请引用现行法律相关条款`,
+        };
+      }
+
+      if (articleNumber !== null) {
+        const articleVerified = verification
+          && verification.articleMin !== undefined
+          && verification.articleMax !== undefined
+          && articleNumber >= verification.articleMin
+          && articleNumber <= verification.articleMax;
+        if (!articleVerified) {
+          return {
+            citation,
+            type: 'statute',
+            exists: false,
+            isEffective: null,
+            source: verification ? verificationSource(verification) : '内置法名状态表（不含条文核验）',
+            detail: verification?.articleMax !== undefined
+              ? `《${statuteName}》存在，但第${articleNumber}条超出已核验条文范围（${verification.articleMin}-${verification.articleMax}条）。`
+              : `《${statuteName}》法名已识别，但第${articleNumber}条尚未通过权威文本核验。`,
+          };
+        }
+      } else if (!verification) {
+        return {
+          citation,
+          type: 'statute',
+          exists: true,
+          isEffective: null,
+          source: '内置法名状态表（非实时权威核验）',
+          detail: `${found.title} 法名已识别，但正式交付前仍需核验当前版本和生效状态。`,
+        };
+      }
+
       return {
         citation,
         type: 'statute',
         exists: true,
-        isEffective: found.effective,
-        source: '国家法律法规数据库 (flk.npc.gov.cn)',
-        detail: found.effective
-          ? `${found.title} 现行有效`
-          : `${found.title} 已于${found.repealedDate || '民法典施行日'}废止，请引用民法典相关条款`,
+        isEffective: true,
+        source: verification ? verificationSource(verification) : '内置法名状态表（非实时权威核验）',
+        detail: articleNumber === null
+          ? `${found.title} 已按所列权威来源核验。`
+          : `${found.title} 第${articleNumber}条位于已核验权威文本条文范围内。`,
       };
     }
     return {
@@ -344,7 +456,7 @@ export function verifyMultipleCitations(text: string, orgId?: string): CitationC
   const checks: CitationCheck[] = [];
 
   // Find all 《...》 statute citations
-  const statuteRe = /《([^》]+)》/g;
+  const statuteRe = /《[^》]+》(?:第[零〇一二两三四五六七八九十百千万\d]+条(?:之[零〇一二两三四五六七八九十百千万\d]+)?(?:第[零〇一二两三四五六七八九十百千万\d]+款)?(?:第[零〇一二两三四五六七八九十百千万\d]+项)?)?/g;
   let m: RegExpExecArray | null;
   while ((m = statuteRe.exec(text)) !== null) {
     checks.push(verifyCitation(m[0], orgId));

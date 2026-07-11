@@ -104,15 +104,15 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('onProgress');
   });
 
-  it('keeps ordinary tool confirmations silent across chat, voice, and task entry points', () => {
+  it('keeps ordinary tools silent and records hard boundaries for one-time text confirmation', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
     const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
     for (const source of [chat, voice, task]) {
-      expect(source).toContain('canAutoApproveAction(toolName, args)) return true');
-      expect(source).toContain('blocked at hard boundary without showing a confirmation popup');
+      expect(source).toContain('canAutoApproveAction(toolName, args,');
+      expect(source).toContain('recordPendingConfirmation');
       expect(source).not.toContain("socket.emit('agent:confirm_tool'");
       expect(source).not.toContain('socket.emit("agent:confirm_tool"');
     }

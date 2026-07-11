@@ -63,8 +63,8 @@ export function evaluateActionConstitution(
 ): ActionConstitutionDecision {
   const domain = classifyAction(toolName, args);
   const argText = JSON.stringify(args || {});
-  const actionText = buildActionText(toolName, args);
-  const risk = classifyActionRisk(toolName, args);
+  const actionText = buildActionText(toolName, args, context);
+  const risk = classifyActionRisk(toolName, args, context);
 
   const sensitiveClientAction = getSensitiveClientAction(args);
   if (toolName === 'client_action' && sensitiveClientAction) {
@@ -81,7 +81,7 @@ export function evaluateActionConstitution(
   }
 
   if (context?.autonomous === true) {
-    const gate = getGateConfig();
+    const gate = getGateConfig(context.userId);
     if (gate.autonomyLevel === 'reactive' || !gate.autoProcessEnabled) {
       return {
         level: 'forbidden',
@@ -149,11 +149,11 @@ export function evaluateActionConstitution(
   };
 }
 
-export function classifyActionRisk(toolName: string, args: Record<string, any> = {}): ActionRisk {
+export function classifyActionRisk(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent'>): ActionRisk {
   const domain = classifyAction(toolName, args);
   const name = toolName.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
-  const actionText = buildActionText(toolName, args);
+  const actionText = buildActionText(toolName, args, context);
   const externalStateChanging = isExternalStateChangingDomain(domain);
 
   if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'high';
@@ -169,9 +169,9 @@ export function classifyActionRisk(toolName: string, args: Record<string, any> =
   return 'low';
 }
 
-export function canAutoApproveAction(toolName: string, args: Record<string, any> = {}): boolean {
+export function canAutoApproveAction(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent'>): boolean {
   const domain = classifyAction(toolName, args);
-  const risk = classifyActionRisk(toolName, args);
+  const risk = classifyActionRisk(toolName, args, context);
   if (risk === 'high') return false;
   return !['system', 'destructive'].includes(domain);
 }
@@ -221,8 +221,8 @@ function allow(domain: ActionDomain, reason: string): ActionConstitutionDecision
   };
 }
 
-function buildActionText(toolName: string, args: Record<string, any> = {}): string {
-  return `${toolName} ${JSON.stringify(args || {})}`.toLowerCase();
+function buildActionText(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent'>): string {
+  return `${toolName} ${JSON.stringify(args || {})} ${context?.actionIntent || ''}`.toLowerCase();
 }
 
 function isExternalStateChangingDomain(domain: ActionDomain): boolean {
@@ -294,7 +294,7 @@ function canRunSupervisedExternalCommit(context?: ToolContext): boolean {
   const source = String(context?.source || '').toLowerCase();
   if (['chat', 'voice', 'task', 'chat_preflight', 'chat_chainer', 'quick_command'].includes(source)) return true;
   if (source.startsWith('chat_') || source.startsWith('voice_')) return true;
-  return isMessagingSendConfirmationRequired() === false;
+  return isMessagingSendConfirmationRequired(context.userId) === false;
 }
 
 function getSensitiveClientAction(args: Record<string, any> = {}): string {

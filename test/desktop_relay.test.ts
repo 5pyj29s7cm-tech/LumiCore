@@ -84,7 +84,9 @@ describe('desktop relay routing', () => {
     expect(sent[0].event).toBe('tool:desktop_exec');
     expect(sent[0].payload.name).toBe('desktop_active_window');
 
-    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: '{"title":"WeChat"}' })).toBe(true);
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'forged' }, 'sock_attacker')).toBe(false);
+    expect(getPendingDesktopRelayCount()).toBe(1);
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: '{"title":"WeChat"}' }, 'sock_desktop_a')).toBe(true);
     await expect(promise).resolves.toBe('{"title":"WeChat"}');
     expect(getPendingDesktopRelayCount()).toBe(0);
   });
@@ -117,7 +119,8 @@ describe('desktop relay routing', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].event).toBe('tool:desktop_exec');
 
-    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'typed' })).toBe(true);
+    const selectedSocketId = sent[0].target === 'one' ? 'sock_desktop_b1' : 'sock_desktop_b2';
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'typed' }, selectedSocketId)).toBe(true);
     await expect(promise).resolves.toBe('typed');
     expect(getPendingDesktopRelayCount()).toBe(0);
   });

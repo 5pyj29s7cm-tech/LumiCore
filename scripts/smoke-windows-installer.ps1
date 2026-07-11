@@ -31,6 +31,7 @@ function Invoke-JsonRequest {
     [string]$Uri,
     [string]$Method = "GET",
     [object]$Body = $null,
+    [hashtable]$Headers = @{},
     [int]$TimeoutSec = 8
   )
 
@@ -38,6 +39,7 @@ function Invoke-JsonRequest {
     Uri = $Uri
     Method = $Method
     TimeoutSec = $TimeoutSec
+    Headers = $Headers
   }
   if ($null -ne $Body) {
     $params.ContentType = "application/json"
@@ -275,6 +277,12 @@ try {
     throw "Installed app backend did not become ready on port $Port"
   }
 
+  $Bootstrap = Invoke-JsonRequest -Uri "$BaseUrl/auth/bootstrap" -TimeoutSec 15
+  if (-not $Bootstrap.success -or [string]::IsNullOrWhiteSpace($Bootstrap.token)) {
+    throw "Installed app local identity bootstrap failed"
+  }
+  $AuthHeaders = @{ Authorization = "Bearer $($Bootstrap.token)" }
+
   $Marketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
   $Skill = @($Marketplace | Where-Object { $_.id -eq $SkillId })[0]
   if (-not $Skill) {
@@ -303,7 +311,7 @@ try {
   $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $Deadline) {
     Start-Sleep -Seconds 1
-    $Skills = Invoke-JsonRequest -Uri "$BaseUrl/skills" -TimeoutSec 8
+    $Skills = Invoke-JsonRequest -Uri "$BaseUrl/skills" -Headers $AuthHeaders -TimeoutSec 8
     $Connected = [bool](@($Skills.skills | Where-Object { $_.name -eq $DirName -and $_.connected }).Count)
     if ($Connected) {
       break

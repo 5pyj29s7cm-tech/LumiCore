@@ -145,7 +145,7 @@ export class ToolRegistry {
       } else if (context?.requestConfirmation) {
         const allowed = await context.requestConfirmation(name, args);
         if (!allowed) {
-          return `Tool "${name}" execution was declined by the user.`;
+          return `Tool "${name}" requires user confirmation and was not approved.`;
         }
         userConfirmed = true;
       } else {

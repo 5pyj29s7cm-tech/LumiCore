@@ -9,6 +9,8 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { getJwtSecret } from '../config/local_identity';
+import { getMember } from '../org/db';
 
 export interface AuthUser {
   uid: string;
@@ -26,8 +28,6 @@ declare global {
   }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
-
 function extractToken(req: Request): string | null {
   let token = req.cookies?.token;
   if (!token && req.headers.authorization?.startsWith('Bearer ')) {
@@ -38,7 +38,7 @@ function extractToken(req: Request): string | null {
 
 function decodeToken(token: string): AuthUser | null {
   try {
-    const decoded: any = jwt.verify(token, JWT_SECRET);
+    const decoded: any = jwt.verify(token, getJwtSecret());
     return {
       uid: decoded.uid,
       username: decoded.username,
@@ -92,6 +92,32 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   next();
 }
 
+function requestedOrgId(req: Request): string {
+  return String(req.params?.orgId || req.body?.orgId || req.query?.orgId || '').trim();
+}
+
+function resolveActiveMembership(req: Request, res: Response): ReturnType<typeof getMember> | null {
+  if (!req.user?.orgId) {
+    res.status(403).json({ error: 'Organization context required. Use /api/auth/switch-org first.' });
+    return null;
+  }
+
+  const requested = requestedOrgId(req);
+  if (requested && requested !== req.user.orgId) {
+    res.status(403).json({ error: 'Organization context does not match the requested organization.' });
+    return null;
+  }
+
+  const membership = getMember(req.user.orgId, req.user.uid);
+  if (!membership || membership.status !== 'active') {
+    res.status(403).json({ error: 'Active organization membership required.' });
+    return null;
+  }
+
+  req.user.orgRole = membership.role;
+  return membership;
+}
+
 /** Require the user to be in org context with a specific org role. */
 export function requireOrgRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -99,11 +125,9 @@ export function requireOrgRole(...roles: string[]) {
       res.status(401).json({ error: 'Authentication required' });
       return;
     }
-    if (!req.user.orgId) {
-      res.status(403).json({ error: 'Organization context required. Use /api/auth/switch-org first.' });
-      return;
-    }
-    if (!req.user.orgRole || !roles.includes(req.user.orgRole)) {
+    const membership = resolveActiveMembership(req, res);
+    if (!membership) return;
+    if (!roles.includes(membership.role)) {
       res.status(403).json({ error: `Requires one of these org roles: ${roles.join(', ')}` });
       return;
     }
@@ -117,10 +141,7 @@ export function requireOrgMember(req: Request, res: Response, next: NextFunction
     res.status(401).json({ error: 'Authentication required' });
     return;
   }
-  if (!req.user.orgId) {
-    res.status(403).json({ error: 'Organization context required. Use /api/auth/switch-org first.' });
-    return;
-  }
+  if (!resolveActiveMembership(req, res)) return;
   next();
 }
 

@@ -29,8 +29,8 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       properties: {},
       required: [],
     },
-    handler: async () => {
-      const policy = { ...getGateConfig() } as Partial<SafetyGateConfig> & { externalAppAutomationEnabled?: boolean; externalAppAutomationGate?: string };
+    handler: async (_args, context) => {
+      const policy = { ...getGateConfig(context?.userId) } as Partial<SafetyGateConfig> & { externalAppAutomationEnabled?: boolean; externalAppAutomationGate?: string };
       delete policy.externalAppAutomationEnabled;
       policy.externalAppAutomationGate = 'removed';
       return JSON.stringify({
@@ -52,12 +52,12 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       },
       required: [],
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const patch = pickGatePatch(args);
       if (Object.keys(patch).length === 0) {
         throw new Error('No autonomy policy fields were provided.');
       }
-      const updated = saveGateConfig(patch);
+      const updated = saveGateConfig(patch, context?.userId);
       return JSON.stringify({
         updated,
         reason: args.reason || '',

@@ -27,6 +27,15 @@ import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { canAutoApproveAction, classifyActionRisk, evaluateActionConstitution } from "../tools/action_constitution";
+import {
+  clearPendingConfirmation,
+  consumePendingConfirmation,
+  formatPendingConfirmationPrompt,
+  getPendingConfirmation,
+  isConfirmationCancellation,
+  isExplicitConfirmationReply,
+  recordPendingConfirmation,
+} from "../tools/pending_confirmation";
 import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay } from "../personality/engine";
@@ -66,8 +75,9 @@ import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
 import { createDesktopRelay } from "./desktop_relay";
+import { getJwtSecret } from "../config/local_identity";
 
-const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
+const JWT_SECRET = getJwtSecret();
 
 function stripHistoricalAttachmentBlocks(value: string): string {
   const text = String(value || '').trim();
@@ -780,6 +790,13 @@ export function registerChatHandler(
     const conversationAgentId = agentId || 'lumi';
     const uid = userIdFn(socket);
     const sessionKey = `${uid}:${eventSource}`;
+    if (isConfirmationCancellation(visibleUserText)) clearPendingConfirmation(uid);
+    const pendingConfirmation = isExplicitConfirmationReply(visibleUserText)
+      ? getPendingConfirmation(uid)
+      : null;
+    const pendingConfirmationPrompt = pendingConfirmation
+      ? formatPendingConfirmationPrompt(pendingConfirmation)
+      : '';
     console.log('[ChatHandler] uid:', uid, 'agentId:', agentId, 'source:', source);
 
     // Work context comes from the authenticated socket token. Personal mode can be
@@ -804,7 +821,7 @@ export function registerChatHandler(
         const requestedOrgId = typeof data.orgId === 'string' ? data.orgId.trim() : '';
         if (requestedOrgId) {
           const membership = getMember(requestedOrgId, uid);
-          if (membership && membership.status !== 'left' && membership.status !== 'suspended') {
+            if (membership?.status === 'active') {
             resolvedDomain = 'work';
             resolvedOrgId = requestedOrgId;
           }
@@ -980,10 +997,13 @@ export function registerChatHandler(
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
       effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn or exact local paths stated in the current user message. If the user says "this file", "the attachment", or similar without a current attachment/path, ask them to reattach the file or provide the exact path before calling file tools.';
+      if (pendingConfirmationPrompt) {
+        effectiveSystemPrompt += `\n\n${pendingConfirmationPrompt}`;
+      }
       if (chatContextBridge) {
         effectiveSystemPrompt += '\n\n' + chatContextBridge;
       }
-      const effectiveRoutedVisibleUserText = [visibleUserText, chatContextBridge].filter(Boolean).join('\n\n');
+      const effectiveRoutedVisibleUserText = [visibleUserText, chatContextBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
       const routingText = attachments.length > 0
         ? [effectiveRoutedVisibleUserText, attachmentContext].filter(Boolean).join('\n\n')
         : (effectiveRoutedVisibleUserText || text);
@@ -1112,7 +1132,7 @@ export function registerChatHandler(
         );
       };
 
-      const recentFailureExplanation = conversationId
+      const recentFailureExplanation = conversationId && !pendingConfirmation
         ? buildRecentFailureExplanation(visibleUserText, getMessages(conversationId, 24))
         : '';
       if (recentFailureExplanation) {
@@ -1144,21 +1164,32 @@ export function registerChatHandler(
       });
 
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-        if (canAutoApproveAction(toolName, args)) return true;
-        console.warn(`[ChatHandler] Tool "${toolName}" blocked at hard boundary without showing a confirmation popup.`);
+        if (
+          pendingConfirmation
+          && consumePendingConfirmation(uid, pendingConfirmation.id, toolName, args)
+        ) {
+          console.log(`[ChatHandler] Consumed one-time confirmation for "${toolName}".`);
+          return true;
+        }
+        if (canAutoApproveAction(toolName, args, { actionIntent: visibleUserText })) return true;
+        const pending = recordPendingConfirmation(uid, toolName, args, eventSource);
+        console.warn(`[ChatHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
         return false;
       };
 
-      const specialWorkflowText = visibleUserText || text;
+      const specialWorkflowText = [visibleUserText || text, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
       const specialWorkflow = turnFlow.specialWorkflow;
       if (specialWorkflow) {
         const workflowHighRiskApprovals = new Set<string>();
         const workflowDesktopRelay = async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
-          const decision = evaluateActionConstitution(toolName, args, 'safe', { source: specialWorkflow.source });
+          const decision = evaluateActionConstitution(toolName, args, 'safe', {
+            source: specialWorkflow.source,
+            actionIntent: specialWorkflowText,
+          });
           if (decision.level === 'forbidden') {
             throw new Error(`Desktop action blocked: ${decision.reason}`);
           }
-          if (classifyActionRisk(toolName, args) === 'high') {
+          if (classifyActionRisk(toolName, args, { actionIntent: specialWorkflowText }) === 'high') {
             const approvalKey = `${toolName}:${JSON.stringify(args || {}).slice(0, 240)}`;
             if (!workflowHighRiskApprovals.has(approvalKey)) {
               const allowed = await requestToolConfirmation(toolName, args);
@@ -1467,6 +1498,7 @@ export function registerChatHandler(
                 allowLocalFileWrites,
                 localWriteIntentReason,
                 requestConfirmation: requestToolConfirmation,
+                actionIntent: visibleUserText,
               });
               quickToolResult = tcResult || '';
               if (shouldEmitQuickTool) {
@@ -1632,6 +1664,7 @@ export function registerChatHandler(
             localWriteIntentReason,
             isCancelled: () => abortController.signal.aborted,
             requestConfirmation: requestToolConfirmation,
+            actionIntent: visibleUserText,
           });
           record.result = result || '';
           if (shouldEmitLifecycle) {
@@ -1853,6 +1886,7 @@ export function registerChatHandler(
             localWriteIntentReason,
             isCancelled: () => abortController.signal.aborted,
             requestConfirmation: requestToolConfirmation,
+            actionIntent: visibleUserText,
             toolPolicy: routedToolPolicy || personality.toolPolicy,
             onProgress: (step: string) => {
               emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
@@ -1926,6 +1960,7 @@ export function registerChatHandler(
             localWriteIntentReason,
             isCancelled: () => abortController.signal.aborted,
             requestConfirmation: requestToolConfirmation,
+            actionIntent: visibleUserText,
             toolPolicy: routedToolPolicy || personality.toolPolicy,
             onProgress: (step: string) => {
               emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
@@ -2291,6 +2326,7 @@ export function registerChatHandler(
                 localWriteIntentReason,
                 isCancelled: () => abortController.signal.aborted,
                 requestConfirmation: requestToolConfirmation,
+                actionIntent: visibleUserText,
                 toolPolicy: routedToolPolicy || personality.toolPolicy,
                 onProgress: (step: string) => {
                   emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
@@ -2456,6 +2492,7 @@ export function registerChatHandler(
                 emitAgent("agent:progress", { text: step, agentName: "Lumi" });
               },
               ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
+              actionIntent: visibleUserText,
               ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
             },
             llmGetters.getOllama,
@@ -2565,6 +2602,7 @@ export function registerChatHandler(
                     });
                   },
                   ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
+                  actionIntent: visibleUserText,
                   ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
                 },
                 llmGetters.getOllama,

@@ -20,7 +20,10 @@ services:
       - "3000:3000"
     environment:
       LUMI_ROLE: personal
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      HOST: 0.0.0.0
+      LUMI_DATA_DIR: /app
+      JWT_SECRET: ${JWT_SECRET:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -39,7 +42,10 @@ services:
       - "3001:3000"
     environment:
       LUMI_ROLE: org
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      HOST: 0.0.0.0
+      LUMI_DATA_DIR: /app
+      JWT_SECRET: ${JWT_SECRET:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

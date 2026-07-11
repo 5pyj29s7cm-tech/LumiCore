@@ -1233,7 +1233,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const adapterRegistry = getAdapterRegistry({ userId, clientState: getClientState(userId) as Record<string, any> | null });
       return JSON.stringify({
         externalAppAutomationGate: 'removed',
-        messagingSendRequiresConfirmation: isMessagingSendConfirmationRequired(),
+        messagingSendRequiresConfirmation: isMessagingSendConfirmationRequired(userId),
         adapters: getExternalAppAdapters(),
         adapterRegistrySummary: adapterRegistry.summary,
         adapterRegistry: adapterRegistry.adapters.filter(adapter => ['web', 'finance', 'messaging', 'cad_bim', 'ai', 'automation'].includes(adapter.category)),
@@ -1372,7 +1372,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         clipboardResult: copied,
         opened: Boolean(args.openWechat),
         openResult: opened,
-        sendAllowed: !isMessagingSendConfirmationRequired(),
+        sendAllowed: !isMessagingSendConfirmationRequired(context?.userId),
         note: 'The draft is ready on the clipboard. Lumi did not send the message.',
       }, null, 2);
     },

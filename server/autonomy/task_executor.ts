@@ -134,13 +134,14 @@ function markLinkedPlanFailed(task: AutonomousTask, error: string) {
 export async function executeNextAutonomousTask(
   io: SocketIOServer,
   getters: LLMGetters,
+  userId?: string,
 ): Promise<{ executed: boolean; taskId?: string; result?: string }> {
   // Don't start a new task if one is already running
-  if (getRunningTask()) {
+  if (getRunningTask(userId)) {
     return { executed: false, result: 'Task already running' };
   }
 
-  const task = dequeue();
+  const task = dequeue(userId);
   if (!task) return { executed: false };
 
   const gate = isAutonomousWorkAllowed(task.userId);
@@ -152,7 +153,7 @@ export async function executeNextAutonomousTask(
   if (!running) return { executed: false };
   markLinkedPlanRunning(running);
 
-  io.emit('autonomous:task_started', {
+  io.to(`user:${task.userId}`).emit('autonomous:task_started', {
     taskId: task.id,
     title: task.title,
     mode: task.mode,
@@ -160,7 +161,7 @@ export async function executeNextAutonomousTask(
   });
 
   try {
-    const currentGate = getGateConfig();
+    const currentGate = getGateConfig(task.userId);
     const maxIterations = currentGate.autonomyLevel === 'full' ? 50 : 30;
     // Build desktop relay using the user's registered desktop client, not a broad user-room broadcast.
     const desktopRelay = createDesktopRelay({
@@ -175,7 +176,8 @@ export async function executeNextAutonomousTask(
     const context: ToolContext = {
       userId: task.userId,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
-      requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args),
+      requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args, { actionIntent: task.description }),
+      actionIntent: task.description,
       toolPolicy,
       isCancelled: () => cancelled,
       autonomous: true,
@@ -218,7 +220,7 @@ export async function executeNextAutonomousTask(
     markCompleted(task.id, summary, toolCallCount, tokensUsed);
     markLinkedPlanCompleted(task, summary);
 
-    io.emit('autonomous:task_completed', {
+    io.to(`user:${task.userId}`).emit('autonomous:task_completed', {
       taskId: task.id,
       title: task.title,
       result: summary,
@@ -234,7 +236,7 @@ export async function executeNextAutonomousTask(
     markFailed(task.id, errorMsg);
     markLinkedPlanFailed(task, errorMsg);
 
-    io.emit('autonomous:task_failed', {
+    io.to(`user:${task.userId}`).emit('autonomous:task_failed', {
       taskId: task.id,
       title: task.title,
       error: errorMsg,

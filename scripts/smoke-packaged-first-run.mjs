@@ -175,6 +175,12 @@ async function main() {
       return fetchJson(`${baseUrl}/health`, { timeoutMs: 2000 });
     });
 
+    const bootstrap = await fetchJson(`${baseUrl}/auth/bootstrap`, { timeoutMs: 15000 });
+    if (!bootstrap?.success || !bootstrap?.token) {
+      throw new Error(`Local identity bootstrap failed: ${JSON.stringify(bootstrap)}`);
+    }
+    const authHeaders = { Authorization: `Bearer ${bootstrap.token}` };
+
     const marketplace = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, { timeoutMs: 8000 });
     if (!Array.isArray(marketplace) || marketplace.length < 20) {
       throw new Error(`Unexpected marketplace response. Skill count: ${Array.isArray(marketplace) ? marketplace.length : 'not-array'}`);
@@ -207,7 +213,10 @@ async function main() {
     await assertPath(skillNodeModules, 'installed skill node_modules link');
 
     const connectedSkill = await waitFor(`${dirName} MCP connection`, args.timeoutMs, 1000, async () => {
-      const skills = await fetchJson(`${baseUrl}/skills`, { timeoutMs: 8000 });
+      const skills = await fetchJson(`${baseUrl}/skills`, {
+        headers: authHeaders,
+        timeoutMs: 8000,
+      });
       const items = Array.isArray(skills?.skills) ? skills.skills : [];
       return items.find(item => item.name === dirName && item.connected);
     });

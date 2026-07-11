@@ -39,6 +39,15 @@ import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { canAutoApproveAction } from "../tools/action_constitution";
+import {
+  clearPendingConfirmation,
+  consumePendingConfirmation,
+  formatPendingConfirmationPrompt,
+  getPendingConfirmation,
+  isConfirmationCancellation,
+  isExplicitConfirmationReply,
+  recordPendingConfirmation,
+} from "../tools/pending_confirmation";
 import { updatePresence } from "../biometrics/presence";
 import { getVoiceprints } from "../biometrics/store";
 import { formatClientSelfPrompt } from "../client/self_model";
@@ -451,14 +460,19 @@ async function processVoiceInput(
   session.ttsAbortController = new AbortController();
   socket.emit("audio:status", { status: "thinking" });
   const voiceScope = { domain: session.domain, orgId: session.orgId };
+  if (isConfirmationCancellation(userText)) clearPendingConfirmation(session.userId);
+  const pendingConfirmation = isExplicitConfirmationReply(userText)
+    ? getPendingConfirmation(session.userId)
+    : null;
+  const pendingConfirmationPrompt = pendingConfirmation
+    ? formatPendingConfirmationPrompt(pendingConfirmation)
+    : '';
   const recentProactiveSuggestion = getRecentProactiveSuggestion(session.userId);
   const shouldUseProactiveContext = Boolean(recentProactiveSuggestion && isVoiceProactiveFollowup(userText));
   const proactiveContextPrompt = shouldUseProactiveContext && recentProactiveSuggestion
     ? formatProactiveSuggestionForPrompt(recentProactiveSuggestion)
     : '';
-  const routedUserText = proactiveContextPrompt
-    ? `${userText}\n\n${proactiveContextPrompt}`
-    : userText;
+  const routedUserText = [userText, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
   const allowLocalFileWrites = shouldAllowVoiceLocalFileWriteForTurn(routedUserText);
   const localWriteIntentReason = allowLocalFileWrites
     ? `Current voice request explicitly asked Lumi to generate/export a local deliverable: "${userText.slice(0, 120)}"`
@@ -711,8 +725,16 @@ async function processVoiceInput(
   });
 
   const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-    if (canAutoApproveAction(toolName, args)) return true;
-    logger.warn(`[Audio] Tool "${toolName}" blocked at hard boundary without showing a confirmation popup.`);
+    if (
+      pendingConfirmation
+      && consumePendingConfirmation(session.userId, pendingConfirmation.id, toolName, args)
+    ) {
+      logger.info(`[Audio] Consumed one-time confirmation for "${toolName}".`);
+      return true;
+    }
+    if (canAutoApproveAction(toolName, args, { actionIntent: routedUserText })) return true;
+    const pending = recordPendingConfirmation(session.userId, toolName, args, 'voice');
+    logger.warn(`[Audio] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
     return false;
   };
 
@@ -732,6 +754,7 @@ async function processVoiceInput(
     supervisedExternalCommits: true,
     allowLocalFileWrites,
     localWriteIntentReason,
+    actionIntent: routedUserText,
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
     isCancelled: () => pipelineAbort?.signal.aborted ?? false,
     onProgress: (step: string) => {

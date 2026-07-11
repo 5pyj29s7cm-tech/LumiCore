@@ -154,7 +154,7 @@ function nowInNightWindow(): boolean {
 function shouldRunSleepCycle(userId: string, options: DreamCycleOptions): { allowed: boolean; reason?: string } {
   if (options.force) return { allowed: true };
 
-  const gate = getGateConfig();
+  const gate = getGateConfig(userId);
   if (!gate.alwaysOnline) return { allowed: false, reason: 'Always Online is disabled' };
 
   const state = getSleepCycleState(userId);

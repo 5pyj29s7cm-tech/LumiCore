@@ -9,6 +9,7 @@ import { scheduler, registerScheduledTasks } from "../scheduler";
 import { runFirstBootExploration, isFirstBootComplete } from "../autonomy/system_explorer";
 import { installProfessionAgents } from "../autonomy/profession_templates";
 import bcrypt from "bcryptjs";
+import { getLocalAdminPassword } from "../config/local_identity";
 
 interface BootstrapContext {
   server: any;
@@ -69,7 +70,7 @@ export async function bootstrap(ctx: BootstrapContext) {
   }
 
   // Auto-create admin account for local/desktop use
-  const adminPassword = process.env.AUTO_LOGIN_PASSWORD || 'lumi_admin_2026';
+  const adminPassword = getLocalAdminPassword();
   if (adminPassword) {
     try {
       const db = readDB();

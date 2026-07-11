@@ -12,6 +12,7 @@ import {
 } from './db';
 import { PLANS, getPlan } from './types';
 import type { CommercialReleaseInfo } from './types';
+import { getJwtSecret } from '../config/local_identity';
 
 const router = Router();
 
@@ -23,7 +24,7 @@ function getUserId(req: any): string {
       token = req.headers.authorization.slice(7);
     }
     if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local') as jwt.JwtPayload;
+      const decoded = jwt.verify(token, getJwtSecret()) as jwt.JwtPayload;
       if (typeof decoded?.uid === 'string') return decoded.uid;
     }
   } catch {}

@@ -25,6 +25,7 @@ import { recordTokenUsage } from "../llm/token_tracker";
 import { executeExternalAgent, validateExternalCommand } from "./external_runtime";
 import { ToolExecutionRecord } from "../tools/types";
 import { buildResponseLanguageInstruction } from "../utils/language";
+import { canAutoApproveAction } from "../tools/action_constitution";
 
 type LLMProvider = 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
 type ScopedLLMConfig = {
@@ -818,10 +819,14 @@ async function executeWorkerTask(
 
     try {
       const messages: NormalizedMessage[] = [{ role: 'user', content: workerPrompt }];
-      // Worker context: auto-approve confirm-level tools, desktop relay + LLM getters for vision tools
+      // Workers inherit the task intent: ordinary tool use stays low-friction, while
+      // high-consequence actions cannot bypass the Action Constitution.
       const workerContext = {
         userId: context.userId,
-        requestConfirmation: async () => true,
+        requestConfirmation: async (toolName: string, args: Record<string, any>) =>
+          canAutoApproveAction(toolName, args, { actionIntent: subTask.description }),
+        actionIntent: subTask.description,
+        source: 'orchestrator',
         desktopRelay: context.desktopRelay,
         isCancelled: context.isCancelled,
         llmGetters,

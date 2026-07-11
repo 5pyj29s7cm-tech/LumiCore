@@ -70,6 +70,17 @@ describe('Action Constitution', () => {
     expect(classifyAction('desktop_run_command', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\me\\Desktop\\plan_run_autocad.ps1"' })).toBe('desktop_control');
   });
 
+  it('uses the original task intent to classify a raw coordinate click', () => {
+    const args = { x: 820, y: 640 };
+    expect(classifyActionRisk('desktop_mouse_click_at', args)).toBe('medium');
+    expect(classifyActionRisk('desktop_mouse_click_at', args, {
+      actionIntent: '在券商客户端确认买入100股并提交订单',
+    })).toBe('high');
+    expect(canAutoApproveAction('desktop_mouse_click_at', args, {
+      actionIntent: '在法院立案网提交立案材料',
+    })).toBe(false);
+  });
+
   it('upgrades safe local writes to confirmation', () => {
     const decision = evaluateActionConstitution('write_file', { path: 'notes.txt' }, 'safe');
     expect(decision.level).toBe('confirm');
@@ -355,7 +366,7 @@ describe('Action Constitution', () => {
 
     await expect(registry.execute('desktop_ui_click', { name: 'Submit payment' }, {
       requestConfirmation: async () => false,
-    })).resolves.toContain('declined by the user');
+    })).resolves.toContain('requires user confirmation');
   });
 
   it('does not trust model-provided confirmation for sensitive client actions', async () => {

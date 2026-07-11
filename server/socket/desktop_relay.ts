@@ -19,6 +19,7 @@ type PendingDesktopRelay = {
   timeout: ReturnType<typeof setTimeout>;
   onDisconnect?: () => void;
   requestSocket?: Socket;
+  targetSocketId?: string;
 };
 
 export type DesktopRelayLifecycle = (event: {
@@ -64,9 +65,10 @@ export function getPreferredDesktopSocketId(userId: string): string | null {
   return devices[0]?.socketId || null;
 }
 
-export function handleDesktopRelayResult(correlationId: string, data: DesktopRelayResult = {}): boolean {
+export function handleDesktopRelayResult(correlationId: string, data: DesktopRelayResult = {}, senderSocketId?: string): boolean {
   const pending = pendingDesktopRelays.get(correlationId);
   if (!pending) return false;
+  if (!senderSocketId || !pending.targetSocketId || senderSocketId !== pending.targetSocketId) return false;
 
   pendingDesktopRelays.delete(correlationId);
   clearTimeout(pending.timeout);
@@ -143,28 +145,30 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
         requestSocket: cancelOnDisconnect ? options.requestSocket : undefined,
       });
 
+      const emitToDesktopTarget = (socketId: string): boolean => {
+        const targetSocket = options.io.sockets.sockets.get(socketId);
+        if (!targetSocket?.connected) return false;
+        const pending = pendingDesktopRelays.get(cid);
+        if (!pending) return false;
+        pending.targetSocketId = socketId;
+        targetSocket.emit('tool:desktop_exec', payload);
+        return true;
+      };
+
       if (cancelOnDisconnect && options.requestSocket) {
         options.requestSocket.once('disconnect', onDisconnect);
       }
 
       const preferredSocketId = getPreferredDesktopSocketId(options.userId);
-      if (preferredSocketId) {
-        const targetSocket = options.io.sockets.sockets.get(preferredSocketId);
-        if (targetSocket?.connected) {
-          targetSocket.emit('tool:desktop_exec', payload);
-          return;
-        }
-      }
+      if (preferredSocketId && emitToDesktopTarget(preferredSocketId)) return;
 
       const roomSockets = options.io.sockets.adapter.rooms.get(room);
       if (roomSockets?.size === 1) {
-        options.io.to(Array.from(roomSockets)[0]).emit('tool:desktop_exec', payload);
-        return;
+        if (emitToDesktopTarget(Array.from(roomSockets)[0])) return;
       }
 
       if (options.requestSocket?.connected) {
-        options.requestSocket.emit('tool:desktop_exec', payload);
-        return;
+        if (emitToDesktopTarget(options.requestSocket.id)) return;
       }
 
       finishWithError(`Desktop tool "${toolName}" cannot run: no desktop client is connected for this user`);

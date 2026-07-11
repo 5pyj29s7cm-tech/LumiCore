@@ -16,7 +16,7 @@ describe('desktop operation mode autonomy sync', () => {
     app = await makeApp();
     mountPreferencesRoutes(app.apiRouter, JWT_SECRET);
     const { saveGateConfig } = await import('../server/autonomy/safety_gate');
-    saveGateConfig({ autonomyLevel: 'semi' });
+    saveGateConfig({ autonomyLevel: 'semi' }, 'mode-sync-user');
   });
 
   afterEach(() => {
@@ -37,20 +37,20 @@ describe('desktop operation mode autonomy sync', () => {
     const { getGateConfig } = await import('../server/autonomy/safety_gate');
 
     await expect(putMode('chat')).resolves.toMatchObject({ autonomyLevel: 'reactive' });
-    expect(getGateConfig().autonomyLevel).toBe('reactive');
+    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('reactive');
 
     await expect(putMode('assistant')).resolves.toMatchObject({ autonomyLevel: 'semi' });
-    expect(getGateConfig().autonomyLevel).toBe('semi');
+    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('semi');
 
     await expect(putMode('autonomous')).resolves.toMatchObject({ autonomyLevel: 'full' });
-    expect(getGateConfig().autonomyLevel).toBe('full');
+    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('full');
   });
 
   it('does not treat Meeting as a fourth autonomy permission level', async () => {
     const { getGateConfig, saveGateConfig } = await import('../server/autonomy/safety_gate');
-    saveGateConfig({ autonomyLevel: 'full' });
+    saveGateConfig({ autonomyLevel: 'full' }, 'mode-sync-user');
 
     await expect(putMode('meeting')).resolves.toMatchObject({ ok: true });
-    expect(getGateConfig().autonomyLevel).toBe('full');
+    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('full');
   });
 });

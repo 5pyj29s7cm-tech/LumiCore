@@ -18,7 +18,9 @@ import iconv from 'iconv-lite';
 import { readDB, writeDB } from '../db_layer';
 import { chunkText, ingestDocument } from '../server/agents/rag';
 import { getDataPath, getDataRoot } from '../server/config/data_path';
+import { getJwtSecret } from '../server/config/local_identity';
 import * as OrgKB from '../server/org/kb';
+import { getMember } from '../server/org/db';
 import { analyzeScreen } from '../server/llm/adapter';
 import { getUserPreferredVision, type VisionProvider } from '../server/llm/vision_preferences';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../server/stt/file_transcription';
@@ -36,7 +38,7 @@ fs.mkdirSync(PERSONAL_KNOWLEDGE_DIR, { recursive: true });
 
 const router = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
+const JWT_SECRET = getJwtSecret();
 
 function requireAuth(req: Request, res: Response, next: () => void): void {
   let token = req.cookies.token;
@@ -693,15 +695,33 @@ function getRequestedDomain(req: Request): 'personal' | 'work' {
 }
 
 function getFileScope(req: Request): FileScope {
+  const payload = getAuthPayload(req);
+  if (!payload?.uid) {
+    const err: any = new Error('Authentication required');
+    err.status = 401;
+    throw err;
+  }
+
   const domain = getRequestedDomain(req);
   if (domain === 'personal') {
     return { domain: 'personal', dir: PERSONAL_KNOWLEDGE_DIR };
   }
 
-  const payload = getAuthPayload(req);
-  const orgId = String(req.query.orgId || req.body?.orgId || payload?.orgId || '').trim();
-  if (!payload || !orgId) {
+  const requestedOrgId = String(req.query.orgId || req.body?.orgId || '').trim();
+  const orgId = requestedOrgId || String(payload.orgId || '').trim();
+  if (!orgId || !payload.orgId) {
     const err: any = new Error('Organization context required');
+    err.status = 403;
+    throw err;
+  }
+  if (orgId !== payload.orgId) {
+    const err: any = new Error('Organization context does not match the requested organization');
+    err.status = 403;
+    throw err;
+  }
+  const membership = getMember(orgId, payload.uid);
+  if (!membership || membership.status !== 'active') {
+    const err: any = new Error('Active organization membership required');
     err.status = 403;
     throw err;
   }

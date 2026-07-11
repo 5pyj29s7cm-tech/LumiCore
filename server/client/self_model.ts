@@ -1507,7 +1507,7 @@ export function formatClientSelfPrompt(userId: string): string {
   const health = getClientHealthReport(userId);
   const awareness = getClientSelfAwarenessReport(userId);
   const stateAge = state?.updatedAt ? Math.round((Date.now() - state.updatedAt) / 1000) : null;
-  const gate = getGateConfig();
+  const gate = getGateConfig(userId);
   const workflows = listAutonomousWorkflows(userId);
   const enabledWorkflows = workflows.filter(workflow => workflow.enabled);
   const memoryFirewall = getMemoryFirewallPolicy();

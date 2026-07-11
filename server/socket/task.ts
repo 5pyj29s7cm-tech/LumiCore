@@ -30,6 +30,15 @@ import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { canAutoApproveAction } from "../tools/action_constitution";
+import {
+  clearPendingConfirmation,
+  consumePendingConfirmation,
+  formatPendingConfirmationPrompt,
+  getPendingConfirmation,
+  isConfirmationCancellation,
+  isExplicitConfirmationReply,
+  recordPendingConfirmation,
+} from "../tools/pending_confirmation";
 import type { ToolExecutionRecord } from "../tools/types";
 import { createDesktopRelay } from "./desktop_relay";
 
@@ -55,8 +64,16 @@ export function registerTaskHandler(
 ) {
   socket.on("agent:task", async (data: { text: string; history?: any[]; personalityId?: string; conversationId?: string }) => {
     const uid = userIdFn(socket);
+    if (isConfirmationCancellation(data.text)) clearPendingConfirmation(uid);
+    const pendingConfirmation = isExplicitConfirmationReply(data.text)
+      ? getPendingConfirmation(uid)
+      : null;
+    const pendingConfirmationPrompt = pendingConfirmation
+      ? formatPendingConfirmationPrompt(pendingConfirmation)
+      : '';
+    const routedTaskText = [data.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
     const interactionId = crypto.randomUUID();
-    const exposeAgentWork = shouldExposeAgentWork(data.text);
+    const exposeAgentWork = shouldExposeAgentWork(routedTaskText);
 
     // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
     const personalityPreConfig = personalityRegistry.get(data.personalityId || 'lumi');
@@ -65,7 +82,7 @@ export function registerTaskHandler(
       : { typeWeights: {}, perspectiveWeights: {} };
 
     const relevantMemories = queryMemories({
-      userId: uid, query: data.text, limit: 5, minConfidence: 0.4,
+      userId: uid, query: routedTaskText, limit: 5, minConfidence: 0.4,
       retrievalTypeWeights: retrievalBiases.typeWeights,
       retrievalPerspectiveWeights: retrievalBiases.perspectiveWeights,
     });
@@ -105,7 +122,7 @@ export function registerTaskHandler(
     // ── Load persisted conversation history (survives page reload) ──
     const turnDispatch = buildLumiTurnDispatch({
       userId: uid,
-      text: data.text,
+      text: routedTaskText,
       channel: 'task',
       source: 'task',
       category: 'command',
@@ -117,24 +134,24 @@ export function registerTaskHandler(
     const visionIntent = turnFlow.visionIntent;
     const executionDecision = buildLumiExecutionDecision({
       flow: turnFlow,
-      text: data.text,
+      text: routedTaskText,
       toolDeclarations: toolRegistry.getToolDeclarations(),
       personalityToolPolicy: personality.toolPolicy,
     });
     const intentTrace = buildLumiIntentTrace({
       dispatch: turnDispatch,
       execution: executionDecision,
-      text: data.text,
+      text: routedTaskText,
       source: 'task',
     });
     const capabilitySelection = buildLumiCapabilitySelection({
       dispatch: turnDispatch,
       execution: executionDecision,
-      text: data.text,
+      text: routedTaskText,
     });
     const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
       channel: 'task',
-      text: data.text,
+      text: routedTaskText,
       flow: turnFlow,
       capabilitySelection,
     });
@@ -176,14 +193,14 @@ export function registerTaskHandler(
     }
     effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
       userId: uid,
-      text: data.text,
+      text: routedTaskText,
       flow: turnFlow,
       toolRegistry,
     });
     if (workSurfaceRoute.promptOverlay) {
       effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
     }
-    const visionRoutingOverlay = visionIntent ? buildVisionRoutingOverlay(uid, data.text) : '';
+    const visionRoutingOverlay = visionIntent ? buildVisionRoutingOverlay(uid, routedTaskText) : '';
     if (visionRoutingOverlay) {
       effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
     }
@@ -211,7 +228,7 @@ export function registerTaskHandler(
     const messages: NormalizedMessage[] = [
       { role: 'system', content: effectiveSystemPrompt },
       ...voiceHistory,
-      { role: 'user', content: data.text },
+      { role: 'user', content: routedTaskText },
     ];
     const persistTaskLearning = (
       assistantText: string,
@@ -283,7 +300,7 @@ export function registerTaskHandler(
         llmModel: activeModel,
         isLLMAvailable: true,
       };
-      cognition = await processInput(data.text, cognitiveCtx);
+      cognition = await processInput(routedTaskText, cognitiveCtx);
 
       // If cognitive engine handled directly (simple command), skip LLM entirely
       // ── Auto-select model: flash for simple chat, pro for complex tasks ──
@@ -345,8 +362,8 @@ export function registerTaskHandler(
 
       // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
       let orchestratedText = '';
-      if (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question') {
-        const complexity = classifyComplexity(data.text, { userId: uid, personalityId: data.personalityId || 'lumi' });
+      if (!pendingConfirmation && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
+        const complexity = classifyComplexity(routedTaskText, { userId: uid, personalityId: data.personalityId || 'lumi' });
         if (!workSurfaceRoute.forbidComputerUse && (complexity === 'complex' || complexity === 'moderate')) {
           const db = readDB();
           const availableAgents = (db.agents || []).filter((a: any) => a.status !== 'offline');
@@ -425,8 +442,16 @@ export function registerTaskHandler(
       }
 
       const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-        if (canAutoApproveAction(toolName, args)) return true;
-        console.warn(`[TaskHandler] Tool "${toolName}" blocked at hard boundary without showing a confirmation popup.`);
+        if (
+          pendingConfirmation
+          && consumePendingConfirmation(uid, pendingConfirmation.id, toolName, args)
+        ) {
+          console.log(`[TaskHandler] Consumed one-time confirmation for "${toolName}".`);
+          return true;
+        }
+        if (canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })) return true;
+        const pending = recordPendingConfirmation(uid, toolName, args, 'task');
+        console.warn(`[TaskHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
         return false;
       };
 
@@ -450,7 +475,7 @@ export function registerTaskHandler(
             socket.emit("agent:chunk", { text: chunk, agentName: personality.name });
           }
         },
-        { userId: uid, desktopRelay, requestConfirmation, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { userId: uid, desktopRelay, requestConfirmation, actionIntent: routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,

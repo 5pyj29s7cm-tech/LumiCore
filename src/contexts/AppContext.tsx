@@ -515,6 +515,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
           if (result.success && !cancelled) {
             console.log('[Auth] Auto-logged in via bootstrap as', result.user?.username);
+            socketService.refreshAuth();
           } else if (!cancelled) {
             console.warn('[Auth] Bootstrap failed after retries:', result.error);
           }

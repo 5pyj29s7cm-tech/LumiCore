@@ -77,38 +77,56 @@ const AUTONOMY_LEVEL_PRESETS: Record<AutonomyLevel, Partial<SafetyGateConfig>> =
 
 const DB_KEY = 'autonomy_gate_config';
 
-let config: SafetyGateConfig = { ...DEFAULT_CONFIG };
+const configs = new Map<string, SafetyGateConfig>();
 const userTokensThisHour = new Map<string, { hour: number; tokens: number }>();
 const userLastIdle = new Map<string, { idleSeconds: number; timestamp: number }>();
 
-export function loadGateConfig(): SafetyGateConfig {
+function configScope(userId?: string): string {
+  return String(userId || '').trim() || '__default__';
+}
+
+function configDbKey(userId?: string): string {
+  const normalized = String(userId || '').trim();
+  return normalized ? `${DB_KEY}:${normalized}` : DB_KEY;
+}
+
+export function loadGateConfig(userId?: string): SafetyGateConfig {
+  const scope = configScope(userId);
+  let config = { ...DEFAULT_CONFIG };
   try {
     const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === DB_KEY);
+    const settings = db.settings || [];
+    const setting = settings.find((s: any) => s.key === configDbKey(userId))
+      || (userId ? settings.find((s: any) => s.key === DB_KEY) : undefined);
     if (setting?.value) {
       config = normalizeGateConfig(JSON.parse(setting.value));
     }
   } catch {}
+  configs.set(scope, config);
   return { ...config };
 }
 
-export function getGateConfig(): SafetyGateConfig {
-  return { ...config };
+export function getGateConfig(userId?: string): SafetyGateConfig {
+  const scope = configScope(userId);
+  return { ...(configs.get(scope) || loadGateConfig(userId)) };
 }
 
-export function saveGateConfig(partial: Partial<SafetyGateConfig>): SafetyGateConfig {
+export function saveGateConfig(partial: Partial<SafetyGateConfig>, userId?: string): SafetyGateConfig {
+  const current = getGateConfig(userId);
   const level = normalizeAutonomyLevel(partial.autonomyLevel);
   const patch = level ? { ...AUTONOMY_LEVEL_PRESETS[level], ...partial, autonomyLevel: level } : partial;
-  config = normalizeGateConfig({ ...config, ...patch });
+  const config = normalizeGateConfig({ ...current, ...patch });
+  configs.set(configScope(userId), config);
   try {
     const db = readDB();
-    let setting = (db.settings || []).find((s: any) => s.key === DB_KEY);
+    const key = configDbKey(userId);
+    let setting = (db.settings || []).find((s: any) => s.key === key);
     const value = JSON.stringify(config);
     if (setting) {
       setting.value = value;
     } else {
       if (!db.settings) db.settings = [];
-      db.settings.push({ key: DB_KEY, value });
+      db.settings.push({ key, value });
     }
     writeDB(db);
   } catch {}
@@ -180,7 +198,7 @@ export function getRecentIdleState(userId: string): { idleSeconds: number; times
 
 /** Check if autonomous work is currently allowed for this user */
 export function isAutonomousWorkAllowed(userId?: string): { allowed: boolean; reason?: string } {
-  const cfg = config;
+  const cfg = getGateConfig(userId);
   const now = new Date();
   const hour = now.getHours();
 
@@ -229,8 +247,8 @@ export function isAutonomousWorkAllowed(userId?: string): { allowed: boolean; re
   return { allowed: true };
 }
 
-export function isMessagingSendConfirmationRequired(): boolean {
-  return config.messagingSendRequiresConfirmation !== false;
+export function isMessagingSendConfirmationRequired(userId?: string): boolean {
+  return getGateConfig(userId).messagingSendRequiresConfirmation !== false;
 }
 
 /** Record token usage for budget tracking */

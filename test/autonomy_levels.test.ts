@@ -48,4 +48,15 @@ describe('autonomy levels', () => {
     expect(config.externalAppAutomationEnabled).toBe(false);
     expect(isAutonomousWorkAllowed('level_semi_user').allowed).toBe(true);
   });
+
+  it('keeps autonomy policies isolated per user', async () => {
+    const { getGateConfig, isAutonomousWorkAllowed, saveGateConfig } = await import('../server/autonomy/safety_gate');
+    saveGateConfig({ autonomyLevel: 'reactive' }, 'isolated-reactive');
+    saveGateConfig({ autonomyLevel: 'full' }, 'isolated-full');
+
+    expect(getGateConfig('isolated-reactive').autonomyLevel).toBe('reactive');
+    expect(getGateConfig('isolated-full').autonomyLevel).toBe('full');
+    expect(isAutonomousWorkAllowed('isolated-reactive').allowed).toBe(false);
+    expect(isAutonomousWorkAllowed('isolated-full').allowed).toBe(true);
+  });
 });
