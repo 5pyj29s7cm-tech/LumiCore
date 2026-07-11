@@ -130,6 +130,8 @@ const DECLARATIONS = [
   'capability_gap_autofix',
   'capability_learning_list',
   'client_get_state',
+  'lumi_sleep_status',
+  'lumi_sleep_cycle',
   'work_takeover_capability_reuse_probe',
   'work_takeover_real_smoke_run',
   'work_takeover_task_prepare_industry_package',
@@ -639,6 +641,21 @@ describe('tool router', () => {
       'self_extension_plan',
       'capability_learning_list',
     ]));
+  });
+
+  it('routes sleep and dream requests to Lumi memory consolidation tools', () => {
+    const route = routeToolsForTurn(
+      '让 Lumi 现在做梦休息一下，整理最近的记忆，降低混乱，但不要改核心人格',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('sleep_dream');
+    expect(route.toolNames.slice(0, 4)).toEqual(expect.arrayContaining([
+      'lumi_sleep_status',
+      'lumi_sleep_cycle',
+    ]));
+    expect(route.toolNames).not.toContain('legal_search_case');
+    expect(route.toolNames).not.toContain('wechat_send_message');
   });
 
   it('merges routes with existing restrictive policies', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeMutations, OwnerProfile } from '../server/personality/evolution';
+import { computeMutations, generateReviewPrompt, OwnerProfile } from '../server/personality/evolution';
 import { generateSystemPrompt } from '../server/personality/engine';
 import { PersonalityConfig } from '../server/personality/types';
 
@@ -83,5 +83,38 @@ describe('personality core and growth split', () => {
     expect(prompt).toContain('same Lumi, not separate personas');
     expect(prompt).toContain('desktop client');
     expect(prompt).toContain('do not treat it as core identity');
+  });
+
+  it('generates clean weekly monthly and yearly review prompts', () => {
+    for (const depth of ['weekly', 'monthly', 'yearly'] as const) {
+      const prompt = generateReviewPrompt({
+        depth,
+        personalityName: 'Lumi',
+        currentVersion: '2.3',
+        evolutionSteps: [{
+          version: '2.4',
+          timestamp: new Date().toISOString(),
+          trigger: 'scheduled',
+          depth: depth === 'weekly' ? 'lightweight' : 'full',
+          ownerProfile: profile,
+          mutations: [],
+          narrative: '更理解主人对桌面能力和法律工作流的要求。',
+        }],
+        newMemoryCount: 12,
+        newInteractionCount: 8,
+        topMemoryTopics: ['桌面能力', '法律工作流', '自主学习'],
+        connectionScore: 0.83,
+        totalFacts: 42,
+        totalPreferences: 9,
+        activeConversations: 3,
+      });
+
+      expect(prompt).toContain('你是 Lumi');
+      expect(prompt).toContain('主人主要话题：桌面能力、法律工作流、自主学习');
+      expect(prompt).toContain('连接亲密度：83%');
+      expect(prompt).not.toContain('�');
+      expect(prompt).not.toContain('{label}');
+      expect(prompt).not.toContain('{ctx.');
+    }
   });
 });

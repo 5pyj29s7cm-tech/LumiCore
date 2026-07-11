@@ -63,6 +63,8 @@ const MESSAGE_TERMS = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6
 const REPLY_VERBS = /(?:\u56de\u4e00\u4e0b|\u56de\u590d|\u56de|\u8349\u7a3f|\b(?:reply|respond|draft)\b)/iu;
 const MESSAGE_SEND_VERBS = /(?:\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\u53d1\u7ed9|\u53d1\u9001|\u8f6c\u53d1|\u7c98\u8d34|\u8d34\u5230|\u53d1|\b(?:send|forward|paste)\b)/iu;
 const GREETING_MESSAGE_TERMS = /(?:\u95ee\u5019\u8bed|\u95ee\u5019|\u5bd2\u6684|\u62db\u547c|\u6d88\u606f|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u5ba2\u6237|\u8054\u7cfb\u4eba|\u7fa4|\b(?:greeting|message|wechat|wecom|customer|contact|group)\b)/iu;
+const DESKTOP_AI_TERMS = /\b(?:workbuddy|work\s*buddy|codex|chatgpt|chatgpt\.com|claude|gemini|deepseek|kimi|doubao|tongyi|qwen|wenxin|ernie|perplexity|cursor|copilot|ollama|lm\s*studio|cherry\s*studio|anythingllm|ai\s*(?:tool|tools|app|apps|agent|agents|assistant|assistants|model|models)|other\s+ai|desktop\s+ai|local\s+ai)\b/i;
+const DESKTOP_AI_ACTION_VERBS = /\b(?:ask|query|send|forward|collect|gather|compare|summari[sz]e|bring\s+back|take\s+back|retrieve|paste\s+into|hand\s+off)\b/i;
 const CONTINUE_VERBS = /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b|\b(?:continue|resume)\b)/iu;
 const TASK_TERMS = /(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee|\b(?:task|customer|delivery|takeover|project)\b)/iu;
 const CREATE_OR_DRAW_VERBS = /(?:\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u5236\u4f5c|\u505a|\u753b|\u51fa|\b(?:create|generate|draw|make)\b)/iu;
@@ -79,6 +81,7 @@ const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
   { name: 'legal-work-product', all: [LEGAL_TERMS, WORK_PRODUCT_VERBS] },
   { name: 'messaging-reply', all: [MESSAGE_TERMS, REPLY_VERBS] },
   { name: 'messaging-send-or-greeting', all: [MESSAGE_SEND_VERBS, GREETING_MESSAGE_TERMS] },
+  { name: 'desktop-ai-collaboration', all: [DESKTOP_AI_TERMS, DESKTOP_AI_ACTION_VERBS] },
   { name: 'task-continuation', all: [CONTINUE_VERBS, TASK_TERMS] },
   { name: 'visual-production', all: [CREATE_OR_DRAW_VERBS, VISUAL_OUTPUT_TERMS] },
   { name: 'work-product', all: [WORK_PRODUCT_VERBS, WORK_PRODUCT_TERMS] },

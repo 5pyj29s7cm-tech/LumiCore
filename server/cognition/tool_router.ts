@@ -267,6 +267,10 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'autonomy_register_workflow',
     'autonomy_set_workflow_enabled',
   ],
+  sleepDream: [
+    'lumi_sleep_status',
+    'lumi_sleep_cycle',
+  ],
   calendar: [
     'calendar_today',
     'upcoming_events',
@@ -435,6 +439,15 @@ const ROUTES: RouteDefinition[] = [
       /\b(work\s*takeover|real\s*smoke|closed\s*loop|capability\s*reuse|pressure\s*test|task\s*center|take\s*over)\b/i,
     ],
     groups: ['workTakeover', 'skills'],
+  },
+  {
+    category: 'sleep_dream',
+    reason: 'sleep, dream, or internal memory consolidation request',
+    patterns: [
+      /(?:做梦|睡觉|睡眠|休息|入睡|梦境|梦一下|消化一下|整理记忆|整理一下记忆|记忆整理|记忆巩固|内在整理|人格消化|人格整理|降低混乱|减少混乱|醒来|睡醒)/u,
+      /\b(?:sleep|dream|rest|nap|memory\s*consolidation|consolidate\s+(?:memory|memories)|process\s+(?:memory|memories)|dream\s*cycle|sleep\s*cycle)\b/i,
+    ],
+    groups: ['sleepDream'],
   },
   {
     category: 'messaging',
@@ -648,6 +661,12 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'desktop_capture_screen',
       );
     }
+  }
+  if (categories.includes('sleep_dream')) {
+    priorities.push(
+      'lumi_sleep_status',
+      'lumi_sleep_cycle',
+    );
   }
   if (categories.includes('legal')) {
     if (/案件文件夹|材料文件夹|文件夹.*(?:代理词|证据目录|委托书|起诉状|答辩状)|读取.*(?:案件|材料).*文件夹|case\s*folder|legal\s*folder/i.test(text)) {

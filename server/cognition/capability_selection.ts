@@ -13,6 +13,7 @@ export type LumiCapabilityLane =
   | 'work_takeover'
   | 'legal_casework'
   | 'messaging'
+  | 'internal_memory'
   | 'artifact_work'
   | 'design_cad'
   | 'desktop_control'
@@ -81,6 +82,10 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'desktop_keyboard_press',
     'browser_open_task',
     'external_app_list_adapters',
+  ],
+  internal_memory: [
+    'lumi_sleep_status',
+    'lumi_sleep_cycle',
   ],
   artifact_work: ['work_product_plan', 'create_docx', 'create_ppt', 'create_pdf', 'write_file', 'work_product_verify'],
   design_cad: [
@@ -257,6 +262,14 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
   }
 
   const actionContract = buildActionContract(text);
+  if (routeHas(input, 'sleep_dream') || routeHasTool(input, /^lumi_sleep_/)) {
+    return {
+      lane: 'internal_memory',
+      primary: 'sleep/dream memory consolidation',
+      reasons: [...reasons, 'sleep, dream, or memory consolidation tools matched'],
+    };
+  }
+
   if (
     actionContract.kind === 'browser_account' ||
     (!routeHas(input, 'legal') && routeHas(input, 'authenticated_web', 'web_research'))
@@ -367,6 +380,8 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
       return 'Use the unified legal casework path across personal chat, company chat, voice, task center, and remote bot intake. Start from the case workspace/source intake, apply the major-premise/minor-premise/conclusion chain, verify current effective law before final documents, and stop for confirmation before filing, signing, paying, submitting, or committing a final legal position.';
     case 'messaging':
       return 'Use messaging tools as a bridge to customer or account communication. For explicit ordinary foreground sends, use the dedicated send tool and visible cursor path; draft before sending when the boundary is ambiguous.';
+    case 'internal_memory':
+      return 'Use Lumi sleep/dream tools for internal memory consolidation. Keep core identity stable, preserve original memories, mark uncertainty, and report only the dream status or useful next questions.';
     case 'artifact_work':
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':
