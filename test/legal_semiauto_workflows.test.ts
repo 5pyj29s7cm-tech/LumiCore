@@ -901,6 +901,47 @@ describe('semi-automated legal workflows', () => {
     }
   });
 
+  it('blocks formal legal delivery packages when no current-law citation is present', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_no_statute_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        caseName: '无法条引用阻断测试案',
+        documentType: '法律意见书',
+        outputDir: dir,
+        includeDocx: true,
+        reasoningSummary: [
+          '大前提：本意见需要补充现行有效法律依据后才能作为正式法律文书交付。',
+          '小前提：原告已供货，被告未付款，证据包括合同、送货单和付款记录。',
+          '结论：被告可能承担付款责任，但正式文书前必须补充可核验法条引用。',
+        ].join('\n'),
+        content: [
+          '# 法律意见书草稿',
+          '原告已供货，被告未支付剩余货款，建议主张付款责任。',
+          '该草稿故意不写具体法条名称，用于验证正式交付 gate。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包未生成');
+      expect(output).toContain('正式法律交付包未检测到可核验的法条引用');
+      expect(output).toContain('已识别法条数：0');
+      expect(fs.existsSync(path.join(dir, '00_current-law-gate-blocked.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '03_source-register.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '00_manifest.md'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(false);
+      expect(fs.readdirSync(dir).some(file => file.endsWith('.docx'))).toBe(false);
+
+      const report = fs.readFileSync(path.join(dir, '02_citation-verification-report.md'), 'utf-8');
+      expect(report).toContain('现行有效法律硬门槛：未通过');
+      const gateReport = fs.readFileSync(path.join(dir, '00_current-law-gate-blocked.md'), 'utf-8');
+      expect(gateReport).toContain('Missing statute citation: yes');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reuses archived case reasoning matrices for formal delivery packages', async () => {
     const registry = createLegalRegistry();
     const orgId = `test-legal-delivery-archived-reasoning-${Date.now()}`;

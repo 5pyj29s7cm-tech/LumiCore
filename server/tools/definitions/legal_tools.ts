@@ -349,6 +349,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
   const missing = checks.filter(item => !item.exists);
   const repealed = checks.filter(item => item.isEffective === false);
   const statuteGateRisks = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
+  const statuteGatePassed = statuteChecks.length > 0 && statuteGateRisks.length === 0;
   const valid = checks.filter(item => item.exists && item.isEffective !== false);
 
   const rows = checks.length
@@ -373,7 +374,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
     `- 已确认或可继续使用：${valid.length}`,
     `- 未确认存在：${missing.length}`,
     `- 已废止/失效风险：${repealed.length}`,
-    `- 现行有效法律硬门槛：${statuteGateRisks.length === 0 ? '通过' : '未通过'}`,
+    `- 现行有效法律硬门槛：${statuteGatePassed ? '通过' : '未通过'}`,
     '',
     '## 明细',
     '',
@@ -392,6 +393,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
 
 interface CurrentLawGateResult {
   passed: boolean;
+  missingStatuteCitation: boolean;
   checks: CitationCheck[];
   statuteChecks: CitationCheck[];
   blockingStatutes: CitationCheck[];
@@ -411,8 +413,10 @@ function evaluateCurrentLawGate(text: string, orgId?: string): CurrentLawGateRes
   const statuteChecks = checks.filter(item => item.type === 'statute');
   const blockingStatutes = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
   const missingCaseChecks = checks.filter(item => item.type === 'case' && !item.exists);
+  const missingStatuteCitation = statuteChecks.length === 0;
   return {
-    passed: blockingStatutes.length === 0,
+    passed: !missingStatuteCitation && blockingStatutes.length === 0,
+    missingStatuteCitation,
     checks,
     statuteChecks,
     blockingStatutes,
@@ -506,6 +510,7 @@ function formatCurrentLawGateBlock(args: {
     `- Citation report: ${args.reportPath}`,
     `- Source register: ${args.sourcePath}`,
     `- Statute citations checked: ${args.gate.statuteChecks.length}`,
+    `- Missing statute citation: ${args.gate.missingStatuteCitation ? 'yes' : 'no'}`,
     `- Blocking statute citations: ${args.gate.blockingStatutes.length}`,
     `- Missing case citations for lawyer review: ${args.gate.missingCaseChecks.length}`,
     '',
@@ -519,6 +524,7 @@ function formatCurrentLawGateBlock(args: {
     '',
     '## Required Fix',
     '',
+    '- Add at least one reviewable current effective statute or judicial interpretation citation for formal legal delivery.',
     '- Replace repealed statutes with current effective law or judicial interpretations.',
     '- Verify unknown statutes against an authoritative source before generating the formal delivery package.',
     '- Re-run legal_finalize_delivery_package after the legal authority text is corrected.',
@@ -4516,6 +4522,12 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   const reasoningGatePath = path.join(outputDir, '00_reasoning-gate-blocked.md');
 
   if (!currentLawGate.passed) {
+    const currentLawBlockReason = currentLawGate.missingStatuteCitation
+      ? '现行有效法律硬门槛未通过。正式法律交付包未检测到可核验的法条引用。'
+      : '现行有效法律硬门槛未通过。存在已废止、失效或未确认的法条引用。';
+    const currentLawNextStep = currentLawGate.missingStatuteCitation
+      ? '请先补充至少一条现行有效法律或司法解释引用，并完成三段论大前提说明，再重新运行 legal_finalize_delivery_package。'
+      : '请先替换或核验法条，再重新运行 legal_finalize_delivery_package。';
     const gateReport = formatCurrentLawGateBlock({
       caseName,
       documentType,
@@ -4546,7 +4558,8 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       `- 案件：${caseName}`,
       `- 文书类型：${documentType}`,
       `- 输出目录：${outputDir}`,
-      `- 阻断原因：现行有效法律硬门槛未通过。存在已废止、失效或未确认的法条引用。`,
+      `- 阻断原因：${currentLawBlockReason}`,
+      `- 已识别法条数：${currentLawGate.statuteChecks.length}`,
       `- 阻断法条数：${currentLawGate.blockingStatutes.length}`,
       `- 引用核验报告：${reportPath}`,
       `- 来源登记表：${sourcePath}`,
@@ -4556,7 +4569,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       '## 阻断项',
       ...formatCitationList(currentLawGate.blockingStatutes),
       '',
-      '请先替换或核验法条，再重新运行 legal_finalize_delivery_package。',
+      currentLawNextStep,
     ].join('\n');
   }
 
