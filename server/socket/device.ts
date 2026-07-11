@@ -1,6 +1,7 @@
 import { Socket, Server } from "socket.io";
 import { deviceRegistry } from "../devices";
 import { registerUserSocket, unregisterUserSocket } from "../memory";
+import { joinDesktopRelayRoom } from "./desktop_relay";
 
 function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
   return (...args: any[]) => {
@@ -33,6 +34,7 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
       deviceFingerprint: fingerprint,
     });
     registerUserSocket(uid, socket.id);
+    joinDesktopRelayRoom(socket, uid, data.type);
   }));
 
   socket.on("disconnect", socketGuard(() => {

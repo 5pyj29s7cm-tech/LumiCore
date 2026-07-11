@@ -1,0 +1,124 @@
+import { describe, expect, it } from 'vitest';
+import { deviceRegistry } from '../server/devices';
+import {
+  createDesktopRelay,
+  desktopRelayRoomForUser,
+  getPendingDesktopRelayCount,
+  handleDesktopRelayResult,
+  joinDesktopRelayRoom,
+} from '../server/socket/desktop_relay';
+
+function mockIo(sockets: Record<string, any> = {}, rooms: Record<string, string[]> = {}) {
+  const emitted: any[] = [];
+  const socketMap = new Map(Object.entries(sockets));
+  return {
+    emitted,
+    io: {
+      sockets: {
+        sockets: socketMap,
+        adapter: {
+          rooms: new Map(Object.entries(rooms).map(([name, ids]) => [name, new Set(ids)])),
+        },
+      },
+      to(target: string) {
+        return {
+          emit(event: string, payload: any) {
+            emitted.push({ target, event, payload });
+          },
+        };
+      },
+    } as any,
+  };
+}
+
+describe('desktop relay routing', () => {
+  it('joins desktop clients to a user-scoped desktop relay room', () => {
+    const joined: string[] = [];
+    const socket = {
+      data: {},
+      join(room: string) {
+        joined.push(room);
+      },
+    } as any;
+
+    expect(joinDesktopRelayRoom(socket, 'user_room_test', 'desktop')).toBe(true);
+    expect(joined).toEqual([desktopRelayRoomForUser('user_room_test')]);
+    expect(socket.data.lumiDeviceType).toBe('desktop');
+
+    const webSocket = { data: {}, join: () => joined.push('unexpected') } as any;
+    expect(joinDesktopRelayRoom(webSocket, 'user_room_test', 'web')).toBe(false);
+  });
+
+  it('routes a chat request to the registered desktop socket and resolves cross-socket results', async () => {
+    const userId = `relay_user_${Date.now()}_a`;
+    const sent: any[] = [];
+    const desktopSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ target: 'desktop', event, payload }),
+    };
+    const requestSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ target: 'request', event, payload }),
+      once: () => {},
+      off: () => {},
+    };
+
+    deviceRegistry.register(userId, 'sock_desktop_a', {
+      name: 'Relay Test Desktop A',
+      type: 'desktop',
+      deviceFingerprint: `fp_${userId}`,
+    });
+
+    const { io } = mockIo({ sock_desktop_a: desktopSocket });
+    const relay = createDesktopRelay({
+      io,
+      userId,
+      source: 'chat',
+      requestSocket: requestSocket as any,
+      timeoutMs: 1000,
+    });
+
+    const promise = relay('desktop_active_window', {});
+    expect(sent).toHaveLength(1);
+    expect(sent[0].target).toBe('desktop');
+    expect(sent[0].event).toBe('tool:desktop_exec');
+    expect(sent[0].payload.name).toBe('desktop_active_window');
+
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: '{"title":"WeChat"}' })).toBe(true);
+    await expect(promise).resolves.toBe('{"title":"WeChat"}');
+    expect(getPendingDesktopRelayCount()).toBe(0);
+  });
+
+  it('selects one preferred desktop socket instead of broadcasting duplicate input actions', async () => {
+    const userId = `relay_user_${Date.now()}_b`;
+    const sent: any[] = [];
+    const desktopOne = { connected: true, emit: (event: string, payload: any) => sent.push({ target: 'one', event, payload }) };
+    const desktopTwo = { connected: true, emit: (event: string, payload: any) => sent.push({ target: 'two', event, payload }) };
+
+    deviceRegistry.register(userId, 'sock_desktop_b1', {
+      name: 'Relay Test Desktop B1',
+      type: 'desktop',
+      deviceFingerprint: `fp_${userId}_1`,
+    });
+    deviceRegistry.register(userId, 'sock_desktop_b2', {
+      name: 'Relay Test Desktop B2',
+      type: 'desktop',
+      deviceFingerprint: `fp_${userId}_2`,
+    });
+
+    const room = desktopRelayRoomForUser(userId);
+    const { io } = mockIo(
+      { sock_desktop_b1: desktopOne, sock_desktop_b2: desktopTwo },
+      { [room]: ['sock_desktop_b1', 'sock_desktop_b2'] },
+    );
+    const relay = createDesktopRelay({ io, userId, source: 'task', timeoutMs: 1000 });
+
+    const promise = relay('desktop_keyboard_type', { text: 'hello' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].event).toBe('tool:desktop_exec');
+
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'typed' })).toBe(true);
+    await expect(promise).resolves.toBe('typed');
+    expect(getPendingDesktopRelayCount()).toBe(0);
+  });
+});

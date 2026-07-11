@@ -18,7 +18,7 @@ import { deviceRegistry } from "../devices";
 import { personalityRegistry } from "../personality";
 import { setOnAgentPromoted } from "../agents/orchestrator";
 import { initMemorySync, initMemoryAssociations } from "../memory";
-import { handleAutonomousDesktopResult } from "../autonomy/task_executor";
+import { handleDesktopRelayResult } from "../socket/desktop_relay";
 
 interface SocketContext {
   io: Server;
@@ -96,7 +96,7 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     socket.onAny((event, ...args) => {
       if (event.startsWith('tool:desktop_result:')) {
         const correlationId = event.slice('tool:desktop_result:'.length);
-        handleAutonomousDesktopResult(correlationId, args[0] || {});
+        handleDesktopRelayResult(correlationId, args[0] || {});
       }
       const noisyEvents = new Set([
         'audio:chunk',
@@ -136,8 +136,8 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     registerTerminalHandlers(socket, getUserId);
     registerMusicHandlers(socket, getUserId, io);
     registerClientSelfHandlers(socket, getUserId, io);
-    registerChatHandler(socket, llmGetters, (uid: string) => getSensory(uid), getUserId);
-    registerTaskHandler(socket, llmGetters, (uid: string) => getSensory(uid), getUserId);
-    registerVoiceHandlers(socket, llmGetters, (uid: string) => getSensory(uid), getUserId);
+    registerChatHandler(socket, llmGetters, (uid: string) => getSensory(uid), getUserId, io);
+    registerTaskHandler(socket, llmGetters, (uid: string) => getSensory(uid), getUserId, io);
+    registerVoiceHandlers(socket, llmGetters, (uid: string) => getSensory(uid), getUserId, io);
   });
 }

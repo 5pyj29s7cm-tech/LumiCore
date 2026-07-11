@@ -2,7 +2,7 @@
  * Voice / Audio Pipeline — STT → LLM → TTS real-time handlers
  * v2.1 — Multi-turn tool iteration, hands/mouth separation, input queue
  */
-import { Socket } from "socket.io";
+import { Server, Socket } from "socket.io";
 import fs from "fs";
 import path from "path";
 import { readDB, writeDB } from "../../db_layer";
@@ -47,6 +47,7 @@ import { formatProactiveSuggestionForPrompt, getRecentProactiveSuggestion } from
 import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
+import { createDesktopRelay } from "./desktop_relay";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -422,6 +423,7 @@ async function processVoiceInput(
   userText: string,
   llmGetters: LlmGetters,
   sensoryFn: (uid: string) => any,
+  io: Server,
 ): Promise<void> {
   if (!isVoiceprintGateOpen(session)) {
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
@@ -698,59 +700,15 @@ async function processVoiceInput(
   ]);
   const isDirectDesktopTool = (toolName: string) => directDesktopRelayTools.has(toolName);
 
-  const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const cid = Math.random().toString(36).substring(2, 11);
-      const uiCid = `desktop-${cid}`;
-      const eventName = `tool:desktop_result:${cid}`;
-      let settled = false;
-      const timeout = setTimeout(() => {
-        finishWithError(`Desktop tool "${toolName}" timed out (30s)`);
-      }, 30000);
-      emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args });
-
-      function cleanup() {
-        clearTimeout(timeout);
-        socket.off(eventName, onResult);
-        socket.off('disconnect', onDisconnect);
-      }
-
-      function finishWithError(message: string) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: message });
-        reject(new Error(message));
-      }
-
-      function onResult(data: { output?: string; error?: string }) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        if (data.error) {
-          emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: data.error });
-          reject(new Error(data.error));
-        } else {
-          const output = data.output || '';
-          emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, result: formatToolResultForUi(output) });
-          resolve(output);
-        }
-      }
-
-      function onDisconnect() {
-        finishWithError(`Desktop tool "${toolName}" cancelled: desktop client disconnected before returning a result`);
-      }
-
-      if (!socket.connected) {
-        finishWithError(`Desktop tool "${toolName}" cannot run: desktop client socket is disconnected`);
-        return;
-      }
-
-      socket.once(eventName, onResult);
-      socket.once('disconnect', onDisconnect);
-      socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
-    });
-  };
+  const desktopRelay = createDesktopRelay({
+    io,
+    userId: session.userId,
+    source: 'voice',
+    requestSocket: socket,
+    emitToolLifecycle,
+    formatResultForLifecycle: formatToolResultForUi,
+    cancelOnRequestSocketDisconnect: true,
+  });
 
   const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
     if (canAutoApproveAction(toolName, args)) return true;
@@ -1545,6 +1503,7 @@ export function registerVoiceHandlers(
   llmGetters: LlmGetters,
   sensoryFn: (uid: string) => any,
   getUserId: (s: Socket) => string,
+  io: Server,
 ) {
   socket.on("audio:start", async (data: { voiceId?: string; personalityId?: string; agentId?: string; transcriptionOnly?: boolean; domain?: 'personal' | 'work'; orgId?: string }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
@@ -1689,7 +1648,7 @@ export function registerVoiceHandlers(
             session.bargeinTimer = setTimeout(() => {
               session.bargeinTimer = null;
               if (!session.isActive) return;
-              processVoiceInput(socket, session, text, llmGetters, sensoryFn).catch(err => {
+              processVoiceInput(socket, session, text, llmGetters, sensoryFn, io).catch(err => {
                 logger.error("[Voice Error]:", err);
                 session.isSpeaking = false;
                 session.isProcessing = false;

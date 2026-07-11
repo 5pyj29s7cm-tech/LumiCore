@@ -1,7 +1,7 @@
 /**
  * agent:chat socket handler — the core conversational AI pipeline
  */
-import { Socket } from "socket.io";
+import { Server, Socket } from "socket.io";
 import jwt from "jsonwebtoken";
 import os from "os";
 import path from "path";
@@ -64,6 +64,7 @@ import { buildResponseLanguageInstruction } from "../utils/language";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
+import { createDesktopRelay } from "./desktop_relay";
 
 const JWT_SECRET = process.env.JWT_SECRET || 'lumiOS_default_jwt_secret_2026_local';
 
@@ -696,6 +697,7 @@ export function registerChatHandler(
   },
   sensoryFn: (uid: string) => any,
   userIdFn: (s: Socket) => string,
+  io: Server,
 ) {
   const chatSessionMap = new Map<string, AbortController>();
 
@@ -1129,59 +1131,15 @@ export function registerChatHandler(
         return;
       }
 
-      // ── Desktop relay: enables 15 tools (mouse/keyboard/clipboard/screenshot/etc) in chat ──
-      const desktopRelay = ((toolName: string, args: Record<string, any>): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const cid = crypto.randomUUID();
-          const uiCid = `desktop-${cid}`;
-          const eventName = `tool:desktop_result:${cid}`;
-          let settled = false;
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-
-          emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args });
-
-          function cleanup() {
-            if (timeout) clearTimeout(timeout);
-            socket.off(eventName, onResult);
-            socket.off('disconnect', onDisconnect);
-          }
-
-          function finishWithError(message: string) {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: message });
-            reject(new Error(message));
-          }
-
-          function onResult(data: { output?: string; error?: string }) {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            if (data.error) {
-              emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, error: data.error });
-              reject(new Error(data.error));
-              return;
-            }
-            const output = data.output || '';
-            emitToolLifecycle({ correlationId: uiCid, name: toolName, arguments: args, result: formatToolResultForUi(output) });
-            resolve(output);
-          }
-
-          function onDisconnect() {
-            finishWithError(`Desktop tool "${toolName}" cancelled: desktop client disconnected before returning a result`);
-          }
-
-          if (!socket.connected) {
-            finishWithError(`Desktop tool "${toolName}" cannot run: desktop client socket is disconnected`);
-            return;
-          }
-
-          timeout = setTimeout(() => finishWithError(`Desktop tool "${toolName}" timed out (30s)`), 30000);
-          socket.once(eventName, onResult);
-          socket.once('disconnect', onDisconnect);
-          socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
-        });
+      // ── Desktop relay: route tools to the user's registered desktop client, not only this chat socket ──
+      const desktopRelay = createDesktopRelay({
+        io,
+        userId: uid,
+        source: 'chat',
+        requestSocket: socket,
+        emitToolLifecycle,
+        formatResultForLifecycle: formatToolResultForUi,
+        cancelOnRequestSocketDisconnect: true,
       });
 
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {

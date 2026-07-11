@@ -13,6 +13,7 @@ import type { AutonomousTask } from './task_queue';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getPlan, updatePlan, updatePlanStep } from './planner';
+import { createDesktopRelay } from '../socket/desktop_relay';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -53,12 +54,6 @@ const LOCAL_BODY_LEARNING_TOOLS = [
   'work_product_plan',
   'work_product_verify',
 ];
-
-const pendingDesktopResults = new Map<string, {
-  resolve: (output: string) => void;
-  reject: (err: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}>();
 
 export function isLocalBodyLearningTask(task: Pick<AutonomousTask, 'title' | 'description'>): boolean {
   return /本机身体|local machine body|desktop body|local body|desktop_body_map|local_machine_awareness/i
@@ -136,20 +131,6 @@ function markLinkedPlanFailed(task: AutonomousTask, error: string) {
   });
 }
 
-export function handleAutonomousDesktopResult(
-  correlationId: string,
-  data: { output?: string; error?: string },
-): boolean {
-  const pending = pendingDesktopResults.get(correlationId);
-  if (!pending) return false;
-
-  pendingDesktopResults.delete(correlationId);
-  clearTimeout(pending.timeout);
-  if (data?.error) pending.reject(new Error(data.error));
-  else pending.resolve(data?.output || '');
-  return true;
-}
-
 export async function executeNextAutonomousTask(
   io: SocketIOServer,
   getters: LLMGetters,
@@ -181,19 +162,12 @@ export async function executeNextAutonomousTask(
   try {
     const currentGate = getGateConfig();
     const maxIterations = currentGate.autonomyLevel === 'full' ? 50 : 30;
-    // Build desktop relay using socket.io broadcast
-    const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
-      return new Promise((resolve, reject) => {
-        const cid = `autonomous_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        const timeout = setTimeout(() => {
-          pendingDesktopResults.delete(cid);
-          reject(new Error(`Desktop tool "${toolName}" timed out (30s)`));
-        }, 30000);
-
-        pendingDesktopResults.set(cid, { resolve, reject, timeout });
-        io.to(`user:${task.userId}`).emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
-      });
-    };
+    // Build desktop relay using the user's registered desktop client, not a broad user-room broadcast.
+    const desktopRelay = createDesktopRelay({
+      io,
+      userId: task.userId,
+      source: 'autonomous',
+    });
 
     let cancelled = false;
     const toolPolicy = buildAutonomousToolPolicy(running, maxIterations);

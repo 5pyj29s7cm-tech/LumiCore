@@ -1,7 +1,7 @@
 /**
  * agent:task socket handler — multi-turn tool-augmented AI pipeline
  */
-import { Socket } from "socket.io";
+import { Server, Socket } from "socket.io";
 import { readDB, writeDB } from "../../db_layer";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
@@ -31,6 +31,7 @@ import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import type { ToolExecutionRecord } from "../tools/types";
+import { createDesktopRelay } from "./desktop_relay";
 
 export function registerTaskHandler(
   socket: Socket,
@@ -50,6 +51,7 @@ export function registerTaskHandler(
   },
   sensoryFn: (uid: string) => any,
   userIdFn: (s: Socket) => string,
+  io: Server,
 ) {
   socket.on("agent:task", async (data: { text: string; history?: any[]; personalityId?: string; conversationId?: string }) => {
     const uid = userIdFn(socket);
@@ -333,50 +335,13 @@ export function registerTaskHandler(
       }
 
       // ── Desktop relay: must be defined before orchestrator path so OCR tools work ──
-      const desktopRelay = async (toolName: string, args: Record<string, any>): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const cid = crypto.randomUUID();
-          const eventName = `tool:desktop_result:${cid}`;
-          let settled = false;
-          const timeout = setTimeout(() => {
-            finishWithError(`Desktop tool "${toolName}" timed out (30s)`);
-          }, 30000);
-
-          function cleanup() {
-            clearTimeout(timeout);
-            socket.off(eventName, onResult);
-            socket.off('disconnect', onDisconnect);
-          }
-
-          function finishWithError(message: string) {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            reject(new Error(message));
-          }
-
-          function onResult(data: { output?: string; error?: string }) {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            if (data.error) reject(new Error(data.error));
-            else resolve(data.output || '');
-          }
-
-          function onDisconnect() {
-            finishWithError(`Desktop tool "${toolName}" cancelled: desktop client disconnected before returning a result`);
-          }
-
-          if (!socket.connected) {
-            finishWithError(`Desktop tool "${toolName}" cannot run: desktop client socket is disconnected`);
-            return;
-          }
-
-          socket.once(eventName, onResult);
-          socket.once('disconnect', onDisconnect);
-          socket.emit('tool:desktop_exec', { correlationId: cid, name: toolName, arguments: args });
-        });
-      };
+      const desktopRelay = createDesktopRelay({
+        io,
+        userId: uid,
+        source: 'task',
+        requestSocket: socket,
+        cancelOnRequestSocketDisconnect: true,
+      });
 
       // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
       let orchestratedText = '';
