@@ -901,6 +901,58 @@ describe('semi-automated legal workflows', () => {
     }
   });
 
+  it('reuses archived case reasoning matrices for formal delivery packages', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-delivery-archived-reasoning-${Date.now()}`;
+    const reasoningDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_reasoning_for_delivery_'));
+    const deliveryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_archived_reasoning_'));
+    const caseName = '归档三段论复用测试案';
+
+    try {
+      await registry.execute('legal_case_reasoning_matrix', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        role: '原告',
+        caseType: '买卖合同纠纷',
+        facts: '原告已供货，被告签收后未支付剩余货款。',
+        evidence: '买卖合同、送货单、签收单、银行流水。',
+        issues: ['被告是否应支付货款和违约金'],
+        legalAuthorities: '引用《民法典》第五百八十五条。',
+        outputDir: reasoningDir,
+      });
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.id).toBeTruthy();
+
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        orgId,
+        userId: 'vitest',
+        caseId: caseFile.id,
+        caseName,
+        documentType: '代理词',
+        outputDir: deliveryDir,
+        includeDocx: false,
+        content: [
+          '# 代理词草稿',
+          '根据《民法典》第五百八十五条，原告请求被告支付货款并承担违约责任。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包已生成');
+      expect(output).toContain('三段论推理链硬门槛：通过');
+      expect(fs.existsSync(path.join(deliveryDir, '00_manifest.md'))).toBe(true);
+      expect(fs.existsSync(path.join(deliveryDir, '00_reasoning-gate-blocked.md'))).toBe(false);
+      const sourceRegister = fs.readFileSync(path.join(deliveryDir, '03_source-register.md'), 'utf-8');
+      expect(sourceRegister).toContain('已归档三段论底稿');
+      expect(sourceRegister).toContain('已复用');
+    } finally {
+      fs.rmSync(reasoningDir, { recursive: true, force: true });
+      fs.rmSync(deliveryDir, { recursive: true, force: true });
+    }
+  });
+
   it('blocks formal legal delivery packages when statute citations are repealed or unverified', async () => {
     const registry = createLegalRegistry();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_blocked_'));

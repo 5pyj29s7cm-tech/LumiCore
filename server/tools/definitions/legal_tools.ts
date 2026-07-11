@@ -425,6 +425,7 @@ function collectLegalReasoningGateText(args: Record<string, any>, sourceText: st
     'reasoningMatrix',
     'reasoningSummary',
     'legalReasoning',
+    'archivedReasoning',
     'analysis',
     'legalAuthorities',
     'similarCases',
@@ -464,6 +465,23 @@ function evaluateLegalReasoningGate(args: Record<string, any>, sourceText: strin
     hasConclusion,
     missing,
   };
+}
+
+function findArchivedLegalReasoningGateText(args: Record<string, any>, orgId: string): string {
+  const caseId = textArg(args, 'caseId');
+  if (!caseId) return '';
+  const caseFile = LegalCases.getCase(orgId, caseId);
+  if (!caseFile) return '';
+  const material = (caseFile.materials || []).find(item => {
+    const haystack = `${item.title}\n${item.content || ''}`;
+    return /法律分析三段论底稿|三段论|大前提|小前提|涵摄|reasoning\s+matrix|major\s+premise|minor\s+premise|subsumption/i.test(haystack);
+  });
+  if (!material) return '';
+  return [
+    `Archived reasoning material: ${material.title}`,
+    material.localPath ? `Local path: ${material.localPath}` : '',
+    material.content || '',
+  ].filter(Boolean).join('\n');
 }
 
 function formatCitationList(items: CitationCheck[]): string[] {
@@ -4433,10 +4451,15 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     'delivery_package',
   );
 
+  const archivedReasoning = findArchivedLegalReasoningGateText(args, orgId);
+  const reasoningArgs = archivedReasoning ? { ...args, archivedReasoning } : args;
   const formalMarkdown = buildFormalLegalMarkdown({ ...args, caseName, documentType }, content);
   const citationReport = formatCitationReportMarkdown({ ...args, caseName, orgId }, formalMarkdown, 'formal_delivery_document');
   const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId);
-  const reasoningGate = evaluateLegalReasoningGate(args, content);
+  const reasoningGate = evaluateLegalReasoningGate(reasoningArgs, content);
+  const reasoningSourceRow = archivedReasoning
+    ? '| 内部推理底稿 | 案件工作台 | 已归档三段论底稿 | 案件材料 | 已归档 | 三段论推理链 gate | 已复用 |'
+    : '| 内部推理底稿 | legal_case_reasoning_matrix / reasoningSummary | 待登记 | 待登记 | 待登记 | 三段论推理链 gate | 待补充 |';
   const sourceRegister = [
     `# ${caseName} 来源登记表`,
     '',
@@ -4445,6 +4468,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     '| 法律法规 | 国家法律法规数据库/本地法条库 | 待登记 | 待登记 | 待登记 | 核验现行有效法律 | 律师复核 |',
     '| 类案案例 | 人民法院案例库/裁判文书网/法蝉/Alpha | 待登记 | 待登记 | 待登记 | 类案补强 | 律师复核 |',
     '| 证据材料 | 本地案件材料/当事人提供 | 待登记 | 待登记 | 待登记 | 证明待证事实 | 原件核对 |',
+    reasoningSourceRow,
     '| 外部主体信息 | 企查查/国家企业信用/执行信息公开网 | 待登记 | 待登记 | 待登记 | 主体与财产线索核验 | 律师复核 |',
     '',
     '边界：未登记来源的法条、案例、网页摘录和主体信息，不应作为最终对外文书中的确定性依据。',
