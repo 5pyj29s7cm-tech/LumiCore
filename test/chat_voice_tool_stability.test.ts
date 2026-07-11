@@ -51,6 +51,17 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('blocked: finalized.blocked');
   });
 
+  it('archives legal meeting analysis through the legal casework toolchain', () => {
+    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+
+    expect(restChat).toContain('buildLegalMeetingMinutesArgs');
+    expect(restChat).toContain('shouldArchiveLegalMeeting');
+    expect(restChat).toContain("toolRegistry.execute('legal_meeting_minutes_to_case'");
+    expect(restChat).toContain("source: 'meeting-analyze'");
+    expect(restChat).toContain('legalCasework');
+    expect(restChat).toContain('legalCaseArchived');
+  });
+
   it('keeps voice tool execution visible and aligned with chat permission behavior', () => {
     const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
 

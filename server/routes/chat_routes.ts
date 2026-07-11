@@ -90,6 +90,45 @@ function finalizeRestChatResponse(input: {
   });
 }
 
+function dateLikeToIso(value: unknown, fallback = Date.now()): string {
+  const date = value ? new Date(value as any) : new Date(fallback);
+  return Number.isNaN(date.getTime()) ? new Date(fallback).toISOString() : date.toISOString();
+}
+
+function shouldArchiveLegalMeeting(purpose: unknown, legalCase: unknown): boolean {
+  return purpose === 'legal_consultation' || Boolean(legalCase && typeof legalCase === 'object');
+}
+
+function buildLegalMeetingMinutesArgs(input: {
+  transcript: string;
+  startedAt?: unknown;
+  endedAt?: unknown;
+  legalCase?: any;
+  orgId: string;
+  userId: string;
+}) {
+  const legalCase = input.legalCase && typeof input.legalCase === 'object' ? input.legalCase : {};
+  const caseName = String(
+    legalCase.title ||
+    legalCase.caseName ||
+    legalCase.caseNumber ||
+    `法律会议 ${dateLikeToIso(input.startedAt).slice(0, 10)}`,
+  ).trim();
+  return {
+    transcript: input.transcript,
+    meetingTime: dateLikeToIso(input.startedAt || input.endedAt),
+    orgId: input.orgId || 'default',
+    userId: input.userId,
+    caseId: String(legalCase.id || '').trim(),
+    caseName,
+    participants: String(legalCase.party || legalCase.participants || '').trim(),
+    caseType: String(legalCase.cause || legalCase.caseType || '').trim(),
+    court: String(legalCase.court || '').trim(),
+    stage: String(legalCase.stage || 'consultation').trim(),
+    persistCase: true,
+  };
+}
+
 const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
   'legal_search_case',
   'legal_search_statute',
@@ -430,6 +469,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   router.post("/meeting/analyze", optionalAuth, asyncHandler(async (req, res) => {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
+    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
+    const orgId = String(req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
     const preferred = getUserPreferredLLMConfig(userId, { maxTokens: 1800 });
     const provider = preferred.provider;
     const model = preferred.model;
@@ -515,6 +556,35 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const tokens = estimateTokens(prompt + ' ' + report);
     recordTokenUsage(userId, provider, model, result.usage, `meeting_analyze_${Date.now()}`, 'meeting');
     const usage = recordUsage(userId, tokens);
-    res.json({ report, usage });
+    let legalCasework = '';
+    let legalCaseworkError = '';
+    if (shouldArchiveLegalMeeting(purpose, legalCase)) {
+      try {
+        legalCasework = await toolRegistry.execute('legal_meeting_minutes_to_case', buildLegalMeetingMinutesArgs({
+          transcript,
+          startedAt,
+          endedAt,
+          legalCase,
+          orgId,
+          userId,
+        }), {
+          userId,
+          domain,
+          orgId,
+          llmGetters: llm,
+          source: 'meeting-analyze',
+        });
+      } catch (err: any) {
+        legalCaseworkError = err?.message || String(err);
+        console.warn('[Meeting] Legal meeting archive failed:', legalCaseworkError);
+      }
+    }
+    res.json({
+      report,
+      usage,
+      legalCasework,
+      legalCaseArchived: Boolean(legalCasework),
+      legalCaseworkError: legalCaseworkError || undefined,
+    });
   }));
 }
