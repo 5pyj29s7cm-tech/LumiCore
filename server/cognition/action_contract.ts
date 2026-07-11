@@ -1,4 +1,5 @@
 import type { ToolExecutionRecord } from '../tools/types';
+import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 
 export type LumiActionContractKind =
   | 'none'
@@ -144,10 +145,28 @@ function withDefaults(contract: Omit<LumiActionContract, 'applies'>): LumiAction
   };
 }
 
+function buildLegalDocumentContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'legal_document',
+    label: '\u6cd5\u5f8b\u6587\u4e66/\u4ee3\u7406\u8bcd',
+    coreAction: '\u4ee5\u4e09\u6bb5\u8bba\u4e3a\u6838\u5fc3\u57fa\u7840\uff0c\u57fa\u4e8e\u7528\u6237\u63d0\u4f9b\u7684\u4e8b\u5b9e\u548c\u6587\u4ef6\u8d77\u8349\u6216\u5ba1\u9605\u6cd5\u5f8b\u6587\u4e66',
+    preparationIsNotCompletion: ['\u6cd5\u5f8b\u5e38\u8bc6\u8bf4\u660e', '\u5217\u5927\u7eb2', '\u6ca1\u6709\u8bfb\u5230\u6848\u60c5\u6750\u6599'],
+    requiredEvidence: ['draft/review text grounded in supplied facts', '\u6587\u4e66\u6587\u4ef6\u8def\u5f84\u6216\u660e\u786e\u7684\u5ba1\u9605\u610f\u89c1'],
+    preferredTools: LEGAL_ENTRY_PREFERRED_TOOLS,
+    verificationTools: ['read_docx', 'read_pdf', 'desktop_path_info', 'work_product_verify'],
+    nextStep: '\u5148\u62ff\u5230\u4e8b\u5b9e\u3001\u8bc1\u636e\u3001\u8bc9\u8bbc\u76ee\u6807\u548c\u7ba1\u8f96\u7b49\u4fe1\u606f\uff0c\u518d\u8d77\u8349\u6216\u5ba1\u9605\u3002',
+    caution: '\u4e0d\u80fd\u628a\u4e00\u822c\u6cd5\u5f8b\u8bf4\u660e\u8bf4\u6210\u5b8c\u6574\u4ee3\u7406\u8bcd\uff1b\u91cd\u5927\u6cd5\u5f8b\u51b3\u7b56\u9700\u8981\u4e13\u4e1a\u5f8b\u5e08\u590d\u6838\u3002',
+  });
+}
+
 export function buildActionContract(input: string): LumiActionContract {
   const text = compact(input);
   if (!text) return NONE_CONTRACT;
   const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u);
+
+  if (isRemoteLegalMessageTurn(text)) {
+    return buildLegalDocumentContract();
+  }
 
   if (
     matches(text, /wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f|message|chat/i) &&
@@ -278,18 +297,8 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  if (matches(text, /\u5f8b\u5e08|\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u5408\u540c|\u534f\u8bae|\u8d22\u4ea7\u7ebf\u7d22|\u88ab\u6267\u884c\u4eba|\u80a1\u6743\u7a7f\u900f|\u8d22\u4ea7\u4fdd\u5168|\u5b9e\u9645\u63a7\u5236\u4eba|\u5931\u4fe1|\u9650\u5236\u6d88\u8d39|\u6cd5\u5f8b\u4f1a\u8bae|\u5f8b\u5e08\u4f1a\u8bae|\u529e\u6848\u4f1a\u8bae|\u6848\u4ef6\u4f1a\u8bae|\u4f1a\u8bae\u7eaa\u8981.*\u6848\u4ef6|\u6c9f\u901a\u8bb0\u5f55.*\u6848\u4ef6|\u4e09\u6bb5\u8bba|\u5927\u524d\u63d0|\u5c0f\u524d\u63d0|\u6db5\u6444|legal|lawyer|pleading|contract|agreement|asset|enforcement|equity|shareholder/i)) {
-    return withDefaults({
-      kind: 'legal_document',
-      label: '\u6cd5\u5f8b\u6587\u4e66/\u4ee3\u7406\u8bcd',
-      coreAction: '\u4ee5\u4e09\u6bb5\u8bba\u4e3a\u6838\u5fc3\u57fa\u7840\uff0c\u57fa\u4e8e\u7528\u6237\u63d0\u4f9b\u7684\u4e8b\u5b9e\u548c\u6587\u4ef6\u8d77\u8349\u6216\u5ba1\u9605\u6cd5\u5f8b\u6587\u4e66',
-      preparationIsNotCompletion: ['\u6cd5\u5f8b\u5e38\u8bc6\u8bf4\u660e', '\u5217\u5927\u7eb2', '\u6ca1\u6709\u8bfb\u5230\u6848\u60c5\u6750\u6599'],
-      requiredEvidence: ['draft/review text grounded in supplied facts', '\u6587\u4e66\u6587\u4ef6\u8def\u5f84\u6216\u660e\u786e\u7684\u5ba1\u9605\u610f\u89c1'],
-      preferredTools: ['legal_case_workspace', 'legal_meeting_minutes_to_case', 'legal_case_reasoning_matrix', 'legal_review_contract', 'legal_draft_contract', 'legal_generate_bid', 'legal_trace_assets', 'legal_equity_penetration', 'legal_external_research_plan', 'legal_search_external_authorities', 'legal_company_database_lookup', 'legal_extract_dispute_focus', 'legal_generate_litigation_packet', 'legal_generate_argument_or_opinion', 'legal_finalize_delivery_package', 'read_docx', 'read_pdf', 'create_docx', 'write_file'],
-      verificationTools: ['read_docx', 'read_pdf', 'desktop_path_info', 'work_product_verify'],
-      nextStep: '\u5148\u62ff\u5230\u4e8b\u5b9e\u3001\u8bc1\u636e\u3001\u8bc9\u8bbc\u76ee\u6807\u548c\u7ba1\u8f96\u7b49\u4fe1\u606f\uff0c\u518d\u8d77\u8349\u6216\u5ba1\u9605\u3002',
-      caution: '\u4e0d\u80fd\u628a\u4e00\u822c\u6cd5\u5f8b\u8bf4\u660e\u8bf4\u6210\u5b8c\u6574\u4ee3\u7406\u8bcd\uff1b\u91cd\u5927\u6cd5\u5f8b\u51b3\u7b56\u9700\u8981\u4e13\u4e1a\u5f8b\u5e08\u590d\u6838\u3002',
-    });
+  if (isLegalEntryTurn(text) || matches(text, /\u5f8b\u5e08|\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u5408\u540c|\u534f\u8bae|\u8d22\u4ea7\u7ebf\u7d22|\u88ab\u6267\u884c\u4eba|\u80a1\u6743\u7a7f\u900f|\u8d22\u4ea7\u4fdd\u5168|\u5b9e\u9645\u63a7\u5236\u4eba|\u5931\u4fe1|\u9650\u5236\u6d88\u8d39|\u6cd5\u5f8b\u4f1a\u8bae|\u5f8b\u5e08\u4f1a\u8bae|\u529e\u6848\u4f1a\u8bae|\u6848\u4ef6\u4f1a\u8bae|\u4f1a\u8bae\u7eaa\u8981.*\u6848\u4ef6|\u6c9f\u901a\u8bb0\u5f55.*\u6848\u4ef6|\u4e09\u6bb5\u8bba|\u5927\u524d\u63d0|\u5c0f\u524d\u63d0|\u6db5\u6444|legal|lawyer|pleading|contract|agreement|asset|enforcement|equity|shareholder/i)) {
+    return buildLegalDocumentContract();
   }
 
   if (matches(text, /\u6587\u4ef6|\u6587\u6863|PPT|PDF|docx|xlsx|pptx|\u751f\u6210|\u5bfc\u51fa|\u4fdd\u5b58|create|generate|export|save/i)) {

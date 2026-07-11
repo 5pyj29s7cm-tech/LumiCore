@@ -22,6 +22,16 @@ describe('chat and voice tool-call stability', () => {
     }
   });
 
+  it('keeps legal entry prompts in the shared execution decision instead of per-channel scripts', () => {
+    const executionDecision = readFileSync(path.join(process.cwd(), 'server/cognition/execution_decision.ts'), 'utf8');
+    const legalEntry = readFileSync(path.join(process.cwd(), 'server/cognition/legal_entry.ts'), 'utf8');
+
+    expect(executionDecision).toContain('buildUnifiedLegalEntryPrompt');
+    expect(legalEntry).toContain('Unified Legal Casework Entry');
+    expect(legalEntry).toContain('Current-law gate');
+    expect(legalEntry).toContain('personal chat, company/work chat, voice, task center');
+  });
+
   it('keeps voice tool execution visible and aligned with chat permission behavior', () => {
     const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
 

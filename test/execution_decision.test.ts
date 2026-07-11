@@ -39,6 +39,36 @@ const declarations = [
   'mcp_stockbot_stock_quote',
   'mcp_stockbot_stock_trade_plan',
   'mcp_stockbot_paper_portfolio',
+  'legal_search_case',
+  'legal_search_statute',
+  'legal_generate_bid',
+  'legal_review_contract',
+  'legal_draft_contract',
+  'legal_trace_assets',
+  'legal_equity_penetration',
+  'legal_case_strategy',
+  'legal_case_workspace',
+  'legal_case_workflow_status',
+  'legal_message_intake_to_case',
+  'legal_meeting_minutes_to_case',
+  'legal_case_reasoning_matrix',
+  'legal_generate_litigation_packet',
+  'legal_prepare_filing_handoff',
+  'legal_extract_dispute_focus',
+  'legal_generate_argument_or_opinion',
+  'legal_analyze_folder_and_draft_argument',
+  'legal_import_materials_to_kb',
+  'legal_process_notice_link',
+  'legal_download_and_extract_document',
+  'legal_external_research_plan',
+  'legal_search_external_authorities',
+  'legal_company_database_lookup',
+  'legal_generate_citation_verification_report',
+  'legal_finalize_delivery_package',
+  'legal_prepare_external_browser_workspace',
+  'read_docx',
+  'read_pdf',
+  'create_docx',
 ].map(name => ({
   type: 'function' as const,
   function: {
@@ -175,6 +205,59 @@ describe('Lumi execution decision', () => {
     expect(decision.toolRoute?.categories.length).toBeGreaterThan(0);
     expect(decision.toolPolicy.allowedTools).toContain('web_search');
     expect(decision.promptOverlay).toContain('Lumi Execution Decision');
+  });
+
+  it('adds the unified legal entry overlay for company legal chat', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+
+    const text = '\u6839\u636e\u6848\u4ef6\u6750\u6599\u6574\u7406\u4e89\u8bae\u7126\u70b9\uff0c\u68c0\u7d22\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u5e76\u751f\u6210\u4ee3\u7406\u8bcd';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_company_legal_user',
+      text,
+      channel: 'chat',
+      source: 'org-chat',
+      domain: 'work',
+      orgId: 'org-legal-entry',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolRoute?.categories).toContain('legal');
+    expect(decision.promptOverlay).toContain('Unified Legal Casework Entry');
+    expect(decision.promptOverlay).toContain('organization case workspace');
+    expect(decision.promptOverlay).toContain('Current-law gate');
+  });
+
+  it('adds the unified legal entry overlay for voice legal work', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+
+    const text = '\u8bed\u97f3\u8bb0\u5f55\u5f53\u4e8b\u4eba\u6c9f\u901a\uff0c\u5b9e\u65f6\u5f62\u6210\u6cd5\u5f8b\u4f1a\u8bae\u7eaa\u8981';
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_voice_legal_user',
+      text,
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolRoute?.categories).toContain('legal');
+    expect(decision.promptOverlay).toContain('personal Lumi legal work');
+    expect(decision.promptOverlay).toContain('major premise');
   });
 
   it('keeps chat, voice, and task sockets on the shared execution decision path', () => {

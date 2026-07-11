@@ -80,6 +80,10 @@ describe('Lumi action contract', () => {
     expect(legalAssetTrace.kind).toBe('legal_document');
     expect(legalAssetTrace.preferredTools).toContain('legal_trace_assets');
     expect(legalAssetTrace.preferredTools).toContain('legal_equity_penetration');
+    const legalRemoteIntake = buildActionContract('\u98de\u4e66\u53d1\u7ed9 Lumi bot \u7684\u6cd5\u9662\u77ed\u4fe1\u94fe\u63a5\uff0c\u81ea\u52a8\u5165\u6848');
+    expect(legalRemoteIntake.kind).toBe('legal_document');
+    expect(legalRemoteIntake.preferredTools).toContain('legal_message_intake_to_case');
+    expect(legalRemoteIntake.preferredTools).toContain('legal_generate_citation_verification_report');
   });
 
   it('requires stronger evidence when the user asks for visible AutoCAD execution', () => {

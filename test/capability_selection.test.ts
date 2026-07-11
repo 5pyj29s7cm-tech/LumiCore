@@ -73,6 +73,35 @@ const declarations = [
   'wechat_send_message',
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
+  'legal_search_case',
+  'legal_search_statute',
+  'legal_generate_bid',
+  'legal_review_contract',
+  'legal_draft_contract',
+  'legal_trace_assets',
+  'legal_equity_penetration',
+  'legal_case_strategy',
+  'legal_case_workspace',
+  'legal_case_workflow_status',
+  'legal_message_intake_to_case',
+  'legal_meeting_minutes_to_case',
+  'legal_case_reasoning_matrix',
+  'legal_generate_litigation_packet',
+  'legal_prepare_filing_handoff',
+  'legal_extract_dispute_focus',
+  'legal_generate_argument_or_opinion',
+  'legal_analyze_folder_and_draft_argument',
+  'legal_import_materials_to_kb',
+  'legal_process_notice_link',
+  'legal_download_and_extract_document',
+  'legal_external_research_plan',
+  'legal_search_external_authorities',
+  'legal_company_database_lookup',
+  'legal_generate_citation_verification_report',
+  'legal_finalize_delivery_package',
+  'legal_prepare_external_browser_workspace',
+  'read_docx',
+  'read_pdf',
 ].map(name => ({
   type: 'function' as const,
   function: {
@@ -303,6 +332,53 @@ describe('Lumi capability selection', () => {
 
     expect(selection.lane).toBe('messaging');
     expect(selection.preferredTools).toContain('wechat_prepare_reply');
+  });
+
+  it('routes remote legal bot materials to unified legal casework before generic messaging', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_remote_legal_user',
+      text: '\u5fae\u4fe1/\u98de\u4e66\u53d1\u7ed9 Lumi bot \u7684\u6cd5\u9662\u77ed\u4fe1\u94fe\u63a5\u548c\u6848\u4ef6\u6750\u6599\uff0c\u81ea\u52a8\u5165\u6848\u5e76\u6574\u7406\u4e0b\u4e00\u6b65',
+      source: 'feishu-bot',
+      domain: 'work',
+      orgId: 'org-legal-capability',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('legal_casework');
+    expect(selection.preferredTools).toContain('legal_message_intake_to_case');
+    expect(selection.preferredTools).toContain('legal_case_reasoning_matrix');
+    expect(selection.promptOverlay).toContain('unified legal casework path');
+    expect(execution.promptOverlay).toContain('Unified Legal Casework Entry');
+    expect(execution.promptOverlay).toContain('organization case workspace');
+    expect(execution.toolRoute?.categories).toEqual(expect.arrayContaining(['legal', 'messaging']));
+  });
+
+  it('keeps personal legal chat on legal casework without claiming organization persistence', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_personal_legal_user',
+      text: '\u5e2e\u6211\u6309\u4e09\u6bb5\u8bba\u5206\u6790\u8fd9\u4e2a\u5408\u540c\u7ea0\u7eb7\uff0c\u987a\u4fbf\u8d77\u8349\u4ee3\u7406\u8bcd',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('legal_casework');
+    expect(selection.preferredTools).toContain('legal_case_workspace');
+    expect(selection.preferredTools).toContain('legal_generate_citation_verification_report');
+    expect(execution.promptOverlay).toContain('personal Lumi legal work');
+    expect(execution.promptOverlay).toContain('Current-law gate');
+  });
+
+  it('routes voice legal work through the same legal casework lane', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_voice_legal_user',
+      text: '\u8bed\u97f3\u4f1a\u8bae\u8bb0\u5f55\uff1a\u6839\u636e\u8fd9\u4e2a\u6848\u5b50\u751f\u6210\u7b54\u8fa9\u72b6\u548c\u8d28\u8bc1\u610f\u89c1',
+      channel: 'voice',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('legal_casework');
+    expect(selection.preferredTools).toContain('legal_meeting_minutes_to_case');
+    expect(selection.preferredTools).toContain('legal_generate_litigation_packet');
+    expect(execution.promptOverlay).toContain('major premise');
   });
 
   it('selects foreground WeChat sending with the virtual cursor path', async () => {

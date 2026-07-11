@@ -1,6 +1,7 @@
 import type { LumiExecutionDecision } from './execution_decision';
 import type { LumiTurnDispatch } from './turn_dispatch';
 import { buildActionContract, formatActionContractPrompt, requiresVisibleAutoCadExecution } from './action_contract';
+import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn } from './legal_entry';
 
 export type LumiCapabilityLane =
   | 'conversation'
@@ -10,6 +11,7 @@ export type LumiCapabilityLane =
   | 'skill_workflow'
   | 'task_center'
   | 'work_takeover'
+  | 'legal_casework'
   | 'messaging'
   | 'artifact_work'
   | 'design_cad'
@@ -58,6 +60,7 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'work_takeover_task_verify_result',
     'work_takeover_task_export_packet',
   ],
+  legal_casework: LEGAL_ENTRY_PREFERRED_TOOLS,
   messaging: [
     'desktop_list_apps',
     'desktop_open',
@@ -242,23 +245,31 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
         };
   }
 
-  if (routeHas(input, 'messaging') || routeHasTool(input, /^(wechat_|feishu_|recent_emails|send_email)/)) {
-    return {
-      lane: 'messaging',
-      primary: 'message handoff and reply drafting',
-      reasons: [...reasons, 'message or account communication tools matched'],
-    };
-  }
-
   const actionContract = buildActionContract(text);
   if (
     actionContract.kind === 'browser_account' ||
-    routeHas(input, 'authenticated_web', 'web_research')
+    (!routeHas(input, 'legal') && routeHas(input, 'authenticated_web', 'web_research'))
   ) {
     return {
       lane: 'web_or_account',
       primary: actionContract.kind === 'browser_account' ? 'browser/account session work' : 'browser web work',
       reasons: [...reasons, 'browser, login, saved-session, or authenticated web tools matched before artifact handling'],
+    };
+  }
+
+  if (routeHas(input, 'legal') || routeHasTool(input, /^(legal_|mcp_legal-casework_)/) || isLegalEntryTurn(text)) {
+    return {
+      lane: 'legal_casework',
+      primary: 'legal casework and legal documents',
+      reasons: [...reasons, 'legal casework, legal source, or remote legal intake tools matched'],
+    };
+  }
+
+  if (routeHas(input, 'messaging') || routeHasTool(input, /^(wechat_|feishu_|recent_emails|send_email)/)) {
+    return {
+      lane: 'messaging',
+      primary: 'message handoff and reply drafting',
+      reasons: [...reasons, 'message or account communication tools matched'],
     };
   }
 
@@ -333,6 +344,8 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
       return 'Treat this as persistent work with task state, artifacts, blockers, confirmation boundaries, and a concise result.';
     case 'work_takeover':
       return 'Continue the active task instead of starting over. Preserve context, advance the next safe step, verify evidence, and update the task.';
+    case 'legal_casework':
+      return 'Use the unified legal casework path across personal chat, company chat, voice, task center, and remote bot intake. Start from the case workspace/source intake, apply the major-premise/minor-premise/conclusion chain, verify current effective law before final documents, and stop for confirmation before filing, signing, paying, submitting, or committing a final legal position.';
     case 'messaging':
       return 'Use messaging tools as a bridge to customer or account communication. For explicit ordinary foreground sends, use the dedicated send tool and visible cursor path; draft before sending when the boundary is ambiguous.';
     case 'artifact_work':

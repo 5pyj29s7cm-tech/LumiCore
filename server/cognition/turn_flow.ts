@@ -40,7 +40,10 @@ export interface LumiTurnFlowInput {
 
 export interface LumiTurnFlow {
   channel: LumiTurnChannel;
+  source?: string;
   surface: WorkTakeoverTurnSurface;
+  domain?: string;
+  orgId?: string;
   operationMode: OperationMode;
   effectiveOperationMode: OperationMode;
   requestedMode: OperationMode | null;
@@ -366,7 +369,10 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
 
   const flowWithoutPrompt: Omit<LumiTurnFlow, 'promptOverlay'> = {
     channel: input.channel,
+    source: input.source,
     surface,
+    domain: input.domain,
+    orgId: input.orgId,
     operationMode,
     effectiveOperationMode,
     requestedMode,

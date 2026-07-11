@@ -663,6 +663,17 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'legal_case_workspace',
       );
     }
+    if (/\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1|\u6cd5\u5f8b\u610f\u89c1|\u8bc9\u72b6|\u6587\u4e66|\u8bc9\u8bbc\u6750\u6599|argument|opinion|complaint|defense|pleading/i.test(text)) {
+      priorities.push(
+        'legal_analyze_folder_and_draft_argument',
+        'legal_generate_argument_or_opinion',
+        'legal_case_reasoning_matrix',
+        'legal_generate_citation_verification_report',
+        'read_docx',
+        'read_pdf',
+        'create_docx',
+      );
+    }
     priorities.push(
       'legal_case_workspace',
       'legal_case_workflow_status',

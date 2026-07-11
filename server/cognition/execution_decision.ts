@@ -1,6 +1,7 @@
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import { getOperationModeConfig } from './operation_modes';
+import { buildUnifiedLegalEntryPrompt } from './legal_entry';
 import {
   formatToolRouteForPrompt,
   mergeToolPolicyWithRoute,
@@ -210,6 +211,15 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     input.flow.selfRepairTurn ? 'Inspect and repair Lumi/client state first; verify after one safe recovery.' : '',
     input.isSanctuary ? 'This agent is in sanctuary territory; tools are disabled.' : '',
     toolRoute ? formatToolRouteForPrompt(toolRoute) : '',
+    buildUnifiedLegalEntryPrompt({
+      text: input.flow.routeText || input.text,
+      domain: input.flow.domain,
+      orgId: input.flow.orgId,
+      channel: input.flow.channel,
+      source: input.flow.source,
+      routeCategories: toolRoute?.categories,
+      toolNames: toolRoute?.toolNames,
+    }),
     !toolRoute && allowToolUse && !input.flow.clientActionOnlyTurn && !input.flow.selfRepairTurn
       ? 'No narrow tool route was selected. Use the base policy conservatively and ask one clarification if the work surface is unclear.'
       : '',
