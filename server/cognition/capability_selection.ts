@@ -94,6 +94,9 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'cad_run_autocad_draw_script',
   ],
   desktop_control: [
+    'desktop_ai_list_targets',
+    'desktop_ai_ask',
+    'desktop_ai_collect_answer',
     'desktop_active_window',
     'desktop_list_apps',
     'desktop_open',
@@ -131,7 +134,7 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'mcp_playwright_browser_fill_form',
     'desktop_active_window',
   ],
-  external_tool: [],
+  external_tool: ['desktop_ai_list_targets', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'adapter_registry_list'],
   blocked_no_tools: [],
 };
 
@@ -172,6 +175,12 @@ function fallbackPrimary(input: LumiCapabilitySelectionInput): string {
 function asksForRawDesktopOperation(text: string): boolean {
   return /\b(?:mouse|keyboard|cursor|click|drag|type|uia|computer_use|coordinate|screen\s+control|desktop\s+control)\b/i.test(text)
     || /(?:\u9f20\u6807|\u952e\u76d8|\u5149\u6807|\u70b9\u51fb|\u62d6\u62fd|\u8f93\u5165|\u5750\u6807|\u63a5\u7ba1\u684c\u9762|\u684c\u9762\u63a7\u5236|\u5c4f\u5e55\u63a7\u5236|\u539f\u751f\u63a7\u4ef6)/u.test(text);
+}
+
+function asksForDesktopAiCollaboration(text: string): boolean {
+  return /(?:WorkBuddy|Codex|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
+    || /(?:问|发给|发送给|交给|询问)[\s\S]{0,80}(?:AI|模型|agent|智能体)/iu.test(text)
+    || /(?:AI|模型|agent|智能体)[\s\S]{0,80}(?:回答|结果|总结|对比|汇总)/iu.test(text);
 }
 
 function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySelection, 'lane' | 'primary' | 'reasons'> {
@@ -262,6 +271,14 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
       lane: 'legal_casework',
       primary: 'legal casework and legal documents',
       reasons: [...reasons, 'legal casework, legal source, or remote legal intake tools matched'],
+    };
+  }
+
+  if (asksForDesktopAiCollaboration(text) && (routeHas(input, 'external_control') || routeHasTool(input, /^desktop_ai_/))) {
+    return {
+      lane: 'desktop_control',
+      primary: 'desktop AI collaboration',
+      reasons: [...reasons, 'the user wants Lumi to ask local desktop AI apps and collect their answers'],
     };
   }
 

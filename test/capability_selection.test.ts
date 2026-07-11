@@ -22,6 +22,9 @@ const declarations = [
   'desktop_ui_type',
   'desktop_ui_invoke',
   'desktop_capture_screen',
+  'desktop_ai_list_targets',
+  'desktop_ai_ask',
+  'desktop_ai_collect_answer',
   'desktop_mouse_click_at',
   'desktop_cursor_glow_show',
   'desktop_cursor_glow_update',
@@ -310,6 +313,24 @@ describe('Lumi capability selection', () => {
     expect(selection.preferredTools).toContain('mouse_drag');
     expect(selection.preferredTools).toContain('keyboard_press');
     expect(selection.preferredTools).toContain('computer_use');
+  });
+
+  it('selects desktop AI collaboration tools for WorkBuddy and Codex delegation', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_desktop_ai_user',
+      text: '把这个问题发给 WorkBuddy 和 Codex，再把其它 AI 的回答拿回来总结',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('desktop_control');
+    expect(selection.preferredTools.slice(0, 6)).toEqual(expect.arrayContaining([
+      'desktop_ai_list_targets',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
+    ]));
+    expect(execution.toolRoute?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
+      execution.toolRoute?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it('selects browser/account work for saved-login dashboards', async () => {

@@ -32,6 +32,7 @@ describe('adapter registry external toolbox awareness', () => {
       const report = getAdapterRegistry({ includePlanned: false });
       const cadToolbox = report.adapters.find(adapter => adapter.id === 'cad_bim.local_toolchain');
       const nanoBanana = report.adapters.find(adapter => adapter.id === 'ai.nano_banana');
+      const externalAi = report.adapters.find(adapter => adapter.id === 'ai.external_agents');
       const drafting = report.adapters.find(adapter => adapter.id === 'cad_bim.drafting');
 
       expect(cadToolbox?.status).toBe('available');
@@ -44,6 +45,12 @@ describe('adapter registry external toolbox awareness', () => {
       ]));
       expect(nanoBanana?.status).toBe('requires_setup');
       expect(nanoBanana?.surfaces).toEqual(expect.arrayContaining(['Google AI Studio', 'Gemini app']));
+      expect(externalAi?.actions).toEqual(expect.arrayContaining([
+        'desktop_ai_list_targets',
+        'desktop_ai_ask',
+        'desktop_ai_collect_answer',
+      ]));
+      expect(externalAi?.surfaces).toEqual(expect.arrayContaining(['WorkBuddy', 'Codex desktop']));
       expect(drafting?.actions).toContain('mcp_cad-drafting_cad_renovation_folder_workflow');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

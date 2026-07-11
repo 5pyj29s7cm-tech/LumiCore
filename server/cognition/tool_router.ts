@@ -196,6 +196,9 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'external_app_list_adapters',
   ],
   externalControl: [
+    'desktop_ai_list_targets',
+    'desktop_ai_ask',
+    'desktop_ai_collect_answer',
     'external_control_candidates',
     'external_control_configure_candidate',
     'desktop_ui_snapshot',
@@ -387,8 +390,8 @@ const ROUTES: RouteDefinition[] = [
     category: 'external_control',
     reason: 'external software, browser DOM, or native UI control request',
     patterns: [
-      /外部软件|桌面控制|控件树|结构化浏览器|原生控件|窗口控件|按钮|输入框|Playwright|UIA|pywinauto|Windows UI Automation/u,
-      /\b(external\s+software|desktop\s+control|control\s+tree|native\s+control|playwright|uia|pywinauto|windows\s+ui\s+automation)\b/i,
+      /外部软件|桌面控制|控件树|结构化浏览器|原生控件|窗口控件|按钮|输入框|Playwright|UIA|pywinauto|Windows UI Automation|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|问.*AI|AI.*回答|发给.*AI|WorkBuddy|Codex/u,
+      /\b(external\s+software|desktop\s+control|control\s+tree|native\s+control|playwright|uia|pywinauto|windows\s+ui\s+automation|external\s+ai|desktop\s+ai|workbuddy|codex|ask\s+.*ai|send\s+.*ai)\b/i,
     ],
     groups: ['externalControl'],
   },
@@ -494,6 +497,12 @@ function isMessagingRead(text: string): boolean {
   return /(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f).*(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3)|(?:\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u603b\u7ed3).*(?:wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f)/iu.test(text);
 }
 
+function isDesktopAiCollaboration(text: string): boolean {
+  return /(?:WorkBuddy|Codex|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
+    || /(?:问|发给|发送给|交给|询问)[\s\S]{0,80}(?:AI|模型|agent|智能体)/iu.test(text)
+    || /(?:AI|模型|agent|智能体)[\s\S]{0,80}(?:回答|结果|总结|对比|汇总)/iu.test(text);
+}
+
 function isLocalCadSourceRequest(text: string): boolean {
   const raw = String(text || '');
   const hasLocalSource =
@@ -510,6 +519,18 @@ function isLocalCadSourceRequest(text: string): boolean {
 
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
+  if (isDesktopAiCollaboration(text)) {
+    priorities.push(
+      'desktop_ai_list_targets',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
+      'desktop_open',
+      'desktop_active_window',
+      'desktop_capture_screen',
+      'ocr_screen',
+      'computer_use',
+    );
+  }
   if (categories.includes('messaging')) {
     if (isMessagingRead(text)) {
       priorities.push(

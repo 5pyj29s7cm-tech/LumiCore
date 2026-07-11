@@ -49,6 +49,9 @@ const DECLARATIONS = [
   'desktop_ui_invoke',
   'desktop_ui_type',
   'desktop_capture_screen',
+  'desktop_ai_list_targets',
+  'desktop_ai_ask',
+  'desktop_ai_collect_answer',
   'ocr_screen',
   'desktop_mouse_click_at',
   'desktop_cursor_glow_show',
@@ -56,6 +59,7 @@ const DECLARATIONS = [
   'desktop_cursor_glow_click',
   'desktop_cursor_glow_hide',
   'desktop_keyboard_press',
+  'computer_use',
   'wechat_read_recent_chat',
   'wechat_send_message',
   'wechat_prepare_reply',
@@ -391,6 +395,24 @@ describe('tool router', () => {
       'adapter_registry_list',
       'mcp_playwright_browser_snapshot',
     ]));
+  });
+
+  it('routes desktop AI collaboration to the WorkBuddy/Codex handoff tools first', () => {
+    const route = routeToolsForTurn(
+      '把这个问题发给 WorkBuddy 和 Codex，再把其它 AI 的回答拿回来总结',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('external_control');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_ai_list_targets',
+      'desktop_ai_ask',
+      'desktop_ai_collect_answer',
+      'desktop_open',
+      'desktop_capture_screen',
+      'computer_use',
+    ]));
+    expect(route.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(route.toolNames.indexOf('computer_use'));
   });
 
   it('routes spoken bid and asset-tracing requests through legal tools', () => {
