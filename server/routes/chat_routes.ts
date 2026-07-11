@@ -95,8 +95,9 @@ function dateLikeToIso(value: unknown, fallback = Date.now()): string {
   return Number.isNaN(date.getTime()) ? new Date(fallback).toISOString() : date.toISOString();
 }
 
-function shouldArchiveLegalMeeting(purpose: unknown, legalCase: unknown): boolean {
-  return purpose === 'legal_consultation' || Boolean(legalCase && typeof legalCase === 'object');
+function shouldArchiveLegalMeeting(purpose: unknown, legalCase: unknown, domain: string, orgId: string): boolean {
+  const isLegalMeeting = purpose === 'legal_consultation' || Boolean(legalCase && typeof legalCase === 'object');
+  return isLegalMeeting && domain === 'work' && Boolean(orgId);
 }
 
 function buildLegalMeetingMinutesArgs(input: {
@@ -470,7 +471,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
     const domain = req.body?.domain === 'work' ? 'work' : 'personal';
-    const orgId = String(req.body?.orgId || req.user?.orgId || 'default').trim() || 'default';
+    const orgId = domain === 'work'
+      ? String(req.body?.orgId || req.user?.orgId || '').trim()
+      : '';
     const preferred = getUserPreferredLLMConfig(userId, { maxTokens: 1800 });
     const provider = preferred.provider;
     const model = preferred.model;
@@ -558,7 +561,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const usage = recordUsage(userId, tokens);
     let legalCasework = '';
     let legalCaseworkError = '';
-    if (shouldArchiveLegalMeeting(purpose, legalCase)) {
+    if (shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)) {
       try {
         legalCasework = await toolRegistry.execute('legal_meeting_minutes_to_case', buildLegalMeetingMinutesArgs({
           transcript,

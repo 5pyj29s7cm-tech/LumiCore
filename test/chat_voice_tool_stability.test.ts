@@ -56,10 +56,26 @@ describe('chat and voice tool-call stability', () => {
 
     expect(restChat).toContain('buildLegalMeetingMinutesArgs');
     expect(restChat).toContain('shouldArchiveLegalMeeting');
+    expect(restChat).toContain("return isLegalMeeting && domain === 'work' && Boolean(orgId)");
+    expect(restChat).toContain("const orgId = domain === 'work'");
     expect(restChat).toContain("toolRegistry.execute('legal_meeting_minutes_to_case'");
+    expect(restChat).toContain('shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)');
     expect(restChat).toContain("source: 'meeting-analyze'");
     expect(restChat).toContain('legalCasework');
     expect(restChat).toContain('legalCaseArchived');
+  });
+
+  it('binds legal meeting analysis to the current case and organization scope in the desktop client', () => {
+    const desktop = readFileSync(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
+
+    expect(desktop).toContain('const legalCaseId = legalCase?.id || getLegalConsultationCaseId()');
+    expect(desktop).toContain("const workLegalScope = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId)");
+    expect(desktop).toContain('id: legalCaseId');
+    expect(desktop).toContain("domain: workLegalScope ? 'work' : 'personal'");
+    expect(desktop).toContain('orgId: workLegalScope ? orgConnection?.orgId : undefined');
+    expect(desktop).toContain('if (data.legalCaseArchived && workLegalScope && legalCaseId && notesForAnalysis.length > 0)');
+    expect(desktop).toContain('lastLegalMeetingArchiveRef.current = archiveKey');
+    expect(desktop).toContain('setLegalConsultationCaseId(String(detail.legalCaseId))');
   });
 
   it('keeps voice tool execution visible and aligned with chat permission behavior', () => {

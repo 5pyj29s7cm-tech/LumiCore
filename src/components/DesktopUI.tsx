@@ -88,6 +88,7 @@ import {
   getLegalCaseLabel,
   getLegalConsultationCase,
   getLegalConsultationCaseId,
+  setLegalConsultationCaseId,
 } from '@/lib/legalCaseStore';
 import { PresenceIndicator } from './biometrics/PresenceIndicator';
 import { UserSwitchPrompt } from './biometrics/UserSwitchPrompt';
@@ -2586,8 +2587,11 @@ export function DesktopUI({
     setMeetingReportGenerating(true);
     try {
       const legalCase = getLegalConsultationCase();
+      const legalCaseId = legalCase?.id || getLegalConsultationCaseId();
+      const workLegalScope = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
       const legalCaseTitle = legalCase ? getLegalCaseLabel(legalCase) : legalMeetingCaseTitle;
       const legalCaseForAnalysis = legalCaseTitle ? {
+        id: legalCaseId,
         title: legalCase?.title || legalCaseTitle,
         caseNumber: legalCase?.caseNumber || '',
         party: legalCase?.party || '',
@@ -2596,6 +2600,8 @@ export function DesktopUI({
         judge: legalCase?.judge || '',
         stage: legalCase?.stage || '',
         notes: legalCase?.notes || '',
+        domain: workDomain,
+        orgId: workLegalScope ? orgConnection?.orgId : '',
       } : null;
       const res = await fetch('/api/meeting/analyze', {
         method: 'POST',
@@ -2609,6 +2615,8 @@ export function DesktopUI({
           endedAt,
           language: lang,
           purpose: legalCaseForAnalysis ? 'legal_consultation' : 'meeting',
+          domain: workLegalScope ? 'work' : 'personal',
+          orgId: workLegalScope ? orgConnection?.orgId : undefined,
           legalCase: legalCaseForAnalysis || undefined,
         }),
       });
@@ -2617,6 +2625,14 @@ export function DesktopUI({
       const report = String(data.report || '').trim() || buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(report);
       localStorage.setItem('lumi_meeting_report', report);
+      if (data.legalCaseArchived && workLegalScope && legalCaseId && notesForAnalysis.length > 0) {
+        const lastNote = notesForAnalysis[notesForAnalysis.length - 1];
+        const archiveKey = `${legalCaseId}:${meetingStartedAt || ''}:${lastNote?.id || notesForAnalysis.length}`;
+        lastLegalMeetingArchiveRef.current = archiveKey;
+        clearLegalConsultationCaseId();
+        setLegalMeetingCaseTitle('');
+        window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed'));
+      }
       toast.success(lang === 'zh' ? 'Lumi 已整理会议报告' : 'Lumi generated the meeting report');
       return report;
     } catch (err: any) {
@@ -2628,7 +2644,7 @@ export function DesktopUI({
     } finally {
       setMeetingReportGenerating(false);
     }
-  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
+  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt, orgConnection?.connected, orgConnection?.orgId, workDomain]);
 
   const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number, notesOverride?: MeetingNote[]) => {
     const notesForArchive = notesOverride || meetingNotes;
@@ -2808,6 +2824,7 @@ export function DesktopUI({
   type MeetingModeRequestDetail = {
     confirmed?: boolean;
     resetNotes?: boolean;
+    legalCaseId?: string;
     legalCaseTitle?: string;
     respond?: (payload?: unknown) => void;
     reject?: (message: string) => void;
@@ -2816,6 +2833,7 @@ export function DesktopUI({
   const openMeetingMode = useCallback((detail: MeetingModeRequestDetail = {}) => {
     try {
       if (detail.resetNotes) resetMeetingCapture();
+      if (detail.legalCaseId) setLegalConsultationCaseId(String(detail.legalCaseId));
       if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
       else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
 
@@ -3953,6 +3971,7 @@ export function DesktopUI({
         if (action === 'start_meeting_mode') {
           if (!confirmed) throw new Error('start_meeting_mode requires explicit user confirmation');
           if (detail.resetNotes) resetMeetingCapture();
+          if (detail.legalCaseId) setLegalConsultationCaseId(String(detail.legalCaseId));
           if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
           else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
           setClientMode('meeting');
