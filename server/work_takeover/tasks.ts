@@ -182,7 +182,7 @@ function categoryLabel(category: WechatWorkCategory): string {
     customer: '客户推进',
     store: '店铺运营',
     account: '账号运营',
-    legal_case: '自动立案',
+    legal_case: '半自动立案',
     video_publish: '视频发布',
     design_delivery: '设计交付',
     general_work: '通用工作',

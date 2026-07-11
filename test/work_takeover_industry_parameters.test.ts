@@ -62,6 +62,23 @@ function makeTaskFromIntake(message: string): WorkTakeoverTask {
 }
 
 describe('work takeover industry parameterization', () => {
+  it('keeps legal takeover labels on semi-automatic filing collaboration', () => {
+    const root = process.cwd();
+    const sourcePaths = [
+      'server/work_takeover/industry_standards.ts',
+      'server/work_takeover/tasks.ts',
+      'server/work_takeover/wechat_intake.ts',
+      'server/work_takeover/execution_planner.ts',
+    ];
+    const sources = sourcePaths.map(file => fs.readFileSync(path.join(root, file), 'utf8'));
+
+    for (const source of sources) {
+      expect(source).not.toMatch(/(?:label|legal_case):\s*['"]\u81ea\u52a8\u7acb\u6848/);
+    }
+    expect(sources.join('\n')).toContain('\u534a\u81ea\u52a8\u7acb\u6848');
+    expect(sources.join('\n')).toContain('\u534a\u81ea\u52a8\u7acb\u6848/\u6cd5\u5f8b\u6750\u6599\u5305');
+  });
+
   it('extracts ecommerce and short-video parameters from a customer message', () => {
     const message = '客户微信：帮我接管抖店账号，主推商品：空气炸锅，预算500元，目标今天做短视频脚本、图文提示词、发布草稿和微信客服回复，先别正式发布。';
     const intake = analyzeWechatIntake({ message, source: 'wechat', takeoverMode: 'auto' });

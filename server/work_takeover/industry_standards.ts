@@ -73,7 +73,7 @@ export const INDUSTRY_WORK_STANDARDS: Record<WechatWorkCategory, IndustryWorkSta
   },
   legal_case: {
     category: 'legal_case',
-    label: '自动立案/法律材料接管',
+    label: '半自动立案/法律材料接管',
     objective: '把法律消息变成事实时间线、证据目录、立案材料清单、风险提示和网页登录交接动作。',
     externalSurfaces: ['法院/法律平台网页登录会话', 'WPS/文档', 'PDF/证据文件夹', '任务中心'],
     deliverables: ['立案材料清单', '证据目录', '事实时间线', '风险提示', '待确认事项'],

@@ -157,7 +157,7 @@ const CAPABILITY_RULES: CapabilityRule[] = [
   },
   {
     id: 'legal.case_filing_pack',
-    label: '立案/法律材料包',
+    label: '半自动立案/法律材料包',
     kind: 'document',
     tools: ['legal_case_intake', 'legal_generate_litigation_packet', 'legal_prepare_filing_handoff', 'create_docx', 'create_pdf'],
     confirmationRequired: ['提交立案、签名、付款、正式法律意见前需要确认'],
