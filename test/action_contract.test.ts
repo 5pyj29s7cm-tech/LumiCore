@@ -75,7 +75,9 @@ describe('Lumi action contract', () => {
     const legalReasoning = buildActionContract('\u6309\u4e09\u6bb5\u8bba\u505a\u4e00\u4efd\u6848\u4ef6\u6cd5\u5f8b\u5206\u6790');
     expect(legalReasoning.kind).toBe('legal_document');
     expect(legalReasoning.coreAction).toContain('\u4e09\u6bb5\u8bba');
+    expect(legalReasoning.requiredEvidence).toContain('\u4e09\u6bb5\u8bba\u63a8\u7406\u94fe/\u6cd5\u5f8b\u4f9d\u636e-\u4e8b\u5b9e\u8bc1\u636e-\u6db5\u6444\u7ed3\u8bba\u8bc1\u636e');
     expect(legalReasoning.preferredTools).toContain('legal_case_reasoning_matrix');
+    expect(legalReasoning.verificationTools).toContain('legal_case_reasoning_matrix');
     const legalAssetTrace = buildActionContract('\u67e5\u88ab\u6267\u884c\u4eba\u8d22\u4ea7\u7ebf\u7d22\u548c\u80a1\u6743\u7a7f\u900f');
     expect(legalAssetTrace.kind).toBe('legal_document');
     expect(legalAssetTrace.preferredTools).toContain('legal_trace_assets');

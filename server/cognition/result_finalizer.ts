@@ -173,6 +173,30 @@ function hasLegalCurrentLawGateEvidence(records: ToolExecutionRecord[]): boolean
   });
 }
 
+function hasLegalReasoningChainEvidence(records: ToolExecutionRecord[]): boolean {
+  const successful = records.filter(record => !record.error && String(record.result || '').trim());
+  if (successful.length === 0) return false;
+
+  const combined = successful.map(record => `${record.name}\n${record.result || ''}`).join('\n');
+  if (/(?:\u6cd5\u5f8b\u5206\u6790\u4e09\u6bb5\u8bba\u5e95\u7a3f|\u4e09\u6bb5\u8bba|\u5927\u524d\u63d0|\u5c0f\u524d\u63d0|\u6db5\u6444|major\s+premise|minor\s+premise|subsumption|reasoning\s+matrix)/iu.test(combined)) {
+    return true;
+  }
+
+  const hasReasoningCapableProduct = successful.some(record => {
+    const name = String(record.name || '');
+    const result = String(record.result || '');
+    const isReasoningCapableTool = /^(legal_case_reasoning_matrix|legal_generate_litigation_packet|legal_generate_argument_or_opinion|legal_analyze_folder_and_draft_argument|legal_review_contract|legal_draft_contract|legal_finalize_delivery_package|legal_generate_bid)$/i.test(name);
+    if (!isReasoningCapableTool) return false;
+    return /(?:\u4e89\u8bae\u7126\u70b9|\u4e8b\u5b9e\u9002\u7528\u5206\u6790|\u6cd5\u5f8b\u9002\u7528|\u8bc1\u636e\u8bc4\u4ef7|\u8bc1\u636e\u76ee\u5f55|\u8bc1\u660e\u76ee\u7684|\u5f85\u8bc1\u4e8b\u5b9e|\u8d28\u8bc1|\u7ed3\u8bba|dispute\s+issue|application|conclusion|evidence\s+catalog|proof\s+purpose)/iu.test(result);
+  });
+  if (!hasReasoningCapableProduct) return false;
+
+  const hasLaw = /(?:\u6cd5\u5f8b\u4f9d\u636e|\u73b0\u884c\u6709\u6548\u6cd5\u5f8b|\u6cd5\u6761|\u6cd5\u5f8b\u9002\u7528|\u88c1\u5224\u89c4\u5219|\u7c7b\u6848|current-?law|statute|legal\s+(?:basis|authority)|citation)/iu.test(combined);
+  const hasFactEvidence = /(?:\u4e8b\u5b9e\u4e0e\u8bc1\u636e|\u4e8b\u5b9e|\u8bc1\u636e|\u8bc1\u636e\u8bc4\u4ef7|\u8bc1\u636e\u76ee\u5f55|\u8bc1\u660e\u76ee\u7684|\u5f85\u8bc1\u4e8b\u5b9e|\u4e3e\u8bc1|\u8d28\u8bc1|facts?|evidence|proof\s+purpose|burden\s+of\s+proof)/iu.test(combined);
+  const hasApplication = /(?:\u4e8b\u5b9e\u9002\u7528\u5206\u6790|\u6cd5\u5f8b\u9002\u7528|\u4e89\u8bae\u7126\u70b9|\u7ed3\u8bba|\u8bf7\u6c42\u6743\u57fa\u7840|\u6297\u8fa9\u7406\u7531|application|analysis|conclusion|subsumption)/iu.test(combined);
+  return hasLaw && hasFactEvidence && hasApplication;
+}
+
 function hasLegalExternalPlatformSignal(text: string): boolean {
   return /(?:\u6cd5\u9662\u7acb\u6848\u7f51|\u7f51\u4e0a\u7acb\u6848|\u4eba\u6c11\u6cd5\u9662\u5728\u7ebf\u670d\u52a1|\u6cd5\u9662\u5728\u7ebf\u670d\u52a1|\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93|\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u5929\u773c\u67e5|\u56fd\u5bb6\u4f01\u4e1a\u4fe1\u7528|\u6267\u884c\u4fe1\u606f\u516c\u5f00|wenshu|fachan|qichacha|court\s+filing|judgments?\s+online)/iu
     .test(text || '');
@@ -245,6 +269,19 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
           'I cannot say the external legal-platform search is complete yet.',
           'I need authorized session/API output, visible webpage results, source registration, or case-archive evidence.',
           'Until then, this is an authorized handoff, not a verified platform result.',
+        ].join('\n');
+  }
+  if (contract.kind === 'legal_document' && /reasoning chain|triad|\u4e09\u6bb5\u8bba/i.test(reason || '')) {
+    return zh
+      ? [
+          '\u8fd9\u4efd\u6cd5\u5f8b\u6210\u679c\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210\u6216\u6b63\u5f0f\u53ef\u7528\u3002',
+          '\u7f3a\u5c11\u4e09\u6bb5\u8bba\u63a8\u7406\u94fe\uff1a\u9700\u8981 legal_case_reasoning_matrix\uff0c\u6216\u6587\u4e66/\u4ea4\u4ed8\u5305\u4e2d\u80fd\u770b\u5230\u6cd5\u5f8b\u4f9d\u636e\u3001\u4e8b\u5b9e\u8bc1\u636e\u3001\u6db5\u6444/\u9002\u7528\u7ed3\u8bba\u7684\u53ef\u9a8c\u6536\u8bb0\u5f55\u3002',
+          '\u6b63\u5f0f\u6587\u4e66\u5fc5\u987b\u80fd\u4ece\u5927\u524d\u63d0\u3001\u5c0f\u524d\u63d0\u5230\u7ed3\u8bba\u9010\u6b65\u590d\u6838\u3002',
+        ].join('\n')
+      : [
+          'This legal work product cannot be marked complete or formally usable yet.',
+          'Missing legal reasoning chain: run legal_case_reasoning_matrix, or provide product evidence showing legal authority, facts/evidence, and application/conclusion.',
+          'Formal legal documents must be reviewable from rule, to facts, to conclusion.',
         ].join('\n');
   }
   if (contract.kind === 'legal_document' && /current-law|current law|\u73b0\u884c\u6709\u6548/i.test(reason || '')) {
@@ -432,6 +469,23 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         type: 'work_product_guard',
         level: 'warning',
         message: 'Missing current-law verification gate for legal document.',
+      },
+    };
+  }
+  if (
+    actionContract.kind === 'legal_document' &&
+    claimsLegalDocumentCompletion(input.responseText || '') &&
+    requiresLegalCurrentLawGate(actionText) &&
+    !hasLegalReasoningChainEvidence(input.toolRecords || [])
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing legal reasoning chain evidence.'),
+      blocked: true,
+      reason: 'Missing legal reasoning chain evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing legal reasoning chain evidence.',
       },
     };
   }

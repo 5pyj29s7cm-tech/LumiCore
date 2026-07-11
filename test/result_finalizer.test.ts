@@ -248,7 +248,7 @@ describe('Lumi result finalizer', () => {
         {
           name: 'legal_generate_litigation_packet',
           arguments: { caseName: '\u4e70\u5356\u5408\u540c\u7ea0\u7eb7' },
-          result: '# \u8d77\u8bc9\u72b6\n# \u8981\u7d20\u5f0f\u8bc9\u72b6\noutput: D:\\\\tmp\\\\complaint.docx',
+          result: '# \u8d77\u8bc9\u72b6\n## \u6cd5\u5f8b\u4f9d\u636e\n\u4ee5\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u4e3a\u51c6\u3002\n## \u4e8b\u5b9e\u4e0e\u8bc1\u636e\n\u8bc1\u636e\u76ee\u5f55\u3001\u8bc1\u660e\u76ee\u7684\u5df2\u7ed1\u5b9a\u3002\n## \u4e8b\u5b9e\u9002\u7528\u5206\u6790\n\u56f4\u7ed5\u4e89\u8bae\u7126\u70b9\u5f62\u6210\u7ed3\u8bba\u8bf7\u6c42\u3002\n# \u8981\u7d20\u5f0f\u8bc9\u72b6\noutput: D:\\\\tmp\\\\complaint.docx',
         },
         {
           name: 'legal_generate_citation_verification_report',
@@ -261,6 +261,33 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.text).toBe(responseText);
+  });
+
+  it('blocks legal document completion claims without triad reasoning chain evidence', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u751f\u6210\u6b63\u5f0f\u6cd5\u5f8b\u610f\u89c1\u4e66',
+      responseText: '\u6b63\u5f0f\u6cd5\u5f8b\u610f\u89c1\u4e66\u5df2\u7ecf\u751f\u6210\u5b8c\u6210\uff0c\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u6838\u9a8c\u5df2\u901a\u8fc7\uff0c\u53ef\u4ee5\u76f4\u63a5\u4f7f\u7528\u3002',
+      toolRecords: [
+        {
+          name: 'legal_generate_litigation_packet',
+          arguments: { caseName: '\u63a8\u7406\u94fe\u7f3a\u5931\u6d4b\u8bd5\u6848' },
+          result: '# \u6cd5\u5f8b\u610f\u89c1\u4e66\noutput: D:\\\\tmp\\\\opinion.docx',
+        },
+        {
+          name: 'legal_generate_citation_verification_report',
+          arguments: { caseName: '\u63a8\u7406\u94fe\u7f3a\u5931\u6d4b\u8bd5\u6848' },
+          result: '\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u786c\u95e8\u69db\uff1a\u901a\u8fc7\n\u5df2\u5e9f\u6b62/\u5931\u6548\u98ce\u9669\uff1a0',
+        },
+      ],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing legal reasoning chain evidence.');
+    expect(result.text).toContain('\u4e09\u6bb5\u8bba\u63a8\u7406\u94fe');
+    expect(result.text).toContain('legal_case_reasoning_matrix');
   });
 
   it('blocks legal delivery claims when the current-law gate failed', async () => {
