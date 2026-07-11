@@ -24,6 +24,9 @@ describe('autonomous public web learning', () => {
     expect(workflow.externalAppsAllowed).toBe(false);
     expect(workflow.allowedActions).toEqual(expect.arrayContaining([
       'public_web_search',
+      'industry_habit_research',
+      'profession_context',
+      'workflow_standard_refresh',
       'web_search',
       'url_fetch',
       'authority_research',
@@ -42,7 +45,31 @@ describe('autonomous public web learning', () => {
     const { saveGateConfig } = await import('../server/autonomy/safety_gate');
     const { generateAutonomousTasks } = await import('../server/autonomy/task_generator');
     const { getTaskQueue } = await import('../server/autonomy/task_queue');
+    const { readDB, writeDB } = await import('../db_layer');
     const userId = 'web_learning_seed_user';
+    const db = readDB();
+    db.professionProfiles = [{
+      profession: 'lawyer',
+      confidence: 0.86,
+      evidence: ['中国裁判文书网', '企查查'],
+      knowledgeDomains: ['诉讼法', '法律检索'],
+      personaHints: ['严谨'],
+      installedRelevantTools: ['中国裁判文书网'],
+    }];
+    db.memories = [
+      ...(db.memories || []),
+      {
+        id: 'habit_web_learning_lawyer',
+        userId,
+        type: 'habit',
+        content: '用户做法律工作时习惯先核验现行有效法律，再整理证据目录和代理词。',
+        keywords: '[]',
+        confidence: 0.9,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    writeDB(db);
 
     saveGateConfig({ autonomyLevel: 'full' });
 
@@ -59,6 +86,9 @@ describe('autonomous public web learning', () => {
     expect(seeded?.description).toContain('desktop_ai_discovery_plan');
     expect(seeded?.description).toContain('desktop_ai_register_target');
     expect(seeded?.description).toContain('不要使用需要登录');
+    expect(seeded?.description).toContain('使用者行业习惯画像');
+    expect(seeded?.description).toContain('legal_casework');
+    expect(seeded?.description).toContain('现行有效法律');
 
     const second = await generateAutonomousTasks(userId, LLM_GETTERS);
     expect(second).toBe(0);

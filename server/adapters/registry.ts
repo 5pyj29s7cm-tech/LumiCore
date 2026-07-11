@@ -530,7 +530,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       surfaces: ['official sources', 'citation packets', 'knowledge memory'],
       requiresConfirmation: true,
       safety: 'Reading/searching public sources is safe; login-required, paid, captcha, QR/OTP, private, or account-authorization pages are blockers. Saving research into long-term knowledge requires explicit confirmation unless a confirmed workflow explicitly grants that write.',
-      notes: 'Use for laws, policies, patents, software copyright, standards, academic papers, technical docs, current factual claims, and autonomous public-source learning refreshes that need sources.',
+      notes: 'Use for laws, policies, patents, software copyright, standards, academic papers, technical docs, current factual claims, and autonomous public-source learning refreshes that need sources. Autonomous learning should follow the user industry habits: common platforms, deliverable formats, vocabulary, verification standards, and confirmation boundaries.',
     },
     {
       id: 'finance.stock_watch',

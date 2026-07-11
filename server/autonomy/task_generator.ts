@@ -14,6 +14,7 @@ import { readDB, writeDB } from '../../db_layer';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getRecentActivity } from '../context/activity_stream';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
+import { formatIndustryLearningContext } from './industry_learning';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -50,7 +51,8 @@ export function buildPublicWebLearningTaskDescription(contextParts: string[]): s
   const context = contextParts.length > 0 ? contextParts.join('\n') : '暂无额外上下文。';
   return [
     '自主联网学习任务：根据当前上下文选择 1 个对用户近期目标最有价值、且需要时效更新的主题。',
-    '优先主题包括：现行有效法律/政策更新、Lumi 桌面自动化与外部 AI 协作稳定性、桌面 AI/桌面工具目标目录更新、知识库/组织库连接、用户最近反复提到的工作流。',
+    '选题必须优先贴合使用者的行业习惯、常用平台、术语、交付物格式、验收标准和风险边界；不要泛泛追 AI 热点。',
+    '优先主题包括：使用者行业的现行规则/政策/平台流程更新、Lumi 桌面自动化与外部 AI 协作稳定性、桌面 AI/桌面工具目标目录更新、知识库/组织库连接、用户最近反复提到的工作流。',
     '如果主题涉及“其他桌面 AI/桌面工具目标”，先用 desktop_ai_list_targets 查看现有目录，再用 desktop_ai_discovery_plan 生成候选结构，并结合 web_search、url_fetch、authority_research 检索公开/官方来源。',
     '可用工具边界：可以使用 web_search、url_fetch、authority_research 检索公开网页、公开文档和权威来源；不要使用需要登录、付费、验证码、扫码、二次验证或账号授权的页面作为已完成来源。',
     '输出要求：给出来源 URL、检索时间、可信度、不确定点、可吸收的候选知识、对 Lumi 能力/工作流的更新建议；涉及桌面 AI/工具时额外输出可供 desktop_ai_register_target 使用的候选 JSON（id、label、aliases、openTargets、surface、sourceUrls、notes）。不能把未核验信息写成确定事实。',
@@ -132,7 +134,7 @@ function seedPublicWebLearningTaskIfDue(
     workflowId: workflow.id,
     planId: plan.id,
     title: generated.title,
-    description: generated.description.slice(0, 1200),
+    description: generated.description.slice(0, 2400),
     source: 'curiosity',
     priority: generated.priority,
     mode: generated.mode,
@@ -244,6 +246,11 @@ export async function generateAutonomousTasks(
     contextParts.push(`待办事项: ${pendingReminders.join('; ')}`);
   }
 
+  const industryContext = formatIndustryLearningContext(userId);
+  if (industryContext) {
+    contextParts.push(industryContext);
+  }
+
   if (contextParts.length === 0) return 0;
 
   const prompt = `你是 Lumi 的后台自主学习与任务规划器。根据用户当前的上下文，建议 1-3 个你可以自主完成的小任务。
@@ -253,6 +260,8 @@ export async function generateAutonomousTasks(
 - 每个任务必须填写 workflowId，且 workflowId 必须来自下面的工作流列表
 - 任务 mode 必须在对应工作流的 allowedModes 内
 - 如果任务需要外部应用，而工作流 externalApps=not_allowed，则不要生成该任务
+- 必须根据“使用者行业习惯画像”选择学习主题：围绕行业常用平台、术语、交付物格式、验收标准、合规/确认边界和用户反复出现的实际任务去调研和进化
+- 如果没有行业画像，先围绕最近任务/记忆/活跃应用推断行业候选，但要标注不确定性，不要把猜测当事实
 - 公开网页搜索、url_fetch、authority_research 属于网络观察，不算外部应用自动化；只有工作流 allowedActions 包含 public_web_search、web_search 或 authority_research 时才可生成联网学习任务
 - 如果用户上下文涉及“其他桌面 AI、桌面工具、外部 AI 目标、AI 客户端”，优先生成桌面 AI/工具目标目录更新任务：查看 desktop_ai_list_targets，使用 desktop_ai_discovery_plan 设计候选结构，再联网查公开/官方来源
 - 联网学习任务只能检索公开来源；遇到登录、付费、验证码、扫码、二次验证、账号授权或私有页面，要记录阻塞和替代公开来源，不要假装完成
