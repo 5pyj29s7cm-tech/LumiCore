@@ -232,7 +232,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     baseToolPolicy,
     toolRoute,
     toolPolicy,
-    maxIterations: toolPolicy.maxIterations || input.personalityToolPolicy?.maxIterations || 5,
+    maxIterations: toolPolicy.maxIterations ?? input.personalityToolPolicy?.maxIterations ?? 5,
     promptOverlay: promptParts,
   };
 }

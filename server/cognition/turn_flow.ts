@@ -339,6 +339,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const taskEntryTurn = input.channel === 'task';
   const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn;
   const shouldPromoteForAction =
+    operationMode === 'chat' &&
+    !requestedMode &&
     !chatModePureConversation &&
     (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools);
   const effectiveOperationMode = requestedMode || (shouldPromoteForAction ? 'assistant' : operationMode);
