@@ -87,11 +87,16 @@ export function buildUnifiedLegalEntryPrompt(input: {
     '## Unified Legal Casework Entry',
     'Legal work is available from personal chat, company/work chat, voice, task center, and Feishu/WeCom/WeChat bot intake. Treat these as entrances into the same legal casework capability, not as separate scripts or ordinary messaging.',
     scopeLine,
+    'Execution order: intake/case space -> identity/facts -> major premise -> minor premise -> conclusion/subsumption -> current-law gate -> filing handoff -> delivery/archive.',
     remoteIntake
       ? 'Remote legal messages and forwarded SMS/court links should use legal_message_intake_to_case or legal_process_notice_link, then bind the source, sender, link, extracted document, and next case step into the case workspace.'
       : '',
+    remoteIntake
+      ? 'Remote bot intake must resolve the organization/case binding first. If orgId is available, archive into the organization case workspace and organization knowledge base; if not, keep it as personal intake and do not claim organization persistence.'
+      : '',
     'Core legal method: major premise = retrieve current law, explain the rule, and reinforce with ranked similar cases; minor premise = organize facts, materials, evidence, burden, and cross-examination; conclusion = subsume facts into the rule and produce the complaint, defense, argument, legal opinion, filing handoff, or delivery package.',
     'Current-law gate: every generated legal document must verify cited law through legal_generate_citation_verification_report, legal_search_statute, legal_search_external_authorities, or an equivalent authoritative source before being marked final. If currency cannot be verified, label it unverified instead of presenting it as current effective law.',
+    'External legal platforms: court filing portals, Fachan, Alpha, China Judgments Online, Qichacha, and enterprise credit systems are authorized-collaboration surfaces. Do not claim full automation; archive sources/results and run the delivery gate before formal use.',
     'External-platform boundary: court filing, signatures, payment, public submission, settlement commitment, final legal position, or service confirmation require lawyer/party confirmation. Authorized browser/database work may prepare, search, verify, and stage the result.',
   ].filter(Boolean).join('\n');
 }

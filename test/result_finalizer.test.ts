@@ -217,6 +217,141 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('\u6ca1\u6709\u627e\u5230\u5df2\u4fdd\u5b58\u7684\u7f51\u9875\u767b\u5f55 profile');
   });
 
+  it('blocks legal document completion claims without current-law verification', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6839\u636e\u6750\u6599\u751f\u6210\u8d77\u8bc9\u72b6\u548c\u8981\u7d20\u5f0f\u8bc9\u72b6',
+      responseText: '\u8d77\u8bc9\u72b6\u548c\u8981\u7d20\u5f0f\u8bc9\u72b6\u5df2\u7ecf\u751f\u6210\u5b8c\u6210\uff0c\u53ef\u4ee5\u76f4\u63a5\u4f7f\u7528\u3002',
+      toolRecords: [{
+        name: 'legal_generate_litigation_packet',
+        arguments: { caseName: '\u4e70\u5356\u5408\u540c\u7ea0\u7eb7' },
+        result: '# \u8d77\u8bc9\u72b6\u8349\u7a3f\n\u672a\u8fd0\u884c\u5f15\u7528\u6838\u9a8c\u62a5\u544a',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing current-law verification gate for legal document.');
+    expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210\u6216\u6b63\u5f0f\u53ef\u7528');
+    expect(result.text).toContain('legal_generate_citation_verification_report');
+  });
+
+  it('allows legal document completion after current-law verification passes', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const responseText = '\u8d77\u8bc9\u72b6\u548c\u8981\u7d20\u5f0f\u8bc9\u72b6\u5df2\u7ecf\u751f\u6210\u5b8c\u6210\uff0c\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u6838\u9a8c\u5df2\u901a\u8fc7\u3002';
+    const result = finalizeLumiResponse({
+      taskText: '\u6839\u636e\u6750\u6599\u751f\u6210\u8d77\u8bc9\u72b6\u548c\u8981\u7d20\u5f0f\u8bc9\u72b6',
+      responseText,
+      toolRecords: [
+        {
+          name: 'legal_generate_litigation_packet',
+          arguments: { caseName: '\u4e70\u5356\u5408\u540c\u7ea0\u7eb7' },
+          result: '# \u8d77\u8bc9\u72b6\n# \u8981\u7d20\u5f0f\u8bc9\u72b6\noutput: D:\\\\tmp\\\\complaint.docx',
+        },
+        {
+          name: 'legal_generate_citation_verification_report',
+          arguments: { caseName: '\u4e70\u5356\u5408\u540c\u7ea0\u7eb7' },
+          result: '\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u786c\u95e8\u69db\uff1a\u901a\u8fc7\n\u5df2\u5e9f\u6b62/\u5931\u6548\u98ce\u9669\uff1a0',
+        },
+      ],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('blocks legal delivery claims when the current-law gate failed', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u751f\u6210\u6b63\u5f0f\u4ee3\u7406\u8bcd\u548c\u6cd5\u5f8b\u610f\u89c1\u4e66\u4ea4\u4ed8\u5305',
+      responseText: '\u6b63\u5f0f\u4ee3\u7406\u8bcd\u548c\u6cd5\u5f8b\u610f\u89c1\u4e66\u4ea4\u4ed8\u5305\u5df2\u5b8c\u6210\u3002',
+      toolRecords: [{
+        name: 'legal_finalize_delivery_package',
+        arguments: { caseName: '\u5e9f\u6b62\u6cd5\u963b\u65ad\u6d4b\u8bd5\u6848' },
+        result: '\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u786c\u95e8\u69db\u672a\u901a\u8fc7\n\u300a\u5408\u540c\u6cd5\u300b\u5df2\u5e9f\u6b62',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing current-law verification gate for legal document.');
+    expect(result.text).toContain('\u672a\u6838\u9a8c\u7684\u6cd5\u5f8b\u6587\u4e66');
+  });
+
+  it('blocks court filing portal claims that pretend final external submission is automatic', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u5e2e\u6211\u5728\u6cd5\u9662\u7acb\u6848\u7f51\u81ea\u52a8\u7acb\u6848\u5e76\u63d0\u4ea4',
+      responseText: '\u5df2\u7ecf\u5728\u6cd5\u9662\u7acb\u6848\u7f51\u5b8c\u6210\u81ea\u52a8\u7acb\u6848\u63d0\u4ea4\u3001\u7b7e\u540d\u548c\u7f34\u8d39\u3002',
+      toolRecords: [{
+        name: 'legal_prepare_filing_handoff',
+        arguments: { caseName: '\u7acb\u6848\u6d4b\u8bd5\u6848' },
+        result: '\u534a\u81ea\u52a8\u7acb\u6848\u4ea4\u63a5\u5355\nLumi \u672a\u81ea\u52a8\u63d0\u4ea4\u3001\u672a\u7b7e\u540d\u3001\u672a\u7f34\u8d39\u3002',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('External legal platform final action requires authorized collaboration.');
+    expect(result.text).toContain('\u5916\u90e8\u6cd5\u5f8b\u5e73\u53f0\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5168\u81ea\u52a8\u5b8c\u6210');
+    expect(result.text).toContain('\u6388\u6743\u534f\u4f5c');
+  });
+
+  it('blocks external legal research result claims without source or session evidence', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u8fde\u63a5\u6cd5\u8749\u3001Alpha \u548c\u4f01\u67e5\u67e5\u67e5\u516c\u53f8\u548c\u88ab\u6267\u884c\u4eba\u60c5\u51b5',
+      responseText: '\u5df2\u7ecf\u5728\u6cd5\u8749\u3001Alpha \u548c\u4f01\u67e5\u67e5\u67e5\u5230\u516c\u53f8\u6d89\u8bc9\u548c\u88ab\u6267\u884c\u60c5\u51b5\u3002',
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing external legal platform result evidence.');
+    expect(result.text).toContain('\u5916\u90e8\u6cd5\u5f8b\u5e73\u53f0\u67e5\u8be2');
+    expect(result.text).toContain('\u6765\u6e90\u767b\u8bb0');
+  });
+
+  it('allows authorized external legal research handoffs without pretending results are fetched', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const responseText = '\u5df2\u751f\u6210\u6388\u6743\u534f\u4f5c\u68c0\u7d22\u884c\u52a8\u5355\uff0c\u5f85\u5f8b\u5e08\u767b\u5f55\u6cd5\u8749\u3001Alpha \u548c\u88c1\u5224\u6587\u4e66\u7f51\u6838\u9a8c\u5e76\u5f52\u6863\u6765\u6e90\u3002';
+    const result = finalizeLumiResponse({
+      taskText: '\u751f\u6210\u6cd5\u8749\u3001Alpha \u548c\u88c1\u5224\u6587\u4e66\u7f51\u68c0\u7d22\u8ba1\u5212',
+      responseText,
+      toolRecords: [{
+        name: 'legal_external_research_plan',
+        arguments: { caseName: '\u5916\u90e8\u68c0\u7d22\u6d4b\u8bd5\u6848' },
+        result: '\u5916\u90e8\u68c0\u7d22\u884c\u52a8\u5355\n\u6388\u6743\u7f51\u9875\u767b\u5f55\u534f\u4f5c\n\u6765\u6e90\u767b\u8bb0\u8868',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('blocks ordinary chat formal legal documents without production and citation gates', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u76f4\u63a5\u7ed9\u6211\u4e00\u4efd\u6b63\u5f0f\u7248\u8d77\u8bc9\u72b6',
+      responseText: '\u6b63\u5f0f\u7248\u8d77\u8bc9\u72b6\u5df2\u751f\u6210\uff0c\u53ef\u4ee5\u76f4\u63a5\u63d0\u4ea4\u3002',
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing legal document production evidence.');
+    expect(result.text).toContain('\u6cd5\u5f8b\u6587\u4e66\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210');
+  });
+
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
     const socketSources = [

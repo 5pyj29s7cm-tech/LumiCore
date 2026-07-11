@@ -129,12 +129,148 @@ function hasContinuousStockWatchEvidence(records: ToolExecutionRecord[]): boolea
   });
 }
 
+function requiresLegalCurrentLawGate(text: string): boolean {
+  if (
+    /(?:\u68c0\u7d22\u8ba1\u5212|\u68c0\u7d22\u884c\u52a8\u5355|\u5916\u90e8\u68c0\u7d22|\u6765\u6e90\u767b\u8bb0|\u6388\u6743\u534f\u4f5c|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93|\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|research plan|source register|authorized collaboration)/iu.test(text || '') &&
+    !/(?:\u8d77\u8bc9\u72b6|\u8981\u7d20\u5f0f\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1\u610f\u89c1|\u4ee3\u7406\u8bcd|\u6cd5\u5f8b\u610f\u89c1\u4e66|\u59d4\u6258\u624b\u7eed|\u7acb\u6848\u6750\u6599|\u8bc1\u636e\u76ee\u5f55|\u5408\u540c|\u534f\u8bae|\u6807\u4e66|\u6295\u6807\u4e66|\u6b63\u5f0f\u6587\u4e66|\u4ea4\u4ed8\u5305|pleading|complaint|defense|legal\s+opinion|contract|agreement|bid|tender|filing\s+packet|evidence\s+catalog)/iu.test(text || '')
+  ) {
+    return false;
+  }
+  return /(?:\u8d77\u8bc9\u72b6|\u8981\u7d20\u5f0f\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u8d28\u8bc1\u610f\u89c1|\u4ee3\u7406\u8bcd|\u6cd5\u5f8b\u610f\u89c1\u4e66|\u59d4\u6258\u624b\u7eed|\u7acb\u6848\u6750\u6599|\u8bc1\u636e\u76ee\u5f55|\u5408\u540c|\u534f\u8bae|\u6807\u4e66|\u6295\u6807\u4e66|\u6587\u4e66|\u8bc9\u72b6|pleading|complaint|defense|legal\s+opinion|contract|agreement|bid|tender|filing\s+packet|evidence\s+catalog)/iu
+    .test(text || '');
+}
+
+function claimsLegalDocumentCompletion(text: string): boolean {
+  return /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u751f\u6210|\u51fa\u5177|\u4ea4\u4ed8|\u6b63\u5f0f|\u53ef\u76f4\u63a5\u4f7f\u7528|\u53ef\u4ee5\u76f4\u63a5\u4f7f\u7528|\u53ef\u63d0\u4ea4|\u53ef\u7acb\u6848|\u53ef\u7528|completed|created|generated|ready|formal|deliverable)/iu
+    .test(text || '');
+}
+
+function hasLegalDocumentProductionEvidence(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => {
+    if (record.error) return false;
+    const name = String(record.name || '');
+    const result = String(record.result || '');
+    return /^(legal_generate_(?!citation_verification_report)|legal_analyze_folder_and_draft_argument|legal_review_contract|legal_draft_contract|legal_finalize_delivery_package|legal_prepare_filing_handoff|create_docx|write_file)$/i.test(name)
+      || /\.(?:docx|pdf|md|txt)\b|formal-document|litigation-packet|pleading|argument|opinion|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u4ee3\u7406\u8bcd|\u6cd5\u5f8b\u610f\u89c1|\u8bc1\u636e\u76ee\u5f55|\u6807\u4e66/iu.test(result);
+  });
+}
+
+function hasLegalCurrentLawGateEvidence(records: ToolExecutionRecord[]): boolean {
+  const successful = records.filter(record => !record.error && String(record.result || '').trim());
+  if (successful.length === 0) return false;
+
+  const combined = successful.map(record => `${record.name}\n${record.result || ''}`).join('\n');
+  if (/(?:\u73b0\u884c\u6709\u6548\u6cd5\u5f8b[^\n]{0,24}\u672a\u901a\u8fc7|\u786c\u95e8\u69db[^\n]{0,24}\u672a\u901a\u8fc7|current-law gate blocked|current law gate blocked|\u300a[^\n\u300b]{1,40}\u300b[^\n]{0,20}\u5df2\u5e9f\u6b62|\u5931\u6548\u98ce\u9669[^\d\n]{0,8}[1-9]|\u672a\u786e\u8ba4\u7684\u6cd5\u6761|\u4e0d\u5f97\u6807\u8bb0\u4e3a\u6b63\u5f0f\u6210\u679c)/iu.test(combined)) {
+    return false;
+  }
+
+  return successful.some(record => {
+    const name = String(record.name || '');
+    const result = String(record.result || '');
+    const isGateTool = /^(legal_generate_citation_verification_report|legal_finalize_delivery_package|legal_search_statute|legal_case_reasoning_matrix|legal_generate_litigation_packet|legal_generate_argument_or_opinion|legal_review_contract|legal_draft_contract|legal_generate_bid)$/i.test(name);
+    if (!isGateTool) return false;
+    return /(?:\u73b0\u884c\u6709\u6548\u6cd5\u5f8b(?:\u9884\u68c0|\u786c\u95e8\u69db)?[\uff1a:]\s*\u901a\u8fc7|\u5df2\u5e9f\u6b62\/\u5931\u6548\u98ce\u9669[\uff1a:]\s*0|current-?law\s+gate[^.\n]{0,40}pass|"currentLawGate"\s*:\s*"passed"|"passed"\s*:\s*true)/iu.test(result);
+  });
+}
+
+function hasLegalExternalPlatformSignal(text: string): boolean {
+  return /(?:\u6cd5\u9662\u7acb\u6848\u7f51|\u7f51\u4e0a\u7acb\u6848|\u4eba\u6c11\u6cd5\u9662\u5728\u7ebf\u670d\u52a1|\u6cd5\u9662\u5728\u7ebf\u670d\u52a1|\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93|\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u5929\u773c\u67e5|\u56fd\u5bb6\u4f01\u4e1a\u4fe1\u7528|\u6267\u884c\u4fe1\u606f\u516c\u5f00|wenshu|fachan|qichacha|court\s+filing|judgments?\s+online)/iu
+    .test(text || '');
+}
+
+function describesAuthorizedLegalExternalHandoff(text: string): boolean {
+  return /(?:\u6388\u6743\u534f\u4f5c|\u534a\u81ea\u52a8|\u884c\u52a8\u5355|\u4ea4\u63a5\u5355|\u6765\u6e90\u767b\u8bb0|\u7ed3\u679c\u5f52\u6863|\u5f85\u5f8b\u5e08|\u5f85\u4eba\u5de5|\u4eba\u5de5\u6838\u5bf9|\u4eba\u5de5\u63d0\u4ea4|\u9700\u8981\u767b\u5f55|\u9700\u8981\u9a8c\u8bc1|\u4e0d\u4f1a\u81ea\u52a8|\u4e0d\u81ea\u52a8|\u672a\u63d0\u4ea4|\u4e0d\u7b7e\u540d|\u4e0d\u7f34\u8d39|\u4e0d\u786e\u8ba4\u9001\u8fbe|authorized collaboration|handoff|source register|manual review|not submit|not sign|not pay)/iu
+    .test(text || '');
+}
+
+function claimsExternalLegalPlatformFinalAction(text: string): boolean {
+  const value = text || '';
+  if (/(?:\u4e0d\u4f1a|\u4e0d\u80fd|\u4e0d\u5e94|\u672a|\u5f85|\u9700\u8981|\u5fc5\u987b).{0,14}(?:\u63d0\u4ea4|\u7acb\u6848|\u7b7e\u540d|\u7b7e\u7f72|\u7f34\u8d39|\u9001\u8fbe|\u64a4\u56de|\u548c\u89e3|submit|sign|pay|service|settle)/iu.test(value)) {
+    return false;
+  }
+  return /(?:(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u81ea\u52a8|\u5168\u81ea\u52a8).{0,24}(?:\u63d0\u4ea4\u7acb\u6848|\u7acb\u6848\u63d0\u4ea4|\u7f51\u4e0a\u7acb\u6848|\u7b7e\u540d|\u7b7e\u7f72|\u7f34\u8d39|\u786e\u8ba4\u9001\u8fbe|\u64a4\u56de|\u548c\u89e3\u627f\u8bfa|\u5bf9\u5916\u63d0\u4ea4))|(?:(?:auto|fully automatic|completed).{0,24}(?:filing|submitted|signature|signed|payment|paid|service|settlement))|(?:bypass(?:ed)?\s+(?:captcha|2fa|verification))/iu
+    .test(value);
+}
+
+function claimsExternalLegalPlatformResult(text: string): boolean {
+  const value = text || '';
+  if (describesAuthorizedLegalExternalHandoff(value)) return false;
+  return /(?:(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230).{0,36}(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66|\u6848\u4f8b\u5e93|\u516c\u53f8|\u88ab\u6267\u884c|\u6cd5\u9662|\u7ed3\u679c))|(?:(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93).{0,36}(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u7ed3\u679c|result))/iu
+    .test(value);
+}
+
+function hasLegalExternalPlatformResultEvidence(records: ToolExecutionRecord[]): boolean {
+  const successful = records.filter(record => !record.error && String(record.result || '').trim());
+  if (successful.length === 0) return false;
+
+  return successful.some(record => {
+    const name = String(record.name || '');
+    const result = String(record.result || '');
+    if (/manual_required|captcha|2FA|QR|\u9a8c\u8bc1\u7801|\u626b\u7801|\u4ed8\u8d39|\u9700\u8981\u767b\u5f55|\u672a\u914d\u7f6e|not configured|login required/i.test(result)) {
+      return false;
+    }
+    const resultTool = /^(legal_search_external_authorities|legal_company_database_lookup|legal_trace_assets|legal_equity_penetration|url_fetch_logged_in|mcp_playwright_browser_snapshot|mcp_playwright_browser_evaluate|browser_open_task)$/i.test(name);
+    const hasResultMarkers = /(?:\u6765\u6e90\u767b\u8bb0|\u590d\u6838\u72b6\u6001|\u6848\u53f7|\u6cd5\u9662|\u88c1\u5224|\u80a1\u4e1c|\u88ab\u6267\u884c|\u516c\u53f8|\u641c\u7d22\u7ed3\u679c|Page URL|source-register|result|title|case|company)/iu.test(result);
+    return resultTool && hasResultMarkers;
+  });
+}
+
 function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: string): string {
   const zh = isChineseText(input.taskText) || isChineseText(input.responseText);
   const failure = summarizeToolFailure(input.toolRecords || []);
   const contract = buildActionContract(`${input.taskText}\n${input.responseText}`);
   const contractBlocker = summarizeActionContractBlocker(contract, failure);
   const source = String(input.source || '').toLowerCase();
+  if (/External legal platform final action/i.test(reason || '')) {
+    return zh
+      ? [
+          '\u5916\u90e8\u6cd5\u5f8b\u5e73\u53f0\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5168\u81ea\u52a8\u5b8c\u6210\u3002',
+          '\u6cd5\u9662\u7acb\u6848\u7f51\u3001\u6cd5\u8749\u3001Alpha\u3001\u88c1\u5224\u6587\u4e66\u7f51\u3001\u4f01\u67e5\u67e5\u7b49\u53d7\u8d26\u53f7\u3001\u9a8c\u8bc1\u7801\u3001\u4ed8\u8d39\u548c\u98ce\u63a7\u5f71\u54cd\uff1bLumi \u53ea\u80fd\u505a\u6388\u6743\u534f\u4f5c\u3001\u7ed3\u679c\u5f52\u6863\u548c\u4ea4\u4ed8\u524d\u6838\u9a8c\u3002',
+          '\u63d0\u4ea4\u3001\u7b7e\u540d\u3001\u7f34\u8d39\u3001\u786e\u8ba4\u9001\u8fbe\u3001\u64a4\u56de\u6216\u548c\u89e3\u627f\u8bfa\u5fc5\u987b\u7531\u5f8b\u5e08\u6216\u5f53\u4e8b\u4eba\u786e\u8ba4\u3002',
+        ].join('\n')
+      : [
+          'External legal platforms cannot be marked as fully automated completion.',
+          'Court filing portals, Fachan, Alpha, China Judgments Online, Qichacha, and similar systems depend on accounts, captcha/2FA, payment, and platform risk controls. Lumi can do authorized collaboration, result archiving, and pre-delivery verification.',
+          'Submission, signature, payment, service confirmation, withdrawal, or settlement commitment requires lawyer or party confirmation.',
+        ].join('\n');
+  }
+  if (/Missing external legal platform result evidence/i.test(reason || '')) {
+    return zh
+      ? [
+          '\u8fd8\u4e0d\u80fd\u8bf4\u5df2\u7ecf\u5b8c\u6210\u5916\u90e8\u6cd5\u5f8b\u5e73\u53f0\u67e5\u8be2\u6216\u68c0\u7d22\u7ed3\u679c\u3002',
+          '\u9700\u8981\u6709\u6388\u6743\u767b\u5f55\u4f1a\u8bdd\u3001\u5b98\u65b9 API \u8fd4\u56de\u3001\u7f51\u9875\u53ef\u89c1\u7ed3\u679c\u3001\u6765\u6e90\u767b\u8bb0\u6216\u5165\u6848\u5f52\u6863\u8bb0\u5f55\u3002',
+          '\u76ee\u524d\u53ea\u80fd\u8bf4\u662f\u6388\u6743\u534f\u4f5c\u6216\u68c0\u7d22\u4ea4\u63a5\uff0c\u4e0d\u80fd\u5047\u88c5\u5df2\u7ecf\u67e5\u5230\u771f\u5b9e\u5e73\u53f0\u7ed3\u679c\u3002',
+        ].join('\n')
+      : [
+          'I cannot say the external legal-platform search is complete yet.',
+          'I need authorized session/API output, visible webpage results, source registration, or case-archive evidence.',
+          'Until then, this is an authorized handoff, not a verified platform result.',
+        ].join('\n');
+  }
+  if (contract.kind === 'legal_document' && /current-law|current law|\u73b0\u884c\u6709\u6548/i.test(reason || '')) {
+    return zh
+      ? [
+          '\u8fd9\u4efd\u6cd5\u5f8b\u6587\u4e66\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210\u6216\u6b63\u5f0f\u53ef\u7528\u3002',
+          '\u7f3a\u5c11\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u6838\u9a8c\uff1a\u9700\u8981\u8fd0\u884c legal_generate_citation_verification_report \u6216 legal_finalize_delivery_package\uff0c\u5e76\u786e\u8ba4\u6ca1\u6709\u5df2\u5e9f\u6b62\u3001\u5931\u6548\u6216\u672a\u786e\u8ba4\u7684\u6cd5\u6761\u5f15\u7528\u3002',
+          '\u6211\u4e0d\u4f1a\u628a\u672a\u6838\u9a8c\u7684\u6cd5\u5f8b\u6587\u4e66\u8bf4\u6210\u6b63\u5f0f\u6210\u679c\u3002',
+        ].join('\n')
+      : [
+          'This legal document cannot be marked complete or formally usable yet.',
+          'Missing current-law verification: run legal_generate_citation_verification_report or legal_finalize_delivery_package and confirm there are no repealed, invalid, or unverified statute citations.',
+          'I will not present an unverified legal document as a formal result.',
+        ].join('\n');
+  }
+  if (contract.kind === 'legal_document' && /production evidence|document production/i.test(reason || '')) {
+    return zh
+      ? [
+          '\u8fd9\u4efd\u6cd5\u5f8b\u6587\u4e66\u8fd8\u4e0d\u80fd\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002',
+          '\u7f3a\u5c11\u5b9e\u9645\u6587\u4e66\u4ea7\u7269\u8bc1\u636e\uff1a\u9700\u8981\u5148\u751f\u6210\u6216\u5199\u5165\u8d77\u8bc9\u72b6\u3001\u7b54\u8fa9\u72b6\u3001\u4ee3\u7406\u8bcd\u3001\u6cd5\u5f8b\u610f\u89c1\u4e66\u3001\u5408\u540c\u6216\u6807\u4e66\u7b49\u5b9e\u9645\u8349\u7a3f\uff0c\u518d\u8fdb\u884c\u73b0\u884c\u6709\u6548\u6cd5\u5f8b\u6838\u9a8c\u3002',
+        ].join('\n')
+      : [
+          'This legal document cannot be marked complete yet.',
+          'Missing legal document production evidence: generate or write the actual draft first, then run the current-law verification gate.',
+        ].join('\n');
+  }
   if (source === 'background_delegation' || shouldUseCompactActionBlockedResponse(input)) {
     if (zh) {
       return [
@@ -177,6 +313,42 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
     .test(input.responseText || '');
   const actionText = `${input.taskText}\n${input.responseText}`;
+  const legalExternalHandoffOnly =
+    hasLegalExternalPlatformSignal(actionText) &&
+    describesAuthorizedLegalExternalHandoff(input.responseText || '') &&
+    !claimsExternalLegalPlatformFinalAction(input.responseText || '') &&
+    !claimsExternalLegalPlatformResult(input.responseText || '');
+  if (
+    hasLegalExternalPlatformSignal(actionText) &&
+    claimsExternalLegalPlatformFinalAction(input.responseText || '')
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'External legal platform final action requires authorized collaboration.'),
+      blocked: true,
+      reason: 'External legal platform final action requires authorized collaboration.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'External legal platform final action requires authorized collaboration.',
+      },
+    };
+  }
+  if (
+    hasLegalExternalPlatformSignal(actionText) &&
+    claimsExternalLegalPlatformResult(input.responseText || '') &&
+    !hasLegalExternalPlatformResultEvidence(input.toolRecords || [])
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing external legal platform result evidence.'),
+      blocked: true,
+      reason: 'Missing external legal platform result evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing external legal platform result evidence.',
+      },
+    };
+  }
   if (
     actionContract.kind === 'stock_monitor' &&
     (claimsActionDone || claimsStockWatchStarted) &&
@@ -215,6 +387,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     actionContract.kind === 'browser_account' &&
     claimsActionDone &&
     requiresAuthenticatedWebResult(actionText) &&
+    !legalExternalHandoffOnly &&
     !hasAuthenticatedWebResultEvidence(input.toolRecords || [], input.taskText)
   ) {
     return {
@@ -228,7 +401,41 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
+  if (
+    actionContract.kind === 'legal_document' &&
+    claimsLegalDocumentCompletion(input.responseText || '') &&
+    requiresLegalCurrentLawGate(actionText) &&
+    !hasLegalDocumentProductionEvidence(input.toolRecords || [])
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing legal document production evidence.'),
+      blocked: true,
+      reason: 'Missing legal document production evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing legal document production evidence.',
+      },
+    };
+  }
+  if (
+    actionContract.kind === 'legal_document' &&
+    claimsLegalDocumentCompletion(input.responseText || '') &&
+    requiresLegalCurrentLawGate(actionText) &&
+    !hasLegalCurrentLawGateEvidence(input.toolRecords || [])
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing current-law verification gate for legal document.'),
+      blocked: true,
+      reason: 'Missing current-law verification gate for legal document.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing current-law verification gate for legal document.',
+      },
+    };
+  }
+  if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !legalExternalHandoffOnly && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
     return {
       text: formatCompactBlockedResponse(input, `Missing core evidence for ${actionContract.kind}.`),
       blocked: true,

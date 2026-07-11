@@ -546,6 +546,25 @@ function formatLegalWorkflowRows(steps: LegalCases.LegalCaseWorkflowStep[]): str
   ].map(value => String(value || '').replace(/\|/g, ' ')).join(' | ')).map(row => `| ${row} |`).join('\n');
 }
 
+function formatStandardLegalCaseworkSequence(): string {
+  const rows = [
+    ['01', 'Intake / case space', 'Archive messages, meetings, identity material, evidence, notice links, and local files into one case before drafting.', 'legal_message_intake_to_case -> legal_case_workspace -> legal_import_materials_to_kb'],
+    ['02', 'Identity / facts', 'Confirm party identity, authority, service address, claims, jurisdiction, and a facts timeline.', 'legal_case_workspace -> legal_meeting_minutes_to_case'],
+    ['03', 'Major premise', 'Retrieve current effective law, explain the rule, and reinforce it with ranked similar cases.', 'legal_search_statute -> legal_external_research_plan -> legal_search_external_authorities'],
+    ['04', 'Minor premise', 'Map facts, evidence, proof purpose, burden of proof, authenticity, legality, relevance, and cross-examination risks.', 'legal_extract_dispute_focus -> legal_generate_litigation_packet'],
+    ['05', 'Conclusion / subsumption', 'Apply the rule to the facts and turn it into complaint, defense, cross-exam notes, argument, or legal opinion drafts.', 'legal_case_reasoning_matrix -> legal_generate_argument_or_opinion'],
+    ['06', 'Current-law gate', 'Before any formal document, verify citations and block repealed, invalid, or unverified statutes.', 'legal_generate_citation_verification_report -> legal_finalize_delivery_package'],
+    ['07', 'Filing handoff', 'Prepare court-platform fields and upload lists; do not submit, sign, pay, confirm service, or commit settlement automatically.', 'legal_prepare_filing_handoff'],
+    ['08', 'Delivery / archive', 'Generate the formal delivery package, source register, citation report, and organization knowledge archive.', 'legal_finalize_delivery_package -> legal_import_materials_to_kb'],
+  ];
+  return [
+    '## Standard Legal Casework Sequence',
+    '| Step | Stage | Required judgment | Tool chain |',
+    '| --- | --- | --- | --- |',
+    ...rows.map(row => `| ${row.map(value => value.replace(/\|/g, ' ')).join(' | ')} |`),
+  ].join('\n');
+}
+
 function makeWorkspaceWorkflowCase(args: Record<string, any>, params: {
   orgId: string;
   caseName: string;
@@ -924,6 +943,136 @@ ${transcript || '待补充'}
 `;
 }
 
+function legalMeetingBulletsFromTranscript(text: string, keywords: RegExp, fallback: string): string[] {
+  const lines = String(text || '')
+    .split(/\r?\n|[。！？；;]+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const picked = lines.filter(line => keywords.test(line)).slice(0, 12);
+  const source = picked.length ? picked : lines.slice(0, 8);
+  return source.length ? source.map(line => `- ${line.slice(0, 220).replace(/\|/g, ' ')}`) : [`- ${fallback}`];
+}
+
+function buildLegalMeetingActionItemsMarkdown(args: Record<string, any>): string {
+  const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const deadlineLines = legalMeetingBulletsFromTranscript(
+    transcript,
+    /开庭|举证|答辩|立案|提交|缴费|送达|截止|期限|日期|deadline|hearing|file|submit/i,
+    '暂未识别明确期限，需会后人工确认。',
+  );
+  const evidenceLines = legalMeetingBulletsFromTranscript(
+    transcript,
+    /证据|原件|合同|发票|流水|转账|聊天|微信|短信|邮件|照片|录音|送货|签收|鉴定|evidence|document/i,
+    '待补充证据名称、来源、页码和原件状态。',
+  );
+  const nextLines = legalMeetingBulletsFromTranscript(
+    transcript,
+    /需要|确认|补充|整理|生成|起草|检索|联系|提交|下载|归档|核验|review|confirm|draft|search/i,
+    '会后先生成案件工作台状态，再提炼争议焦点和证据目录。',
+  );
+
+  return [
+    `# ${caseName} Meeting Action Items`,
+    '',
+    '## Deadlines / Time Points',
+    ...deadlineLines,
+    '',
+    '## Evidence To Collect',
+    ...evidenceLines,
+    '',
+    '## Ownerless Next Actions',
+    ...nextLines,
+    '',
+    '## Next Legal Workflow',
+    '| Step | Tool | Purpose |',
+    '| --- | --- | --- |',
+    '| 1 | legal_case_workspace | Update case state, missing fields, and next action. |',
+    '| 2 | legal_extract_dispute_focus | Extract issues, facts to prove, and cross-examination points. |',
+    '| 3 | legal_case_reasoning_matrix | Build the internal major/minor/conclusion reasoning base. |',
+    '| 4 | legal_generate_litigation_packet / legal_generate_argument_or_opinion | Draft lawyer-reviewed work products. |',
+    '| 5 | legal_generate_citation_verification_report / legal_finalize_delivery_package | Run current-law and delivery gates before formal use. |',
+  ].join('\n');
+}
+
+function buildLegalMeetingCaseUpdateMarkdown(args: Record<string, any>): string {
+  const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const participants = textArg(args, 'participants') || '待补充';
+  const objective = textArg(args, 'objective') || textArg(args, 'claims') || '待律师确认';
+  const facts = legalMeetingBulletsFromTranscript(
+    transcript,
+    /事实|经过|合同|履行|付款|交付|质量|解除|侵权|损失|争议|claim|fact/i,
+    '待从会议记录补充案件事实。',
+  );
+  const issues = legalMeetingBulletsFromTranscript(
+    transcript,
+    /争议|焦点|对方|抗辩|质证|管辖|时效|责任|违约|赔偿|风险|issue|risk/i,
+    '待从会议记录提炼争议焦点。',
+  );
+  const evidence = legalMeetingBulletsFromTranscript(
+    transcript,
+    /证据|合同|发票|流水|转账|聊天|微信|短信|邮件|录音|照片|签收|送货|document|evidence/i,
+    '待从会议记录整理证据线索。',
+  );
+
+  return [
+    `# ${caseName} Case Intake Update`,
+    '',
+    `- Participants: ${participants}`,
+    `- Objective: ${objective}`,
+    `- Generated at: ${new Date().toISOString()}`,
+    '',
+    '## Fact Timeline Seeds',
+    ...facts,
+    '',
+    '## Dispute Focus Seeds',
+    ...issues,
+    '',
+    '## Evidence Seeds',
+    ...evidence,
+    '',
+    '## Case Workspace Fields To Recheck',
+    '- Party identity / authorization / service address',
+    '- Court / jurisdiction / cause of action',
+    '- Claims, amount calculation, limitation period, and deadlines',
+    '- Evidence authenticity, legality, relevance, original carrier, and page numbers',
+    '- Current effective law and similar-case source registration before formal drafting',
+  ].join('\n');
+}
+
+function buildLegalMeetingLiveBriefMarkdown(args: Record<string, any>, files: {
+  minutesPath: string;
+  actionItemsPath: string;
+  caseUpdatePath: string;
+}): string {
+  const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const summary = legalMeetingBulletsFromTranscript(transcript, /./, '会议内容待补充。').slice(0, 6);
+
+  return [
+    `# ${caseName} Live Meeting Brief`,
+    '',
+    '## Live Meeting Workstream',
+    '- Lumi records the meeting transcript into the case space.',
+    '- Lumi keeps a rolling summary, action items, case-intake update, and formal minutes as separate files.',
+    '- Meeting output is a lawyer-review draft. It is not a final legal opinion, filing submission, settlement commitment, or service confirmation.',
+    '',
+    '## Rolling Summary',
+    ...summary,
+    '',
+    '## Generated Files',
+    `- Formal minutes: ${files.minutesPath}`,
+    `- Action items: ${files.actionItemsPath}`,
+    `- Case intake update: ${files.caseUpdatePath}`,
+    '',
+    '## Automatic Follow-Up',
+    '- Open the case action board and resolve blockers before drafting.',
+    '- Generate dispute focus and reasoning matrix before litigation documents.',
+    '- Run current-law and delivery gates before any formal document is marked usable.',
+  ].join('\n');
+}
+
 async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: any): Promise<string> {
   const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
   if (!transcript) return '请提供 transcript / meetingText / notes，用于生成法律会议纪要。';
@@ -954,11 +1103,28 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
     caseName,
     'meeting_minutes',
   );
-  const baseMarkdown = buildLegalMeetingMinutesMarkdown(args);
-  const preflightSection = buildLegalWorkProductPreflightSection(baseMarkdown, args, orgId);
-  const markdown = `${baseMarkdown}\n\n${preflightSection}`;
   const minutesPath = path.join(outputDir, 'legal-meeting-minutes.md');
+  const actionItemsPath = path.join(outputDir, 'legal-meeting-action-items.md');
+  const caseUpdatePath = path.join(outputDir, 'legal-meeting-case-update.md');
+  const liveBriefPath = path.join(outputDir, 'legal-meeting-live-brief.md');
+  const baseMarkdown = buildLegalMeetingMinutesMarkdown(args);
+  const actionItemsMarkdown = buildLegalMeetingActionItemsMarkdown(args);
+  const caseUpdateMarkdown = buildLegalMeetingCaseUpdateMarkdown(args);
+  const liveBriefMarkdown = buildLegalMeetingLiveBriefMarkdown(args, {
+    minutesPath,
+    actionItemsPath,
+    caseUpdatePath,
+  });
+  const preflightSection = buildLegalWorkProductPreflightSection([
+    baseMarkdown,
+    actionItemsMarkdown,
+    caseUpdateMarkdown,
+  ].join('\n\n'), args, orgId);
+  const markdown = `${baseMarkdown}\n\n${liveBriefMarkdown}\n\n${preflightSection}`;
   fs.writeFileSync(minutesPath, markdown, 'utf-8');
+  fs.writeFileSync(actionItemsPath, actionItemsMarkdown, 'utf-8');
+  fs.writeFileSync(caseUpdatePath, caseUpdateMarkdown, 'utf-8');
+  fs.writeFileSync(liveBriefPath, liveBriefMarkdown, 'utf-8');
 
   let archiveLine = '- 案件空间：未归档（persistCase=false）';
   if (persist && caseFile) {
@@ -967,6 +1133,20 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
       title: `${caseName}法律会议纪要`,
       content: markdown,
       localPath: minutesPath,
+      source: 'meeting',
+    });
+    LegalCases.addMaterial(orgId, userId, caseFile.id, {
+      type: 'note',
+      title: `${caseName}会议行动项与期限`,
+      content: actionItemsMarkdown,
+      localPath: actionItemsPath,
+      source: 'meeting',
+    });
+    LegalCases.addMaterial(orgId, userId, caseFile.id, {
+      type: 'note',
+      title: `${caseName}会议案件更新`,
+      content: caseUpdateMarkdown,
+      localPath: caseUpdatePath,
       source: 'meeting',
     });
     archiveLine = material
@@ -980,6 +1160,9 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
     `- 案件：${caseName}`,
     `- 输出目录：${outputDir}`,
     `- 纪要文件：${minutesPath}`,
+    `- 实时摘要文件：${liveBriefPath}`,
+    `- 行动项文件：${actionItemsPath}`,
+    `- 案件更新文件：${caseUpdatePath}`,
     archiveLine,
     '',
     preflightSection,
@@ -1256,6 +1439,8 @@ ${caseIdLine}
 | --- | --- | --- | --- | --- |
 ${formatLegalWorkflowRows(workflow.steps)}
 
+${formatStandardLegalCaseworkSequence()}
+
 ## 三、材料索引
 | 序号 | 类型 | 标题 | 来源 | 归档时间 |
 | --- | --- | --- | --- | --- |
@@ -1382,6 +1567,8 @@ async function caseWorkflowStatusHandler(args: Record<string, any>, context?: an
 | 模块 | 状态 | 判断依据 | 下一步 | 推荐工具 |
 | --- | --- | --- | --- | --- |
 ${formatLegalWorkflowRows(workflow.steps)}
+
+${formatStandardLegalCaseworkSequence()}
 
 ## 边界
 - 本状态用于办案推进和工具选择，不替代律师对事实、证据、法源和程序风险的最终判断。
@@ -2609,6 +2796,7 @@ ${statuteRefs || '未找到直接相关法条'}
 async function generateLitigationPacketHandler(args: Record<string, any>, context?: any): Promise<string> {
   const role = roleLabel(textArg(args, 'role'));
   const caseName = textArg(args, 'caseName') || '未命名案件';
+  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
   const facts = textArg(args, 'facts');
   const evidence = textArg(args, 'evidence');
   const caseContext = buildCaseContext(args);
@@ -2616,13 +2804,78 @@ async function generateLitigationPacketHandler(args: Record<string, any>, contex
   const evidenceReviewRows = buildEvidenceReviewRows({ ...args, facts, evidence });
   const evidenceReviewTable = formatEvidenceReviewRows(evidenceReviewRows);
   const evidenceGapList = formatEvidenceGapList(evidenceReviewRows);
-  const finish = (report: string) => appendLegalWorkProductArchiveSection(report, args, context, {
+  const writeFiles = args.writeFiles !== false && args.writeFile !== false;
+  const finish = (report: string) => {
+    let packetPath = '';
+    let filingChecklistPath = '';
+    let authorizationChecklistPath = '';
+    let evidenceMatrixPath = '';
+    if (writeFiles) {
+      const outputDir = resolveWritableOutputDir(
+        textArg(args, 'outputDir'),
+        ensureLegalDeliveryRoot(orgId),
+        caseName,
+        'litigation_packet',
+      );
+      packetPath = path.join(outputDir, '00_litigation-packet.md');
+      filingChecklistPath = path.join(outputDir, '01_filing-material-checklist.md');
+      authorizationChecklistPath = path.join(outputDir, '02_authorization-checklist.md');
+      evidenceMatrixPath = path.join(outputDir, '03_evidence-review-matrix.md');
+      fs.writeFileSync(packetPath, report, 'utf-8');
+      fs.writeFileSync(filingChecklistPath, [
+        `# ${caseName} Filing Material Checklist`,
+        '',
+        '| No. | Material | Use | Review point |',
+        '| --- | --- | --- | --- |',
+        '| 1 | Complaint / application / answer materials | Court filing or defense response | Lawyer review, signature, seal |',
+        '| 2 | Party identity materials | Subject qualification | ID, business license, legal representative certificate |',
+        '| 3 | Authorization materials | Attorney authority | Engagement, power of attorney, law firm letter, lawyer certificate |',
+        '| 4 | Evidence catalog and copies | Proof package | Originals, page numbers, copy count, proof purpose |',
+        '| 5 | Service address / fee / preservation materials | Court platform fields | Manual confirmation before submission |',
+        '',
+        'Boundary: Lumi prepares and names materials only; court submission, signature, seal, payment, service confirmation, withdrawal, and settlement commitment require lawyer or party confirmation.',
+      ].join('\n'), 'utf-8');
+      fs.writeFileSync(authorizationChecklistPath, [
+        `# ${caseName} Authorization Checklist`,
+        '',
+        '- Engagement / retainer key terms',
+        '- Power of attorney scope and special authorization items',
+        '- Law firm letter',
+        '- Lawyer certificate copy',
+        '- Party identity / business license / legal representative certificate',
+        '- Signature and seal status',
+        '',
+        'All authorization scope and signature/seal status must be reviewed manually.',
+      ].join('\n'), 'utf-8');
+      fs.writeFileSync(evidenceMatrixPath, [
+        `# ${caseName} Evidence Catalog And Three-Property Review`,
+        '',
+        '| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        evidenceReviewTable,
+        '',
+        '## Evidence Gaps',
+        evidenceGapList,
+      ].join('\n'), 'utf-8');
+    }
+    const reportWithFiles = packetPath
+      ? `${report}
+
+## 七、诉讼文书包文件输出
+- 文书包总稿文件：${packetPath}
+- 立案材料清单文件：${filingChecklistPath}
+- 授权委托手续清单文件：${authorizationChecklistPath}
+- 证据目录与三性矩阵文件：${evidenceMatrixPath}`
+      : report;
+    return appendLegalWorkProductArchiveSection(reportWithFiles, args, context, {
     caseName,
     title: `${caseName}半自动诉讼文书包`,
     type: 'pleading',
     cause: textArg(args, 'caseType') || '诉讼文书包',
     court: textArg(args, 'court'),
+    localPath: packetPath || undefined,
   });
+  };
 
   const prompt = `你是一名律所诉讼支持律师。请生成半自动诉讼文书包草稿，所有内容均用于律师复核，不得宣称可直接提交。
 
@@ -4743,7 +4996,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'legal_meeting_minutes_to_case',
-    description: '法律会议纪要入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，提取事实、证据三性提示、争议焦点和期限待办，并归档到统一案件空间。',
+    description: '法律会议模式入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，同时生成实时滚动摘要、行动项/期限、案件入案更新文件，提取事实、证据三性提示、争议焦点和下一步，并归档到统一案件空间。',
     parameters: {
       type: 'object',
       properties: {
@@ -4822,6 +5075,8 @@ export function registerLegalTools(registry: ToolRegistry): void {
         facts: { type: 'string', description: '案件事实和时间线' },
         evidence: { type: 'string', description: '已有证据材料摘要' },
         opponentMaterials: { type: 'string', description: '对方起诉状、证据或其他材料摘要' },
+        outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_delivery/{orgId}' },
+        writeFiles: { type: 'boolean', description: '是否写入诉讼文书包 Markdown 文件，默认 true' },
         persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },

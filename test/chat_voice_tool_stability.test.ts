@@ -28,7 +28,13 @@ describe('chat and voice tool-call stability', () => {
 
     expect(executionDecision).toContain('buildUnifiedLegalEntryPrompt');
     expect(legalEntry).toContain('Unified Legal Casework Entry');
+    expect(legalEntry).toContain('Execution order');
+    expect(legalEntry).toContain('major premise -> minor premise -> conclusion/subsumption');
     expect(legalEntry).toContain('Current-law gate');
+    expect(legalEntry).toContain('External legal platforms');
+    expect(legalEntry).toContain('authorized-collaboration surfaces');
+    expect(legalEntry).toContain('Remote bot intake must resolve the organization/case binding first');
+    expect(legalEntry).toContain('archive into the organization case workspace and organization knowledge base');
     expect(legalEntry).toContain('personal chat, company/work chat, voice, task center');
   });
 

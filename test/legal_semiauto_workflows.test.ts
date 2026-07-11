@@ -81,6 +81,58 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('法律成果预检');
   });
 
+  it('writes litigation packet files and archives the packet path into the case workspace', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-litigation-files-${Date.now()}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_litigation_packet_'));
+    const caseName = '诉讼文书包文件输出测试案';
+
+    try {
+      const output = await registry.execute('legal_generate_litigation_packet', {
+        orgId,
+        userId: 'vitest',
+        caseName,
+        role: '原告',
+        caseType: '买卖合同纠纷',
+        court: '上海市黄浦区人民法院',
+        parties: '原告 Alpha；被告 Beta',
+        claims: '请求支付货款及违约金',
+        facts: '被告收货后未付剩余货款。',
+        evidence: '买卖合同；送货单；签收单；银行流水。',
+        outputDir: dir,
+      });
+
+      const packetPath = path.join(dir, '00_litigation-packet.md');
+      const filingChecklistPath = path.join(dir, '01_filing-material-checklist.md');
+      const authorizationChecklistPath = path.join(dir, '02_authorization-checklist.md');
+      const evidenceMatrixPath = path.join(dir, '03_evidence-review-matrix.md');
+
+      expect(output).toContain('诉讼文书包文件输出');
+      expect(output).toContain('文书包总稿文件');
+      expect(output).toContain('立案材料清单文件');
+      expect(output).toContain('授权委托手续清单文件');
+      expect(output).toContain('证据目录与三性矩阵文件');
+      expect(fs.existsSync(packetPath)).toBe(true);
+      expect(fs.existsSync(filingChecklistPath)).toBe(true);
+      expect(fs.existsSync(authorizationChecklistPath)).toBe(true);
+      expect(fs.existsSync(evidenceMatrixPath)).toBe(true);
+      expect(fs.readFileSync(filingChecklistPath, 'utf8')).toContain('Filing Material Checklist');
+      expect(fs.readFileSync(authorizationChecklistPath, 'utf8')).toContain('Authorization Checklist');
+      expect(fs.readFileSync(evidenceMatrixPath, 'utf8')).toContain('Evidence Catalog And Three-Property Review');
+
+      const LegalCases = await import('../server/org/legal_cases');
+      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
+      expect(caseFile?.materials.some(material => (
+        material.source === 'tool'
+        && material.type === 'pleading'
+        && material.title.includes('半自动诉讼文书包')
+        && material.localPath === packetPath
+      ))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('extracts dispute focuses from complaint, evidence, and trial notes', async () => {
     const registry = createLegalRegistry();
 
@@ -125,6 +177,14 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('完成度：');
     expect(output).toContain('下一动作：');
     expect(output).toContain('推荐工具');
+    expect(output).toContain('Standard Legal Casework Sequence');
+    expect(output).toContain('Intake / case space');
+    expect(output).toContain('Major premise');
+    expect(output).toContain('Minor premise');
+    expect(output).toContain('Conclusion / subsumption');
+    expect(output).toContain('Current-law gate');
+    expect(output).toContain('legal_message_intake_to_case -> legal_case_workspace');
+    expect(output).toContain('legal_generate_citation_verification_report -> legal_finalize_delivery_package');
     expect(output).toContain('三段论分析');
     expect(output).toContain('底层必经');
     expect(output).toContain('证据目录与三性审查矩阵');
@@ -191,6 +251,11 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('直接状态查询测试案');
     expect(output).toContain('完成度：');
     expect(output).toContain('下一动作：');
+    expect(output).toContain('Standard Legal Casework Sequence');
+    expect(output).toContain('Major premise');
+    expect(output).toContain('Minor premise');
+    expect(output).toContain('Conclusion / subsumption');
+    expect(output).toContain('Current-law gate');
     expect(output).toMatch(/\| 现行有效法律 \| 阻断 \|/);
     expect(output).toContain('合同法');
     expect(output).not.toContain('正式交付包已生成');
@@ -278,11 +343,20 @@ describe('semi-automated legal workflows', () => {
 
       expect(output).toContain('法律会议纪要已生成');
       expect(output).toContain('纪要文件');
+      expect(output).toContain('实时摘要文件');
+      expect(output).toContain('行动项文件');
+      expect(output).toContain('案件更新文件');
       expect(output).toContain('案件空间：已归档');
       expect(output).toContain('法律成果预检');
 
       const minutesPath = path.join(dir, 'legal-meeting-minutes.md');
+      const liveBriefPath = path.join(dir, 'legal-meeting-live-brief.md');
+      const actionItemsPath = path.join(dir, 'legal-meeting-action-items.md');
+      const caseUpdatePath = path.join(dir, 'legal-meeting-case-update.md');
       expect(fs.existsSync(minutesPath)).toBe(true);
+      expect(fs.existsSync(liveBriefPath)).toBe(true);
+      expect(fs.existsSync(actionItemsPath)).toBe(true);
+      expect(fs.existsSync(caseUpdatePath)).toBe(true);
       const markdown = fs.readFileSync(minutesPath, 'utf8');
       expect(markdown).toContain('沟通要点');
       expect(markdown).toContain('证据线索与三性提示');
@@ -292,6 +366,13 @@ describe('semi-automated legal workflows', () => {
       expect(markdown).toContain('期限和待办');
       expect(markdown).toContain('法律成果预检');
       expect(markdown).toContain('legal_case_workspace');
+      expect(markdown).toContain('Live Meeting Workstream');
+      expect(markdown).toContain('Rolling Summary');
+      expect(fs.readFileSync(liveBriefPath, 'utf8')).toContain('Automatic Follow-Up');
+      expect(fs.readFileSync(actionItemsPath, 'utf8')).toContain('Meeting Action Items');
+      expect(fs.readFileSync(actionItemsPath, 'utf8')).toContain('Next Legal Workflow');
+      expect(fs.readFileSync(caseUpdatePath, 'utf8')).toContain('Case Intake Update');
+      expect(fs.readFileSync(caseUpdatePath, 'utf8')).toContain('Case Workspace Fields To Recheck');
 
       const LegalCases = await import('../server/org/legal_cases');
       const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
@@ -300,6 +381,18 @@ describe('semi-automated legal workflows', () => {
         && material.type === 'consultation'
         && material.title.includes('法律会议纪要')
         && material.localPath === minutesPath
+      ))).toBe(true);
+      expect(caseFile?.materials.some(material => (
+        material.source === 'meeting'
+        && material.type === 'note'
+        && material.title.includes('会议行动项与期限')
+        && material.localPath === actionItemsPath
+      ))).toBe(true);
+      expect(caseFile?.materials.some(material => (
+        material.source === 'meeting'
+        && material.type === 'note'
+        && material.title.includes('会议案件更新')
+        && material.localPath === caseUpdatePath
       ))).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1114,6 +1207,11 @@ describe('semi-automated legal workflows', () => {
     expect(legalHubSource).toContain('legal_generate_litigation_packet');
     expect(legalHubSource).toContain('legal_external_research_plan');
     expect(legalHubSource).toContain('buildLegalCaseReadiness');
+    expect(legalHubSource).toContain('buildLegalCaseActionSummary');
+    expect(legalHubSource).toContain('Case Action Board');
+    expect(legalHubSource).toContain('actionSummary.canDeliver');
+    expect(legalHubSource).toContain('actionSummary.blockers');
+    expect(legalHubSource).toContain('actionSummary.gaps');
     expect(legalHubSource).toContain('legalCaseToolArgs');
     expect(legalHubSource).toContain("runLegalTool('legal_case_reasoning_matrix'");
     expect(legalHubSource).toContain('办案闭环');
@@ -1134,6 +1232,10 @@ describe('semi-automated legal workflows', () => {
     expect(registry.get('legal_case_workflow_status')).toBeTruthy();
     expect(registry.get('legal_message_intake_to_case')).toBeTruthy();
     expect(legalToolsSource).toContain('三段论是 Lumi 法律工作的核心基础');
+    expect(legalToolsSource).toContain('Standard Legal Casework Sequence');
+    expect(legalToolsSource).toContain('Major premise');
+    expect(legalToolsSource).toContain('Minor premise');
+    expect(legalToolsSource).toContain('Conclusion / subsumption');
     expect(toolRouterSource).toContain('legal_case_reasoning_matrix');
     expect(toolRouterSource).toContain('legal_case_workflow_status');
     expect(toolRouterSource).toContain('legal_message_intake_to_case');

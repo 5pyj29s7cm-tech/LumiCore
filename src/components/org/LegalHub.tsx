@@ -111,6 +111,23 @@ interface LegalCaseReadinessItem {
   view?: LegalView;
 }
 
+interface LegalCaseActionSummary {
+  completionRatio: number;
+  doneCount: number;
+  blockedCount: number;
+  missingCount: number;
+  readyCount: number;
+  manualCount: number;
+  statusLabel: string;
+  statusDetail: string;
+  canDraft: boolean;
+  canDeliver: boolean;
+  primary: LegalCaseReadinessItem | null;
+  blockers: LegalCaseReadinessItem[];
+  gaps: LegalCaseReadinessItem[];
+  nextActions: LegalCaseReadinessItem[];
+}
+
 function legalCaseMaterialText(caseFile: LegalCaseFile): string {
   return [
     caseFile.notes,
@@ -242,6 +259,67 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
       view: 'verify',
     },
   ];
+}
+
+function buildLegalCaseActionSummary(
+  items: LegalCaseReadinessItem[],
+  ui: (zh: string, en: string) => string,
+): LegalCaseActionSummary {
+  const done = items.filter(item => item.status === 'done');
+  const blocked = items.filter(item => item.status === 'blocked');
+  const ready = items.filter(item => item.status === 'ready');
+  const missing = items.filter(item => item.status === 'missing');
+  const manual = items.filter(item => item.status === 'manual');
+  const currentLaw = items.find(item => item.key === 'law');
+  const workProduct = items.find(item => item.key === 'work-product');
+  const delivery = items.find(item => item.key === 'delivery');
+  const completionRatio = items.length ? Math.round((done.length / items.length) * 100) : 0;
+  const primary = blocked[0] || ready[0] || missing[0] || manual[0] || null;
+  const actionPool = [primary, ...ready, ...manual, ...missing].filter(Boolean) as LegalCaseReadinessItem[];
+  const seen = new Set<string>();
+  const nextActions = actionPool.filter(item => {
+    if (seen.has(item.key)) return false;
+    seen.add(item.key);
+    return true;
+  }).slice(0, 3);
+  const canDraft = Boolean(workProduct && ['ready', 'done'].includes(workProduct.status) && currentLaw?.status !== 'blocked');
+  const canDeliver = Boolean(delivery && ['ready', 'done'].includes(delivery.status) && currentLaw?.status !== 'blocked');
+
+  let statusLabel = ui('补齐材料', 'Build the file');
+  let statusDetail = ui('先把案件材料、身份、事实和证据补到同一个案件空间。', 'Collect materials, identity, facts, and evidence into one case space.');
+  if (blocked.length) {
+    statusLabel = ui('先处理阻断', 'Resolve blockers');
+    statusDetail = blocked[0].nextStep;
+  } else if (delivery?.status === 'done') {
+    statusLabel = ui('可归档交付', 'Delivery recorded');
+    statusDetail = ui('正式交付 gate 已有记录，继续做来源复核、归档和律师确认。', 'The delivery gate is recorded; continue source review, archive, and lawyer confirmation.');
+  } else if (canDeliver) {
+    statusLabel = ui('可走交付 gate', 'Ready for delivery gate');
+    statusDetail = delivery?.nextStep || '';
+  } else if (canDraft) {
+    statusLabel = ui('可进入起草', 'Ready to draft');
+    statusDetail = workProduct?.nextStep || '';
+  } else if (ready.length) {
+    statusLabel = ui('下一步明确', 'Next step ready');
+    statusDetail = ready[0].nextStep;
+  }
+
+  return {
+    completionRatio,
+    doneCount: done.length,
+    blockedCount: blocked.length,
+    missingCount: missing.length,
+    readyCount: ready.length,
+    manualCount: manual.length,
+    statusLabel,
+    statusDetail,
+    canDraft,
+    canDeliver,
+    primary,
+    blockers: blocked.slice(0, 3),
+    gaps: missing.slice(0, 4),
+    nextActions,
+  };
 }
 
 function legalReadinessTone(status: LegalCaseReadinessItem['status']): string {
@@ -999,6 +1077,7 @@ function LegalCaseWorkspace({
     || readinessItems.find(item => item.status === 'missing')
     || readinessItems.find(item => item.status === 'manual')
     || null;
+  const actionSummary = buildLegalCaseActionSummary(readinessItems, ui);
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto p-5">
@@ -1082,6 +1161,106 @@ function LegalCaseWorkspace({
         </div>
 
         <div className="space-y-5">
+          <section className="lumi-panel p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-white/78">
+                  <Shield size={16} className={actionSummary.blockedCount ? 'text-rose-300' : 'text-emerald-300'} />
+                  <h3 className="text-sm font-bold">{ui('案件行动面板', 'Case Action Board')}</h3>
+                </div>
+                <div className="mt-2 text-lg font-semibold text-white">{actionSummary.statusLabel}</div>
+                <p className="mt-1 max-w-3xl text-xs leading-5 text-white/45">{actionSummary.statusDetail}</p>
+              </div>
+              <div className="flex min-w-[132px] items-center justify-end gap-2">
+                <div className="text-right">
+                  <div className="text-2xl font-black text-white">{actionSummary.completionRatio}%</div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/30">{ui('闭环', 'Loop')}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-5">
+              <div className="rounded-lg border border-emerald-400/14 bg-emerald-500/[0.055] px-3 py-2">
+                <div className="text-[11px] text-white/38">{ui('已完成', 'Done')}</div>
+                <div className="mt-1 text-base font-bold text-emerald-100">{actionSummary.doneCount}</div>
+              </div>
+              <div className={`rounded-lg border px-3 py-2 ${actionSummary.blockedCount ? 'border-rose-400/24 bg-rose-500/[0.08]' : 'border-white/10 bg-white/[0.035]'}`}>
+                <div className="text-[11px] text-white/38">{ui('阻断', 'Blocked')}</div>
+                <div className={`mt-1 text-base font-bold ${actionSummary.blockedCount ? 'text-rose-100' : 'text-white/60'}`}>{actionSummary.blockedCount}</div>
+              </div>
+              <div className="rounded-lg border border-amber-400/16 bg-amber-500/[0.055] px-3 py-2">
+                <div className="text-[11px] text-white/38">{ui('可推进', 'Ready')}</div>
+                <div className="mt-1 text-base font-bold text-amber-100">{actionSummary.readyCount}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
+                <div className="text-[11px] text-white/38">{ui('缺口', 'Gaps')}</div>
+                <div className="mt-1 text-base font-bold text-white/70">{actionSummary.missingCount}</div>
+              </div>
+              <div className="rounded-lg border border-cyan-400/16 bg-cyan-500/[0.045] px-3 py-2">
+                <div className="text-[11px] text-white/38">{ui('交付 gate', 'Delivery gate')}</div>
+                <div className={`mt-1 text-xs font-bold ${actionSummary.canDeliver ? 'text-cyan-100' : 'text-white/50'}`}>
+                  {actionSummary.canDeliver ? ui('可进入', 'Ready') : ui('未到位', 'Not ready')}
+                </div>
+              </div>
+            </div>
+
+            {actionSummary.primary && (
+              <button
+                type="button"
+                onClick={() => actionSummary.primary?.view && onSetView(actionSummary.primary.view)}
+                className={`mt-4 flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${legalReadinessTone(actionSummary.primary.status)}`}
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-white/80">{ui('下一步', 'Next action')}</span>
+                  <span className="mt-1 block truncate text-sm font-bold">{actionSummary.primary.label}</span>
+                </span>
+                <ArrowRight size={15} className="shrink-0" />
+              </button>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <div className="rounded-lg border border-white/10 bg-black/14 p-3">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-rose-100/80">
+                  <AlertTriangle size={12} />
+                  {ui('阻断项', 'Blockers')}
+                </div>
+                <div className="space-y-1.5 text-xs text-white/48">
+                  {(actionSummary.blockers.length ? actionSummary.blockers : [null]).map((item, index) => (
+                    <div key={item?.key || index} className="truncate">
+                      {item ? `${item.label}: ${item.nextStep}` : ui('暂无阻断', 'No blockers')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/14 p-3">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-white/70">
+                  <ClipboardList size={12} />
+                  {ui('材料缺口', 'Gaps')}
+                </div>
+                <div className="space-y-1.5 text-xs text-white/48">
+                  {(actionSummary.gaps.length ? actionSummary.gaps : [null]).map((item, index) => (
+                    <div key={item?.key || index} className="truncate">
+                      {item ? `${item.label}: ${item.detail}` : ui('暂无关键缺口', 'No key gaps')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-black/14 p-3">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-amber-100/80">
+                  <ArrowRight size={12} />
+                  {ui('推进顺序', 'Next queue')}
+                </div>
+                <div className="space-y-1.5 text-xs text-white/48">
+                  {(actionSummary.nextActions.length ? actionSummary.nextActions : [null]).map((item, index) => (
+                    <div key={item?.key || index} className="truncate">
+                      {item ? `${index + 1}. ${item.label}` : ui('闭环已完成，继续复核归档', 'Loop complete; continue review and archive')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section className="lumi-panel p-4">
             <div className="mb-4 flex items-center gap-2 text-white/78">
               <FolderOpen size={16} className="text-amber-300" />
