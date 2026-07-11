@@ -177,6 +177,8 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('完成度：');
     expect(output).toContain('下一动作：');
     expect(output).toContain('推荐工具');
+    expect(output).toContain('优先行动队列');
+    expect(output).toContain('| 顺位 | 模块 | 状态 | 下一步 | 推荐工具 |');
     expect(output).toContain('Standard Legal Casework Sequence');
     expect(output).toContain('Intake / case space');
     expect(output).toContain('Major premise');
@@ -251,6 +253,8 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('直接状态查询测试案');
     expect(output).toContain('完成度：');
     expect(output).toContain('下一动作：');
+    expect(output).toContain('优先行动队列');
+    expect(output).toContain('| 顺位 | 模块 | 状态 | 下一步 | 推荐工具 |');
     expect(output).toContain('Standard Legal Casework Sequence');
     expect(output).toContain('Major premise');
     expect(output).toContain('Minor premise');

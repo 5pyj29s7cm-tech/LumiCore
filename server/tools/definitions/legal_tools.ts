@@ -546,6 +546,31 @@ function formatLegalWorkflowRows(steps: LegalCases.LegalCaseWorkflowStep[]): str
   ].map(value => String(value || '').replace(/\|/g, ' ')).join(' | ')).map(row => `| ${row} |`).join('\n');
 }
 
+function formatLegalWorkflowActionQueue(workflow: LegalCases.LegalCaseWorkflowEvaluation): string {
+  const actionableStates = new Set<LegalCases.LegalCaseWorkflowStepState>(['blocked', 'ready', 'manual', 'missing']);
+  const queue: LegalCases.LegalCaseWorkflowStep[] = [];
+  const seen = new Set<string>();
+  for (const step of [workflow.nextStep, ...workflow.steps]) {
+    if (!step || seen.has(step.key) || !actionableStates.has(step.state)) continue;
+    seen.add(step.key);
+    queue.push(step);
+    if (queue.length >= 5) break;
+  }
+  if (queue.length === 0) {
+    return [
+      '## 优先行动队列',
+      '- 闭环已完成；继续做律师复核、来源留痕、归档和期限管理。',
+    ].join('\n');
+  }
+  const clean = (value: unknown) => String(value || '').replace(/\|/g, ' ');
+  return [
+    '## 优先行动队列',
+    '| 顺位 | 模块 | 状态 | 下一步 | 推荐工具 |',
+    '| --- | --- | --- | --- | --- |',
+    ...queue.map((step, index) => `| ${index + 1} | ${clean(step.label)} | ${clean(legalWorkflowStateLabel(step.state))} | ${clean(step.nextStep)} | ${clean(step.tool)} |`),
+  ].join('\n');
+}
+
 function formatStandardLegalCaseworkSequence(): string {
   const rows = [
     ['01', 'Intake / case space', 'Archive messages, meetings, identity material, evidence, notice links, and local files into one case before drafting.', 'legal_message_intake_to_case -> legal_case_workspace -> legal_import_materials_to_kb'],
@@ -1439,6 +1464,8 @@ ${caseIdLine}
 | --- | --- | --- | --- | --- |
 ${formatLegalWorkflowRows(workflow.steps)}
 
+${formatLegalWorkflowActionQueue(workflow)}
+
 ${formatStandardLegalCaseworkSequence()}
 
 ## 三、材料索引
@@ -1567,6 +1594,8 @@ async function caseWorkflowStatusHandler(args: Record<string, any>, context?: an
 | 模块 | 状态 | 判断依据 | 下一步 | 推荐工具 |
 | --- | --- | --- | --- | --- |
 ${formatLegalWorkflowRows(workflow.steps)}
+
+${formatLegalWorkflowActionQueue(workflow)}
 
 ${formatStandardLegalCaseworkSequence()}
 
