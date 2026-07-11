@@ -95,6 +95,12 @@ describe('Intent Classifier', () => {
       expect(r.subIntent).toBe('messaging_read');
       expect(r.directToolCall).toBeUndefined();
     });
+
+    it('does not turn a negated desktop constraint into a direct open command', () => {
+      const r = c('\u8fd9\u662f\u684c\u9762 relay \u538b\u6d4b\u3002\u8bf7\u53ea\u8bfb\u53d6\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u7684\u6807\u9898\u548c\u5f53\u524d\u684c\u9762\u8fd0\u884c\u72b6\u6001\uff0c\u7ed9\u51fa\u4f60\u5b9e\u9645\u8bfb\u53d6\u5230\u7684\u7ed3\u679c\u3002\u7981\u6b62\u70b9\u51fb\u3001\u8f93\u5165\u3001\u5207\u6362\u7a97\u53e3\u3001\u6253\u5f00\u5e94\u7528\u6216\u4fee\u6539\u4efb\u4f55\u5185\u5bb9');
+      expect(r.directToolCall).toBeUndefined();
+      expect(r.subIntent).not.toBe('open');
+    });
   });
 
   // ── Web ──

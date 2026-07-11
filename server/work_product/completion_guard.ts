@@ -147,6 +147,18 @@ function isDesktopActionTask(task: string): boolean {
   return DESKTOP_ACTION_TASK_RE.test(text) && !CONTENT_WORK_TASK_RE.test(text);
 }
 
+function stripNegatedClaimClauses(value: string): string {
+  return String(value || '')
+    .replace(
+      /(?:\u6ca1\u6709|\u5e76\u672a|\u672a\u66fe|\u4e0d\u4f1a|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u8981|\u7981\u6b62|\u672a)(?=[^\u3002\uFF1B\uFF01\uFF1F\n\r]{0,48}(?:\u5b8c\u6210|\u6253\u5f00|\u542f\u52a8|\u53d1\u9001|\u751f\u6210|\u521b\u5efa|\u4fdd\u5b58|\u5bfc\u51fa|\u8bfb\u53d6|\u67e5\u770b))[^\u3002\uFF1B\uFF01\uFF1F\n\r]*/gu,
+      ' ',
+    )
+    .replace(
+      /\b(?:did\s+not|didn't|does\s+not|doesn't|have\s+not|haven't|has\s+not|hasn't|will\s+not|won't|cannot|can't|must\s+not|do\s+not|don't|never)\b(?=[^.;!?\n\r]{0,64}\b(?:complete|open|launch|send|create|generate|save|export|read|view)\b)[^.;!?\n\r]*/giu,
+      ' ',
+    );
+}
+
 export function needsCompletionEvidence(task: string): boolean {
   return EXTERNAL_WORK_TASK_RE.test(task || '');
 }
@@ -155,6 +167,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const task = input.task || '';
   const response = input.response || '';
   if (!response.trim()) return { text: response, blocked: false };
+  const claimText = stripNegatedClaimClauses(response);
 
   const needsEvidence = needsCompletionEvidence(task) || EXTERNAL_WORK_TASK_RE.test(response);
   const toolCalls = input.toolCalls || [];
@@ -165,7 +178,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     DESKTOP_ACTION_EVIDENCE_TOOL_RE.test(call.name) &&
     (Boolean(call.error) || Boolean(String(call.result || '').trim()))
   );
-  const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(response) && !desktopActionTask;
+  const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(claimText) && !desktopActionTask;
   const hasPromiseEvidence = successful.some(call =>
     ACTION_PROMISE_EVIDENCE_TOOL_RE.test(call.name) ||
     (!INSPECTION_ONLY_TOOL_RE.test(call.name) && Boolean(call.result || call.name))
@@ -175,8 +188,8 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     ? !hasDesktopActionEvidence
     : (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence));
   const promisesActionWithoutEvidence =
-    ACTION_PROMISE_RE.test(response) &&
-    (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(response)) &&
+    ACTION_PROMISE_RE.test(claimText) &&
+    (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(claimText)) &&
     missingPromisedEvidence;
 
   if (promisesActionWithoutEvidence) {
@@ -190,7 +203,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     };
   }
 
-  const claimsCompletion = COMPLETION_CLAIM_RE.test(response);
+  const claimsCompletion = COMPLETION_CLAIM_RE.test(claimText);
   if (!needsEvidence || !claimsCompletion) return { text: response, blocked: false };
 
   const hasAnySuccess = successful.length > 0;
@@ -214,9 +227,9 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   let reason = '';
   if (!hasAnySuccess) {
     reason = '这一轮没有成功执行任何工具';
-  } else if (OPEN_CLAIM_RE.test(response) && !hasOpenTool) {
+  } else if (OPEN_CLAIM_RE.test(claimText) && !hasOpenTool) {
     reason = '回复声称已经打开或加载，但没有成功的打开/客户端动作记录';
-  } else if (FILE_CREATION_CLAIM_RE.test(response) && !hasFileProducer && !hasPassingVerification) {
+  } else if (FILE_CREATION_CLAIM_RE.test(claimText) && !hasFileProducer && !hasPassingVerification) {
     reason = '回复声称已经生成或保存产物，但没有成功的写入/生成/验收记录';
   } else if (!hasActionTool && !hasPassingVerification && !pathsExist) {
     reason = '只有查询或检查记录，没有实际执行、生成、打开或验收证据';

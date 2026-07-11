@@ -1,6 +1,7 @@
 import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
+import { formatDesktopObservationResult } from './desktop_observation';
 import {
   buildActionContract,
   hasAuthenticatedWebResultEvidence,
@@ -34,12 +35,16 @@ function hasToolEvidence(records: ToolExecutionRecord[]): boolean {
   return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
 }
 
+function taskActionContract(input: LumiResultFinalizerInput) {
+  return buildActionContract(input.taskText);
+}
+
 function shouldRunCompletionGuard(input: LumiResultFinalizerInput): boolean {
   const toolRecords = input.toolRecords || [];
   if (hasToolEvidence(toolRecords)) return true;
   if (input.flow?.completionEvidenceNeeded) return true;
   if (needsCompletionEvidence(input.taskText)) return true;
-  const actionContract = buildActionContract(`${input.taskText}\n${input.responseText}`);
+  const actionContract = taskActionContract(input);
   if (actionContract.applies && actionContract.kind !== 'none') return true;
 
   const source = String(input.source || '').toLowerCase();
@@ -93,8 +98,8 @@ function summarizeWebAccountBlocker(records: ToolExecutionRecord[]): string {
 function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput): boolean {
   const records = input.toolRecords || [];
   if (String(input.source || '').toLowerCase() === 'background_delegation') return true;
-  const contract = buildActionContract(`${input.taskText}\n${input.responseText}`);
-  if (shouldEnforceCoreActionContract(contract, `${input.taskText}\n${input.responseText}`)) return true;
+  const contract = taskActionContract(input);
+  if (shouldEnforceCoreActionContract(contract, input.taskText)) return true;
   const hasDesktopOrMessagingTool = records.some(record =>
     /^(desktop_|wechat_(?:send_message|read_recent_chat)|computer_use|keyboard_|mouse_|cursor_|get_active_window_info|capture_screen|ocr_screen)/i.test(String(record.name || ''))
   );
@@ -242,7 +247,7 @@ function hasLegalExternalPlatformResultEvidence(records: ToolExecutionRecord[]):
 function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: string): string {
   const zh = isChineseText(input.taskText) || isChineseText(input.responseText);
   const failure = summarizeToolFailure(input.toolRecords || []);
-  const contract = buildActionContract(`${input.taskText}\n${input.responseText}`);
+  const contract = taskActionContract(input);
   const contractBlocker = summarizeActionContractBlocker(contract, failure);
   const source = String(input.source || '').toLowerCase();
   if (/External legal platform final action/i.test(reason || '')) {
@@ -339,17 +344,46 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
     : 'This is not complete yet: I do not have verifiable completion evidence.';
 }
 
+function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string | null {
+  return formatDesktopObservationResult(input.toolRecords || [], input.taskText);
+}
+
+function correctCurrentTurnContractDrift(
+  input: LumiResultFinalizerInput,
+  taskContract: ReturnType<typeof buildActionContract>,
+): string | null {
+  if (!taskContract.applies || taskContract.kind !== 'desktop_operation') return null;
+  const responseContract = buildActionContract(input.responseText);
+  if (!responseContract.applies || responseContract.kind === taskContract.kind) return null;
+  if (hasCoreActionEvidence(responseContract, input.toolRecords || [])) return null;
+  if (!hasCoreActionEvidence(taskContract, input.toolRecords || [])) return null;
+
+  const grounded = formatGroundedDesktopEvidence(input);
+  if (grounded) {
+    console.warn(`[ResultFinalizer] Corrected current-turn contract drift: task=${taskContract.kind}, response=${responseContract.kind}`);
+  }
+  return grounded;
+}
+
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
   if (!shouldRunCompletionGuard(input)) {
     return { text: input.responseText, blocked: false };
   }
 
-  const actionContract = buildActionContract(`${input.taskText}\n${input.responseText}`);
+  const actionContract = taskActionContract(input);
+  const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
+  if (groundedDriftCorrection) {
+    return {
+      text: groundedDriftCorrection,
+      blocked: false,
+      reason: 'Corrected current-turn action-contract drift using fresh desktop evidence.',
+    };
+  }
   const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|completed|success|sent|opened|read|viewed|created|generated)/iu
     .test(input.responseText || '');
   const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
     .test(input.responseText || '');
-  const actionText = `${input.taskText}\n${input.responseText}`;
+  const actionText = input.taskText;
   const legalExternalHandoffOnly =
     hasLegalExternalPlatformSignal(actionText) &&
     describesAuthorizedLegalExternalHandoff(input.responseText || '') &&

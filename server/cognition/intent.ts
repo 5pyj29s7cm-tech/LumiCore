@@ -156,6 +156,17 @@ const COMMAND_PATTERNS: Array<{ regex: RegExp; subIntent: string; tool?: string 
   { regex: /(截屏|截图|screenshot|capture)/i, subIntent: 'screenshot' },
 ];
 
+const NEGATED_COMMAND_PREFIX_RE =
+  /(?:\b(?:do\s+not|don't|never|must\s+not|without)\b|\u7981\u6b62|\u4e0d\u8981|\u4e0d\u51c6|\u4e0d\u5f97|\u4e0d\u7528|\u65e0\u9700|\u907f\u514d|\u52ff|\u522b)[^,.;!?\n\r\uFF0C\u3002\uFF1B\uFF01\uFF1F]{0,36}$/iu;
+
+function isNegatedCommandMatch(text: string, match: RegExpMatchArray): boolean {
+  const start = typeof match.index === 'number' ? match.index : text.indexOf(match[0]);
+  if (start <= 0) return false;
+  const prefix = text.slice(Math.max(0, start - 64), start);
+  const clausePrefix = prefix.split(/[,.;!?\n\r\uFF0C\u3002\uFF1B\uFF01\uFF1F]/u).pop() || '';
+  return NEGATED_COMMAND_PREFIX_RE.test(clausePrefix);
+}
+
 // ── Question Patterns ──
 const QUESTION_PATTERNS = [
   /^(什么|什么是|what\s+is|who\s+is|where\s+is|when\s+is|why\s+is|how\s+to|怎么|如何|为什么|怎样)/i,
@@ -276,7 +287,14 @@ export function classifyIntent(input: string): IntentResult {
   for (const { regex, subIntent, tool } of COMMAND_PATTERNS) {
     const match = text.match(regex);
     if (match) {
+      if (isNegatedCommandMatch(text, match)) continue;
       const target = (match[match.length - 1] || '').trim();
+      if (
+        subIntent === 'open' &&
+        /^(?:\u72b6\u6001|\u60c5\u51b5|\u4fe1\u606f|state\b|status\b)/iu.test(target)
+      ) {
+        continue;
+      }
       const result: IntentResult = {
         category: 'command',
         confidence: 0.85,

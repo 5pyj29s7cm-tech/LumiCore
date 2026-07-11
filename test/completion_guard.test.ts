@@ -60,4 +60,25 @@ describe('completion guard desktop action handling', () => {
     expect(result.blocked).toBe(false);
     expect(result.text).toBe(response);
   });
+
+  it('does not treat a negative no-mutation statement as an open claim', () => {
+    const response = [
+      '\u672c\u8f6e\u684c\u9762\u72b6\u6001\u8bfb\u53d6\u5df2\u5b8c\u6210\u3002',
+      '\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumi OS\uff08lumi-os.exe\uff0cPID 3928\uff09\u3002',
+      '\u672c\u8f6e\u6ca1\u6709\u6267\u884c\u70b9\u51fb\u3001\u8f93\u5165\u3001\u5207\u6362\u7a97\u53e3\u3001\u6253\u5f00\u5e94\u7528\u6216\u4fee\u6539\u5185\u5bb9\u3002',
+    ].join('\n');
+
+    const result = guardCompletionClaims({
+      task: '\u53ea\u8bfb\u53d6\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u548c\u684c\u9762\u8fd0\u884c\u72b6\u6001',
+      response,
+      toolCalls: [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: '{"title":"Lumi OS","process_name":"lumi-os.exe","pid":3928}',
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+  });
 });

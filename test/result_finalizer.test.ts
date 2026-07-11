@@ -152,6 +152,37 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('\u5fae\u4fe1\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001');
   });
 
+  it('keeps the current desktop task isolated from a stale messaging response', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u8bf7\u53ea\u8bfb\u53d6\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u6807\u9898\u548c\u684c\u9762\u8fd0\u884c\u72b6\u6001\uff0c\u4e0d\u8981\u70b9\u51fb\u6216\u8f93\u5165',
+      responseText: '\u8fd8\u6ca1\u5b8c\u6210\u5fae\u4fe1\u804a\u5929\u8bfb\u53d6\uff0c\u9700\u8981 wechat_read_recent_chat \u8bc1\u636e\u3002',
+      toolRecords: [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: '{"title":"Lumi OS","process_name":"lumi-os.exe","pid":3928,"width":1920,"height":1080}',
+      }, {
+        name: 'desktop_running_processes',
+        arguments: { top: 20 },
+        result: '[{"pid":3928,"name":"lumi-os.exe"},{"pid":22920,"name":"msedge.exe"}]',
+      }, {
+        name: 'desktop_idle_time',
+        arguments: {},
+        result: '{"idle_seconds":160}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('action-contract drift');
+    expect(result.text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aLumi OS');
+    expect(result.text).toContain('lumi-os.exe');
+    expect(result.text).toContain('\u672c\u8f6e\u6ca1\u6709\u6267\u884c\u70b9\u51fb');
+    expect(result.text).not.toContain('\u5fae\u4fe1');
+    expect(result.text).not.toContain('wechat_read_recent_chat');
+  });
+
   it('does not treat a CAD folder workflow as visible AutoCAD completion evidence', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 

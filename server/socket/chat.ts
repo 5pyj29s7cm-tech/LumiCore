@@ -18,6 +18,7 @@ import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
+import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildActionContract, summarizeActionContractBlocker } from "../cognition/action_contract";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
@@ -303,7 +304,7 @@ const DESKTOP_RELATIVE_FOLDER_RE = /(?:Desktop|\u684c\u9762)[\\/][^\n\r"'<>|.,;\
 const LOCAL_ACTION_VERB_RE =
   /\b(?:open|read|review|inspect|analy[sz]e|summari[sz]e|compare|transcribe|extract|ocr|check|look\s+at|look\s+over)\b|(?:\u6253\u5f00|\u8bfb\u53d6|\u8bfb\u4e00\u4e0b|\u8bfb\u4e0b|\u770b\u4e00\u4e0b|\u770b\u770b|\u67e5\u770b|\u5ba1\u67e5|\u5ba1\u9605|\u5206\u6790|\u68c0\u67e5|\u6574\u7406|\u603b\u7ed3|\u8f6c\u6587\u5b57|\u8f6c\u5199|\u8bc6\u522b|\u63d0\u53d6|\u5bf9\u6bd4|\u505a\u6210|\u751f\u6210)/iu;
 const LOCAL_ACTION_OBJECT_RE =
-  /\b(?:file|document|docx|pdf|word|attachment|desktop|contract|agreement|audio|recording|voice|screenshot|image|picture)\b|(?:\u6587\u4ef6|\u6587\u6863|\u8d44\u6599|\u9644\u4ef6|\u684c\u9762|\u5408\u540c|\u534f\u8bae|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3|\u622a\u56fe|\u56fe\u7247|\u7167\u7247|\u8fd9\u4efd)/iu;
+  /\b(?:file|folder|directory|document|docx|pdf|word|attachment|contract|agreement|audio|recording|voice|screenshot|image|picture)\b|(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6587\u6863|\u8d44\u6599|\u9644\u4ef6|\u5408\u540c|\u534f\u8bae|\u5f55\u97f3|\u97f3\u9891|\u8bed\u97f3|\u622a\u56fe|\u56fe\u7247|\u7167\u7247|\u8fd9\u4efd)/iu;
 const TRANSCRIPTION_REQUEST_RE =
   /\b(?:transcribe|transcript|speech\s*to\s*text|voice\s*to\s*text)\b|(?:\u8f6c\u6587\u5b57|\u8f6c\u5199|\u7b14\u5f55|\u8bed\u97f3\u8bc6\u522b|\u5f55\u97f3)/iu;
 const DOCUMENT_REVIEW_REQUEST_RE =
@@ -403,7 +404,7 @@ function buildClientSurfaceContinuationBridge(userText: string, history: any[] |
   ].join('\n');
 }
 
-function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
+export function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
   if (attachments.some(item => item.path && !shouldSkipPreflightForAttachment(item))) return true;
   const text = userText || '';
   if (extractExplicitLocalPaths(text).length > 0) return true;
@@ -1739,6 +1740,33 @@ export function registerChatHandler(
           effectiveSystemPrompt += '\n\n' + actionPreflightContext;
         }
       }
+
+      const desktopObservationPlan = buildDesktopObservationPlan(visibleUserText);
+      if (
+        !responseText &&
+        desktopObservationPlan.length > 0 &&
+        executionDecision.allowToolUse &&
+        !clientActionOnlyTurn &&
+        !selfRepairTurn &&
+        !isSanctuary
+      ) {
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: 'desktop_observation',
+          detail: 'Reading current desktop state',
+        });
+        const observationStartIndex = allToolRecords.length;
+        for (const call of desktopObservationPlan) {
+          await runPreflightTool(call.name, call.arguments);
+        }
+        responseText = formatDesktopObservationResult(
+          allToolRecords.slice(observationStartIndex),
+          visibleUserText,
+        ) || '';
+        llmWasCalled = false;
+      }
+
       const deferCompletionStream = turnFlow.completionEvidenceNeeded;
       const prefersSequentialWorkflow =
         shouldChainTask(text) &&
@@ -2180,7 +2208,7 @@ export function registerChatHandler(
         }
       }
 
-      if (!responseText && !actionPreflightContext && !prefersSequentialWorkflow && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
+      if (!responseText && !actionPreflightContext && !prefersSequentialWorkflow && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && capabilitySelection.lane !== 'desktop_control' && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
         // Path B: Orchestrator — decompose tasks into sub-tasks for worker agents
         // (Skipped for sanctuary agents — they stay in their territory)
         try {
