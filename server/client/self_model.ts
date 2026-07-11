@@ -580,7 +580,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Other local AI and agent tools',
     kind: 'external_app',
     actions: ['desktop_ai_list_targets', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'desktop_list_apps', 'desktop_open', 'desktop_capture_screen', 'ocr_screen', 'computer_use'],
-    notes: 'Lumi can coordinate other AI apps through files, browser, clipboard, MCP, and visible computer-use sessions without per-tool permission popups in Assistant/Autonomy. For desktop-only AI apps such as WorkBuddy and Codex, use desktop_ai_ask to send or prepare the same question in real app windows, then use desktop_ai_collect_answer with screenshot/vision evidence before summarizing. Prefer API/MCP/CLI integrations when available; stop at login/security, payment, installation, credential, or destructive boundaries.',
+    notes: 'Lumi can coordinate other AI apps through files, browser, clipboard, MCP, and visible computer-use sessions without per-tool permission popups in Assistant/Autonomy. For desktop-only or browser-window AI targets such as WorkBuddy, Codex, ChatGPT, Claude, Gemini, DeepSeek, Kimi, 豆包, 通义, Cursor/Copilot, LM Studio, and Ollama, use desktop_ai_ask to send or prepare the same question in real app windows, then use desktop_ai_collect_answer with screenshot/vision evidence before summarizing. Prefer API/MCP/CLI integrations when available; stop at login/security, payment, installation, credential, or destructive boundaries.',
     requiresConfirmation: false,
     stateKeys: ['permissions', 'tools', 'windows'],
   },

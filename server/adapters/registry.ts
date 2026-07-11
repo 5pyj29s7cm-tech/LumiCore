@@ -600,10 +600,10 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       category: 'ai',
       status: skillStats.connected > 0 ? 'available' : 'requires_setup',
       actions: ['desktop_ai_list_targets', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'adapter_registry_list', 'capability_research', 'computer_use'],
-      surfaces: ['MCP', 'browser', 'files', 'clipboard', 'local AI apps', 'WorkBuddy', 'Codex desktop'],
+      surfaces: ['MCP', 'browser', 'files', 'clipboard', 'local AI apps', 'WorkBuddy', 'Codex desktop', 'ChatGPT', 'Claude', 'Gemini', 'DeepSeek', 'Kimi', 'Cursor/Copilot', 'local AI runtimes'],
       requiresConfirmation: false,
       setup: skillStats.connected > 0 ? [] : ['Connect a specific AI app, MCP server, browser account, or file workflow before delegating real work.'],
-      notes: 'Lumi can research, draft adapters, ask desktop AI apps such as WorkBuddy/Codex through real windows, collect visible answers with screenshot/vision evidence, and coordinate connected AI apps without per-tool permission popups. API/MCP/CLI integrations are preferred when available; installing or running untrusted third-party code remains a hard boundary.',
+      notes: 'Lumi can research, draft adapters, ask desktop AI apps and browser AI surfaces such as WorkBuddy, Codex, ChatGPT, Claude, Gemini, DeepSeek, Kimi, Cursor/Copilot, and local AI runtimes through real windows, collect visible answers with screenshot/vision evidence, and coordinate connected AI apps without per-tool permission popups. API/MCP/CLI integrations are preferred when available; installing or running untrusted third-party code remains a hard boundary.',
     },
     {
       id: 'ai.nano_banana',

@@ -399,7 +399,7 @@ describe('tool router', () => {
 
   it('routes desktop AI collaboration to the WorkBuddy/Codex handoff tools first', () => {
     const route = routeToolsForTurn(
-      '把这个问题发给 WorkBuddy 和 Codex，再把其它 AI 的回答拿回来总结',
+      '把这个问题发给 WorkBuddy、Codex、ChatGPT 和 Claude，再把其它 AI 的回答拿回来总结',
       DECLARATIONS,
     );
 

@@ -50,7 +50,7 @@ describe('adapter registry external toolbox awareness', () => {
         'desktop_ai_ask',
         'desktop_ai_collect_answer',
       ]));
-      expect(externalAi?.surfaces).toEqual(expect.arrayContaining(['WorkBuddy', 'Codex desktop']));
+      expect(externalAi?.surfaces).toEqual(expect.arrayContaining(['WorkBuddy', 'Codex desktop', 'ChatGPT', 'Claude', 'local AI runtimes']));
       expect(drafting?.actions).toContain('mcp_cad-drafting_cad_renovation_folder_workflow');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

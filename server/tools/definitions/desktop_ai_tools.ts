@@ -6,8 +6,10 @@ import { getUserPreferredVision, type VisionProvider } from '../../llm/vision_pr
 interface DesktopAiTarget {
   id: string;
   label: string;
+  aliases?: string[];
   openTargets: string[];
   match: RegExp;
+  surface?: 'desktop_app' | 'browser_app' | 'local_runtime' | 'developer_tool';
 }
 
 interface DesktopAiTargetRun {
@@ -25,14 +27,138 @@ const TARGETS: DesktopAiTarget[] = [
   {
     id: 'workbuddy',
     label: 'WorkBuddy',
+    aliases: ['work buddy'],
     openTargets: ['WorkBuddy', 'workbuddy.exe'],
     match: /work\s*buddy|workbuddy/i,
+    surface: 'desktop_app',
   },
   {
     id: 'codex',
     label: 'Codex',
+    aliases: ['openai codex'],
     openTargets: ['Codex', 'codex.exe'],
     match: /codex|openai.*codex/i,
+    surface: 'developer_tool',
+  },
+  {
+    id: 'chatgpt',
+    label: 'ChatGPT',
+    aliases: ['openai', 'openai chatgpt'],
+    openTargets: ['ChatGPT', 'https://chatgpt.com/'],
+    match: /chatgpt|chat\.openai|chatgpt\.com|openai/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'claude',
+    label: 'Claude',
+    aliases: ['anthropic claude'],
+    openTargets: ['Claude', 'https://claude.ai/new'],
+    match: /claude|anthropic|claude\.ai/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini',
+    aliases: ['google gemini', 'bard'],
+    openTargets: ['Gemini', 'https://gemini.google.com/app'],
+    match: /gemini|bard|gemini\.google/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    aliases: ['deep seek'],
+    openTargets: ['DeepSeek', 'https://chat.deepseek.com/'],
+    match: /deep\s*seek|deepseek|chat\.deepseek/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    aliases: ['moonshot', '月之暗面'],
+    openTargets: ['Kimi', 'https://www.kimi.com/'],
+    match: /kimi|moonshot|月之暗面|kimi\.com/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'doubao',
+    label: '豆包',
+    aliases: ['doubao', '字节豆包'],
+    openTargets: ['豆包', 'Doubao', 'https://www.doubao.com/chat/'],
+    match: /豆包|doubao|doubao\.com/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'tongyi',
+    label: '通义千问',
+    aliases: ['通义', 'qwen', 'tongyi qianwen'],
+    openTargets: ['通义千问', 'Tongyi', 'https://tongyi.aliyun.com/qianwen/'],
+    match: /通义|千问|tongyi|qwen|aliyun/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'wenxin',
+    label: '文心一言',
+    aliases: ['文心', 'ernie', 'baidu ai'],
+    openTargets: ['文心一言', 'ERNIE Bot', 'https://yiyan.baidu.com/'],
+    match: /文心|一言|ernie|yiyan|baidu/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'perplexity',
+    label: 'Perplexity',
+    aliases: ['perplexity ai'],
+    openTargets: ['Perplexity', 'https://www.perplexity.ai/'],
+    match: /perplexity|perplexity\.ai/i,
+    surface: 'browser_app',
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    aliases: ['cursor ai', 'cursor editor'],
+    openTargets: ['Cursor', 'Cursor.exe'],
+    match: /cursor/i,
+    surface: 'developer_tool',
+  },
+  {
+    id: 'copilot',
+    label: 'GitHub Copilot',
+    aliases: ['copilot', 'github copilot', 'vscode copilot'],
+    openTargets: ['GitHub Copilot', 'Visual Studio Code'],
+    match: /copilot|github.*copilot|visual studio code|vscode|code\.exe/i,
+    surface: 'developer_tool',
+  },
+  {
+    id: 'lmstudio',
+    label: 'LM Studio',
+    aliases: ['lm studio'],
+    openTargets: ['LM Studio', 'LM Studio.exe'],
+    match: /lm\s*studio|lmstudio/i,
+    surface: 'local_runtime',
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama',
+    aliases: ['ollama chat'],
+    openTargets: ['Ollama', 'http://localhost:11434/'],
+    match: /ollama|localhost:11434/i,
+    surface: 'local_runtime',
+  },
+  {
+    id: 'cherry-studio',
+    label: 'Cherry Studio',
+    aliases: ['cherrystudio', 'cherry ai'],
+    openTargets: ['Cherry Studio', 'Cherry Studio.exe'],
+    match: /cherry\s*studio|cherrystudio/i,
+    surface: 'desktop_app',
+  },
+  {
+    id: 'anythingllm',
+    label: 'AnythingLLM',
+    aliases: ['anything llm'],
+    openTargets: ['AnythingLLM', 'http://localhost:3001/'],
+    match: /anything\s*llm|anythingllm|localhost:3001/i,
+    surface: 'local_runtime',
   },
 ];
 
@@ -52,15 +178,58 @@ function targetText(value: unknown): string {
   return String(value).trim().toLowerCase().replace(/\s+/g, '');
 }
 
-function resolveTargets(value: unknown): DesktopAiTarget[] {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function customTargetsFromArgs(value: unknown): DesktopAiTarget[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 12).map<DesktopAiTarget | null>((item, index) => {
+    const raw = item as Record<string, any>;
+    const id = String(raw.id || raw.name || `custom_${index + 1}`).trim();
+    const label = String(raw.label || raw.name || id).trim();
+    const openTargets = listArg(raw.openTargets || raw.openTarget || raw.target || raw.url || raw.path);
+    const aliases = listArg(raw.aliases || raw.alias || raw.matchText || raw.windowTitle);
+    const matchTerms = [
+      label,
+      id,
+      ...aliases,
+      ...openTargets.filter(target => !/^https?:\/\//i.test(target)),
+    ].filter(Boolean);
+    if (!id || openTargets.length === 0 || matchTerms.length === 0) return null;
+    return {
+      id,
+      label,
+      aliases,
+      openTargets,
+      match: new RegExp(matchTerms.map(escapeRegExp).join('|'), 'i'),
+      surface: 'desktop_app' as const,
+    };
+  }).filter((target): target is DesktopAiTarget => Boolean(target));
+}
+
+function allTargets(customTargets?: DesktopAiTarget[]): DesktopAiTarget[] {
+  const merged = [...TARGETS];
+  for (const target of customTargets || []) {
+    const key = targetText(target.id);
+    const index = merged.findIndex(item => targetText(item.id) === key);
+    if (index >= 0) merged[index] = target;
+    else merged.push(target);
+  }
+  return merged;
+}
+
+function resolveTargets(value: unknown, customTargets: DesktopAiTarget[] = []): DesktopAiTarget[] {
+  const catalog = allTargets(customTargets);
   const requested = listArg(value);
-  if (requested.length === 0) return TARGETS.slice(0, 2);
+  if (requested.length === 0) return catalog.filter(target => ['workbuddy', 'codex'].includes(target.id));
   const resolved: DesktopAiTarget[] = [];
   for (const item of requested) {
     const key = targetText(item);
-    const found = TARGETS.find(target => (
+    const found = catalog.find(target => (
       targetText(target.id) === key ||
       targetText(target.label) === key ||
+      (target.aliases || []).some(alias => targetText(alias) === key) ||
       target.openTargets.some(openTarget => targetText(openTarget) === key)
     ));
     if (found && !resolved.some(target => target.id === found.id)) resolved.push(found);
@@ -169,7 +338,8 @@ async function focusTarget(
 async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
   if (!question) return 'Error: question is required.';
-  const targets = resolveTargets(args.targets || args.target);
+  const customTargets = customTargetsFromArgs(args.customTargets);
+  const targets = resolveTargets(args.targets || args.target, customTargets);
   if (targets.length === 0) return 'Error: no supported desktop AI targets matched. Try targets=["workbuddy","codex"].';
 
   const desktopRelay = requireDesktopRelay(context);
@@ -237,7 +407,8 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
 }
 
 async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolContext): Promise<string> {
-  const targets = resolveTargets(args.targets || args.target);
+  const customTargets = customTargetsFromArgs(args.customTargets);
+  const targets = resolveTargets(args.targets || args.target, customTargets);
   const target = targets[0];
   if (!target) return 'Error: target is required. Try target="workbuddy" or target="codex".';
 
@@ -332,9 +503,11 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async () => JSON.stringify({
-      targets: TARGETS.map(target => ({
+      targets: allTargets().map(target => ({
         id: target.id,
         label: target.label,
+        aliases: target.aliases || [],
+        surface: target.surface || 'desktop_app',
         openTargets: target.openTargets,
         route: 'desktop window, clipboard paste, optional submit shortcut, then visible-screen answer collection',
       })),
@@ -351,7 +524,12 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'Question or task to send to the desktop AI targets.' },
-        targets: { type: 'array', items: { type: 'string' }, description: 'Desktop AI target ids or names. Supported: workbuddy, codex. Defaults to both.' },
+        targets: { type: 'array', items: { type: 'string' }, description: 'Desktop AI target ids or names. Supported built-ins include workbuddy, codex, chatgpt, claude, gemini, deepseek, kimi, doubao, tongyi, wenxin, perplexity, cursor, copilot, lmstudio, ollama, cherry-studio, anythingllm. Defaults to WorkBuddy and Codex.' },
+        customTargets: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Optional custom targets: [{id,label,openTargets:["AppName or URL"],aliases:["window title"]}]. Use this for other desktop tools before they become built-ins.',
+        },
         send: { type: 'boolean', description: 'Press the submit shortcut after pasting. Defaults true. Set false to only prepare the message.' },
         submitShortcut: { type: 'string', description: 'Shortcut used to submit, default enter. Use ctrl+enter for apps that need it.' },
         openIfNeeded: { type: 'boolean', description: 'Open/focus the app if it is not already foreground. Defaults true.' },
@@ -372,6 +550,11 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       properties: {
         target: { type: 'string', description: 'Desktop AI target id or name, e.g. workbuddy or codex.' },
         targets: { type: 'array', items: { type: 'string' }, description: 'Optional target list; the first supported target is used.' },
+        customTargets: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Optional custom targets: [{id,label,openTargets:["AppName or URL"],aliases:["window title"]}].',
+        },
         question: { type: 'string', description: 'Original question, used to help distinguish the answer from the prompt.' },
         openIfNeeded: { type: 'boolean', description: 'Open/focus the app if it is not already foreground. Defaults true.' },
         waitMs: { type: 'number', description: 'Optional wait before collecting, max 60000.' },

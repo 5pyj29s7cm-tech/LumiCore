@@ -318,7 +318,7 @@ describe('Lumi capability selection', () => {
   it('selects desktop AI collaboration tools for WorkBuddy and Codex delegation', async () => {
     const { selection, execution } = await selectCapability({
       userId: 'capability_selection_desktop_ai_user',
-      text: '把这个问题发给 WorkBuddy 和 Codex，再把其它 AI 的回答拿回来总结',
+      text: '把这个问题发给 ChatGPT、Claude、WorkBuddy 和 Codex，再把其它 AI 的回答拿回来总结',
       operationMode: 'assistant',
     });
 

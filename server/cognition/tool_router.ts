@@ -390,8 +390,8 @@ const ROUTES: RouteDefinition[] = [
     category: 'external_control',
     reason: 'external software, browser DOM, or native UI control request',
     patterns: [
-      /外部软件|桌面控制|控件树|结构化浏览器|原生控件|窗口控件|按钮|输入框|Playwright|UIA|pywinauto|Windows UI Automation|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|问.*AI|AI.*回答|发给.*AI|WorkBuddy|Codex/u,
-      /\b(external\s+software|desktop\s+control|control\s+tree|native\s+control|playwright|uia|pywinauto|windows\s+ui\s+automation|external\s+ai|desktop\s+ai|workbuddy|codex|ask\s+.*ai|send\s+.*ai)\b/i,
+      /外部软件|桌面控制|控件树|结构化浏览器|原生控件|窗口控件|按钮|输入框|Playwright|UIA|pywinauto|Windows UI Automation|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|问.*AI|AI.*回答|发给.*AI|WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM Studio|Cherry Studio|AnythingLLM/u,
+      /\b(external\s+software|desktop\s+control|control\s+tree|native\s+control|playwright|uia|pywinauto|windows\s+ui\s+automation|external\s+ai|desktop\s+ai|workbuddy|codex|chatgpt|claude|gemini|deepseek|kimi|doubao|tongyi|wenxin|perplexity|cursor|copilot|ollama|lm\s*studio|cherry\s*studio|anythingllm|ask\s+.*ai|send\s+.*ai)\b/i,
     ],
     groups: ['externalControl'],
   },
@@ -498,7 +498,7 @@ function isMessagingRead(text: string): boolean {
 }
 
 function isDesktopAiCollaboration(text: string): boolean {
-  return /(?:WorkBuddy|Codex|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
+  return /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM Studio|Cherry Studio|AnythingLLM|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
     || /(?:问|发给|发送给|交给|询问)[\s\S]{0,80}(?:AI|模型|agent|智能体)/iu.test(text)
     || /(?:AI|模型|agent|智能体)[\s\S]{0,80}(?:回答|结果|总结|对比|汇总)/iu.test(text);
 }
