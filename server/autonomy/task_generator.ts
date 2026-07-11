@@ -4,9 +4,13 @@
  */
 import { isAutonomousWorkAllowed } from './safety_gate';
 import { enqueue } from './task_queue';
-import { listEnabledAutonomousWorkflows } from './workflows';
+import {
+  DEFAULT_LEARNING_WORKFLOW_ID,
+  listEnabledAutonomousWorkflows,
+  type AutonomousWorkflow,
+} from './workflows';
 import { createPlan, updatePlan, type LumiPlan } from './planner';
-import { readDB } from '../../db_layer';
+import { readDB, writeDB } from '../../db_layer';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getRecentActivity } from '../context/activity_stream';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
@@ -27,11 +31,33 @@ type GeneratedAutonomousTask = {
   workflowId?: string;
 };
 
+export const AUTONOMOUS_WEB_LEARNING_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const AUTONOMOUS_WEB_LEARNING_SETTING_PREFIX = 'autonomous_public_web_learning_last_run:';
+
 function toPlanPriority(priority: number): LumiPlan['priority'] {
   if (priority >= 9) return 'critical';
   if (priority >= 7) return 'high';
   if (priority <= 3) return 'low';
   return 'medium';
+}
+
+export function workflowAllowsPublicWebLearning(workflow: Pick<AutonomousWorkflow, 'allowedActions'>): boolean {
+  const actions = new Set((workflow.allowedActions || []).map(action => String(action || '').trim()));
+  return actions.has('public_web_search') || actions.has('web_search') || actions.has('authority_research');
+}
+
+export function buildPublicWebLearningTaskDescription(contextParts: string[]): string {
+  const context = contextParts.length > 0 ? contextParts.join('\n') : '暂无额外上下文。';
+  return [
+    '自主联网学习任务：根据当前上下文选择 1 个对用户近期目标最有价值、且需要时效更新的主题。',
+    '优先主题包括：现行有效法律/政策更新、Lumi 桌面自动化与外部 AI 协作稳定性、知识库/组织库连接、用户最近反复提到的工作流。',
+    '可用工具边界：可以使用 web_search、url_fetch、authority_research 检索公开网页、公开文档和权威来源；不要使用需要登录、付费、验证码、扫码、二次验证或账号授权的页面作为已完成来源。',
+    '输出要求：给出来源 URL、检索时间、可信度、不确定点、可吸收的候选知识、对 Lumi 能力/工作流的更新建议；不能把未核验信息写成确定事实。',
+    '写入边界：除非任务里已有明确用户授权，不要调用 authority_research_save 或其他长期知识写入工具；先把候选知识和来源整理为摘要。',
+    '',
+    '当前上下文：',
+    context,
+  ].join('\n');
 }
 
 function createLearningPlanForTask(task: GeneratedAutonomousTask, workflowTitle: string): LumiPlan {
@@ -44,12 +70,84 @@ function createLearningPlanForTask(task: GeneratedAutonomousTask, workflowTitle:
     'lumi',
     toPlanPriority(Math.max(1, Math.min(10, task.priority || 5))),
     [
-      { title: '识别可吸收的新知识', description: '从最近上下文、记忆、资料或知识缺口中确认本轮学习目标。' },
-      { title: '执行学习与整理', description: '完成分析、归纳、对照和必要的知识结构化。' },
-      { title: '沉淀结果', description: '输出可复用摘要、索引、记忆线索或下一步学习建议。' },
+      { title: '识别可吸收的新知识', description: '从最近上下文、记忆、资料、公开来源更新或知识缺口中确认本轮学习目标。' },
+      { title: '执行学习与整理', description: '完成分析、归纳、对照、必要的公开来源检索和知识结构化。' },
+      { title: '沉淀结果', description: '输出可复用摘要、来源索引、候选记忆线索或下一步学习建议。' },
     ],
     ['lumi-learning', 'autonomous', task.workflowId || 'workflow'],
   );
+}
+
+function webLearningSettingKey(userId: string): string {
+  return `${AUTONOMOUS_WEB_LEARNING_SETTING_PREFIX}${userId}`;
+}
+
+function getLastPublicWebLearningAt(userId: string): number {
+  try {
+    const db = readDB();
+    const row = (db.settings || []).find((item: any) => item.key === webLearningSettingKey(userId));
+    const value = Number(row?.value || 0);
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function recordPublicWebLearningAt(userId: string, timestamp: number) {
+  try {
+    const db = readDB();
+    if (!db.settings) db.settings = [];
+    const key = webLearningSettingKey(userId);
+    const row = db.settings.find((item: any) => item.key === key);
+    if (row) row.value = String(timestamp);
+    else db.settings.push({ key, value: String(timestamp) });
+    writeDB(db);
+  } catch {}
+}
+
+function seedPublicWebLearningTaskIfDue(
+  userId: string,
+  workflows: AutonomousWorkflow[],
+  contextParts: string[],
+): number {
+  const workflow = workflows.find(item => item.id === DEFAULT_LEARNING_WORKFLOW_ID && workflowAllowsPublicWebLearning(item))
+    || workflows.find(workflowAllowsPublicWebLearning);
+  if (!workflow || !workflow.allowedModes.includes('analysis')) return 0;
+
+  const now = Date.now();
+  const lastRun = getLastPublicWebLearningAt(userId);
+  if (lastRun > 0 && now - lastRun < AUTONOMOUS_WEB_LEARNING_INTERVAL_MS) return 0;
+
+  const generated: GeneratedAutonomousTask = {
+    workflowId: workflow.id,
+    title: '公开来源学习更新巡检',
+    description: buildPublicWebLearningTaskDescription(contextParts),
+    mode: 'analysis',
+    priority: 4,
+  };
+  const plan = createLearningPlanForTask(generated, workflow.title);
+  const task = enqueue({
+    userId,
+    workflowId: workflow.id,
+    planId: plan.id,
+    title: generated.title,
+    description: generated.description.slice(0, 1200),
+    source: 'curiosity',
+    priority: generated.priority,
+    mode: generated.mode,
+  });
+
+  if (!task) {
+    updatePlan(plan.id, {
+      status: 'cancelled',
+      result: 'Autonomous queue is full, so this public web learning refresh was not started.',
+    });
+    return 0;
+  }
+
+  recordPublicWebLearningAt(userId, now);
+  console.log(`[AutoTasks] Seeded public web learning refresh for ${userId}`);
+  return 1;
 }
 
 export async function generateAutonomousTasks(
@@ -154,6 +252,10 @@ export async function generateAutonomousTasks(
 - 每个任务必须填写 workflowId，且 workflowId 必须来自下面的工作流列表
 - 任务 mode 必须在对应工作流的 allowedModes 内
 - 如果任务需要外部应用，而工作流 externalApps=not_allowed，则不要生成该任务
+- 公开网页搜索、url_fetch、authority_research 属于网络观察，不算外部应用自动化；只有工作流 allowedActions 包含 public_web_search、web_search 或 authority_research 时才可生成联网学习任务
+- 联网学习任务只能检索公开来源；遇到登录、付费、验证码、扫码、二次验证、账号授权或私有页面，要记录阻塞和替代公开来源，不要假装完成
+- 联网学习任务必须要求输出 URL、检索时间、可信度、不确定点和可吸收的候选知识
+- 除非用户已明确授权长期写入，不要生成需要静默调用 authority_research_save 的任务
 - 优先生成学习、知识吸收、记忆整理、资料消化、能力补齐类任务
 - 每个任务完成后应产出可沉淀的摘要、索引、记忆线索或下一步建议
 - 安全无害（不删除文件、不执行危险命令）
@@ -192,17 +294,17 @@ ${contextParts.join('\n')}
     );
 
     const text = (result.text || '').replace(/```json|```/g, '').trim();
-    if (!text || text === '[]') return 0;
+    if (!text || text === '[]') return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
 
     let tasks: GeneratedAutonomousTask[];
     try {
       tasks = JSON.parse(text);
     } catch {
       console.log('[AutoTasks] Failed to parse LLM response:', text.slice(0, 200));
-      return 0;
+      return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
     }
 
-    if (!Array.isArray(tasks) || tasks.length === 0) return 0;
+    if (!Array.isArray(tasks) || tasks.length === 0) return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
 
     let enqueued = 0;
     for (const t of tasks) {
@@ -238,10 +340,14 @@ ${contextParts.join('\n')}
       }
     }
 
+    if (enqueued === 0) {
+      enqueued += seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
+    }
+
     console.log(`[AutoTasks] Generated ${enqueued} autonomous tasks for ${userId}`);
     return enqueued;
   } catch (err: any) {
     console.warn(`[AutoTasks] Generation failed:`, err.message);
-    return 0;
+    return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
   }
 }

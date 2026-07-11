@@ -529,8 +529,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       actions: ['authority_research', 'authority_research_save', 'web_search', 'url_fetch'],
       surfaces: ['official sources', 'citation packets', 'knowledge memory'],
       requiresConfirmation: true,
-      safety: 'Reading/searching is safe; saving research into long-term knowledge requires explicit confirmation.',
-      notes: 'Use for laws, policies, patents, software copyright, standards, academic papers, technical docs, and current factual claims that need sources.',
+      safety: 'Reading/searching public sources is safe; login-required, paid, captcha, QR/OTP, private, or account-authorization pages are blockers. Saving research into long-term knowledge requires explicit confirmation unless a confirmed workflow explicitly grants that write.',
+      notes: 'Use for laws, policies, patents, software copyright, standards, academic papers, technical docs, current factual claims, and autonomous public-source learning refreshes that need sources.',
     },
     {
       id: 'finance.stock_watch',
