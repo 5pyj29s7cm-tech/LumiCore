@@ -340,16 +340,40 @@ function buildFormalLegalMarkdown(args: Record<string, any>, content: string): s
   ].join('\n');
 }
 
+function normalizeCaseCitation(value: string): string {
+  return String(value || '').replace(/[（）()\s]/g, '').trim();
+}
+
+function caseCitationMatches(a: string, b: string): boolean {
+  const left = normalizeCaseCitation(a);
+  const right = normalizeCaseCitation(b);
+  return !!left && !!right && (left.includes(right) || right.includes(left));
+}
+
+function ownCaseNumbersFromArgs(args: Record<string, any>): string[] {
+  return [
+    textArg(args, 'caseNumber'),
+    textArg(args, 'filingCaseNumber'),
+    ...listArg(args, 'ownCaseNumbers'),
+  ].filter(Boolean);
+}
+
+function isOwnCaseCitation(item: CitationCheck, ownCaseNumbers: string[]): boolean {
+  return ownCaseNumbers.some(caseNumber => caseCitationMatches(item.citation, caseNumber));
+}
+
 function formatCitationReportMarkdown(args: Record<string, any>, text: string, sourceLabel: string): string {
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const orgId = textArg(args, 'orgId') || undefined;
   const checks = verifyMultipleCitations(text, orgId);
   const statuteChecks = checks.filter(item => item.type === 'statute');
   const caseChecks = checks.filter(item => item.type === 'case');
+  const ownCaseNumbers = ownCaseNumbersFromArgs(args);
   const missing = checks.filter(item => !item.exists);
   const repealed = checks.filter(item => item.isEffective === false);
   const statuteGateRisks = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
   const statuteGatePassed = statuteChecks.length > 0 && statuteGateRisks.length === 0;
+  const caseSourceGatePassed = caseChecks.filter(item => !item.exists && !isOwnCaseCitation(item, ownCaseNumbers)).length === 0;
   const valid = checks.filter(item => item.exists && item.isEffective !== false);
 
   const rows = checks.length
@@ -375,6 +399,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
     `- 未确认存在：${missing.length}`,
     `- 已废止/失效风险：${repealed.length}`,
     `- 现行有效法律硬门槛：${statuteGatePassed ? '通过' : '未通过'}`,
+    `- 类案/案号来源硬门槛：${caseSourceGatePassed ? '通过' : '未通过'}`,
     '',
     '## 明细',
     '',
@@ -394,6 +419,7 @@ function formatCitationReportMarkdown(args: Record<string, any>, text: string, s
 interface CurrentLawGateResult {
   passed: boolean;
   missingStatuteCitation: boolean;
+  caseSourcePassed: boolean;
   checks: CitationCheck[];
   statuteChecks: CitationCheck[];
   blockingStatutes: CitationCheck[];
@@ -408,15 +434,16 @@ interface LegalReasoningGateResult {
   missing: string[];
 }
 
-function evaluateCurrentLawGate(text: string, orgId?: string): CurrentLawGateResult {
+function evaluateCurrentLawGate(text: string, orgId?: string, ownCaseNumbers: string[] = []): CurrentLawGateResult {
   const checks = verifyMultipleCitations(text, orgId);
   const statuteChecks = checks.filter(item => item.type === 'statute');
   const blockingStatutes = statuteChecks.filter(item => !item.exists || item.isEffective !== true);
-  const missingCaseChecks = checks.filter(item => item.type === 'case' && !item.exists);
+  const missingCaseChecks = checks.filter(item => item.type === 'case' && !item.exists && !isOwnCaseCitation(item, ownCaseNumbers));
   const missingStatuteCitation = statuteChecks.length === 0;
   return {
     passed: !missingStatuteCitation && blockingStatutes.length === 0,
     missingStatuteCitation,
+    caseSourcePassed: missingCaseChecks.length === 0,
     checks,
     statuteChecks,
     blockingStatutes,
@@ -528,6 +555,38 @@ function formatCurrentLawGateBlock(args: {
     '- Replace repealed statutes with current effective law or judicial interpretations.',
     '- Verify unknown statutes against an authoritative source before generating the formal delivery package.',
     '- Re-run legal_finalize_delivery_package after the legal authority text is corrected.',
+    '',
+  ].join('\n');
+}
+
+function formatCaseSourceGateBlock(args: {
+  caseName: string;
+  documentType: string;
+  outputDir: string;
+  reportPath: string;
+  sourcePath: string;
+  gate: CurrentLawGateResult;
+}): string {
+  return [
+    `# ${args.caseName} case-source gate blocked`,
+    '',
+    `- Document type: ${args.documentType}`,
+    `- Checked at: ${new Date().toISOString()}`,
+    `- Output directory: ${args.outputDir}`,
+    `- Citation report: ${args.reportPath}`,
+    `- Source register: ${args.sourcePath}`,
+    `- Case citations checked: ${args.gate.checks.filter(item => item.type === 'case').length}`,
+    `- Missing case citations: ${args.gate.missingCaseChecks.length}`,
+    '',
+    '## Missing Case Citations',
+    '',
+    ...formatCitationList(args.gate.missingCaseChecks),
+    '',
+    '## Required Fix',
+    '',
+    '- Import the judgment or authorized case source into the organization legal knowledge base.',
+    '- Or remove the case citation from the formal document until its source, court level, date, URL/file path, and favorable point are verified.',
+    '- Re-run legal_finalize_delivery_package after the case source is archived and reviewable.',
     '',
   ].join('\n');
 }
@@ -4459,9 +4518,17 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
 
   const archivedReasoning = findArchivedLegalReasoningGateText(args, orgId);
   const reasoningArgs = archivedReasoning ? { ...args, archivedReasoning } : args;
+  const caseFileForDeliveryGate = caseId ? LegalCases.getCase(orgId, caseId) : null;
+  const citationGateArgs = {
+    ...args,
+    caseName,
+    orgId,
+    caseNumber: textArg(args, 'caseNumber') || caseFileForDeliveryGate?.caseNumber || '',
+  };
+  const ownCaseNumbers = ownCaseNumbersFromArgs(citationGateArgs);
   const formalMarkdown = buildFormalLegalMarkdown({ ...args, caseName, documentType }, content);
-  const citationReport = formatCitationReportMarkdown({ ...args, caseName, orgId }, formalMarkdown, 'formal_delivery_document');
-  const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId);
+  const citationReport = formatCitationReportMarkdown(citationGateArgs, formalMarkdown, 'formal_delivery_document');
+  const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId, ownCaseNumbers);
   const reasoningGate = evaluateLegalReasoningGate(reasoningArgs, content);
   const reasoningSourceRow = archivedReasoning
     ? '| 内部推理底稿 | 案件工作台 | 已归档三段论底稿 | 案件材料 | 已归档 | 三段论推理链 gate | 已复用 |'
@@ -4486,7 +4553,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     `- 文书类型：${documentType}`,
     `- 生成时间：${new Date().toISOString()}`,
     `- 输出目录：${outputDir}`,
-    `- 状态：律师复核稿（现行有效法律硬门槛、三段论推理链硬门槛已通过）`,
+    `- 状态：律师复核稿（现行有效法律硬门槛、类案/案号来源硬门槛、三段论推理链硬门槛已通过）`,
     '',
     '## 文件清单',
     '- 01_formal-document.md：正式文书复核稿',
@@ -4519,6 +4586,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   const checklistPath = path.join(outputDir, '04_filing-and-signature-checklist.md');
   const manifestPath = path.join(outputDir, '00_manifest.md');
   const gatePath = path.join(outputDir, '00_current-law-gate-blocked.md');
+  const caseSourceGatePath = path.join(outputDir, '00_case-source-gate-blocked.md');
   const reasoningGatePath = path.join(outputDir, '00_reasoning-gate-blocked.md');
 
   if (!currentLawGate.passed) {
@@ -4570,6 +4638,51 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       ...formatCitationList(currentLawGate.blockingStatutes),
       '',
       currentLawNextStep,
+    ].join('\n');
+  }
+
+  if (!currentLawGate.caseSourcePassed) {
+    const gateReport = formatCaseSourceGateBlock({
+      caseName,
+      documentType,
+      outputDir,
+      reportPath,
+      sourcePath,
+      gate: currentLawGate,
+    });
+    fs.writeFileSync(reportPath, citationReport, 'utf-8');
+    fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
+    fs.writeFileSync(caseSourceGatePath, gateReport, 'utf-8');
+    const blockedMaterial = appendLegalCaseMaterial({
+      orgId,
+      userId,
+      caseId,
+      type: 'note',
+      title: `${documentType}案例来源阻断记录`,
+      content: gateReport,
+      localPath: outputDir,
+    });
+    const caseArchiveLine = caseId
+      ? blockedMaterial ? `- 案件空间：已归档阻断记录 materialId=${blockedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
+      : '- 案件空间：未归档（未提供 caseId）';
+
+    return [
+      '# 正式交付包未生成',
+      '',
+      `- 案件：${caseName}`,
+      `- 文书类型：${documentType}`,
+      `- 输出目录：${outputDir}`,
+      `- 阻断原因：类案/案号来源硬门槛未通过。正式法律交付包存在未入库或未核验来源的案例引用。`,
+      `- 未核验案例数：${currentLawGate.missingCaseChecks.length}`,
+      `- 引用核验报告：${reportPath}`,
+      `- 来源登记表：${sourcePath}`,
+      `- 阻断记录：${caseSourceGatePath}`,
+      caseArchiveLine,
+      '',
+      '## 未核验案例',
+      ...formatCitationList(currentLawGate.missingCaseChecks),
+      '',
+      '请先导入裁判文书、授权网页摘录或来源登记，再重新运行 legal_finalize_delivery_package。',
     ].join('\n');
   }
 

@@ -823,10 +823,25 @@ describe('semi-automated legal workflows', () => {
 
   it('writes formal legal delivery packages with DOCX and citation reports', async () => {
     const registry = createLegalRegistry();
+    const orgId = `test-legal-delivery-${Date.now()}`;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_'));
 
     try {
+      await registry.execute('legal_import_judgment', {
+        orgId,
+        userId: 'vitest',
+        content: [
+          '上海市黄浦区人民法院',
+          '（2025）沪0101民初123号',
+          '案由：买卖合同纠纷',
+          '本院认为，买卖合同依法成立并生效，买受人应依约支付价款。',
+          '裁判日期：二〇二五年六月一日',
+        ].join('\n'),
+      });
+
       const output = await registry.execute('legal_finalize_delivery_package', {
+        orgId,
+        userId: 'vitest',
         caseName: '正式交付测试案',
         documentType: '代理词',
         caseType: '买卖合同纠纷',
@@ -937,6 +952,88 @@ describe('semi-automated legal workflows', () => {
       expect(report).toContain('现行有效法律硬门槛：未通过');
       const gateReport = fs.readFileSync(path.join(dir, '00_current-law-gate-blocked.md'), 'utf-8');
       expect(gateReport).toContain('Missing statute citation: yes');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks formal legal delivery packages when case citations are not source-verified', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-delivery-case-source-${Date.now()}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_case_source_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        orgId,
+        userId: 'vitest',
+        caseName: '未核验类案阻断测试案',
+        documentType: '代理词',
+        outputDir: dir,
+        includeDocx: true,
+        reasoningSummary: [
+          '大前提：依据《民法典》第五百八十五条，违约方应承担违约责任，并可结合已核验类案裁判规则补强。',
+          '小前提：原告已供货，被告未付款，证据包括合同、送货单和付款记录。',
+          '结论：被告应承担付款及违约责任，但类案引用必须先完成来源核验。',
+        ].join('\n'),
+        content: [
+          '# 代理词草稿',
+          '根据《民法典》第五百八十五条，并参照（2026）沪0101民初999号裁判思路，原告请求应获支持。',
+          '该案号故意未导入组织知识库，用于验证案例来源 gate。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包未生成');
+      expect(output).toContain('类案/案号来源硬门槛未通过');
+      expect(output).toContain('未核验案例数：1');
+      expect(output).toContain('（2026）沪0101民初999号');
+      expect(fs.existsSync(path.join(dir, '00_case-source-gate-blocked.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '03_source-register.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '00_manifest.md'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(false);
+      expect(fs.readdirSync(dir).some(file => file.endsWith('.docx'))).toBe(false);
+
+      const report = fs.readFileSync(path.join(dir, '02_citation-verification-report.md'), 'utf-8');
+      expect(report).toContain('现行有效法律硬门槛：通过');
+      expect(report).toContain('类案/案号来源硬门槛：未通过');
+      const gateReport = fs.readFileSync(path.join(dir, '00_case-source-gate-blocked.md'), 'utf-8');
+      expect(gateReport).toContain('Missing Case Citations');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not block formal delivery when the only unarchived case number is the current case', async () => {
+    const registry = createLegalRegistry();
+    const orgId = `test-legal-delivery-own-case-${Date.now()}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_own_case_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        orgId,
+        userId: 'vitest',
+        caseName: '本案案号豁免测试案',
+        caseNumber: '（2026）沪0101民初888号',
+        documentType: '代理词',
+        outputDir: dir,
+        includeDocx: false,
+        reasoningSummary: [
+          '大前提：依据《民法典》第五百八十五条，违约方应承担违约责任。',
+          '小前提：本案（2026）沪0101民初888号中，原告已供货，被告未付款。',
+          '结论：被告应承担付款及违约责任。',
+        ].join('\n'),
+        content: [
+          '# 代理词草稿',
+          '本案案号为（2026）沪0101民初888号。根据《民法典》第五百八十五条，被告应承担违约责任。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包已生成');
+      expect(fs.existsSync(path.join(dir, '00_case-source-gate-blocked.md'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, '00_manifest.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(true);
+      const report = fs.readFileSync(path.join(dir, '02_citation-verification-report.md'), 'utf-8');
+      expect(report).toContain('类案/案号来源硬门槛：通过');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
