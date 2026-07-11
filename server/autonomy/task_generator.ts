@@ -34,6 +34,8 @@ type GeneratedAutonomousTask = {
 
 export const AUTONOMOUS_WEB_LEARNING_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const AUTONOMOUS_WEB_LEARNING_SETTING_PREFIX = 'autonomous_public_web_learning_last_run:';
+export const AUTONOMOUS_LOCAL_BODY_LEARNING_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const AUTONOMOUS_LOCAL_BODY_LEARNING_SETTING_PREFIX = 'autonomous_local_body_learning_last_run:';
 
 function toPlanPriority(priority: number): LumiPlan['priority'] {
   if (priority >= 9) return 'critical';
@@ -47,6 +49,16 @@ export function workflowAllowsPublicWebLearning(workflow: Pick<AutonomousWorkflo
   return actions.has('public_web_search') || actions.has('web_search') || actions.has('authority_research');
 }
 
+export function workflowAllowsLocalBodyLearning(workflow: Pick<AutonomousWorkflow, 'allowedActions' | 'allowedModes'>): boolean {
+  const actions = new Set((workflow.allowedActions || []).map(action => String(action || '').trim()));
+  return workflow.allowedModes.includes('desktop') && (
+    actions.has('local_machine_awareness') ||
+    actions.has('desktop_app_inventory') ||
+    actions.has('local_file_landmark_scan') ||
+    actions.has('desktop_body_map')
+  );
+}
+
 export function buildPublicWebLearningTaskDescription(contextParts: string[]): string {
   const context = contextParts.length > 0 ? contextParts.join('\n') : '暂无额外上下文。';
   return [
@@ -57,6 +69,21 @@ export function buildPublicWebLearningTaskDescription(contextParts: string[]): s
     '可用工具边界：可以使用 web_search、url_fetch、authority_research 检索公开网页、公开文档和权威来源；不要使用需要登录、付费、验证码、扫码、二次验证或账号授权的页面作为已完成来源。',
     '输出要求：给出来源 URL、检索时间、可信度、不确定点、可吸收的候选知识、对 Lumi 能力/工作流的更新建议；涉及桌面 AI/工具时额外输出可供 desktop_ai_register_target 使用的候选 JSON（id、label、aliases、openTargets、surface、sourceUrls、notes）。不能把未核验信息写成确定事实。',
     '写入边界：除非任务里已有明确用户授权，不要调用 authority_research_save、desktop_ai_register_target 或其他长期知识/配置写入工具；先把候选知识和来源整理为摘要。',
+    '',
+    '当前上下文：',
+    context,
+  ].join('\n');
+}
+
+export function buildLocalBodyLearningTaskDescription(contextParts: string[]): string {
+  const context = contextParts.length > 0 ? contextParts.join('\n') : '暂无额外上下文。';
+  return [
+    '自主本机身体学习任务：把本地电脑当作 Lumi 的身体进行低风险观察，只建立地图，不执行外部动作。',
+    '允许的观察：desktop_system_info、desktop_list_apps、desktop_list_files、desktop_path_info、desktop_running_processes、desktop_active_window、desktop_idle_time、desktop_poll_activity。',
+    '文件学习边界：只列出 Desktop、Documents、Downloads 或用户明确工作目录的顶层文件/文件夹元数据；不要读取文件正文，不要打开文件，不要上传/复制/删除/移动文件。',
+    '应用学习边界：整理可启动应用、正在运行进程、前台窗口、常用行业工具和可能的工作入口；不要打开应用，不要点击，不要键入，不要截图，不要运行命令。',
+    '输出要求：形成“本机身体地图”：主机/桌面目录/重要文件夹线索/常用应用/正在运行应用/行业相关工具/未知缺口/下一次需要用户确认的探索项。',
+    '隐私要求：遇到明显私人、敏感、财务、医疗、法律客户材料时只记录类别和路径线索，不摘录内容；不把本地文件名推断成确定事实。',
     '',
     '当前上下文：',
     context,
@@ -85,10 +112,25 @@ function webLearningSettingKey(userId: string): string {
   return `${AUTONOMOUS_WEB_LEARNING_SETTING_PREFIX}${userId}`;
 }
 
+function localBodyLearningSettingKey(userId: string): string {
+  return `${AUTONOMOUS_LOCAL_BODY_LEARNING_SETTING_PREFIX}${userId}`;
+}
+
 function getLastPublicWebLearningAt(userId: string): number {
   try {
     const db = readDB();
     const row = (db.settings || []).find((item: any) => item.key === webLearningSettingKey(userId));
+    const value = Number(row?.value || 0);
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getLastLocalBodyLearningAt(userId: string): number {
+  try {
+    const db = readDB();
+    const row = (db.settings || []).find((item: any) => item.key === localBodyLearningSettingKey(userId));
     const value = Number(row?.value || 0);
     return Number.isFinite(value) ? value : 0;
   } catch {
@@ -106,6 +148,73 @@ function recordPublicWebLearningAt(userId: string, timestamp: number) {
     else db.settings.push({ key, value: String(timestamp) });
     writeDB(db);
   } catch {}
+}
+
+function recordLocalBodyLearningAt(userId: string, timestamp: number) {
+  try {
+    const db = readDB();
+    if (!db.settings) db.settings = [];
+    const key = localBodyLearningSettingKey(userId);
+    const row = db.settings.find((item: any) => item.key === key);
+    if (row) row.value = String(timestamp);
+    else db.settings.push({ key, value: String(timestamp) });
+    writeDB(db);
+  } catch {}
+}
+
+function enqueueGeneratedLearningTask(
+  userId: string,
+  workflow: AutonomousWorkflow,
+  generated: GeneratedAutonomousTask,
+  descriptionLimit: number,
+): boolean {
+  const plan = createLearningPlanForTask(generated, workflow.title);
+  const task = enqueue({
+    userId,
+    workflowId: workflow.id,
+    planId: plan.id,
+    title: generated.title,
+    description: generated.description.slice(0, descriptionLimit),
+    source: 'curiosity',
+    priority: generated.priority,
+    mode: generated.mode,
+  });
+
+  if (!task) {
+    updatePlan(plan.id, {
+      status: 'cancelled',
+      result: 'Autonomous queue is full, so this Lumi learning plan was not started.',
+    });
+    return false;
+  }
+  return true;
+}
+
+function seedLocalBodyLearningTaskIfDue(
+  userId: string,
+  workflows: AutonomousWorkflow[],
+  contextParts: string[],
+): number {
+  const workflow = workflows.find(item => item.id === DEFAULT_LEARNING_WORKFLOW_ID && workflowAllowsLocalBodyLearning(item))
+    || workflows.find(workflowAllowsLocalBodyLearning);
+  if (!workflow) return 0;
+
+  const now = Date.now();
+  const lastRun = getLastLocalBodyLearningAt(userId);
+  if (lastRun > 0 && now - lastRun < AUTONOMOUS_LOCAL_BODY_LEARNING_INTERVAL_MS) return 0;
+
+  const generated: GeneratedAutonomousTask = {
+    workflowId: workflow.id,
+    title: '本机身体地图观察',
+    description: buildLocalBodyLearningTaskDescription(contextParts),
+    mode: 'desktop',
+    priority: 5,
+  };
+
+  if (!enqueueGeneratedLearningTask(userId, workflow, generated, 2200)) return 0;
+  recordLocalBodyLearningAt(userId, now);
+  console.log(`[AutoTasks] Seeded local body learning refresh for ${userId}`);
+  return 1;
 }
 
 function seedPublicWebLearningTaskIfDue(
@@ -128,29 +237,20 @@ function seedPublicWebLearningTaskIfDue(
     mode: 'analysis',
     priority: 4,
   };
-  const plan = createLearningPlanForTask(generated, workflow.title);
-  const task = enqueue({
-    userId,
-    workflowId: workflow.id,
-    planId: plan.id,
-    title: generated.title,
-    description: generated.description.slice(0, 2400),
-    source: 'curiosity',
-    priority: generated.priority,
-    mode: generated.mode,
-  });
 
-  if (!task) {
-    updatePlan(plan.id, {
-      status: 'cancelled',
-      result: 'Autonomous queue is full, so this public web learning refresh was not started.',
-    });
-    return 0;
-  }
-
+  if (!enqueueGeneratedLearningTask(userId, workflow, generated, 2400)) return 0;
   recordPublicWebLearningAt(userId, now);
   console.log(`[AutoTasks] Seeded public web learning refresh for ${userId}`);
   return 1;
+}
+
+function seedFallbackLearningTasksIfDue(
+  userId: string,
+  workflows: AutonomousWorkflow[],
+  contextParts: string[],
+): number {
+  return seedLocalBodyLearningTaskIfDue(userId, workflows, contextParts)
+    + seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
 }
 
 export async function generateAutonomousTasks(
@@ -264,6 +364,8 @@ export async function generateAutonomousTasks(
 - 如果没有行业画像，先围绕最近任务/记忆/活跃应用推断行业候选，但要标注不确定性，不要把猜测当事实
 - 公开网页搜索、url_fetch、authority_research 属于网络观察，不算外部应用自动化；只有工作流 allowedActions 包含 public_web_search、web_search 或 authority_research 时才可生成联网学习任务
 - 如果用户上下文涉及“其他桌面 AI、桌面工具、外部 AI 目标、AI 客户端”，优先生成桌面 AI/工具目标目录更新任务：查看 desktop_ai_list_targets，使用 desktop_ai_discovery_plan 设计候选结构，再联网查公开/官方来源
+- 本机电脑也是 Lumi 的身体：如果工作流允许 desktop 且 allowedActions 包含 local_machine_awareness、desktop_app_inventory、local_file_landmark_scan 或 desktop_body_map，可以生成本机身体学习任务，使用 desktop_system_info、desktop_list_apps、desktop_list_files、desktop_path_info、desktop_running_processes、desktop_active_window、desktop_idle_time、desktop_poll_activity 做只读观察
+- 本机身体学习不等于外部应用自动化：不要打开应用/文件，不要点击/键入，不要截图，不要运行命令，不要读取文件正文；只整理文件夹/应用/进程/窗口的地图、线索、缺口和下一步确认项
 - 联网学习任务只能检索公开来源；遇到登录、付费、验证码、扫码、二次验证、账号授权或私有页面，要记录阻塞和替代公开来源，不要假装完成
 - 联网学习任务必须要求输出 URL、检索时间、可信度、不确定点和可吸收的候选知识
 - 除非用户已明确授权长期写入，不要生成需要静默调用 authority_research_save、desktop_ai_register_target 的任务
@@ -305,17 +407,17 @@ ${contextParts.join('\n')}
     );
 
     const text = (result.text || '').replace(/```json|```/g, '').trim();
-    if (!text || text === '[]') return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
+    if (!text || text === '[]') return seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
 
     let tasks: GeneratedAutonomousTask[];
     try {
       tasks = JSON.parse(text);
     } catch {
       console.log('[AutoTasks] Failed to parse LLM response:', text.slice(0, 200));
-      return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
+      return seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
     }
 
-    if (!Array.isArray(tasks) || tasks.length === 0) return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
+    if (!Array.isArray(tasks) || tasks.length === 0) return seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
 
     let enqueued = 0;
     for (const t of tasks) {
@@ -352,13 +454,13 @@ ${contextParts.join('\n')}
     }
 
     if (enqueued === 0) {
-      enqueued += seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
+      enqueued += seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
     }
 
     console.log(`[AutoTasks] Generated ${enqueued} autonomous tasks for ${userId}`);
     return enqueued;
   } catch (err: any) {
     console.warn(`[AutoTasks] Generation failed:`, err.message);
-    return seedPublicWebLearningTaskIfDue(userId, workflows, contextParts);
+    return seedFallbackLearningTasksIfDue(userId, workflows, contextParts);
   }
 }

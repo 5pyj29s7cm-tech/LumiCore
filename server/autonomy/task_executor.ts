@@ -38,11 +38,44 @@ const AUTONOMOUS_POLICY = {
   maxIterations: 50,
 };
 
+const LOCAL_BODY_LEARNING_TOOLS = [
+  'desktop_system_info',
+  'desktop_list_apps',
+  'desktop_list_files',
+  'desktop_path_info',
+  'desktop_running_processes',
+  'desktop_active_window',
+  'get_active_window_info',
+  'get_running_processes',
+  'desktop_idle_time',
+  'desktop_poll_activity',
+  'adapter_registry_list',
+  'work_product_plan',
+  'work_product_verify',
+];
+
 const pendingDesktopResults = new Map<string, {
   resolve: (output: string) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
 }>();
+
+export function isLocalBodyLearningTask(task: Pick<AutonomousTask, 'title' | 'description'>): boolean {
+  return /本机身体|local machine body|desktop body|local body|desktop_body_map|local_machine_awareness/i
+    .test(`${task.title || ''}\n${task.description || ''}`);
+}
+
+export function buildAutonomousToolPolicy(task: Pick<AutonomousTask, 'title' | 'description'>, maxIterations: number) {
+  if (isLocalBodyLearningTask(task)) {
+    return {
+      allowedTools: LOCAL_BODY_LEARNING_TOOLS,
+      requireConfirmation: [],
+      forbiddenTools: AUTONOMOUS_POLICY.forbiddenTools,
+      maxIterations: Math.min(maxIterations, 16),
+    };
+  }
+  return { ...AUTONOMOUS_POLICY, maxIterations };
+}
 
 function clipPlanResult(value: string, max = 1800): string {
   return value.length > max ? `${value.slice(0, max)}...` : value;
@@ -163,12 +196,13 @@ export async function executeNextAutonomousTask(
     };
 
     let cancelled = false;
+    const toolPolicy = buildAutonomousToolPolicy(running, maxIterations);
 
     const context: ToolContext = {
       userId: task.userId,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
       requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args),
-      toolPolicy: { ...AUTONOMOUS_POLICY, maxIterations },
+      toolPolicy,
       isCancelled: () => cancelled,
       autonomous: true,
       source: 'autonomous',
@@ -180,6 +214,7 @@ export async function executeNextAutonomousTask(
         formatLumiConstitutionForPrompt(),
         'For concrete deliverables, define the work product with work_product_plan, verify it with work_product_verify or domain-specific verification tools, repair failed criteria, and only then mark the task complete. If confirmation or missing input blocks progress, report the blocker.',
         'For autonomous web learning, you may use public web_search, url_fetch, and authority_research. Treat them as observation: cite URLs, retrieval time, confidence, and uncertainty. Choose research topics from the user industry habits in the task context: common platforms, vocabulary, deliverable formats, verification standards, compliance boundaries, and repeated real workflows. Avoid generic trend learning unless it clearly improves that user’s industry workflow. For desktop AI/tool catalog learning, use desktop_ai_list_targets and desktop_ai_discovery_plan, then produce source-grounded candidate JSON for later registration. Do not use login-required, paid, captcha, QR/OTP, private, or account-authorization pages as completed sources. Do not call authority_research_save, desktop_ai_register_target, or other long-term knowledge/configuration writes unless the task itself contains explicit user authorization; otherwise produce source-grounded knowledge or target candidates for later absorption.',
+        'For autonomous local machine/body learning, only use observation tools for OS info, top-level file/folder landmarks, launchable apps, active/running processes, idle/activity signals, and adapter inventory. Do not open apps or files, click, type, capture screenshots, run commands, read file contents, move/copy/delete files, or infer private facts from filenames. Produce a local body map with evidence, uncertainty, useful app/file landmarks, industry-relevant tools, and next exploration items that need user confirmation.',
       ].join('\n\n') },
       { role: 'user' as const, content: task.description },
     ];

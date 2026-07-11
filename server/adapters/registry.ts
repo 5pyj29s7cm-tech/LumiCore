@@ -236,8 +236,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         state?.runtime?.backendNodeRunning ? 'backendNode=running' : '',
         staleState ? `clientStateAge=${stateAgeSeconds}s` : '',
       ].filter(Boolean),
-      safety: 'Observation only: system info, app/file listings, path checks, active-window/process checks, and screenshots are perception. File/app/settings changes, shell commands, and desktop input follow the normal mode and confirmation gates.',
-      notes: 'Use when Lumi needs to know this computer: what host it is running on, what apps are launchable, what files/folders exist, what window is foregrounded, and what processes are running. Refresh these facts through desktop tools before making claims.',
+      safety: 'Observation only: system info, app/file listings, path checks, active-window/process checks, and screenshots are perception. Autonomous local body learning is stricter: map top-level landmarks and app/process state only, without opening files/apps, screenshots, shell commands, desktop input, or file-content reads. File/app/settings changes, shell commands, and desktop input follow the normal mode and confirmation gates.',
+      notes: 'Use when Lumi needs to know this computer as her local body: what host it is running on, what apps are launchable, what files/folders exist, what window is foregrounded, and what processes are running. Autonomous mode may periodically refresh this body map so future work starts from evidence rather than guesses.',
     },
     {
       id: 'system.background_runtime_awareness',
