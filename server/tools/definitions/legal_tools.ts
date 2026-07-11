@@ -398,6 +398,14 @@ interface CurrentLawGateResult {
   missingCaseChecks: CitationCheck[];
 }
 
+interface LegalReasoningGateResult {
+  passed: boolean;
+  hasMajorPremise: boolean;
+  hasMinorPremise: boolean;
+  hasConclusion: boolean;
+  missing: string[];
+}
+
 function evaluateCurrentLawGate(text: string, orgId?: string): CurrentLawGateResult {
   const checks = verifyMultipleCitations(text, orgId);
   const statuteChecks = checks.filter(item => item.type === 'statute');
@@ -409,6 +417,52 @@ function evaluateCurrentLawGate(text: string, orgId?: string): CurrentLawGateRes
     statuteChecks,
     blockingStatutes,
     missingCaseChecks,
+  };
+}
+
+function collectLegalReasoningGateText(args: Record<string, any>, sourceText: string): string {
+  const keys = [
+    'reasoningMatrix',
+    'reasoningSummary',
+    'legalReasoning',
+    'analysis',
+    'legalAuthorities',
+    'similarCases',
+    'facts',
+    'evidence',
+    'materials',
+    'claims',
+    'issues',
+    'content',
+    'packetText',
+    'documentText',
+  ];
+  const parts = [sourceText];
+  for (const key of keys) {
+    const value = args[key];
+    if (Array.isArray(value)) parts.push(value.map(String).join('\n'));
+    else if (value !== undefined && value !== null) parts.push(String(value));
+  }
+  return parts.join('\n\n');
+}
+
+function evaluateLegalReasoningGate(args: Record<string, any>, sourceText: string): LegalReasoningGateResult {
+  const text = collectLegalReasoningGateText(args, sourceText);
+  const explicitMatrix = /法律分析三段论底稿|三段论|大前提|小前提|涵摄|major\s+premise|minor\s+premise|subsumption|reasoning\s+matrix/i.test(text);
+  const hasMajorPremise = explicitMatrix || /法律依据|现行有效法律|法条|司法解释|裁判规则|类案|法律适用|《[^》]{1,80}》|statute|legal\s+(?:authority|basis)|case\s+law/i.test(text);
+  const hasMinorPremise = explicitMatrix || /事实|证据|待证|举证|质证|原告|被告|当事人|合同关系|履行|付款|交付|欠款|聊天记录|转账|发票|材料|facts?|evidence|proof/i.test(text);
+  const hasConclusion = explicitMatrix || /结论|涵摄|适用|应当|请求|支持|承担|构成|成立|不成立|风险|代理意见|法律意见|据此|故|therefore|conclusion|application|liable/i.test(text);
+  const missing = [
+    hasMajorPremise ? '' : '大前提：现行有效法律、司法解释或类案裁判规则',
+    hasMinorPremise ? '' : '小前提：待证事实、证据材料、举证质证',
+    hasConclusion ? '' : '结论：涵摄适用、文书表达和风险',
+  ].filter(Boolean);
+  return {
+    passed: hasMajorPremise && hasMinorPremise && hasConclusion,
+    hasMajorPremise,
+    hasMinorPremise,
+    hasConclusion,
+    missing,
   };
 }
 
@@ -4382,6 +4436,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   const formalMarkdown = buildFormalLegalMarkdown({ ...args, caseName, documentType }, content);
   const citationReport = formatCitationReportMarkdown({ ...args, caseName, orgId }, formalMarkdown, 'formal_delivery_document');
   const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId);
+  const reasoningGate = evaluateLegalReasoningGate(args, content);
   const sourceRegister = [
     `# ${caseName} 来源登记表`,
     '',
@@ -4401,7 +4456,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     `- 文书类型：${documentType}`,
     `- 生成时间：${new Date().toISOString()}`,
     `- 输出目录：${outputDir}`,
-    `- 状态：律师复核稿（现行有效法律硬门槛已通过）`,
+    `- 状态：律师复核稿（现行有效法律硬门槛、三段论推理链硬门槛已通过）`,
     '',
     '## 文件清单',
     '- 01_formal-document.md：正式文书复核稿',
@@ -4412,6 +4467,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     '## 边界',
     '- Lumi 只生成本地文件和复核清单，不自动提交、签名、盖章、缴费、发送或确认送达。',
     '- 已废止、失效或未确认的法条引用会阻断正式交付包生成。',
+    '- 缺少大前提、小前提或涵摄结论的三段论推理链会阻断正式交付包生成。',
     '- 若需 PDF，请在安装 Microsoft Word 的 Windows 环境中设置 includePdf=true 生成，或由律师确认后另行导出。',
     '',
   ].join('\n');
@@ -4433,6 +4489,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   const checklistPath = path.join(outputDir, '04_filing-and-signature-checklist.md');
   const manifestPath = path.join(outputDir, '00_manifest.md');
   const gatePath = path.join(outputDir, '00_current-law-gate-blocked.md');
+  const reasoningGatePath = path.join(outputDir, '00_reasoning-gate-blocked.md');
 
   if (!currentLawGate.passed) {
     const gateReport = formatCurrentLawGateBlock({
@@ -4476,6 +4533,64 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       ...formatCitationList(currentLawGate.blockingStatutes),
       '',
       '请先替换或核验法条，再重新运行 legal_finalize_delivery_package。',
+    ].join('\n');
+  }
+
+  if (!reasoningGate.passed) {
+    const reasoningReport = [
+      `# ${caseName} reasoning gate blocked`,
+      '',
+      `- Document type: ${documentType}`,
+      `- Checked at: ${new Date().toISOString()}`,
+      `- Output directory: ${outputDir}`,
+      `- Citation report: ${reportPath}`,
+      `- Source register: ${sourcePath}`,
+      `- Major premise present: ${reasoningGate.hasMajorPremise ? 'yes' : 'no'}`,
+      `- Minor premise present: ${reasoningGate.hasMinorPremise ? 'yes' : 'no'}`,
+      `- Conclusion/subsumption present: ${reasoningGate.hasConclusion ? 'yes' : 'no'}`,
+      '',
+      '## Missing Reasoning Links',
+      '',
+      ...(reasoningGate.missing.length ? reasoningGate.missing.map(item => `- ${item}`) : ['- None']),
+      '',
+      '## Required Fix',
+      '',
+      '- Run legal_case_reasoning_matrix or provide reasoningMatrix/reasoningSummary before generating the formal delivery package.',
+      '- The formal package must show a reviewable chain from current law, to facts/evidence, to application/conclusion.',
+      '',
+    ].join('\n');
+    fs.writeFileSync(reportPath, citationReport, 'utf-8');
+    fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
+    fs.writeFileSync(reasoningGatePath, reasoningReport, 'utf-8');
+    const blockedMaterial = appendLegalCaseMaterial({
+      orgId,
+      userId,
+      caseId,
+      type: 'note',
+      title: `${documentType}三段论推理链阻断记录`,
+      content: reasoningReport,
+      localPath: outputDir,
+    });
+    const caseArchiveLine = caseId
+      ? blockedMaterial ? `- 案件空间：已归档阻断记录 materialId=${blockedMaterial.id}` : '- 案件空间：未归档（caseId 不存在或无权限）'
+      : '- 案件空间：未归档（未提供 caseId）';
+
+    return [
+      '# 正式交付包未生成',
+      '',
+      `- 案件：${caseName}`,
+      `- 文书类型：${documentType}`,
+      `- 输出目录：${outputDir}`,
+      '- 阻断原因：三段论推理链硬门槛未通过。缺少可复核的大前提、小前提或涵摄结论。',
+      `- 大前提：${reasoningGate.hasMajorPremise ? '已识别' : '缺失'}`,
+      `- 小前提：${reasoningGate.hasMinorPremise ? '已识别' : '缺失'}`,
+      `- 涵摄结论：${reasoningGate.hasConclusion ? '已识别' : '缺失'}`,
+      `- 引用核验报告：${reportPath}`,
+      `- 来源登记表：${sourcePath}`,
+      `- 阻断记录：${reasoningGatePath}`,
+      caseArchiveLine,
+      '',
+      '请先运行 legal_case_reasoning_matrix，或提供 reasoningMatrix/reasoningSummary，再重新运行 legal_finalize_delivery_package。',
     ].join('\n');
   }
 
@@ -4534,6 +4649,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     caseArchiveLine,
     ...docxLines,
     '- 现行有效法律硬门槛：通过',
+    '- 三段论推理链硬门槛：通过',
     `- 引用风险项：${riskCount}`,
     '',
     '## 人工边界',
@@ -5428,6 +5544,9 @@ export function registerLegalTools(registry: ToolRegistry): void {
         content: { type: 'string', description: '需要整理成正式交付包的文书草稿或工作底稿' },
         packetText: { type: 'string', description: 'content 的别名，用于诉讼文书包结果' },
         documentText: { type: 'string', description: 'content 的别名，用于单份文书结果' },
+        reasoningMatrix: { type: 'string', description: 'legal_case_reasoning_matrix 生成的大前提/小前提/涵摄结论底稿；正式交付前建议提供' },
+        reasoningSummary: { type: 'string', description: '三段论推理摘要：现行法/类案、事实证据、涵摄结论' },
+        legalReasoning: { type: 'string', description: 'reasoningMatrix 的别名，用于传入可复核的法律推理链' },
         caseId: { type: 'string', description: '已有案件工作台 ID；提供后会把交付包或阻断记录归档到该案件空间' },
         caseName: { type: 'string', description: '案件名称或简称' },
         documentType: { type: 'string', description: '文书类型：起诉状/答辩状/质证意见/代理词/法律意见书/证据目录/合同文本/投标书等' },

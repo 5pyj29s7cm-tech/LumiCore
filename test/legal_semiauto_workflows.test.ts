@@ -837,6 +837,11 @@ describe('semi-automated legal workflows', () => {
         outputDir: dir,
         includeDocx: true,
         includePdf: false,
+        reasoningSummary: [
+          '大前提：依据《民法典》第五百八十五条及买卖合同违约责任规则。',
+          '小前提：原告已供货，被告未按约付款，证据包括合同、送货单和付款记录。',
+          '结论：被告应承担付款和违约责任，代理词围绕合同成立、履行和违约责任展开。',
+        ].join('\n'),
         content: [
           '# 代理词草稿',
           '根据《民法典》第五百八十五条，结合（2025）沪0101民初123号案件材料，形成如下意见。',
@@ -861,6 +866,36 @@ describe('semi-automated legal workflows', () => {
       expect(report).not.toContain('合同法');
       expect(report).toContain('已废止/失效风险：0');
       expect(report).toContain('律师最终检索');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks formal legal delivery packages when the reasoning chain is missing', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_delivery_reasoning_blocked_'));
+
+    try {
+      const output = await registry.execute('legal_finalize_delivery_package', {
+        caseName: '三段论阻断测试案',
+        documentType: '法律意见书',
+        outputDir: dir,
+        includeDocx: true,
+        content: [
+          '# 法律意见书草稿',
+          '根据《民法典》第五百八十五条，形成如下法律意见。',
+        ].join('\n'),
+      });
+
+      expect(output).toContain('正式交付包未生成');
+      expect(output).toContain('三段论推理链硬门槛未通过');
+      expect(output).toContain('legal_case_reasoning_matrix');
+      expect(fs.existsSync(path.join(dir, '00_reasoning-gate-blocked.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '03_source-register.md'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, '00_manifest.md'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, '01_formal-document.md'))).toBe(false);
+      expect(fs.readdirSync(dir).some(file => file.endsWith('.docx'))).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
