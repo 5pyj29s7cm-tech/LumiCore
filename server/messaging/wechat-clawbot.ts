@@ -20,6 +20,7 @@ import type {
   OutgoingMessage,
   CardPayload,
   MessagingPlatform,
+  IncomingAttachment,
 } from './types';
 
 export interface WeChatClawBotConfig {
@@ -59,7 +60,18 @@ interface WeixinMessage {
   item_list: Array<{
     type: number;
     text_item?: { text: string };
+    image_item?: { media?: WeixinCdnMedia; aeskey?: string; mid_size?: number };
+    voice_item?: { media?: WeixinCdnMedia; text?: string; playtime?: number };
+    file_item?: { media?: WeixinCdnMedia; file_name?: string; md5?: string; len?: string };
+    video_item?: { media?: WeixinCdnMedia; video_size?: number; video_md5?: string };
   }>;
+}
+
+interface WeixinCdnMedia {
+  encrypt_query_param?: string;
+  aes_key?: string;
+  encrypt_type?: number;
+  full_url?: string;
 }
 
 interface GetUpdatesResponse {
@@ -91,6 +103,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
   private pollingRun: { value: boolean } | null = null;
   private pollingAbort: AbortController | null = null;
   private onMessage: ((msg: IncomingMessage) => Promise<OutgoingMessage | null>) | null = null;
+  private contextTokens = new Map<string, string>();
   private suggestedLongPollMs = 35_000;
   private health: Omit<WeChatConnectionStatus, 'listening'> = {
     sessionExpired: false,
@@ -111,6 +124,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
     this.config = { ...config };
     if (accountChanged) {
       this.cursor = this.readCursor();
+      this.contextTokens.clear();
       this.health.sessionExpired = false;
       this.health.lastError = null;
     }
@@ -349,9 +363,37 @@ export class WeChatClawBotAdapter implements MessageAdapter {
   parseEvent(event: any): IncomingMessage | null {
     const msg: WeixinMessage = event;
 
-    if (!msg.from_user_id || msg.message_type !== 1) return null; // text only
-    const textItem = msg.item_list?.find(i => i.type === 1)?.text_item;
-    if (!textItem?.text) return null;
+    if (!msg.from_user_id || msg.message_type !== 1) return null;
+    const textParts = (msg.item_list || [])
+      .flatMap(item => [item.text_item?.text, item.voice_item?.text])
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    const attachments: IncomingAttachment[] = (msg.item_list || []).flatMap((item, index) => {
+      const media = item.file_item?.media || item.image_item?.media || item.voice_item?.media || item.video_item?.media;
+      const resourceKey = String(media?.encrypt_query_param || '').trim();
+      const downloadUrl = String(media?.full_url || '').trim();
+      if (!resourceKey && !downloadUrl) return [];
+      const type: IncomingAttachment['type'] = item.type === 2 ? 'image'
+        : item.type === 3 ? 'audio'
+          : item.type === 5 ? 'media'
+            : 'file';
+      const fallbackExtension = type === 'image' ? '.jpg' : type === 'audio' ? '.silk' : type === 'media' ? '.mp4' : '';
+      const fileName = String(item.file_item?.file_name || `${type}-${msg.message_id || msg.client_id || index}${fallbackExtension}`);
+      const fileSize = Number(item.file_item?.len || item.image_item?.mid_size || item.video_item?.video_size || 0) || undefined;
+      return [{
+        id: `wechat-${msg.message_id || msg.client_id || 'message'}-${index}`,
+        type,
+        fileName,
+        fileSize,
+        resourceKey,
+        resourceType: type,
+        downloadUrl: downloadUrl || undefined,
+        encryptionKey: String(item.image_item?.aeskey || media?.aes_key || ''),
+      }];
+    });
+    if (textParts.length === 0 && attachments.length === 0) return null;
+    const messageText = textParts.join('\n') || attachments.map(item => `[附件] ${item.fileName}`).join('\n');
+    if (msg.context_token) this.contextTokens.set(msg.from_user_id, msg.context_token);
 
     return {
       platform: 'wechat',
@@ -360,16 +402,32 @@ export class WeChatClawBotAdapter implements MessageAdapter {
       chatId: msg.from_user_id, // for now 1:1
       chatType: 'private',
       messageId: String(msg.message_id || msg.client_id || crypto.randomUUID()),
-      text: textItem.text,
+      text: messageText,
+      attachments: attachments.length ? attachments : undefined,
       raw: { context_token: msg.context_token, message: msg },
       timestamp: new Date(msg.create_time_ms || Date.now()).toISOString(),
     };
   }
 
+  async downloadAttachment(attachment: IncomingAttachment): Promise<Buffer> {
+    const encryptedParam = String(attachment.resourceKey || '').trim();
+    const aesKey = decodeWeChatAesKey(String(attachment.encryptionKey || ''));
+    if (!encryptedParam && !attachment.downloadUrl) throw new Error('WeChat attachment is missing its encrypted CDN parameter');
+    const url = attachment.downloadUrl
+      ? validateWeChatCdnUrl(attachment.downloadUrl)
+      : `https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=${encodeURIComponent(encryptedParam)}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`WeChat attachment download failed: HTTP ${response.status}`);
+    const encrypted = Buffer.from(await response.arrayBuffer());
+    const decipher = crypto.createDecipheriv('aes-128-ecb', aesKey, null);
+    decipher.setAutoPadding(true);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  }
+
   // ── Send Message ──
 
   async sendMessage(toUser: string, message: OutgoingMessage): Promise<string> {
-    const contextToken = (message as any).context_token || '';
+    const contextToken = (message as any).context_token || this.contextTokens.get(toUser) || '';
     const clientId = crypto.randomUUID();
     const msg: any = {
       to_user_id: toUser,
@@ -397,6 +455,106 @@ export class WeChatClawBotAdapter implements MessageAdapter {
     return data.message_id || clientId;
   }
 
+  hasConversationContext(toUser: string): boolean {
+    return Boolean(this.contextTokens.get(toUser));
+  }
+
+  async sendFile(toUser: string, buffer: Buffer, fileName: string, contextToken = ''): Promise<string> {
+    if (buffer.byteLength === 0) throw new Error('Cannot send an empty WeChat file');
+    if (buffer.byteLength > 25 * 1024 * 1024) throw new Error('WeChat file transfer limit is 25 MB');
+    const resolvedContextToken = contextToken || this.contextTokens.get(toUser) || '';
+    if (!resolvedContextToken) {
+      throw new Error('WeChat file send requires a recent bound conversation context. Send Lumi a WeChat message first.');
+    }
+
+    const aesKey = crypto.randomBytes(16);
+    const aesKeyHex = aesKey.toString('hex');
+    const fileKey = crypto.randomBytes(16).toString('hex');
+    const md5 = crypto.createHash('md5').update(buffer).digest('hex');
+    const cipher = crypto.createCipheriv('aes-128-ecb', aesKey, null);
+    cipher.setAutoPadding(true);
+    const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+    const baseUrl = this.config.baseUrl || 'https://ilinkai.weixin.qq.com';
+
+    const uploadConfigResponse = await fetch(`${baseUrl}/ilink/bot/getuploadurl`, {
+      method: 'POST',
+      headers: this.makeHeaders(),
+      body: JSON.stringify({
+        filekey: fileKey,
+        media_type: 3,
+        to_user_id: toUser,
+        rawsize: buffer.byteLength,
+        rawfilemd5: md5,
+        filesize: encrypted.byteLength,
+        no_need_thumb: true,
+        aeskey: aesKeyHex,
+        base_info: this.baseInfo(),
+      }),
+    });
+    const uploadConfig: any = await uploadConfigResponse.json().catch(() => ({}));
+    if (!uploadConfigResponse.ok || (uploadConfig.ret && uploadConfig.ret !== 0) || (!uploadConfig.upload_param && !uploadConfig.upload_full_url)) {
+      throw new Error(`WeChat upload URL request failed: ${uploadConfig.errmsg || uploadConfig.errcode || uploadConfigResponse.status}`);
+    }
+
+    const cdnUploadUrl = uploadConfig.upload_full_url
+      ? validateWeChatCdnUrl(uploadConfig.upload_full_url)
+      : `https://novac2c.cdn.weixin.qq.com/c2c/upload?encrypted_query_param=${encodeURIComponent(uploadConfig.upload_param)}&filekey=${encodeURIComponent(fileKey)}`;
+    let uploadResponse: Response | null = null;
+    let uploadError: unknown = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        uploadResponse = await fetch(cdnUploadUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: new Uint8Array(encrypted),
+        });
+        if (uploadResponse.ok || (uploadResponse.status >= 400 && uploadResponse.status < 500)) break;
+        uploadError = new Error(`HTTP ${uploadResponse.status}`);
+      } catch (err) {
+        uploadError = err;
+      }
+    }
+    if (!uploadResponse) {
+      throw new Error(`WeChat CDN upload failed: ${uploadError instanceof Error ? uploadError.message : String(uploadError || 'network error')}`);
+    }
+    const encryptedParam = uploadResponse.headers.get('x-encrypted-param') || '';
+    if (!uploadResponse.ok || !encryptedParam) {
+      throw new Error(`WeChat CDN upload failed: HTTP ${uploadResponse.status}`);
+    }
+
+    const clientId = crypto.randomUUID();
+    const msg = {
+      to_user_id: toUser,
+      client_id: clientId,
+      message_type: 2,
+      message_state: 2,
+      context_token: resolvedContextToken,
+      item_list: [{
+        type: 4,
+        file_item: {
+          media: {
+            encrypt_query_param: encryptedParam,
+            aes_key: Buffer.from(aesKeyHex, 'utf8').toString('base64'),
+            encrypt_type: 1,
+          },
+          file_name: fileName,
+          md5,
+          len: String(buffer.byteLength),
+        },
+      }],
+    };
+    const sendResponse = await fetch(`${baseUrl}/ilink/bot/sendmessage`, {
+      method: 'POST',
+      headers: this.makeHeaders(),
+      body: JSON.stringify({ msg, base_info: this.baseInfo() }),
+    });
+    const sendResult: any = await sendResponse.json().catch(() => ({}));
+    if (!sendResponse.ok || (sendResult.ret && sendResult.ret !== 0)) {
+      throw new Error(`WeChat file send failed: ${sendResult.errmsg || sendResult.errcode || sendResponse.status}`);
+    }
+    return String(sendResult.message_id || clientId);
+  }
+
   async sendCard(_chatId: string, _card: CardPayload): Promise<string> {
     // WeChat iLink doesn't support cards yet — fall back to inline text
     return '';
@@ -405,6 +563,26 @@ export class WeChatClawBotAdapter implements MessageAdapter {
   getLoginQRUrl(): string {
     return '/api/wechat/qrcode';
   }
+}
+
+function decodeWeChatAesKey(value: string): Buffer {
+  const raw = String(value || '').trim();
+  if (/^[a-f0-9]{32}$/i.test(raw)) return Buffer.from(raw, 'hex');
+  if (!raw) throw new Error('WeChat attachment is missing its AES key');
+  const decoded = Buffer.from(raw, 'base64');
+  if (decoded.length === 16) return decoded;
+  const decodedText = decoded.toString('utf8').trim();
+  if (/^[a-f0-9]{32}$/i.test(decodedText)) return Buffer.from(decodedText, 'hex');
+  throw new Error('WeChat attachment AES key format is unsupported');
+}
+
+function validateWeChatCdnUrl(value: string): string {
+  const url = new URL(String(value || '').trim());
+  const hostname = url.hostname.toLowerCase();
+  if (url.protocol !== 'https:' || (hostname !== 'weixin.qq.com' && !hostname.endsWith('.weixin.qq.com'))) {
+    throw new Error('WeChat CDN URL is not on a trusted HTTPS WeChat host');
+  }
+  return url.toString();
 }
 
 // ── Static helpers ──

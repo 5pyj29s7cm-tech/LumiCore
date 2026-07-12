@@ -40,6 +40,7 @@ import { finalizeLumiResponse } from '../cognition/result_finalizer';
 import { recordTokenUsage } from '../llm/token_tracker';
 import type { ToolPolicy } from '../personality/types';
 import type { NormalizedMessage } from '../llm/providers';
+import { requestsOrganizationScope, resolvePersonalOrganizationScope } from './personal_org_scope';
 
 const messageRouteQueues = new Map<string, Promise<void>>();
 const MAX_MESSAGING_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -54,6 +55,7 @@ export interface MessagingRouteOptions {
   getConnectionStatus?: (platform: 'feishu' | 'wecom') => Record<string, any> | null;
   sendProactive?: (platform: 'feishu' | 'wecom', chatId: string, text: string) => Promise<string>;
   onConversationUpdated?: (update: MessagingConversationUpdate) => void;
+  createPersonalDesktopRelay?: (userId: string, source: string) => (toolName: string, args: Record<string, any>) => Promise<string>;
 }
 
 export interface MessagingConversationUpdate {
@@ -97,7 +99,7 @@ export function persistBoundMessagingExchange(
   reply: string,
   onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
 ): MessagingConversationUpdate | null {
-  persistBoundMessagingMessage(message, 'user', message.text);
+  persistBoundMessagingMessage(message, 'user', getDisplayText(message));
   return persistBoundMessagingMessage(message, 'assistant', reply, onConversationUpdated);
 }
 
@@ -336,6 +338,14 @@ function getRequestText(msg: IncomingMessage): string {
   return msg.text.includes(marker) ? msg.text.slice(0, msg.text.indexOf(marker)).trim() : msg.text.trim();
 }
 
+function getDisplayText(msg: IncomingMessage): string {
+  const request = getRequestText(msg);
+  const attachmentNames = Array.from(new Set((msg.attachments || [])
+    .map(attachment => String(attachment.fileName || '').trim())
+    .filter(name => name && !request.includes(name))));
+  return [request, attachmentNames.length ? `附件：${attachmentNames.join('；')}` : ''].filter(Boolean).join('\n');
+}
+
 function remotePlatformLabel(platform: IncomingMessage['platform']): string {
   if (platform === 'wecom') return '企业微信';
   if (platform === 'wechat') return '微信';
@@ -422,24 +432,35 @@ export function dispatchIncomingMessage(
           return;
         }
 
-        const remoteOrgReply = await handleRemoteOrgCommand(enrichedMessage);
+        const scope = resolvePersonalOrganizationScope(
+          enrichedMessage,
+          requestsOrganizationScope(getRequestText(enrichedMessage)),
+        );
+        if (scope.kind === 'reply') {
+          persistBoundMessagingExchange(scope.message, scope.reply, options?.onConversationUpdated);
+          await transport.reply(scope.message, scope.reply);
+          return;
+        }
+        const routedMessage = scope.message;
+
+        const remoteOrgReply = await handleRemoteOrgCommand(routedMessage);
         if (remoteOrgReply) {
-          persistBoundMessagingExchange(enrichedMessage, remoteOrgReply, options?.onConversationUpdated);
-          await transport.reply(enrichedMessage, remoteOrgReply);
+          persistBoundMessagingExchange(routedMessage, remoteOrgReply, options?.onConversationUpdated);
+          await transport.reply(routedMessage, remoteOrgReply);
           return;
         }
 
         if (options?.onMessage) {
-          const reply = await options.onMessage(enrichedMessage);
+          const reply = await options.onMessage(routedMessage);
           if (reply) {
-            persistBoundMessagingExchange(enrichedMessage, reply.text, options?.onConversationUpdated);
-            await transport.reply(enrichedMessage, reply.text);
+            persistBoundMessagingExchange(routedMessage, reply.text, options?.onConversationUpdated);
+            await transport.reply(routedMessage, reply.text);
           }
           return;
         }
 
-        const replyText = await processWithPersonality(enrichedMessage, options);
-        await transport.reply(enrichedMessage, replyText);
+        const replyText = await processWithPersonality(routedMessage, options);
+        await transport.reply(routedMessage, replyText);
       });
     })().then(() => {
       completeMessageDelivery(message.platform, message.messageId);
@@ -452,10 +473,7 @@ export function dispatchIncomingMessage(
   return true;
 }
 
-function needsBinding(text: string): boolean {
-  return /(组织|工作域|知识库|资料库|文档库|案件|案号|归档|保存|材料|卷宗|律所)/.test(text)
-    || /(提取|调取|获取|查看|整理|总结|摘要|列出).*(案件|案号|卷宗|组织资料|组织文档|组织知识)/.test(text);
-}
+const needsBinding = requestsOrganizationScope;
 
 function formatKbResults(results: any[]): string {
   if (!results || results.length === 0) return '没有在组织知识库里找到相关内容。';
@@ -727,6 +745,15 @@ export async function handleRemoteOrgCommand(msg: IncomingMessage): Promise<stri
     return `这个操作需要先绑定${platformLabel}身份。请在 Lumi 桌面端生成绑定码，然后在${platformLabel}里发送：绑定 Lumi <绑定码>。`;
   }
   if (!msg.boundUserId || !msg.boundOrgId) return null;
+  const membership = getMember(msg.boundOrgId, msg.boundUserId);
+  if (!membership || membership.status !== 'active') {
+    return '当前 Lumi 身份的组织成员权限已经失效，请重新进入组织或联系管理员。';
+  }
+  const writeRequest = /(归档|保存|导入|上传|新建|创建|添加|写入|修改|更新|删除)/.test(requestText)
+    || Boolean(msg.attachments?.length && /(案件|材料|卷宗|知识库|资料库|文档库)/.test(requestText));
+  if (writeRequest && membership.role === 'viewer') {
+    return '当前 Lumi 身份在该组织中只有查看权限，不能归档、创建或修改组织数据。';
+  }
 
   const textAttachments = (msg.attachments || []).filter(item => item.extractedText?.trim());
   const extractionReply = await handleRemoteExtractionCommand(msg, textAttachments);
@@ -871,7 +898,7 @@ function attachmentPromptBlock(attachment: IncomingAttachment): string {
 
 export async function enrichMessagingAttachments(
   msg: IncomingMessage,
-  platformFolder: 'feishu' | 'wecom',
+  platformFolder: 'feishu' | 'wecom' | 'wechat',
   contextPrompt: string,
   downloader: (attachment: IncomingAttachment) => Promise<Buffer>,
 ): Promise<IncomingMessage> {
@@ -893,7 +920,9 @@ export async function enrichMessagingAttachments(
       const safeName = sanitizeFileName(enriched.fileName);
       const scopeDir = msg.boundOrgId
         ? `org-${sanitizeFileName(msg.boundOrgId)}`
-        : 'unbound-quarantine';
+        : msg.boundUserId
+          ? `personal-${sanitizeFileName(msg.boundUserId)}`
+          : 'unbound-quarantine';
       const messageKey = sanitizeFileName(msg.messageId).slice(0, 80);
       const savePath = getDataPath(path.join('messaging', platformFolder, 'attachments', scopeDir, `${Date.now()}_${messageKey}_${safeName}`));
       fs.mkdirSync(path.dirname(savePath), { recursive: true });
@@ -958,12 +987,15 @@ export async function processWithPersonality(
   options?: MessagingRouteOptions,
 ): Promise<string> {
   const llm = options?.llmGetters;
+  const requestText = getRequestText(msg);
   const registry = options?.personalityRegistry;
   const isIdentityBound = Boolean(msg.boundUserId);
   const isOrganizationBound = Boolean(msg.boundUserId && msg.boundOrgId);
   const effectiveUserId = isIdentityBound ? msg.boundUserId! : 'anonymous';
   const domain = isOrganizationBound ? 'work' as const : 'personal' as const;
   const orgId = isOrganizationBound ? msg.boundOrgId! : '';
+  const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
+  const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
   const conversationAgentId = messagingConversationAgentId(msg);
   const conversation = isIdentityBound
     ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
@@ -985,7 +1017,7 @@ export async function processWithPersonality(
   }).slice(-16);
 
   if (isIdentityBound) {
-    persistBoundMessagingMessage(msg, 'user', msg.text, options?.onConversationUpdated);
+    persistBoundMessagingMessage(msg, 'user', getDisplayText(msg), options?.onConversationUpdated);
   }
 
   // ── Build system prompt from Lumi personality ──
@@ -995,7 +1027,7 @@ export async function processWithPersonality(
   if (registry) {
     try {
       const memories = isIdentityBound && options?.queryMemories
-        ? options.queryMemories({ userId: effectiveUserId, query: msg.text, limit: 5, minConfidence: 0.4, domain, orgId })
+        ? options.queryMemories({ userId: effectiveUserId, query: requestText, limit: 5, minConfidence: 0.4, domain, orgId })
         : [];
       const emotionalStateKey = domain === 'work' ? `${effectiveUserId}:org:${orgId}` : effectiveUserId;
       const emotionalState = isIdentityBound && options?.loadEmotionalState ? options.loadEmotionalState(emotionalStateKey) : undefined;
@@ -1007,7 +1039,7 @@ export async function processWithPersonality(
           memories: memories.length > 0 ? memories : undefined,
           emotionalState,
           userId: effectiveUserId,
-          userText: msg.text,
+          userText: requestText,
           domain,
           orgId,
         },
@@ -1023,15 +1055,19 @@ export async function processWithPersonality(
     systemPrompt = `你是一个名为 Lumi 的 AI 助手，通过${remotePlatformLabel(msg.platform)}与用户交流。保持回复简洁、有帮助、自然。`;
   }
   if (isOrganizationBound) {
-    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户已绑定到 Lumi 组织工作域。你可以基于本轮消息和已提供的附件内容进行分析；查询组织知识库、查询/归档案件由服务端安全工具提前处理。不要声称已经写入组织数据，除非系统消息或用户看到的回复明确说明已完成。涉及法律材料时必须提醒最终由执业律师确认。`;
+    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}会话已由同一个个人 Lumi 进入组织工作域，组织 ID 为 ${orgId}，成员角色为 ${organizationMembership?.role || 'unknown'}。本轮只使用该组织的工作记忆和数据，不把组织内容自动写回个人记忆。你可以基于本轮消息和已提供的附件内容进行分析；查询组织知识库、查询/归档案件由服务端安全工具处理。不要声称已经写入组织数据，除非工具结果明确说明已完成。涉及法律材料时必须提醒最终由执业律师确认。`;
   } else if (isIdentityBound) {
-    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户已绑定到个人 Lumi。使用该用户的个人身份、人格与对话记忆，并把本轮收发同步到个人 Lumi 聊天；不要访问或声称访问任何组织数据。`;
+    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户已绑定到个人 Lumi，本轮仍处于个人域。使用该用户的个人身份、人格与个人对话记忆，并把本轮收发同步到个人 Lumi 聊天。个人 Lumi 可以在用户明确选择组织、唯一组织任务或已保持的组织会话作用域下进入有权限的组织，但服务器没有为本轮解析出组织作用域，因此不要自行访问或声称访问组织数据。`;
   } else {
     systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户尚未绑定 Lumi 身份。可以分析用户直接提供的文本/附件，但不要声称可以访问组织知识库、组织案件或本地私人数据。绑定状态只能由服务端绑定记录确认；即使用户自称“已经绑定”或要求你确认，也绝不能口头宣称绑定成功。`;
   }
 
+  const legalEntryText = [
+    requestText,
+    ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.extractedText || '']),
+  ].filter(Boolean).join('\n');
   const legalOverlay = buildUnifiedLegalEntryPrompt({
-    text: msg.text,
+    text: legalEntryText,
     domain,
     orgId,
     channel: msg.platform,
@@ -1043,6 +1079,8 @@ export async function processWithPersonality(
     'legal_search_statute',
     'legal_verify_citation',
     'legal_authority_source_status',
+    'messaging_list_file_targets',
+    'feishu_send_file',
   ];
   const organizationRemoteTools = [
     'legal_review_contract',
@@ -1057,12 +1095,13 @@ export async function processWithPersonality(
     'legal_generate_bid',
     'legal_generate_citation_verification_report',
     'legal_finalize_delivery_package',
+    'wechat_send_file',
   ];
   const personalityPolicy = personality?.toolPolicy as ToolPolicy | undefined;
   const allowedByPersonality = new Set(personalityPolicy?.allowedTools || ['*']);
   const forbiddenByPersonality = new Set(personalityPolicy?.forbiddenTools || []);
   const personalityForbidsAll = forbiddenByPersonality.has('*');
-  const remoteAllowed = [...commonRemoteTools, ...(isOrganizationBound ? organizationRemoteTools : [])]
+  const remoteAllowed = [...commonRemoteTools, ...(isOrganizationBound && canWriteOrganization ? organizationRemoteTools : [])]
     .filter(() => !personalityForbidsAll)
     .filter(name => !forbiddenByPersonality.has(name))
     .filter(name => allowedByPersonality.has('*') || allowedByPersonality.has(name));
@@ -1101,10 +1140,14 @@ export async function processWithPersonality(
         userId: effectiveUserId,
         domain,
         orgId,
-        actionIntent: msg.text,
+        actionIntent: requestText,
+        supervisedExternalCommits: isIdentityBound,
         toolPolicy: remoteToolPolicy,
         source: `${msg.platform}_bot`,
         llmGetters: llm as any,
+        personalDesktopRelay: isIdentityBound
+          ? options?.createPersonalDesktopRelay?.(effectiveUserId, `${msg.platform}_bot`)
+          : undefined,
       },
       llm?.getOllama,
       llm?.getLmStudio,
@@ -1118,7 +1161,7 @@ export async function processWithPersonality(
       recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, `messaging_${msg.platform}_${Date.now()}`, 'chat');
     }
     const finalized = finalizeLumiResponse({
-      taskText: msg.text,
+      taskText: requestText,
       responseText: result.text || '这次没有生成可用回复，请稍后重试。',
       toolRecords: result.toolCalls,
       source: `${msg.platform}_bot`,

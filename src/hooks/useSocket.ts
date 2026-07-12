@@ -222,6 +222,18 @@ async function handleDesktopExec(socket: Socket, data: {
         output = ok ? 'Clipboard updated' : 'Failed to set clipboard';
         break;
       }
+      case 'desktop_clipboard_write_files': {
+        const paths = (Array.isArray(args.paths) ? args.paths : [args.path])
+          .map((value: unknown) => String(value || '').trim())
+          .filter(Boolean);
+        if (paths.length === 0) {
+          socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No file paths provided for clipboard' });
+          return;
+        }
+        const ok = await invoke('set_clipboard_files', { paths });
+        output = ok ? `Clipboard file list updated (${paths.length})` : 'Failed to set clipboard files';
+        break;
+      }
       case 'desktop_idle_time': {
         const idle = await invoke('get_idle_time');
         output = JSON.stringify(idle, null, 2);

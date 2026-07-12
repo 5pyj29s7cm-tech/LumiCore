@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import crypto from 'crypto';
 import { WeChatClawBotAdapter } from '../server/messaging/wechat-clawbot';
 
 const originalFetch = globalThis.fetch;
@@ -42,6 +43,112 @@ afterEach(() => {
 });
 
 describe('WeChat ClawBot connection stability', () => {
+  it('parses and decrypts inbound iLink file items instead of dropping non-text messages', async () => {
+    const instance = adapter();
+    const key = crypto.randomBytes(16);
+    const plain = Buffer.from('personal WeChat legal evidence');
+    const cipher = crypto.createCipheriv('aes-128-ecb', key, null);
+    const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
+    const mediaKey = Buffer.from(key.toString('hex'), 'utf8').toString('base64');
+    const message = instance.parseEvent({
+      message_id: 314159,
+      from_user_id: 'wx-file-user',
+      to_user_id: 'bot@im.bot',
+      message_type: 1,
+      message_state: 2,
+      context_token: 'file-context-token',
+      item_list: [{
+        type: 4,
+        file_item: {
+          file_name: '法院通知.pdf',
+          len: String(plain.byteLength),
+          media: {
+            encrypt_query_param: 'encrypted-param-123',
+            aes_key: mediaKey,
+            encrypt_type: 1,
+          },
+        },
+      }],
+    });
+
+    expect(message).toMatchObject({
+      platform: 'wechat',
+      text: '[附件] 法院通知.pdf',
+      attachments: [{
+        type: 'file',
+        fileName: '法院通知.pdf',
+        fileSize: plain.byteLength,
+        resourceKey: 'encrypted-param-123',
+        encryptionKey: mediaKey,
+      }],
+    });
+    globalThis.fetch = vi.fn(async () => new Response(encrypted, { status: 200 })) as any;
+    await expect(instance.downloadAttachment(message!.attachments![0])).resolves.toEqual(plain);
+    expect(String((globalThis.fetch as any).mock.calls[0][0])).toContain('encrypted_query_param=encrypted-param-123');
+  });
+
+  it('encrypts, uploads, and sends an outbound file through the bound iLink conversation', async () => {
+    const instance = adapter();
+    instance.parseEvent({
+      message_id: 271828,
+      from_user_id: 'wx-file-target',
+      to_user_id: 'bot@im.bot',
+      message_type: 1,
+      message_state: 2,
+      context_token: 'outbound-file-context',
+      item_list: [{ type: 1, text_item: { text: '把文件发给我' } }],
+    });
+    const plain = Buffer.from('organization case material');
+    let uploadConfigBody: any = null;
+    let encryptedUpload = Buffer.alloc(0);
+    let sendBody: any = null;
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/getuploadurl')) {
+        uploadConfigBody = JSON.parse(String(init?.body || '{}'));
+        return response({ ret: 0, upload_param: 'upload-param-456' });
+      }
+      if (url.includes('/c2c/upload')) {
+        encryptedUpload = Buffer.from(init?.body as Uint8Array);
+        return new Response(null, { status: 200, headers: { 'x-encrypted-param': 'download-param-789' } });
+      }
+      if (url.includes('/sendmessage')) {
+        sendBody = JSON.parse(String(init?.body || '{}'));
+        return response({ ret: 0, message_id: 'wx-file-sent' });
+      }
+      return response({ ret: 0 });
+    }) as any;
+
+    await expect(instance.sendFile('wx-file-target', plain, '案件材料.pdf')).resolves.toBe('wx-file-sent');
+    expect(uploadConfigBody).toMatchObject({
+      media_type: 3,
+      to_user_id: 'wx-file-target',
+      rawsize: plain.byteLength,
+      no_need_thumb: true,
+    });
+    expect(uploadConfigBody.rawfilemd5).toBe(crypto.createHash('md5').update(plain).digest('hex'));
+    const decipher = crypto.createDecipheriv('aes-128-ecb', Buffer.from(uploadConfigBody.aeskey, 'hex'), null);
+    decipher.setAutoPadding(true);
+    expect(Buffer.concat([decipher.update(encryptedUpload), decipher.final()])).toEqual(plain);
+    expect(sendBody).toMatchObject({
+      msg: {
+        to_user_id: 'wx-file-target',
+        context_token: 'outbound-file-context',
+        item_list: [{
+          type: 4,
+          file_item: {
+            media: { encrypt_query_param: 'download-param-789', encrypt_type: 1 },
+            file_name: '案件材料.pdf',
+            len: String(plain.byteLength),
+          },
+        }],
+      },
+    });
+    expect(Buffer.from(sendBody.msg.item_list[0].file_item.media.aes_key, 'base64').toString('utf8'))
+      .toBe(uploadConfigBody.aeskey);
+  });
+
   it('deduplicates concurrent polling starts and aborts an active long-poll on stop', async () => {
     let notifyStartCalls = 0;
     let getUpdatesCalls = 0;

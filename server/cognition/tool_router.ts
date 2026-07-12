@@ -225,6 +225,9 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'mcp_playwright_browser_fill_form',
   ],
   messaging: [
+    'messaging_list_file_targets',
+    'feishu_send_file',
+    'wechat_send_file',
     'desktop_list_apps',
     'desktop_open',
     'desktop_active_window',
@@ -555,7 +558,16 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     );
   }
   if (categories.includes('messaging')) {
-    if (isMessagingRead(text)) {
+    const isFileTransfer = /(?:文件|附件|材料|文书|图纸|file|attachment).*(?:发送|发给|转发|传到|传给|send|forward|transfer)|(?:发送|发给|转发|传到|传给|send|forward|transfer).*(?:文件|附件|材料|文书|图纸|file|attachment)/iu.test(text);
+    if (isFileTransfer) {
+      priorities.push(
+        'messaging_list_file_targets',
+        'feishu_send_file',
+        'wechat_send_file',
+        'desktop_open',
+        'desktop_active_window',
+      );
+    } else if (isMessagingRead(text)) {
       priorities.push(
         'wechat_read_recent_chat',
         'desktop_open',

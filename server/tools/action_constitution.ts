@@ -99,6 +99,13 @@ export function evaluateActionConstitution(
     return allow('external_app', 'Saved or preset web login/session reuse is allowed by the active desktop mode');
   }
 
+  if (isExplicitMessagingFileTransfer(toolName, context)) {
+    if (canRunSupervisedExternalCommit(context)) {
+      return allow('messaging', 'User explicitly requested this bound WeChat/Feishu file transfer');
+    }
+    return confirm('messaging', 'Messaging file transfer requires a supervised request or relaxed messaging policy');
+  }
+
   if (isHighConsequenceExternalCommit(actionText, toolName) && isExternalStateChangingDomain(domain)) {
     return confirm(domain, `High-consequence ${domain} action requires explicit user confirmation`);
   }
@@ -288,6 +295,13 @@ function isPreparationOnlyAction(toolName: string): boolean {
     name.includes('copy') ||
     name.includes('intake') ||
     name.includes('analyze');
+}
+
+function isExplicitMessagingFileTransfer(toolName: string, context?: ToolContext): boolean {
+  if (!/^(?:wechat_send_file|feishu_send_file)$/i.test(toolName)) return false;
+  const intent = String(context?.actionIntent || '').trim();
+  return /(?:send|forward|share|transfer|发给|发送|转发|传给|分享到)/i.test(intent)
+    && /(?:file|attachment|document|文件|附件|材料|通知|文书)/i.test(intent);
 }
 
 function canRunSupervisedExternalCommit(context?: ToolContext): boolean {

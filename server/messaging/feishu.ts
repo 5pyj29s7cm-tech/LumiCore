@@ -174,6 +174,49 @@ export class FeishuAdapter implements MessageAdapter {
     return Buffer.from(await res.arrayBuffer());
   }
 
+  async uploadFile(buffer: Buffer, fileName: string, fileType = 'stream'): Promise<string> {
+    if (buffer.byteLength === 0) throw new Error('Feishu file upload rejected an empty file');
+    if (buffer.byteLength > 30 * 1024 * 1024) throw new Error('Feishu file upload limit is 30 MB');
+    const token = await this.getTenantToken();
+    const form = new FormData();
+    form.append('file_type', fileType);
+    form.append('file_name', fileName);
+    form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
+
+    const res = await fetch('https://open.feishu.cn/open-apis/im/v1/files', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || data.code !== 0 || !data.data?.file_key) {
+      throw new Error(`Feishu file upload failed: ${data.msg || data.error || res.status}`);
+    }
+    return String(data.data.file_key);
+  }
+
+  async sendFile(chatId: string, buffer: Buffer, fileName: string, fileType = 'stream'): Promise<string> {
+    const fileKey = await this.uploadFile(buffer, fileName, fileType);
+    const token = await this.getTenantToken();
+    const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        receive_id: chatId,
+        msg_type: 'file',
+        content: JSON.stringify({ file_key: fileKey }),
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || data.code !== 0) {
+      throw new Error(`Feishu file send failed: ${data.msg || data.error || res.status}`);
+    }
+    return String(data.data?.message_id || '');
+  }
+
   // ── Send Message ──
 
   async sendMessage(chatId: string, message: OutgoingMessage): Promise<string> {

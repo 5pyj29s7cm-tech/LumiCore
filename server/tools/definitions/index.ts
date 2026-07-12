@@ -39,6 +39,7 @@ import { registerWorkProductTools } from './work_product_tools';
 import { registerAuthorityResearchTools } from './authority_research_tools';
 import { registerWorkTakeoverTools } from './work_takeover_tools';
 import { registerDesktopAiTools } from './desktop_ai_tools';
+import { registerMessagingTools } from './messaging_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -90,6 +91,7 @@ export function registerAllTools(
   registerAuthorityResearchTools(registry);
   registerWorkTakeoverTools(registry);
   registerDesktopAiTools(registry);
+  registerMessagingTools(registry);
   if (llmGetters) {
     setSkillLLMGetters(llmGetters);
   }

@@ -174,6 +174,29 @@ describe('Action Constitution', () => {
     expect(classifyActionRisk('wechat_send_message', { text: 'Thanks' })).toBe('medium');
   });
 
+  it('treats an explicit court-document transfer as messaging rather than a court filing', () => {
+    const transfer = evaluateActionConstitution('wechat_send_file', {
+      filePath: 'D:\\cases\\法院开庭通知.pdf',
+    }, 'safe', {
+      source: 'feishu_bot',
+      actionIntent: '把这份法院开庭通知附件发给我的微信',
+      supervisedExternalCommits: true,
+    });
+    expect(transfer).toMatchObject({
+      level: 'safe',
+      domain: 'messaging',
+      requiresUserConfirmation: false,
+    });
+
+    const filing = evaluateActionConstitution('mcp_playwright_browser_click', {
+      name: '提交法院立案',
+    }, 'safe', {
+      source: 'chat',
+      supervisedExternalCommits: true,
+    });
+    expect(filing.level).toBe('confirm');
+  });
+
   it('allows supervised video comments while keeping payment submission gated', () => {
     const comment = evaluateActionConstitution('mcp_playwright_browser_click', {
       name: 'Submit comment',

@@ -2367,6 +2367,30 @@ fn set_clipboard_text(text: String) -> bool {
     }
 }
 
+#[tauri::command]
+fn set_clipboard_files(paths: Vec<String>) -> Result<bool, String> {
+    use arboard::Clipboard;
+    let files: Vec<PathBuf> = paths
+        .into_iter()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|value| !value.as_os_str().is_empty())
+        .collect();
+    if files.is_empty() {
+        return Err("At least one file path is required".to_string());
+    }
+    for file in &files {
+        if !file.is_file() {
+            return Err(format!("Clipboard file does not exist or is not a file: {}", file.display()));
+        }
+    }
+    let mut clipboard = Clipboard::new().map_err(|error| error.to_string())?;
+    clipboard
+        .set()
+        .file_list(&files)
+        .map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 // ── Idle Time ──
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3014,6 +3038,7 @@ pub fn run() {
             capture_screen,
             get_clipboard_text,
             set_clipboard_text,
+            set_clipboard_files,
             get_idle_time,
             poll_activity,
             get_system_volume,

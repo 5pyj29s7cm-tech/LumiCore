@@ -13,6 +13,8 @@ export interface ToolContext {
   cwd?: string;
   /** Relay for desktop tools: sends execution request to Tauri frontend and returns result */
   desktopRelay?: (toolName: string, args: Record<string, any>) => Promise<string>;
+  /** Explicit personal-device relay used only for approved cross-workspace handoff, such as sending an organization file to the member's own WeChat. */
+  personalDesktopRelay?: (toolName: string, args: Record<string, any>) => Promise<string>;
   /** Called when a tool requires confirmation. Returns true to proceed, false to abort. */
   requestConfirmation?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** Original user/task intent used to classify semantic risk for low-level actions. */

@@ -12,6 +12,11 @@ import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import { analyzeScreen } from '../../llm/adapter';
 import { getUserPreferredVisionConfig, type VisionProvider } from '../../llm/vision_preferences';
 import { captureWindowsUiSnapshot } from '../../external_control/windows_uia';
+import { getMember, logAudit } from '../../org/db';
+import {
+  sendLocalFileToPersonalWeChat,
+  WeChatFileApiUnavailableError,
+} from '../../messaging/file_transfer';
 
 function requireDesktopRelay(context?: ToolContext) {
   if (!context?.desktopRelay) {
@@ -1739,6 +1744,211 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         note: sent
           ? 'The foreground send action completed and the result was verified from visible WeChat evidence.'
           : 'The send shortcut was pressed, but completion was not verified. Do not report the message as sent.',
+      }, null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'wechat_send_file',
+    description: 'Send one real local file to WeChat after an explicit user request. When contact is omitted, first use the current Lumi user\'s bound personal WeChat bot conversation and provider acknowledgement, including an organization audit for work-to-personal transfer. If that conversation lacks usable context, fall back to the member\'s personal desktop WeChat relay. Provide contact only when the user explicitly names another contact/group; desktop mode then copies a real file list to the OS clipboard, sends it, and never reports success without filename evidence.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Exact local path of the file to send.' },
+        contact: { type: 'string', description: 'Explicit WeChat recipient or group name for desktop mode. Omit for the current Lumi user\'s bound personal WeChat bot conversation.' },
+        bindingId: { type: 'string', description: 'Optional personal WeChat binding ID. Use when this Lumi user has more than one personal WeChat binding.' },
+        applicationTarget: { type: 'string', description: 'Desktop app target. Defaults to wechat.' },
+        useSearch: { type: 'boolean', description: 'Search for the contact before sending. Defaults true when contact is provided.' },
+        sendShortcut: { type: 'string', description: 'WeChat send shortcut. Defaults enter.' },
+      },
+      required: ['filePath'],
+    },
+    handler: async (args, context) => {
+      const filePath = path.resolve(String(args.filePath || '').trim());
+      if (!args.filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        throw new Error(`File does not exist: ${filePath}`);
+      }
+      if (context?.domain === 'work' && (!context.userId || !context.orgId)) {
+        throw new Error('Organization-to-personal WeChat transfer requires a bound member and organization scope for audit.');
+      }
+      if (context?.domain === 'work') {
+        const membership = getMember(context.orgId!, context.userId!);
+        if (membership?.status !== 'active' || membership.role === 'viewer') {
+          throw new Error('This Lumi member cannot transfer files from the active organization.');
+        }
+      }
+      const progress = (step: string) => context?.onProgress?.(step);
+      const contact = String(args.contact || '').trim();
+      let nativeFallbackReason = '';
+      if (!contact && context?.userId) {
+        try {
+          progress('正在通过已绑定的个人微信会话发送文件。');
+          const result = await sendLocalFileToPersonalWeChat({
+            userId: context.userId,
+            filePath,
+            bindingId: String(args.bindingId || '').trim() || undefined,
+            sourceOrgId: context.domain === 'work' ? context.orgId : undefined,
+          });
+          return JSON.stringify({
+            sent: true,
+            sendAttempted: true,
+            verificationStatus: 'provider_accepted',
+            verificationMethod: 'wechat_ilink_provider_ack',
+            verificationConfidence: 0.95,
+            filePath,
+            fileName: result.fileName,
+            fileSize: result.fileSize,
+            bindingId: result.target.bindingId,
+            messageId: result.messageId,
+            method: result.method,
+            note: 'The bound WeChat provider accepted the file message.',
+          }, null, 2);
+        } catch (err: any) {
+          if (!(err instanceof WeChatFileApiUnavailableError)) throw err;
+          nativeFallbackReason = err?.message || String(err);
+        }
+      }
+      const desktopRelay = context?.domain === 'work'
+        ? context.personalDesktopRelay
+        : context?.desktopRelay || context?.personalDesktopRelay;
+      if (!desktopRelay) {
+        const suffix = nativeFallbackReason ? ` Native WeChat path unavailable: ${nativeFallbackReason}` : '';
+        throw new Error(`Sending a file to personal WeChat requires either a recent bound bot conversation or the member's personal Lumi desktop client online.${suffix}`);
+      }
+
+      const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
+      const useSearch = args.useSearch !== false && Boolean(contact);
+      const sendShortcut = String(args.sendShortcut || 'enter').trim() || 'enter';
+      const fileName = path.basename(filePath);
+
+      progress('正在复用个人桌面的微信窗口。');
+      const openResult = await desktopRelay('desktop_open', { target: appTarget });
+      await sleep(450);
+      let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      if (!isWeChatActiveWindow(activeWindow)) {
+        await sleep(600);
+        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      }
+      if (!isWeChatActiveWindow(activeWindow)) {
+        throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+      }
+
+      if (useSearch) {
+        progress(`正在微信里定位联系人: ${contact}`);
+        await desktopRelay('desktop_clipboard_write', { text: contact });
+        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
+        await sleep(250);
+        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
+        await sleep(450);
+        await desktopRelay('desktop_keyboard_press', { key: 'enter' });
+        await sleep(650);
+        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+        if (!isWeChatActiveWindow(activeWindow)) {
+          throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+        }
+      }
+
+      const point = virtualInputPoint(activeWindow);
+      await desktopRelay('desktop_cursor_glow_show', { source: 'wechat_send_file', timeoutMs: 12000 }).catch(() => '');
+      await desktopRelay('desktop_cursor_glow_update', { x: point.x, y: point.y }).catch(() => '');
+      await desktopRelay('desktop_mouse_click_at', { x: point.x, y: point.y, button: 'left' });
+      await desktopRelay('desktop_cursor_glow_click', { x: point.x, y: point.y }).catch(() => '');
+      await sleep(180);
+
+      let beforeUiSnapshot = '';
+      try { beforeUiSnapshot = await captureDesktopUiEvidence(desktopRelay, 220); } catch {}
+      progress(`正在粘贴并发送文件: ${fileName}`);
+      await desktopRelay('desktop_clipboard_write_files', { paths: [filePath] });
+      await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
+      await sleep(500);
+      await desktopRelay('desktop_keyboard_press', { key: sendShortcut });
+      await sleep(800);
+      await desktopRelay('desktop_cursor_glow_hide', { source: 'wechat_send_file' }).catch(() => '');
+
+      const finalActiveWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      if (!isWeChatActiveWindow(finalActiveWindow)) {
+        throw new Error(`File send shortcut was pressed, but WeChat is no longer foreground. Active window: ${JSON.stringify(finalActiveWindow).slice(0, 300)}`);
+      }
+      let afterUiSnapshot = '';
+      try { afterUiSnapshot = await captureDesktopUiEvidence(desktopRelay, 260); } catch {}
+      const normalizedAfter = afterUiSnapshot.toLowerCase();
+      const uiVerified = normalizedAfter.includes(fileName.toLowerCase()) && afterUiSnapshot !== beforeUiSnapshot;
+
+      let visionVerification = { sent: false, confidence: 0, reason: '' };
+      const visionConfig = hasVisionProvider(context);
+      if (!uiVerified && visionConfig) {
+        try {
+          const screenCapture = await desktopRelay('desktop_capture_screen', { quality: 70 });
+          const getters = context?.llmGetters;
+          const verificationText = await analyzeScreen(
+            screenCapture,
+            [
+              'Verify a foreground WeChat file send using only visible evidence.',
+              `Expected recipient/group: ${JSON.stringify(contact || '(current conversation)')}.`,
+              `Expected filename: ${JSON.stringify(fileName)}.`,
+              'Set sent=true only if the filename is visibly present as the newest outgoing file bubble and is no longer merely pending in the input area.',
+              'Return only JSON: {"sent":boolean,"confidence":number,"reason":"short visible evidence"}.',
+            ].join('\n'),
+            visionConfig,
+            getters?.getDeepSeek,
+            getters?.getGemini,
+            getters?.getOpenAI,
+            getters?.getAnthropic,
+            getters?.getQwen,
+            getters?.getOllama,
+            getters?.getLmStudio,
+            getters?.getArk,
+            getters?.getXiaomi,
+            getters?.getKimi,
+            getters?.getGlm,
+            getters?.getRelay,
+          );
+          visionVerification = parseWeChatSendVisionVerification(verificationText);
+        } catch (err: any) {
+          visionVerification.reason = err?.message || String(err);
+        }
+      }
+      const sent = uiVerified || visionVerification.sent;
+
+      if (sent && context?.domain === 'work' && context.orgId && context.userId) {
+        logAudit({
+          orgId: context.orgId,
+          userId: context.userId,
+          action: 'messaging.file.transfer_to_personal_wechat',
+          resourceType: 'messaging_file_transfer',
+          resourceId: `wechat:${Date.now()}`,
+          details: {
+            sourceDomain: 'work',
+            targetPlatform: 'wechat',
+            contact: contact || '(current conversation)',
+            fileName,
+            fileSize: fs.statSync(filePath).size,
+            localPath: filePath,
+            verificationMethod: uiVerified ? 'uia_filename' : 'screen_vision',
+          },
+        });
+      }
+
+      return JSON.stringify({
+        sent,
+        sendAttempted: true,
+        verificationStatus: sent ? 'verified' : 'uncertain',
+        verificationMethod: uiVerified ? 'uia_filename' : visionVerification.sent ? 'screen_vision' : 'none',
+        verificationConfidence: uiVerified ? 0.8 : visionVerification.confidence,
+        verificationReason: uiVerified
+          ? 'The exact filename appeared as new accessible WeChat UI text after the send action.'
+          : visionVerification.reason || 'No outgoing file-bubble evidence was available.',
+        contact: contact || null,
+        filePath,
+        fileName,
+        openResult,
+        activeWindow: finalActiveWindow,
+        nativeFallbackReason: nativeFallbackReason || null,
+        note: sent
+          ? 'The foreground file send completed and was verified from visible WeChat evidence.'
+          : 'The send shortcut was pressed, but completion was not verified. Do not report the file as sent.',
       }, null, 2);
     },
     permission: 'user',

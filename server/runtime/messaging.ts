@@ -9,6 +9,7 @@ import { queryMemories } from "../memory";
 import { loadEmotionalState } from "../personality/state";
 import { messagingConnectionManager } from "../messaging/connections";
 import type { MessagingRouteOptions } from "../messaging/routes";
+import { createDesktopRelay } from "../socket/desktop_relay";
 
 export function setupMessaging(
   apiRouter: Router,
@@ -45,6 +46,16 @@ export function setupMessaging(
     },
     getConnectionStatus: platform => messagingConnectionManager.status(platform),
     sendProactive: (platform, chatId, text) => messagingConnectionManager.sendProactive(platform, chatId, text),
+    createPersonalDesktopRelay: io
+      ? (userId, source) => createDesktopRelay({
+          io,
+          userId,
+          domain: 'personal',
+          orgId: '',
+          source,
+          timeoutMs: 90_000,
+        })
+      : undefined,
     onConversationUpdated: update => {
       if (!io) return;
       const room = update.domain === 'work' && update.orgId

@@ -538,6 +538,26 @@ export function addReminder(reminder: Omit<Reminder, 'id' | 'createdAt' | 'statu
   return newReminder;
 }
 
+export function upsertPendingReminder(
+  reminder: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'firedAt'>,
+): { reminder: Reminder; created: boolean } {
+  const all = getReminderStore();
+  const existing = all.find(item =>
+    item.userId === reminder.userId
+    && item.status === 'pending'
+    && item.sourceInteractionId === reminder.sourceInteractionId
+    && (item.domain || 'personal') === (reminder.domain || 'personal')
+    && (item.orgId || '') === (reminder.orgId || ''),
+  );
+  if (existing) {
+    existing.content = reminder.content;
+    existing.dueAt = reminder.dueAt;
+    saveReminderStore(all);
+    return { reminder: existing, created: false };
+  }
+  return { reminder: addReminder(reminder), created: true };
+}
+
 export function getDueReminders(filters: { userId?: string; domain?: string; orgId?: string } = {}): Reminder[] {
   const all = getReminderStore();
   const now = new Date().toISOString();

@@ -1,4 +1,7 @@
 import './helpers';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 describe('external app permission boundaries', () => {
@@ -214,6 +217,62 @@ describe('external app permission boundaries', () => {
     expect(result.inputPoint).toEqual({ x: 758, y: 764 });
     expect(relayCalls.some(call => call.name === 'desktop_mouse_click_at')).toBe(true);
     expect(relayCalls.find(call => call.name === 'desktop_cursor_glow_update')?.args).toEqual({ x: 758, y: 764 });
+  });
+
+  it('uses the member personal desktop relay for a verified organization-to-WeChat file transfer', async () => {
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
+    const registry = new ToolRegistry();
+    registerExternalAppTools(registry);
+    const { createOrg, addMember } = await import('../server/org/db');
+    const userId = `wechat-file-owner-${Date.now()}-${Math.random()}`;
+    const orgId = createOrg('WeChat File Boundary', `wechat-file-boundary-${Date.now()}-${Math.random()}`, userId).id;
+    addMember(orgId, userId, 'owner');
+    const filePath = path.join(os.tmpdir(), `lumi-wechat-file-${Date.now()}.txt`);
+    fs.writeFileSync(filePath, 'file transfer evidence', 'utf8');
+    const relayCalls: Array<{ name: string; args: Record<string, any> }> = [];
+    let snapshotCount = 0;
+
+    try {
+      const raw = await registry.execute('wechat_send_file', {
+        filePath,
+        contact: '文件传输助手',
+      }, {
+        userId,
+        domain: 'work',
+        orgId,
+        source: 'feishu_bot',
+        actionIntent: '把这个文件附件发给我的微信',
+        supervisedExternalCommits: true,
+        requestConfirmation: async () => { throw new Error('explicit file transfer must not open confirmation'); },
+        desktopRelay: async () => { throw new Error('work desktop relay must not be used'); },
+        personalDesktopRelay: async (name, args) => {
+          relayCalls.push({ name, args });
+          if (name === 'desktop_open') return JSON.stringify({ ok: true, reusedRunningWindow: true });
+          if (name === 'desktop_active_window') {
+            return JSON.stringify({
+              title: '微信',
+              processName: 'Weixin.exe',
+              bounds: { x: 100, y: 60, width: 1000, height: 760 },
+            });
+          }
+          if (name === 'desktop_ui_snapshot') {
+            snapshotCount++;
+            return snapshotCount > 1 ? `new outgoing file ${path.basename(filePath)}` : 'existing chat content';
+          }
+          return JSON.stringify({ ok: true });
+        },
+      } as any);
+
+      const result = JSON.parse(raw);
+      expect(result.sent).toBe(true);
+      expect(result.verificationMethod).toBe('uia_filename');
+      expect(relayCalls.find(call => call.name === 'desktop_clipboard_write_files')?.args)
+        .toEqual({ paths: [filePath] });
+      expect(relayCalls.some(call => call.name === 'desktop_keyboard_press' && call.args.key === 'ctrl+v')).toBe(true);
+    } finally {
+      fs.rmSync(filePath, { force: true });
+    }
   });
 
   it('accepts only confident structured visual evidence for a WeChat send', async () => {

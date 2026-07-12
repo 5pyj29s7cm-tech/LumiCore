@@ -271,15 +271,31 @@ export function evaluateCaseWorkflow(
   };
 }
 
+function normalizeLegalDateMatch(match?: RegExpMatchArray | null): string {
+  if (!match) return '';
+  return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`
+    + (match[4] ? ` ${match[4].padStart(2, '0')}:${(match[5] || '00').padStart(2, '0')}` : '');
+}
+
+function extractHearingDate(text: string): string {
+  const datePattern = /(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?(?:\s*(\d{1,2})[:：时](\d{1,2})?分?)?/;
+  const hearingWindow = text.match(new RegExp(`(?:开庭|庭审|审理)[^\n。；;]{0,80}${datePattern.source}|${datePattern.source}[^\n。；;]{0,40}(?:开庭|庭审|审理)`));
+  if (hearingWindow) {
+    const nested = hearingWindow[0].match(datePattern);
+    if (nested) return normalizeLegalDateMatch(nested);
+  }
+  return normalizeLegalDateMatch(text.match(datePattern));
+}
+
 export function extractLegalCaseHints(text: string): Partial<Pick<OrgLegalCaseFile, 'caseNumber' | 'court' | 'hearingDate' | 'judgmentDate' | 'cause'>> {
   const hints: Partial<Pick<OrgLegalCaseFile, 'caseNumber' | 'court' | 'hearingDate' | 'judgmentDate' | 'cause'>> = {};
-  const caseNumber = text.match(/[（(]\d{4}[）)][^，。；;\n]{2,60}[号字]/)?.[0] || '';
+  const caseNumber = text.match(/[（(]\d{4}[）)][^，。；;\n]{2,80}(?:号|字第?\d+号?)/)?.[0] || '';
   const court = text.match(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/)?.[0] || '';
-  const dateMatch = text.match(/(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?/);
+  const hearingDate = extractHearingDate(text);
   const cause = text.match(/案由[：:\s]+([^\n，。；;]{2,40})/)?.[1] || '';
   if (caseNumber) hints.caseNumber = caseNumber;
   if (court) hints.court = court;
-  if (dateMatch) hints.hearingDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
+  if (hearingDate) hints.hearingDate = hearingDate;
   if (cause) hints.cause = cause.trim();
   return hints;
 }

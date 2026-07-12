@@ -245,7 +245,7 @@ describe('messaging long connections and organization routing', () => {
     expect(routes.messagingConversationAgentId(ownerMessage)).not.toBe(routes.messagingConversationAgentId(memberMessage));
   });
 
-  it('supports personal WeChat identity binding without organization access', () => {
+  it('supports personal WeChat identity binding without a fixed organization assignment', () => {
     const lumiUserId = `personal-wechat-${Date.now()}-${Math.random()}`;
     const code = bindings.createBindingCode('wechat', lumiUserId, '', 'personal');
     expect(code.code).toMatch(/^[A-F0-9]{12}$/);
@@ -300,6 +300,31 @@ describe('messaging long connections and organization routing', () => {
     const update = routes.persistBoundMessagingExchange(personal, '收到', value => { emitted = value; });
     expect(update).toMatchObject({ agentId: 'lumi', domain: 'personal', orgId: '', source: 'wechat_bot' });
     expect(emitted).toEqual(update);
+  });
+
+  it('keeps attachment processing instructions out of the synchronized chat history', async () => {
+    const userId = `clean-attachment-chat-${Date.now()}-${Math.random()}`;
+    const value = incoming({
+      platform: 'wechat',
+      userId: `wx-${userId}`,
+      chatId: `wx-${userId}`,
+      boundUserId: userId,
+      text: [
+        '帮我看看这个文件。',
+        '',
+        '以下是用户通过个人微信发送的真实附件内容。这里是系统处理说明。',
+        '## 附件：notes.txt',
+        '解析文本：internal attachment context',
+      ].join('\n'),
+      attachments: [{ id: 'clean-file', type: 'file', fileName: 'notes.txt', extractedText: 'internal attachment context' }],
+    });
+    const update = routes.persistBoundMessagingExchange(value, '看过了');
+    const conversations = await import('../server/conversation/manager');
+    const messages = conversations.getMessages(update!.conversationId);
+    const userMessage = messages.find(item => item.role === 'user');
+
+    expect(userMessage?.message).toBe('帮我看看这个文件。\n附件：notes.txt');
+    expect(userMessage?.message).not.toContain('系统处理说明');
   });
 
   it('parses WeCom long-connection text, voice, file, and mixed messages', () => {

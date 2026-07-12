@@ -837,7 +837,7 @@ describe('semi-automated legal workflows', () => {
     const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
     expect(caseFile).toBeTruthy();
     expect(caseFile.materials.some(material => (
-      material.source === 'import'
+      material.source === 'wechat'
       && material.type === 'consultation'
       && material.title.includes('微信法律消息原文')
       && material.content.includes('court.example.test/notice/456')

@@ -63,6 +63,9 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
   ],
   legal_casework: LEGAL_ENTRY_PREFERRED_TOOLS,
   messaging: [
+    'messaging_list_file_targets',
+    'feishu_send_file',
+    'wechat_send_file',
     'desktop_list_apps',
     'desktop_open',
     'desktop_active_window',

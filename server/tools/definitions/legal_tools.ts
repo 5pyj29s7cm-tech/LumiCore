@@ -983,7 +983,8 @@ function legalRemoteMessagePlatformLabel(platform: LegalRemoteMessagePlatform): 
 }
 
 function legalRemoteMessageMaterialSource(platform: LegalRemoteMessagePlatform): LegalCases.OrgLegalCaseMaterial['source'] {
-  return platform === 'feishu' ? 'feishu' : 'import';
+  if (platform === 'feishu' || platform === 'wecom' || platform === 'wechat') return platform;
+  return 'import';
 }
 
 function extractAllUrls(input: string): string[] {
@@ -1871,6 +1872,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
   ].join('\n');
 
   let materialId = '';
+  const attachmentMaterialIds: string[] = [];
   if (caseFile) {
     const material = LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'consultation',
@@ -1880,6 +1882,25 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
       source: legalRemoteMessageMaterialSource(platform),
     });
     materialId = material?.id || '';
+    if (Array.isArray(args.attachments)) {
+      for (const item of args.attachments) {
+        if (!item || typeof item !== 'object') continue;
+        const attachment = item as Record<string, any>;
+        const fileName = String(attachment.fileName || attachment.name || attachment.title || '').trim();
+        const localPath = String(attachment.localPath || '').trim();
+        const extractedText = String(attachment.extractedText || attachment.text || attachment.content || '').trim();
+        if (!fileName && !localPath && !extractedText) continue;
+        const attachmentMaterial = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+          type: 'note',
+          title: `远程附件：${fileName || '未命名附件'}`,
+          content: extractedText || '附件已保存到案件空间，当前类型未抽取到可读文本。',
+          fileName: fileName || undefined,
+          localPath: localPath || undefined,
+          source: legalRemoteMessageMaterialSource(platform),
+        });
+        if (attachmentMaterial?.id) attachmentMaterialIds.push(attachmentMaterial.id);
+      }
+    }
     caseFile = LegalCases.getCase(orgId, caseFile.id) || caseFile;
   }
 
@@ -1910,6 +1931,20 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
         domain: 'work',
         source: `${platform}-legal-message-intake`,
       });
+      if (caseFile) {
+        const linkedHints = LegalCases.extractLegalCaseHints(report);
+        const linkedPatch: Partial<LegalCases.OrgLegalCaseFile> = {};
+        if (linkedHints.caseNumber && !caseFile.caseNumber) linkedPatch.caseNumber = linkedHints.caseNumber;
+        if (linkedHints.court && !caseFile.court) linkedPatch.court = linkedHints.court;
+        if (linkedHints.cause && !caseFile.cause) linkedPatch.cause = linkedHints.cause;
+        if (linkedHints.hearingDate && !caseFile.hearingDate) {
+          linkedPatch.hearingDate = linkedHints.hearingDate;
+          if (caseFile.stage === 'consultation') linkedPatch.stage = 'trial';
+        }
+        if (Object.keys(linkedPatch).length > 0) {
+          caseFile = LegalCases.updateCase(orgId, userId, caseFile.id, linkedPatch) || caseFile;
+        }
+      }
       if (/授权网页登录协作|登录|验证码|人脸|短信验证|访问受限|平台限制/.test(report)) {
         linkLine = '链接已登记；目标页面需要授权浏览器登录、验证码、人脸或短信验证，已转为人工协作下一步。';
       } else if (/已下载材料|已直接读取|保存留痕|留痕报告/.test(report)) {
@@ -1949,6 +1984,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
     `- 法院：${caseFile?.court || hints.court || textArg(args, 'court') || '未识别'}`,
     `- 开庭/通知日期：${caseFile?.hearingDate || hints.hearingDate || '未识别'}`,
     `- 原文材料：${materialId || (caseFile ? '已尝试归档' : '未归档')}`,
+    `- 附件材料：${attachmentMaterialIds.length > 0 ? `已独立归档 ${attachmentMaterialIds.length} 份` : (attachmentNames.length > 0 ? '未形成独立附件材料' : '无')}`,
     `- 附件/文件：${attachmentNames.length ? attachmentNames.join('；') : '无'}`,
     `- 链接处理：${linkLine}`,
     workflow ? `- 案件闭环状态：${workflow.doneCount}/${workflow.steps.length}（${workflow.completionRatio}%），阻断 ${workflow.blockedCount}，待补 ${workflow.missingCount}` : '- 案件闭环状态：未评估',
@@ -2139,17 +2175,17 @@ function stripHtmlToText(html: string): string {
 }
 
 function extractNoticeHints(input: string): { caseNumber?: string; court?: string; hearingDate?: string } {
-  const caseNumber = input.match(/[（(]\d{4}[）)][^，。；;\n]{2,80}(?:号|字第?\d+号?)/)?.[0];
+  const sharedHints = LegalCases.extractLegalCaseHints(input);
   const court = Array.from(input.matchAll(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/g))
     .map(match => match[0])
     .filter(candidate => !['人民法院', '法院'].includes(candidate))
     .sort((a, b) => b.length - a.length)[0]
-    || input.match(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/)?.[0];
-  const dateMatch = input.match(/(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?(?:\s*(\d{1,2})[:：时](\d{1,2})?分?)?/);
-  const hearingDate = dateMatch
-    ? `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}${dateMatch[4] ? ` ${dateMatch[4].padStart(2, '0')}:${(dateMatch[5] || '00').padStart(2, '0')}` : ''}`
-    : undefined;
-  return { caseNumber, court, hearingDate };
+    || sharedHints.court;
+  return {
+    caseNumber: sharedHints.caseNumber,
+    court,
+    hearingDate: sharedHints.hearingDate,
+  };
 }
 
 function noticeNeedsBrowser(status: number, contentType: string, textSample: string): boolean {

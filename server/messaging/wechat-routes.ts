@@ -17,11 +17,14 @@ import { getMember } from '../org/db';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import {
   enqueueMessageRoute,
+  enrichMessagingAttachments,
   handleRemoteOrgCommand,
   persistBoundMessagingExchange,
   processWithPersonality,
 } from './routes';
 import type { MessagingRouteOptions } from './routes';
+import { setActiveWeChatAdapter } from './wechat_runtime';
+import { requestsOrganizationScope, resolvePersonalOrganizationScope } from './personal_org_scope';
 
 function requireWechatAdmin(req: any, res: any): boolean {
   if (req.user?.role === 'admin') return true;
@@ -46,6 +49,7 @@ export function createWeChatRoutes(
 ): Router {
   const router = Router();
   const adapter = new WeChatClawBotAdapter(config);
+  setActiveWeChatAdapter(adapter);
 
   // ── GET /wechat/qrcode — get login QR code ──
   router.get('/wechat/qrcode', requireAuth, async (req, res) => {
@@ -199,30 +203,43 @@ function startWeChatPolling(
     if (bindingReply) return { text: bindingReply, platform: 'wechat' as const };
 
     const boundMsg = applyWeChatBinding(msg);
+    const enrichedMsg = await enrichMessagingAttachments(
+      boundMsg,
+      'wechat',
+      '以下是用户通过个人微信发送的真实附件内容。个人绑定的附件保持在个人域；只有用户明确要求转入组织，或法院通知唯一匹配到其有权限的组织案件时，才可跨域归档。',
+      attachment => adapter.downloadAttachment(attachment),
+    );
     let outgoing: { text: string; platform: 'wechat' } | null = null;
-    await enqueueMessageRoute(boundMsg, async () => {
-      const legalNoticeReply = await handleRemoteLegalNoticeIntake(boundMsg);
+    await enqueueMessageRoute(enrichedMsg, async () => {
+      const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMsg);
       if (legalNoticeReply) {
-        persistBoundMessagingExchange(boundMsg, legalNoticeReply, options?.onConversationUpdated);
+        persistBoundMessagingExchange(enrichedMsg, legalNoticeReply, options?.onConversationUpdated);
         outgoing = { text: legalNoticeReply, platform: 'wechat' };
         return;
       }
-      const remoteOrgReply = await handleRemoteOrgCommand(boundMsg);
+      const scope = resolvePersonalOrganizationScope(enrichedMsg, requestsOrganizationScope(enrichedMsg.text));
+      if (scope.kind === 'reply') {
+        persistBoundMessagingExchange(scope.message, scope.reply, options?.onConversationUpdated);
+        outgoing = { text: scope.reply, platform: 'wechat' };
+        return;
+      }
+      const routedMsg = scope.message;
+      const remoteOrgReply = await handleRemoteOrgCommand(routedMsg);
       if (remoteOrgReply) {
-        persistBoundMessagingExchange(boundMsg, remoteOrgReply, options?.onConversationUpdated);
+        persistBoundMessagingExchange(routedMsg, remoteOrgReply, options?.onConversationUpdated);
         outgoing = { text: remoteOrgReply, platform: 'wechat' };
         return;
       }
 
       if (options?.onMessage) {
-        const reply = await options.onMessage(boundMsg);
+        const reply = await options.onMessage(routedMsg);
         if (reply) {
-          persistBoundMessagingExchange(boundMsg, reply.text, options?.onConversationUpdated);
+          persistBoundMessagingExchange(routedMsg, reply.text, options?.onConversationUpdated);
           outgoing = { text: reply.text, platform: 'wechat' };
         }
         return;
       }
-      const replyText = await processWithPersonality(boundMsg, options);
+      const replyText = await processWithPersonality(routedMsg, options);
       outgoing = { text: replyText, platform: 'wechat' };
     });
     return outgoing;
