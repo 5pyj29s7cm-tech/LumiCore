@@ -375,6 +375,27 @@ export function updateCase(orgId: string, userId: string, caseId: string, patch:
   return next;
 }
 
+export function deleteCase(orgId: string, userId: string, caseId: string): OrgLegalCaseFile | null {
+  const store = readStore();
+  const index = store.cases.findIndex(item => item.orgId === orgId && item.id === caseId);
+  if (index < 0) return null;
+  const [deleted] = store.cases.splice(index, 1);
+  writeStore(store);
+  EDB.logAudit({
+    orgId,
+    userId,
+    action: 'legal_case.delete',
+    resourceType: 'legal_case',
+    resourceId: caseId,
+    details: {
+      title: deleted.title,
+      caseNumber: deleted.caseNumber,
+      materialCount: deleted.materials?.length || 0,
+    },
+  });
+  return deleted;
+}
+
 export function addMaterial(
   orgId: string,
   userId: string,

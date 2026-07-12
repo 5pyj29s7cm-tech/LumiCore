@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { AlertCircle, Building2, FileText, Loader2, Network, Search, Target } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, Building2, FileText, FolderOpen, Loader2, Network, Search, Target } from 'lucide-react';
+import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
-import type { LegalCaseFile } from '../../lib/legalCaseStore';
+import type { LegalCaseFile, LegalCaseMaterial } from '../../lib/legalCaseStore';
 import { runLegalTool } from '../../lib/legalToolClient';
+import { LegalCaseContextBar } from './LegalCaseContextBar';
 
 interface TraceResult {
   company?: string;
@@ -36,17 +38,25 @@ function assetTraceCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Re
 export function LegalAssetTrace({
   caseFile,
   orgId,
+  onAddMaterial,
 }: {
   caseFile?: LegalCaseFile | null;
   orgId?: string;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(caseFile?.party || '');
   const [result, setResult] = useState<TraceResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'info' | 'enforcement' | 'equity' | 'raw'>('info');
+
+  useEffect(() => {
+    setName(caseFile?.party || '');
+    setResult(null);
+    setActiveTab('info');
+  }, [caseFile?.id, caseFile?.party]);
 
   const trace = async () => {
     if (!name.trim() || loading) return;
@@ -74,6 +84,12 @@ export function LegalAssetTrace({
     }
   };
 
+  const archive = () => {
+    if (!result?.raw || !onAddMaterial) return;
+    onAddMaterial('note', `${legalCaseTitle(caseFile)} ${ui('财产线索报告', 'asset trace report')}`, result.raw, 'tool');
+    toast.success(ui('财产线索报告已归档到当前案件', 'Asset trace report archived to the current case'));
+  };
+
   return (
     <div className="h-full overflow-y-auto p-6 text-white">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
@@ -90,6 +106,8 @@ export function LegalAssetTrace({
             </div>
           </div>
         </section>
+
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : result ? 'result' : 'input'} />
 
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
           <div className="grid gap-3 md:grid-cols-[1fr_auto]">
@@ -122,11 +140,19 @@ export function LegalAssetTrace({
             </div>
           ) : result ? (
             <div className="flex h-full min-h-[420px] flex-col">
-              <div className="mb-4 flex flex-wrap gap-2 border-b border-white/10 pb-3">
-                <TabButton active={activeTab === 'info'} icon={<Building2 size={14} />} label={ui('企业信息', 'Enterprise')} onClick={() => setActiveTab('info')} />
-                <TabButton active={activeTab === 'enforcement'} icon={<AlertCircle size={14} />} label={ui('执行记录', 'Enforcement')} onClick={() => setActiveTab('enforcement')} />
-                <TabButton active={activeTab === 'equity'} icon={<Network size={14} />} label={ui('股权结构', 'Equity')} onClick={() => setActiveTab('equity')} />
-                <TabButton active={activeTab === 'raw'} icon={<FileText size={14} />} label={ui('原始报告', 'Raw Report')} onClick={() => setActiveTab('raw')} />
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+                <div className="flex flex-wrap gap-2">
+                  <TabButton active={activeTab === 'info'} icon={<Building2 size={14} />} label={ui('企业信息', 'Enterprise')} onClick={() => setActiveTab('info')} />
+                  <TabButton active={activeTab === 'enforcement'} icon={<AlertCircle size={14} />} label={ui('执行记录', 'Enforcement')} onClick={() => setActiveTab('enforcement')} />
+                  <TabButton active={activeTab === 'equity'} icon={<Network size={14} />} label={ui('股权结构', 'Equity')} onClick={() => setActiveTab('equity')} />
+                  <TabButton active={activeTab === 'raw'} icon={<FileText size={14} />} label={ui('原始报告', 'Raw Report')} onClick={() => setActiveTab('raw')} />
+                </div>
+                {result.raw && onAddMaterial && !orgId && (
+                  <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
+                    <FolderOpen size={14} />
+                    {ui('归档到案件', 'Archive to Case')}
+                  </button>
+                )}
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">

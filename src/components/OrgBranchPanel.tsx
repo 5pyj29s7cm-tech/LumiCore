@@ -169,7 +169,7 @@ export function OrgBranchPanel() {
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <GitBranch size={20} className="text-purple-400" />
-          {ui('分支终端', 'Branch Terminal')}
+          {ui('分支连接', 'Branch Connection')}
         </h2>
         <span className={`text-xs px-3 py-1 rounded-full border ${
           connected
@@ -255,7 +255,7 @@ export function OrgBranchPanel() {
             />
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-white/35">
-                {ui('分支终端会把工作域数据同步到公司服务器，个人域数据仍保留在本机。', 'The branch terminal syncs work-domain data to the company server. Personal-domain data remains local.')}
+                {ui('分支连接只同步工作域数据到公司服务器，个人域数据仍保留在本机。', 'Branch connection syncs only work-domain data to the company server. Personal-domain data remains local.')}
               </p>
               <button onClick={connect} disabled={connecting} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-sm flex items-center gap-1 whitespace-nowrap">
                 <Link size={14} /> {connecting ? ui('连接中...', 'Connecting...') : ui('连接', 'Connect')}

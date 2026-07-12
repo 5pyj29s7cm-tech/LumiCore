@@ -10,6 +10,7 @@ import { useT } from '../../lib/useT';
 import { toast } from 'sonner';
 
 const AuditLogViewer = lazy(() => import('./AuditLogViewer').then(m => ({ default: m.AuditLogViewer })));
+const AgentTemplateWorkspace = lazy(() => import('./AgentTemplateWorkspace').then(m => ({ default: m.AgentTemplateWorkspace })));
 const BranchDashboard = lazy(() => import('./BranchDashboard').then(m => ({ default: m.BranchDashboard })));
 const CentralLumiChat = lazy(() => import('./CentralLumiChat').then(m => ({ default: m.CentralLumiChat })));
 const DesignHub = lazy(() => import('./DesignHub').then(m => ({ default: m.DesignHub })));
@@ -17,20 +18,18 @@ const KnowledgeBaseBrowser = lazy(() => import('./KnowledgeBaseBrowser').then(m 
 const KnowledgeBaseEditor = lazy(() => import('./KnowledgeBaseEditor').then(m => ({ default: m.KnowledgeBaseEditor })));
 const LegalHub = lazy(() => import('./LegalHub').then(m => ({ default: m.LegalHub })));
 const MessagingHub = lazy(() => import('../MessagingHub').then(m => ({ default: m.MessagingHub })));
-const OrgBranchPanel = lazy(() => import('../OrgBranchPanel').then(m => ({ default: m.OrgBranchPanel })));
 const OrgMembers = lazy(() => import('./OrgMembers').then(m => ({ default: m.OrgMembers })));
-const OrgSettings = lazy(() => import('./OrgSettings').then(m => ({ default: m.OrgSettings })));
+const OrganizationSettingsWorkspace = lazy(() => import('./OrganizationSettingsWorkspace').then(m => ({ default: m.OrganizationSettingsWorkspace })));
 const TemplateCreator = lazy(() => import('./TemplateCreator').then(m => ({ default: m.TemplateCreator })));
-const TemplateMarketplace = lazy(() => import('./TemplateMarketplace').then(m => ({ default: m.TemplateMarketplace })));
-const TemplateReviewQueue = lazy(() => import('./TemplateReviewQueue').then(m => ({ default: m.TemplateReviewQueue })));
 
-type SubView = 'dashboard' | 'kb' | 'kb-edit' | 'templates' | 'templates-create' | 'review' | 'chat' | 'messaging' | 'members' | 'settings' | 'audit' | 'legal' | 'design' | 'branch';
+type SubView = 'dashboard' | 'kb' | 'kb-edit' | 'templates' | 'templates-create' | 'review' | 'chat' | 'messaging' | 'members' | 'settings' | 'audit' | 'legal' | 'spatial-design' | 'brand-design' | 'branch';
 
 interface NavItem {
   id: SubView;
   label: string;
   icon: React.ReactNode;
   roles: Array<'owner' | 'admin' | 'member' | 'viewer'>;
+  showInNav?: boolean;
 }
 
 function OrgViewFallback() {
@@ -56,17 +55,18 @@ export function OrgHub() {
 
   const allNavItems: NavItem[] = useMemo(() => [
     { id: 'dashboard', label: t.orgDashboard, icon: <Home size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'kb', label: t.orgKB, icon: <BookOpen size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'chat', label: t.orgChat, icon: <MessageSquare size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'kb', label: t.orgKB, icon: <BookOpen size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
+    { id: 'chat', label: t.orgChat, icon: <MessageSquare size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
     { id: 'messaging', label: t.messaging || ui('消息接入', 'Messaging'), icon: <MessagesSquare size={16} />, roles: ['owner', 'admin', 'member'] },
-    { id: 'templates', label: t.orgTemplates, icon: <Package size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'review', label: t.orgReview, icon: <ClipboardCheck size={16} />, roles: ['owner', 'admin'] },
-    { id: 'members', label: t.orgMembers, icon: <Users size={16} />, roles: ['owner', 'admin'] },
+    { id: 'templates', label: t.orgTemplates, icon: <Package size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
+    { id: 'review', label: ui('智能体模板', 'Agent Templates'), icon: <ClipboardCheck size={16} />, roles: ['owner', 'admin'], showInNav: false },
+    { id: 'members', label: t.orgMembers, icon: <Users size={16} />, roles: ['owner', 'admin'], showInNav: false },
     { id: 'audit', label: t.orgAudit, icon: <ScrollText size={16} />, roles: ['owner', 'admin'] },
     { id: 'legal', label: t.legalHub || ui('律所', 'Legal'), icon: <Scale size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'design', label: t.designHub || ui('设计所', 'Design'), icon: <Palette size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'settings', label: t.orgSettings, icon: <Settings size={16} />, roles: ['owner', 'admin'] },
-    { id: 'branch', label: t.branchTerminal || ui('分支终端', 'Branch Terminal'), icon: <GitBranch size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'spatial-design', label: ui('空间建筑设计', 'Spatial & Architecture'), icon: <Building2 size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'brand-design', label: ui('品牌创意设计', 'Brand & Creative'), icon: <Palette size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'settings', label: t.orgSettings, icon: <Settings size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'branch', label: ui('分支连接', 'Branch Connection'), icon: <GitBranch size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
   ], [t, isZh]);
 
   const roleLabel: Record<string, { label: string; icon: React.ReactNode; color: string }> = useMemo(() => ({
@@ -80,9 +80,10 @@ export function OrgHub() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.tab === 'org' && detail?.sub) {
-        if (detail.sub === 'kb-edit') setEditingArticleId(detail.articleId || undefined);
-        else if (detail.sub === 'kb') setEditingArticleId(undefined);
-        setSubView(detail.sub as SubView);
+        const requestedView = detail.sub === 'design' ? 'spatial-design' : detail.sub;
+        if (requestedView === 'kb-edit') setEditingArticleId(detail.articleId || undefined);
+        else if (requestedView === 'kb') setEditingArticleId(undefined);
+        setSubView(requestedView as SubView);
       }
     };
     window.addEventListener('lumi:navigate', handler);
@@ -91,8 +92,8 @@ export function OrgHub() {
 
   const orgRole = orgConnection?.orgRole || 'member';
   const visibleItems = allNavItems.filter(item => item.roles.includes(orgRole as any));
-  const moduleItemIds = useMemo(() => new Set<SubView>(['legal', 'design']), []);
-  const primaryNavItems = visibleItems.filter(item => !moduleItemIds.has(item.id));
+  const moduleItemIds = useMemo(() => new Set<SubView>(['legal', 'spatial-design', 'brand-design']), []);
+  const primaryNavItems = visibleItems.filter(item => item.showInNav !== false && !moduleItemIds.has(item.id));
   const moduleNavItems = visibleItems.filter(item => moduleItemIds.has(item.id));
   const isModuleView = moduleItemIds.has(subView);
   const roleInfo = roleLabel[orgRole] || roleLabel.member;
@@ -124,17 +125,18 @@ export function OrgHub() {
       case 'dashboard': return <BranchDashboard />;
       case 'kb': return <KnowledgeBaseBrowser />;
       case 'kb-edit': return <KnowledgeBaseEditor articleId={editingArticleId} onSaved={() => { setEditingArticleId(undefined); setSubView('kb'); }} />;
-      case 'templates': return <TemplateMarketplace />;
+      case 'templates': return <AgentTemplateWorkspace />;
       case 'templates-create': return <TemplateCreator />;
-      case 'review': return <TemplateReviewQueue />;
+      case 'review': return <AgentTemplateWorkspace initialTab="review" />;
       case 'chat': return <CentralLumiChat />;
       case 'messaging': return <MessagingHub t={t} />;
       case 'members': return <OrgMembers />;
-      case 'settings': return <OrgSettings />;
+      case 'settings': return <OrganizationSettingsWorkspace />;
       case 'audit': return <AuditLogViewer />;
       case 'legal': return <LegalHub />;
-      case 'design': return <DesignHub />;
-      case 'branch': return <OrgBranchPanel />;
+      case 'spatial-design': return <DesignHub workspace="spatial" />;
+      case 'brand-design': return <DesignHub workspace="brand" />;
+      case 'branch': return <OrganizationSettingsWorkspace initialTab="branch" />;
       default: return <BranchDashboard />;
     }
   };

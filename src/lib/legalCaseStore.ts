@@ -162,7 +162,10 @@ export function writeLegalCaseFiles(cases: LegalCaseFile[], activeCaseId?: strin
   if (!canUseStorage()) return;
   if (currentLegalStorageScope().domain === 'work') return;
   localStorage.setItem(LEGAL_CASES_STORAGE, JSON.stringify(cases));
-  if (activeCaseId) localStorage.setItem(ACTIVE_LEGAL_CASE_STORAGE, activeCaseId);
+  if (typeof activeCaseId === 'string') {
+    if (activeCaseId) localStorage.setItem(ACTIVE_LEGAL_CASE_STORAGE, activeCaseId);
+    else localStorage.removeItem(ACTIVE_LEGAL_CASE_STORAGE);
+  }
   emitLegalCasesChanged();
 }
 

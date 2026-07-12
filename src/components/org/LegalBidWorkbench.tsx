@@ -1,9 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
 import type { LegalCaseFile } from '../../lib/legalCaseStore';
 import { runLegalTool } from '../../lib/legalToolClient';
+import { LegalCaseContextBar } from './LegalCaseContextBar';
 
 function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
   if (!caseFile) return '未命名案件';
@@ -35,11 +36,17 @@ export function LegalBidWorkbench({
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [requirements, setRequirements] = useState('');
-  const [projectName, setProjectName] = useState('');
+  const [projectName, setProjectName] = useState(() => caseFile?.title || caseFile?.cause || '');
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setProjectName(caseFile?.title || caseFile?.cause || '');
+    setRequirements('');
+    setResult('');
+  }, [caseFile?.id, caseFile?.title, caseFile?.cause]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -115,6 +122,12 @@ export function LegalBidWorkbench({
             </div>
           </div>
         </section>
+
+        <LegalCaseContextBar
+          caseFile={caseFile}
+          state={loading ? 'running' : result ? 'result' : 'input'}
+          detail={ui('招标要求、生成结果和交付记录均关联当前案件/项目', 'Requirements, generated output, and delivery records stay linked to the current case or project')}
+        />
 
         <section className="grid min-h-[560px] gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">

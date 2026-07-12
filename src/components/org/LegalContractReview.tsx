@@ -1,9 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, FileText, HelpCircle, Loader2, Shield, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import type { LegalCaseFile } from '../../lib/legalCaseStore';
+import { LegalCaseContextBar } from './LegalCaseContextBar';
 
 interface RiskItem {
   level: 'high' | 'medium' | 'low';
@@ -18,13 +19,23 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
   const { workDomain, orgConnection } = useApp();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const [contract, setContract] = useState('');
+  const defaultContract = useMemo(() => (
+    (caseFile?.materials || []).find(material => material.type === 'contract' && material.content)?.content || ''
+  ), [caseFile]);
+  const [contract, setContract] = useState(defaultContract);
   const [result, setResult] = useState('');
   const [risks, setRisks] = useState<RiskItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedRisk, setSelectedRisk] = useState<RiskItem | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setContract(defaultContract);
+    setResult('');
+    setRisks([]);
+    setSelectedRisk(null);
+  }, [caseFile?.id]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -82,6 +93,11 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
       setResult(text);
       setRisks(parsedRisks);
       setSelectedRisk(parsedRisks[0] || null);
+      if (caseFile?.id) {
+        window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed', {
+          detail: { caseId: caseFile.id, toolName: 'legal_review_contract' },
+        }));
+      }
     } catch (e: any) {
       setResult(`${ui('错误', 'Error')}: ${e.message}`);
     } finally {
@@ -105,6 +121,12 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
             </div>
           </div>
         </section>
+
+        <LegalCaseContextBar
+          caseFile={caseFile}
+          state={loading ? 'running' : result ? 'result' : 'input'}
+          detail={ui('案件内已有合同会自动带入；审查结果由法律工具链关联当前案件', 'Existing case contracts are prefilled; the legal toolchain links review results to this case')}
+        />
 
         <section className="grid min-h-[560px] gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">

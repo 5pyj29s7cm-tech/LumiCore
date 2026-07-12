@@ -259,6 +259,15 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     res.json(caseFile);
   });
 
+  router.delete('/org/legal/cases/:caseId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    const caseFile = LegalCases.deleteCase(req.user!.orgId!, req.user!.uid, req.params.caseId);
+    if (!caseFile) {
+      res.status(404).json({ error: 'Legal case not found' });
+      return;
+    }
+    res.json({ success: true, caseId: caseFile.id });
+  });
+
   router.post('/org/legal/cases/:caseId/materials', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const material = LegalCases.addMaterial(req.user!.orgId!, req.user!.uid, req.params.caseId, {
       type: req.body?.type || 'note',

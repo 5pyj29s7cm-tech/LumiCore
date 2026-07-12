@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Scale, FileText, Search, Crosshair, Shield, Brain, CheckCircle, Upload,
   Calendar, ClipboardList, Plus, FolderOpen, Gavel, AlertTriangle, RefreshCw, Loader2, Database,
-  ArrowRight, Archive,
+  ArrowRight, Archive, Trash2, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LegalBidWorkbench } from './LegalBidWorkbench';
@@ -10,6 +10,7 @@ import { LegalCaseSearch } from './LegalCaseSearch';
 import { LegalAssetTrace } from './LegalAssetTrace';
 import { LegalContractReview } from './LegalContractReview';
 import { LegalDataSourcesSettings } from './LegalDataSourcesSettings';
+import { LegalCaseContextBar } from './LegalCaseContextBar';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import { runLegalTool } from '../../lib/legalToolClient';
@@ -17,6 +18,7 @@ import {
   clearLegalConsultationCaseId,
   createEmptyLegalCase,
   getActiveLegalCaseId,
+  getLegalConsultationCaseId,
   LEGAL_CASES_CHANGED_EVENT,
   readLegalCaseFiles,
   setActiveLegalCaseId,
@@ -35,6 +37,8 @@ interface NavItem {
   icon: React.ReactNode;
 }
 
+type LegalCaseCreateInput = Pick<LegalCaseFile, 'title' | 'caseNumber' | 'party' | 'cause' | 'stage' | 'notes'>;
+
 const LEGAL_WORKFLOW_ORDER: LegalView[] = [
   'workspace',
   'import',
@@ -51,6 +55,10 @@ const LEGAL_WORKFLOW_ORDER: LegalView[] = [
 function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
   if (!caseFile) return 'Untitled legal case';
   return caseFile.title || caseFile.party || caseFile.caseNumber || 'Untitled legal case';
+}
+
+function resolveLegalCaseActiveId(cases: LegalCaseFile[], requestedId: string): string {
+  return cases.some(item => item.id === requestedId) ? requestedId : (cases[0]?.id || '');
 }
 
 function buildLegalCaseKnowledgeMarkdown(caseFile: LegalCaseFile): string {
@@ -110,23 +118,6 @@ interface LegalCaseReadinessItem {
   done: boolean;
   view?: LegalView;
   tool?: string;
-}
-
-interface LegalCaseActionSummary {
-  completionRatio: number;
-  doneCount: number;
-  blockedCount: number;
-  missingCount: number;
-  readyCount: number;
-  manualCount: number;
-  statusLabel: string;
-  statusDetail: string;
-  canDraft: boolean;
-  canDeliver: boolean;
-  primary: LegalCaseReadinessItem | null;
-  blockers: LegalCaseReadinessItem[];
-  gaps: LegalCaseReadinessItem[];
-  nextActions: LegalCaseReadinessItem[];
 }
 
 const LEGAL_CASE_READINESS_TOOLS: Record<string, string> = {
@@ -276,67 +267,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
   return items.map(item => ({ ...item, tool: LEGAL_CASE_READINESS_TOOLS[item.key] }));
 }
 
-function buildLegalCaseActionSummary(
-  items: LegalCaseReadinessItem[],
-  ui: (zh: string, en: string) => string,
-): LegalCaseActionSummary {
-  const done = items.filter(item => item.status === 'done');
-  const blocked = items.filter(item => item.status === 'blocked');
-  const ready = items.filter(item => item.status === 'ready');
-  const missing = items.filter(item => item.status === 'missing');
-  const manual = items.filter(item => item.status === 'manual');
-  const currentLaw = items.find(item => item.key === 'law');
-  const workProduct = items.find(item => item.key === 'work-product');
-  const delivery = items.find(item => item.key === 'delivery');
-  const completionRatio = items.length ? Math.round((done.length / items.length) * 100) : 0;
-  const primary = blocked[0] || ready[0] || missing[0] || manual[0] || null;
-  const actionPool = [primary, ...ready, ...manual, ...missing].filter(Boolean) as LegalCaseReadinessItem[];
-  const seen = new Set<string>();
-  const nextActions = actionPool.filter(item => {
-    if (seen.has(item.key)) return false;
-    seen.add(item.key);
-    return true;
-  }).slice(0, 3);
-  const canDraft = Boolean(workProduct && ['ready', 'done'].includes(workProduct.status) && currentLaw?.status !== 'blocked');
-  const canDeliver = Boolean(delivery && ['ready', 'done'].includes(delivery.status) && currentLaw?.status !== 'blocked');
-
-  let statusLabel = ui('补齐材料', 'Build the file');
-  let statusDetail = ui('先把案件材料、身份、事实和证据补到同一个案件空间。', 'Collect materials, identity, facts, and evidence into one case space.');
-  if (blocked.length) {
-    statusLabel = ui('先处理阻断', 'Resolve blockers');
-    statusDetail = blocked[0].nextStep;
-  } else if (delivery?.status === 'done') {
-    statusLabel = ui('可归档交付', 'Delivery recorded');
-    statusDetail = ui('正式交付 gate 已有记录，继续做来源复核、归档和律师确认。', 'The delivery gate is recorded; continue source review, archive, and lawyer confirmation.');
-  } else if (canDeliver) {
-    statusLabel = ui('可走交付 gate', 'Ready for delivery gate');
-    statusDetail = delivery?.nextStep || '';
-  } else if (canDraft) {
-    statusLabel = ui('可进入起草', 'Ready to draft');
-    statusDetail = workProduct?.nextStep || '';
-  } else if (ready.length) {
-    statusLabel = ui('下一步明确', 'Next step ready');
-    statusDetail = ready[0].nextStep;
-  }
-
-  return {
-    completionRatio,
-    doneCount: done.length,
-    blockedCount: blocked.length,
-    missingCount: missing.length,
-    readyCount: ready.length,
-    manualCount: manual.length,
-    statusLabel,
-    statusDetail,
-    canDraft,
-    canDeliver,
-    primary,
-    blockers: blocked.slice(0, 3),
-    gaps: missing.slice(0, 4),
-    nextActions,
-  };
-}
-
 function legalReadinessTone(status: LegalCaseReadinessItem['status']): string {
   if (status === 'done') return 'border-emerald-400/18 bg-emerald-500/[0.07] text-emerald-100';
   if (status === 'blocked') return 'border-rose-400/24 bg-rose-500/[0.08] text-rose-100';
@@ -381,16 +311,24 @@ export function LegalHub() {
   const [cases, setCases] = useState<LegalCaseFile[]>(() => readLegalCaseFiles());
   const [activeCaseId, setActiveCaseIdState] = useState(() => getActiveLegalCaseId());
   const [orgCasesLoading, setOrgCasesLoading] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<LegalCaseFile | null>(null);
+  const [caseMutation, setCaseMutation] = useState<'create' | 'delete' | ''>('');
   const { workDomain, orgConnection } = useApp();
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = useCallback((zh: string, en: string) => (isZh ? zh : en), [isZh]);
   const useOrgCases = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
+  const canDeleteCases = !useOrgCases || ['owner', 'admin'].includes(String(orgConnection?.orgRole || '').toLowerCase());
 
   const refreshCases = useCallback(async () => {
     if (!useOrgCases) {
-      setCases(readLegalCaseFiles());
-      setActiveCaseIdState(getActiveLegalCaseId());
+      const loaded = readLegalCaseFiles();
+      const storedActiveId = getActiveLegalCaseId();
+      const resolvedActiveId = resolveLegalCaseActiveId(loaded, storedActiveId);
+      setCases(loaded);
+      setActiveCaseIdState(resolvedActiveId);
+      if (storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
       return;
     }
 
@@ -412,8 +350,12 @@ export function LegalHub() {
   useEffect(() => {
     const syncCases = () => {
       if (useOrgCases) return;
-      setCases(readLegalCaseFiles());
-      setActiveCaseIdState(getActiveLegalCaseId());
+      const loaded = readLegalCaseFiles();
+      const storedActiveId = getActiveLegalCaseId();
+      const resolvedActiveId = resolveLegalCaseActiveId(loaded, storedActiveId);
+      setCases(loaded);
+      setActiveCaseIdState(resolvedActiveId);
+      if (storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
     };
     const syncStorage = (event: StorageEvent) => {
       if (!event.key || event.key.startsWith('lumi_legal_')) syncCases();
@@ -428,8 +370,12 @@ export function LegalHub() {
 
   useEffect(() => {
     if (!useOrgCases) {
-      setCases(readLegalCaseFiles());
-      setActiveCaseIdState(getActiveLegalCaseId());
+      const loaded = readLegalCaseFiles();
+      const storedActiveId = getActiveLegalCaseId();
+      const resolvedActiveId = resolveLegalCaseActiveId(loaded, storedActiveId);
+      setCases(loaded);
+      setActiveCaseIdState(resolvedActiveId);
+      if (storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
       return;
     }
     void refreshCases();
@@ -475,14 +421,20 @@ export function LegalHub() {
   const legalOrgId = useOrgCases ? orgConnection?.orgId : undefined;
 
   const saveCases = (next: LegalCaseFile[], nextActiveId = activeCaseId) => {
+    const resolvedActiveId = resolveLegalCaseActiveId(next, nextActiveId);
     setCases(next);
-    if (!useOrgCases) writeLegalCaseFiles(next, nextActiveId);
-    if (nextActiveId) setActiveCaseIdState(nextActiveId);
+    setActiveCaseIdState(resolvedActiveId);
+    if (!useOrgCases) writeLegalCaseFiles(next, resolvedActiveId);
+    else setActiveLegalCaseId(resolvedActiveId);
   };
 
-  const createCase = async () => {
-    const nextCase = createEmptyLegalCase();
-    nextCase.title = ui('新案件', 'New Case');
+  const createCase = async (input: LegalCaseCreateInput) => {
+    const nextCase = {
+      ...createEmptyLegalCase(),
+      ...input,
+      title: input.title.trim() || input.party.trim() || input.caseNumber.trim() || ui('未命名案件', 'Untitled case'),
+    };
+    setCaseMutation('create');
     try {
       if (useOrgCases) {
         const res = await fetch('/api/org/legal/cases', {
@@ -497,10 +449,40 @@ export function LegalHub() {
       } else {
         saveCases([nextCase, ...cases], nextCase.id);
       }
+      setCreateDialogOpen(false);
       setView('workspace');
       toast.success(ui('已创建案件档案', 'Case file created'));
     } catch (err: any) {
       toast.error(err?.message || ui('案件创建失败', 'Failed to create case'));
+    } finally {
+      setCaseMutation('');
+    }
+  };
+
+  const deleteCase = async () => {
+    if (!deleteTarget || caseMutation) return;
+    setCaseMutation('delete');
+    try {
+      if (useOrgCases) {
+        const res = await fetch(`/api/org/legal/cases/${encodeURIComponent(deleteTarget.id)}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || ui('案件删除失败', 'Failed to delete case'));
+      }
+
+      const next = cases.filter(item => item.id !== deleteTarget.id);
+      const nextActiveId = activeCaseId === deleteTarget.id ? (next[0]?.id || '') : activeCaseId;
+      if (getLegalConsultationCaseId() === deleteTarget.id) clearLegalConsultationCaseId();
+      saveCases(next, nextActiveId);
+      setDeleteTarget(null);
+      setView('workspace');
+      toast.success(ui('案件已删除', 'Case deleted'));
+    } catch (err: any) {
+      toast.error(err?.message || ui('案件删除失败', 'Failed to delete case'));
+    } finally {
+      setCaseMutation('');
     }
   };
 
@@ -648,7 +630,8 @@ export function LegalHub() {
             cases={cases}
             activeCase={activeCase}
             activeCaseId={activeCase?.id || ''}
-            onCreateCase={createCase}
+            onCreateCase={() => setCreateDialogOpen(true)}
+            onDeleteCase={setDeleteTarget}
             onSelectCase={(id) => {
               setActiveCaseIdState(id);
               setActiveLegalCaseId(id);
@@ -662,6 +645,7 @@ export function LegalHub() {
             onAddMaterial={addMaterial}
             onRefreshCases={refreshCases}
             orgBacked={useOrgCases}
+            canDeleteCases={canDeleteCases}
             orgId={legalOrgId}
             refreshing={orgCasesLoading}
             ui={ui}
@@ -671,8 +655,8 @@ export function LegalHub() {
       case 'external-research': return <LegalExternalResearchView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'data-sources': return <LegalDataSourcesPanel />;
       case 'bid': return <LegalBidWorkbench onSwitchView={setView} caseFile={activeCase} orgId={legalOrgId} />;
-      case 'case-search': return <LegalCaseSearch />;
-      case 'asset-trace': return <LegalAssetTrace caseFile={activeCase} orgId={legalOrgId} />;
+      case 'case-search': return <LegalCaseSearch caseFile={activeCase} onAddMaterial={addMaterial} />;
+      case 'asset-trace': return <LegalAssetTrace caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'contract-review': return <LegalContractReview caseFile={activeCase} />;
       case 'strategy': return <LegalStrategyView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'verify': return <LegalVerifyView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
@@ -683,7 +667,8 @@ export function LegalHub() {
   };
 
   return (
-    <div className="flex h-full">
+    <>
+      <div className="flex h-full">
       <div className="flex w-56 shrink-0 flex-col border-r border-white/[0.08] bg-black/20">
         <div className="border-b border-white/[0.08] p-4">
           <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-white/85">
@@ -814,6 +799,181 @@ export function LegalHub() {
           {renderView()}
         </div>
       </div>
+      </div>
+      {createDialogOpen && (
+        <LegalCaseCreateDialog
+          busy={caseMutation === 'create'}
+          onClose={() => !caseMutation && setCreateDialogOpen(false)}
+          onSubmit={createCase}
+          ui={ui}
+        />
+      )}
+      {deleteTarget && (
+        <LegalCaseDeleteDialog
+          caseFile={deleteTarget}
+          busy={caseMutation === 'delete'}
+          onClose={() => !caseMutation && setDeleteTarget(null)}
+          onConfirm={deleteCase}
+          ui={ui}
+        />
+      )}
+    </>
+  );
+}
+
+function LegalCaseCreateDialog({
+  busy,
+  onClose,
+  onSubmit,
+  ui,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (input: LegalCaseCreateInput) => void | Promise<void>;
+  ui: (zh: string, en: string) => string;
+}) {
+  const [draft, setDraft] = useState<LegalCaseCreateInput>({
+    title: '',
+    caseNumber: '',
+    party: '',
+    cause: '',
+    stage: 'consultation',
+    notes: '',
+  });
+  const updateDraft = <K extends keyof LegalCaseCreateInput>(key: K, value: LegalCaseCreateInput[K]) => {
+    setDraft(current => ({ ...current, [key]: value }));
+  };
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!draft.title.trim() || busy) return;
+    void onSubmit({
+      ...draft,
+      title: draft.title.trim(),
+      caseNumber: draft.caseNumber.trim(),
+      party: draft.party.trim(),
+      cause: draft.cause.trim(),
+      notes: draft.notes.trim(),
+    });
+  };
+
+  const stages: Array<{ value: LegalCaseStage; label: string }> = [
+    { value: 'consultation', label: ui('咨询', 'Consultation') },
+    { value: 'filing', label: ui('立案', 'Filing') },
+    { value: 'trial', label: ui('庭审', 'Trial') },
+    { value: 'judgment', label: ui('判决', 'Judgment') },
+    { value: 'enforcement', label: ui('执行', 'Enforcement') },
+    { value: 'closed', label: ui('结案', 'Closed') },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <button type="button" className="absolute inset-0" onClick={onClose} aria-label={ui('关闭新建案件', 'Close new case')} />
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="legal-create-case-title"
+        onSubmit={submit}
+        className="relative z-10 w-full max-w-2xl rounded-lg border border-white/12 bg-[#11151b] p-5 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="legal-create-case-title" className="text-lg font-bold text-white">{ui('新建案件', 'New Case')}</h2>
+            <p className="mt-1 text-sm text-white/45">{ui('先填写基本档案，创建后再进入办案闭环。', 'Create the case profile first, then continue into the case workflow.')}</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy} className="lumi-icon-button h-9 w-9" title={ui('关闭', 'Close')}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label className="space-y-1.5 md:col-span-2">
+            <span className="text-xs text-white/48">{ui('案件名称', 'Case name')} *</span>
+            <input
+              autoFocus
+              required
+              value={draft.title}
+              onChange={event => updateDraft('title', event.target.value)}
+              className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50"
+              placeholder={ui('例如：甲公司与乙公司买卖合同纠纷', 'Example: Alpha v. Beta sales contract dispute')}
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/48">{ui('当事人', 'Party')}</span>
+            <input value={draft.party} onChange={event => updateDraft('party', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/48">{ui('案号', 'Case number')}</span>
+            <input value={draft.caseNumber} onChange={event => updateDraft('caseNumber', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/48">{ui('案由', 'Cause')}</span>
+            <input value={draft.cause} onChange={event => updateDraft('cause', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs text-white/48">{ui('当前阶段', 'Current stage')}</span>
+            <select value={draft.stage} onChange={event => updateDraft('stage', event.target.value as LegalCaseStage)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50">
+              {stages.map(stage => <option key={stage.value} value={stage.value}>{stage.label}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1.5 md:col-span-2">
+            <span className="text-xs text-white/48">{ui('案情摘要', 'Case summary')}</span>
+            <textarea
+              value={draft.notes}
+              onChange={event => updateDraft('notes', event.target.value)}
+              rows={4}
+              className="lumi-field w-full resize-none rounded-lg focus:border-amber-400/50"
+            />
+          </label>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={busy} className="lumi-button h-10 px-4 text-sm">{ui('取消', 'Cancel')}</button>
+          <button type="submit" disabled={busy || !draft.title.trim()} className="lumi-button-primary h-10 border-amber-400/25 bg-amber-500/15 px-4 text-sm text-amber-100 hover:bg-amber-500/25">
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+            {busy ? ui('创建中...', 'Creating...') : ui('创建案件', 'Create case')}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function LegalCaseDeleteDialog({
+  caseFile,
+  busy,
+  onClose,
+  onConfirm,
+  ui,
+}: {
+  caseFile: LegalCaseFile;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+  ui: (zh: string, en: string) => string;
+}) {
+  return (
+    <div className="fixed inset-0 z-[310] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <button type="button" className="absolute inset-0" onClick={onClose} aria-label={ui('关闭删除确认', 'Close delete confirmation')} />
+      <div role="dialog" aria-modal="true" aria-labelledby="legal-delete-case-title" className="relative z-10 w-full max-w-md rounded-lg border border-rose-400/18 bg-[#11151b] p-5 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-rose-400/20 bg-rose-500/10 text-rose-200">
+            <Trash2 size={18} />
+          </span>
+          <div className="min-w-0">
+            <h2 id="legal-delete-case-title" className="text-lg font-bold text-white">{ui('删除案件', 'Delete Case')}</h2>
+            <p className="mt-2 text-sm leading-6 text-white/55">
+              {ui(`将删除“${legalCaseTitle(caseFile)}”及其 ${caseFile.materials?.length || 0} 条归档材料记录。原始本地文件不会被删除。`, `This removes “${legalCaseTitle(caseFile)}” and ${caseFile.materials?.length || 0} archived material records. Original local files are not deleted.`)}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={busy} className="lumi-button h-10 px-4 text-sm">{ui('取消', 'Cancel')}</button>
+          <button type="button" onClick={() => void onConfirm()} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-400/25 bg-rose-500/12 px-4 text-sm font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-50">
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+            {busy ? ui('删除中...', 'Deleting...') : ui('确认删除', 'Delete')}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -823,6 +983,7 @@ function LegalCaseWorkspace({
   activeCase,
   activeCaseId,
   onCreateCase,
+  onDeleteCase,
   onSelectCase,
   onUpdateCase,
   onSetView,
@@ -833,6 +994,7 @@ function LegalCaseWorkspace({
   onAddMaterial,
   onRefreshCases,
   orgBacked,
+  canDeleteCases,
   orgId,
   refreshing,
   ui,
@@ -841,6 +1003,7 @@ function LegalCaseWorkspace({
   activeCase: LegalCaseFile | null;
   activeCaseId: string;
   onCreateCase: () => void;
+  onDeleteCase: (caseFile: LegalCaseFile) => void;
   onSelectCase: (id: string) => void;
   onUpdateCase: (id: string, patch: Partial<LegalCaseFile>) => void;
   onSetView: (view: LegalView) => void;
@@ -851,6 +1014,7 @@ function LegalCaseWorkspace({
   onAddMaterial: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
   onRefreshCases: () => void;
   orgBacked: boolean;
+  canDeleteCases: boolean;
   orgId?: string;
   refreshing: boolean;
   ui: (zh: string, en: string) => string;
@@ -1092,7 +1256,6 @@ function LegalCaseWorkspace({
     || readinessItems.find(item => item.status === 'missing')
     || readinessItems.find(item => item.status === 'manual')
     || null;
-  const actionSummary = buildLegalCaseActionSummary(readinessItems, ui);
 
   return (
     <div className="custom-scrollbar h-full overflow-y-auto p-5">
@@ -1149,18 +1312,34 @@ function LegalCaseWorkspace({
                   {ui('没有匹配案件', 'No matching cases')}
                 </div>
               ) : filteredCases.map(item => (
-                <button
+                <div
                   key={item.id}
-                  onClick={() => onSelectCase(item.id)}
-                  className={`w-full rounded-xl border px-3 py-2 text-left transition-colors ${
+                  className={`group flex items-center rounded-xl border transition-colors ${
                     item.id === activeCaseId
                       ? 'border-amber-400/20 bg-amber-500/[0.12] text-amber-200'
                       : 'border-transparent bg-white/[0.03] text-white/58 hover:border-white/[0.08] hover:bg-white/[0.06] hover:text-white/75'
                   }`}
                 >
-                  <div className="truncate text-sm font-semibold">{item.title || item.party || item.caseNumber || ui('未命名案件', 'Untitled case')}</div>
-                  <div className="mt-0.5 truncate text-xs text-white/32">{stageLabels[item.stage]} / {item.cause || ui('未填写案由', 'No cause')}</div>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectCase(item.id)}
+                    className="min-w-0 flex-1 px-3 py-2 text-left"
+                  >
+                    <span className="block truncate text-sm font-semibold">{item.title || item.party || item.caseNumber || ui('未命名案件', 'Untitled case')}</span>
+                    <span className="mt-0.5 block truncate text-xs text-white/32">{stageLabels[item.stage]} / {item.cause || ui('未填写案由', 'No cause')}</span>
+                  </button>
+                  {canDeleteCases && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteCase(item)}
+                      className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white/30 transition hover:bg-rose-500/12 hover:text-rose-200"
+                      aria-label={ui(`删除案件 ${item.title || item.caseNumber || ''}`, `Delete case ${item.title || item.caseNumber || ''}`)}
+                      title={ui('删除案件', 'Delete case')}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           </div>
@@ -1176,140 +1355,6 @@ function LegalCaseWorkspace({
         </div>
 
         <div className="space-y-5">
-          <section className="lumi-panel p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-white/78">
-                  <Shield size={16} className={actionSummary.blockedCount ? 'text-rose-300' : 'text-emerald-300'} />
-                  <h3 className="text-sm font-bold">{ui('案件行动面板', 'Case Action Board')}</h3>
-                </div>
-                <div className="mt-2 text-lg font-semibold text-white">{actionSummary.statusLabel}</div>
-                <p className="mt-1 max-w-3xl text-xs leading-5 text-white/45">{actionSummary.statusDetail}</p>
-                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-                  <span className={`rounded-md border px-2 py-1 ${actionSummary.canDraft ? 'border-emerald-400/18 bg-emerald-500/[0.07] text-emerald-100' : 'border-white/10 bg-white/[0.035] text-white/45'}`}>
-                    {ui('\u8d77\u8349 gate', 'Draft gate')}: <b className="font-semibold">{actionSummary.canDraft ? ui('\u53ef\u8d77\u8349', 'Ready') : ui('\u672a\u5230\u4f4d', 'Not ready')}</b>
-                  </span>
-                  <span className={`rounded-md border px-2 py-1 ${actionSummary.canDeliver ? 'border-cyan-400/18 bg-cyan-500/[0.06] text-cyan-100' : 'border-white/10 bg-white/[0.035] text-white/45'}`}>
-                    {ui('\u4ea4\u4ed8 gate', 'Delivery gate')}: <b className="font-semibold">{actionSummary.canDeliver ? ui('\u53ef\u8fdb\u5165', 'Ready') : ui('\u672a\u5230\u4f4d', 'Not ready')}</b>
-                  </span>
-                  {actionSummary.primary?.tool && (
-                    <span className="max-w-full truncate rounded-md border border-amber-400/14 bg-amber-500/[0.055] px-2 py-1 text-amber-100/78">
-                      {ui('\u5efa\u8bae\u5de5\u5177', 'Tool')}: <b className="font-semibold">{actionSummary.primary.tool}</b>
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="flex min-w-[132px] items-center justify-end gap-2">
-                <div className="text-right">
-                  <div className="text-2xl font-black text-white">{actionSummary.completionRatio}%</div>
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/30">{ui('闭环', 'Loop')}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-5">
-              <div className="rounded-lg border border-emerald-400/14 bg-emerald-500/[0.055] px-3 py-2">
-                <div className="text-[11px] text-white/38">{ui('已完成', 'Done')}</div>
-                <div className="mt-1 text-base font-bold text-emerald-100">{actionSummary.doneCount}</div>
-              </div>
-              <div className={`rounded-lg border px-3 py-2 ${actionSummary.blockedCount ? 'border-rose-400/24 bg-rose-500/[0.08]' : 'border-white/10 bg-white/[0.035]'}`}>
-                <div className="text-[11px] text-white/38">{ui('阻断', 'Blocked')}</div>
-                <div className={`mt-1 text-base font-bold ${actionSummary.blockedCount ? 'text-rose-100' : 'text-white/60'}`}>{actionSummary.blockedCount}</div>
-              </div>
-              <div className="rounded-lg border border-amber-400/16 bg-amber-500/[0.055] px-3 py-2">
-                <div className="text-[11px] text-white/38">{ui('可推进', 'Ready')}</div>
-                <div className="mt-1 text-base font-bold text-amber-100">{actionSummary.readyCount}</div>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
-                <div className="text-[11px] text-white/38">{ui('缺口', 'Gaps')}</div>
-                <div className="mt-1 text-base font-bold text-white/70">{actionSummary.missingCount}</div>
-              </div>
-              <div className="rounded-lg border border-cyan-400/16 bg-cyan-500/[0.045] px-3 py-2">
-                <div className="text-[11px] text-white/38">{ui('交付 gate', 'Delivery gate')}</div>
-                <div className={`mt-1 text-xs font-bold ${actionSummary.canDeliver ? 'text-cyan-100' : 'text-white/50'}`}>
-                  {actionSummary.canDeliver ? ui('可进入', 'Ready') : ui('未到位', 'Not ready')}
-                </div>
-              </div>
-            </div>
-
-            {actionSummary.primary && (
-              <button
-                type="button"
-                onClick={() => actionSummary.primary?.view && onSetView(actionSummary.primary.view)}
-                className={`mt-4 flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${legalReadinessTone(actionSummary.primary.status)}`}
-              >
-                <span className="min-w-0">
-                  <span className="block text-xs font-semibold text-white/80">{ui('下一步', 'Next action')}</span>
-                  <span className="mt-1 block truncate text-sm font-bold">{actionSummary.primary.label}</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {actionSummary.primary.tool && (
-                    <span className="hidden max-w-[220px] truncate rounded-md border border-white/10 bg-black/18 px-2 py-1 text-[11px] text-white/52 sm:block">
-                      {actionSummary.primary.tool}
-                    </span>
-                  )}
-                  <ArrowRight size={15} className="shrink-0" />
-                </span>
-              </button>
-            )}
-
-            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
-              <div className="rounded-lg border border-white/10 bg-black/14 p-3">
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-rose-100/80">
-                  <AlertTriangle size={12} />
-                  {ui('阻断项', 'Blockers')}
-                </div>
-                <div className="space-y-1.5 text-xs text-white/48">
-                  {(actionSummary.blockers.length ? actionSummary.blockers : [null]).map((item, index) => (
-                    <div key={item?.key || index} className="truncate">
-                      {item ? `${item.label}: ${item.nextStep}` : ui('暂无阻断', 'No blockers')}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/14 p-3">
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-white/70">
-                  <ClipboardList size={12} />
-                  {ui('材料缺口', 'Gaps')}
-                </div>
-                <div className="space-y-1.5 text-xs text-white/48">
-                  {(actionSummary.gaps.length ? actionSummary.gaps : [null]).map((item, index) => (
-                    <div key={item?.key || index} className="truncate">
-                      {item ? `${item.label}: ${item.detail}` : ui('暂无关键缺口', 'No key gaps')}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/14 p-3">
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-amber-100/80">
-                  <ArrowRight size={12} />
-                  {ui('推进顺序', 'Next queue')}
-                </div>
-                <div className="space-y-1.5 text-xs text-white/48">
-                  {(actionSummary.nextActions.length ? actionSummary.nextActions : [null]).map((item, index) => (
-                    item ? (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => item.view && onSetView(item.view)}
-                        title={`${item.nextStep} ${item.tool || ''}`}
-                        className="block w-full rounded-lg border border-white/8 bg-white/[0.025] px-2.5 py-2 text-left transition-colors hover:border-amber-400/18 hover:bg-amber-500/[0.045]"
-                      >
-                        <span className="block truncate font-semibold text-white/76">{index + 1}. {item.label}</span>
-                        <span className="mt-1 block truncate text-white/42">{item.nextStep}</span>
-                        {item.tool && <span className="mt-1 block truncate text-amber-100/55">{item.tool}</span>}
-                      </button>
-                    ) : (
-                      <div key={index} className="truncate">
-                        {ui('闭环已完成，继续复核归档', 'Loop complete; continue review and archive')}
-                      </div>
-                    )
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-
           <section className="lumi-panel p-4">
             <div className="mb-4 flex items-center gap-2 text-white/78">
               <FolderOpen size={16} className="text-amber-300" />
@@ -1657,17 +1702,24 @@ function LegalPacketView({
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
-  const [role, setRole] = useState('原告');
+  const defaultEvidence = useMemo(() => (
+    (caseFile?.materials || [])
+      .filter(material => material.type === 'evidence')
+      .map(material => `${material.title}\n${material.content || ''}`)
+      .join('\n\n')
+  ), [caseFile]);
+  const [role, setRole] = useState('plaintiff');
   const [facts, setFacts] = useState(defaultFacts);
   const [claims, setClaims] = useState('');
-  const [evidence, setEvidence] = useState('');
+  const [evidence, setEvidence] = useState(defaultEvidence);
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setFacts(defaultFacts);
+    setEvidence(defaultEvidence);
     setResult('');
-  }, [defaultFacts]);
+  }, [caseFile?.id]);
 
   const generate = async () => {
     if ((!facts.trim() && !evidence.trim()) || loading) return;
@@ -1700,10 +1752,17 @@ function LegalPacketView({
       accent="amber"
       title={ui('半自动诉讼文书包', 'Semi-Automated Litigation Packet')}
       desc={ui('生成起诉/答辩/质证/委托/立案组卷工作底稿，提交和签发保留人工确认。', 'Draft complaint/defense/evidence/retainer/filing work papers with human confirmation gates.')}
+      caseFile={caseFile}
+      running={loading}
       left={(
         <>
           <div className="grid gap-3 md:grid-cols-2">
-            <input value={role} onChange={event => setRole(event.target.value)} placeholder={ui('我方身份：原告/被告', 'Role: plaintiff/defendant')} className="lumi-field h-10 rounded-lg" />
+            <select value={role} onChange={event => setRole(event.target.value)} className="lumi-field h-10 rounded-lg">
+              <option value="plaintiff">{ui('原告', 'Plaintiff')}</option>
+              <option value="defendant">{ui('被告', 'Defendant')}</option>
+              <option value="applicant">{ui('申请人', 'Applicant')}</option>
+              <option value="respondent">{ui('被申请人', 'Respondent')}</option>
+            </select>
             <input value={claims} onChange={event => setClaims(event.target.value)} placeholder={ui('诉请、抗辩目标或办理目标', 'Claims, defenses, or objective')} className="lumi-field h-10 rounded-lg" />
           </div>
           <textarea value={facts} onChange={event => setFacts(event.target.value)} placeholder={ui('案件事实、时间线、当事人信息...', 'Facts, timeline, parties...')} className="mt-3 min-h-[240px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35" />
@@ -1717,7 +1776,7 @@ function LegalPacketView({
       result={result}
       emptyText={ui('半自动文书包会显示在这里。', 'The packet will appear here.')}
       archiveLabel={ui('归档到案件', 'Archive to Case')}
-      onArchive={result ? archive : undefined}
+      onArchive={!orgId && result ? archive : undefined}
     />
   );
 }
@@ -1746,7 +1805,7 @@ function LegalExternalResearchView({
     setCompanies(caseFile?.party || '');
     setFacts(defaultFacts);
     setResult('');
-  }, [caseFile?.cause, caseFile?.party, defaultFacts]);
+  }, [caseFile?.id]);
 
   const generate = async () => {
     if (!facts.trim() && !issues.trim() && !companies.trim()) return;
@@ -1778,6 +1837,8 @@ function LegalExternalResearchView({
       accent="cyan"
       title={ui('半自动外部检索', 'Semi-Automated External Research')}
       desc={ui('生成打开外部法律网站的检索词、网页登录预设和来源登记表；内容由律师在网页内确认。', 'Generate search terms, login presets, and source logs for external legal sites.')}
+      caseFile={caseFile}
+      running={loading}
       left={(
         <>
           <input value={issues} onChange={event => setIssues(event.target.value)} placeholder={ui('争议焦点，多个用逗号分隔', 'Issues, comma-separated')} className="lumi-field h-10 w-full rounded-lg" />
@@ -1792,7 +1853,7 @@ function LegalExternalResearchView({
       result={result}
       emptyText={ui('外部检索行动单会显示在这里。', 'External research plan will appear here.')}
       archiveLabel={ui('归档到案件', 'Archive to Case')}
-      onArchive={result ? archive : undefined}
+      onArchive={!orgId && result ? archive : undefined}
     />
   );
 }
@@ -1802,6 +1863,8 @@ function LegalTwoPaneTool({
   accent,
   title,
   desc,
+  caseFile,
+  running = false,
   left,
   result,
   emptyText,
@@ -1812,6 +1875,8 @@ function LegalTwoPaneTool({
   accent: 'amber' | 'emerald' | 'cyan';
   title: string;
   desc: string;
+  caseFile?: LegalCaseFile | null;
+  running?: boolean;
   left: React.ReactNode;
   result: string;
   emptyText: string;
@@ -1837,6 +1902,7 @@ function LegalTwoPaneTool({
             </div>
           </div>
         </section>
+        <LegalCaseContextBar caseFile={caseFile} state={running ? 'running' : result ? 'result' : 'input'} />
         <section className="grid min-h-[560px] gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">{left}</div>
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -1878,18 +1944,7 @@ function LegalStrategyView({
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const defaultFacts = useMemo(() => {
-    if (!caseFile) return '';
-    return [
-      caseFile.title && `案件：${caseFile.title}`,
-      caseFile.caseNumber && `案号：${caseFile.caseNumber}`,
-      caseFile.party && `当事人：${caseFile.party}`,
-      caseFile.cause && `案由：${caseFile.cause}`,
-      caseFile.court && `法院：${caseFile.court}`,
-      caseFile.judge && `承办法官：${caseFile.judge}`,
-      caseFile.notes && `事实摘要：\n${caseFile.notes}`,
-    ].filter(Boolean).join('\n');
-  }, [caseFile]);
+  const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
   const [facts, setFacts] = useState(defaultFacts);
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1897,7 +1952,7 @@ function LegalStrategyView({
   useEffect(() => {
     setFacts(defaultFacts);
     setResult('');
-  }, [defaultFacts]);
+  }, [caseFile?.id]);
 
   const analyze = async () => {
     if (!facts.trim() || loading) return;
@@ -1936,6 +1991,8 @@ function LegalStrategyView({
           </div>
         </section>
 
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : result ? 'result' : 'input'} />
+
         <section className="grid min-h-[520px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <label className="mb-2 text-sm font-medium text-white">{ui('案件事实', 'Case facts')}</label>
@@ -1958,12 +2015,14 @@ function LegalStrategyView({
           <div className="min-h-0 rounded-lg border border-white/10 bg-white/[0.04] p-4">
             {result ? (
               <div className="flex h-full min-h-[420px] flex-col gap-3">
-                <div className="flex justify-end">
-                  <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
-                    <FolderOpen size={14} />
-                    {ui('归档到案件', 'Archive to Case')}
-                  </button>
-                </div>
+                {!orgId && (
+                  <div className="flex justify-end">
+                    <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
+                      <FolderOpen size={14} />
+                      {ui('归档到案件', 'Archive to Case')}
+                    </button>
+                  </div>
+                )}
                 <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
                   {result}
                 </pre>
@@ -1993,9 +2052,19 @@ function LegalVerifyView({
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const [text, setText] = useState('');
+  const defaultText = useMemo(() => (
+    (caseFile?.materials || []).find(material => (
+      Boolean(material.content) && (material.type === 'pleading' || material.type === 'contract')
+    ))?.content || ''
+  ), [caseFile]);
+  const [text, setText] = useState(defaultText);
   const [results, setResults] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setText(defaultText);
+    setResults(null);
+  }, [caseFile?.id]);
 
   const verify = async () => {
     if (!text.trim() || loading) return;
@@ -2033,6 +2102,8 @@ function LegalVerifyView({
             </div>
           </div>
         </section>
+
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : verificationText ? 'result' : 'input'} />
 
         <section className="grid min-h-[500px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -2197,6 +2268,8 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
           </div>
         </section>
 
+        <LegalCaseContextBar caseFile={caseFile} state={status ? 'result' : loading ? 'running' : 'input'} />
+
         <section className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <h3 className="text-sm font-semibold text-white">{ui('归档摘要', 'Archive Summary')}</h3>
@@ -2276,6 +2349,8 @@ function LegalImportView({
             </div>
           </div>
         </section>
+
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : status ? 'result' : 'input'} />
 
         <section className="grid min-h-[560px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">

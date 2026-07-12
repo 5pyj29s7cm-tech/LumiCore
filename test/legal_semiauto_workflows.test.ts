@@ -1532,14 +1532,10 @@ describe('semi-automated legal workflows', () => {
     expect(legalHubSource).toContain('legal_generate_litigation_packet');
     expect(legalHubSource).toContain('legal_external_research_plan');
     expect(legalHubSource).toContain('buildLegalCaseReadiness');
-    expect(legalHubSource).toContain('buildLegalCaseActionSummary');
     expect(legalHubSource).toContain('LEGAL_CASE_READINESS_TOOLS');
-    expect(legalHubSource).toContain('Case Action Board');
-    expect(legalHubSource).toContain('actionSummary.canDeliver');
-    expect(legalHubSource).toContain('actionSummary.canDraft');
-    expect(legalHubSource).toContain('actionSummary.primary.tool');
-    expect(legalHubSource).toContain('actionSummary.blockers');
-    expect(legalHubSource).toContain('actionSummary.gaps');
+    expect(legalHubSource).not.toContain('buildLegalCaseActionSummary');
+    expect(legalHubSource).not.toContain('Case Action Board');
+    expect(legalHubSource).not.toContain('案件行动面板');
     expect(legalHubSource).toContain('legalCaseToolArgs');
     expect(legalHubSource).toContain("runLegalTool('legal_case_reasoning_matrix'");
     expect(legalHubSource).toContain('办案闭环');

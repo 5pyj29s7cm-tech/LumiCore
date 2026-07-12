@@ -95,4 +95,17 @@ describe('legal case client scope', () => {
     expect(getLegalConsultationCaseId()).toBe('personal-consultation');
     expect(storage.getItem(ACTIVE_LEGAL_CASE_STORAGE)).toBe('personal-active');
   });
+
+  it('clears a stale active case when the personal case list becomes empty', () => {
+    usePersonalDomain();
+    const caseFile = { ...createEmptyLegalCase(), id: 'case-to-delete', title: 'Delete me' };
+    writeLegalCaseFiles([caseFile], caseFile.id);
+    expect(getActiveLegalCaseId()).toBe(caseFile.id);
+
+    writeLegalCaseFiles([], '');
+
+    expect(readLegalCaseFiles()).toEqual([]);
+    expect(getActiveLegalCaseId()).toBe('');
+    expect(storage.getItem(ACTIVE_LEGAL_CASE_STORAGE)).toBeNull();
+  });
 });

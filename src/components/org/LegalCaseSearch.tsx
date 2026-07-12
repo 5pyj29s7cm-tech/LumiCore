@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { AlertCircle, FileText, Hash, Loader2, MapPin, Search, Scale } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, FileText, FolderOpen, Hash, Loader2, MapPin, Search, Scale } from 'lucide-react';
+import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import { runLegalTool } from '../../lib/legalToolClient';
+import type { LegalCaseFile, LegalCaseMaterial } from '../../lib/legalCaseStore';
+import { LegalCaseContextBar } from './LegalCaseContextBar';
 
 interface CaseResult {
   articleId: string;
@@ -14,16 +17,40 @@ interface CaseResult {
   date?: string;
 }
 
-export function LegalCaseSearch() {
+function caseSearchSeed(caseFile?: LegalCaseFile | null): string {
+  if (!caseFile) return '';
+  const facts = String(caseFile.notes || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !/^【材料归档】/.test(line))
+    .join('\n');
+  return [caseFile.cause, facts].filter(Boolean).join('\n');
+}
+
+export function LegalCaseSearch({
+  caseFile,
+  onAddMaterial,
+}: {
+  caseFile?: LegalCaseFile | null;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+}) {
   const t = useT();
   const { workDomain, orgConnection } = useApp();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const [query, setQuery] = useState('');
+  const defaultQuery = useMemo(() => caseSearchSeed(caseFile), [caseFile?.cause, caseFile?.notes]);
+  const [query, setQuery] = useState(defaultQuery);
   const [results, setResults] = useState<CaseResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [selected, setSelected] = useState<CaseResult | null>(null);
+
+  useEffect(() => {
+    setQuery(defaultQuery);
+    setResults([]);
+    setSelected(null);
+    setSearched(false);
+  }, [caseFile?.id]);
 
   const search = async () => {
     if (!query.trim() || loading) return;
@@ -34,6 +61,10 @@ export function LegalCaseSearch() {
       const text = await runLegalTool('legal_search_case', {
         query,
         orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
+        caseId: caseFile?.id,
+        caseName: caseFile?.title || caseFile?.party || caseFile?.caseNumber || undefined,
+        caseType: caseFile?.cause || undefined,
+        persistCase: Boolean(caseFile),
       });
       const parsed = parseCaseResults(text);
       setResults(parsed.length > 0 ? parsed : [{ articleId: 'raw', title: t.legalCaseSearchResults || ui('检索结果', 'Search Results'), chunk: text, score: 0 }]);
@@ -45,6 +76,20 @@ export function LegalCaseSearch() {
   };
 
   const active = selected || results[0] || null;
+  const archive = () => {
+    if (!active || active.articleId === 'error' || !onAddMaterial) return;
+    const caseTitle = caseFile?.title || caseFile?.party || caseFile?.caseNumber || ui('案件', 'Case');
+    const content = [
+      active.title,
+      active.caseNumber ? `${ui('案号', 'Case number')}: ${active.caseNumber}` : '',
+      active.court ? `${ui('法院', 'Court')}: ${active.court}` : '',
+      active.score > 0 ? `${ui('相似度', 'Similarity')}: ${(active.score * 100).toFixed(1)}%` : '',
+      '',
+      active.chunk,
+    ].filter(Boolean).join('\n');
+    onAddMaterial('note', `${caseTitle} ${ui('类案检索记录', 'similar case research')}`, content, 'tool');
+    toast.success(ui('类案结果已归档到当前案件', 'Similar-case result archived to the current case'));
+  };
 
   return (
     <div className="h-full overflow-y-auto p-6 text-white">
@@ -62,6 +107,8 @@ export function LegalCaseSearch() {
             </div>
           </div>
         </section>
+
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : searched ? 'result' : 'input'} />
 
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
           <div className="grid gap-3 md:grid-cols-[1fr_auto]">
@@ -142,6 +189,12 @@ export function LegalCaseSearch() {
                       {active.score > 0 && <span className="rounded-md bg-amber-500/10 px-2 py-1 text-amber-200">{(active.score * 100).toFixed(1)}%</span>}
                     </div>
                   </div>
+                  {onAddMaterial && active.articleId !== 'error' && (
+                    <button onClick={archive} className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
+                      <FolderOpen size={14} />
+                      {ui('归档到案件', 'Archive to Case')}
+                    </button>
+                  )}
                 </div>
                 <div className={`rounded-lg border p-4 text-sm leading-7 whitespace-pre-wrap ${
                   active.articleId === 'error'

@@ -27,6 +27,8 @@ type DesignView =
   | 'spec-check'
   | 'inspiration';
 
+export type DesignWorkspace = 'spatial' | 'brand';
+
 interface NavItem {
   id: DesignView;
   label: string;
@@ -47,10 +49,14 @@ interface ToolConfig {
 
 const localText = (t: any, zh: string, en: string) => (t.langCode === 'en' ? en : zh);
 
-export function DesignHub() {
-  const [view, setView] = useState<DesignView>('space');
+export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspace }) {
+  const [view, setView] = useState<DesignView>(() => workspace === 'spatial' ? 'space' : 'brand');
   const t = useT();
   const ui = (zh: string, en: string) => localText(t, zh, en);
+
+  React.useEffect(() => {
+    setView(workspace === 'spatial' ? 'space' : 'brand');
+  }, [workspace]);
 
   const tools = useMemo<Record<DesignView, ToolConfig>>(() => ({
     space: {
@@ -145,7 +151,7 @@ export function DesignHub() {
     },
   }), [t.langCode]);
 
-  const navItems: NavItem[] = [
+  const allNavItems: NavItem[] = [
     { id: 'space', label: tools.space.title, desc: tools.space.desc, icon: tools.space.icon },
     { id: 'interior', label: tools.interior.title, desc: tools.interior.desc, icon: tools.interior.icon },
     { id: 'architecture', label: tools.architecture.title, desc: tools.architecture.desc, icon: tools.architecture.icon },
@@ -156,19 +162,27 @@ export function DesignHub() {
     { id: 'spec-check', label: tools['spec-check'].title, desc: tools['spec-check'].desc, icon: tools['spec-check'].icon },
     { id: 'inspiration', label: tools.inspiration.title, desc: tools.inspiration.desc, icon: tools.inspiration.icon },
   ];
+  const spatialViews = new Set<DesignView>(['space', 'interior', 'architecture']);
+  const navItems = allNavItems.filter(item => workspace === 'spatial' ? spatialViews.has(item.id) : !spatialViews.has(item.id));
+  const workspaceTitle = workspace === 'spatial'
+    ? ui('空间建筑设计', 'Spatial & Architecture')
+    : ui('品牌创意设计', 'Brand & Creative');
+  const workspaceDescription = workspace === 'spatial'
+    ? ui('面向空间规划、室内方案与建筑前期设计的专业工作区。', 'A focused workspace for space planning, interior schemes, and architectural concept design.')
+    : ui('面向品牌识别、Logo、数字体验与营销视觉的创意工作区。', 'A focused workspace for brand identity, logos, digital experience, and campaign visuals.');
 
   return (
     <div className="flex h-full min-h-0">
       <aside className="flex w-64 shrink-0 flex-col border-r border-white/[0.08] bg-black/20">
         <div className="border-b border-white/[0.08] p-4">
           <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-white/85">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-pink-300/15 bg-pink-400/10 text-pink-300">
-              <Palette size={16} />
+            <span className={`flex h-8 w-8 items-center justify-center rounded-xl border ${workspace === 'spatial' ? 'border-cyan-300/15 bg-cyan-400/10 text-cyan-200' : 'border-pink-300/15 bg-pink-400/10 text-pink-200'}`}>
+              {workspace === 'spatial' ? <Building2 size={16} /> : <Palette size={16} />}
             </span>
-            <span className="min-w-0 truncate">{t.designHub || ui('设计所', 'Design Hub')}</span>
+            <span className="min-w-0 truncate">{workspaceTitle}</span>
           </h3>
           <p className="mt-2 text-xs leading-relaxed text-white/40">
-            {ui('空间、室内、建筑、品牌和界面设计统一工作台。', 'Unified workspace for space, interior, architecture, brand, and interface design.')}
+            {workspaceDescription}
           </p>
         </div>
         <nav className="custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
@@ -178,7 +192,9 @@ export function DesignHub() {
               onClick={() => setView(item.id)}
               className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors ${
                 view === item.id
-                  ? 'border-pink-400/20 bg-pink-500/10 text-pink-100'
+                  ? workspace === 'spatial'
+                    ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'
+                    : 'border-pink-400/20 bg-pink-500/10 text-pink-100'
                   : 'border-transparent text-white/50 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
               }`}
             >
@@ -192,7 +208,7 @@ export function DesignHub() {
         </nav>
       </aside>
       <main className="custom-scrollbar min-w-0 flex-1 overflow-y-auto bg-black/10">
-        <DesignToolView config={tools[view]} />
+        <DesignToolView config={tools[view]} workspace={workspace} />
       </main>
     </div>
   );
@@ -229,7 +245,7 @@ function useDesignChat() {
   return { input, setInput, result, loading, send };
 }
 
-function DesignToolView({ config }: { config: ToolConfig }) {
+function DesignToolView({ config, workspace }: { config: ToolConfig; workspace: DesignWorkspace }) {
   const t = useT();
   const ui = (zh: string, en: string) => localText(t, zh, en);
   const { input, setInput, result, loading, send } = useDesignChat();
@@ -250,8 +266,8 @@ ${input}`);
       <section className="border-b border-white/[0.08] pb-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="mb-2 flex items-center gap-2 text-pink-200">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-pink-300/15 bg-pink-400/10">
+            <div className={`mb-2 flex items-center gap-2 ${workspace === 'spatial' ? 'text-cyan-200' : 'text-pink-200'}`}>
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl border ${workspace === 'spatial' ? 'border-cyan-300/15 bg-cyan-400/10 text-cyan-200' : 'border-pink-300/15 bg-pink-400/10 text-pink-200'}`}>
                 {config.icon}
               </span>
               <h2 className="text-xl font-black tracking-tight text-white">{config.title}</h2>
@@ -276,7 +292,7 @@ ${input}`);
             onChange={e => setInput(e.target.value)}
             placeholder={config.placeholder}
             rows={8}
-            className="lumi-field min-h-56 w-full resize-none focus:border-pink-500/50"
+            className={`lumi-field min-h-56 w-full resize-none ${workspace === 'spatial' ? 'focus:border-cyan-500/50' : 'focus:border-pink-500/50'}`}
           />
           <div className="flex flex-wrap items-center gap-2">
             {config.chips.map(chip => (
@@ -284,7 +300,7 @@ ${input}`);
                 key={chip}
                 type="button"
                 onClick={() => setInput(prev => prev ? `${prev}\n${chip}` : chip)}
-                className="rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/55 transition-colors hover:border-pink-400/25 hover:bg-pink-500/10 hover:text-pink-100"
+                className={`rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-white/55 transition-colors ${workspace === 'spatial' ? 'hover:border-cyan-400/25 hover:bg-cyan-500/10 hover:text-cyan-100' : 'hover:border-pink-400/25 hover:bg-pink-500/10 hover:text-pink-100'}`}
               >
                 {chip}
               </button>
@@ -293,7 +309,7 @@ ${input}`);
           <button
             onClick={run}
             disabled={loading || !input.trim()}
-            className="lumi-button-primary border-pink-400/25 bg-pink-500/15 px-6 py-3 text-pink-100 hover:bg-pink-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+            className={`lumi-button-primary px-6 py-3 disabled:cursor-not-allowed disabled:opacity-40 ${workspace === 'spatial' ? 'border-cyan-400/25 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25' : 'border-pink-400/25 bg-pink-500/15 text-pink-100 hover:bg-pink-500/25'}`}
           >
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
             {loading ? ui('处理中...', 'Working...') : config.button}
@@ -308,7 +324,7 @@ ${input}`);
           <div className="grid gap-2">
             {config.output.map(item => (
               <div key={item} className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.035] px-3 py-2 text-sm text-white/65">
-                <FileText size={14} className="shrink-0 text-pink-300/70" />
+                <FileText size={14} className={`shrink-0 ${workspace === 'spatial' ? 'text-cyan-300/70' : 'text-pink-300/70'}`} />
                 <span className="min-w-0 truncate">{item}</span>
               </div>
             ))}

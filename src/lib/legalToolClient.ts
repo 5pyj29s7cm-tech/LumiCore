@@ -7,5 +7,11 @@ export async function runLegalTool(toolName: string, args: Record<string, any>):
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `${toolName} failed`);
-  return data.text || data.response || data.reply || data.message || JSON.stringify(data);
+  const text = data.text || data.response || data.reply || data.message || JSON.stringify(data);
+  if (args.caseId && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed', {
+      detail: { caseId: args.caseId, toolName },
+    }));
+  }
+  return text;
 }
