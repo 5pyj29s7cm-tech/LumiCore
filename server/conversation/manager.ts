@@ -56,6 +56,18 @@ function conversationMatchesScope(c: Conversation, domainOrOrgId?: string, orgId
   return !c.orgId || c.orgId === '';
 }
 
+export function getConversationForScope(
+  conversationId: string,
+  userId: string,
+  domain?: string,
+  orgId?: string,
+): Conversation | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
+  if (!conversation || conversation.userId !== userId) return null;
+  return conversationMatchesScope(conversation, domain, orgId) ? conversation : null;
+}
+
 export function getOrCreateActiveConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
   const db = readDB();
   if (!db.conversations) db.conversations = [];

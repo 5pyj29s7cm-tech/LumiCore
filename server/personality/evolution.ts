@@ -18,22 +18,19 @@ import { Memory } from '../memory/types';
 import { queryMemories } from '../memory/store';
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
 import { readDB } from '../../db_layer';
+import { getScopedPreferredLLM } from '../llm/user_preferences';
 
 const DEFAULT_MODELS: Record<string, string> = {
-  deepseek: 'deepseek-chat',
+  deepseek: 'deepseek-v4-flash',
   qwen: 'qwen-plus',
   openai: 'gpt-4o',
   gemini: 'gemini-2.0-flash',
   anthropic: 'claude-sonnet-4-6',
 };
 
-function getUserLLMPrefs(userId: string): { provider: string; models: Record<string, string> } {
-  try {
-    const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === `llm_prefs_${userId}`);
-    if (setting) return JSON.parse(setting.value);
-  } catch {}
-  return { provider: '', models: {} };
+export interface PersonalityLearningScope {
+  domain?: 'personal' | 'work';
+  orgId?: string;
 }
 
 // ── Types ──
@@ -176,12 +173,17 @@ export async function synthesizeOwnerProfile(
   getOpenAI: () => any,
   getAnthropic: () => any,
   getQwen: () => any,
+  scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
 ): Promise<OwnerProfile | null> {
+  const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
+  const orgId = domain === 'work' ? String(scope.orgId) : '';
   const memories = queryMemories({
-    userId,
+    ...(domain === 'personal' ? { userId } : {}),
     perspective: 'owner_trait',
     limit: 50,
     minConfidence: 0.3,
+    domain,
+    orgId,
   });
 
   if (memories.length < DEFAULT_EVOLUTION_CONFIG.minMemoriesForEvolution) {
@@ -192,7 +194,8 @@ export async function synthesizeOwnerProfile(
     `[${i + 1}] confidence=${m.confidence.toFixed(2)} | ${m.content}`
   ).join('\n');
 
-  const synthesisPrompt = `You are analyzing accumulated observations about a person to build a structured psychological profile.
+  const subject = domain === 'work' ? 'an organization and its shared working style' : 'a person';
+  const synthesisPrompt = `You are analyzing accumulated observations about ${subject} to build a structured communication profile.
 
 Below are ${memories.length} observational memories collected over time about this person. Each has a confidence score.
 
@@ -215,7 +218,7 @@ ${memoryTexts}`;
     ];
 
     // Build provider order from user's LLM prefs: active provider first, then explicitly configured fallbacks.
-    const prefs = getUserLLMPrefs(userId);
+    const prefs = getScopedPreferredLLM(userId, { domain, orgId });
     const activeProvider = prefs.provider || '';
     const userModels = prefs.models || {};
 
@@ -532,6 +535,7 @@ export async function evolvePersonality(
   getAnthropic: () => any,
   getQwen: () => any,
   evolutionConfig: EvolutionConfig = DEFAULT_EVOLUTION_CONFIG,
+  scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
 ): Promise<EvolutionStep | null> {
   // Gate: connection score
   if (connectionScore < evolutionConfig.minConnectionForEvolution) {
@@ -541,7 +545,7 @@ export async function evolvePersonality(
 
   // Synthesize owner profile (evolves when there's enough data, cooldown is now
   // handled externally via the scheduler's memory-count gate, not a fixed timer)
-  const profile = await synthesizeOwnerProfile(userId, getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen);
+  const profile = await synthesizeOwnerProfile(userId, getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, scope);
   if (!profile) {
     console.log(`[Evolution] Insufficient owner_trait memories for ${userId}`);
     return null;
@@ -604,13 +608,14 @@ export async function lightweightEvolve(
   getOpenAI?: () => any,
   getAnthropic?: () => any,
   getQwen?: () => any,
+  scope: PersonalityLearningScope = { domain: 'personal', orgId: '' },
 ): Promise<EvolutionStep | null> {
   const effConfig = existingEvolutionConfig || DEFAULT_EVOLUTION_CONFIG;
 
   // Synthesize owner profile (same as full evolution but halved plasticity)
   const profile = await synthesizeOwnerProfile(
     userId,
-    getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+    getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, scope,
   );
   if (!profile) return null; // Not enough owner_trait memories
 

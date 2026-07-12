@@ -63,6 +63,14 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Invalid or expired token' });
     return;
   }
+  if (user.orgId) {
+    const membership = getMember(user.orgId, user.uid);
+    if (!membership || membership.status !== 'active') {
+      res.status(403).json({ error: 'Active organization membership required.' });
+      return;
+    }
+    user.orgRole = membership.role;
+  }
   req.user = user;
   next();
 }
@@ -73,6 +81,14 @@ export function optionalAuth(req: Request, res: Response, next: NextFunction): v
   if (token) {
     const user = decodeToken(token);
     if (user) {
+      if (user.orgId) {
+        const membership = getMember(user.orgId, user.uid);
+        if (!membership || membership.status !== 'active') {
+          res.status(403).json({ error: 'Active organization membership required.' });
+          return;
+        }
+        user.orgRole = membership.role;
+      }
       req.user = user;
     }
   }
@@ -145,10 +161,24 @@ export function requireOrgMember(req: Request, res: Response, next: NextFunction
   next();
 }
 
+/** Require a request that originated from this machine, independent of proxy headers. */
+export function requireLocalRequest(req: Request, res: Response, next: NextFunction): void {
+  const address = String(req.socket?.remoteAddress || '').toLowerCase();
+  const loopback = address === '::1'
+    || address === '127.0.0.1'
+    || address.startsWith('127.')
+    || address.startsWith('::ffff:127.');
+  if (!loopback) {
+    res.status(403).json({ error: 'This operation is available only from the local Lumi desktop client.' });
+    return;
+  }
+  next();
+}
+
 /**
  * Resolve the domain and orgId from auth context for writing new records.
  */
-export function resolveDomain(user: AuthUser): { domain: string; orgId: string } {
+export function resolveDomain(user: AuthUser): { domain: 'personal' | 'work'; orgId: string } {
   if (user.orgId) return { domain: 'work', orgId: user.orgId };
   return { domain: 'personal', orgId: '' };
 }

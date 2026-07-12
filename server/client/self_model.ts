@@ -579,8 +579,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'external.ai_apps',
     label: 'Other local AI and agent tools',
     kind: 'external_app',
-    actions: ['desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_register_target', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'desktop_list_apps', 'desktop_open', 'desktop_capture_screen', 'ocr_screen', 'computer_use'],
-    notes: 'Lumi can coordinate other AI apps through files, browser, clipboard, MCP, and visible computer-use sessions without per-tool permission popups in Assistant/Autonomy. For desktop-only or browser-window AI targets such as WorkBuddy, Codex, ChatGPT, Claude, Gemini, DeepSeek, Kimi, 豆包, 通义, Cursor/Copilot, LM Studio, and Ollama, use desktop_ai_ask to send or prepare the same question in real app windows, then use desktop_ai_collect_answer with screenshot/vision evidence before summarizing. If the user asks what other desktop AI/tools can be supported, or an autonomous public-source learning refresh discovers a new tool, use desktop_ai_discovery_plan with web_search/url_fetch/authority_research, produce a source-grounded candidate, then register it with desktop_ai_register_target after confirmation so future calls can use it without one-off customTargets. Prefer API/MCP/CLI integrations when available; stop at login/security, payment, installation, credential, or destructive boundaries.',
+    actions: ['desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_register_target', 'desktop_ai_roundtable', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'desktop_list_apps', 'desktop_open', 'desktop_capture_screen', 'ocr_screen', 'computer_use'],
+    notes: 'Lumi can coordinate other AI apps through files, browser, clipboard, MCP, and visible computer-use sessions without per-tool permission popups in Assistant/Autonomy. For desktop-only or browser-window AI targets such as WorkBuddy, Codex, ChatGPT, Claude, Gemini, DeepSeek, Kimi, 豆包, 通义, Cursor/Copilot, LM Studio, and Ollama, use desktop_ai_roundtable when the user wants the same question sent to multiple AIs and all visible answers collected for one summary. Use desktop_ai_ask plus desktop_ai_collect_answer for manual control. A pasted prompt and submit shortcut are only an unverified submission attempt until answer evidence is collected. If the user asks what other desktop AI/tools can be supported, or an autonomous public-source learning refresh discovers a new tool, use desktop_ai_discovery_plan with web_search/url_fetch/authority_research, produce a source-grounded candidate, then register it with desktop_ai_register_target after confirmation so future calls can use it without one-off customTargets. Prefer API/MCP/CLI integrations when available; stop at login/security, payment, installation, credential, or destructive boundaries.',
     requiresConfirmation: false,
     stateKeys: ['permissions', 'tools', 'windows'],
   },
@@ -779,7 +779,7 @@ const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
   },
   {
     id: 'wallpaper_for_immersive_work',
-    rule: 'Use wallpaper mode during explicit demonstrations or confirmed visible desktop-control sessions so Lumi feels present on the desktop, then turn it off when done.',
+    rule: 'Use wallpaper mode only when the user explicitly requests it or during a visible user-present desktop workflow, then turn it off when done. The explicit current request is the authorization; do not ask a second tool-level confirmation.',
   },
   {
     id: 'large_panel_for_result_takeover',
@@ -1482,12 +1482,22 @@ function parseRelayObject(result: any): Record<string, any> | null {
   }
 }
 
-function formatLearnedCapabilityRoutes(userId: string): string[] {
+function formatLearnedCapabilityRoutes(
+  userId: string,
+  scope: { domain: 'personal' | 'work'; orgId: string },
+): string[] {
   try {
-    const records = listCapabilityLearningRecords({ userId, limit: 8 })
+    const records = listCapabilityLearningRecords({
+      userId,
+      scopeDomain: scope.domain,
+      orgId: scope.domain === 'work' ? scope.orgId : '',
+      limit: 8,
+    })
       .filter(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
     if (!records.length) {
-      return ['- No persisted learned capability routes yet. When a capability gap appears, use capability_gap_autofix to create one.'];
+      return [scope.domain === 'work'
+        ? '- No organization-scoped learned routes yet. Organization Lumi does not inherit member personal capability routes.'
+        : '- No persisted learned capability routes yet. When a capability gap appears, use capability_gap_autofix to create one.'];
     }
     return records.map(record => [
       `- ${record.selectedRoute.label} (${record.domain}/${record.status})`,
@@ -1502,20 +1512,46 @@ function formatLearnedCapabilityRoutes(userId: string): string[] {
   }
 }
 
-export function formatClientSelfPrompt(userId: string): string {
-  const state = getClientState(userId);
-  const health = getClientHealthReport(userId);
-  const awareness = getClientSelfAwarenessReport(userId);
+export function formatClientSelfPrompt(
+  userId: string,
+  scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
+): string {
+  const isWork = scope.domain === 'work' && Boolean(scope.orgId);
+  const rawState = getClientState(userId);
+  const state = isWork
+    ? rawState?.workDomain === 'work' && rawState.org?.id === scope.orgId ? rawState : null
+    : rawState;
+  const health = state ? getClientHealthReport(userId) : {
+    level: 'unknown' as const,
+    stateAgeSeconds: null,
+    findings: [],
+    autonomyBoundary: { automatic: [], confirmFirst: [], forbidden: [] },
+  };
+  const awareness = state ? getClientSelfAwarenessReport(userId) : {
+    level: 'missing' as const,
+    bodySummary: isWork
+      ? 'No live desktop state has been verified for this member in the active organization.'
+      : 'No live desktop client state has been reported yet.',
+    knows: [],
+    gaps: [],
+    habits: [],
+    nextBestActions: [],
+  };
   const stateAge = state?.updatedAt ? Math.round((Date.now() - state.updatedAt) / 1000) : null;
   const gate = getGateConfig(userId);
-  const workflows = listAutonomousWorkflows(userId);
+  const workflows = isWork ? [] : listAutonomousWorkflows(userId);
   const enabledWorkflows = workflows.filter(workflow => workflow.enabled);
   const memoryFirewall = getMemoryFirewallPolicy();
   const actionConstitution = getActionConstitutionPolicy();
-  const musicProfile = getCachedMusicProfile(userId);
+  const musicProfile = isWork ? null : getCachedMusicProfile(userId);
   const adapterRegistry = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
-  const desktopAwareness = formatDesktopAwarenessForPrompt();
-  const learnedCapabilityLines = formatLearnedCapabilityRoutes(userId);
+  const desktopAwareness = isWork
+    ? '### Organization Desktop Boundary\nThe server-host exploration profile and the member\'s personal desktop snapshot are not organization knowledge. Use only the verified live organization client state above and refresh the authenticated member desktop through relay tools when the task requires it.'
+    : formatDesktopAwarenessForPrompt();
+  const learnedCapabilityLines = formatLearnedCapabilityRoutes(userId, {
+    domain: isWork ? 'work' : 'personal',
+    orgId: isWork ? String(scope.orgId || '') : '',
+  });
   const capabilityLines = CLIENT_CAPABILITIES.map(cap => (
     `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (hard-boundary-sensitive)' : ''}`
   ));
@@ -1545,8 +1581,12 @@ export function formatClientSelfPrompt(userId: string): string {
     `- Permissions: ${formatStateObject(state.permissions)}`,
     `- Tools: agent=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
     `- Native runtime: autostartSupported=${Boolean(state.runtime?.autostartSupported)}, autostart=${Boolean(state.runtime?.autostartEnabled)}, closeToBackground=${Boolean(state.runtime?.closeToBackground)}, startedInBackground=${Boolean(state.runtime?.startedInBackground)}, backendNode=${state.runtime?.backendNodeRunning ? 'running' : 'dev/not-spawned'}, backendPython=${state.runtime?.backendPythonRunning ? 'running' : 'dev/not-spawned'}, nodeRestarts=${state.runtime?.nodeRestarts ?? 0}, pythonRestarts=${state.runtime?.pythonRestarts ?? 0}, shortcut=${state.runtime?.globalShortcut || 'Alt+Space'}${state.runtime?.lastError ? `, error=${state.runtime.lastError}` : ''}`,
-    `- Autonomy level: ${gate.autonomyLevel} (alwaysOnline=${gate.alwaysOnline}, autoProcess=${gate.autoProcessEnabled}, messagingSendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}, maxConsecutiveTasks=${gate.maxConsecutiveTasks}, externalAppAutomationGate=removed)`,
-    `- Confirmed autonomous workflows: enabled=${enabledWorkflows.length}, total=${workflows.length}${enabledWorkflows.length ? `, titles=${enabledWorkflows.map(workflow => workflow.title).slice(0, 5).join(', ')}` : ''}`,
+    isWork
+      ? '- Organization scope does not inherit personal autonomy settings, autonomous workflows, music profile, or local learning state.'
+      : `- Autonomy level: ${gate.autonomyLevel} (alwaysOnline=${gate.alwaysOnline}, autoProcess=${gate.autoProcessEnabled}, messagingSendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}, maxConsecutiveTasks=${gate.maxConsecutiveTasks}, externalAppAutomationGate=removed)`,
+    isWork
+      ? '- Organization autonomous workflows: not configured on this personal client surface.'
+      : `- Confirmed autonomous workflows: enabled=${enabledWorkflows.length}, total=${workflows.length}${enabledWorkflows.length ? `, titles=${enabledWorkflows.map(workflow => workflow.title).slice(0, 5).join(', ')}` : ''}`,
     `- Recent errors: ${state.errors?.length ? state.errors.map(e => `${e.source}: ${e.message}`).slice(-3).join(' | ') : 'none'}`,
     `- State age: ${stateAge}s`,
   ] : [
@@ -1570,7 +1610,9 @@ export function formatClientSelfPrompt(userId: string): string {
 
   return [
     '## Lumi Client Self Model',
-    'You are Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
+    isWork
+      ? `You are the organization Lumi for organization ${scope.orgId}. Keep organization identity, knowledge, conversations, and routing separate from every member's personal Lumi. A member's device is an authorized execution endpoint, not organization memory or organization identity.`
+      : 'You are Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Keep three maps separate and current: local machine (host, files, apps, processes), visible desktop (foreground window, screen/UI controls, cursor, logged-in sessions), and background runtime (client visibility, autostart, close-to-background, backend health, runtime log, confirmed autonomous workflows).',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
@@ -1587,7 +1629,7 @@ export function formatClientSelfPrompt(userId: string): string {
     'When the user asks Lumi to handle, reply to, classify, or take over a WeChat/customer message and says things like “接管这条微信先跑一遍”, “真实闭环测试”, “先跑出结果”, or wants to say less, use work_takeover_real_smoke_run first. It should create or continue the task, choose external-control routes, advance safe steps, prepare supported industry packages, verify files/content/drafts/desktop evidence, export a local packet, and report only what is done, blocked, and awaiting confirmation. Use work_takeover_task_autorun for the older bounded loop when full route selection and verification are not needed. Use work_takeover_task_from_wechat/from_clipboard for manual creation, then continue/orchestrate/advance when they want more control. Run a specific suggested tool only when arguments and confirmation boundaries are clear.',
     'When the user says continue that customer, next step, that WeChat task, the previous takeover task, or asks what work Lumi is managing, use work_takeover_task_advance to move the persisted task forward by one safe step before answering from memory or jumping into an industry workflow. Use work_takeover_task_run_suggested_tool for one explicit plan-suggested tool call, work_takeover_task_verify_result after visible/external work before claiming success, and work_takeover_task_export_packet when the task should leave the task center as files.',
     'For work takeover status reports, do not recite every tool call or generated sentence. Report only: what is done, what concrete result exists, what is blocked, and what needs the user to confirm next.',
-    'Ask for explicit user confirmation before changing wallpaper mode, starting autonomous execution, starting/stopping meeting capture, or requesting sensor/permission changes.',
+    'Wallpaper and meeting capture require explicit current user intent, but that instruction itself is authorization and should not trigger a second tool popup. Never start meeting capture from unattended autonomous work. Sensor/OS permission prompts and high-consequence actions keep their hard boundaries.',
     'For 24-hour availability: distinguish three states. Launch-at-login and close-to-background make Lumi resident only while the desktop client/server are actually running; hidden-to-background does not mean autonomous execution; autonomous background work still requires auto processing, the active autonomy policy, token budget, and confirmed-workflow gates. Assistant/semi no longer requires the user to be idle by default. Verify client_get_state or client_health_check before promising that Lumi is running or will continue after the window is hidden or after restart.',
     'Rest is part of your local life. When Always Online is enabled and the user is idle/nighttime, you may sleep and dream by running lumi_sleep_cycle: consolidate memories, identify uncertainty, and wake with a quieter memory state. Never delete original memories or mutate core identity during dreams.',
     'When Lumi is alone in Autonomy mode, she can learn her local machine body by observing desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_running_processes, desktop_active_window, desktop_idle_time, and desktop_poll_activity. This is map-building only: do not open apps/files, click, type, screenshot, run commands, read file contents, or infer private facts from filenames without explicit task need and authorization.',
@@ -1653,7 +1695,7 @@ export function formatClientSelfPrompt(userId: string): string {
     '### Action Constitution',
     ...actionConstitution.rules.map(rule => `- ${rule}`),
     '',
-    formatLAPSelfPrompt(),
+    isWork ? 'Organization scope does not inherit the member\'s personal LAP profile.' : formatLAPSelfPrompt(),
   ].join('\n');
 }
 

@@ -20,14 +20,14 @@ import { appConfirm } from '../../lib/appConfirm';
 type Feedback = { type: 'success' | 'error'; text: string };
 
 const LLM_PROVIDER_OPTIONS = [
-  { id: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-reasoner'] },
+  { id: 'deepseek', label: 'DeepSeek', models: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'] },
   { id: 'qwen', label: 'Qwen / DashScope', models: ['qwen-plus', 'qwen-max', 'qwen-turbo'] },
   { id: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4.1', 'o3'] },
   { id: 'gemini', label: 'Gemini', models: ['gemini-2.0-flash', 'gemini-1.5-pro'] },
   { id: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4-6', 'claude-3-5-sonnet-latest'] },
-  { id: 'ark', label: 'Volcengine Ark', models: ['doubao-1-5-pro-32k'] },
+  { id: 'ark', label: 'Volcengine Ark', models: ['doubao-seed-2-0-lite-260215', 'doubao-1-5-pro-32k'] },
   { id: 'kimi', label: 'Kimi', models: ['moonshot-v1-8k', 'moonshot-v1-32k'] },
-  { id: 'glm', label: 'GLM', models: ['glm-4-plus', 'glm-4-air'] },
+  { id: 'glm', label: 'GLM', models: ['glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4-plus'] },
   { id: 'relay', label: 'Relay', models: ['gpt-4o'] },
   { id: 'ollama', label: 'Ollama', models: ['qwen2.5:7b', 'llama3.2'] },
   { id: 'lmstudio', label: 'LM Studio', models: ['local-model'] },
@@ -49,10 +49,8 @@ export function OrgSettings() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmSaving, setLlmSaving] = useState(false);
-  const [llmInheritPersonal, setLlmInheritPersonal] = useState(true);
   const [llmProvider, setLlmProvider] = useState('deepseek');
   const [llmModels, setLlmModels] = useState<Record<string, string>>({});
-  const [llmInheritedModel, setLlmInheritedModel] = useState('');
 
   const loadOrg = useCallback(async () => {
     setLoading(true);
@@ -86,13 +84,8 @@ export function OrgSettings() {
       const res = await fetch('/api/preferences/org-llm', { credentials: 'include' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ui(`大模型策略加载失败（${res.status}）`, `Failed to load LLM policy (${res.status})`));
-      setLlmInheritPersonal(data.inheritPersonal !== false);
-      setLlmProvider(data.provider || data.inheritedProvider || 'deepseek');
+      setLlmProvider(data.provider || 'deepseek');
       setLlmModels(data.models && typeof data.models === 'object' ? data.models : {});
-      const inherited = data.inheritedProvider || data.provider
-        ? `${data.inheritedProvider || data.provider} / ${data.inheritedModel || data.model || ''}`
-        : '';
-      setLlmInheritedModel(inherited);
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
     } finally {
@@ -147,7 +140,7 @@ export function OrgSettings() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          inheritPersonal: llmInheritPersonal,
+          inheritPersonal: false,
           provider: llmProvider,
           models: nextModels,
         }),
@@ -155,10 +148,8 @@ export function OrgSettings() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ui(`大模型策略保存失败（${res.status}）`, `Failed to save LLM policy (${res.status})`));
-      setLlmInheritPersonal(data.inheritPersonal !== false);
-      setLlmProvider(data.provider || data.inheritedProvider || llmProvider);
+      setLlmProvider(data.provider || llmProvider);
       setLlmModels(data.models && typeof data.models === 'object' ? data.models : nextModels);
-      setLlmInheritedModel(`${data.inheritedProvider || data.provider || llmProvider} / ${data.inheritedModel || data.model || selectedModel}`);
       setFeedback({ type: 'success', text: ui('公司 Lumi 大模型策略已保存', 'Company Lumi model policy saved') });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -296,7 +287,7 @@ export function OrgSettings() {
             <KeyRound size={17} className="text-emerald-300" />
             <h3 className="text-sm font-medium text-white">{ui('邀请码', 'Invitation Codes')}</h3>
           </div>
-          <p className="mb-4 text-sm leading-6 text-white/50">
+          <p className="hidden">
             {ui('生成一个成员加入码，发给需要加入组织的人。当前邀请码不限使用次数。', 'Generate a join code for new members. The current code has unlimited uses.')}
           </p>
           <div className="flex flex-wrap items-end gap-3">
@@ -349,42 +340,14 @@ export function OrgSettings() {
             <h3 className="text-sm font-medium text-white">{ui('公司 Lumi 大模型', 'Company Lumi Model')}</h3>
           </div>
           <p className="mb-4 text-sm leading-6 text-white/50">
-            {ui('组织域聊天、语音和子 agent 编排会优先使用这里的模型策略；选择继承时才使用当前成员的个人模型。', 'Work-domain chat, voice, and agent orchestration use this policy first; inheritance uses the current member personal model.')}
+            {ui('组织域聊天、语音和子 agent 编排统一使用公司 Lumi 的独立模型策略，不读取任何成员的个人模型偏好。', 'Work-domain chat, voice, and agent orchestration use one independent company policy and never read a member\'s personal model preference.')}
           </p>
 
-          <div className="mb-4 grid gap-3 md:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => setLlmInheritPersonal(true)}
-              className={`rounded-lg border p-3 text-left transition ${
-                llmInheritPersonal
-                  ? 'border-blue-400/35 bg-blue-500/15 text-blue-100'
-                  : 'border-white/10 bg-black/10 text-white/60 hover:bg-white/5'
-              }`}
-            >
-              <div className="text-sm font-medium">{ui('继承个人模型', 'Inherit personal model')}</div>
-              <div className="mt-1 text-xs text-white/45">{llmInheritedModel || ui('按当前成员个人偏好运行', 'Use the current member preference')}</div>
-            </button>
-            <button
-              type="button"
-              onClick={() => setLlmInheritPersonal(false)}
-              className={`rounded-lg border p-3 text-left transition ${
-                !llmInheritPersonal
-                  ? 'border-blue-400/35 bg-blue-500/15 text-blue-100'
-                  : 'border-white/10 bg-black/10 text-white/60 hover:bg-white/5'
-              }`}
-            >
-              <div className="text-sm font-medium">{ui('使用组织独立模型', 'Use organization model')}</div>
-              <div className="mt-1 text-xs text-white/45">{ui('公司 Lumi 固定使用组织策略', 'Company Lumi uses a fixed organization policy')}</div>
-            </button>
-          </div>
-
-          <div className={`grid gap-4 md:grid-cols-[220px_1fr_auto] ${llmInheritPersonal ? 'opacity-55' : ''}`}>
+          <div className="grid gap-4 md:grid-cols-[220px_1fr_auto]">
             <label className="block">
               <span className="mb-1 block text-xs text-white/50">Provider</span>
               <select
                 value={llmProvider}
-                disabled={llmInheritPersonal}
                 onChange={event => {
                   const nextProvider = event.target.value;
                   const option = LLM_PROVIDER_OPTIONS.find(item => item.id === nextProvider) || LLM_PROVIDER_OPTIONS[0];
@@ -403,7 +366,6 @@ export function OrgSettings() {
               <input
                 value={selectedModel}
                 list="org-llm-models"
-                disabled={llmInheritPersonal}
                 onChange={event => updateLlmModel(event.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-blue-400/40 disabled:cursor-not-allowed"
               />

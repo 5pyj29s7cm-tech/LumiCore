@@ -77,7 +77,9 @@ export async function withCloudResilience<T>(
   } catch (err: any) {
     // 4. Failure — classify and record
     const classified = classifyCloudError(err, provider);
-    recordFailure(provider, model, err);
+    recordFailure(provider, model, err, {
+      openImmediately: classified.category === 'auth' || classified.category === 'quota',
+    });
 
     // Attach classification to error for upstream handling
     err.cloudCategory = classified.category;

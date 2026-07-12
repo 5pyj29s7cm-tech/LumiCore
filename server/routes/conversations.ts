@@ -11,13 +11,9 @@ import {
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
 
 function getConversationScope(req: any): ConversationScope {
-  const requestedDomain = (req.query?.domain ?? req.body?.domain) as string | undefined;
-  if (requestedDomain === 'personal') return { domain: 'personal', orgId: '' };
-  if (requestedDomain === 'work') return { domain: 'work', orgId: req.user?.orgId || '' };
-  return {
-    domain: req.user?.orgId ? 'work' : 'personal',
-    orgId: req.user?.orgId || '',
-  };
+  return req.user?.orgId
+    ? { domain: 'work', orgId: String(req.user.orgId) }
+    : { domain: 'personal', orgId: '' };
 }
 
 function conversationMatchesScope(conv: any, scope: ConversationScope): boolean {

@@ -60,6 +60,22 @@ function findScopedAgent(db: any, user: AuthUser, id: string): any | null {
   return (db.agents || []).find((agent: any) => agent.id === id && agentMatchesScope(agent, user)) || null;
 }
 
+function canCreateAgent(user: AuthUser): boolean {
+  return !user.orgId || ['owner', 'admin', 'member'].includes(String(user.orgRole || ''));
+}
+
+function canManageAgent(agent: any, user: AuthUser): boolean {
+  if (!agentMatchesScope(agent, user)) return false;
+  if (!user.orgId) return !agent.ownerUid || agent.ownerUid === user.uid;
+  return ['owner', 'admin'].includes(String(user.orgRole || '')) || agent.ownerUid === user.uid;
+}
+
+function interactionMatchesUserScope(interaction: any, user: AuthUser): boolean {
+  if (interaction.userId !== user.uid) return false;
+  if (user.orgId) return interaction.domain === 'work' && interaction.orgId === user.orgId;
+  return interaction.domain !== 'work' && !interaction.orgId;
+}
+
 function externalRuntimeConfig(agent: any): { cwd?: string } {
   const cfg = parseRuntimeConfig(agent?.runtimeConfig);
   const cwd = typeof cfg.cwd === 'string' && cfg.cwd.trim() ? cfg.cwd.trim() : undefined;
@@ -104,12 +120,13 @@ export function mountAgentRoutes(
     try {
       const { id } = req.params; const db = readDB();
       const isDefault = ['lumi', 'lumi_default', 'scholar_default', 'founder_default', 'incubated'].includes(id);
-      if (!isDefault && !db.agents.find((a: any) => a.id === id && a.ownerUid === req.user!.uid)) return res.status(404).json({ error: "Agent not found" });
-      const conv = getActiveConversation(req.user!.uid, id);
+      if (!isDefault && !findScopedAgent(db, req.user!, id)) return res.status(404).json({ error: "Agent not found" });
+      const dc = resolveDomain(req.user!);
+      const conv = getActiveConversation(req.user!.uid, id, dc.domain, dc.orgId);
       const msgs = conv ? getMessages(conv.id, 100) : [];
       // Also merge proactive push notifications (Lumi-initiated messages)
       const proactive = (db.interactions || [])
-        .filter((i: any) => i.userId === req.user!.uid && i.mode === 'proactive')
+        .filter((i: any) => interactionMatchesUserScope(i, req.user!) && i.mode === 'proactive')
         .slice(-50)
         .map((i: any) => ({ role: 'assistant', content: i.content || i.message || '', createdAt: i.timestamp, mode: 'proactive' }));
       const merged = [...msgs.map((m: any) => ({ role: m.role, content: m.content || m.message || '', createdAt: m.createdAt })), ...proactive]
@@ -123,9 +140,10 @@ export function mountAgentRoutes(
     try {
       const { id } = req.params; const { messages } = req.body;
       const db = readDB(); const isDefault = ['lumi', 'lumi_default', 'scholar_default', 'founder_default', 'incubated'].includes(id);
-      if (!isDefault && !db.agents.find((a: any) => a.id === id && a.ownerUid === req.user!.uid)) return res.status(404).json({ error: "Agent not found" });
-      const conv = getOrCreateActiveConversation(req.user!.uid, id);
-      if (Array.isArray(messages)) for (const msg of messages) addMessage({ userId: req.user!.uid, agentId: id, conversationId: conv.id, role: msg.role || 'user', content: msg.content || '' });
+      if (!isDefault && !findScopedAgent(db, req.user!, id)) return res.status(404).json({ error: "Agent not found" });
+      const dc = resolveDomain(req.user!);
+      const conv = getOrCreateActiveConversation(req.user!.uid, id, dc.domain, dc.orgId);
+      if (Array.isArray(messages)) for (const msg of messages) addMessage({ userId: req.user!.uid, agentId: id, conversationId: conv.id, role: msg.role || 'user', content: msg.content || '', domain: dc.domain, orgId: dc.orgId });
       res.json({ success: true, conversationId: conv.id });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
@@ -139,6 +157,7 @@ export function mountAgentRoutes(
 
   router.post("/agents", requireAuth, (req, res) => {
     try {
+      if (!canCreateAgent(req.user!)) return res.status(403).json({ error: 'This organization role has read-only agent access.' });
       const { name, category, data, personalityId, modelPreference, memoryScope, autonomyLevel, territory, distilledFrom, evidenceMap, relationshipType, isFrozen, seedMemoryIds, executionMode, runtime, externalCommand, skillTags, knowledgeDomains, runtimeConfig } = req.body;
       const db = readDB(); const isSanctuary = territory === 'sanctuary';
       const dc = resolveDomain(req.user!);
@@ -226,7 +245,7 @@ export function mountAgentRoutes(
     try {
       const { id } = req.params;
       const db = readDB();
-      const idx = db.agents.findIndex((a: any) => a.id === id && agentMatchesScope(a, req.user!));
+      const idx = db.agents.findIndex((a: any) => a.id === id && canManageAgent(a, req.user!));
       if (idx === -1) return res.status(404).json({ error: "Agent not found or unauthorized" });
       const agent = db.agents[idx];
       const previousRuntime = agent.runtime;
@@ -281,18 +300,22 @@ export function mountAgentRoutes(
       const { id } = req.params; const db = readDB();
       const BUILTINS = ['lumi', 'lumi_default', 'scholar_default', 'founder_default', 'incubated'];
       if (BUILTINS.includes(id)) return res.status(403).json({ error: "Cannot delete built-in agent" });
-      const idx = db.agents.findIndex((a: any) => a.id === id && agentMatchesScope(a, req.user!));
+      const idx = db.agents.findIndex((a: any) => a.id === id && canManageAgent(a, req.user!));
       if (idx === -1) return res.status(404).json({ error: "Agent not found or unauthorized" });
       db.agents.splice(idx, 1);
       // Cleanup orphaned data
-      if (db.interactions) db.interactions = db.interactions.filter((i: any) => i.agentId !== id);
-      if (db.memories) db.memories = db.memories.filter((m: any) => m.agentId !== id);
-      if (db.conversations) db.conversations = db.conversations.filter((c: any) => c.agentId !== id);
+      const dc = resolveDomain(req.user!);
+      const sameScope = (record: any) => dc.domain === 'work'
+        ? record.domain === 'work' && record.orgId === dc.orgId
+        : record.domain !== 'work' && !record.orgId;
+      if (db.interactions) db.interactions = db.interactions.filter((i: any) => i.agentId !== id || !sameScope(i));
+      if (db.memories) db.memories = db.memories.filter((m: any) => m.agentId !== id || !sameScope(m));
+      if (db.conversations) db.conversations = db.conversations.filter((c: any) => c.agentId !== id || !sameScope(c));
       writeDB(db); res.json({ success: true });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  router.post("/audio/transcribe", asyncHandler(async (req, res) => {
+  router.post("/audio/transcribe", requireAuth, asyncHandler(async (req, res) => {
     const { audio, fileName } = req.body || {};
     if (!audio) return res.status(400).json({ error: "Audio data is required" });
     try {
@@ -316,7 +339,7 @@ export function mountAgentRoutes(
     }
   }));
 
-  router.post("/pets/generate", asyncHandler(async (req, res) => {
+  router.post("/pets/generate", requireAuth, asyncHandler(async (req, res) => {
     const { prompt, mode } = req.body || {};
     if (!prompt?.trim()) return res.status(400).json({ error: "Prompt is required" });
     const lower = prompt.toLowerCase();

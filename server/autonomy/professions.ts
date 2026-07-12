@@ -66,10 +66,18 @@ const PROFESSION_SIGNATURES: Record<string, { apps: string[]; domains: string[];
 export function detectProfession(installedApps: string[]): ProfessionProfile[] {
   const results: ProfessionProfile[] = [];
 
+  const matchesSignature = (app: string, signature: string): boolean => {
+    const normalizedApp = app.toLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ').trim();
+    const normalizedSignature = signature.toLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ').trim();
+    if (!normalizedSignature) return false;
+    if (normalizedSignature.length <= 3 && /^[a-z0-9]+$/.test(normalizedSignature)) {
+      return normalizedApp.split(/\s+/).includes(normalizedSignature);
+    }
+    return normalizedApp === normalizedSignature || normalizedApp.includes(normalizedSignature);
+  };
+
   for (const [profession, sig] of Object.entries(PROFESSION_SIGNATURES)) {
-    const matched = installedApps.filter(app =>
-      sig.apps.some(sigApp => app.toLowerCase().includes(sigApp.toLowerCase()))
-    );
+    const matched = [...new Set(installedApps.filter(app => sig.apps.some(sigApp => matchesSignature(app, sigApp))))];
     if (matched.length === 0) continue;
 
     const confidence = Math.min(1, matched.length / Math.max(3, Math.sqrt(sig.apps.length)));

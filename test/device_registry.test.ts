@@ -11,7 +11,9 @@ describe('DeviceRegistry', () => {
       capabilities: { audio: true, video: false, spatial: false, haptic: false, holographic: false },
     });
 
-    expect(device.id).toBe('dev_user1_socket1');
+    expect(device.id).toBe('dev_user1_personal_socket1');
+    expect(device.domain).toBe('personal');
+    expect(device.orgId).toBe('');
     expect(device.name).toBe('Test Desktop');
     expect(device.status).toBe('online');
     expect(device.capabilities.audio).toBe(true);
@@ -64,5 +66,21 @@ describe('DeviceRegistry', () => {
 
     const ctx = deviceRegistry.getSensoryContext('user3');
     expect(ctx.deviceCount).toBe(0); // offline devices excluded from context
+  });
+
+  it('keeps personal and organization devices in separate capability scopes', () => {
+    const userId = `device_scope_${Date.now()}`;
+    deviceRegistry.register(userId, 'scope_personal', {
+      name: 'Personal Desktop', type: 'desktop', domain: 'personal', orgId: '',
+    });
+    deviceRegistry.register(userId, 'scope_org_a', {
+      name: 'Organization Desktop', type: 'desktop', domain: 'work', orgId: 'org-a',
+    });
+
+    expect(deviceRegistry.getActiveDevices(userId, { domain: 'personal', orgId: '' }).map(item => item.socketId))
+      .toEqual(['scope_personal']);
+    expect(deviceRegistry.getActiveDevices(userId, { domain: 'work', orgId: 'org-a' }).map(item => item.socketId))
+      .toEqual(['scope_org_a']);
+    expect(deviceRegistry.getActiveDevices(userId, { domain: 'work', orgId: 'org-b' })).toEqual([]);
   });
 });

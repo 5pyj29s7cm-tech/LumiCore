@@ -571,7 +571,7 @@ export async function makeLLMCall(
   if (config.provider === 'auto' && getOllama) {
     const { dispatchLLMCall } = await import('./dispatch');
     const getters = { getDeepSeek, getGemini, getOpenAI: getOpenAI || (() => null), getAnthropic: getAnthropic || (() => null), getQwen: getQwen || (() => null), getArk: getArk || (() => null), getOllama, isOllamaAvailable: () => !!getOllama?.(), getLmStudio, isLmStudioAvailable: () => !!getLmStudio?.() };
-    const result = await dispatchLLMCall(messages, toolDeclarations, { provider: 'deepseek', model: 'deepseek-chat', maxTokens: maxTokens, userId: config.userId }, getters);
+    const result = await dispatchLLMCall(messages, toolDeclarations, { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: maxTokens, userId: config.userId }, getters);
     return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
   }
 
@@ -590,13 +590,17 @@ export async function makeLLMCall(
 
     const fmt = config.provider === 'qwen' ? formatQwenRequest : formatDeepSeekRequest;
     const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
-    const params = fmt({
+    const params: any = fmt({
       model: config.model,
       messages,
       toolDeclarations,
       maxTokens: maxTokens,
       ...(isLocal ? {} : { userId: config.userId }),
     });
+    if (config.provider === 'xiaomi') {
+      if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
+      delete params.max_tokens;
+    }
 
     const response = await withCloudResilience(
       () => client.chat.completions.create(params),
@@ -628,13 +632,17 @@ export async function makeLLMCall(
     const client = getOpenAI?.();
     if (!client) throw new Error('OpenAI not configured (OPENAI_API_KEY missing)');
 
-    const params = formatOpenAIRequest({
+    const params: any = formatOpenAIRequest({
       model: config.model,
       messages,
       toolDeclarations,
       maxTokens: maxTokens,
       userId: config.userId,
     });
+    if (isReasoningModel(config.model)) {
+      if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
+      delete params.max_tokens;
+    }
 
     const response = await withCloudResilience(
       () => client.chat.completions.create(params),
@@ -669,7 +677,7 @@ export async function makeLLMCall(
 export type StreamCallback = (chunk: string) => void;
 
 function isReasoningModel(model: string): boolean {
-  return /reasoner|v4-(pro|flash)|o[13]|o4-mini|r1/i.test(model);
+  return /reasoner|v4-(pro|flash)|gpt-5|o[134]|r1/i.test(model);
 }
 
 export async function makeLLMCallStreaming(
@@ -706,7 +714,7 @@ export async function makeLLMCallStreaming(
   if (config.provider === 'auto' && getOllama) {
     const { dispatchLLMCallStreaming } = await import('./dispatch');
     const getters = { getDeepSeek, getGemini, getOpenAI: getOpenAI || (() => null), getAnthropic: getAnthropic || (() => null), getQwen: getQwen || (() => null), getArk: getArk || (() => null), getOllama, isOllamaAvailable: () => !!getOllama?.(), getLmStudio, isLmStudioAvailable: () => !!getLmStudio?.() };
-    const result = await dispatchLLMCallStreaming(messages, toolDeclarations, { provider: 'deepseek', model: 'deepseek-chat', maxTokens: maxTokens, userId: config.userId, signal: config.signal }, onChunk, getters);
+    const result = await dispatchLLMCallStreaming(messages, toolDeclarations, { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: maxTokens, userId: config.userId, signal: config.signal }, onChunk, getters);
     return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
   }
 
@@ -733,6 +741,10 @@ export async function makeLLMCallStreaming(
       maxTokens: maxTokens,
       ...(isLocal ? {} : { userId: config.userId }),
     });
+    if (config.provider === 'xiaomi' || (config.provider === 'openai' && isReasoningModel(config.model))) {
+      if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
+      delete params.max_tokens;
+    }
     params.stream = true;
 
     const stream: any = await withCloudResilience(

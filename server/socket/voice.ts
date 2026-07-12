@@ -17,6 +17,7 @@ import { himTick } from "../personality/him";
 import { createStreamingSession, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { transcribeAudioFile } from "../stt/file_transcription";
 import { getMeetingAudioDir } from "../stt/artifact_paths";
+import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, resolveEmotionVoice } from "../tts/adapter";
 import { recordLatency } from "../monitor/latency_store";
 import { getOrCreateActiveConversation, addMessage, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
@@ -57,6 +58,7 @@ import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, 
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { createDesktopRelay } from "./desktop_relay";
+import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -328,6 +330,10 @@ function getAudioSession(socket: Socket): AudioSession {
   return socket.data.audioSession as AudioSession;
 }
 
+function getVoiceStateKey(session: AudioSession): string {
+  return scopedEmotionalStateKey(session.userId, { domain: session.domain, orgId: session.orgId });
+}
+
 function writePcm16Wav(rawPath: string, wavPath: string, sampleRate = 16000): void {
   const pcm = fs.readFileSync(rawPath);
   const header = Buffer.alloc(44);
@@ -350,7 +356,11 @@ function writePcm16Wav(rawPath: string, wavPath: string, sampleRate = 16000): vo
 
 function startMeetingPcmRecording(session: AudioSession): void {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const rawPath = path.join(getMeetingAudioDir(), `meeting_${stamp}_${Math.random().toString(36).slice(2)}.pcm`);
+  const rawPath = path.join(getMeetingAudioDir({
+    userId: session.userId,
+    domain: session.domain,
+    orgId: session.orgId,
+  }), `meeting_${stamp}_${Math.random().toString(36).slice(2)}.pcm`);
   fs.writeFileSync(rawPath, Buffer.alloc(0));
   session.meetingPcmPath = rawPath;
   session.meetingPcmBytes = 0;
@@ -366,6 +376,7 @@ async function refineMeetingTranscript(socket: Socket, session: AudioSession, ra
   try {
     socket.emit('meeting:refine_status', { status: 'transcribing', bytes });
     writePcm16Wav(rawPath, wavPath);
+    try { fs.rmSync(rawPath, { force: true }); } catch {}
     const result = await transcribeAudioFile(fs.readFileSync(wavPath), {
       fileName: path.basename(wavPath),
       language: 'zh',
@@ -460,6 +471,7 @@ async function processVoiceInput(
   session.ttsAbortController = new AbortController();
   socket.emit("audio:status", { status: "thinking" });
   const voiceScope = { domain: session.domain, orgId: session.orgId };
+  const voiceStateKey = getVoiceStateKey(session);
   if (isConfirmationCancellation(userText)) clearPendingConfirmation(session.userId);
   const pendingConfirmation = isExplicitConfirmationReply(userText)
     ? getPendingConfirmation(session.userId)
@@ -500,7 +512,7 @@ async function processVoiceInput(
     });
   } catch {}
 
-  const sensoryAudio = sensoryFn(socket.id);
+  const sensoryAudio = sensoryFn(session.userId);
   const { config: personality, systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
     session.personalityId || 'lumi',
     { mode: 'task', sensory: sensoryAudio, uiContext: 'voice' },
@@ -508,6 +520,8 @@ async function processVoiceInput(
       userId: session.userId,
       memories: voiceMemories.length > 0 ? voiceMemories : undefined,
       userText: routedUserText,
+      domain: voiceScope.domain,
+      orgId: voiceScope.orgId,
     },
   );
 
@@ -640,7 +654,7 @@ async function processVoiceInput(
     ? toolVoiceOverlay
     : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, assemble a team, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
-  const clientSelfPrompt = '\n\n' + formatClientSelfPrompt(session.userId);
+  const clientSelfPrompt = '\n\n' + formatClientSelfPrompt(session.userId, voiceScope);
   const dispatchOverlay = '\n\n' + turnDispatch.promptOverlay;
   const executionOverlay = '\n\n' + executionDecision.promptOverlay;
   const capabilitySelectionOverlay = '\n\n' + capabilitySelection.promptOverlay;
@@ -666,7 +680,7 @@ async function processVoiceInput(
   const voiceModel = (userLLMPrefs.models || {})[provider]
     || (provider === 'deepseek' ? 'deepseek-v4-pro' : DEFAULT_MODELS[provider])
     || userLLMPrefs.model
-    || 'deepseek-chat';
+    || 'deepseek-v4-flash';
 
   const maxIterations = executionDecision.maxIterations || personality.toolPolicy.maxIterations || 5;
   const toolResultPreviewLimit = 500;
@@ -717,6 +731,8 @@ async function processVoiceInput(
   const desktopRelay = createDesktopRelay({
     io,
     userId: session.userId,
+    domain: voiceScope.domain,
+    orgId: voiceScope.orgId,
     source: 'voice',
     requestSocket: socket,
     emitToolLifecycle,
@@ -766,7 +782,7 @@ async function processVoiceInput(
   // Emotion-adaptive voice: map mood to speech parameters, preserve user's chosen voiceId
   const emotionVoice = ((): { voiceId: string; speechRate?: number; pitch?: number; volume?: number } => {
     try {
-      const es = loadEmotionalState(session.userId);
+      const es = loadEmotionalState(voiceStateKey);
       if (es) return resolveEmotionVoice(session.currentVoiceId || 'longxiaochun_v3', es);
     } catch {}
     return { voiceId: session.currentVoiceId || 'longxiaochun_v3' };
@@ -987,7 +1003,7 @@ async function processVoiceInput(
       orgId: voiceScope.orgId,
       surface: 'voice',
     });
-    if (quickResult?.matched) {
+    if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
       logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
       let quickResponseText = quickResult.responseText;
       let quickToolResult = '';
@@ -1015,6 +1031,8 @@ async function processVoiceInput(
         }
         if (quickResult.formatToolResult) {
           quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
+        } else if (quickToolError) {
+          quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
         }
         quickToolRecord = {
           id: correlationId,
@@ -1024,12 +1042,21 @@ async function processVoiceInput(
           error: quickToolError,
         };
       }
+      const quickFinalized = finalizeLumiResponse({
+        taskText: routedUserText,
+        responseText: quickResponseText,
+        toolRecords: quickToolRecord ? [quickToolRecord] : [],
+        source: 'voice',
+        flow: turnFlow,
+      });
+      quickResponseText = quickFinalized.text;
+      if (quickFinalized.notification) socket.emit('agent:notification', quickFinalized.notification);
       flushSentence(quickResponseText);
       await Promise.allSettled(ttsPromises);
       responseText = quickResponseText;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: quickResult.toolCall ? [quickResult.toolCall] : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: quickToolRecord ? [quickToolRecord] : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
       session.isProcessing = false;
       session.isSpeaking = false;
       session.pipelineAbortController = null;
@@ -1466,7 +1493,7 @@ async function processVoiceInput(
     const textSentiment = extractSentiment(userText);
     if (textSentiment.valence !== 0 || textSentiment.urgency > 0 || textSentiment.frustration > 0) {
       try {
-        const es = loadEmotionalState(session.userId);
+        const es = loadEmotionalState(voiceStateKey);
         const updated = updateEmotionalState(es, {
           type: 'sentiment_analysis',
           timestamp: new Date().toISOString(),
@@ -1477,8 +1504,8 @@ async function processVoiceInput(
             urgency: textSentiment.urgency,
           },
         });
-        saveEmotionalState(session.userId, updated);
-        try { const hm = loadHIMState(session.userId); const { him: nh } = himTick(updated, hm); saveHIMState(session.userId, nh); } catch {}
+        saveEmotionalState(voiceStateKey, updated);
+        try { const hm = loadHIMState(voiceStateKey); const { him: nh } = himTick(updated, hm); saveHIMState(voiceStateKey, nh); } catch {}
       } catch { /* best-effort */ }
     }
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
@@ -1539,8 +1566,9 @@ export function registerVoiceHandlers(
     session.lastChunkTime = 0;
     session.userId = getUserId(socket);
     session.agentId = data.agentId || 'lumi';
-    session.domain = data.domain === 'work' && data.orgId ? 'work' : 'personal';
-    session.orgId = session.domain === 'work' ? String(data.orgId || '') : '';
+    const sessionScope = resolveSocketScope(socket, session.userId, data);
+    session.domain = sessionScope.domain;
+    session.orgId = sessionScope.orgId;
     session.transcriptionOnly = data.transcriptionOnly === true;
     session.meetingPcmPath = null;
     session.meetingPcmBytes = 0;
@@ -1552,16 +1580,28 @@ export function registerVoiceHandlers(
         logger.warn(`[Meeting] Failed to start PCM recording: ${err?.message || err}`);
       }
     }
-    const enrolledVoiceprints = session.userId ? getVoiceprints(session.userId) : [];
+    const enrolledVoiceprints = session.domain === 'personal' && session.userId ? getVoiceprints(session.userId) : [];
     session.voiceprintRequired = enrolledVoiceprints.length > 0;
     session.voiceprintMatched = !session.voiceprintRequired;
     session.voiceprintConfidence = 0;
     session.voiceprintSpeakerLabel = null;
     session.voiceprintSource = '';
     session.voiceprintLastAt = 0;
-    const personalityCfg = personalityRegistry.get(data.personalityId || 'lumi');
+    const personalityCfg = personalityRegistry.getForUser(
+      data.personalityId || 'lumi',
+      session.userId,
+      session.domain === 'work' ? session.orgId : undefined,
+    );
     // Use explicit voiceId, then personality's TTS voice, then null (TTS provider default)
-    session.currentVoiceId = data.voiceId || personalityCfg?.ttsVoiceId || null;
+    const requestedVoiceId = data.voiceId || personalityCfg?.ttsVoiceId || null;
+    const voiceScope = voiceProfileScope(session.userId, session.domain, session.orgId);
+    if (requestedVoiceId && !isVoiceProfileAccessible(voiceScope, requestedVoiceId)) {
+      logger.warn(`[Audio] Refused voice profile from another domain: ${requestedVoiceId}`);
+      socket.emit('audio:voice_unavailable', { reason: 'voice_profile_scope_mismatch' });
+      session.currentVoiceId = null;
+    } else {
+      session.currentVoiceId = requestedVoiceId;
+    }
     session.personalityId = data.personalityId || 'lumi';
 
     // End previous STT session if re-starting without explicit stop
@@ -1583,7 +1623,8 @@ export function registerVoiceHandlers(
             // Feed voice sentiment into emotional state when a provider includes it.
             if (result.sentiment && session.userId) {
               try {
-                const es = loadEmotionalState(session.userId);
+                const stateKey = getVoiceStateKey(session);
+                const es = loadEmotionalState(stateKey);
                 const updated = updateEmotionalState(es, {
                   type: 'sentiment_analysis',
                   timestamp: new Date().toISOString(),
@@ -1594,8 +1635,8 @@ export function registerVoiceHandlers(
                     urgency: 0,
                   },
                 });
-                saveEmotionalState(session.userId, updated);
-                try { const hm2 = loadHIMState(session.userId); const { him: nh2 } = himTick(updated, hm2); saveHIMState(session.userId, nh2); } catch {}
+                saveEmotionalState(stateKey, updated);
+                try { const hm2 = loadHIMState(stateKey); const { him: nh2 } = himTick(updated, hm2); saveHIMState(stateKey, nh2); } catch {}
               } catch { /* best-effort sentiment tracking */ }
             }
             session.accumulatedText += result.text;
@@ -1728,6 +1769,7 @@ export function registerVoiceHandlers(
   // ── Voiceprint: receive MFCC match results from frontend hook ──
   socket.on("voiceprint:result", (data: { isOwnerSpeaking: boolean; confidence: number; speakerLabel?: string | null; source?: string; quality?: number; reason?: string }) => {
     const session = getAudioSession(socket);
+    if (session.domain === 'work') return;
     session.voiceprintMatched = data.isOwnerSpeaking;
     session.voiceprintConfidence = data.confidence;
     session.voiceprintSpeakerLabel = data.speakerLabel || null;
@@ -1737,9 +1779,21 @@ export function registerVoiceHandlers(
   });
 
   // ── Presence: periodic heartbeat from usePresence hook ──
-  socket.on("presence:heartbeat", (data: { facePresent: boolean; faceConfidence: number; voiceprintMatched: boolean; voiceprintConfidence: number; userId: string }) => {
-    const state = updatePresence(data.userId, data);
-    const status = state.isAway ? 'away' : (state.facePresent || state.voiceprintMatched ? 'present' : 'uncertain');
+  socket.on("presence:heartbeat", (data: { facePresent: boolean; faceMatched?: boolean; faceConfidence: number; voiceprintMatched: boolean; voiceprintConfidence: number }) => {
+    const userId = getUserId(socket);
+    const presenceScope = resolveSocketScope(socket, userId);
+    if (presenceScope.domain === 'work') {
+      socket.emit('presence:state_change', { isAway: true, status: 'unavailable_in_organization' });
+      return;
+    }
+    const state = updatePresence(userId, {
+      facePresent: data.facePresent === true,
+      faceMatched: data.faceMatched === true,
+      faceConfidence: Number(data.faceConfidence) || 0,
+      voiceprintMatched: data.voiceprintMatched === true,
+      voiceprintConfidence: Number(data.voiceprintConfidence) || 0,
+    });
+    const status = state.isAway ? 'away' : (state.faceMatched || state.voiceprintMatched ? 'present' : 'uncertain');
     socket.emit('presence:state_change', { isAway: state.isAway, status });
   });
 
@@ -1829,13 +1883,17 @@ export function registerVoiceHandlers(
     // Resolve voiceId: session first, then personality config, then give up
     let voiceId = session.currentVoiceId;
     if (!voiceId) {
-      const personalityCfg = personalityRegistry.get(session.personalityId || 'lumi');
+      const personalityCfg = personalityRegistry.getForUser(
+        session.personalityId || 'lumi',
+        userId,
+        session.domain === 'work' ? session.orgId : undefined,
+      );
       voiceId = personalityCfg?.ttsVoiceId || null;
     }
     if (!voiceId) { resetSpeaking(); return; }
 
     // Gate: check initiative level — Lumi only speaks first when comfortable enough
-    const es = loadEmotionalState(userId);
+    const es = loadEmotionalState(getVoiceStateKey(session));
     if (es.initiative < 0.4) { resetSpeaking(); return; }
 
     // Gate: don't interrupt when environment is noisy (user likely in a meeting)
@@ -1881,12 +1939,16 @@ export function registerVoiceHandlers(
     const session = getAudioSession(socket);
     let voiceId = session.currentVoiceId;
     if (!voiceId) {
-      const personalityCfg = personalityRegistry.get(session.personalityId || 'lumi');
+      const personalityCfg = personalityRegistry.getForUser(
+        session.personalityId || 'lumi',
+        userId,
+        session.domain === 'work' ? session.orgId : undefined,
+      );
       voiceId = personalityCfg?.ttsVoiceId || null;
     }
     if (!voiceId) return;
 
-    const es = loadEmotionalState(userId);
+    const es = loadEmotionalState(getVoiceStateKey(session));
     if (es.initiative < 0.3) return; // Lower gate for greetings
 
     // Build temporal context for scene-aware generation

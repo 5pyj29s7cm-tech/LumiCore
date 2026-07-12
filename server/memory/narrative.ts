@@ -34,11 +34,15 @@ export async function buildNarrativeChain(params: {
   userId: string;
   topic: string;
   limit?: number;
+  domain?: string;
+  orgId?: string;
   getDeepSeek: () => any;
   getGemini: () => any;
   getQwen?: () => any;
 }): Promise<NarrativeChainResult> {
   const { userId, topic, limit = 10 } = params;
+  const domain = params.domain === 'work' ? 'work' : 'personal';
+  const orgId = domain === 'work' ? (params.orgId || '') : '';
 
   // 1. Seed retrieval — find memories matching the topic
   const seedMemories = queryMemories({
@@ -46,6 +50,8 @@ export async function buildNarrativeChain(params: {
     query: topic,
     limit,
     minConfidence: 0.3,
+    domain,
+    orgId,
   });
 
   if (seedMemories.length === 0) {
@@ -57,7 +63,7 @@ export async function buildNarrativeChain(params: {
   const allMemories: Memory[] = [...seedMemories];
 
   for (const seed of seedMemories) {
-    const associated = getAssociatedMemories(seed.id, userId, 0.2);
+    const associated = getAssociatedMemories(seed.id, userId, 0.2, domain, orgId);
     for (const am of associated) {
       if (!allIds.has(am.id)) {
         allIds.add(am.id);
@@ -90,7 +96,7 @@ export async function buildNarrativeChain(params: {
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 512, userId },
+      { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: 512, userId },
       params.getDeepSeek,
       params.getGemini,
       undefined,
@@ -128,6 +134,10 @@ export async function buildNarrativeChain(params: {
         tier: 'growth',
         perspective: 'lumi_self',
         importance: 0.6,
+        domain,
+        orgId,
+        source: 'consolidation',
+        privacyClass: domain === 'work' ? 'organization' : 'private',
       },
     );
 

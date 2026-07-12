@@ -17,6 +17,12 @@ describe('AutoCAD visible draw script', () => {
         width: 9000,
         height: 7600,
         unit: 'mm',
+        sourcePath: 'C:\\Users\\tester\\Desktop\\source-plan.png',
+        inferredScale: true,
+        confidence: 0.72,
+        assumptions: ['One unlabeled wall segment was inferred.'],
+        missingForPrecision: ['Confirm the overall depth.'],
+        precisionStatus: 'inferred_requires_review',
         wallThickness: 180,
         outputDirectory: dir,
         strokeDelayMs: 120,
@@ -45,7 +51,17 @@ describe('AutoCAD visible draw script', () => {
       expect(fs.existsSync(result.lispPath)).toBe(true);
       expect(fs.existsSync(result.scriptPath)).toBe(true);
       expect(fs.existsSync(result.powershellRunnerPath)).toBe(true);
+      expect(fs.existsSync(result.manifestPath)).toBe(true);
       expect(result.completionMarkerPath).toContain('_completed.txt');
+      expect(result).toMatchObject({ inferredScale: true, confidence: 0.72, precisionStatus: 'inferred_requires_review' });
+
+      const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf-8'));
+      expect(manifest).toMatchObject({
+        operationCount: result.operationCount,
+        strokeDelayMs: 120,
+        inferredScale: true,
+        missingForPrecision: ['Confirm the overall depth.'],
+      });
 
       const lisp = fs.readFileSync(result.lispPath, 'utf-8');
       const script = fs.readFileSync(result.scriptPath, 'utf-8');
@@ -68,11 +84,28 @@ describe('AutoCAD visible draw script', () => {
       } as any);
       const runResult = JSON.parse(runRaw);
       expect(runResult.status).toBe('ready_to_launch');
+      expect(runResult.manifestFound).toBe(true);
+      expect(runResult.estimatedWaitSeconds).toBeGreaterThanOrEqual(45);
       expect(runResult.launchCommand).toContain(runResult.powershellRunnerPath);
       expect(fs.existsSync(runResult.powershellRunnerPath)).toBe(true);
       expect(fs.readFileSync(runResult.powershellRunnerPath, 'utf-8')).toContain(path.basename(result.scriptPath));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('refuses to invent fallback dimensions when geometry is incomplete', async () => {
+    const registry = new ToolRegistry();
+    registerExternalAppTools(registry);
+
+    await expect(registry.execute('cad_generate_dxf', {
+      title: 'missing dimensions',
+      width: null,
+      height: null,
+      walls: [{ x1: 0, y1: 0, x2: 1000, y2: 0 }],
+    }, {
+      userConfirmed: true,
+      allowLocalFileWrites: true,
+    })).rejects.toThrow(/width and height must be positive finite values/i);
   });
 });

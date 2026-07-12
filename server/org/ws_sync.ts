@@ -7,13 +7,11 @@
  */
 
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import jwt from 'jsonwebtoken';
 import { getMember } from './db';
 import { removeBranchHeartbeat } from './main_api';
 
 let io: SocketIOServer | null = null;
 const branchSockets = new Map<string, Set<string>>(); // userId -> Set<socketId>
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
 // ── Initialize ──────────────────────────────────────────────────────────
 
@@ -21,8 +19,10 @@ export function attachOrgWs(server: SocketIOServer) {
   io = server;
 
   io.on('connection', (socket: Socket) => {
-    const userId = extractUserId(socket);
-    const orgId = extractOrgId(socket);
+    const userId = String(socket.data?.authenticatedUserId || 'anonymous');
+    const requestedOrgId = String(socket.data?.authenticatedOrgId || '').trim();
+    const membership = requestedOrgId ? getMember(requestedOrgId, userId) : null;
+    const orgId = membership?.status === 'active' ? requestedOrgId : '';
 
     // Track branch socket
     if (userId !== 'anonymous') {
@@ -41,7 +41,7 @@ export function attachOrgWs(server: SocketIOServer) {
     // ── Branch heartbeat ──────────────────────────────────────────────
 
     socket.on('org:heartbeat', (data: { orgId: string }) => {
-      if (data.orgId && userId !== 'anonymous') {
+      if (data.orgId === orgId && userId !== 'anonymous') {
         socket.emit('org:heartbeat:ack', { serverTime: new Date().toISOString() });
       }
     });
@@ -127,39 +127,6 @@ export function emitKbUpdated(orgId: string, articleId: string, action: 'created
 }
 
 // ── Auth helpers ────────────────────────────────────────────────────────
-
-function extractUserId(socket: Socket): string {
-  try {
-    const authToken = socket.handshake?.auth?.token;
-    if (authToken) {
-      const decoded: any = jwt.verify(authToken, JWT_SECRET);
-      return decoded.uid || 'anonymous';
-    }
-    const cookies = socket.handshake.headers.cookie;
-    if (cookies) {
-      const token = cookies
-        .split(';')
-        .find((c: string) => c.trim().startsWith('token='))
-        ?.split('=')[1];
-      if (token) {
-        const decoded: any = jwt.verify(token, JWT_SECRET);
-        return decoded.uid || 'anonymous';
-      }
-    }
-  } catch {}
-  return 'anonymous';
-}
-
-function extractOrgId(socket: Socket): string | null {
-  try {
-    const authToken = socket.handshake?.auth?.token;
-    if (authToken) {
-      const decoded: any = jwt.verify(authToken, JWT_SECRET);
-      return decoded.orgId || null;
-    }
-  } catch {}
-  return null;
-}
 
 function countSyncItems(payload: any): number {
   let count = 0;

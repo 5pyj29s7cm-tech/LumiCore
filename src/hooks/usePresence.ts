@@ -28,10 +28,10 @@ export function usePresence({ socket, faceResult, voiceprintResult, userId }: Us
     const timer = setInterval(() => {
       socket.emit('presence:heartbeat', {
         facePresent: faceResult.facePresent,
+        faceMatched: faceResult.ownerPresent,
         faceConfidence: faceResult.confidence,
         voiceprintMatched: voiceprintResult.isOwnerSpeaking,
         voiceprintConfidence: voiceprintResult.confidence,
-        userId,
       });
     }, 2000);
     return () => clearInterval(timer);
@@ -52,13 +52,14 @@ export function usePresence({ socket, faceResult, voiceprintResult, userId }: Us
 
   // Local away detection (fast path — doesn't wait for server roundtrip)
   useEffect(() => {
-    const away = !faceResult.facePresent && !voiceprintResult.isOwnerSpeaking;
-    let status: PresenceState['status'] = 'present';
-    if (away) status = 'away';
-    else if (!faceResult.facePresent || !voiceprintResult.isOwnerSpeaking) status = 'uncertain';
+    const ownerSignal = faceResult.ownerPresent || voiceprintResult.isOwnerSpeaking;
+    const away = !ownerSignal && !faceResult.facePresent;
+    const status: PresenceState['status'] = ownerSignal
+      ? 'present'
+      : (faceResult.facePresent ? 'uncertain' : 'away');
 
     setPresence({ isAway: away, status });
-  }, [faceResult.facePresent, voiceprintResult.isOwnerSpeaking]);
+  }, [faceResult.facePresent, faceResult.ownerPresent, voiceprintResult.isOwnerSpeaking]);
 
   return presence;
 }

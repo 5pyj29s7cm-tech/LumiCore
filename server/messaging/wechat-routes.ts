@@ -4,8 +4,6 @@ import { WeChatClawBotAdapter, type WeChatClawBotConfig } from './wechat-clawbot
 import { getMessagingConfig, updateMessagingConfig } from './config';
 import { requireAuth } from '../middleware/auth';
 import type { IncomingMessage, MessageHandler } from './types';
-import { makeLLMCall, type NormalizedMessage } from '../llm/providers';
-import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import {
   consumeBindingCode,
   createBindingCode,
@@ -15,6 +13,27 @@ import {
 } from './bindings';
 import { getMember } from '../org/db';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
+import {
+  enqueueMessageRoute,
+  handleRemoteOrgCommand,
+  persistBoundMessagingExchange,
+  processWithPersonality,
+} from './routes';
+
+function requireWechatAdmin(req: any, res: any): boolean {
+  if (req.user?.role === 'admin') return true;
+  res.status(403).json({ error: 'System administrator access is required for the host WeChat bot account.' });
+  return false;
+}
+
+function requestedBindingOrgId(req: any): string {
+  const sessionOrgId = String(req.user?.orgId || '').trim();
+  const requestedOrgId = String(req.body?.orgId || '').trim();
+  if (sessionOrgId && requestedOrgId && sessionOrgId !== requestedOrgId) {
+    throw new Error('Requested organization does not match the active organization context');
+  }
+  return sessionOrgId || requestedOrgId;
+}
 
 export function createWeChatRoutes(
   config: WeChatClawBotConfig,
@@ -22,7 +41,7 @@ export function createWeChatRoutes(
     onMessage?: MessageHandler;
     llmGetters?: Record<string, () => any>;
     personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number }) => any[];
+    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
     loadEmotionalState?: (userId: string) => any;
   },
 ): Router {
@@ -30,8 +49,9 @@ export function createWeChatRoutes(
   const adapter = new WeChatClawBotAdapter(config);
 
   // ── GET /wechat/qrcode — get login QR code ──
-  router.get('/wechat/qrcode', requireAuth, async (_req, res) => {
+  router.get('/wechat/qrcode', requireAuth, async (req, res) => {
     try {
+      if (!requireWechatAdmin(req, res)) return;
       const qr = await adapter.getQRCode();
       res.json(qr);
     } catch (err: any) {
@@ -42,6 +62,7 @@ export function createWeChatRoutes(
   // ── GET /wechat/qrcode/status — poll QR scan status ──
   router.get('/wechat/qrcode/status', requireAuth, async (req, res) => {
     try {
+      if (!requireWechatAdmin(req, res)) return;
       const qrId = req.query.qrcode_id as string;
       if (!qrId) return res.status(400).json({ error: 'qrcode_id required' });
       const status = await adapter.checkQRCodeStatus(qrId);
@@ -68,7 +89,7 @@ export function createWeChatRoutes(
   });
 
   // ── GET /wechat/status — connection status ──
-  router.get('/wechat/status', (_req, res) => {
+  router.get('/wechat/status', requireAuth, (_req, res) => {
     res.json({
       platform: 'wechat',
       configured: !!(config.botToken && config.botId),
@@ -78,7 +99,8 @@ export function createWeChatRoutes(
   });
 
   // ── GET /wechat/config ──
-  router.get('/wechat/config', requireAuth, (_req, res) => {
+  router.get('/wechat/config', requireAuth, (req, res) => {
+    if (!requireWechatAdmin(req, res)) return;
     res.json({
       botId: config.botId,
       hasToken: !!config.botToken,
@@ -89,6 +111,7 @@ export function createWeChatRoutes(
   // ── POST /wechat/config — manual config override ──
   router.post('/wechat/config', requireAuth, async (req, res) => {
     try {
+      if (!requireWechatAdmin(req, res)) return;
       const { botToken, botId } = req.body;
       const updated = updateMessagingConfig({ wechat: { botToken, botId, baseUrl: 'https://ilinkai.weixin.qq.com' } });
       Object.assign(config, updated.wechat);
@@ -106,7 +129,7 @@ export function createWeChatRoutes(
 
   router.post('/wechat/bindings/code', requireAuth, (req, res) => {
     try {
-      const code = createBindingCode('wechat', req.user!.uid, String(req.body?.orgId || req.user?.orgId || ''));
+      const code = createBindingCode('wechat', req.user!.uid, requestedBindingOrgId(req));
       res.json({
         code: code.code,
         expiresAt: code.expiresAt,
@@ -118,11 +141,14 @@ export function createWeChatRoutes(
   });
 
   router.get('/wechat/bindings', requireAuth, (req, res) => {
-    res.json({ bindings: listBindingsForUser(req.user!.uid).filter(item => item.platform === 'wechat') });
+    const orgId = String(req.user?.orgId || '').trim();
+    res.json({ bindings: listBindingsForUser(req.user!.uid).filter(item =>
+      item.platform === 'wechat' && (!orgId || item.orgId === orgId)
+    ) });
   });
 
   router.delete('/wechat/bindings/:bindingId', requireAuth, (req, res) => {
-    const ok = deleteBindingForUser(req.user!.uid, req.params.bindingId);
+    const ok = deleteBindingForUser(req.user!.uid, req.params.bindingId, req.user?.orgId || undefined);
     res.json({ success: ok });
   });
 
@@ -145,7 +171,7 @@ function startWeChatPolling(
     onMessage?: MessageHandler;
     llmGetters?: Record<string, () => any>;
     personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number }) => any[];
+    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
     loadEmotionalState?: (userId: string) => any;
   },
 ): void {
@@ -154,20 +180,35 @@ function startWeChatPolling(
     if (bindingReply) return { text: bindingReply, platform: 'wechat' as const };
 
     const boundMsg = applyWeChatBinding(msg);
-    const legalNoticeReply = await handleRemoteLegalNoticeIntake(boundMsg);
-    if (legalNoticeReply) return { text: legalNoticeReply, platform: 'wechat' as const };
+    let outgoing: { text: string; platform: 'wechat' } | null = null;
+    await enqueueMessageRoute(boundMsg, async () => {
+      const legalNoticeReply = await handleRemoteLegalNoticeIntake(boundMsg);
+      if (legalNoticeReply) {
+        persistBoundMessagingExchange(boundMsg, legalNoticeReply);
+        outgoing = { text: legalNoticeReply, platform: 'wechat' };
+        return;
+      }
+      const remoteOrgReply = await handleRemoteOrgCommand(boundMsg);
+      if (remoteOrgReply) {
+        persistBoundMessagingExchange(boundMsg, remoteOrgReply);
+        outgoing = { text: remoteOrgReply, platform: 'wechat' };
+        return;
+      }
 
-    if (options?.onMessage) {
-      return options.onMessage(boundMsg);
-    }
-    const reply = await processWeChatMessage(boundMsg, options);
-    return reply ? { text: reply.text, platform: 'wechat' as const } : null;
+      if (options?.onMessage) {
+        const reply = await options.onMessage(boundMsg);
+        if (reply) {
+          persistBoundMessagingExchange(boundMsg, reply.text);
+          outgoing = { text: reply.text, platform: 'wechat' };
+        }
+        return;
+      }
+      const replyText = await processWithPersonality(boundMsg, options);
+      outgoing = { text: replyText, platform: 'wechat' };
+    });
+    return outgoing;
   });
 }
-
-// Simplified AI reply via the user's selected main LLM.
-
-const DEFAULT_SYSTEM_PROMPT = `你是一个名为 Lumi 的 AI 助手，通过微信与用户交流。保持回复简洁、温暖、有帮助。用中文回复。`;
 
 function handleWeChatBindingCommand(msg: IncomingMessage): string | null {
   const match = msg.text.trim().match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
@@ -189,36 +230,4 @@ function applyWeChatBinding(msg: IncomingMessage): IncomingMessage {
     boundUserId: binding.lumiUserId,
     boundOrgId: binding.orgId,
   };
-}
-
-async function processWeChatMessage(
-  msg: IncomingMessage,
-  options?: { llmGetters?: Record<string, () => any> },
-): Promise<{ text: string } | null> {
-  const llm = options?.llmGetters;
-  if (!llm) return { text: `收到你的消息："${msg.text.slice(0, 60)}"。当前 AI 服务未配置。` };
-
-  try {
-    const config = getUserPreferredLLMConfig(msg.userId || 'anonymous', { maxTokens: 500 });
-    const messages: NormalizedMessage[] = [
-      { role: 'system', content: DEFAULT_SYSTEM_PROMPT },
-      { role: 'user', content: msg.text },
-    ];
-    const response = await makeLLMCall(
-      messages,
-      [],
-      config,
-      llm.getDeepSeek,
-      llm.getGemini,
-      llm.getOpenAI,
-      llm.getAnthropic,
-      llm.getQwen,
-    );
-    const text = response.text?.trim();
-    if (text) return { text: text.slice(0, 500) };
-  } catch (err: any) {
-    console.warn(`[WeChat] Main LLM failed:`, err.message);
-  }
-
-  return { text: `收到你的消息："${msg.text.slice(0, 60)}"。当前主推理服务不可用，请稍后再试。` };
 }

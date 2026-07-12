@@ -386,6 +386,33 @@ describe('Action Constitution', () => {
     })).rejects.toThrow(/requires user confirmation/);
   });
 
+  it('uses an explicit foreground user request as authorization without a second popup', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'client_action',
+      description: 'Client action',
+      parameters: {},
+      permission: 'user',
+      securityLevel: 'safe',
+      handler: async (_args, context) => context?.userConfirmed ? 'authorized' : 'explicit-intent',
+    });
+
+    await expect(registry.execute('client_action', {
+      action: 'start_meeting_mode',
+    }, {
+      actionIntent: '开始会议模式，记录这次沟通',
+      source: 'chat',
+    })).resolves.toBe('explicit-intent');
+
+    await expect(registry.execute('client_action', {
+      action: 'set_wallpaper_mode',
+      enabled: true,
+    }, {
+      actionIntent: '进入壁纸模式继续工作',
+      source: 'voice',
+    })).resolves.toBe('explicit-intent');
+  });
+
   it('passes real registry confirmation to confirmed tools', async () => {
     const registry = new ToolRegistry();
     registry.register({

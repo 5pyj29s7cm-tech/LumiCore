@@ -186,8 +186,10 @@ interface ObsidianNoteFile {
 
 interface FileScope {
   domain: 'personal' | 'work';
+  userId: string;
   orgId?: string;
   dir: string;
+  legacyPersonalOwner?: boolean;
 }
 
 interface KnowledgeFileInput {
@@ -690,8 +692,54 @@ function normalizeFileDomain(value: unknown): 'personal' | 'work' {
   return String(value || '').toLowerCase() === 'work' ? 'work' : 'personal';
 }
 
-function getRequestedDomain(req: Request): 'personal' | 'work' {
-  return normalizeFileDomain(req.query.domain || req.body?.domain);
+function getRequestedDomain(req: Request): 'personal' | 'work' | null {
+  const value = req.query.domain ?? req.body?.domain;
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  return normalizeFileDomain(value);
+}
+
+function isPrimaryLocalOwner(userId: string): boolean {
+  const db = readDB();
+  const primaryAdmin = (db.users || []).find((user: any) => user?.role === 'admin');
+  return Boolean(primaryAdmin?.uid && primaryAdmin.uid === userId);
+}
+
+function getPersonalKnowledgeDirectory(userId: string): { dir: string; legacyPersonalOwner: boolean } {
+  // Preserve the original on-device owner's vault location. Any additional local
+  // account gets a separate directory so an organization member cannot enter a
+  // personal token context and see the host owner's files.
+  if (isPrimaryLocalOwner(userId)) {
+    return { dir: PERSONAL_KNOWLEDGE_DIR, legacyPersonalOwner: true };
+  }
+  const directoryId = crypto.createHash('sha256').update(userId).digest('hex').slice(0, 24);
+  const dir = path.join(PERSONAL_KNOWLEDGE_DIR, '_users', directoryId);
+  fs.mkdirSync(dir, { recursive: true });
+  return { dir, legacyPersonalOwner: false };
+}
+
+function assertLocalHostRequest(req: Request): void {
+  const address = String(req.socket?.remoteAddress || '').toLowerCase();
+  const loopback = address === '::1'
+    || address === '127.0.0.1'
+    || address.startsWith('127.')
+    || address.startsWith('::ffff:127.');
+  if (loopback) return;
+  const err: any = new Error('This operation is available only from the local Lumi desktop client.');
+  err.status = 403;
+  throw err;
+}
+
+function assertKnowledgeWriteAccess(scope: FileScope, adminOnly = false): void {
+  if (scope.domain === 'personal') return;
+  const membership = scope.orgId ? getMember(scope.orgId, scope.userId) : null;
+  const allowedRoles = adminOnly ? ['owner', 'admin'] : ['owner', 'admin', 'member'];
+  if (!membership || !allowedRoles.includes(membership.role)) {
+    const err: any = new Error(adminOnly
+      ? 'Organization owner or administrator access required.'
+      : 'This organization role has read-only knowledge access.');
+    err.status = 403;
+    throw err;
+  }
 }
 
 function getFileScope(req: Request): FileScope {
@@ -702,9 +750,25 @@ function getFileScope(req: Request): FileScope {
     throw err;
   }
 
-  const domain = getRequestedDomain(req);
-  if (domain === 'personal') {
-    return { domain: 'personal', dir: PERSONAL_KNOWLEDGE_DIR };
+  const requestedDomain = getRequestedDomain(req);
+  const authenticatedDomain = payload.orgId ? 'work' : 'personal';
+  if (requestedDomain && requestedDomain !== authenticatedDomain) {
+    const err: any = new Error(authenticatedDomain === 'work'
+      ? 'Personal knowledge is unavailable in organization context. Switch to personal Lumi first.'
+      : 'Organization knowledge requires an active organization context.');
+    err.status = 403;
+    throw err;
+  }
+
+  if (authenticatedDomain === 'personal') {
+    assertLocalHostRequest(req);
+    const personal = getPersonalKnowledgeDirectory(payload.uid);
+    return {
+      domain: 'personal',
+      userId: payload.uid,
+      dir: personal.dir,
+      legacyPersonalOwner: personal.legacyPersonalOwner,
+    };
   }
 
   const requestedOrgId = String(req.query.orgId || req.body?.orgId || '').trim();
@@ -728,14 +792,16 @@ function getFileScope(req: Request): FileScope {
 
   const dir = getDataPath(path.join('org', orgId, 'knowledge'));
   fs.mkdirSync(dir, { recursive: true });
-  return { domain: 'work', orgId, dir };
+  return { domain: 'work', userId: payload.uid, orgId, dir };
 }
 
 function metaMatchesScope(meta: any, scope: FileScope): boolean {
   const metaDomain = normalizeFileDomain(meta?.domain || (meta?.orgId ? 'work' : 'personal'));
   if (metaDomain !== scope.domain) return false;
   if (scope.domain === 'work') return String(meta?.orgId || '') === scope.orgId;
-  return !meta?.orgId;
+  if (meta?.orgId) return false;
+  if (meta?.userId) return String(meta.userId) === scope.userId;
+  return scope.legacyPersonalOwner === true;
 }
 
 function findFileMeta(db: any, filename: string, scope: FileScope): any | undefined {
@@ -858,11 +924,13 @@ async function saveKnowledgeFile(
     existing.source = 'upload';
     existing.domain = scope.domain;
     existing.orgId = scope.orgId || '';
+    existing.userId = scope.domain === 'personal' ? scope.userId : existing.userId;
     existing.updatedAt = new Date().toISOString();
   } else {
     db.knowledgeFiles.push({
       filename: finalName,
       displayName: repairFilename(finalName),
+      userId: scope.userId,
       domain: scope.domain,
       orgId: scope.orgId || '',
       source: 'upload',
@@ -1195,6 +1263,7 @@ async function syncObsidianNote(
     meta = {
       filename: finalName,
       displayName: repairFilename(finalName),
+      userId: scope.userId,
       domain: scope.domain,
       orgId: scope.orgId || '',
       source: 'obsidian',
@@ -1370,6 +1439,47 @@ function findExistingFileMemories(
   });
 }
 
+function removeFileMemoryReferences(db: any, filename: string, scope: FileScope): number {
+  if (scope.domain !== 'personal') return 0;
+  const ids = new Set(
+    findExistingFileMemories(db, filename, scope, { userId: scope.userId })
+      .map((memory: any) => memory.id)
+      .filter(Boolean),
+  );
+  if (ids.size === 0) return 0;
+  db.memories = (db.memories || []).filter((memory: any) => !ids.has(memory.id));
+  return ids.size;
+}
+
+function renameFileMemoryReferences(
+  db: any,
+  oldName: string,
+  newName: string,
+  newPath: string,
+  scope: FileScope,
+): number {
+  if (scope.domain !== 'personal') return 0;
+  const memories = findExistingFileMemories(db, oldName, scope, { userId: scope.userId });
+  const normalizedOldName = oldName.normalize('NFC').toLowerCase();
+  const oldSourceKeyword = `source:${oldName}`.normalize('NFC').toLowerCase();
+  for (const memory of memories) {
+    const content = String(memory.content || '');
+    if (content.startsWith(`[${oldName} #`)) {
+      memory.content = `[${newName} #${content.slice(oldName.length + 3)}`;
+    }
+    memory.keywords = (Array.isArray(memory.keywords) ? memory.keywords : []).map((keyword: unknown) => {
+      const value = String(keyword || '');
+      const normalized = value.normalize('NFC').toLowerCase();
+      if (normalized === normalizedOldName) return newName;
+      if (normalized === oldSourceKeyword) return `source:${newName}`;
+      return value;
+    });
+    memory.sourceInteractionId = newPath;
+    memory.updatedAt = new Date().toISOString();
+  }
+  return memories.length;
+}
+
 function normalizedKnowledgeFileKeys(filename: string): string[] {
   const repaired = repairFilename(filename);
   const stem = path.basename(repaired, path.extname(repaired));
@@ -1431,7 +1541,12 @@ router.get('/files/list', (req: Request, res: Response) => {
     const files: KnowledgeEntry[] = [];
     for (const name of entries) {
       if (name.startsWith('.') || name.startsWith('_')) continue;
-      const inferredMemories = findExistingFileMemories(db, name, scope);
+      const inferredMemories = findExistingFileMemories(
+        db,
+        name,
+        scope,
+        scope.domain === 'personal' ? { userId: scope.userId } : {},
+      );
       const inferredAgentIds = [...new Set(inferredMemories.map((m: any) => String(m.agentId || '').trim()).filter(Boolean))];
       const meta = {
         ...(fileMeta[name] || { source: 'upload' as const, agentIds: [] as string[] }),
@@ -1455,6 +1570,7 @@ router.get('/files/list', (req: Request, res: Response) => {
 // ── Obsidian vault connection and sync ──
 router.get('/files/obsidian/status', requireAuth, (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const userId = getUserId(req);
     const scope = getFileScope(req);
     const db = readDB();
@@ -1484,8 +1600,10 @@ router.get('/files/obsidian/status', requireAuth, (req: Request, res: Response) 
 
 router.post('/files/obsidian/connect', requireAuth, (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const { vaultPath, name } = req.body || {};
     if (!vaultPath) return res.status(400).json({ error: 'vaultPath is required' });
     const db = readDB();
@@ -1510,8 +1628,10 @@ router.post('/files/obsidian/connect', requireAuth, (req: Request, res: Response
 
 router.post('/files/obsidian/sync', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const db = readDB();
     const vaultId = String(req.body?.vaultId || req.query.vaultId || '').trim();
     const vaults = readObsidianVaults(db, userId, scope);
@@ -1551,8 +1671,10 @@ router.post('/files/obsidian/sync', requireAuth, async (req: Request, res: Respo
 
 router.delete('/files/obsidian/:id', requireAuth, (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const db = readDB();
     const vaults = readObsidianVaults(db, userId, scope);
     const next = vaults.filter(v => v.id !== req.params.id);
@@ -1575,6 +1697,7 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
 
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const db = readDB();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
 
@@ -1598,6 +1721,7 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
 // ── POST /files/import-paths — import local files dropped into the desktop widget ──
 router.post('/files/import-paths', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const requestedPaths = Array.isArray(req.body?.paths) ? req.body.paths : [];
     const uniquePaths: string[] = [...new Set<string>(
       requestedPaths.map((p: unknown) => String(p || '').trim()).filter(Boolean),
@@ -1608,6 +1732,7 @@ router.post('/files/import-paths', requireAuth, async (req: Request, res: Respon
 
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const db = readDB();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
 
@@ -1656,6 +1781,7 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
 
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const safeName = sanitizeKnowledgeFilename(name);
     const contentText = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
     const filePath = path.join(scope.dir, safeName);
@@ -1668,11 +1794,13 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
       existing.source = 'generated';
       existing.domain = scope.domain;
       existing.orgId = scope.orgId || '';
+      existing.userId = scope.domain === 'personal' ? scope.userId : existing.userId;
       existing.updatedAt = new Date().toISOString();
     } else {
       db.knowledgeFiles.push({
         filename: safeName,
         displayName: repairFilename(safeName),
+        userId: scope.userId,
         domain: scope.domain,
         orgId: scope.orgId || '',
         source: 'generated',
@@ -1723,6 +1851,7 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
 // ── GET /files/generated?path=... — download a generated work artifact ──
 router.get('/files/generated', requireAuth, (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const filePath = resolveGeneratedDownloadPath(req.query.path);
     const fileName = path.basename(filePath);
     const mime = getDownloadMime(filePath);
@@ -1739,6 +1868,7 @@ router.get('/files/generated', requireAuth, (req: Request, res: Response) => {
 // Open a knowledge/generated file with the OS default application.
 router.post('/files/open', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const id = req.body?.id || req.query.id;
     const rawPath = req.body?.path || req.query.path;
     const filePath = id
@@ -1780,6 +1910,7 @@ router.get('/files/download/:id', (req: Request, res: Response) => {
 // ── GET /files/open-folder/:id — open the file's containing folder in the OS ──
 router.get('/files/open-folder', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const scope = getFileScope(req);
     const folder = path.resolve(scope.dir);
     if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
@@ -1792,6 +1923,7 @@ router.get('/files/open-folder', requireAuth, async (req: Request, res: Response
 
 router.get('/files/open-folder/:id', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertLocalHostRequest(req);
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);
     const filePath = path.join(scope.dir, safeName);
@@ -1809,17 +1941,22 @@ router.get('/files/open-folder/:id', requireAuth, async (req: Request, res: Resp
 router.delete('/files/delete/:id', requireAuth, (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope, scope.domain === 'work');
     const safeName = path.basename(req.params.id);
     const filePath = path.join(scope.dir, safeName);
     if (!safeName || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
-    fs.unlinkSync(filePath);
-
     const db = readDB();
+    const meta = findFileMeta(db, safeName, scope);
+    const removedMemoryCount = removeFileMemoryReferences(db, safeName, scope);
+    fs.unlinkSync(filePath);
     if (db.knowledgeFiles) {
       removeFileMeta(db, safeName, scope);
-      writeDB(db);
     }
-    res.json({ success: true });
+    writeDB(db);
+    const removedOrgArticle = scope.domain === 'work' && scope.orgId && meta?.orgArticleId
+      ? OrgKB.deleteArticle(scope.orgId, scope.userId, meta.orgArticleId)
+      : false;
+    res.json({ success: true, removedMemoryCount, removedOrgArticle });
   } catch (err: any) {
     sendRouteError(res, err);
   }
@@ -1832,6 +1969,7 @@ router.post('/files/rename', requireAuth, (req: Request, res: Response) => {
     if (!id || !newName) return res.status(400).json({ error: 'id and newName required' });
 
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const oldPath = path.join(scope.dir, path.basename(id));
     const safeNewName = sanitizeKnowledgeFilename(newName);
     const newPath = path.join(scope.dir, safeNewName);
@@ -1842,16 +1980,29 @@ router.post('/files/rename', requireAuth, (req: Request, res: Response) => {
     fs.renameSync(oldPath, newPath);
 
     const db = readDB();
+    const oldName = path.basename(id);
+    const renamedMemoryCount = renameFileMemoryReferences(db, oldName, safeNewName, newPath, scope);
+    let orgArticleId = '';
     if (db.knowledgeFiles) {
-      const meta = findFileMeta(db, path.basename(id), scope);
+      const meta = findFileMeta(db, oldName, scope);
       if (meta) {
         meta.filename = safeNewName;
         meta.displayName = repairFilename(safeNewName);
         meta.updatedAt = new Date().toISOString();
+        orgArticleId = String(meta.orgArticleId || '');
       }
-      writeDB(db);
     }
-    res.json({ success: true, id: safeNewName, name: repairFilename(safeNewName), displayName: repairFilename(safeNewName) });
+    writeDB(db);
+    if (scope.domain === 'work' && scope.orgId && orgArticleId) {
+      OrgKB.updateArticle(scope.orgId, scope.userId, orgArticleId, { title: repairFilename(safeNewName) });
+    }
+    res.json({
+      success: true,
+      id: safeNewName,
+      name: repairFilename(safeNewName),
+      displayName: repairFilename(safeNewName),
+      renamedMemoryCount,
+    });
   } catch (err: any) {
     sendRouteError(res, err);
   }
@@ -1910,6 +2061,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
   try {
     const userId = getUserId(req);
     const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope);
     const { fileId, agentId } = req.body;
     if (!fileId || !agentId) return res.status(400).json({ error: 'fileId and agentId required' });
 
@@ -1930,6 +2082,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
       meta = {
         filename: safeName,
         displayName: repairFilename(safeName),
+        userId: scope.userId,
         domain: scope.domain,
         orgId: scope.orgId || '',
         source: 'upload',

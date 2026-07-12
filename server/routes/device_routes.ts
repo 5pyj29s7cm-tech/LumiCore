@@ -50,7 +50,10 @@ export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
 
   router.get("/devices", optionalAuth, (req, res) => {
     const userId = req.user?.uid || 'local';
-    const userDevices = userId ? deviceRegistry.getUserDevices(userId) : [];
+    const scope = req.user?.orgId
+      ? { domain: 'work' as const, orgId: req.user.orgId }
+      : { domain: 'personal' as const, orgId: '' };
+    const userDevices = userId ? deviceRegistry.getUserDevices(userId, scope) : [];
     const mcpDevices = deviceRegistry.getMcpDevices();
     const pairedDeviceIds = getPairedDeviceIds(userId);
     const pairedSet = new Set(pairedDeviceIds);
@@ -58,7 +61,7 @@ export function mountDeviceRoutes(router: Router, _jwtSecret: string) {
       ...device,
       paired: pairedSet.has(device.id),
     }));
-    const sensory = userId ? deviceRegistry.getSensoryContext(userId) : { hasAudio: false, hasVideo: false, hasSpatial: false, hasHaptic: false, hasHolographic: false, activeDeviceTypes: [], deviceCount: mcpDevices.length };
+    const sensory = userId ? deviceRegistry.getSensoryContext(userId, scope) : { hasAudio: false, hasVideo: false, hasSpatial: false, hasHaptic: false, hasHolographic: false, activeDeviceTypes: [], deviceCount: mcpDevices.length };
     res.json({ devices, pairedDeviceIds, sensoryContext: sensory });
   });
 }

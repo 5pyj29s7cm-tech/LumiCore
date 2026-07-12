@@ -199,6 +199,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'desktop_ai_list_targets',
     'desktop_ai_discovery_plan',
     'desktop_ai_register_target',
+    'desktop_ai_roundtable',
     'desktop_ai_ask',
     'desktop_ai_collect_answer',
     'external_control_candidates',
@@ -535,11 +536,14 @@ function isLocalCadSourceRequest(text: string): boolean {
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
   if (isDesktopAiCollaboration(text)) {
+    const wantsCollectedComparison = /(?:\u603b\u7ed3|\u6c47\u603b|\u5bf9\u6bd4|\u90fd\u62ff\u56de\u6765|\u6240\u6709\u56de\u7b54|summari[sz]e|compare|collect\s+all|all\s+answers)/iu.test(text);
     priorities.push(
       'desktop_ai_list_targets',
       'desktop_ai_discovery_plan',
+      ...(wantsCollectedComparison ? ['desktop_ai_roundtable'] : []),
       'desktop_ai_ask',
       'desktop_ai_collect_answer',
+      ...(!wantsCollectedComparison ? ['desktop_ai_roundtable'] : []),
       'desktop_ai_register_target',
       'desktop_open',
       'desktop_active_window',

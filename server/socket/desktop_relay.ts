@@ -33,6 +33,8 @@ export type DesktopRelayLifecycle = (event: {
 export type DesktopRelayOptions = {
   io: Server;
   userId: string;
+  domain?: 'personal' | 'work';
+  orgId?: string;
   source: 'chat' | 'task' | 'voice' | 'autonomous' | string;
   requestSocket?: Socket;
   emitToolLifecycle?: DesktopRelayLifecycle;
@@ -43,23 +45,42 @@ export type DesktopRelayOptions = {
 
 const pendingDesktopRelays = new Map<string, PendingDesktopRelay>();
 
-export function desktopRelayRoomForUser(userId: string): string {
-  return `desktop:${userId || 'anonymous'}`;
+function normalizeDesktopScope(domain?: string, orgId?: string) {
+  const normalizedOrgId = String(orgId || '').trim();
+  return domain === 'work' && normalizedOrgId
+    ? { domain: 'work' as const, orgId: normalizedOrgId }
+    : { domain: 'personal' as const, orgId: '' };
+}
+
+export function desktopRelayRoomForUser(userId: string, domain?: 'personal' | 'work', orgId?: string): string {
+  const scope = normalizeDesktopScope(domain, orgId);
+  const suffix = scope.domain === 'work' ? `org:${scope.orgId}` : 'personal';
+  return `desktop:${userId || 'anonymous'}:${suffix}`;
 }
 
 export function isDesktopDeviceType(type?: string): boolean {
   return /^(desktop|tauri|windows|macos|linux)$/i.test(String(type || '').trim());
 }
 
-export function joinDesktopRelayRoom(socket: Socket, userId: string, deviceType?: string): boolean {
+export function joinDesktopRelayRoom(
+  socket: Socket,
+  userId: string,
+  deviceType?: string,
+  domain?: 'personal' | 'work',
+  orgId?: string,
+): boolean {
   if (!isDesktopDeviceType(deviceType)) return false;
-  socket.join(desktopRelayRoomForUser(userId));
+  const scope = normalizeDesktopScope(domain, orgId);
+  socket.join(desktopRelayRoomForUser(userId, scope.domain, scope.orgId));
   socket.data.lumiDeviceType = 'desktop';
+  socket.data.lumiDesktopDomain = scope.domain;
+  socket.data.lumiDesktopOrgId = scope.orgId;
   return true;
 }
 
-export function getPreferredDesktopSocketId(userId: string): string | null {
-  const devices = deviceRegistry.getActiveDevices(userId)
+export function getPreferredDesktopSocketId(userId: string, domain?: 'personal' | 'work', orgId?: string): string | null {
+  const scope = normalizeDesktopScope(domain, orgId);
+  const devices = deviceRegistry.getActiveDevices(userId, scope)
     .filter(device => isDesktopDeviceType(device.type) && Boolean(device.socketId))
     .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')));
   return devices[0]?.socketId || null;
@@ -86,14 +107,15 @@ export function getPendingDesktopRelayCount(): number {
 }
 
 export function createDesktopRelay(options: DesktopRelayOptions) {
-  const timeoutMs = options.timeoutMs ?? 30000;
+  const timeoutMs = options.timeoutMs ?? 60000;
   const cancelOnDisconnect = options.cancelOnRequestSocketDisconnect ?? false;
+  const scope = normalizeDesktopScope(options.domain, options.orgId);
 
   return async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
     return new Promise((resolve, reject) => {
       const cid = `${options.source}_${randomUUID()}`;
       const uiCid = `desktop-${cid}`;
-      const room = desktopRelayRoomForUser(options.userId);
+      const room = desktopRelayRoomForUser(options.userId, scope.domain, scope.orgId);
       const payload: DesktopRelayPayload = { correlationId: cid, name: toolName, arguments: args };
       let settled = false;
 
@@ -159,7 +181,7 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
         options.requestSocket.once('disconnect', onDisconnect);
       }
 
-      const preferredSocketId = getPreferredDesktopSocketId(options.userId);
+      const preferredSocketId = getPreferredDesktopSocketId(options.userId, scope.domain, scope.orgId);
       if (preferredSocketId && emitToDesktopTarget(preferredSocketId)) return;
 
       const roomSockets = options.io.sockets.adapter.rooms.get(room);
@@ -167,7 +189,10 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
         if (emitToDesktopTarget(Array.from(roomSockets)[0])) return;
       }
 
-      if (options.requestSocket?.connected) {
+      const requestSocketMatchesScope = options.requestSocket?.data?.lumiDeviceType === 'desktop'
+        && (options.requestSocket.data.lumiDesktopDomain || 'personal') === scope.domain
+        && String(options.requestSocket.data.lumiDesktopOrgId || '') === scope.orgId;
+      if (options.requestSocket?.connected && requestSocketMatchesScope) {
         if (emitToDesktopTarget(options.requestSocket.id)) return;
       }
 

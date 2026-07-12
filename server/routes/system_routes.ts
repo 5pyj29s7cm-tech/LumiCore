@@ -9,14 +9,16 @@ import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
 import { getCloudHealth } from "../cloud/core";
 import { loadKeys, saveKeys, getKey, getAllKeyNames, isPersistableKeyName } from "../config/keys";
-import { requireAuth, requireOrgMember, requireOrgRole } from "../middleware/auth";
+import { requireAuth, requireLocalRequest, requireOrgMember, requireOrgRole } from "../middleware/auth";
 import { getLatencyStats } from "../monitor/latency_store";
 import { mcpManager, getMCPConfig } from "../mcp";
 import { DEFAULT_VISION_MODELS } from "../llm/vision_preferences";
-import { getOrgPreferredLLM, getUserPreferredLLM, upsertOrgPreferredLLM } from "../llm/user_preferences";
+import { DEFAULT_MODELS, getOrgPreferredLLM, upsertOrgPreferredLLM } from "../llm/user_preferences";
 import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
+import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
+import { analyzeScreen } from "../llm/adapter";
 
 // Cached GPU detection — queried once
 let _cachedGPU: { name?: string; util?: number } | null | undefined;
@@ -31,6 +33,134 @@ function readPackageMeta(): { name?: string; version?: string } {
 }
 
 const packageMeta = readPackageMeta();
+
+interface TestableLLMRuntime {
+  getDeepSeek?: () => any;
+  getGemini?: () => any;
+  getOpenAI?: () => any;
+  getAnthropic?: () => any;
+  getQwen?: () => any;
+  getArk?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
+}
+
+const TESTABLE_LLM_PROVIDERS = new Set([
+  'deepseek', 'gemini', 'openai', 'anthropic', 'qwen', 'ark',
+  'ollama', 'lmstudio', 'xiaomi', 'kimi', 'glm', 'relay',
+]);
+const TESTABLE_VISION_PROVIDERS = new Set(['openai', 'gemini', 'ark', 'qwen', 'ollama', 'lmstudio', 'relay']);
+const VISION_TEST_IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAEUUlEQVR4nO1XbUxbVRiuv7htV27b24pbgdveS4uU7wIDCpN1k7ENNzZhjDFsEOyK3UTFRVjcDB8DNzBZpmxz+FEH6v5sJiQLYW5EiT+2+TUomkiYPyRkBrfMyFdMOvOYc1Qis6VAmTHRkzzpzTnv+zzP+bj3vJVI/m/3NI6zKjiZqU7FiF8opeI0G6JHMCAchIuTmWoJt2S+Fh5qjmIZcShYUX9QSUWPThFj9CnOcVaFUroQcQMhAieLQr5lNwV5Jn1kLGA+I3p8rgQnM9UFSlZLRWjl0XhQYQavsWDkzTu48fYEDJo02kfGSEwgHk5mevFvBlRS4Uu/+xhigEZmpCKr2HiEK5PRfegqRt/1YtTtRfdL12gfGSMxJJbk+N0KRvz8Xv0HWMYw5S+BEIYpzNApk8CrU1Cd34KRDu8c1Gx5lY6RGBJLcvwfTGGKaM6q83wOo2R8O1ZLo2bF9eo0rDZuw+Brv+Cbdu8cfP36DLJMRTTmTxMk16cBxgCiGdAA6dPIo7GKTaCzE7WZ6K0fxfVjXp+42DBGY0gsySG5/ngXZEAtFelMIpTJELSZaCu/gGutXgyfv0t/faGtvBsGTTrN+X0VxKUb4GRGhKsTEalKwbq4SlxqmMTlpml8f9WLvqYZnyAxjya7YNTZ8FBoAuVYsgGN3ISVbDx4dSpaXd/CaipBc9kHGH7vNg4Vn4Et1o61MWVY83ApMk3FSNZvRrpQhBPlg+DVaeAjcihH0AZ22drw1v4ZNJR/hcvNg7g79SvOH7gCm9lOkWXaidXCNqSIBTj8eD/Ouu7gCWszInTZQRqQGREeakH7s7fQUTONk/sm0Vh6DtfdY9iz4QiyTSUUGVGFSBW2Ii92H9z2cXQ5b6PTMQYhcq3P13FRh7Cq4CxOPz+Fk3sn0e6cwOFd36Hrwqeo3duKOlcrHDsOUPEkfjNe2TKA0/ZxvFNxi5qoWvdGcIdQp0rFqZqfZsWPV0zgmP1nOEs7scn6JPKzHVhvKUNi5EYUJrbgeNFNnNj5Azrs43CX/wi34yZ4lWXpBnKT9qOl9AYaikfQsH0ELxcM42D+MGpzB5DFO5GhdyBDcOKR6OfwQvYVHMwZQL1tAI0bh9D8mAdHC4eQZ65eugE2RI+VikSUZZ7BM7ZP4Mrox9MUH6Mk5n3YhEaK7QY3HOZe7LFchCvtEqpTP0JFahd0bHJwX0L2L98DctPlmetRldGHqrR+VFj6sIFvwXq+CZXxPaiM68VTcT3YGnsUWrkZKkbwfxcs1gD7R5JWboJ2RQzS9U5UJvSg1HgOO/Sd2B39IaxhDjpGb8IFcC3aADt7lQq0ACHvt56zQZCuoc+0KJln1stmgF0G/PsMSAIUJMtuQCpMzClIApVkyw1fJZmE1O3/lAGfRSnHWRWkZL7vs5eKnrCwXLlknj8mnvtmgBE9REMyX9Nqc1aQJSL7RKrXZThwUypG/Ixw+p255L/cfgNpjJqDkvhwjQAAAABJRU5ErkJggg==';
+
+function sanitizedProviderError(error: unknown): string {
+  return String((error as any)?.message || error || 'Connection test failed')
+    .replace(/(?:sk|key)-[A-Za-z0-9_-]{8,}/gi, '[redacted]')
+    .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .slice(0, 400);
+}
+
+async function withConnectionTestTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Connection test timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function testLLMProviderConnection(
+  provider: string,
+  requestedModel: string | undefined,
+  llm: TestableLLMRuntime,
+): Promise<{ ok: true; provider: string; model: string; latencyMs: number }> {
+  if (!TESTABLE_LLM_PROVIDERS.has(provider)) throw new Error(`Unsupported provider: ${provider}`);
+  const localConfig = provider === 'ollama' || provider === 'lmstudio'
+    ? getLocalModelConfig(provider)
+    : null;
+  const model = String(requestedModel || localConfig?.models.find(modelName => !/(?:embed|whisper|rerank)/i.test(modelName)) || (DEFAULT_MODELS as Record<string, string>)[provider] || '').trim();
+  if (!model || model.length > 200) throw new Error('A valid model name is required');
+
+  const startedAt = Date.now();
+  if (provider === 'gemini') {
+    const client = llm.getGemini?.();
+    if (!client) throw new Error('Gemini is not configured');
+    const instance = client.getGenerativeModel({ model });
+    await withConnectionTestTimeout(instance.generateContent('Reply with only OK.'), 20_000);
+  } else if (provider === 'anthropic') {
+    const client = llm.getAnthropic?.();
+    if (!client) throw new Error('Anthropic is not configured');
+    await withConnectionTestTimeout(client.messages.create({
+      model,
+      max_tokens: 8,
+      messages: [{ role: 'user', content: 'Reply with only OK.' }],
+    }), 20_000);
+  } else {
+    const getterByProvider: Record<string, (() => any) | undefined> = {
+      deepseek: llm.getDeepSeek,
+      openai: llm.getOpenAI,
+      qwen: llm.getQwen,
+      ark: llm.getArk,
+      ollama: llm.getOllama,
+      lmstudio: llm.getLmStudio,
+      xiaomi: llm.getXiaomi,
+      kimi: llm.getKimi,
+      glm: llm.getGlm,
+      relay: llm.getRelay,
+    };
+    const client = getterByProvider[provider]?.();
+    if (!client) throw new Error(`${provider} is not configured or not currently reachable`);
+    const request: Record<string, any> = {
+      model,
+      messages: [{ role: 'user', content: 'Reply with only OK.' }],
+      stream: false,
+    };
+    if (provider === 'xiaomi' || (provider === 'openai' && /^(?:o[134]|gpt-5)/i.test(model))) {
+      request.max_completion_tokens = 8;
+    } else {
+      request.max_tokens = 8;
+    }
+    await withConnectionTestTimeout(client.chat.completions.create(request), provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000);
+  }
+
+  return { ok: true, provider, model, latencyMs: Date.now() - startedAt };
+}
+
+export async function testVisionProviderConnection(
+  provider: string,
+  model: string,
+  llm: TestableLLMRuntime,
+): Promise<{ ok: true; provider: string; model: string; latencyMs: number }> {
+  if (!TESTABLE_VISION_PROVIDERS.has(provider)) throw new Error(`Unsupported vision provider: ${provider}`);
+  if (!model.trim() || model.length > 200) throw new Error('A valid vision model name is required');
+  const startedAt = Date.now();
+  await withConnectionTestTimeout(analyzeScreen(
+    VISION_TEST_IMAGE_BASE64,
+    'Confirm that you received the image. Reply with only OK.',
+    { provider, model, maxTokens: 24 },
+    llm.getDeepSeek,
+    llm.getGemini,
+    llm.getOpenAI,
+    llm.getAnthropic,
+    llm.getQwen,
+    llm.getOllama,
+    llm.getLmStudio,
+    llm.getArk,
+    llm.getXiaomi,
+    llm.getKimi,
+    llm.getGlm,
+    llm.getRelay,
+  ), provider === 'ollama' || provider === 'lmstudio' ? 60_000 : 30_000);
+  return { ok: true, provider, model, latencyMs: Date.now() - startedAt };
+}
 
 function getRuntimeVersionInfo() {
   return {
@@ -104,7 +234,7 @@ function sumTimes(times: Record<string, number>): number {
   return (times.user || 0) + (times.nice || 0) + (times.sys || 0) + (times.idle || 0) + (times.irq || 0);
 }
 
-export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
+export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, llm: TestableLLMRuntime = {}) {
   router.get("/version", (_req, res) => {
     res.json(getRuntimeVersionInfo());
   });
@@ -152,19 +282,22 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
     try { res.json(getCloudHealth()); } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  router.get("/voice/active-provider", (_req, res) => {
+  router.get("/voice/active-provider", requireAuth, (_req, res) => {
     const pref = getVoicePreference();
     res.json({
       pref,
       active: {
-        stt: getActiveSTTProvider(),
-        streamingStt: getActiveStreamingSTTProvider(),
-        tts: getActiveTTSProvider(),
+        stt: getActiveSTTProvider({ requireHealthy: true }),
+        streamingStt: getActiveStreamingSTTProvider({ requireHealthy: true }),
+        tts: getActiveTTSProvider({ requireHealthy: true }),
       },
     });
   });
 
-  router.post("/voice/provider", (req, res) => {
+  router.post("/voice/provider", requireAuth, requireLocalRequest, (req, res) => {
+    if (req.user?.orgId) {
+      return res.status(403).json({ error: 'Voice provider selection belongs to the local personal Lumi settings.' });
+    }
     const { stt, tts } = req.body || {};
     const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);
     const allowedTts = new Set<VoicePreference['tts']>(['auto', 'local-cosyvoice', 'gptsovits', 'cosyvoice', 'ark']);
@@ -184,9 +317,9 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
       success: true,
       pref,
       active: {
-        stt: getActiveSTTProvider(),
-        streamingStt: getActiveStreamingSTTProvider(),
-        tts: getActiveTTSProvider(),
+        stt: getActiveSTTProvider({ requireHealthy: true }),
+        streamingStt: getActiveStreamingSTTProvider({ requireHealthy: true }),
+        tts: getActiveTTSProvider({ requireHealthy: true }),
       },
     });
   });
@@ -277,30 +410,22 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
       const stored = loadKeys();
       const envOrStore = (envKey: string, storeKey: string = envKey) =>
         !!(process.env[envKey] && process.env[envKey]!.length > 0) || !!stored[storeKey];
-      // Check local model configs
-      let ollamaAvailable = false;
-      let lmstudioAvailable = false;
-      try {
-        const db = readDB();
-        const os = (db.settings || []).find((s: any) => s.key === 'ollama_config');
-        if (os) ollamaAvailable = !!JSON.parse(os.value).detected;
-        const ls = (db.settings || []).find((s: any) => s.key === 'lmstudio_config');
-        if (ls) lmstudioAvailable = !!JSON.parse(ls.value).detected;
-      } catch {}
+      const ollamaConfig = getLocalModelConfig('ollama');
+      const lmstudioConfig = getLocalModelConfig('lmstudio');
       res.json({
         providers: {
-          deepseek: { available: envOrStore('DEEPSEEK_API_KEY'), model: process.env.DEEPSEEK_MODEL || 'deepseek-chat' },
+          deepseek: { available: envOrStore('DEEPSEEK_API_KEY'), model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash' },
           gemini: { available: envOrStore('GEMINI_API_KEY'), model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' },
           openai: { available: envOrStore('OPENAI_API_KEY'), model: process.env.OPENAI_MODEL || 'gpt-4o' },
           anthropic: { available: envOrStore('ANTHROPIC_API_KEY'), model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6' },
           qwen: { available: envOrStore('QWEN_API_KEY') || envOrStore('DASHSCOPE_API_KEY'), model: process.env.QWEN_MODEL || 'qwen-plus' },
-          ark: { available: envOrStore('ARK_API_KEY'), model: process.env.ARK_MODEL || 'doubao-1-5-pro-32k' },
-          xiaomi: { available: envOrStore('XIAOMI_API_KEY'), model: process.env.XIAOMI_MODEL || 'xiaomi-chat' },
+          ark: { available: envOrStore('ARK_API_KEY'), model: process.env.ARK_MODEL || 'doubao-seed-2-0-lite-260215' },
+          xiaomi: { available: envOrStore('XIAOMI_API_KEY'), model: process.env.XIAOMI_MODEL || 'mimo-v2.5-pro' },
           kimi: { available: envOrStore('KIMI_API_KEY'), model: process.env.KIMI_MODEL || 'moonshot-v1-8k' },
-          glm: { available: envOrStore('GLM_API_KEY'), model: process.env.GLM_MODEL || 'glm-4-plus' },
+          glm: { available: envOrStore('GLM_API_KEY'), model: process.env.GLM_MODEL || 'glm-5.1' },
           relay: { available: envOrStore('RELAY_API_KEY') && envOrStore('RELAY_BASE_URL'), model: process.env.RELAY_MODEL || 'openai-compatible' },
-          ollama: { available: ollamaAvailable, model: 'local' },
-          lmstudio: { available: lmstudioAvailable, model: 'local' },
+          ollama: { available: ollamaConfig.detected, model: ollamaConfig.models[0] || 'local' },
+          lmstudio: { available: lmstudioConfig.detected, model: lmstudioConfig.models[0] || 'local' },
         },
       });
     } catch (err: any) {
@@ -309,28 +434,27 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
   });
 
   // LLM connection test
-  router.post("/llm/test", async (req, res) => {
-    const { provider, apiKey } = req.body || {};
+  router.post("/llm/test", requireLocalRequest, async (req, res) => {
+    const { provider, model } = req.body || {};
     try {
-      const stored = loadKeys();
-      const keyMap: Record<string, string | undefined> = {
-        deepseek: apiKey || process.env.DEEPSEEK_API_KEY || stored.DEEPSEEK_API_KEY,
-        gemini: apiKey || process.env.GEMINI_API_KEY || stored.GEMINI_API_KEY,
-        openai: apiKey || process.env.OPENAI_API_KEY || stored.OPENAI_API_KEY,
-        anthropic: apiKey || process.env.ANTHROPIC_API_KEY || stored.ANTHROPIC_API_KEY,
-        qwen: apiKey || process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY || stored.QWEN_API_KEY || stored.DASHSCOPE_API_KEY,
-        ark: apiKey || process.env.ARK_API_KEY || stored.ARK_API_KEY,
-        xiaomi: apiKey || process.env.XIAOMI_API_KEY || stored.XIAOMI_API_KEY,
-        kimi: apiKey || process.env.KIMI_API_KEY || stored.KIMI_API_KEY,
-        glm: apiKey || process.env.GLM_API_KEY || stored.GLM_API_KEY,
-      };
-      const key = keyMap[provider];
-      if (!key) {
-        return res.status(400).json({ error: `No API key configured for ${provider}. Add it in Settings → API Matrix or Voice Services.` });
-      }
-      res.json({ ok: true, provider, message: 'API key configured' });
+      const result = await testLLMProviderConnection(String(provider || ''), typeof model === 'string' ? model : undefined, llm);
+      res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message?.slice(0, 200) || 'Connection check failed' });
+      const message = sanitizedProviderError(err);
+      const configurationError = /not configured|not currently reachable|unsupported provider|valid model/i.test(message);
+      res.status(configurationError ? 400 : 502).json({ ok: false, provider, model, error: message });
+    }
+  });
+
+  router.post("/vision/test", requireLocalRequest, async (req, res) => {
+    const provider = String(req.body?.provider || '');
+    const model = String(req.body?.model || '');
+    try {
+      res.json(await testVisionProviderConnection(provider, model, llm));
+    } catch (err: any) {
+      const message = sanitizedProviderError(err);
+      const configurationError = /not configured|not currently reachable|unsupported vision provider|valid vision model/i.test(message);
+      res.status(configurationError ? 400 : 502).json({ ok: false, provider, model, error: message });
     }
   });
 
@@ -401,16 +525,13 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
           source: 'organization',
         });
       }
-      const personal = getUserPreferredLLM(req.user!.uid);
       res.json({
-        inheritPersonal: true,
+        inheritPersonal: false,
         configured: false,
-        provider: personal.provider,
-        model: personal.model,
+        provider: 'deepseek',
+        model: DEFAULT_MODELS.deepseek,
         models: {},
-        inheritedProvider: personal.provider,
-        inheritedModel: personal.model,
-        source: 'personal',
+        source: 'organization',
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -419,26 +540,12 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
 
   router.put("/preferences/org-llm", requireAuth, requireOrgRole('owner', 'admin'), (req, res) => {
     try {
-      const { inheritPersonal, provider, models } = req.body || {};
+      const { provider, models } = req.body || {};
       const updated = upsertOrgPreferredLLM(req.user!.orgId!, {
-        inheritPersonal: inheritPersonal === true,
+        inheritPersonal: false,
         provider,
         models,
       });
-      if (!updated.configured) {
-        const personal = getUserPreferredLLM(req.user!.uid);
-        return res.json({
-          success: true,
-          inheritPersonal: true,
-          configured: false,
-          provider: personal.provider,
-          model: personal.model,
-          models: {},
-          inheritedProvider: personal.provider,
-          inheritedModel: personal.model,
-          source: 'personal',
-        });
-      }
       res.json({
         success: true,
         inheritPersonal: false,
@@ -694,101 +801,34 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any) {
   // ── Ollama local model config ──
   // GET: return saved Ollama URL + detection status
   router.get("/ollama/config", (_req, res) => {
-    try {
-      const db = readDB();
-      const setting = (db.settings || []).find((s: any) => s.key === 'ollama_config');
-      const config = setting ? JSON.parse(setting.value) : {};
-      res.json({
-        baseUrl: config.baseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-        detected: !!config.detected,
-        models: config.models || [],
-      });
-    } catch { res.json({ baseUrl: 'http://localhost:11434', detected: false, models: [] }); }
+    res.json(getLocalModelConfig('ollama'));
   });
 
   // PUT: save Ollama URL and trigger re-detection
-  router.put("/ollama/config", async (req, res) => {
+  router.put("/ollama/config", requireLocalRequest, async (req, res) => {
     try {
       const { baseUrl } = req.body || {};
-      const url = (baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
-
-      // Try detecting models at the new URL
-      let detected = false;
-      let models: string[] = [];
-      try {
-        const resp = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
-        if (resp.ok) {
-          const data = await resp.json() as any;
-          models = (data.models || []).map((m: any) => m.name);
-          detected = models.length > 0;
-        }
-      } catch { /* detection failed */ }
-
-      const payload = { baseUrl: url, detected, models, updatedAt: new Date().toISOString() };
-      const db = readDB();
-      const key = 'ollama_config';
-      const existing = (db.settings || []).findIndex((s: any) => s.key === key);
-      if (existing >= 0) {
-        db.settings[existing].value = JSON.stringify(payload);
-      } else {
-        if (!db.settings) (db as any).settings = [];
-        db.settings.push({ key, value: JSON.stringify(payload) });
-      }
-      writeDB(db);
-
-      res.json({ baseUrl: url, detected, models });
+      const result = await refreshLocalModelConfig('ollama', baseUrl, { timeoutMs: 5000 });
+      res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(400).json({ error: sanitizedProviderError(err) });
     }
   });
 
   // ── LM Studio local model config ──
   // GET: return saved LM Studio URL + detection status
   router.get("/lmstudio/config", (_req, res) => {
-    try {
-      const db = readDB();
-      const setting = (db.settings || []).find((s: any) => s.key === 'lmstudio_config');
-      const config = setting ? JSON.parse(setting.value) : {};
-      res.json({
-        baseUrl: config.baseUrl || process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234',
-        detected: !!config.detected,
-        models: config.models || [],
-      });
-    } catch { res.json({ baseUrl: 'http://localhost:1234', detected: false, models: [] }); }
+    res.json(getLocalModelConfig('lmstudio'));
   });
 
   // PUT: save LM Studio URL and trigger re-detection
-  router.put("/lmstudio/config", async (req, res) => {
+  router.put("/lmstudio/config", requireLocalRequest, async (req, res) => {
     try {
       const { baseUrl } = req.body || {};
-      const url = (baseUrl || 'http://localhost:1234').replace(/\/+$/, '');
-
-      let detected = false;
-      let models: string[] = [];
-      try {
-        const resp = await fetch(`${url}/v1/models`, { signal: AbortSignal.timeout(5000) });
-        if (resp.ok) {
-          const data = await resp.json() as any;
-          models = (data.data || []).map((m: any) => m.id);
-          detected = models.length > 0;
-        }
-      } catch { /* detection failed */ }
-
-      const payload = { baseUrl: url, detected, models, updatedAt: new Date().toISOString() };
-      const db = readDB();
-      const key = 'lmstudio_config';
-      const existing = (db.settings || []).findIndex((s: any) => s.key === key);
-      if (existing >= 0) {
-        db.settings[existing].value = JSON.stringify(payload);
-      } else {
-        if (!db.settings) (db as any).settings = [];
-        db.settings.push({ key, value: JSON.stringify(payload) });
-      }
-      writeDB(db);
-
-      res.json({ baseUrl: url, detected, models });
+      const result = await refreshLocalModelConfig('lmstudio', baseUrl, { timeoutMs: 5000 });
+      res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(400).json({ error: sanitizedProviderError(err) });
     }
   });
 }

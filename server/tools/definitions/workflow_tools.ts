@@ -1,6 +1,13 @@
 import { ToolRegistry } from '../registry';
-import { saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, captureRecentAsWorkflow, autoGenerateWorkflows } from '../../agents/workflows';
+import { saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, captureRecentAsWorkflow } from '../../agents/workflows';
 import { getRecentWorkflows } from '../../skills/worklog';
+
+function workflowScope(context?: any): { domain: 'personal' | 'work'; orgId: string } {
+  if (context?.domain === 'work' && context?.orgId) {
+    return { domain: 'work', orgId: String(context.orgId) };
+  }
+  return { domain: 'personal', orgId: '' };
+}
 
 async function handleSaveWorkflow(args: Record<string, any>, context?: any): Promise<string> {
   const userId = context?.userId || 'system';
@@ -11,13 +18,13 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
   if (!name) throw new Error('Workflow name is required');
   if (!steps.length) throw new Error('At least one step is required');
 
-  const wf = saveWorkflow(userId, name, description, steps, undefined, args.category);
+  const wf = saveWorkflow(userId, name, description, steps, undefined, args.category, workflowScope(context));
   return `Workflow "${wf.name}" saved with ${wf.steps.length} steps.`;
 }
 
 async function handleListWorkflows(_args: Record<string, any>, context?: any): Promise<string> {
   const userId = context?.userId || 'system';
-  const workflows = listWorkflows(userId);
+  const workflows = listWorkflows(userId, undefined, workflowScope(context));
   if (!workflows.length) return 'No saved workflows.';
   return workflows.map(w =>
     `- **${w.name}**: ${w.description || 'No description'} (${w.steps.length} steps, run ${w.runCount} times)`
@@ -27,7 +34,7 @@ async function handleListWorkflows(_args: Record<string, any>, context?: any): P
 async function handleGetWorkflow(args: Record<string, any>, context?: any): Promise<string> {
   const userId = context?.userId || 'system';
   const name: string = args.name || '';
-  const wf = getWorkflow(userId, name);
+  const wf = getWorkflow(userId, name, workflowScope(context));
   if (!wf) throw new Error(`Workflow "${name}" not found`);
   const steps = wf.steps.map((s, i) => `  ${i + 1}. ${s.description}`).join('\n');
   return `**${wf.name}** — ${wf.description}\n\nSteps:\n${steps}\n\nRun count: ${wf.runCount}`;
@@ -36,7 +43,7 @@ async function handleGetWorkflow(args: Record<string, any>, context?: any): Prom
 async function handleDeleteWorkflow(args: Record<string, any>, context?: any): Promise<string> {
   const userId = context?.userId || 'system';
   const name: string = args.name || '';
-  const ok = deleteWorkflow(userId, name);
+  const ok = deleteWorkflow(userId, name, workflowScope(context));
   return ok ? `Deleted workflow "${name}"` : `Workflow "${name}" not found`;
 }
 
@@ -45,7 +52,8 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
   const name: string = args.name || '';
   if (!name) throw new Error('Workflow name is required. Ask the user what to call this workflow.');
 
-  const recent = getRecentWorkflows(userId);
+  const scope = workflowScope(context);
+  const recent = getRecentWorkflows(userId, scope.domain, scope.orgId);
   if (recent.length === 0) return 'No recent activity to capture. Try doing something first.';
 
   const last = recent[recent.length - 1];
@@ -55,7 +63,7 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
     resultSummary: s.resultSummary,
   }));
 
-  const wf = captureRecentAsWorkflow(userId, name, toolTrace);
+  const wf = captureRecentAsWorkflow(userId, name, toolTrace, scope);
   if (!wf) return 'No tool calls found in recent activity.';
 
   return `Workflow "${name}" captured with ${wf.steps.length} steps. You can now say "run ${name}" to execute it.`;
@@ -66,7 +74,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
   const name: string = args.name || '';
   if (!name) throw new Error('Workflow name is required');
 
-  const wf = getWorkflow(userId, name);
+  const wf = getWorkflow(userId, name, workflowScope(context));
   if (!wf) throw new Error(`Workflow "${name}" not found. Use list_workflows to see available workflows.`);
 
   const results: string[] = [`Running workflow "${wf.name}" — ${wf.steps.length} steps:`];

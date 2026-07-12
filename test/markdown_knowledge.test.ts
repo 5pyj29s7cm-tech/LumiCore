@@ -77,6 +77,35 @@ describe('RAG markdown source metadata', () => {
     expect(response.status).toBe(401);
   });
 
+  it('keeps personal vaults separate and rejects personal access from an organization token', async () => {
+    const cookieA = `token=${jwt.sign({ uid: 'vault-user-a', username: 'vault-user-a' }, JWT_SECRET)}`;
+    const cookieB = `token=${jwt.sign({ uid: 'vault-user-b', username: 'vault-user-b' }, JWT_SECRET)}`;
+    const orgCookie = `token=${jwt.sign({ uid: 'vault-user-a', username: 'vault-user-a', orgId: 'org-vault' }, JWT_SECRET)}`;
+
+    for (const [cookie, content] of [[cookieA, 'private-a'], [cookieB, 'private-b']] as const) {
+      const response = await fetch(`${testUrl}/api/files/save?domain=personal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ name: 'private-note.txt', content }),
+      });
+      expect(response.ok).toBe(true);
+    }
+
+    const downloadA = await fetch(`${testUrl}/api/files/download/private-note.txt?domain=personal`, {
+      headers: { Cookie: cookieA },
+    });
+    const downloadB = await fetch(`${testUrl}/api/files/download/private-note.txt?domain=personal`, {
+      headers: { Cookie: cookieB },
+    });
+    expect(await downloadA.text()).toBe('private-a');
+    expect(await downloadB.text()).toBe('private-b');
+
+    const mixedScope = await fetch(`${testUrl}/api/files/list?domain=personal`, {
+      headers: { Cookie: orgCookie },
+    });
+    expect(mixedScope.status).toBe(403);
+  });
+
   it('stores tags, aliases, and links as retrievable memory keywords', async () => {
     const { ingestDocument } = await import('../server/agents/rag');
     const { readDB } = await import('../db_layer');
@@ -112,6 +141,46 @@ describe('RAG markdown source metadata', () => {
       'wikilink:Source Note',
       'link:docs/spec.md',
     ]));
+  });
+
+  it('keeps personal RAG references synchronized across rename and delete', async () => {
+    const { readDB } = await import('../db_layer');
+    const userId = `knowledge-lifecycle-${Date.now()}`;
+    const cookie = `token=${jwt.sign({ uid: userId, username: userId }, JWT_SECRET)}`;
+    const originalName = `source-${Date.now()}.txt`;
+    const renamedName = `renamed-${Date.now()}.txt`;
+
+    const saved = await fetch(`${testUrl}/api/files/save?domain=personal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ name: originalName, content: 'Lifecycle knowledge that must not survive deletion.' }),
+    });
+    expect(saved.ok).toBe(true);
+    expect(readDB().memories.some((memory: any) => (
+      memory.userId === userId && String(memory.sourceInteractionId || '').endsWith(originalName)
+    ))).toBe(true);
+
+    const renamed = await fetch(`${testUrl}/api/files/rename?domain=personal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ id: originalName, newName: renamedName }),
+    });
+    expect(renamed.ok).toBe(true);
+    const afterRename = readDB().memories.filter((memory: any) => memory.userId === userId);
+    expect(afterRename.some((memory: any) => String(memory.sourceInteractionId || '').endsWith(originalName))).toBe(false);
+    expect(afterRename.some((memory: any) => (
+      String(memory.sourceInteractionId || '').endsWith(renamedName)
+      && String(memory.content || '').startsWith(`[${renamedName} #`)
+    ))).toBe(true);
+
+    const deleted = await fetch(`${testUrl}/api/files/delete/${encodeURIComponent(renamedName)}?domain=personal`, {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    });
+    expect(deleted.ok).toBe(true);
+    expect(readDB().memories.some((memory: any) => (
+      memory.userId === userId && String(memory.sourceInteractionId || '').endsWith(renamedName)
+    ))).toBe(false);
   });
 
   it('connects and syncs an Obsidian vault into Lumi knowledge', async () => {

@@ -2,6 +2,7 @@ import { getExternalControlCandidate, listExternalControlCandidates } from '../.
 import { captureWindowsUiSnapshot, runWindowsUiAction } from '../../external_control/windows_uia';
 import { mcpManager, recoverServerTools } from '../../mcp';
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 
 const UI_TARGET_PROPERTIES = {
   root: { type: 'string', enum: ['active', 'focused', 'desktop'], description: 'Search root. Defaults active foreground window.' },
@@ -57,7 +58,10 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       },
       required: ['candidateId'],
     },
-    handler: async (args) => {
+    handler: async (args, context?: ToolContext) => {
+      if (context?.domain === 'work' || context?.orgId) {
+        throw new Error('Organization Lumi cannot change this computer\'s MCP configuration. Configure host capabilities from the local personal Lumi or desktop settings.');
+      }
       const candidate = getExternalControlCandidate(String(args.candidateId || ''));
       if (!candidate) throw new Error(`Unknown external control candidate: ${args.candidateId}`);
       if (!candidate.mcp) {

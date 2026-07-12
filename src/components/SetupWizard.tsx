@@ -6,6 +6,7 @@ import { useT } from '../lib/useT';
 import { toast } from 'sonner';
 import { saveServerKeys } from '../services/settingsKeys';
 import { synthesizeSpeech } from '../services/voiceService';
+import { useApp } from '../contexts/AppContext';
 
 type Step = 'detect' | 'local-ready' | 'api-setup' | 'voice-test' | 'done';
 
@@ -14,18 +15,19 @@ interface Props {
 }
 
 export function SetupWizard({ onFinish }: Props) {
+  const { updateAIConfig } = useApp();
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [step, setStep] = useState<Step>('detect');
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'available' | 'not-found'>('checking');
   const [ollamaUrl, setOllamaUrl] = useState(() => {
-    try { return localStorage.getItem('lumi_ollama_url') || 'http://localhost:11434'; } catch { return 'http://localhost:11434'; }
+    try { return localStorage.getItem('lumi_ollama_url') || 'http://127.0.0.1:11434'; } catch { return 'http://127.0.0.1:11434'; }
   });
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [lmstudioStatus, setLmstudioStatus] = useState<'checking' | 'available' | 'not-found'>('checking');
   const [lmstudioUrl, setLmstudioUrl] = useState(() => {
-    try { return localStorage.getItem('lumi_lmstudio_url') || 'http://localhost:1234'; } catch { return 'http://localhost:1234'; }
+    try { return localStorage.getItem('lumi_lmstudio_url') || 'http://127.0.0.1:1234'; } catch { return 'http://127.0.0.1:1234'; }
   });
   const [lmstudioModels, setLmstudioModels] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState('');
@@ -36,13 +38,18 @@ export function SetupWizard({ onFinish }: Props) {
   const detectOllama = async (url: string) => {
     setOllamaStatus('checking');
     try {
-      const resp = await fetch(`${url.replace(/\/+$/, '')}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      const resp = await fetch('/api/ollama/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ baseUrl: url }),
+      });
       if (resp.ok) {
         const data = await resp.json();
-        const models = data.models || [];
-        const hasLLM = models.some((m: any) => !m.name.includes('embed') && !m.name.includes('whisper'));
-        setOllamaModels(models.map((m: any) => m.name));
-        setOllamaStatus(hasLLM ? 'available' : 'not-found');
+        const models = Array.isArray(data.models) ? data.models : [];
+        setOllamaUrl(data.baseUrl || url);
+        setOllamaModels(models);
+        setOllamaStatus(data.detected ? 'available' : 'not-found');
       } else {
         setOllamaStatus('not-found');
       }
@@ -54,12 +61,18 @@ export function SetupWizard({ onFinish }: Props) {
   const detectLmstudio = async (url: string) => {
     setLmstudioStatus('checking');
     try {
-      const resp = await fetch(`${url.replace(/\/+$/, '')}/v1/models`, { signal: AbortSignal.timeout(5000) });
+      const resp = await fetch('/api/lmstudio/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ baseUrl: url }),
+      });
       if (resp.ok) {
         const data = await resp.json();
-        const models = (data.data || []) as any[];
-        setLmstudioModels(models.map((m: any) => m.id));
-        setLmstudioStatus(models.length > 0 ? 'available' : 'not-found');
+        const models = Array.isArray(data.models) ? data.models : [];
+        setLmstudioUrl(data.baseUrl || url);
+        setLmstudioModels(models);
+        setLmstudioStatus(data.detected ? 'available' : 'not-found');
       } else {
         setLmstudioStatus('not-found');
       }
@@ -76,27 +89,28 @@ export function SetupWizard({ onFinish }: Props) {
   const handleOllamaUrlChange = (url: string) => {
     setOllamaUrl(url);
     localStorage.setItem('lumi_ollama_url', url);
-    fetch('/api/ollama/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseUrl: url }),
-    }).catch(() => {});
-    detectOllama(url);
+    void detectOllama(url);
   };
 
   const handleLmstudioUrlChange = (url: string) => {
     setLmstudioUrl(url);
     localStorage.setItem('lumi_lmstudio_url', url);
-    fetch('/api/lmstudio/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseUrl: url }),
-    }).catch(() => {});
-    detectLmstudio(url);
+    void detectLmstudio(url);
   };
 
   const localAIReady = ollamaStatus === 'available' || lmstudioStatus === 'available';
   const localAINotDetected = ollamaStatus !== 'checking' && lmstudioStatus !== 'checking' && !localAIReady;
+
+  const activateLocalAI = () => {
+    const ollamaModel = ollamaModels.find(model => !/(?:embed|whisper|rerank)/i.test(model));
+    const lmstudioModel = lmstudioModels.find(model => !/(?:embed|whisper|rerank)/i.test(model));
+    if (ollamaStatus === 'available' && ollamaModel) {
+      updateAIConfig({ provider: 'ollama', model: ollamaModel });
+    } else if (lmstudioStatus === 'available' && lmstudioModel) {
+      updateAIConfig({ provider: 'lmstudio', model: lmstudioModel });
+    }
+    setStep('voice-test');
+  };
 
   const handleSaveApiKey = async () => {
     if (!apiKey.trim()) return;
@@ -110,10 +124,10 @@ export function SetupWizard({ onFinish }: Props) {
     };
     try {
       await saveServerKeys({ [keyMap[apiProvider]]: apiKey.trim() });
+      updateAIConfig({ provider: apiProvider });
       setStep('voice-test');
     } catch (err: any) {
       toast.error(err.message || ui('API Key 保存失败', 'API key save failed'));
-      setStep('voice-test');
     } finally {
       setSaving(false);
     }
@@ -191,7 +205,7 @@ export function SetupWizard({ onFinish }: Props) {
                     value={ollamaUrl}
                     onChange={e => setOllamaUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleOllamaUrlChange(ollamaUrl)}
-                    placeholder="Ollama: http://localhost:11434"
+                    placeholder="Ollama: http://127.0.0.1:11434"
                     className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-emerald-500/50"
                   />
                   <button
@@ -208,7 +222,7 @@ export function SetupWizard({ onFinish }: Props) {
                     value={lmstudioUrl}
                     onChange={e => setLmstudioUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleLmstudioUrlChange(lmstudioUrl)}
-                    placeholder="LM Studio: http://localhost:1234"
+                    placeholder="LM Studio: http://127.0.0.1:1234"
                     className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-amber-500/50"
                   />
                   <button
@@ -231,7 +245,7 @@ export function SetupWizard({ onFinish }: Props) {
             )}
             {(ollamaStatus !== 'checking' || lmstudioStatus !== 'checking') && (
               <button
-                onClick={() => setStep(localAIReady ? 'voice-test' : 'api-setup')}
+                onClick={() => localAIReady ? activateLocalAI() : setStep('api-setup')}
                 className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-2xl text-white font-semibold transition-all"
               >
                 {localAIReady ? ui('开始使用 Lumi', 'Start Using Lumi') : ui('设置云端 API Key', 'Set Up Cloud API Key')}
@@ -265,7 +279,7 @@ export function SetupWizard({ onFinish }: Props) {
           <div className="space-y-5">
             <h2 className="text-xl font-bold text-white text-center">{ui('云端 API 设置', 'Cloud API Setup')}</h2>
             <p className="text-white/40 text-sm text-center">
-              {ui('选择服务商并输入 API Key。它会保存在本机，不会被发送到其他地方。', 'Pick a provider and enter your API key. It will be saved locally and never sent anywhere else.')}
+              {ui('选择服务商并输入 API Key。密钥保存在本机，仅在调用所选服务商时用于认证。', 'Pick a provider and enter your API key. It stays on this machine and is used only to authenticate calls to that provider.')}
             </p>
             <div className="grid grid-cols-3 gap-2">
               {['deepseek', 'qwen', 'openai'].map(p => (

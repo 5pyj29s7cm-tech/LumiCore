@@ -13,6 +13,7 @@ import {
 import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
 import { mcpManager } from '../../mcp';
+import { isExplicitSensitiveClientActionRequest } from '../action_constitution';
 
 const ACTIONS = [
   'open_app',
@@ -232,7 +233,10 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         throw new Error('Client actions require the Lumi desktop client relay.');
       }
       const userId = context?.userId || 'anonymous';
-      const userConfirmed = Boolean(context.userConfirmed || args.confirmed);
+      const userConfirmed = Boolean(
+        context.userConfirmed
+        || isExplicitSensitiveClientActionRequest(args, context),
+      );
       const payload = {
         action: args.action,
         target: args.target || '',

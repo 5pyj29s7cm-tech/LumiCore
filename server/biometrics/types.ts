@@ -64,6 +64,7 @@ export interface FaceVerificationResult {
 export interface PresenceState {
   userId: string | null;
   facePresent: boolean;
+  faceMatched: boolean;
   faceConfidence: number;
   voiceprintMatched: boolean;
   voiceprintConfidence: number;
@@ -83,10 +84,10 @@ export interface DetectedUser {
 
 export interface PresenceHeartbeat {
   facePresent: boolean;
+  faceMatched: boolean;
   faceConfidence: number;
   voiceprintMatched: boolean;
   voiceprintConfidence: number;
-  userId: string;
 }
 
 // ── Triple Lock ──

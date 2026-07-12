@@ -22,9 +22,14 @@ interface HealthCheck {
   detail: string;
 }
 
-export function runHealthAudit(userId: string): HealthReport {
+export function runHealthAudit(
+  userId: string,
+  scope: { domain?: 'personal' | 'work' | string; orgId?: string } = {},
+): HealthReport {
   const checks: HealthCheck[] = [];
   const recommendations: string[] = [];
+  const domain = scope.domain === 'work' ? 'work' : 'personal';
+  const orgId = domain === 'work' ? String(scope.orgId || '') : '';
 
   // 1. API keys check
   const keys = loadKeys();
@@ -49,7 +54,11 @@ export function runHealthAudit(userId: string): HealthReport {
   // 3. Memory check
   try {
     const db = readDB();
-    const memCount = (db as any).memories?.length || 0;
+    const memCount = ((db as any).memories || []).filter((memory: any) =>
+      memory.userId === userId &&
+      (memory.domain || 'personal') === domain &&
+      (memory.orgId || '') === orgId
+    ).length;
     checks.push({
       name: 'Memory System',
       status: memCount > 0 ? 'ok' : 'warn',
@@ -63,7 +72,11 @@ export function runHealthAudit(userId: string): HealthReport {
   }
 
   // 4. Skills installed
-  const marketplace = getMarketplaceSkills();
+  const marketplace = getMarketplaceSkills(undefined, {
+    ownerUid: userId,
+    domain,
+    orgId,
+  });
   const installed = marketplace.filter(s => s.installed);
   const uninstalled = marketplace.filter(s => !s.installed && s.runtime !== 'external');
   checks.push({
@@ -80,9 +93,9 @@ export function runHealthAudit(userId: string): HealthReport {
 
   // 5. Personality evolution
   try {
-    const personality = personalityRegistry.get('lumi');
+    const personality = personalityRegistry.getForUser('lumi', userId, orgId || undefined);
     if (personality) {
-      const history = (personality as any).evolutionHistory;
+      const history = personalityRegistry.getEvolutionHistory('lumi', userId, orgId || undefined);
       const evoCount = history?.length || 0;
       const lastEvo = history?.[history.length - 1]?.timestamp;
       checks.push({
@@ -103,7 +116,12 @@ export function runHealthAudit(userId: string): HealthReport {
   // 6. Agent ecosystem
   try {
     const db = readDB();
-    const agentCount = (db as any).agents?.length || 0;
+    const agentCount = ((db as any).agents || []).filter((agent: any) => {
+      if (domain === 'work') {
+        return (agent.domain || 'work') === 'work' && (agent.orgId || '') === orgId;
+      }
+      return (agent.ownerUid || agent.userId) === userId && agent.domain !== 'work' && !agent.orgId;
+    }).length;
     checks.push({
       name: 'Agent Team',
       status: agentCount > 0 ? 'ok' : 'warn',

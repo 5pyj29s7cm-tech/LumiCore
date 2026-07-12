@@ -129,7 +129,7 @@ describe('Lumi core integrity pressure', () => {
     expect(prompt).toContain('one local desktop AI subject');
     expect(prompt).toContain('Chat, voice, task center, tools, skills, memory');
     expect(prompt).toContain('same Lumi, not separate personas');
-    expect(prompt).toContain('Local Growth State');
+    expect(prompt).toContain('Personal Growth State');
     expect(prompt).toContain('do not treat it as core identity');
     expect(prompt).toContain('完整闭环');
     expect(prompt).toContain('Active senses: can hear, can see.');

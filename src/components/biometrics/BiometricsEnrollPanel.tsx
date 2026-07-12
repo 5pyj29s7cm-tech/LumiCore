@@ -116,7 +116,7 @@ export function BiometricsEnrollPanel() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-white/90">{ui('声纹录入', 'Voiceprint Enrollment')}</h3>
-            <p className="text-xs text-white/45">{ui('录制约 6 秒语音，建立更稳的服务端声纹模板', 'Record about 6 seconds to build a stronger server-side voiceprint template')}</p>
+            <p className="text-xs text-white/45">{ui('用于本人声纹确认：唤醒和普通语音指令会校验；会议模式允许记录其他参会者。', 'Used for owner voice verification on wake and normal voice commands; meeting mode can still record other participants.')}</p>
           </div>
         </div>
 
@@ -202,7 +202,7 @@ export function BiometricsEnrollPanel() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-white/90">{ui('人脸录入', 'Face Enrollment')}</h3>
-            <p className="text-xs text-white/45">{ui('正对摄像头保持 2 秒', 'Look at the camera for 2 seconds')}</p>
+            <p className="text-xs text-white/45">{ui('用于本机在场辅助，不用于账号登录或高风险操作授权。', 'Used only as a local presence signal, not for account login or high-risk authorization.')}</p>
           </div>
         </div>
 
@@ -265,8 +265,8 @@ export function BiometricsEnrollPanel() {
         <div>
           <p className="text-xs text-white/60">
             {voiceprints.length === 0 && faces.length === 0
-              ? ui('尚未录入生物特征 — 录入后可防止 Lumi 响应陌生人', 'No biometrics enrolled yet - enroll them to prevent Lumi from responding to strangers')
-              : ui(`已录入 ${voiceprints.length} 组声纹 + ${faces.length} 组人脸`, `${voiceprints.length} voiceprints + ${faces.length} faces enrolled`)
+              ? ui('可选：声纹可限制普通语音响应；人脸仅辅助判断本人是否在场。', 'Optional: voiceprints can gate normal voice responses; face data only helps estimate owner presence.')
+              : ui(`已录入 ${voiceprints.length} 组声纹 + ${faces.length} 组人脸。声纹用于语音确认，人脸用于在场辅助。`, `${voiceprints.length} voiceprints + ${faces.length} faces enrolled. Voice gates commands; face assists presence detection.`)
             }
           </p>
         </div>

@@ -14,7 +14,7 @@ export interface OrgLegalCaseMaterial {
   content: string;
   fileName?: string;
   localPath?: string;
-  source: 'manual' | 'meeting' | 'feishu' | 'tool' | 'import';
+  source: 'manual' | 'meeting' | 'feishu' | 'wecom' | 'wechat' | 'tool' | 'import';
   createdBy: string;
   createdAt: string;
 }

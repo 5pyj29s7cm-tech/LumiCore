@@ -2,15 +2,19 @@ import { Router } from "express";
 import { readDB, writeDB } from "../../db_layer";
 import { requireAuth } from "../middleware/auth";
 import { broadcastPreferenceChange } from "../memory";
+import { broadcastToOrg } from '../org/ws_sync';
 import { normalizeOperationMode, parseStoredOperationMode } from "../cognition/operation_modes";
 import { autonomyLevelForOperationMode, saveGateConfig } from "../autonomy/safety_gate";
 
 export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
+  const petPreferenceKey = (user: NonNullable<Express.Request['user']>) => (
+    user.orgId ? `pet_prefs_org_${user.orgId}` : `pet_prefs_${user.uid}`
+  );
+
   router.get("/preferences/pet", requireAuth, (req, res) => {
     try {
-      const uid = req.user!.uid;
       const db = readDB();
-      const setting = (db.settings || []).find((s: any) => s.key === `pet_prefs_${uid}`);
+      const setting = (db.settings || []).find((s: any) => s.key === petPreferenceKey(req.user!));
       if (setting) {
         res.json(JSON.parse(setting.value));
       } else {
@@ -24,10 +28,13 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
   router.put("/preferences/pet", requireAuth, (req, res) => {
     try {
       const uid = req.user!.uid;
+      if (req.user!.orgId && !['owner', 'admin'].includes(String(req.user!.orgRole || ''))) {
+        return res.status(403).json({ error: 'Only an organization owner or administrator can change the organization Lumi appearance.' });
+      }
       const { pet, accessories } = req.body || {};
       const db = readDB();
       if (!db.settings) db.settings = [];
-      const key = `pet_prefs_${uid}`;
+      const key = petPreferenceKey(req.user!);
       const value = JSON.stringify({ pet: pet || null, accessories: accessories || [] });
       const existing = db.settings.findIndex((s: any) => s.key === key);
       if (existing >= 0) {
@@ -36,7 +43,18 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
         db.settings.push({ key, value });
       }
       writeDB(db);
-      broadcastPreferenceChange(uid, 'pet', { pet: pet || null, accessories: accessories || [] });
+      const preference = { pet: pet || null, accessories: accessories || [] };
+      if (req.user!.orgId) {
+        broadcastToOrg(req.user!.orgId, 'preferences:changed', {
+          key: 'pet',
+          value: preference,
+          domain: 'work',
+          orgId: req.user!.orgId,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        broadcastPreferenceChange(uid, 'pet', preference);
+      }
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

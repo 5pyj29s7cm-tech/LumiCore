@@ -1,2 +1,2 @@
 export { deviceRegistry } from './registry';
-export type { DeviceInfo, DeviceType, DeviceStatus, DeviceCapabilities } from './types';
+export type { DeviceInfo, DeviceType, DeviceStatus, DeviceCapabilities, DeviceDomain, DeviceScope } from './types';

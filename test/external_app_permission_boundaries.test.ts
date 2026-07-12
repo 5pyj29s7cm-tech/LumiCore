@@ -208,9 +208,22 @@ describe('external app permission boundaries', () => {
     } as any);
 
     const result = JSON.parse(raw);
+    expect(result.sent).toBe(false);
+    expect(result.verificationStatus).toBe('uncertain');
     expect(result.method).toBe('virtual_cursor_clipboard_paste_send');
     expect(result.inputPoint).toEqual({ x: 758, y: 764 });
     expect(relayCalls.some(call => call.name === 'desktop_mouse_click_at')).toBe(true);
     expect(relayCalls.find(call => call.name === 'desktop_cursor_glow_update')?.args).toEqual({ x: 758, y: 764 });
+  });
+
+  it('accepts only confident structured visual evidence for a WeChat send', async () => {
+    const { parseWeChatSendVisionVerification } = await import('../server/tools/definitions/external_app_tools');
+
+    expect(parseWeChatSendVisionVerification('{"sent":true,"confidence":0.91,"reason":"outgoing bubble visible"}')).toMatchObject({
+      sent: true,
+      confidence: 0.91,
+    });
+    expect(parseWeChatSendVisionVerification('{"sent":true,"confidence":0.4,"reason":"input text only"}').sent).toBe(false);
+    expect(parseWeChatSendVisionVerification('looks sent').sent).toBe(false);
   });
 });

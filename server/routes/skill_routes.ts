@@ -4,12 +4,11 @@ import fs from "fs";
 import os from "os";
 import { execFileSync } from "child_process";
 import { readDB, writeDB } from "../../db_layer";
-import { mcpManager, getMCPConfig, updateMCPConfig, SKILLS_DIR, normalizeSkillInstallName } from "../mcp";
+import { mcpManager, getMCPConfig, updateMCPConfig, normalizeSkillInstallName } from "../mcp";
 import { generateSkill } from "../skills/generator";
 import { getRecentWorkflows } from "../skills/worklog";
-import { getDataPath } from "../config/data_path";
 import { loadKeys } from "../config/keys";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { createAgentForSkill } from "../agents/skill_agent";
 
 const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => Promise<any>) =>
@@ -37,16 +36,27 @@ export function mountSkillRoutes(
   },
   io: { emit: (event: string, data: any) => void },
 ) {
+  const skillAgentScope = (req: Request) => {
+    const user = req.user!;
+    const dc = resolveDomain(user);
+    return {
+      ownerUid: user.uid,
+      userId: user.uid,
+      domain: dc.domain,
+      orgId: dc.orgId,
+    };
+  };
+
   const removeAutoAgentForSkill = (name: string) => {
     const agentId = `skill_${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
     try {
       const db = readDB();
       if (db.agents) {
-        const idx = db.agents.findIndex((a: any) => a.id === agentId && a.autoCreated);
-        if (idx !== -1) {
-          db.agents.splice(idx, 1);
+        const removed = db.agents.filter((a: any) => a.autoCreated && (a.id === agentId || String(a.id || '').startsWith(`${agentId}_`)));
+        if (removed.length > 0) {
+          db.agents = db.agents.filter((a: any) => !removed.includes(a));
           writeDB(db);
-          io.emit('agent:removed', { id: agentId });
+          for (const agent of removed) io.emit('agent:removed', { id: agent.id });
         }
       }
     } catch {}
@@ -90,16 +100,17 @@ export function mountSkillRoutes(
   });
 
   // Generate a skill from description or workflows
-  router.post("/skills/generate", requireAuth, asyncHandler(async (req, res) => {
+  router.post("/skills/generate", requireAuth, requireAdmin, requireLocalRequest, asyncHandler(async (req, res) => {
     try {
       const { description, provider, model } = req.body;
+      const dc = resolveDomain(req.user!);
 
       let workflows;
       if (req.body.workflowIds) {
-        const allWorkflows = getRecentWorkflows();
+        const allWorkflows = getRecentWorkflows(req.user!.uid, dc.domain, dc.orgId);
         workflows = allWorkflows.filter(w => (req.body.workflowIds as string[]).includes(w.id));
       } else if (req.body.useRecent) {
-        workflows = getRecentWorkflows().slice(-5);
+        workflows = getRecentWorkflows(req.user!.uid, dc.domain, dc.orgId).slice(-5);
       }
 
       const result = await generateSkill(
@@ -107,43 +118,19 @@ export function mountSkillRoutes(
           description,
           workflows,
           provider: provider || 'deepseek',
-          model: model || 'deepseek-chat',
-          userId: (req as any).user?.uid || 'anonymous',
+          model: model || 'deepseek-v4-flash',
+          userId: req.user!.uid,
         },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
       );
 
       if (result.success) {
-        // Save generated skill code to knowledge base for agent ingestion
-        try {
-          const kbDir = getDataPath('knowledge');
-          fs.mkdirSync(kbDir, { recursive: true });
-          const safeName = `skill-${result.skillName}.ts`;
-          fs.writeFileSync(path.join(kbDir, safeName), result.generatedCode || '', 'utf-8');
-          const db = readDB();
-          if (!db.knowledgeFiles) db.knowledgeFiles = [];
-          const existing = db.knowledgeFiles.find((m: any) => m.filename === safeName);
-          if (existing) {
-            existing.source = 'generated';
-            existing.updatedAt = new Date().toISOString();
-          } else {
-            db.knowledgeFiles.push({
-              filename: safeName,
-              source: 'generated',
-              agentIds: [],
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
-          }
-          writeDB(db);
-        } catch (e) {
-          console.warn('[SkillGen] Failed to save to knowledge base:', e);
-        }
         io.emit('skill:updated', { name: result.skillName });
         createAgentForSkill(result.skillName, {
           description: description || 'Auto-generated skill',
           category: 'general',
           installSource: 'generated',
+          scope: skillAgentScope(req),
         }, io);
         res.json(result);
       } else {
@@ -155,7 +142,7 @@ export function mountSkillRoutes(
   }));
 
   // Install a skill from git/npm/local
-  router.post("/skills/install", requireAuth, async (req, res) => {
+  router.post("/skills/install", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const { source, url, package: pkgName, path: localPath, name } = req.body;
 
@@ -172,27 +159,27 @@ export function mountSkillRoutes(
 
         // Restart to pick up new skill
         await mcpManager.restartServer(skillName);
-        createAgentForSkill(skillName, { description: `Git install: ${url}`, category: 'general', installSource: 'git' }, io);
+        createAgentForSkill(skillName, { description: `Git install: ${url}`, category: 'general', installSource: 'git', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'local' && localPath) {
         const skillName = normalizeSkillInstallName(name || path.basename(localPath));
         const destDir = mcpManager.installSkill(skillName, localPath);
         await mcpManager.restartServer(skillName);
-        createAgentForSkill(skillName, { description: `Local install: ${localPath}`, category: 'general', installSource: 'local' }, io);
+        createAgentForSkill(skillName, { description: `Local install: ${localPath}`, category: 'general', installSource: 'local', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'npm' && pkgName) {
         const npmDir = await mcpManager.installFromNpm(pkgName);
         const npmName = path.basename(npmDir);
         await mcpManager.restartServer(npmName);
         io.emit('skill:installed', { name: npmName, source: 'npm' });
-        createAgentForSkill(npmName, { description: `npm package: ${pkgName}`, category: 'general', installSource: 'npm' }, io);
+        createAgentForSkill(npmName, { description: `npm package: ${pkgName}`, category: 'general', installSource: 'npm', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: npmName, directory: npmDir });
       } else if (source === 'github' && url) {
         const ghDir = await mcpManager.installFromGitHub(url);
         const ghName = path.basename(ghDir);
         await mcpManager.restartServer(ghName);
         io.emit('skill:installed', { name: ghName, source: 'github' });
-        createAgentForSkill(ghName, { description: `GitHub repo: ${url}`, category: 'general', installSource: 'github' }, io);
+        createAgentForSkill(ghName, { description: `GitHub repo: ${url}`, category: 'general', installSource: 'github', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: ghName, directory: ghDir });
       } else {
         res.status(400).json({ error: 'Invalid source. Use: git (with url), local (with path), or npm (with package)' });
@@ -203,7 +190,7 @@ export function mountSkillRoutes(
   });
 
   // Repair a local skill by reinstalling known sources or restarting it
-  router.post("/skills/:name/repair", requireAuth, async (req, res) => {
+  router.post("/skills/:name/repair", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const result = await mcpManager.repairSkill(req.params.name);
       if (!result.success) return res.status(400).json(result);
@@ -215,7 +202,7 @@ export function mountSkillRoutes(
   });
 
   // Explicitly clean incomplete local skills
-  router.delete("/skills/broken", requireAuth, async (_req, res) => {
+  router.delete("/skills/broken", requireAuth, requireAdmin, requireLocalRequest, async (_req, res) => {
     try {
       const removed = mcpManager.cleanupBrokenSkills();
       for (const name of removed) {
@@ -229,7 +216,7 @@ export function mountSkillRoutes(
   });
 
   // Uninstall a skill
-  router.delete("/skills/:name", requireAuth, async (req, res) => {
+  router.delete("/skills/:name", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       mcpManager.uninstallSkill(req.params.name);
       io.emit('skill:uninstalled', { name: req.params.name });
@@ -241,7 +228,7 @@ export function mountSkillRoutes(
   });
 
   // Enable a skill
-  router.post("/skills/:name/enable", requireAuth, async (req, res) => {
+  router.post("/skills/:name/enable", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const config = getMCPConfig();
       if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
@@ -268,7 +255,7 @@ export function mountSkillRoutes(
   });
 
   // Disable a skill
-  router.post("/skills/:name/disable", requireAuth, async (req, res) => {
+  router.post("/skills/:name/disable", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const config = getMCPConfig();
       if (!config[req.params.name]) return res.status(404).json({ error: 'Skill not found' });
@@ -283,7 +270,8 @@ export function mountSkillRoutes(
 
   // Workflow inspection (for debugging / manual generation)
   router.get("/skills/workflows", requireAuth, (req, res) => {
-    const workflows = getRecentWorkflows((req as any).user?.uid);
+    const dc = resolveDomain(req.user!);
+    const workflows = getRecentWorkflows(req.user!.uid, dc.domain, dc.orgId);
     res.json({ workflows: workflows.slice(-20), total: workflows.length });
   });
 }

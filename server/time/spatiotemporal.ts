@@ -29,13 +29,17 @@ export interface SpatiotemporalContext {
 
 // ── Pattern Detection ──
 
-export function detectSpatiotemporalPatterns(userId: string): SpatiotemporalPattern[] {
+export function detectSpatiotemporalPatterns(userId: string, domain = 'personal', orgId = ''): SpatiotemporalPattern[] {
   const patterns: SpatiotemporalPattern[] = [];
 
   try {
     const db = readDB();
-    const memories: any[] = (db.memories || []).filter((m: any) => m.userId === userId);
-    const interactions: any[] = (db.interactions || []).filter((i: any) => i.userId === userId);
+    const memories: any[] = (db.memories || []).filter((m: any) =>
+      m.userId === userId && (m.domain || 'personal') === domain && (m.orgId || '') === orgId
+    );
+    const interactions: any[] = (db.interactions || []).filter((i: any) =>
+      i.userId === userId && (i.domain || 'personal') === domain && (i.orgId || '') === orgId
+    );
 
     // ── Location routine detection ──
     const memoriesWithLocation = memories.filter((m: any) => m.location && m.location.trim());
@@ -130,7 +134,7 @@ export function detectSpatiotemporalPatterns(userId: string): SpatiotemporalPatt
 
 // ── Unified Context Generation ──
 
-export function generateSpatiotemporalContext(userId: string): string {
+export function generateSpatiotemporalContext(userId: string, domain = 'personal', orgId = ''): string {
   const lines: string[] = [];
   lines.push('\n## Spatiotemporal Context');
 
@@ -160,7 +164,7 @@ export function generateSpatiotemporalContext(userId: string): string {
   try {
     const db = readDB();
     const userInteractions = (db.interactions || [])
-      .filter((i: any) => i.userId === userId)
+      .filter((i: any) => i.userId === userId && (i.domain || 'personal') === domain && (i.orgId || '') === orgId)
       .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
 
     if (userInteractions.length > 0) {
@@ -178,7 +182,7 @@ export function generateSpatiotemporalContext(userId: string): string {
 
   // ── Space ──
   try {
-    const memories = queryMemories({ userId, limit: 100, minConfidence: 0 });
+    const memories = queryMemories({ userId, limit: 100, minConfidence: 0, domain, orgId });
     const memsWithLoc = memories.filter(m => m.location && m.location.trim());
     if (memsWithLoc.length > 0) {
       const byLoc = new Map<string, number>();
@@ -194,7 +198,7 @@ export function generateSpatiotemporalContext(userId: string): string {
 
   // ── Patterns ──
   try {
-    const patterns = detectSpatiotemporalPatterns(userId);
+    const patterns = detectSpatiotemporalPatterns(userId, domain, orgId);
     if (patterns.length > 0) {
       lines.push('- Learned patterns:');
       for (const p of patterns.slice(0, 3)) {

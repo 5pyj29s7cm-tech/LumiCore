@@ -36,6 +36,15 @@ describe('cad renovation folder workflow', () => {
       expect(result.geometry.calibrated).toBe(true);
       expect(result.geometry.widthMm).toBe(9000);
       expect(result.geometry.heightMm).toBe(7600);
+      expect(result.workflowState).toBe('awaiting_image_geometry_extraction');
+      expect(result.primaryReferenceImage).toBe(path.join(dir, '草稿图.png'));
+      expect(result.recommendedToolCalls.map(call => call.tool)).toEqual([
+        'floorplan_extract_geometry',
+        'cad_generate_dxf',
+        'cad_generate_autocad_draw_script',
+        'cad_run_autocad_draw_script',
+      ]);
+      expect(result.warnings.join(' ')).toContain('not visually traced');
 
       const outputDir = result.outputDir || '';
       const baseDxfPath = path.join(outputDir, '01_户型底图.dxf');
@@ -47,6 +56,18 @@ describe('cad renovation folder workflow', () => {
       expect(fs.readFileSync(baseDxfPath, 'utf-8')).toContain('OUTLINE');
       expect(fs.readFileSync(proposalPath, 'utf-8')).toContain('装修方案');
       expect(fs.readFileSync(materialsPath, 'utf-8')).toContain('类别');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a real package by default unless preview-only is explicit', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_cad_renovation_default_write_'));
+    try {
+      fs.writeFileSync(path.join(dir, '尺寸.txt'), '整体尺寸 8000mm x 6500mm，客厅、厨房、卧室。', 'utf-8');
+      const result = await runRenovationFolderWorkflow({ folderPath: dir, projectName: '默认写入项目' });
+      expect(result.outputDir).toBe(path.join(dir, 'LumiCAD装修方案'));
+      expect(result.cadFiles.every(file => file.path && fs.existsSync(file.path))).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

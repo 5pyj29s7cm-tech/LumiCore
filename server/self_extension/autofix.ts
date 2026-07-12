@@ -14,6 +14,8 @@ import type { ToolDefinition } from '../tools/types';
 
 export interface CapabilityGapAutofixOptions {
   userId?: string;
+  scopeDomain?: 'personal' | 'work';
+  orgId?: string;
   goal: string;
   domain?: string;
   context?: string;
@@ -148,8 +150,14 @@ function hasFailureEvidence(options: CapabilityGapAutofixOptions): boolean {
   return Boolean(compact(options.observedFailure) || /brittle|failed|failure|manual|mouse|坐标|鼠标|失败|没成功|不稳定|脚本感|硬点/i.test(`${options.goal} ${options.context || ''}`));
 }
 
-function reusableLearnedRecord(userId: string, domain: string, goal: string): CapabilityLearningRecord | undefined {
-  return listCapabilityLearningRecords({ userId, domain, goal, limit: 6 })
+function reusableLearnedRecord(
+  userId: string,
+  scopeDomain: 'personal' | 'work',
+  orgId: string,
+  domain: string,
+  goal: string,
+): CapabilityLearningRecord | undefined {
+  return listCapabilityLearningRecords({ userId, scopeDomain, orgId, domain, goal, limit: 6 })
     .find(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
 }
 
@@ -170,11 +178,20 @@ function routeFromExistingCoverage(plan: ReturnType<typeof buildSelfExtensionPla
   };
 }
 
-function transientCoverageRecord(userId: string, plan: ReturnType<typeof buildSelfExtensionPlan>, route: CapabilityRoute, experiment: CapabilityExperimentRecord): CapabilityLearningRecord {
+function transientCoverageRecord(
+  userId: string,
+  scopeDomain: 'personal' | 'work',
+  orgId: string,
+  plan: ReturnType<typeof buildSelfExtensionPlan>,
+  route: CapabilityRoute,
+  experiment: CapabilityExperimentRecord,
+): CapabilityLearningRecord {
   const timestamp = new Date().toISOString();
   return {
     id: 'existing_coverage_not_recorded',
     userId,
+    scopeDomain,
+    orgId,
     domain: plan.domain,
     goal: plan.goal,
     status: 'learned',
@@ -328,19 +345,23 @@ function triggerHints(goal: string, route: CapabilityRoute): string[] {
 
 export async function runCapabilityGapAutofix(options: CapabilityGapAutofixOptions): Promise<CapabilityGapAutofixResult> {
   const userId = options.userId || 'anonymous';
+  const orgId = String(options.orgId || '').trim();
+  const scopeDomain: 'personal' | 'work' = options.scopeDomain === 'work' && orgId ? 'work' : 'personal';
   const goal = compact(options.goal);
   if (!goal) throw new Error('goal is required.');
   const tools = options.tools || [];
   const names = toolNames(tools);
   const plan = buildSelfExtensionPlan({
     userId,
+    scopeDomain,
+    orgId: scopeDomain === 'work' ? orgId : '',
     goal,
     domain: options.domain,
     clientState: options.clientState || null,
     tools,
   });
   const failureEvidence = hasFailureEvidence(options);
-  const learned = reusableLearnedRecord(userId, plan.domain, goal);
+  const learned = reusableLearnedRecord(userId, scopeDomain, scopeDomain === 'work' ? orgId : '', plan.domain, goal);
   if (learned && !failureEvidence) {
     return {
       plan,
@@ -359,7 +380,7 @@ export async function runCapabilityGapAutofix(options: CapabilityGapAutofixOptio
       plan,
       selectedRoute,
       experiment,
-      record: transientCoverageRecord(userId, plan, selectedRoute, experiment),
+      record: transientCoverageRecord(userId, scopeDomain, scopeDomain === 'work' ? orgId : '', plan, selectedRoute, experiment),
       reusedExistingCoverage: true,
       note: `Existing coverage reused: ${plan.resolution.reason} No new capability record was created.`,
     };
@@ -376,6 +397,8 @@ export async function runCapabilityGapAutofix(options: CapabilityGapAutofixOptio
 
   const recordInput = {
     userId,
+    scopeDomain,
+    orgId: scopeDomain === 'work' ? orgId : '',
     domain: plan.domain,
     goal,
     context: compact(options.context) || undefined,

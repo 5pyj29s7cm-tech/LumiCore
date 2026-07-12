@@ -6,12 +6,19 @@ import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { synthesizeSpeech, cloneVoice, designVoice, listVoices, getActiveProvider, isTTSProviderConfigured } from '../server/tts/adapter';
 import { TTSProvider } from '../server/tts/types';
-import { readDB, writeDB } from '../db_layer';
 import { logger } from '../logger';
 import { recordLatency } from '../server/monitor/latency_store';
 import { getDataPath } from '../server/config/data_path';
-import { requireAuth } from '../server/middleware/auth';
+import { requireAuth, requireLocalRequest } from '../server/middleware/auth';
 import { getCosyVoiceCloneTargetModel, getQwenCloneTargetModel, getQwenDesignTargetModel } from '../server/tts/providers/cosyvoice';
+import {
+  addScopedVoiceProfile,
+  isVoiceProfileAccessible,
+  listScopedVoiceProfiles,
+  removeScopedVoiceProfile,
+  voiceProfileScope,
+  type VoiceProfileScope,
+} from '../server/tts/profile_store';
 
 const router = Router();
 
@@ -70,6 +77,21 @@ const upload = multer({
 
 function getUserId(req: Request): string {
   return (req as any).user?.uid || (req as any).userId || 'anonymous';
+}
+
+function getRequestVoiceScope(req: Request): VoiceProfileScope {
+  return voiceProfileScope(
+    getUserId(req),
+    req.user?.orgId ? 'work' : 'personal',
+    req.user?.orgId || '',
+  );
+}
+
+function assertCanMutateVoiceAssets(req: Request): void {
+  if (!req.user?.orgId) return;
+  if (!['owner', 'admin'].includes(String(req.user.orgRole || ''))) {
+    throw Object.assign(new Error('Only an organization owner or administrator can create or remove shared voice assets.'), { statusCode: 403 });
+  }
 }
 
 function getPublicBaseUrl(req: Request): string {
@@ -241,6 +263,11 @@ function getAudioContentType(format: string): { contentType: string; extension: 
 
 // POST /api/voice/samples — Upload voice sample(s) for cloning
 router.post('/voice/samples', requireAuth, (req: Request, res: Response) => {
+  try {
+    assertCanMutateVoiceAssets(req);
+  } catch (err: any) {
+    return res.status(err.statusCode || 403).json({ error: err.message });
+  }
   upload.array('samples', 5)(req, res, (uploadErr: any) => {
     if (uploadErr) {
       return res.status(400).json({ error: uploadErr.message || 'Audio upload failed' });
@@ -296,6 +323,7 @@ router.get('/voice/public-samples/:token', (req: Request, res: Response) => {
 // POST /api/voice/clone — Trigger voice cloning
 router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertCanMutateVoiceAssets(req);
     const { sampleUrls, name, provider } = req.body;
 
     if (!sampleUrls || !Array.isArray(sampleUrls) || sampleUrls.length === 0) {
@@ -343,13 +371,10 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
     const voiceId = await cloneVoice({ sampleUrls: cloneSampleUrls, name: cleanName }, activeProvider);
     console.log('[Voice Clone] Got voiceId:', voiceId);
 
-    // Store voice reference in user data
-    const db = readDB();
     const userId = getUserId(req);
-    console.log('[Voice Clone] Writing to DB for userId:', userId);
-    if (!db.voiceProfiles) db.voiceProfiles = {};
-    if (!db.voiceProfiles[userId]) db.voiceProfiles[userId] = [];
-    db.voiceProfiles[userId].push({
+    const scope = getRequestVoiceScope(req);
+    console.log('[Voice Clone] Writing scoped profile for userId:', userId, 'domain:', scope.domain, 'orgId:', scope.orgId);
+    addScopedVoiceProfile(scope, {
       voiceId,
       name: cleanName,
       provider: activeProvider,
@@ -358,8 +383,7 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       source: 'cloned',
       createdAt: new Date().toISOString(),
     });
-    writeDB(db);
-    console.log('[Voice Clone] DB written, responding with voiceId:', voiceId);
+    console.log('[Voice Clone] Scoped profile written, responding with voiceId:', voiceId);
 
     res.json({ voiceId, name: cleanName, provider: activeProvider, category: 'cloned', model: voiceModel, source: 'cloned' });
   } catch (err: any) {
@@ -371,6 +395,7 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
 // POST /api/voice/design — Design a new voice from text description
 router.post('/voice/design', requireAuth, async (req: Request, res: Response) => {
   try {
+    assertCanMutateVoiceAssets(req);
     const { prompt, name } = req.body;
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 10) {
       return res.status(400).json({ error: 'Voice prompt is required (at least 10 characters)' });
@@ -390,11 +415,7 @@ router.post('/voice/design', requireAuth, async (req: Request, res: Response) =>
     const voiceModel = getQwenDesignTargetModel();
     const voiceId = await designVoice(prompt.trim(), cleanName, activeProvider);
 
-    const db = readDB();
-    const userId = getUserId(req);
-    if (!db.voiceProfiles) db.voiceProfiles = {};
-    if (!db.voiceProfiles[userId]) db.voiceProfiles[userId] = [];
-    db.voiceProfiles[userId].push({
+    addScopedVoiceProfile(getRequestVoiceScope(req), {
       voiceId,
       name: cleanName,
       provider: activeProvider,
@@ -404,21 +425,18 @@ router.post('/voice/design', requireAuth, async (req: Request, res: Response) =>
       prompt: prompt.trim(),
       createdAt: new Date().toISOString(),
     });
-    writeDB(db);
 
     res.json({ voiceId, name: cleanName, provider: activeProvider, category: 'cloned', model: voiceModel, source: 'designed' });
   } catch (err: any) {
     logger.error('[Voice Design Error]', err);
-    res.status(500).json({ error: err.message || 'Voice design service unavailable' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Voice design service unavailable' });
   }
 });
 
 // GET /api/voice/voices — List user's cloned voices + ALL provider premade voices
 router.get('/voice/voices', requireAuth, async (req: Request, res: Response) => {
   try {
-    const userId = getUserId(req);
-    const db = readDB();
-    const userVoices = (db.voiceProfiles?.[userId] || []).map((voice: any) => ({
+    const userVoices = listScopedVoiceProfiles(getRequestVoiceScope(req)).map((voice: any) => ({
       ...voice,
       category: 'cloned' as const,
     }));
@@ -450,34 +468,25 @@ router.get('/voice/voices', requireAuth, async (req: Request, res: Response) => 
       premade: premadeVoices,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 // DELETE /api/voice/:voiceId — Delete a cloned voice
 router.delete('/voice/:voiceId', requireAuth, async (req: Request, res: Response) => {
   try {
-    const userId = getUserId(req);
-    const db = readDB();
-    const userVoices = db.voiceProfiles?.[userId] || [];
-    const voiceIdx = userVoices.findIndex((v: any) => v.voiceId === req.params.voiceId);
-
-    if (voiceIdx === -1) {
-      return res.status(404).json({ error: 'Voice not found' });
-    }
-
-    const [removed] = userVoices.splice(voiceIdx, 1);
-    db.voiceProfiles[userId] = userVoices;
-    writeDB(db);
+    assertCanMutateVoiceAssets(req);
+    const removed = removeScopedVoiceProfile(getRequestVoiceScope(req), req.params.voiceId);
+    if (!removed) return res.status(404).json({ error: 'Voice not found' });
 
     res.json({ deleted: removed });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 // POST /api/voice/synthesize — Synthesize speech (for TTS without full voice call)
-router.post('/voice/synthesize', async (req: Request, res: Response) => {
+router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response) => {
   try {
     const { text, voiceId, provider, model } = req.body;
 
@@ -489,12 +498,16 @@ router.post('/voice/synthesize', async (req: Request, res: Response) => {
     if (!activeProvider) {
       return res.status(400).json({ error: 'No TTS provider configured' });
     }
+    if (!isVoiceProfileAccessible(getRequestVoiceScope(req), voiceId || 'default')) {
+      return res.status(403).json({ error: 'This cloned voice belongs to a different Lumi domain.' });
+    }
 
     const start = Date.now();
     const result = await synthesizeSpeech(text, {
       provider: activeProvider,
       voiceId: voiceId || 'default',
       model,
+      allowFallback: !provider,
     });
     recordLatency('tts', Date.now() - start);
 
@@ -513,20 +526,26 @@ import { getVoicePreference, setVoicePreference } from '../server/config/voice_p
 import { getActiveProvider as getActiveTTSProvider } from '../server/tts/adapter';
 import { getActiveSTTProvider } from '../server/stt/adapter';
 
-router.get('/voice/active-provider', (_req, res) => {
+router.get('/voice/active-provider', requireAuth, (_req, res) => {
   try {
     const pref = getVoicePreference();
     res.json({
       pref,
-      active: { stt: getActiveSTTProvider(), tts: getActiveTTSProvider?.() || 'cosyvoice' },
+      active: {
+        stt: getActiveSTTProvider({ requireHealthy: true }),
+        tts: getActiveTTSProvider?.({ requireHealthy: true }) || null,
+      },
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/voice/provider', (req, res) => {
+router.post('/voice/provider', requireAuth, requireLocalRequest, (req, res) => {
   try {
+    if (req.user?.orgId) {
+      return res.status(403).json({ error: 'Voice provider selection belongs to the local personal Lumi settings.' });
+    }
     const { stt, tts } = req.body;
     const merged = setVoicePreference({ stt: stt || undefined, tts: tts || undefined } as any);
     res.json(merged);

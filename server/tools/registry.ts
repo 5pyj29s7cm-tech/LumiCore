@@ -4,6 +4,20 @@ import { evaluateActionConstitution } from './action_constitution';
 
 export type EffectiveSecurity = { level: SecurityLevel; reason: string };
 
+export function getToolExecutionTimeoutMs(name: string): number {
+  if (name === 'computer_use') return 10 * 60_000;
+  if (name === 'transcribe_audio_to_text_file') return 60 * 60_000;
+  if (/^cad_run_autocad_draw_script$/i.test(name)) return 30 * 60_000;
+  if (/^cad_generate_autocad_draw_script$/i.test(name)) return 5 * 60_000;
+  if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 3 * 60_000;
+  if (name === 'desktop_ai_roundtable') return 15 * 60_000;
+  if (/^(wechat_|desktop_ai_)/i.test(name)) return 3 * 60_000;
+  if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
+  if (/^desktop_/i.test(name)) return 90_000;
+  if (/^(ocr_|floorplan_extract_geometry|cad_generate_dxf)$/i.test(name)) return 90_000;
+  return 30_000;
+}
+
 function normalizeJsonSchema(params: Record<string, any>): Record<string, any> {
   if (!params || Object.keys(params).length === 0) {
     return { type: 'object', properties: {} };
@@ -155,12 +169,7 @@ export class ToolRegistry {
     }
 
     // Wrap with timeouts to prevent hanging. Vision/CAD extraction needs more room than simple tools.
-    const timeoutMs =
-      name === 'computer_use' ? 180_000 :
-      name.startsWith('web_login_') || name === 'url_fetch_logged_in' ? 180_000 :
-      name === 'transcribe_audio_to_text_file' ? 3_600_000 :
-      /^(ocr_|floorplan_extract_geometry|cad_generate_dxf)$/i.test(name) ? 90_000 :
-      30_000;
+    const timeoutMs = getToolExecutionTimeoutMs(name);
     let timedOut = false;
     const executionContext = context
       ? {

@@ -7,7 +7,7 @@ import * as localWhisper from './providers/local-whisper';
 import { getKey } from '../config/keys';
 import { getVoicePreference } from '../config/voice_preference';
 import { recordLatency } from '../monitor/latency_store';
-import { isCircuitClosed } from '../cloud/circuit_breaker';
+import { isCircuitClosed, isCircuitHealthy } from '../cloud/circuit_breaker';
 
 type StreamingSTTProvider = 'qwen' | 'ark';
 
@@ -74,40 +74,38 @@ export function createStreamingSession(
   throw new Error(`Streaming not supported for provider: ${provider}`);
 }
 
-export function getActiveSTTProvider(): STTProvider | null {
+export function getActiveSTTProvider(options: { requireHealthy?: boolean } = {}): STTProvider | null {
   const pref = getVoicePreference();
-  // If user explicitly chose a provider, use it (even if circuit is open — user knows best)
+  const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
+  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY');
+  const hasDoubao = Boolean(doubaoSpeech && doubaoSpeech.includes(':'));
+  const qwenKey = hasQwenKey();
+  const openaiKey = hasOpenAIKey();
   if (pref.stt === 'local-whisper' && localWhisper.isLocalWhisperAvailable()) return 'local-whisper';
-  if (pref.stt === 'qwen') return 'qwen';
-  if (pref.stt === 'ark') return 'ark';
-  if (pref.stt === 'whisper') return 'whisper';
-  // Auto mode — prefer local, then healthy cloud providers
+  if (pref.stt === 'qwen' && qwenKey && available('qwen-stt')) return 'qwen';
+  if (pref.stt === 'ark' && hasDoubao && available('doubao-stt-stream')) return 'ark';
+  if (pref.stt === 'whisper' && openaiKey && available('openai', 'whisper-1')) return 'whisper';
+  // Auto mode and unavailable explicit selections — prefer healthy providers.
   try {
     if (localWhisper.isLocalWhisperAvailable()) return 'local-whisper';
   } catch {}
-  const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY');
-  if (doubaoSpeech && doubaoSpeech.includes(':')) return 'ark';
-  // Check every cloud provider — skip ones with open circuit breakers
-  const qwenKey = hasQwenKey();
-  if (qwenKey && isCircuitClosed('qwen')) return 'qwen';
-  // Fallback: try them anyway if nothing healthy (circuit may have recovered)
-  if (qwenKey) return 'qwen';
-  if (hasOpenAIKey()) return 'whisper';
+  if (hasDoubao && available('doubao-stt-stream')) return 'ark';
+  if (qwenKey && available('qwen-stt')) return 'qwen';
+  if (openaiKey && available('openai', 'whisper-1')) return 'whisper';
   return null;
 }
 
-export function getActiveStreamingSTTProvider(): StreamingSTTProvider | null {
+export function getActiveStreamingSTTProvider(options: { requireHealthy?: boolean } = {}): StreamingSTTProvider | null {
   const pref = getVoicePreference();
+  const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
   const qwenKey = hasQwenKey();
   const doubaoSpeech = arkStream.hasDoubaoSpeech();
 
-  if (pref.stt === 'qwen') return qwenKey ? 'qwen' : null;
-  if (pref.stt === 'ark') return doubaoSpeech ? 'ark' : null;
+  if (pref.stt === 'qwen' && qwenKey && available('qwen-stt')) return 'qwen';
+  if (pref.stt === 'ark' && doubaoSpeech && available('doubao-stt-stream')) return 'ark';
   if (pref.stt === 'local-whisper' || pref.stt === 'whisper') return null;
 
-  if (doubaoSpeech && isCircuitClosed('doubao-stt-stream')) return 'ark';
-  if (qwenKey && isCircuitClosed('qwen-stt')) return 'qwen';
-  if (doubaoSpeech) return 'ark';
-  if (qwenKey) return 'qwen';
+  if (doubaoSpeech && available('doubao-stt-stream')) return 'ark';
+  if (qwenKey && available('qwen-stt')) return 'qwen';
   return null;
 }

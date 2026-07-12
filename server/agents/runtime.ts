@@ -85,15 +85,27 @@ export class AgentRuntime {
     this.emotionalState = createDefaultEmotionalState();
   }
 
+  private getScope(): { domain: 'personal' | 'work'; orgId: string } {
+    if (this.agentRecord.domain === 'work' && this.agentRecord.orgId) {
+      return { domain: 'work', orgId: this.agentRecord.orgId };
+    }
+    return { domain: 'personal', orgId: '' };
+  }
+
+  private stateKey(userId: string): string {
+    const scope = this.getScope();
+    const owner = scope.domain === 'work' ? `${userId}:org:${scope.orgId}` : userId;
+    return `${owner}:agent:${this.agentId}`;
+  }
+
   /** Load agent-specific state (emotion, etc.) */
   loadState(userId: string): void {
-    // Agent emotional state keyed by agentId
-    this.emotionalState = loadEmotionalState(`${userId}_agent_${this.agentId}`);
+    this.emotionalState = loadEmotionalState(this.stateKey(userId));
   }
 
   /** Save agent-specific state */
   saveState(userId: string): void {
-    saveEmotionalState(`${userId}_agent_${this.agentId}`, this.emotionalState);
+    saveEmotionalState(this.stateKey(userId), this.emotionalState);
   }
 
   /** Query memories filtered by this agent's memoryScope */
@@ -103,6 +115,7 @@ export class AgentRuntime {
       query,
       limit,
       minConfidence: 0.3,
+      ...this.getScope(),
     };
     if (this.agentRecord.memoryScope === 'private') {
       (filters as any).agentId = this.agentId;
@@ -121,6 +134,9 @@ export class AgentRuntime {
         tier: memory.tier || 'episodic',
         perspective: memory.perspective || 'lumi_self',
         importance: (memory as any).importance || 0.3,
+        ...this.getScope(),
+        source: 'system',
+        privacyClass: this.getScope().domain === 'work' ? 'organization' : 'private',
       },
     );
   }

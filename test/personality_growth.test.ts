@@ -78,7 +78,7 @@ describe('personality core and growth split', () => {
       sensory: { audio: false, visual: false, spatial: false, haptic: false, holographic: false, activeDeviceTypes: [], deviceCount: 0 },
     });
 
-    expect(prompt).toContain('Local Growth State');
+    expect(prompt).toContain('Personal Growth State');
     expect(prompt).toContain('Stable Lumi Identity Anchor');
     expect(prompt).toContain('same Lumi, not separate personas');
     expect(prompt).toContain('desktop client');

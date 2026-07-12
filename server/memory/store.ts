@@ -209,7 +209,13 @@ function decayAssociations(userId: string): void {
 }
 
 /** Get memories strongly associated with a given memory ID */
-export function getAssociatedMemories(memoryId: string, userId: string, threshold: number = ASSOCIATION_THRESHOLD): Memory[] {
+export function getAssociatedMemories(
+  memoryId: string,
+  userId: string,
+  threshold: number = ASSOCIATION_THRESHOLD,
+  domain?: string,
+  orgId?: string,
+): Memory[] {
   const userMap = coRetrievalMap.get(userId);
   if (!userMap) return [];
   const assocMap = userMap.get(memoryId);
@@ -220,10 +226,16 @@ export function getAssociatedMemories(memoryId: string, userId: string, threshol
   for (const [assocId, strength] of assocMap) {
     if (strength >= threshold) {
       const mem = all.find(m => m.id === assocId);
-      if (mem) result.push(mem);
+      if (mem && matchesMemoryScope(mem, domain, orgId)) result.push(mem);
     }
   }
   return result;
+}
+
+function matchesMemoryScope(memory: Memory, domain?: string, orgId?: string): boolean {
+  if (domain !== undefined && (memory.domain || 'personal') !== domain) return false;
+  if (orgId !== undefined && (memory.orgId || '') !== orgId) return false;
+  return true;
 }
 
 // ── Dedup index (lazy, invalidated on write) ──
@@ -401,9 +413,9 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     const resultIdSet = new Set(resultIds);
     const associated: Memory[] = [];
     for (const m of result) {
-      const assoc = getAssociatedMemories(m.id, q.userId);
+      const assoc = getAssociatedMemories(m.id, q.userId, ASSOCIATION_THRESHOLD, q.domain, q.orgId);
       for (const am of assoc) {
-        if (!resultIdSet.has(am.id)) {
+        if (!resultIdSet.has(am.id) && matchesMemoryScope(am, q.domain, q.orgId)) {
           resultIdSet.add(am.id);
           associated.push(am);
         }
@@ -495,6 +507,8 @@ export interface Reminder {
   sourceInteractionId: string;
   createdAt: string;
   firedAt: string | null;
+  domain?: string;
+  orgId?: string;
 }
 
 function getReminderStore(): Reminder[] {
@@ -524,11 +538,18 @@ export function addReminder(reminder: Omit<Reminder, 'id' | 'createdAt' | 'statu
   return newReminder;
 }
 
-export function getDueReminders(): Reminder[] {
+export function getDueReminders(filters: { userId?: string; domain?: string; orgId?: string } = {}): Reminder[] {
   const all = getReminderStore();
   const now = new Date().toISOString();
   return all
-    .filter(r => r.status === 'pending' && r.dueAt && r.dueAt <= now)
+    .filter(r =>
+      r.status === 'pending' &&
+      r.dueAt &&
+      r.dueAt <= now &&
+      (!filters.userId || r.userId === filters.userId) &&
+      (filters.domain === undefined || (r.domain || 'personal') === filters.domain) &&
+      (filters.orgId === undefined || (r.orgId || '') === filters.orgId)
+    )
     .slice(0, 10);
 }
 
@@ -582,7 +603,11 @@ export function addMemory(
   }
 
   // Check for contradictions with existing memories of same user+type
-  const candidates = all.filter(m => m.userId === memory.userId && m.type === memory.type);
+  const candidates = all.filter(m =>
+    m.userId === memory.userId &&
+    m.type === memory.type &&
+    matchesMemoryScope(m, domain, orgId)
+  );
   const contradictions = findContradictions(memory.content, memory.userId, memory.type, candidates);
   for (const conflicted of contradictions) {
     // Reduce confidence of the older memory — it may be outdated
@@ -598,7 +623,7 @@ export function addMemory(
   const idx = getDedupIndex();
   const dedupCandidates = idx.get(memory.userId)?.get(memory.type) || [];
   const existing = dedupCandidates.find(m =>
-    contentSimilarity(m.content, memory.content) > 0.7,
+    matchesMemoryScope(m, domain, orgId) && contentSimilarity(m.content, memory.content) > 0.7,
   );
 
   const now = new Date().toISOString();
@@ -655,7 +680,7 @@ export function removeMemory(id: string): boolean {
 }
 
 /** Tier-based decay: core_identity never decays, episodic decays fast */
-export function decayMemories(userId: string): void {
+export function decayMemories(userId: string, domain?: string, orgId?: string): void {
   const all = getMemoryStore();
   let changed = false;
 
@@ -667,7 +692,7 @@ export function decayMemories(userId: string): void {
   };
 
   for (const m of all) {
-    if (m.userId !== userId) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
     const rate = decayRates[m.tier] || decayRates.episodic;
     if (rate.amount === 0) continue;
     if (m.confidence <= rate.min) continue;
@@ -796,16 +821,21 @@ export function computeMemoryValue(memory: Memory, childrenCount: number = 0, he
 }
 
 /** Compute the average Hebbian association strength for a memory */
-function getHebbianBonus(userId: string, memoryId: string): number {
+function getHebbianBonus(userId: string, memoryId: string, domain?: string, orgId?: string): number {
   const userMap = coRetrievalMap.get(userId);
   if (!userMap) return 0;
   const assocMap = userMap.get(memoryId);
   if (!assocMap || assocMap.size === 0) return 0;
+  const all = getMemoryStore();
   let total = 0;
-  for (const strength of assocMap.values()) {
+  let count = 0;
+  for (const [associatedId, strength] of assocMap) {
+    const associated = all.find(memory => memory.id === associatedId);
+    if (!associated || !matchesMemoryScope(associated, domain, orgId)) continue;
     total += strength;
+    count++;
   }
-  return +(total / assocMap.size).toFixed(3);
+  return count > 0 ? +(total / count).toFixed(3) : 0;
 }
 
 /**
@@ -817,7 +847,7 @@ function getHebbianBonus(userId: string, memoryId: string): number {
  * Higher intimacy = memories crystallize more easily (the bond makes them meaningful).
  * Returns count of promoted memories.
  */
-export function promoteMemories(userId: string, intimacy: number = 0): number {
+export function promoteMemories(userId: string, intimacy: number = 0, domain?: string, orgId?: string): number {
   const all = getMemoryStore();
   let promoted = 0;
 
@@ -827,11 +857,11 @@ export function promoteMemories(userId: string, intimacy: number = 0): number {
   const growthThreshold = +(0.80 * intimacyMod).toFixed(2);
 
   for (const m of all) {
-    if (m.userId !== userId) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
 
     // Count children for connectedness bonus
     const childrenCount = all.filter(c => c.parentId === m.id).length;
-    const hebbianBonus = getHebbianBonus(userId, m.id);
+    const hebbianBonus = getHebbianBonus(userId, m.id, domain, orgId);
     const value = computeMemoryValue(m, childrenCount, hebbianBonus);
 
     if (m.tier === 'episodic' && value >= episodicThreshold && m.retrieveCount >= 3) {
@@ -857,7 +887,7 @@ export function promoteMemories(userId: string, intimacy: number = 0): number {
  * Dynamic tier-based decay — value modulates the decay speed.
  * High-value memories resist decay; low-value ones decay faster.
  */
-export function dynamicDecayMemories(userId: string): void {
+export function dynamicDecayMemories(userId: string, domain?: string, orgId?: string): void {
   const all = getMemoryStore();
   let changed = false;
 
@@ -869,14 +899,14 @@ export function dynamicDecayMemories(userId: string): void {
   };
 
   for (const m of all) {
-    if (m.userId !== userId) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
     const rate = baseRates[m.tier] || baseRates.episodic;
     if (rate.amount === 0) continue;
     if (m.confidence <= rate.min) continue;
 
     // Value modulates decay: high-value memories resist decay
     const childrenCount = all.filter(c => c.parentId === m.id).length;
-    const hebbianBonus = getHebbianBonus(userId, m.id);
+    const hebbianBonus = getHebbianBonus(userId, m.id, domain, orgId);
     const value = computeMemoryValue(m, childrenCount, hebbianBonus);
     const modulation = 1 - (value * 0.6); // value=1 → 0.4x decay, value=0 → 1x decay
     const effectiveDecay = +(rate.amount * modulation).toFixed(3);
@@ -1083,12 +1113,12 @@ export function borrowAgentMemories(
  * Called after memory promotion/crystallization.
  * Growth-tier memories and internalized memories with importance > 0.7 get auto-shared.
  */
-export function autoMarkCrossAgentShare(userId: string): number {
+export function autoMarkCrossAgentShare(userId: string, domain?: string, orgId?: string): number {
   const all = getMemoryStore();
   let marked = 0;
 
   for (const m of all) {
-    if (m.userId !== userId) continue;
+    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId)) continue;
     if (m.crossAgentShare) continue; // Already marked
 
     if (m.tier === 'growth') {

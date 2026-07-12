@@ -14,7 +14,7 @@ import { Building2, LogIn } from 'lucide-react';
 import '@fontsource-variable/geist';
 import '../index.css';
 
-const OrgHub = lazy(() => import('../components/org/OrgHub').then(m => ({ default: m.OrgHub })));
+const OrgPortal = lazy(() => import('../components/OrgPortal').then(m => ({ default: m.OrgPortal })));
 
 function OrgShell() {
   const { user, loading, refreshUser } = useApp();
@@ -68,7 +68,7 @@ function OrgShell() {
     <div className="min-h-screen bg-celestial-deep overflow-hidden">
       <Toaster position="top-right" theme="dark" />
       <Suspense fallback={<LoadingFallback />}>
-        <OrgHub />
+        <OrgPortal orgOnly />
       </Suspense>
     </div>
   );

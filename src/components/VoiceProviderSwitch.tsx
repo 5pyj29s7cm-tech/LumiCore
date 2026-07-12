@@ -5,24 +5,35 @@ import { apiFetch } from '@/services/apiClient';
 
 export function VoiceProviderSwitch({ t }: { t?: any }) {
   const [pref, setPref] = useState<{ stt: string; tts: string }>({ stt: 'auto', tts: 'auto' });
-  const [active, setActive] = useState<{ stt: string; streamingStt?: string; tts: string }>({ stt: '?', streamingStt: '?', tts: '?' });
+  const [active, setActive] = useState<{ stt: string | null; streamingStt?: string | null; tts: string | null }>({ stt: null, streamingStt: null, tts: null });
+  const [error, setError] = useState('');
   const localTtsProviders = new Set(['local-cosyvoice', 'gptsovits']);
 
-  const load = () => {
-    apiFetch('/api/voice/active-provider')
-      .then(r => r.json())
-      .then(d => { setPref(d.pref); setActive(d.active); })
-      .catch(() => {});
+  const load = async () => {
+    try {
+      const response = await apiFetch('/api/voice/active-provider');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Voice status failed (${response.status})`);
+      setPref(data.pref);
+      setActive(data.active);
+    } catch {}
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, []);
 
   const save = async (stt: string, tts: string) => {
-    await apiFetch('/api/voice/provider', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stt, tts }),
-    });
-    load();
+    setError('');
+    try {
+      const response = await apiFetch('/api/voice/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stt, tts }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Voice provider update failed (${response.status})`);
+      await load();
+    } catch (caught: any) {
+      setError(caught?.message || 'Voice provider update failed');
+    }
   };
 
   const sttOpts = [
@@ -49,7 +60,7 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
         <span className="text-xs font-black uppercase tracking-widest text-white/40">{t?.sttProvider || 'STT'}</span>
         <div className="flex items-center gap-1">
           {(active.streamingStt || active.stt) === 'local-whisper' ? <Cpu size={12} className="text-emerald-400" /> : <Cloud size={12} className={(active.streamingStt || active.stt) === 'ark' ? 'text-cyan-400' : 'text-blue-400'} />}
-          <span className="text-[12px] font-mono text-white/55">{active.streamingStt || active.stt}</span>
+          <span className="text-[12px] font-mono text-white/55">{active.streamingStt || active.stt || (t?.unavailable || 'Unavailable')}</span>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -70,7 +81,7 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
         <span className="text-xs font-black uppercase tracking-widest text-white/40">{t?.ttsProvider || 'TTS'}</span>
         <div className="flex items-center gap-1">
           {localTtsProviders.has(active.tts) ? <Cpu size={12} className="text-emerald-400" /> : <Cloud size={12} className={active.tts === 'ark' ? 'text-cyan-400' : 'text-blue-400'} />}
-          <span className="text-[12px] font-mono text-white/55">{providerLabel(active.tts, ttsOpts)}</span>
+          <span className="text-[12px] font-mono text-white/55">{active.tts ? providerLabel(active.tts, ttsOpts) : (t?.unavailable || 'Unavailable')}</span>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -86,6 +97,7 @@ export function VoiceProviderSwitch({ t }: { t?: any }) {
           >{o.label}</button>
         ))}
       </div>
+      {error && <p className="text-xs text-red-300">{error}</p>}
     </div>
   );
 }

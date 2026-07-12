@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getExternalControlCandidate, listExternalControlCandidates } from '../server/external_control/candidates';
+import { ToolRegistry } from '../server/tools/registry';
+import { registerExternalControlTools } from '../server/tools/definitions/external_control_tools';
 
 describe('external control candidates', () => {
   it('exposes browser and desktop UI control upgrades', () => {
@@ -40,5 +42,19 @@ describe('external control candidates', () => {
 
     expect(browser.map(candidate => candidate.id)).toContain('playwright-mcp');
     expect(browser.every(candidate => candidate.layer === 'browser')).toBe(true);
+  });
+
+  it('does not let organization Lumi rewrite the host MCP configuration', async () => {
+    const registry = new ToolRegistry();
+    registerExternalControlTools(registry);
+
+    await expect(registry.execute('external_control_configure_candidate', {
+      candidateId: 'playwright-mcp',
+      enabled: false,
+    }, {
+      userId: 'organization-member',
+      domain: 'work',
+      orgId: 'organization-id',
+    })).rejects.toThrow(/cannot change this computer's MCP configuration/i);
   });
 });

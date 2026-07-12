@@ -11,7 +11,7 @@ import { queryMemories, addMemory, addReminder, extractMemories } from "../memor
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, vectorMemoryBias } from "../personality/state";
 import { personalityRegistry } from "../personality";
 import { canOutputHolographic, textToHolographicOutput } from "../output/holographic";
-import { getOrCreateActiveConversation } from "../conversation/manager";
+import { getConversationForScope, getOrCreateActiveConversation } from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
 import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggregateWithLLM, recordWorkflowPattern, shouldDistillSkill, buildSkillDescription } from "../agents/orchestrator";
 import { getMessagesByTokenBudget, addMessage, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
@@ -41,6 +41,8 @@ import {
 } from "../tools/pending_confirmation";
 import type { ToolExecutionRecord } from "../tools/types";
 import { createDesktopRelay } from "./desktop_relay";
+import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
+import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 
 export function registerTaskHandler(
   socket: Socket,
@@ -62,8 +64,10 @@ export function registerTaskHandler(
   userIdFn: (s: Socket) => string,
   io: Server,
 ) {
-  socket.on("agent:task", async (data: { text: string; history?: any[]; personalityId?: string; conversationId?: string }) => {
+  socket.on("agent:task", async (data: { text: string; history?: any[]; personalityId?: string; conversationId?: string; domain?: 'personal' | 'work'; orgId?: string }) => {
     const uid = userIdFn(socket);
+    const taskScope = resolveSocketScope(socket, uid, data);
+    const taskStateKey = scopedEmotionalStateKey(uid, taskScope);
     if (isConfirmationCancellation(data.text)) clearPendingConfirmation(uid);
     const pendingConfirmation = isExplicitConfirmationReply(data.text)
       ? getPendingConfirmation(uid)
@@ -76,7 +80,11 @@ export function registerTaskHandler(
     const exposeAgentWork = shouldExposeAgentWork(routedTaskText);
 
     // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
-    const personalityPreConfig = personalityRegistry.get(data.personalityId || 'lumi');
+    const personalityPreConfig = personalityRegistry.getForUser(
+      data.personalityId || 'lumi',
+      uid,
+      taskScope.domain === 'work' ? taskScope.orgId : undefined,
+    );
     const retrievalBiases = personalityPreConfig?.personalityVector
       ? vectorMemoryBias(personalityPreConfig.personalityVector)
       : { typeWeights: {}, perspectiveWeights: {} };
@@ -85,9 +93,11 @@ export function registerTaskHandler(
       userId: uid, query: routedTaskText, limit: 5, minConfidence: 0.4,
       retrievalTypeWeights: retrievalBiases.typeWeights,
       retrievalPerspectiveWeights: retrievalBiases.perspectiveWeights,
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
     });
 
-    const emotionalState = loadEmotionalState(uid);
+    const emotionalState = loadEmotionalState(taskStateKey);
     const isNovelTask = relevantMemories.length < 2;
 
     const sensory = sensoryFn(uid);
@@ -98,26 +108,14 @@ export function registerTaskHandler(
         memories: relevantMemories.length > 0 ? relevantMemories : undefined,
         emotionalState,
         userId: uid,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
       },
     );
 
-    // Read user's LLM prefs from settings (synced from API Matrix)
-    const userLLMPrefs = (() => {
-      try {
-        const db = readDB();
-        const setting = (db.settings || []).find((s: any) => s.key === `llm_prefs_${uid}`);
-        if (setting) return JSON.parse(setting.value);
-      } catch {}
-      return { provider: '', models: {} };
-    })();
-    const DEFAULT_MODELS: Record<string, string> = {
-      deepseek: 'deepseek-chat', qwen: 'qwen-plus', openai: 'gpt-4o',
-      gemini: 'gemini-2.0-flash', anthropic: 'claude-sonnet-4-6',
-      ark: 'doubao-1-5-pro-32k', xiaomi: 'xiaomi-chat', kimi: 'moonshot-v1-8k',
-      glm: 'glm-4-plus', relay: 'gpt-4o', ollama: 'qwen2.5:7b', lmstudio: 'local-model',
-    };
+    const userLLMPrefs = getScopedPreferredLLM(uid, taskScope);
     let activeProvider = userLLMPrefs.provider || 'deepseek';
-    let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-chat';
+    let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-v4-flash';
 
     // ── Load persisted conversation history (survives page reload) ──
     const turnDispatch = buildLumiTurnDispatch({
@@ -127,6 +125,8 @@ export function registerTaskHandler(
       source: 'task',
       category: 'command',
       operationMode: 'assistant',
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
       targetIsLumi: personality.id === 'lumi',
     });
     const turnFlow = turnDispatch.flow;
@@ -183,7 +183,7 @@ export function registerTaskHandler(
         source: 'task',
       });
     }
-    let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid);
+    let effectiveSystemPrompt = systemInstruction + '\n\n' + formatClientSelfPrompt(uid, taskScope);
     effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
     effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
     effectiveSystemPrompt += '\n\n' + executionDecision.promptOverlay;
@@ -204,7 +204,10 @@ export function registerTaskHandler(
     if (visionRoutingOverlay) {
       effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
     }
-    const convForHistory = getOrCreateActiveConversation(uid);
+    const selectedConversation = data.conversationId
+      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
+      : null;
+    const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
     const voiceHistory: NormalizedMessage[] = [];
     if (convForHistory) {
       const summaryContext = getConversationSummary(convForHistory.id);
@@ -245,7 +248,8 @@ export function registerTaskHandler(
           defaultChannel: 'task',
           flow: turnFlow,
           getToolNames: () => toolRegistry.getToolDeclarations().map(declaration => declaration.function.name),
-          domain: 'personal',
+          domain: taskScope.domain,
+          orgId: taskScope.orgId,
           defaultSourceInteractionId: interactionId,
           agentId: '',
           log: { info: console.log, warn: console.warn },
@@ -265,6 +269,8 @@ export function registerTaskHandler(
         assistantText,
         source: 'task',
         interactionId: sourceInteractionId,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
         flow: turnFlow,
         capabilitySelection,
         toolRecords,
@@ -307,7 +313,7 @@ export function registerTaskHandler(
       const complexCategories = ['command', 'code', 'question', 'analysis'];
       const isComplex = complexCategories.includes(cognition.intent.category);
       if (activeProvider === 'deepseek') {
-        activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-chat';
+        activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
       } else if (activeProvider === 'qwen') {
         activeModel = isComplex ? 'qwen-max' : 'qwen-plus';
       } else if (activeProvider === 'gemini') {
@@ -343,6 +349,10 @@ export function registerTaskHandler(
           mode: 'task',
           cognitiveIntent: cognition.intent.category,
           llmWasCalled: false,
+          userId: uid,
+          conversationId: convForHistory.id,
+          domain: taskScope.domain,
+          orgId: taskScope.orgId,
         } as any);
         writeDB(db);
         persistTaskExecutionWriteback(directResponseText, [], `${interactionId}_direct`);
@@ -355,6 +365,8 @@ export function registerTaskHandler(
       const desktopRelay = createDesktopRelay({
         io,
         userId: uid,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
         source: 'task',
         requestSocket: socket,
         cancelOnRequestSocketDisconnect: true,
@@ -363,25 +375,38 @@ export function registerTaskHandler(
       // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
       let orchestratedText = '';
       if (!pendingConfirmation && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
-        const complexity = classifyComplexity(routedTaskText, { userId: uid, personalityId: data.personalityId || 'lumi' });
+        const orchestrationContext = {
+          userId: uid,
+          personalityId: data.personalityId || 'lumi',
+          domain: taskScope.domain,
+          orgId: taskScope.orgId,
+        };
+        const complexity = classifyComplexity(routedTaskText, orchestrationContext);
         if (!workSurfaceRoute.forbidComputerUse && (complexity === 'complex' || complexity === 'moderate')) {
           const db = readDB();
-          const availableAgents = (db.agents || []).filter((a: any) => a.status !== 'offline');
+          const availableAgents = (db.agents || []).filter((a: any) => {
+            if (a.status === 'offline' || a.status === 'terminated') return false;
+            if (taskScope.domain === 'work') {
+              return a.domain === 'work' && a.orgId === taskScope.orgId;
+            }
+            return a.domain !== 'work' && !a.orgId && (!a.ownerUid || a.ownerUid === uid);
+          });
           if (availableAgents.length >= 1) {
             try {
               socket.emit("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
-              const subTasks = await decomposeTask(data.text, { provider: activeProvider, model: activeModel }, { userId: uid, personalityId: data.personalityId || 'lumi' }, llmGetters);
+              const scopedLlmConfig = { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId };
+              const subTasks = await decomposeTask(data.text, scopedLlmConfig, orchestrationContext, llmGetters);
               if (exposeAgentWork) socket.emit("task:chunk", { text: `[Orchestrator] Decomposed into ${subTasks.length} sub-tasks\n`, agentName: "Lumi" });
 
               const assignments = matchWorkers(subTasks, availableAgents);
               if (exposeAgentWork) socket.emit("task:chunk", { text: `[Orchestrator] Assigned to ${assignments.length} worker(s)\n`, agentName: "Lumi" });
 
-              const workflowResult = await executeWorkflow(assignments, { userId: uid, personalityId: data.personalityId || 'lumi', desktopRelay }, { provider: activeProvider, model: activeModel }, llmGetters);
-              const aggregated = await aggregateWithLLM(workflowResult, data.text, { provider: activeProvider, model: activeModel }, llmGetters);
+              const workflowResult = await executeWorkflow(assignments, { ...orchestrationContext, desktopRelay }, scopedLlmConfig, llmGetters);
+              const aggregated = await aggregateWithLLM(workflowResult, data.text, scopedLlmConfig, llmGetters, uid, taskScope);
               orchestratedText = aggregated;
 
               const skillTags = subTasks.map(s => s.requiredSkill);
-              recordWorkflowPattern(data.text, subTasks.length, skillTags, uid);
+              recordWorkflowPattern(data.text, subTasks.length, skillTags, uid, taskScope.domain, taskScope.orgId);
 
               if (shouldDistillSkill(data.text)) {
                 const skillDesc = buildSkillDescription(data.text, workflowResult);
@@ -420,13 +445,12 @@ export function registerTaskHandler(
         socket.off('agent:task_cancel', onCancel);
 
         const db = readDB();
-        const conv = data.conversationId
-          ? (db.conversations || []).find((c: any) => c.id === data.conversationId) || getOrCreateActiveConversation(uid)
-          : getOrCreateActiveConversation(uid);
+        const conv = convForHistory;
         db.interactions.push({
           id: interactionId, content: data.text, response: orchestratedText,
           role: "user", personality: personality.id, timestamp: new Date().toISOString(),
           mode: 'task', cognitiveIntent: cognition.intent.category, llmWasCalled: true,
+          userId: uid, conversationId: conv.id, domain: taskScope.domain, orgId: taskScope.orgId,
         } as any);
         writeDB(db);
 
@@ -435,7 +459,7 @@ export function registerTaskHandler(
         if (isNovelTask) {
           updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
         }
-        saveEmotionalState(uid, updatedState);
+        saveEmotionalState(taskStateKey, updatedState);
         persistTaskExecutionWriteback(orchestratedText, [], `${interactionId}_orchestrated`);
         persistTaskLearning(orchestratedText, { logLabel: 'task orchestrated' });
         return;
@@ -458,7 +482,7 @@ export function registerTaskHandler(
       const result = await runWithTools(
         messages,
         toolRegistry,
-        { provider: activeProvider, model: activeModel, userId: uid },
+        { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId },
         (record) => {
           socket.emit("agent:tool_call", {
             name: record.name,
@@ -475,7 +499,7 @@ export function registerTaskHandler(
             socket.emit("agent:chunk", { text: chunk, agentName: personality.name });
           }
         },
-        { userId: uid, desktopRelay, requestConfirmation, actionIntent: routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -522,9 +546,7 @@ export function registerTaskHandler(
 
       // Log with conversation linkage
       const db = readDB();
-      const conv = data.conversationId
-        ? (db.conversations || []).find((c: any) => c.id === data.conversationId) || getOrCreateActiveConversation(uid)
-        : getOrCreateActiveConversation(uid);
+      const conv = convForHistory;
       if (!conv.title) {
         conv.title = data.text.slice(0, 50);
         writeDB(db);
@@ -539,6 +561,9 @@ export function registerTaskHandler(
         mode: 'task',
         toolCalls: result.toolCalls.map((tc: any) => ({ name: tc.name, args: tc.arguments })),
         conversationId: conv.id,
+        userId: uid,
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
       } as any);
       writeDB(db);
 
@@ -556,6 +581,8 @@ export function registerTaskHandler(
           model: activeModel,
           userId: uid,
           locationTag,
+          domain: taskScope.domain,
+          orgId: taskScope.orgId,
         },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
       ).then(extracted => {
@@ -567,7 +594,7 @@ export function registerTaskHandler(
             keywords: mem.keywords,
             confidence: mem.confidence,
             sourceInteractionId: db.interactions[db.interactions.length - 1]?.id || '',
-          } as any, { location: locationTag, source: 'chat' });
+          } as any, { location: locationTag, domain: taskScope.domain, orgId: taskScope.orgId, source: 'system' });
         }
         for (const rem of extracted.reminders) {
           addReminder({
@@ -575,6 +602,8 @@ export function registerTaskHandler(
             content: rem.content,
             dueAt: rem.dueAt,
             sourceInteractionId: db.interactions[db.interactions.length - 1]?.id || '',
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
           });
         }
         const totalExtracted = extracted.memories.length + extracted.reminders.length;
@@ -605,16 +634,16 @@ export function registerTaskHandler(
           timestamp: new Date().toISOString(),
         });
       }
-      const himState = loadHIMState(uid);
+      const himState = loadHIMState(taskStateKey);
       const { state: himUpdated, him: newHim } = updateEmotionalStateWithHIM(updatedState, { type: 'self_reflection', userId: uid }, himState, data.text.slice(0, 40));
-      saveEmotionalState(uid, himUpdated);
-      saveHIMState(uid, newHim);
+      saveEmotionalState(taskStateKey, himUpdated);
+      saveHIMState(taskStateKey, newHim);
 
       // ── Persist messages via conversation manager for cross-session continuity ──
       if (convForHistory) {
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id });
+        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
         if (finalTaskText) {
-          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id });
+          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
         }
         try {
           const topics = extractTopics(data.text + ' ' + finalTaskText);

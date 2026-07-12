@@ -7,6 +7,7 @@
 import { ToolRegistry } from '../registry';
 import { generateSkill } from '../../skills/generator';
 import { mcpManager } from '../../mcp/client';
+import type { ToolContext } from '../types';
 
 // Module-level LLM getters, set during registration
 let _llmGetters: {
@@ -21,7 +22,16 @@ export function setSkillLLMGetters(getters: typeof _llmGetters): void {
   _llmGetters = getters;
 }
 
-async function generateSkillHandler(args: Record<string, any>): Promise<string> {
+function hostSkillMutationBlocked(context?: ToolContext): string | null {
+  if (context?.domain === 'work' || context?.orgId) {
+    return 'Host-level skill changes are not performed from organization Lumi. A local system administrator can install or generate the skill in the desktop settings; the organization can then use the approved capability.';
+  }
+  return null;
+}
+
+async function generateSkillHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const blocked = hostSkillMutationBlocked(context);
+  if (blocked) return blocked;
   if (!_llmGetters) {
     return 'Skill generation is not available: LLM providers have not been initialized yet. The server may still be starting up.';
   }
@@ -32,13 +42,14 @@ async function generateSkillHandler(args: Record<string, any>): Promise<string> 
   }
 
   const provider = (args.provider as string) || 'deepseek';
-  const model = (args.model as string) || 'deepseek-chat';
+  const model = (args.model as string) || 'deepseek-v4-flash';
 
   const result = await generateSkill(
     {
       description,
       provider: provider as any,
       model,
+      userId: context?.userId || 'skill_gen',
     },
     _llmGetters.getDeepSeek,
     _llmGetters.getGemini,
@@ -81,7 +92,9 @@ async function listSkillsHandler(): Promise<string> {
   }
 }
 
-async function installSkillHandler(args: Record<string, any>): Promise<string> {
+async function installSkillHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const blocked = hostSkillMutationBlocked(context);
+  if (blocked) return blocked;
   const dir = String(args.directory || '').trim();
   if (!dir) {
     return 'Error: "directory" parameter is required. Provide the absolute path to the skill directory containing index.ts and package.json.';
@@ -120,12 +133,12 @@ export function registerSkillTools(registry: ToolRegistry): void {
         },
         model: {
           type: 'string',
-          description: 'Specific model name. Default: deepseek-chat.',
+          description: 'Specific model name. Default: deepseek-v4-flash.',
         },
       },
       required: ['description'],
     },
-    handler: generateSkillHandler,
+    handler: (args, context) => generateSkillHandler(args, context),
     permission: 'user',
     securityLevel: 'confirm',
   });
@@ -165,7 +178,7 @@ export function registerSkillTools(registry: ToolRegistry): void {
       },
       required: ['directory'],
     },
-    handler: installSkillHandler,
+    handler: (args, context) => installSkillHandler(args, context),
     permission: 'user',
     securityLevel: 'confirm',
   });

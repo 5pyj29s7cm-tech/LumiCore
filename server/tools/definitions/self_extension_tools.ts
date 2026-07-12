@@ -31,6 +31,8 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
       const userId = context?.userId || 'anonymous';
       const plan = buildSelfExtensionPlan({
         userId,
+        scopeDomain: context?.domain === 'work' && context?.orgId ? 'work' : 'personal',
+        orgId: context?.domain === 'work' ? context?.orgId : '',
         goal: String(args.goal || ''),
         domain: args.domain ? String(args.domain) : undefined,
         clientState: getClientState(userId) as Record<string, any> | null,
@@ -70,6 +72,8 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
       const userId = context?.userId || 'anonymous';
       const result = await runCapabilityGapAutofix({
         userId,
+        scopeDomain: context?.domain === 'work' && context?.orgId ? 'work' : 'personal',
+        orgId: context?.domain === 'work' ? context?.orgId : '',
         goal: String(args.goal || ''),
         domain: args.domain ? String(args.domain) : undefined,
         context: args.context ? String(args.context) : undefined,
@@ -105,6 +109,8 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
     handler: async (args, context) => {
       const records = listCapabilityLearningRecords({
         userId: context?.userId || 'anonymous',
+        scopeDomain: context?.domain === 'work' && context?.orgId ? 'work' : 'personal',
+        orgId: context?.domain === 'work' ? context?.orgId : '',
         domain: args.domain ? String(args.domain) : undefined,
         goal: args.goal ? String(args.goal) : undefined,
         status: args.status ? String(args.status) as any : undefined,

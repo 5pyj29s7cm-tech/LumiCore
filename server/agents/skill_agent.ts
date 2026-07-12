@@ -9,6 +9,7 @@
  */
 
 import { readDB, writeDB } from "../../db_layer";
+import crypto from 'crypto';
 
 export function createAgentForSkill(
   skillName: string,
@@ -76,9 +77,9 @@ export function createAgentForSkill(
       }
       if (changed) {
         writeDB(db);
-        io?.emit('agent:created', { id: agentId, name: skillName, skillTags: mergedTags, runtime: existing.runtime, healthStatus: existing.healthStatus });
+        io?.emit('agent:created', { id: existing.id, name: skillName, skillTags: mergedTags, runtime: existing.runtime, healthStatus: existing.healthStatus });
       }
-      return agentId;
+      return existing.id;
     }
 
     db.agents.push({
@@ -133,12 +134,16 @@ export function createAgentForSkill(
   }
 }
 
-function scopedAgentId(baseId: string, scope?: { domain?: string; orgId?: string }): string {
+function scopedAgentId(baseId: string, scope?: { ownerUid?: string; domain?: string; orgId?: string }): string {
   if (scope?.domain === 'work' && scope.orgId) {
-    const scopeSuffix = scope.orgId.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/^-+|-+$/g, '');
-    return scopeSuffix ? `${baseId}_${scopeSuffix}` : baseId;
+    return `${baseId}_org-${scopeHash(scope.orgId)}`;
   }
+  if (scope?.ownerUid) return `${baseId}_user-${scopeHash(scope.ownerUid)}`;
   return baseId;
+}
+
+function scopeHash(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
 function agentMatchesScope(agent: any, scope?: { ownerUid?: string; domain?: string; orgId?: string }): boolean {
@@ -146,7 +151,8 @@ function agentMatchesScope(agent: any, scope?: { ownerUid?: string; domain?: str
   if (scope.domain === 'work') {
     return (agent.orgId || '') === (scope.orgId || '') && (agent.domain || 'work') === 'work';
   }
-  return (!agent.orgId || agent.orgId === '') && agent.domain !== 'work' && (!agent.ownerUid || agent.ownerUid === scope.ownerUid);
+  if (agent.orgId || agent.domain === 'work') return false;
+  return scope.ownerUid ? agent.ownerUid === scope.ownerUid : !agent.ownerUid;
 }
 
 /** Map marketplace categories to orchestrator categories */

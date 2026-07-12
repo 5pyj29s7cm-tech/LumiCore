@@ -13,13 +13,13 @@
  */
 
 import { withRetry, isCloudRetryable, withTimeout } from './retry';
-export { withRetry, isCloudRetryable, withTimeout, withFallback, isCircuitClosed, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY };
+export { withRetry, isCloudRetryable, withTimeout, withFallback, isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY };
 export type { RetryOptions } from './retry';
 
 import { withFallback, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY } from './fallback';
 export type { FallbackResult, FallbackAttempt, FallbackChainOptions } from './fallback';
 
-import { isCircuitClosed, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig } from './circuit_breaker';
+import { isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig } from './circuit_breaker';
 export type { CircuitState } from './circuit_breaker';
 
 // ── Error Classification ──
@@ -66,7 +66,11 @@ export function classifyCloudError(error: Error, provider?: string): ClassifiedE
     msg.includes('429') ||
     msg.includes('rate limit') ||
     msg.includes('quota') ||
-    msg.includes('too many requests')
+    msg.includes('too many requests') ||
+    msg.includes('overdue') ||
+    msg.includes('payment required') ||
+    msg.includes('insufficient balance') ||
+    msg.includes('account is in good standing')
   ) {
     return { category: 'quota', message: error.message, isRetryable: true, provider };
   }

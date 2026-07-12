@@ -77,6 +77,9 @@ export interface RenovationFolderWorkflowResult {
   geometry: DraftGeometry;
   draftFiles: Array<{ name: string; path?: string; preview: string }>;
   cadFiles: Array<{ name: string; path?: string; preview?: string }>;
+  workflowState: 'awaiting_image_geometry_extraction' | 'drafting_base_ready' | 'needs_dimension_calibration';
+  primaryReferenceImage?: string;
+  recommendedToolCalls: Array<{ tool: string; arguments?: Record<string, any>; useResultFrom?: string; reason: string }>;
   nextSteps: string[];
   warnings: string[];
 }
@@ -101,6 +104,17 @@ function safeName(value: string, fallback = 'renovation_project'): string {
 
 function unique(values: string[], max = 16): string[] {
   return Array.from(new Set(values.map(v => v.trim()).filter(Boolean))).slice(0, max);
+}
+
+function selectPrimaryReferenceImage(images: ReferenceImage[]): ReferenceImage | undefined {
+  const score = (image: ReferenceImage) => {
+    const name = image.name.toLowerCase();
+    let value = Math.min(image.size / (1024 * 1024), 10);
+    if (/(?:户型|平面|底图|图纸|测量|尺寸|floor|plan|layout|measure|sketch)/i.test(name)) value += 30;
+    if (/(?:效果|render|photo|现场|实景)/i.test(name)) value -= 8;
+    return value;
+  };
+  return [...images].sort((a, b) => score(b) - score(a))[0];
 }
 
 function walkFiles(root: string, maxFiles: number): string[] {
@@ -664,6 +678,7 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
   const projectName = args.projectName || safeName(path.basename(folderPath), '未命名装修项目');
   const signals = extractRenovationSignals(corpus, args);
   const geometry = buildGeometry(signals, corpus);
+  const primaryReferenceImage = selectPrimaryReferenceImage(referenceImages);
   const markdown = makeMarkdown({ ...args, folderPath, projectName }, filesRead, referenceImages, filesSkipped, signals, geometry);
   const outputDir = args.outputDir
     ? path.resolve(expandHome(args.outputDir))
@@ -685,7 +700,8 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
 
   const draftFiles: RenovationFolderWorkflowResult['draftFiles'] = [];
   const cadFiles: RenovationFolderWorkflowResult['cadFiles'] = [];
-  if (args.writeFiles) {
+  const writeFiles = args.writeFiles !== false;
+  if (writeFiles) {
     fs.mkdirSync(outputDir, { recursive: true });
     for (const [name, content] of draftMap) {
       const target = path.join(outputDir, name);
@@ -705,7 +721,7 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
   return {
     projectName,
     folderPath,
-    outputDir: args.writeFiles ? outputDir : undefined,
+    outputDir: writeFiles ? outputDir : undefined,
     filesRead,
     referenceImages,
     filesSkipped,
@@ -713,6 +729,41 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
     geometry,
     draftFiles,
     cadFiles,
+    workflowState: primaryReferenceImage
+      ? 'awaiting_image_geometry_extraction'
+      : geometry.calibrated
+      ? 'drafting_base_ready'
+      : 'needs_dimension_calibration',
+    primaryReferenceImage: primaryReferenceImage?.path,
+    recommendedToolCalls: primaryReferenceImage
+      ? [
+          {
+            tool: 'floorplan_extract_geometry',
+            arguments: {
+              imagePath: primaryReferenceImage.path,
+              projectName,
+              knownDimensions: signals.dimensions.join('; '),
+              unit: 'mm',
+            },
+            reason: 'The folder workflow catalogued this likely floor-plan image but did not visually trace it.',
+          },
+          {
+            tool: 'cad_generate_dxf',
+            useResultFrom: 'floorplan_extract_geometry.cadGenerateDxfArgs',
+            reason: 'Generate the editable DXF from extracted image geometry, not from the conceptual room grid.',
+          },
+          {
+            tool: 'cad_generate_autocad_draw_script',
+            useResultFrom: 'floorplan_extract_geometry.cadGenerateAutocadArgs',
+            reason: 'Prepare visible stroke-by-stroke AutoCAD drawing from the same extracted geometry.',
+          },
+          {
+            tool: 'cad_run_autocad_draw_script',
+            useResultFrom: 'cad_generate_autocad_draw_script',
+            reason: 'Actually execute and verify the AutoCAD drawing through its completion marker.',
+          },
+        ]
+      : [],
     nextSteps: [
       referenceImages.length
         ? 'For higher accuracy, run floorplan_extract_geometry on the main floor-plan image, then regenerate DXF with confirmed geometry.'
@@ -725,6 +776,7 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
     warnings: [
       'DXF files are editable drafting bases, not final construction drawings.',
       'DWG output requires a licensed CAD application or approved converter; this workflow intentionally emits DXF.',
+      primaryReferenceImage ? 'Reference images were catalogued but not visually traced inside this MCP step. Continue with floorplan_extract_geometry before treating the CAD as source-faithful.' : '',
       filesSkipped.length ? `${filesSkipped.length} file(s) were skipped or only partially readable.` : '',
     ].filter(Boolean),
   };

@@ -592,7 +592,7 @@ export async function runWithTools(
     }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
-      recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
+      recordWorkflowIfToolsUsed(executionLog, messages, config);
       const guarded = guardToolResponseIfNeeded({
         task: getPrimaryUserText(messages),
         response: response.text || 'No response.',
@@ -622,7 +622,7 @@ export async function runWithTools(
         JSON.stringify(tc.arguments) === JSON.stringify(normalizedToolCalls[i].arguments)
       );
       if (sameTools && lastAssistantMsg.toolCalls.length === normalizedToolCalls.length) {
-        recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
+        recordWorkflowIfToolsUsed(executionLog, messages, config);
         const fallbackText = response.text || 'The same tools were called repeatedly. Breaking the loop to prevent infinite execution.';
         const guarded = guardToolResponseIfNeeded({
           task: getPrimaryUserText(messages),
@@ -680,7 +680,7 @@ export async function runWithTools(
       });
 
       if (isConfirmationBlocked(record)) {
-        recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
+        recordWorkflowIfToolsUsed(executionLog, messages, config);
         return {
           text: buildConfirmationBlockedSummary(executionLog, getPrimaryUserText(messages)),
           toolCalls: executionLog,
@@ -691,7 +691,7 @@ export async function runWithTools(
 
     const readyWorkProduct = buildReadyWorkProductSummary(messages, executionLog);
     if (readyWorkProduct) {
-      recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
+      recordWorkflowIfToolsUsed(executionLog, messages, config);
       return {
         text: readyWorkProduct,
         toolCalls: executionLog,
@@ -700,7 +700,7 @@ export async function runWithTools(
     }
   }
 
-  recordWorkflowIfToolsUsed(executionLog, messages, config.userId);
+  recordWorkflowIfToolsUsed(executionLog, messages, config);
   const readyWorkProduct = buildReadyWorkProductSummary(messages, executionLog);
   if (readyWorkProduct) {
     return {
@@ -720,14 +720,16 @@ export async function runWithTools(
 function recordWorkflowIfToolsUsed(
   executionLog: ToolExecutionRecord[],
   messages: NormalizedMessage[],
-  userId?: string,
+  config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId'>,
 ): void {
   if (executionLog.length === 0) return;
   const rawContent = messages.find(m => m.role === 'user')?.content || '';
   const userMsg = typeof rawContent === 'string' ? rawContent : Array.isArray(rawContent) ? rawContent.filter(c => c.type === 'text').map(c => (c as any).text).join(' ') : '';
   const safeMsg = userMsg || '';
   recordWorkflow({
-    userId: userId || 'anonymous',
+    userId: config.userId || 'anonymous',
+    domain: config.domain === 'work' ? 'work' : 'personal',
+    orgId: config.domain === 'work' ? (config.orgId || '') : '',
     userIntent: safeMsg.slice(0, 200),
     toolSequence: executionLog.map(e => ({
       name: e.name,

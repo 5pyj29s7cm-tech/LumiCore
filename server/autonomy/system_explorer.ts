@@ -14,6 +14,7 @@ export interface SystemSnapshot {
   filesystem: FilesystemOverview;
   network: NetworkProfile;
   changeSummary?: string;
+  computerScope: "lumi_server_host";
 }
 
 export interface HardwareProfile {
@@ -53,6 +54,8 @@ export interface FilesystemOverview {
   downloadsFiles: number;
   totalUserFiles: number;
   largeDirs: { path: string; sizeMB: number }[];
+  fileCountScope: "desktop_documents_downloads";
+  fileCountMaxDepth: number;
 }
 
 export interface NetworkProfile {
@@ -212,8 +215,6 @@ function collectCommonFolderApps(roots: string[], maxEntries: number): string[] 
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          const cleaned = cleanAppName(entry.name);
-          if (cleaned && !NOISE_APP_NAME.test(cleaned)) names.push(cleaned);
           if (depth < 2 && !skipDirs.has(entry.name.toLowerCase())) {
             stack.push({ dir: fullPath, depth: depth + 1 });
           }
@@ -300,11 +301,15 @@ function getRunningServices(): string[] {
 
 function getGPUInfo(): string[] {
   const gpus: string[] = [];
-  const wmic = exec("wmic path win32_videocontroller get name 2>nul");
-  if (wmic) {
-    for (const line of wmic.split("\n")) {
+  const output = os.platform() === 'win32'
+    ? exec(`powershell -NoProfile -Command "Get-CimInstance Win32_VideoController 2>$null | Where-Object { $_.Name } | Select-Object -ExpandProperty Name"`)
+    : os.platform() === 'darwin'
+      ? exec("system_profiler SPDisplaysDataType | awk -F': ' '/Chipset Model/{print $2}'")
+      : exec("lspci 2>/dev/null | grep -Ei 'vga|3d|display'");
+  if (output) {
+    for (const line of output.split("\n")) {
       const t = line.trim();
-      if (t && t !== "Name") gpus.push(t);
+      if (t && !gpus.includes(t)) gpus.push(t);
     }
   }
   return gpus;
@@ -312,13 +317,33 @@ function getGPUInfo(): string[] {
 
 function getDiskInfo(): SystemSnapshot["hardware"]["disks"] {
   const disks: SystemSnapshot["hardware"]["disks"] = [];
-  const out = exec(`powershell -NoProfile -Command "Get-PSDrive -PSProvider FileSystem 2>$null | Where-Object { $_.Used -gt 0 } | Select-Object Name, @{N='TotalGB';E={[math]::Round($_.Used/1GB+$_.Free/1GB,1)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,1)}} | ConvertTo-Json"`);
+  const out = os.platform() === 'win32'
+    ? exec(`powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' 2>$null | Select-Object DeviceID,FileSystem,Size,FreeSpace | ConvertTo-Json -Compress"`)
+    : '';
   try {
     const parsed = JSON.parse(out);
     for (const d of (Array.isArray(parsed) ? parsed : [parsed])) {
-      disks.push({ name: d.Name, totalGB: d.TotalGB || 0, freeGB: d.FreeGB || 0, fsType: "NTFS" });
+      disks.push({
+        name: String(d.DeviceID || d.Name || '').replace(/:$/, ''),
+        totalGB: Math.round((Number(d.Size || 0) / (1024 ** 3)) * 10) / 10,
+        freeGB: Math.round((Number(d.FreeSpace || 0) / (1024 ** 3)) * 10) / 10,
+        fsType: d.FileSystem || 'unknown',
+      });
     }
   } catch {}
+  if (disks.length === 0 && os.platform() !== 'win32') {
+    const df = exec("df -Pk 2>/dev/null");
+    for (const line of df.split('\n').slice(1)) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 6 || !/^\d+$/.test(parts[1])) continue;
+      disks.push({
+        name: parts.slice(5).join(' '),
+        totalGB: Math.round((Number(parts[1]) / 1024 / 1024) * 10) / 10,
+        freeGB: Math.round((Number(parts[3]) / 1024 / 1024) * 10) / 10,
+        fsType: 'unknown',
+      });
+    }
+  }
   return disks;
 }
 
@@ -344,35 +369,47 @@ function scanUserDirectories(): FilesystemOverview {
   const docs = path.join(home, "Documents");
   const downloads = path.join(home, "Downloads");
 
-  function countFiles(dir: string): number {
+  function countFiles(dir: string, maxDepth = 2, maxEntries = 100_000): number {
     try {
-      let n = 0;
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.isFile() || e.isDirectory()) n++;
+      let files = 0;
+      let visited = 0;
+      const stack = [{ dir, depth: 0 }];
+      while (stack.length > 0 && visited < maxEntries) {
+        const current = stack.pop()!;
+        let entries: fs.Dirent[] = [];
+        try { entries = fs.readdirSync(current.dir, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+          visited++;
+          if (entry.isFile()) files++;
+          else if (entry.isDirectory() && !entry.isSymbolicLink() && current.depth < maxDepth) {
+            stack.push({ dir: path.join(current.dir, entry.name), depth: current.depth + 1 });
+          }
+          if (visited >= maxEntries) break;
+        }
       }
-      return n;
+      return files;
     } catch { return 0; }
   }
 
-  function getDirSizeMB(dir: string): number {
+  function getDirSizeMB(dir: string, maxDepth = 2, maxEntries = 50_000): number {
     try {
       let total = 0;
-      const stack = [dir];
-      let depth = 0;
-      while (stack.length > 0 && depth < 3) {
+      let visited = 0;
+      const stack = [{ dir, depth: 0 }];
+      while (stack.length > 0 && visited < maxEntries) {
         const current = stack.pop()!;
         let entries: fs.Dirent[] = [];
-        try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch {}
+        try { entries = fs.readdirSync(current.dir, { withFileTypes: true }); } catch {}
         for (const e of entries) {
-          const fp = path.join(current, e.name);
+          visited++;
+          const fp = path.join(current.dir, e.name);
           if (e.isFile()) {
             try { total += fs.statSync(fp).size; } catch {}
-          } else if (e.isDirectory()) {
-            stack.push(fp);
+          } else if (e.isDirectory() && !e.isSymbolicLink() && current.depth < maxDepth) {
+            stack.push({ dir: fp, depth: current.depth + 1 });
           }
+          if (visited >= maxEntries) break;
         }
-        depth++;
       }
       return Math.round(total / (1024 * 1024));
     } catch { return 0; }
@@ -384,14 +421,32 @@ function scanUserDirectories(): FilesystemOverview {
     if (size > 100) largeDirs.push({ path: dir, sizeMB: size });
   }
 
+  const desktopFiles = desktopDirs.reduce((sum, dir) => sum + countFiles(dir), 0);
+  const documentsFiles = countFiles(docs);
+  const downloadsFiles = countFiles(downloads);
   return {
     homeDir: home,
-    desktopFiles: desktopDirs.reduce((sum, dir) => sum + countFiles(dir), 0),
-    documentsFiles: countFiles(docs),
-    downloadsFiles: countFiles(downloads),
-    totalUserFiles: countFiles(home),
+    desktopFiles,
+    documentsFiles,
+    downloadsFiles,
+    totalUserFiles: desktopFiles + documentsFiles + downloadsFiles,
     largeDirs,
+    fileCountScope: 'desktop_documents_downloads',
+    fileCountMaxDepth: 2,
   };
+}
+
+function getPhysicalCoreCount(logicalThreads: number): number {
+  let detected = 0;
+  if (os.platform() === 'win32') {
+    detected = Number(exec(`powershell -NoProfile -Command "(Get-CimInstance Win32_Processor 2>$null | Measure-Object -Property NumberOfCores -Sum).Sum"`));
+  } else if (os.platform() === 'darwin') {
+    detected = Number(exec('sysctl -n hw.physicalcpu'));
+  } else {
+    const pairs = new Set(exec("lscpu -p=Core,Socket 2>/dev/null").split('\n').filter(line => line && !line.startsWith('#')));
+    detected = pairs.size;
+  }
+  return Number.isFinite(detected) && detected > 0 ? detected : logicalThreads;
 }
 
 function scanHardwareProfile(): HardwareProfile {
@@ -401,7 +456,7 @@ function scanHardwareProfile(): HardwareProfile {
     platform: os.platform(),
     arch: os.arch(),
     hostname: os.hostname(),
-    cpus: { model: cpuModel, cores: cpus.length, threads: cpus.length },
+    cpus: { model: cpuModel, cores: getPhysicalCoreCount(cpus.length), threads: cpus.length },
     totalMemoryGB: Math.round((os.totalmem() / (1024 * 1024 * 1024)) * 10) / 10,
     gpus: getGPUInfo(),
     disks: getDiskInfo(),
@@ -428,6 +483,7 @@ export function runFirstBootExploration(): SystemSnapshot {
     id: `explore_${Date.now()}`,
     timestamp: new Date().toISOString(),
     type: "first_boot",
+    computerScope: 'lumi_server_host',
     hardware: scanHardwareProfile(),
     software: scanSoftwareProfile(),
     filesystem: scanUserDirectories(),
@@ -474,6 +530,7 @@ export function runDailyScan(): SystemSnapshot | null {
     id: `scan_${Date.now()}`,
     timestamp: new Date().toISOString(),
     type: "daily_scan",
+    computerScope: 'lumi_server_host',
     hardware: scanHardwareProfile(),
     software: scanSoftwareProfile(),
     filesystem: scanUserDirectories(),

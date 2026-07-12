@@ -77,7 +77,7 @@ export async function dispatchLLMCall(
 
   // ── Tier 2: Cloud provider ──
   const provider = config.provider || 'deepseek';
-  const model = config.model || 'deepseek-chat';
+  const model = config.model || 'deepseek-v4-flash';
   console.log(`[Dispatch] Routing to cloud: ${provider}/${model}`);
 
   const cloudResult = await makeLLMCall(
@@ -115,7 +115,7 @@ export async function dispatchLLMCallStreaming(
 
   // ── Tier 2: Cloud streaming ──
   const provider = config.provider || 'deepseek';
-  const model = config.model || 'deepseek-chat';
+  const model = config.model || 'deepseek-v4-flash';
   console.log(`[Dispatch] Routing stream to cloud: ${provider}/${model}`);
 
   const cloudResult = await makeLLMCallStreaming(

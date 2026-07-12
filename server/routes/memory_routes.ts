@@ -25,13 +25,9 @@ function getAuthToken(req: any): string | undefined {
 type MemoryScope = { domain: 'personal' | 'work'; orgId: string };
 
 function getMemoryScope(req: any, decoded: any): MemoryScope {
-  const requestedDomain = (req.query?.domain ?? req.body?.domain) as string | undefined;
-  if (requestedDomain === 'personal') return { domain: 'personal', orgId: '' };
-  if (requestedDomain === 'work') return { domain: 'work', orgId: decoded.orgId || '' };
-  return {
-    domain: decoded.orgId ? 'work' : 'personal',
-    orgId: decoded.orgId || '',
-  };
+  return decoded.orgId
+    ? { domain: 'work', orgId: String(decoded.orgId) }
+    : { domain: 'personal', orgId: '' };
 }
 
 export function mountMemoryRoutes(
@@ -181,8 +177,13 @@ export function mountMemoryRoutes(
     if (!token) return res.status(401).json({ error: "Unauthorized" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      const scope = getMemoryScope(req, decoded);
       const db = readDB();
-      const reminders = (db.reminders || []).filter((r: any) => r.userId === decoded.uid);
+      const reminders = (db.reminders || []).filter((r: any) =>
+        r.userId === decoded.uid &&
+        (r.domain || 'personal') === scope.domain &&
+        (r.orgId || '') === scope.orgId
+      );
       res.json(reminders);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -194,6 +195,7 @@ export function mountMemoryRoutes(
     if (!token) return res.status(401).json({ error: "Unauthorized" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      const scope = getMemoryScope(req, decoded);
       const { content, dueAt } = req.body || {};
       if (!content || typeof content !== "string") {
         return res.status(400).json({ error: "content is required" });
@@ -203,6 +205,8 @@ export function mountMemoryRoutes(
         content: content.trim(),
         dueAt: dueAt || null,
         sourceInteractionId: "manual",
+        domain: scope.domain,
+        orgId: scope.orgId,
       });
       res.json(reminder);
     } catch (e: any) {
@@ -215,9 +219,15 @@ export function mountMemoryRoutes(
     if (!token) return res.status(401).json({ error: "Unauthorized" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      const scope = getMemoryScope(req, decoded);
       const db = readDB();
       const reminders = db.reminders || [];
-      const reminder = reminders.find((r: any) => r.id === req.params.id && r.userId === decoded.uid);
+      const reminder = reminders.find((r: any) =>
+        r.id === req.params.id &&
+        r.userId === decoded.uid &&
+        (r.domain || 'personal') === scope.domain &&
+        (r.orgId || '') === scope.orgId
+      );
       if (!reminder) return res.status(404).json({ error: "Reminder not found" });
 
       const { content, dueAt, status } = req.body || {};
@@ -244,9 +254,15 @@ export function mountMemoryRoutes(
     if (!token) return res.status(401).json({ error: "Unauthorized" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      const scope = getMemoryScope(req, decoded);
       const db = readDB();
       const reminders = db.reminders || [];
-      const idx = reminders.findIndex((r: any) => r.id === req.params.id && r.userId === decoded.uid);
+      const idx = reminders.findIndex((r: any) =>
+        r.id === req.params.id &&
+        r.userId === decoded.uid &&
+        (r.domain || 'personal') === scope.domain &&
+        (r.orgId || '') === scope.orgId
+      );
       if (idx === -1) return res.status(404).json({ error: "Reminder not found" });
       reminders.splice(idx, 1);
       db.reminders = reminders;
@@ -269,7 +285,7 @@ export function mountMemoryRoutes(
       const ctx: ConsolidationContext = {
         userId,
         provider: (req.body.provider as any) || 'deepseek',
-        model: (req.body.model as any) || 'deepseek-chat',
+        model: (req.body.model as any) || 'deepseek-v4-flash',
         domain: scope.domain,
         orgId: scope.orgId,
       };
@@ -302,7 +318,7 @@ export function mountMemoryRoutes(
       const ctx: ConsolidationContext = {
         userId,
         provider: (req.body.provider as any) || 'deepseek',
-        model: (req.body.model as any) || 'deepseek-chat',
+        model: (req.body.model as any) || 'deepseek-v4-flash',
         domain: scope.domain,
         orgId: scope.orgId,
       };
@@ -409,10 +425,16 @@ export function mountMemoryRoutes(
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
       const { parentId } = req.body;
+      const scope = getMemoryScope(req, decoded);
       const db = readDB();
-      const mem = (db.memories || []).find((m: any) => m.id === req.params.id && m.userId === decoded.uid);
+      const mem = (db.memories || []).find((m: any) =>
+        m.id === req.params.id &&
+        m.userId === decoded.uid &&
+        (m.domain || 'personal') === scope.domain &&
+        (m.orgId || '') === scope.orgId
+      );
       if (!mem) return res.status(404).json({ error: "Memory not found" });
-      const ok = moveNode(req.params.id, parentId ?? null);
+      const ok = moveNode(req.params.id, parentId ?? null, { userId: decoded.uid, domain: scope.domain, orgId: scope.orgId });
       if (!ok) return res.status(400).json({ error: "Cannot move: circular reference or parent not found" });
       broadcastMemoryChange(decoded.uid, 'updated', mem.id);
       res.json({ success: true, memory: mem });
@@ -481,7 +503,7 @@ Rules:
       const llmResult = await makeLLMCall(
         [{ role: 'user', content: prompt }],
         [],
-        getUserPreferredLLMConfig(userId),
+        getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId }),
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
       );
 
@@ -500,7 +522,7 @@ Rules:
         const branchNode = ensureBranch(userId, branch.title, '', null, { domain: scope.domain, orgId: scope.orgId });
         branchCount++;
         for (const memId of branch.memoryIds) {
-          const ok = moveNode(memId, branchNode.id);
+          const ok = moveNode(memId, branchNode.id, { userId, domain: scope.domain, orgId: scope.orgId });
           if (ok) assignedCount++;
         }
       }
@@ -549,6 +571,7 @@ Rules:
       if (!token) return res.status(401).json({ error: "Unauthorized" });
       const decoded: any = jwt.verify(token, jwtSecret);
       const userId = decoded.uid;
+      const scope = getMemoryScope(req, decoded);
       const topic = req.query.topic as string;
       if (!topic) return res.status(400).json({ error: "topic query parameter is required" });
 
@@ -557,6 +580,8 @@ Rules:
         userId,
         topic,
         limit,
+        domain: scope.domain,
+        orgId: scope.orgId,
         getDeepSeek: llmGetters.getDeepSeek,
         getGemini: llmGetters.getGemini,
         getQwen: llmGetters.getQwen,

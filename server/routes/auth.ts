@@ -277,6 +277,12 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     if (!token) return res.status(401).json({ error: "Not authenticated" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      if (decoded.orgId) {
+        return res.status(409).json({
+          error: 'Biometric enrollment belongs to personal Lumi. Switch to personal context to manage it.',
+          code: 'PERSONAL_CONTEXT_REQUIRED',
+        });
+      }
       const { label, mfccFeatures, sampleCount, sampleRate } = req.body || {};
       const audioPcm16Base64 = req.body?.audioPcm16Base64 || req.body?.pcm16Base64;
       const labelText = typeof label === 'string' ? label.trim() : '';
@@ -332,6 +338,12 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     if (!token) return res.status(401).json({ error: "Not authenticated" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      if (decoded.orgId) {
+        return res.status(409).json({
+          error: 'Voiceprint verification belongs to personal Lumi. Organization meeting mode uses speaker separation without reading personal biometrics.',
+          code: 'PERSONAL_CONTEXT_REQUIRED',
+        });
+      }
       const { mfccFeatures, minFrames, threshold, sampleRate } = req.body || {};
       const audioPcm16Base64 = req.body?.audioPcm16Base64 || req.body?.pcm16Base64;
       if (!Array.isArray(mfccFeatures) && !audioPcm16Base64) {
@@ -363,6 +375,12 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     if (!token) return res.status(401).json({ error: "Not authenticated" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      if (decoded.orgId) {
+        return res.status(409).json({
+          error: 'Face enrollment belongs to personal Lumi. Switch to personal context to manage it.',
+          code: 'PERSONAL_CONTEXT_REQUIRED',
+        });
+      }
       const { label, embedding } = req.body;
       if (!label || !embedding || !Array.isArray(embedding)) {
         return res.status(400).json({ error: "label and embedding (number array) are required" });
@@ -385,6 +403,14 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     if (!token) return res.status(401).json({ error: "Not authenticated" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      if (decoded.orgId) {
+        return res.json({
+          voiceprints: [],
+          faces: [],
+          personalContextRequired: true,
+          note: 'Personal biometric templates are not exposed to organization Lumi.',
+        });
+      }
       const voiceprints = getVoiceprints(decoded.uid).map(v => ({
         id: v.voiceprintId,
         label: v.label,
@@ -396,7 +422,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
         embeddingModel: v.embeddingModel || null,
         embeddingDim: v.embeddingDim || 0,
       }));
-      const faces = getFaces(decoded.uid).map(f => ({ id: f.faceId, label: f.label, createdAt: f.createdAt }));
+      const faces = getFaces(decoded.uid).map(f => ({ id: f.faceId, label: f.label, createdAt: f.createdAt, embedding: f.embedding }));
       res.json({ voiceprints, faces });
     } catch (e) {
       res.status(401).json({ error: "Invalid token" });
@@ -410,6 +436,12 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     if (!token) return res.status(401).json({ error: "Not authenticated" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
+      if (decoded.orgId) {
+        return res.status(409).json({
+          error: 'Biometric management belongs to personal Lumi. Switch to personal context to manage it.',
+          code: 'PERSONAL_CONTEXT_REQUIRED',
+        });
+      }
       const { type, id } = req.params;
       if (type === 'voiceprint') {
         const ok = deleteVoiceprint(decoded.uid, id);

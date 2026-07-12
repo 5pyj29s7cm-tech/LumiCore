@@ -26,15 +26,7 @@ export function unregisterUserSocket(socketId: string): void {
 /** Broadcast memory change to all connected devices of a user */
 export function broadcastMemoryChange(userId: string, action: 'added' | 'updated' | 'deleted', memoryId?: string): void {
   if (!_io) return;
-  const sockets = userSockets.get(userId);
-  if (!sockets || sockets.size === 0) {
-    // If no targeted sockets, broadcast to all (web clients without auth)
-    _io.emit('memories:changed', { action, memoryId, userId, timestamp: new Date().toISOString() });
-    return;
-  }
-  for (const sid of sockets) {
-    _io.to(sid).emit('memories:changed', { action, memoryId, userId, timestamp: new Date().toISOString() });
-  }
+  _io.to(`user:${userId}:personal`).emit('memories:changed', { action, memoryId, userId, domain: 'personal', timestamp: new Date().toISOString() });
 }
 
 /** Broadcast device list change */
@@ -51,13 +43,6 @@ export function broadcastDeviceChange(userId: string): void {
 /** Broadcast preference change to all devices of a user (pet, accessories, wallpaper, etc.) */
 export function broadcastPreferenceChange(userId: string, key: string, value: any): void {
   if (!_io) return;
-  const sockets = userSockets.get(userId);
-  const payload = { key, value, userId, timestamp: new Date().toISOString() };
-  if (sockets && sockets.size > 0) {
-    for (const sid of sockets) {
-      _io.to(sid).emit('preferences:changed', payload);
-    }
-  } else {
-    _io.emit('preferences:changed', payload);
-  }
+  const payload = { key, value, userId, domain: 'personal', orgId: '', timestamp: new Date().toISOString() };
+  _io.to(`user:${userId}:personal`).emit('preferences:changed', payload);
 }

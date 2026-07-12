@@ -63,11 +63,15 @@ export class FeishuAdapter implements MessageAdapter {
   // ── Webhook Verification ──
 
   verifyWebhook(body: Record<string, any>): boolean {
-    // Feishu URL challenge on first setup
-    if (body.type === 'url_verification') {
-      return true;
+    const configured = String(this.config.verificationToken || '').trim();
+    const supplied = String(body?.token || body?.header?.token || body?.event?.token || '').trim();
+    if (!configured) {
+      return body?.type === 'url_verification' || body?.event?.type === 'url_verification';
     }
-    return true;
+    if (!supplied) return false;
+    const expected = Buffer.from(configured);
+    const actual = Buffer.from(supplied);
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
   }
 
   // ── Event Parsing ──

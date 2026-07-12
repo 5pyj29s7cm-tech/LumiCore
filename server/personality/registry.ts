@@ -5,6 +5,25 @@ import { generateSystemPrompt, initVectorFromStyle, vectorToTone, vectorToVerbos
 import { Memory } from '../memory/types';
 import { EmotionalState } from './state';
 import { EvolutionStep, EvolutionConfig, DEFAULT_EVOLUTION_CONFIG } from './evolution';
+import { readDB, writeDB } from '../../db_layer';
+
+interface UserPersonalityState {
+  schemaVersion: 1;
+  personalityVersion: string;
+  expressionStyle?: PersonalityConfig['expressionStyle'];
+  personalityVector?: PersonalityConfig['personalityVector'];
+  growthState?: PersonalityConfig['growthState'];
+  lastEvolvedAt?: string | null;
+  evolutionHistory?: any[];
+  evolutionAudit?: PersonalityEvolutionAudit[];
+  evolutionFrozenAt?: string | null;
+}
+
+const USER_PERSONALITY_STATE_PREFIX = 'personality_user_state:';
+
+function cloneConfig<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
 
 class PersonalityRegistry {
   private personalities: Map<string, PersonalityConfig> = new Map();
@@ -16,27 +35,19 @@ class PersonalityRegistry {
     this.broadcastFn = fn;
   }
 
-  /** Load personalities: user's evolved state (data/) takes priority over factory default */
+  /** Load the stable personality core. Owner-specific growth is loaded separately per user. */
   load(configPath?: string): void {
     if (this.loaded) return;
 
     const factoryPath = configPath || path.join(process.cwd(), 'server', 'personality', 'personalities.json');
     const altFactoryPath = path.join(process.cwd(), '..', 'server', 'personality', 'personalities.json');
-    const userStatePath = path.join(process.cwd(), 'data', 'personalities.json');
-    const altUserStatePath = path.join(process.cwd(), '..', 'data', 'personalities.json');
 
-    // 1. Prefer user's evolved state (data/ — gitignored, survives updates)
+    // Only the factory core is loaded globally. Personal and organization growth
+    // states are overlaid from scoped database records at request time.
     let raw: string = '';
     let loadedFrom = '';
-    for (const p of [userStatePath, altUserStatePath]) {
+    for (const p of [factoryPath, altFactoryPath]) {
       try { raw = fs.readFileSync(p, 'utf-8'); loadedFrom = p; break; } catch {}
-    }
-
-    // 2. Fall back to factory default (server/ — git-tracked, clean for all users)
-    if (!loadedFrom) {
-      for (const p of [factoryPath, altFactoryPath]) {
-        try { raw = fs.readFileSync(p, 'utf-8'); loadedFrom = p; break; } catch {}
-      }
     }
 
     if (!loadedFrom) {
@@ -122,6 +133,71 @@ class PersonalityRegistry {
     return this.personalities.get('lumi')!;
   }
 
+  private userStateKey(personalityId: string, userId: string, orgId?: string): string {
+    const owner = orgId ? `org:${orgId}` : `personal:${userId}`;
+    return `${USER_PERSONALITY_STATE_PREFIX}${personalityId}:${owner}`;
+  }
+
+  private loadUserState(personalityId: string, userId: string, orgId?: string): UserPersonalityState | null {
+    if (!userId) return null;
+    try {
+      const db = readDB();
+      const row = (db.settings || []).find((item: any) => item.key === this.userStateKey(personalityId, userId, orgId));
+      if (!row?.value) return null;
+      const parsed = JSON.parse(row.value);
+      return parsed?.schemaVersion === 1 ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private saveUserState(personalityId: string, userId: string, config: PersonalityConfig, orgId?: string): void {
+    if (!userId) return;
+    const state: UserPersonalityState = {
+      schemaVersion: 1,
+      personalityVersion: config.version,
+      expressionStyle: cloneConfig(config.expressionStyle),
+      personalityVector: config.personalityVector ? cloneConfig(config.personalityVector) : undefined,
+      growthState: config.growthState ? cloneConfig(config.growthState) : undefined,
+      lastEvolvedAt: config.lastEvolvedAt,
+      evolutionHistory: cloneConfig(config.evolutionHistory || []),
+      evolutionAudit: cloneConfig(config.evolutionAudit || []),
+      evolutionFrozenAt: config.evolutionFrozenAt,
+    };
+    const db = readDB();
+    if (!db.settings) db.settings = [];
+    const key = this.userStateKey(personalityId, userId, orgId);
+    const row = db.settings.find((item: any) => item.key === key);
+    const value = JSON.stringify(state);
+    if (row) row.value = value;
+    else db.settings.push({ key, value });
+    writeDB(db);
+  }
+
+  getForUser(personalityId: string, userId?: string, orgId?: string): PersonalityConfig | undefined {
+    const base = this.get(personalityId);
+    if (!base || !userId) return base;
+    const config = cloneConfig(base);
+    const state = this.loadUserState(personalityId, userId, orgId);
+    if (!state) {
+      delete config.growthState;
+      delete config.lastEvolvedAt;
+      delete config.evolutionHistory;
+      delete config.evolutionAudit;
+      delete config.evolutionFrozenAt;
+      return config;
+    }
+    config.version = state.personalityVersion || config.version;
+    if (state.expressionStyle) config.expressionStyle = cloneConfig(state.expressionStyle);
+    if (state.personalityVector) config.personalityVector = cloneConfig(state.personalityVector);
+    if (state.growthState) config.growthState = cloneConfig(state.growthState);
+    config.lastEvolvedAt = state.lastEvolvedAt;
+    config.evolutionHistory = cloneConfig(state.evolutionHistory || []);
+    config.evolutionAudit = cloneConfig(state.evolutionAudit || []);
+    config.evolutionFrozenAt = state.evolutionFrozenAt;
+    return config;
+  }
+
   list(): PersonalityConfig[] {
     if (!this.loaded) this.load();
     return Array.from(this.personalities.values());
@@ -131,8 +207,8 @@ class PersonalityRegistry {
    * Apply an evolution step to a personality, persisting the changes.
    * Returns the updated config.
    */
-  applyEvolution(personalityId: string, step: EvolutionStep, options?: { force?: boolean }): PersonalityConfig | null {
-    const config = this.get(personalityId);
+  applyEvolution(personalityId: string, step: EvolutionStep, options?: { force?: boolean; userId?: string; orgId?: string }): PersonalityConfig | null {
+    const config = this.getForUser(personalityId, options?.userId, options?.orgId);
     if (!config) return null;
     if (config.evolutionFrozenAt && !options?.force) return null;
     const audit = this.buildEvolutionAudit(step);
@@ -170,13 +246,15 @@ class PersonalityRegistry {
       narrative: step.narrative,
     });
 
-    // Persist to disk
-    this.save();
+    if (options?.userId) this.saveUserState(personalityId, options.userId, config, options.orgId);
+    else this.save();
 
     // Broadcast real-time evolution event
     if (this.broadcastFn) {
       this.broadcastFn('personality:evolved', {
         personalityId,
+        userId: options?.userId,
+        orgId: options?.orgId,
         version: step.version,
         narrative: step.narrative,
         mutations: step.mutations,
@@ -256,46 +334,49 @@ class PersonalityRegistry {
   }
 
   /** Get the evolution config for a personality (with defaults) */
-  getEvolutionConfig(personalityId: string): EvolutionConfig {
-    const config = this.get(personalityId);
+  getEvolutionConfig(personalityId: string, userId?: string, orgId?: string): EvolutionConfig {
+    const config = this.getForUser(personalityId, userId, orgId);
     if (!config) return DEFAULT_EVOLUTION_CONFIG;
     const stored = (config as any).evolutionConfig as Partial<EvolutionConfig> | undefined;
     return { ...DEFAULT_EVOLUTION_CONFIG, ...stored };
   }
 
   /** Get evolution history for a personality */
-  getEvolutionHistory(personalityId: string): EvolutionStep[] {
-    const config = this.get(personalityId);
+  getEvolutionHistory(personalityId: string, userId?: string, orgId?: string): EvolutionStep[] {
+    const config = this.getForUser(personalityId, userId, orgId);
     if (!config) return [];
     return (config as any).evolutionHistory || [];
   }
 
-  getEvolutionAudit(personalityId: string): PersonalityEvolutionAudit[] {
-    const config = this.get(personalityId);
+  getEvolutionAudit(personalityId: string, userId?: string, orgId?: string): PersonalityEvolutionAudit[] {
+    const config = this.getForUser(personalityId, userId, orgId);
     if (!config) return [];
     return ((config as any).evolutionAudit || []) as PersonalityEvolutionAudit[];
   }
 
-  isEvolutionFrozen(personalityId: string): boolean {
-    const config = this.get(personalityId);
+  isEvolutionFrozen(personalityId: string, userId?: string, orgId?: string): boolean {
+    const config = this.getForUser(personalityId, userId, orgId);
     return Boolean(config?.evolutionFrozenAt);
   }
 
-  setEvolutionFrozen(personalityId: string, frozen: boolean): PersonalityConfig | null {
-    const config = this.get(personalityId);
+  setEvolutionFrozen(personalityId: string, frozen: boolean, userId?: string, orgId?: string): PersonalityConfig | null {
+    const config = this.getForUser(personalityId, userId, orgId);
     if (!config) return null;
     config.evolutionFrozenAt = frozen ? new Date().toISOString() : null;
-    this.save();
+    if (userId) this.saveUserState(personalityId, userId, config, orgId);
+    else this.save();
     this.broadcastFn?.('personality:evolution_freeze_changed', {
       personalityId,
+      userId,
+      orgId,
       frozen,
       frozenAt: config.evolutionFrozenAt,
     });
     return config;
   }
 
-  revertEvolution(personalityId: string, auditId: string): PersonalityConfig | null {
-    const config = this.get(personalityId);
+  revertEvolution(personalityId: string, auditId: string, userId?: string, orgId?: string): PersonalityConfig | null {
+    const config = this.getForUser(personalityId, userId, orgId);
     if (!config) return null;
     const extConfig = config as any;
     const audit = ((extConfig.evolutionAudit || []) as PersonalityEvolutionAudit[])
@@ -319,9 +400,12 @@ class PersonalityRegistry {
     history.reverted = true;
     const [major, minor] = (config.version || '2.3').split('.').map(Number);
     config.version = `${major || 2}.${(minor || 0) + 1}`;
-    this.save();
+    if (userId) this.saveUserState(personalityId, userId, config, orgId);
+    else this.save();
     this.broadcastFn?.('personality:evolution_reverted', {
       personalityId,
+      userId,
+      orgId,
       auditId,
       version: config.version,
     });
@@ -363,14 +447,27 @@ class PersonalityRegistry {
       removeFromMotivation?: string;
       newMotivation?: string;
     },
+    userId?: string,
+    orgId?: string,
   ): Promise<boolean> {
-    const config = this.get(personalityId);
+    const config = this.getForUser(personalityId, userId, orgId);
     if (!config) return false;
 
     const extConfig = config as any;
 
+    if (userId && !config.growthState) {
+      config.growthState = {
+        version: 0,
+        lastUpdatedAt: new Date().toISOString(),
+        ownerInterests: [],
+        ownerExpressions: [],
+        communicationPatterns: [],
+        adaptationNotes: [],
+      };
+    }
+
     // Remove contradicted interest from motivation text
-    if (changes.removeFromMotivation) {
+    if (!userId && changes.removeFromMotivation) {
       const target = changes.removeFromMotivation.trim();
       config.coreMotivation = config.coreMotivation
         .replace(new RegExp(target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '')
@@ -382,7 +479,7 @@ class PersonalityRegistry {
     }
 
     // Replace entire motivation if provided
-    if (changes.newMotivation) {
+    if (!userId && changes.newMotivation) {
       config.coreMotivation = changes.newMotivation;
     }
 
@@ -422,10 +519,12 @@ class PersonalityRegistry {
     const [major, minor] = (config.version || '2.3').split('.').map(Number);
     config.version = `${major}.${(minor || 0) + 1}`;
 
-    // Persist immediately
-    this.save();
+    if (userId) this.saveUserState(personalityId, userId, config, orgId);
+    else this.save();
     this.broadcastFn?.('personality:corrected', {
       personalityId,
+      userId,
+      orgId,
       changes,
       newVersion: config.version,
     });
@@ -446,9 +545,12 @@ class PersonalityRegistry {
       emotionalState?: EmotionalState;
       userId?: string;
       userText?: string;
+      domain?: 'personal' | 'work';
+      orgId?: string;
     },
   ): { config: PersonalityConfig; systemPrompt: string } {
-    const config = this.get(personalityId) || this.getDefault();
+    const scopedOrgId = options?.domain === 'work' ? options.orgId : undefined;
+    const config = this.getForUser(personalityId, options?.userId, scopedOrgId) || this.getDefault();
     const prompt = generateSystemPrompt(config, ctx, options);
     return { config, systemPrompt: prompt };
   }

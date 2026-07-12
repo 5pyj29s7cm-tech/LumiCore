@@ -24,15 +24,15 @@ export interface UserLLMPrefs {
 }
 
 export const DEFAULT_MODELS: Record<UserLLMProvider, string> = {
-  deepseek: 'deepseek-chat',
+  deepseek: 'deepseek-v4-flash',
   qwen: 'qwen-plus',
   openai: 'gpt-4o',
   gemini: 'gemini-2.0-flash',
   anthropic: 'claude-sonnet-4-6',
-  ark: 'doubao-1-5-pro-32k',
-  xiaomi: 'xiaomi-chat',
+  ark: 'doubao-seed-2-0-lite-260215',
+  xiaomi: 'mimo-v2.5-pro',
   kimi: 'moonshot-v1-8k',
-  glm: 'glm-4-plus',
+  glm: 'glm-5.1',
   relay: 'gpt-4o',
   ollama: 'qwen2.5:7b',
   lmstudio: 'local-model',
@@ -70,10 +70,18 @@ function parsePrefsRow(key: string): any {
   return null;
 }
 
+function normalizeLegacyModel(provider: UserLLMProvider, model: string): string {
+  if (provider === 'deepseek' && model === 'deepseek-chat') return 'deepseek-v4-flash';
+  if (provider === 'deepseek' && model === 'deepseek-reasoner') return 'deepseek-v4-pro';
+  if (provider === 'xiaomi' && model === 'xiaomi-chat') return 'mimo-v2.5-pro';
+  return model;
+}
+
 function resolvePrefs(raw: any, source: 'personal' | 'organization'): UserLLMPrefs {
   const provider = normalizeProvider(raw?.provider);
-  const models = raw?.models && typeof raw.models === 'object' ? raw.models : {};
-  const model = models[provider] || DEFAULT_MODELS[provider];
+  const rawModels = raw?.models && typeof raw.models === 'object' ? raw.models : {};
+  const model = normalizeLegacyModel(provider, rawModels[provider] || DEFAULT_MODELS[provider]);
+  const models = { ...rawModels, [provider]: model };
   return {
     provider,
     model,
@@ -104,6 +112,7 @@ export function getScopedPreferredLLM(
   if (scope.domain === 'work' && scope.orgId) {
     const orgPrefs = getOrgPreferredLLM(scope.orgId);
     if (orgPrefs?.configured) return orgPrefs;
+    return resolvePrefs({ provider: 'deepseek', models: {} }, 'organization');
   }
   return getUserPreferredLLM(userId);
 }
@@ -113,11 +122,10 @@ export function upsertOrgPreferredLLM(
   input: { inheritPersonal?: boolean; provider?: string; models?: Record<string, string> },
 ): UserLLMPrefs & { configured: boolean } {
   if (!orgId) throw new Error('orgId is required');
-  const inheritPersonal = input.inheritPersonal === true;
-  const provider = inheritPersonal ? '' : normalizeProvider(input.provider);
-  const models = !inheritPersonal && input.models && typeof input.models === 'object' ? input.models : {};
+  const provider = normalizeProvider(input.provider);
+  const models = input.models && typeof input.models === 'object' ? input.models : {};
   const payload = {
-    inheritPersonal,
+    inheritPersonal: false,
     provider,
     models,
     updatedAt: new Date().toISOString(),
@@ -132,9 +140,7 @@ export function upsertOrgPreferredLLM(
     db.settings.push({ key, value: JSON.stringify(payload) });
   }
   writeDB(db);
-  return inheritPersonal
-    ? { ...resolvePrefs(payload, 'organization'), configured: false, inheritPersonal: true }
-    : { ...resolvePrefs(payload, 'organization'), configured: true, inheritPersonal: false };
+  return { ...resolvePrefs(payload, 'organization'), configured: true, inheritPersonal: false };
 }
 
 export function getUserPreferredLLMConfig(

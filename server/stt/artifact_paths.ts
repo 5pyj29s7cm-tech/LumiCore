@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { getDataPath } from '../config/data_path';
 
 function cwdDataPath(...parts: string[]): string | null {
@@ -36,12 +37,21 @@ export function getWhisperModelDir(): string {
   return ensureDir(path.join(getSttArtifactRoot(), 'whisper_models'));
 }
 
-export function getMeetingAudioDir(): string {
+export function getMeetingAudioDir(scope?: { userId?: string; domain?: string; orgId?: string }): string {
   const configured = process.env.LUMI_MEETING_AUDIO_DIR;
-  if (configured) return ensureDir(path.resolve(configured));
+  let root: string;
+  if (configured) root = ensureDir(path.resolve(configured));
+  else {
+    const projectData = cwdDataPath('meeting_audio');
+    root = projectData
+      ? ensureDir(projectData)
+      : ensureDir(path.dirname(getDataPath(path.join('meeting_audio', '.keep'))));
+  }
 
-  const projectData = cwdDataPath('meeting_audio');
-  if (projectData) return ensureDir(projectData);
-
-  return ensureDir(path.dirname(getDataPath(path.join('meeting_audio', '.keep'))));
+  if (!scope?.userId) return root;
+  const identity = scope.domain === 'work' && scope.orgId
+    ? `work:${scope.orgId}`
+    : `personal:${scope.userId}`;
+  const scopeId = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 20);
+  return ensureDir(path.join(root, scope.domain === 'work' ? 'work' : 'personal', scopeId));
 }

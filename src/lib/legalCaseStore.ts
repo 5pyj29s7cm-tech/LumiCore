@@ -45,6 +45,22 @@ function canUseStorage() {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 }
 
+function currentLegalStorageScope(): { domain: 'personal' | 'work'; orgId: string } {
+  if (!canUseStorage()) return { domain: 'personal', orgId: '' };
+  try {
+    if (localStorage.getItem('lumi_work_domain') !== 'work') return { domain: 'personal', orgId: '' };
+    const orgId = String(JSON.parse(localStorage.getItem('lumi_org_connection') || 'null')?.orgId || '').trim();
+    return orgId ? { domain: 'work', orgId } : { domain: 'work', orgId: 'pending' };
+  } catch {
+    return { domain: 'personal', orgId: '' };
+  }
+}
+
+function scopedLegalStateKey(base: string): string {
+  const scope = currentLegalStorageScope();
+  return scope.domain === 'work' ? `${base}:org:${encodeURIComponent(scope.orgId)}` : base;
+}
+
 function newId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -102,6 +118,7 @@ function normalizeCaseFile(value: any): LegalCaseFile | null {
 
 export function readLegalCaseFiles(): LegalCaseFile[] {
   if (!canUseStorage()) return [];
+  if (currentLegalStorageScope().domain === 'work') return [];
   try {
     const parsed = JSON.parse(localStorage.getItem(LEGAL_CASES_STORAGE) || '[]');
     if (!Array.isArray(parsed)) return [];
@@ -113,34 +130,37 @@ export function readLegalCaseFiles(): LegalCaseFile[] {
 
 export function getActiveLegalCaseId(): string {
   if (!canUseStorage()) return '';
-  return localStorage.getItem(ACTIVE_LEGAL_CASE_STORAGE) || '';
+  return localStorage.getItem(scopedLegalStateKey(ACTIVE_LEGAL_CASE_STORAGE)) || '';
 }
 
 export function getLegalConsultationCaseId(): string {
   if (!canUseStorage()) return '';
-  return localStorage.getItem(LEGAL_CONSULTATION_CASE_STORAGE) || '';
+  return localStorage.getItem(scopedLegalStateKey(LEGAL_CONSULTATION_CASE_STORAGE)) || '';
 }
 
 export function setActiveLegalCaseId(caseId: string) {
   if (!canUseStorage()) return;
-  if (caseId) localStorage.setItem(ACTIVE_LEGAL_CASE_STORAGE, caseId);
-  else localStorage.removeItem(ACTIVE_LEGAL_CASE_STORAGE);
+  const key = scopedLegalStateKey(ACTIVE_LEGAL_CASE_STORAGE);
+  if (caseId) localStorage.setItem(key, caseId);
+  else localStorage.removeItem(key);
   emitLegalCasesChanged();
 }
 
 export function setLegalConsultationCaseId(caseId: string) {
   if (!canUseStorage()) return;
-  if (caseId) localStorage.setItem(LEGAL_CONSULTATION_CASE_STORAGE, caseId);
-  else localStorage.removeItem(LEGAL_CONSULTATION_CASE_STORAGE);
+  const key = scopedLegalStateKey(LEGAL_CONSULTATION_CASE_STORAGE);
+  if (caseId) localStorage.setItem(key, caseId);
+  else localStorage.removeItem(key);
 }
 
 export function clearLegalConsultationCaseId() {
   if (!canUseStorage()) return;
-  localStorage.removeItem(LEGAL_CONSULTATION_CASE_STORAGE);
+  localStorage.removeItem(scopedLegalStateKey(LEGAL_CONSULTATION_CASE_STORAGE));
 }
 
 export function writeLegalCaseFiles(cases: LegalCaseFile[], activeCaseId?: string) {
   if (!canUseStorage()) return;
+  if (currentLegalStorageScope().domain === 'work') return;
   localStorage.setItem(LEGAL_CASES_STORAGE, JSON.stringify(cases));
   if (activeCaseId) localStorage.setItem(ACTIVE_LEGAL_CASE_STORAGE, activeCaseId);
   emitLegalCasesChanged();

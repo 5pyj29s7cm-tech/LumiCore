@@ -88,7 +88,7 @@ export function Settings({
   onSectionChange?: (section: string) => void;
 }) {
   const { platform, isElectron } = usePlatform();
-  const { operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode } = useApp();
+  const { operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, switchDomain } = useApp();
   const [providerStatus, setProviderStatus] = useState<Record<string, { available: boolean; model: string }>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const visibleSection = activeSection === 'computer' || activeSection === 'messaging' ? 'general' : activeSection;
@@ -237,7 +237,20 @@ export function Settings({
 
             <SettingsSection title="生物特征录入" icon={<Shield size={18} className="text-amber-400" />}>
               <div className="p-6 bg-white/5 rounded-[2.5rem] border border-white/5">
-                <BiometricsEnrollPanel />
+                {workDomain === 'personal' ? (
+                  <BiometricsEnrollPanel />
+                ) : (
+                  <div className="space-y-3 text-sm text-white/65">
+                    <p>{ui('声纹和人脸属于当前成员的个人 Lumi 与本机设备，不写入组织 Lumi。', 'Voiceprints and face data belong to the current member\'s personal Lumi and device, not the organization Lumi.')}</p>
+                    <button
+                      type="button"
+                      onClick={() => { void switchDomain('personal'); }}
+                      className="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs font-bold text-amber-200 transition-colors hover:bg-amber-400/15"
+                    >
+                      {ui('切换到个人 Lumi 管理', 'Switch to personal Lumi')}
+                    </button>
+                  </div>
+                )}
               </div>
             </SettingsSection>
           </div>
@@ -576,6 +589,36 @@ function SidebarItem({ active, onClick, icon, label }: { active: boolean, onClic
   );
 }
 
+type ProviderTestState = 'idle' | 'testing' | 'ok' | 'error';
+
+async function runLLMConnectionTest(provider: string, model: string): Promise<{ latencyMs: number; model: string }> {
+  const response = await apiFetch('/api/llm/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ provider, model }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok !== true) {
+    throw new Error(data.error || `Connection test failed (${response.status})`);
+  }
+  return { latencyMs: Number(data.latencyMs) || 0, model: data.model || model };
+}
+
+async function runVisionConnectionTest(provider: string, model: string): Promise<{ latencyMs: number; model: string }> {
+  const response = await apiFetch('/api/vision/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ provider, model }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok !== true) {
+    throw new Error(data.error || `Vision test failed (${response.status})`);
+  }
+  return { latencyMs: Number(data.latencyMs) || 0, model: data.model || model };
+}
+
 function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled = false, serverKey, t }: {
   icon: React.ReactNode; label: string; providerId: string; models: string[];
   placeholder: string; disabled?: boolean; serverKey: string; t?: any;
@@ -589,6 +632,9 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
   const [saved, setSaved] = useState(false);
   const [serverConfigured, setServerConfigured] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [keyDirty, setKeyDirty] = useState(false);
+  const [testState, setTestState] = useState<ProviderTestState>('idle');
+  const [testMessage, setTestMessage] = useState('');
 
   const savedModels = (() => {
     try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
@@ -608,6 +654,9 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
       localStorage.removeItem(`lumi_${providerId}_key`);
       setServerConfigured(false);
       setKeyValue('');
+      setKeyDirty(false);
+      setTestState('idle');
+      setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
@@ -619,6 +668,9 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
     saveServerKeys({ [serverKey]: keyValue.trim() }).then(() => {
       localStorage.setItem(`lumi_${providerId}_key`, keyValue.trim());
       setServerConfigured(true);
+      setKeyDirty(false);
+      setTestState('idle');
+      setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
@@ -647,6 +699,20 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
     }
   };
 
+  const handleTest = async () => {
+    if (!serverConfigured || keyDirty || !model.trim()) return;
+    setTestState('testing');
+    setTestMessage('');
+    try {
+      const result = await runLLMConnectionTest(providerId, model.trim());
+      setTestState('ok');
+      setTestMessage(ui(`实调成功 · ${result.latencyMs} ms`, `Live call passed · ${result.latencyMs} ms`));
+    } catch (error: any) {
+      setTestState('error');
+      setTestMessage(error?.message || ui('实调失败', 'Live call failed'));
+    }
+  };
+
   return (
     <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
       <div className="flex items-center gap-2">
@@ -661,7 +727,7 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
             disabled={disabled}
             type={showKey ? 'text' : 'password'}
             value={keyValue}
-            onChange={e => setKeyValue(e.target.value)}
+            onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
             placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || ui('密钥已保存在服务器', 'Key saved on server')) : placeholder}
             className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-celestial-saturn/50 transition-colors disabled:opacity-50"
@@ -687,6 +753,13 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
         >
           {t?.remove || ui('移除', 'Remove')}
         </Button>
+        <Button
+          onClick={handleTest}
+          disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
+          className="h-[56px] px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+        >
+          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : ui('实调', 'Test')}
+        </Button>
       </div>
       <div className="flex items-center gap-3">
         <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
@@ -705,6 +778,11 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
           <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold whitespace-nowrap">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>
         )}
       </div>
+      {testMessage && (
+        <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
+          {testMessage}
+        </p>
+      )}
     </div>
   );
 }
@@ -722,6 +800,9 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
   const [saved, setSaved] = useState(false);
   const [serverConfigured, setServerConfigured] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [keyDirty, setKeyDirty] = useState(false);
+  const [testState, setTestState] = useState<ProviderTestState>('idle');
+  const [testMessage, setTestMessage] = useState('');
   const savedModels = (() => {
     try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
   })();
@@ -738,6 +819,9 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
     saveServerKeys({ [serverKey]: keyValue.trim() }).then(() => {
       localStorage.setItem(`lumi_vision_${providerId}_key`, keyValue.trim());
       setServerConfigured(true);
+      setKeyDirty(false);
+      setTestState('idle');
+      setTestMessage('');
       if (visionConfig.provider === providerId) {
         updateVisionConfig({ apiKey: keyValue.trim(), model });
       }
@@ -752,6 +836,9 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
       localStorage.removeItem(`lumi_vision_${providerId}_key`);
       setServerConfigured(false);
       setKeyValue('');
+      setKeyDirty(false);
+      setTestState('idle');
+      setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
@@ -760,6 +847,8 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
 
   const handleModelChange = (m: string) => {
     setModel(m);
+    setTestState('idle');
+    setTestMessage('');
     const allModels = (() => {
       try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
     })();
@@ -777,6 +866,20 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
     }
   };
 
+  const handleTest = async () => {
+    if (!serverConfigured || keyDirty || !model.trim()) return;
+    setTestState('testing');
+    setTestMessage('');
+    try {
+      const result = await runVisionConnectionTest(providerId, model.trim());
+      setTestState('ok');
+      setTestMessage(ui(`视觉实调成功 · ${result.latencyMs} ms`, `Vision call passed · ${result.latencyMs} ms`));
+    } catch (error: any) {
+      setTestState('error');
+      setTestMessage(error?.message || ui('视觉实调失败', 'Vision call failed'));
+    }
+  };
+
   return (
     <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
       <div className="flex items-center gap-2">
@@ -791,7 +894,7 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
             disabled={disabled}
             type={showKey ? 'text' : 'password'}
             value={keyValue}
-            onChange={e => setKeyValue(e.target.value)}
+            onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
             placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || ui('密钥已保存在服务器', 'Key saved on server')) : placeholder}
             className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-cyan-300/50 transition-colors disabled:opacity-50"
@@ -817,6 +920,13 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
         >
           {t?.remove || ui('移除', 'Remove')}
         </Button>
+        <Button
+          onClick={handleTest}
+          disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
+          className="h-[56px] px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+        >
+          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : ui('实调', 'Test')}
+        </Button>
       </div>
       <div className="flex items-center gap-3">
         <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
@@ -835,6 +945,7 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
           <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold whitespace-nowrap">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>
         )}
       </div>
+      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
     </div>
   );
 }
@@ -860,6 +971,9 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
   const [models, setModels] = useState<string[]>([]);
   const [checking, setChecking] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+  const [testState, setTestState] = useState<ProviderTestState>('idle');
+  const [testMessage, setTestMessage] = useState('');
   const savedModels = (() => {
     try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
   })();
@@ -876,6 +990,7 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
         setBaseUrl(cfg.baseUrl || defaultUrl);
         setDetected(!!cfg.detected);
         setModels(cfg.models || []);
+        setError(cfg.lastError || '');
       })
       .catch(() => {});
   }, [defaultUrl, endpoint]);
@@ -884,6 +999,8 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
 
   const persistModel = (nextModel: string) => {
     setModel(nextModel);
+    setTestState('idle');
+    setTestMessage('');
     const allModels = (() => {
       try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
     })();
@@ -903,6 +1020,9 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
 
   const handleDetect = async () => {
     setChecking(true);
+    setError('');
+    setTestState('idle');
+    setTestMessage('');
     try {
       const resp = await fetch(endpoint, {
         method: 'PUT',
@@ -914,7 +1034,9 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
       if (!resp.ok) throw new Error(cfg.error || 'Detect failed');
       setDetected(!!cfg.detected);
       setModels(cfg.models || []);
-      localStorage.setItem(storageKey, baseUrl);
+      setBaseUrl(cfg.baseUrl || baseUrl);
+      setError(cfg.lastError || '');
+      localStorage.setItem(storageKey, cfg.baseUrl || baseUrl);
       const firstVisionModel = (cfg.models || []).find((m: string) => /vl|vision|minicpm|internvl|llava|glm.*v/i.test(m)) || model || defaultModel;
       if (firstVisionModel && firstVisionModel !== model) persistModel(firstVisionModel);
       setSaved(true);
@@ -922,7 +1044,7 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
     } catch (err: any) {
       setDetected(false);
       setModels([]);
-      toast.error(err.message || 'Detect failed');
+      setError(err.message || 'Detect failed');
     } finally {
       setChecking(false);
     }
@@ -930,6 +1052,20 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
 
   const handleUse = () => {
     updateVisionConfig({ provider: providerId, model });
+  };
+
+  const handleTest = async () => {
+    if (!detected || !model.trim()) return;
+    setTestState('testing');
+    setTestMessage('');
+    try {
+      const result = await runVisionConnectionTest(providerId, model.trim());
+      setTestState('ok');
+      setTestMessage(ui(`视觉实调成功 · ${result.latencyMs} ms`, `Vision call passed · ${result.latencyMs} ms`));
+    } catch (caught: any) {
+      setTestState('error');
+      setTestMessage(caught?.message || ui('视觉实调失败', 'Vision call failed'));
+    }
   };
 
   return (
@@ -945,7 +1081,7 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
         <input
           type="text"
           value={baseUrl}
-          onChange={e => { setBaseUrl(e.target.value); setSaved(false); }}
+          onChange={e => { setBaseUrl(e.target.value); setSaved(false); setDetected(false); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleDetect()}
           placeholder={defaultUrl}
           className="flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-emerald-400/50 transition-colors"
@@ -978,6 +1114,13 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
         >
           {ui('设为视觉', 'Use')}
         </Button>
+        <Button
+          onClick={handleTest}
+          disabled={!detected || !model.trim() || testState === 'testing'}
+          className="h-9 px-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20 transition-all"
+        >
+          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : ui('实调', 'Test')}
+        </Button>
       </div>
       <p className="text-[12px] text-white/45 leading-relaxed">
         {ui('本地视觉只在你的电脑上处理截图和图片。模型需要支持图像输入，否则视觉任务会失败并明确报错。', 'Local vision processes screenshots and images on your machine. The selected model must support image input, otherwise vision tasks will fail explicitly.')}
@@ -989,6 +1132,8 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
           ))}
         </div>
       )}
+      {error && !checking && <p className="text-xs text-amber-300/80">{error}</p>}
+      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
     </div>
   );
 }
@@ -1001,7 +1146,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
     try { return localStorage.getItem('lumi_relay_key') || ''; } catch { return ''; }
   });
   const [baseUrl, setBaseUrl] = useState(() => {
-    try { return localStorage.getItem('lumi_relay_url') || 'http://localhost:8000/v1'; } catch { return 'http://localhost:8000/v1'; }
+    try { return localStorage.getItem('lumi_relay_url') || 'http://127.0.0.1:8000/v1'; } catch { return 'http://127.0.0.1:8000/v1'; }
   });
   const savedModels = (() => {
     try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
@@ -1009,6 +1154,9 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
   const [model, setModel] = useState(() => savedModels.relay || 'qwen2.5-vl-7b-instruct');
   const [serverConfigured, setServerConfigured] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [connectionDirty, setConnectionDirty] = useState(false);
+  const [testState, setTestState] = useState<ProviderTestState>('idle');
+  const [testMessage, setTestMessage] = useState('');
 
   useEffect(() => {
     getSavedKeyStatus()
@@ -1018,6 +1166,8 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
 
   const persistModel = (nextModel: string) => {
     setModel(nextModel);
+    setTestState('idle');
+    setTestMessage('');
     const allModels = (() => {
       try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
     })();
@@ -1032,14 +1182,45 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
       localStorage.setItem('lumi_relay_key', apiKey.trim());
       localStorage.setItem('lumi_relay_url', baseUrl.trim());
       setServerConfigured(true);
+      setConnectionDirty(false);
+      setTestState('idle');
+      setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
     }).catch(err => toast.error(err.message || t?.failedToSaveKey || ui('保存失败', 'Failed to save')));
   };
 
+  const handleRemove = () => {
+    saveServerKeys({ RELAY_API_KEY: '', RELAY_BASE_URL: '' }).then(() => {
+      localStorage.removeItem('lumi_relay_key');
+      localStorage.removeItem('lumi_relay_url');
+      setApiKey('');
+      setBaseUrl('');
+      setServerConfigured(false);
+      setConnectionDirty(false);
+      setTestState('idle');
+      setTestMessage('');
+      toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
+    }).catch(err => toast.error(err.message || ui('移除失败', 'Failed to remove')));
+  };
+
   const handleUse = () => {
     updateVisionConfig({ provider: 'relay', model });
+  };
+
+  const handleTest = async () => {
+    if (!serverConfigured || connectionDirty || !model.trim()) return;
+    setTestState('testing');
+    setTestMessage('');
+    try {
+      const result = await runVisionConnectionTest('relay', model.trim());
+      setTestState('ok');
+      setTestMessage(ui(`视觉实调成功 · ${result.latencyMs} ms`, `Vision call passed · ${result.latencyMs} ms`));
+    } catch (caught: any) {
+      setTestState('error');
+      setTestMessage(caught?.message || ui('视觉实调失败', 'Vision call failed'));
+    }
   };
 
   return (
@@ -1055,7 +1236,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
         <input
           type="password"
           value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
+          onChange={e => { setApiKey(e.target.value); setConnectionDirty(true); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleSave()}
           placeholder="API Key"
           className="bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-cyan-400/50 transition-colors"
@@ -1063,9 +1244,9 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
         <input
           type="text"
           value={baseUrl}
-          onChange={e => setBaseUrl(e.target.value)}
+          onChange={e => { setBaseUrl(e.target.value); setConnectionDirty(true); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleSave()}
-          placeholder="http://localhost:8000/v1"
+          placeholder="http://127.0.0.1:8000/v1"
           className="bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-cyan-400/50 transition-colors"
         />
       </div>
@@ -1097,10 +1278,25 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
         >
           {ui('设为视觉', 'Use as Vision')}
         </Button>
+        <Button
+          onClick={handleTest}
+          disabled={!serverConfigured || connectionDirty || !model.trim() || testState === 'testing'}
+          className="h-[44px] px-5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20 transition-all"
+        >
+          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : ui('实调', 'Test')}
+        </Button>
+        <Button
+          onClick={handleRemove}
+          disabled={!serverConfigured && !apiKey}
+          className="h-[44px] px-4 bg-red-500/10 border border-red-500/20 text-red-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-red-500/20 transition-all"
+        >
+          {t?.remove || ui('移除', 'Remove')}
+        </Button>
       </div>
       <p className="text-[12px] text-white/45 leading-relaxed">
         {ui('用于 vLLM、SGLang、Xinference 或其他兼容 OpenAI Chat Completions 的本地视觉服务。', 'Use this for vLLM, SGLang, Xinference, or any local OpenAI-compatible vision endpoint.')}
       </p>
+      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
     </div>
   );
 }
@@ -1221,7 +1417,7 @@ function VisionModelPage({ t }: { t: any }) {
             providerId="ollama"
             endpoint="/api/ollama/config"
             storageKey="lumi_ollama_url"
-            defaultUrl="http://localhost:11434"
+            defaultUrl="http://127.0.0.1:11434"
             defaultModel="qwen2.5vl:7b"
             suggestions={['qwen2.5vl:7b', 'minicpm-v:8b', 'llama3.2-vision:11b']}
             t={t}
@@ -1232,7 +1428,7 @@ function VisionModelPage({ t }: { t: any }) {
             providerId="lmstudio"
             endpoint="/api/lmstudio/config"
             storageKey="lumi_lmstudio_url"
-            defaultUrl="http://localhost:1234"
+            defaultUrl="http://127.0.0.1:1234"
             defaultModel="local-vision-model"
             suggestions={['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b']}
             t={t}
@@ -1277,12 +1473,12 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
           {t.apiMatrixLLMDesc || ui('为每个 LLM 服务商配置 API Key 和偏好模型。', 'Configure API keys and preferred models for each LLM provider.')}
         </p>
         <div className="grid grid-cols-1 gap-6">
-          <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="DeepSeek" providerId="deepseek" models={['deepseek-chat', 'deepseek-reasoner']} placeholder="sk-..." serverKey="DEEPSEEK_API_KEY" t={t} />
+          <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="DeepSeek" providerId="deepseek" models={['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner']} placeholder="sk-..." serverKey="DEEPSEEK_API_KEY" t={t} />
           <LLMProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen / DashScope (Alibaba Cloud)" providerId="qwen" models={['qwen-plus', 'qwen-max', 'qwen-turbo']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
-          <LLMProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao / 豆包 (Ark)" providerId="ark" models={['doubao-1-5-pro-32k', 'doubao-1-5-lite-32k', 'doubao-1-5-vision-pro-32k']} placeholder={ui('输入 Ark API Key...', 'Enter Ark API key...')} serverKey="ARK_API_KEY" t={t} />
-          <LLMProviderRow icon={<Cpu size={18} className="text-orange-400" />} label="Xiaomi / 小米" providerId="xiaomi" models={['xiaomi-chat']} placeholder={ui('输入小米 API Key...', 'Enter Xiaomi API key...')} serverKey="XIAOMI_API_KEY" t={t} />
+          <LLMProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao / 豆包 (Ark)" providerId="ark" models={['doubao-seed-2-0-lite-260215', 'doubao-1-5-pro-32k', 'doubao-1-5-lite-32k', 'doubao-1-5-vision-pro-32k']} placeholder={ui('输入 Ark API Key...', 'Enter Ark API key...')} serverKey="ARK_API_KEY" t={t} />
+          <LLMProviderRow icon={<Cpu size={18} className="text-orange-400" />} label="Xiaomi MiMo / 小米" providerId="xiaomi" models={['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-pro']} placeholder={ui('输入 MiMo API Key...', 'Enter MiMo API key...')} serverKey="XIAOMI_API_KEY" t={t} />
           <LLMProviderRow icon={<Sparkle size={18} className="text-rose-400" />} label="Kimi / 月之暗面 (Moonshot)" providerId="kimi" models={['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']} placeholder="sk-..." serverKey="KIMI_API_KEY" t={t} />
-          <LLMProviderRow icon={<Sparkle size={18} className="text-cyan-400" />} label="GLM / 智谱 (Zhipu AI)" providerId="glm" models={['glm-4-plus', 'glm-4-flash', 'glm-4-air']} placeholder={ui('输入 GLM API Key...', 'Enter GLM API key...')} serverKey="GLM_API_KEY" t={t} />
+          <LLMProviderRow icon={<Sparkle size={18} className="text-cyan-400" />} label="GLM / 智谱 (Zhipu AI)" providerId="glm" models={['glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4-plus']} placeholder={ui('输入 GLM API Key...', 'Enter GLM API key...')} serverKey="GLM_API_KEY" t={t} />
           <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label={`Google Gemini${providerStatus.gemini?.available ? ` (${providerStatus.gemini.model})` : ''}`} providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={providerStatus.gemini?.available ? (t.connectedViaEnv || ui('已通过环境变量连接', 'Connected via environment')) : (t.noKeyConfigured || ui('未配置密钥', 'No key configured'))} serverKey="GEMINI_API_KEY" t={t} />
           <LLMProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI" providerId="openai" models={['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
           <LLMProviderRow icon={<Sparkle size={18} className="text-purple-400" />} label="Anthropic Claude" providerId="anthropic" models={['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5']} placeholder="sk-ant-..." serverKey="ANTHROPIC_API_KEY" t={t} />
@@ -1295,177 +1491,210 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
   );
 }
 
-function OllamaProviderRow({ t }: { t?: any }) {
+function LocalLLMProviderRow({
+  providerId,
+  label,
+  endpoint,
+  storageKey,
+  defaultUrl,
+  defaultModel,
+  accent,
+  t,
+}: {
+  providerId: 'ollama' | 'lmstudio';
+  label: string;
+  endpoint: string;
+  storageKey: string;
+  defaultUrl: string;
+  defaultModel: string;
+  accent: 'emerald' | 'amber';
+  t?: any;
+}) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
+  const { aiConfig, updateAIConfig } = useApp();
   const [baseUrl, setBaseUrl] = useState(() => {
-    try { return localStorage.getItem('lumi_ollama_url') || 'http://localhost:11434'; } catch { return 'http://localhost:11434'; }
+    try { return localStorage.getItem(storageKey) || defaultUrl; } catch { return defaultUrl; }
   });
   const [detected, setDetected] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [checking, setChecking] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+  const [testState, setTestState] = useState<ProviderTestState>('idle');
+  const [testMessage, setTestMessage] = useState('');
+  const [model, setModel] = useState(() => {
+    try {
+      const savedModels = JSON.parse(localStorage.getItem('lumi_llm_models') || '{}');
+      return savedModels[providerId] || defaultModel;
+    } catch {
+      return defaultModel;
+    }
+  });
+  const generationModels = models.filter(modelName => !/(?:embed|embedding|whisper|rerank|re-rank|bge[-_]|nomic[-_]?embed)/i.test(modelName));
+
+  const persistModel = (nextModel: string) => {
+    setModel(nextModel);
+    const allModels = (() => {
+      try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
+    })();
+    allModels[providerId] = nextModel;
+    localStorage.setItem('lumi_llm_models', JSON.stringify(allModels));
+    if (aiConfig.provider === providerId) updateAIConfig({ model: nextModel });
+    else {
+      apiFetch('/api/preferences/llm', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ provider: aiConfig.provider, models: allModels }),
+      }).catch(() => {});
+    }
+    setTestState('idle');
+    setTestMessage('');
+  };
 
   useEffect(() => {
-    // Load current config on mount
-    fetch('/api/ollama/config', { credentials: 'include' })
+    apiFetch(endpoint, { credentials: 'include' })
       .then(async r => {
         const cfg = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(cfg.error || 'Failed to load Ollama config');
+        if (!r.ok) throw new Error(cfg.error || 'Failed to load local model config');
         return cfg;
       })
       .then(cfg => {
-        setBaseUrl(cfg.baseUrl || 'http://localhost:11434');
+        setBaseUrl(cfg.baseUrl || defaultUrl);
         setDetected(!!cfg.detected);
         setModels(cfg.models || []);
+        setError(cfg.lastError || '');
       })
       .catch(() => {});
-  }, []);
+  }, [defaultUrl, endpoint]);
+
+  useEffect(() => {
+    if (generationModels.length > 0 && !generationModels.includes(model)) {
+      persistModel(generationModels[0]);
+    }
+  }, [generationModels.join('\u0000')]);
 
   const handleDetect = async () => {
     setChecking(true);
+    setError('');
+    setTestState('idle');
+    setTestMessage('');
     try {
-      const resp = await fetch('/api/ollama/config', {
+      const resp = await apiFetch(endpoint, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ baseUrl }),
       });
       const cfg = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(cfg.error || 'Ollama detection failed');
+      if (!resp.ok) throw new Error(cfg.error || 'Local model detection failed');
       setDetected(!!cfg.detected);
       setModels(cfg.models || []);
-      localStorage.setItem('lumi_ollama_url', baseUrl);
+      setBaseUrl(cfg.baseUrl || baseUrl);
+      setError(cfg.lastError || '');
+      localStorage.setItem(storageKey, cfg.baseUrl || baseUrl);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch { setDetected(false); setModels([]); }
-    setChecking(false);
+    } catch (caught: any) {
+      setDetected(false);
+      setModels([]);
+      setError(caught?.message || ui('本地模型检测失败', 'Local model detection failed'));
+    } finally {
+      setChecking(false);
+    }
   };
 
-  const llmModels = models.filter(m => !m.includes('embed') && !m.includes('whisper'));
+  const handleUse = () => {
+    if (!model.trim()) return;
+    updateAIConfig({ provider: providerId, model: model.trim() });
+  };
+
+  const handleTest = async () => {
+    if (!detected || !model.trim()) return;
+    setTestState('testing');
+    setTestMessage('');
+    try {
+      const result = await runLLMConnectionTest(providerId, model.trim());
+      setTestState('ok');
+      setTestMessage(ui(`实调成功 · ${result.latencyMs} ms`, `Live call passed · ${result.latencyMs} ms`));
+    } catch (caught: any) {
+      setTestState('error');
+      setTestMessage(caught?.message || ui('实调失败', 'Live call failed'));
+    }
+  };
+
+  const accentClasses = accent === 'emerald'
+    ? { icon: 'text-emerald-400', button: 'bg-emerald-600 hover:bg-emerald-500', focus: 'focus:border-emerald-400/50' }
+    : { icon: 'text-amber-400', button: 'bg-amber-600 hover:bg-amber-500', focus: 'focus:border-amber-400/50' };
 
   return (
     <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
       <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg"><Cpu size={18} className="text-emerald-400" /></div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">Ollama (Local AI)</label>
-        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">CONNECTED</span>}
+        <div className="p-2 bg-white/5 rounded-lg"><Cpu size={18} className={accentClasses.icon} /></div>
+        <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
+        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{ui('已探测', 'DETECTED')}</span>}
+        {aiConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="flex gap-3">
         <input
           type="text"
           value={baseUrl}
-          onChange={e => { setBaseUrl(e.target.value); setSaved(false); }}
+          onChange={e => { setBaseUrl(e.target.value); setSaved(false); setDetected(false); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleDetect()}
-          placeholder="http://localhost:11434"
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-emerald-400/50 transition-colors"
+          placeholder={defaultUrl}
+          className={`flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none transition-colors ${accentClasses.focus}`}
         />
         <Button
           onClick={handleDetect}
           disabled={checking || !baseUrl.trim()}
-          className="h-[56px] px-5 bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500 transition-all"
+          className={`h-[56px] px-5 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 transition-all ${accentClasses.button}`}
         >
-          {checking ? <Loader2 size={16} className="animate-spin" /> : 'Detect'}
+          {checking ? <Loader2 size={16} className="animate-spin" /> : ui('检测', 'Detect')}
         </Button>
       </div>
-      {detected && llmModels.length > 0 && (
+      <div className="flex items-center gap-3">
+        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
+        <input
+          type="text"
+          value={model}
+          onChange={event => persistModel(event.target.value)}
+          list={`local-llm-models-${providerId}`}
+          placeholder={defaultModel}
+          className={`flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono font-bold outline-none ${accentClasses.focus}`}
+        />
+        <datalist id={`local-llm-models-${providerId}`}>
+          {[...new Set([model, ...generationModels].filter(Boolean))].map(modelName => <option key={modelName} value={modelName} />)}
+        </datalist>
+        <Button onClick={handleUse} disabled={!detected || !model.trim()} className="h-9 px-3 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-celestial-saturn/90">
+          {ui('设为主模型', 'Use')}
+        </Button>
+        <Button onClick={handleTest} disabled={!detected || !model.trim() || testState === 'testing'} className="h-9 px-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20">
+          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : ui('实调', 'Test')}
+        </Button>
+      </div>
+      {detected && generationModels.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {llmModels.map(m => (
-            <span key={m} className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/60 font-mono">{m}</span>
+          {generationModels.map(modelName => (
+            <button key={modelName} onClick={() => persistModel(modelName)} className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/60 hover:bg-white/10 hover:text-white font-mono">
+              {modelName}
+            </button>
           ))}
         </div>
       )}
-      {!detected && !checking && baseUrl && (
-        <p className="text-xs text-white/40">{t?.noOllamaModelsFound || ui('此地址未发现本地模型。请确认 Ollama 正在运行。', 'No local models found at this address. Make sure Ollama is running.')}</p>
-      )}
+      {error && !checking && <p className="text-xs text-amber-300/80">{error}</p>}
+      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
     </div>
   );
 }
 
+function OllamaProviderRow({ t }: { t?: any }) {
+  return <LocalLLMProviderRow providerId="ollama" label="Ollama (Local AI)" endpoint="/api/ollama/config" storageKey="lumi_ollama_url" defaultUrl="http://127.0.0.1:11434" defaultModel="qwen2.5:7b" accent="emerald" t={t} />;
+}
+
 function LmStudioProviderRow({ t }: { t?: any }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const [baseUrl, setBaseUrl] = useState(() => {
-    try { return localStorage.getItem('lumi_lmstudio_url') || 'http://localhost:1234'; } catch { return 'http://localhost:1234'; }
-  });
-  const [detected, setDetected] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
-  const [checking, setChecking] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/lmstudio/config', { credentials: 'include' })
-      .then(async r => {
-        const cfg = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(cfg.error || 'Failed to load LM Studio config');
-        return cfg;
-      })
-      .then(cfg => {
-        setBaseUrl(cfg.baseUrl || 'http://localhost:1234');
-        setDetected(!!cfg.detected);
-        setModels(cfg.models || []);
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleDetect = async () => {
-    setChecking(true);
-    try {
-      const resp = await fetch('/api/lmstudio/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ baseUrl }),
-      });
-      const cfg = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(cfg.error || 'LM Studio detection failed');
-      setDetected(!!cfg.detected);
-      setModels(cfg.models || []);
-      localStorage.setItem('lumi_lmstudio_url', baseUrl);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch { setDetected(false); setModels([]); }
-    setChecking(false);
-  };
-
-  return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg"><Cpu size={18} className="text-amber-400" /></div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">LM Studio (Local AI)</label>
-        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">CONNECTED</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
-      <div className="flex gap-3">
-        <input
-          type="text"
-          value={baseUrl}
-          onChange={e => { setBaseUrl(e.target.value); setSaved(false); }}
-          onKeyDown={e => e.key === 'Enter' && handleDetect()}
-          placeholder="http://localhost:1234"
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-amber-400/50 transition-colors"
-        />
-        <Button
-          onClick={handleDetect}
-          disabled={checking || !baseUrl.trim()}
-          className="h-[56px] px-5 bg-amber-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-amber-500 transition-all"
-        >
-          {checking ? <Loader2 size={16} className="animate-spin" /> : 'Detect'}
-        </Button>
-      </div>
-      {detected && models.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {models.map(m => (
-            <span key={m} className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/60 font-mono">{m}</span>
-          ))}
-        </div>
-      )}
-      {!detected && !checking && baseUrl && (
-        <p className="text-xs text-white/40">{t?.noLmStudioModelsFound || ui('未发现模型。请确认 LM Studio 正在运行，并且已加载模型。', 'No models found. Make sure LM Studio is running and a model is loaded.')}</p>
-      )}
-    </div>
-  );
+  return <LocalLLMProviderRow providerId="lmstudio" label="LM Studio (Local AI)" endpoint="/api/lmstudio/config" storageKey="lumi_lmstudio_url" defaultUrl="http://127.0.0.1:1234" defaultModel="local-model" accent="amber" t={t} />;
 }
 
 function VoiceServicesPage({ t }: { t: any }) {

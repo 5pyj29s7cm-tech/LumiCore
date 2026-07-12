@@ -67,7 +67,19 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
   });
 
   router.put('/org/org/:orgId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
-    const org = Org.updateOrganization(req.params.orgId, req.user!.uid, req.body);
+    const updates = { ...(req.body || {}) };
+    if (updates.name !== undefined) {
+      if (typeof updates.name !== 'string') {
+        res.status(400).json({ error: 'Organization name must be a string' });
+        return;
+      }
+      updates.name = updates.name.trim();
+      if (!updates.name || updates.name.length > 120 || updates.name.includes('\uFFFD')) {
+        res.status(400).json({ error: 'Organization name is empty, too long, or contains invalid characters' });
+        return;
+      }
+    }
+    const org = Org.updateOrganization(req.params.orgId, req.user!.uid, updates);
     if (!org) {
       res.status(404).json({ error: 'Organization not found' });
       return;
@@ -169,7 +181,7 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     res.json(article);
   });
 
-  router.post('/org/kb/articles', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+  router.post('/org/kb/articles', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
     const { title, content, category, tags, status } = req.body;
     if (!title || !content) {
       res.status(400).json({ error: 'title and content are required' });
@@ -179,7 +191,7 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     res.status(201).json(article);
   });
 
-  router.put('/org/kb/articles/:articleId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
+  router.put('/org/kb/articles/:articleId', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
     const article = KB.updateArticle(req.user!.orgId!, req.user!.uid, req.params.articleId, req.body);
     if (!article) {
       res.status(404).json({ error: 'Article not found' });

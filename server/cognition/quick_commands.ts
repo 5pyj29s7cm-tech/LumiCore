@@ -7,6 +7,7 @@
 
 import { readDB } from '../../db_layer';
 import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface } from '../work_takeover/continuity';
+import { listWorkflows } from '../agents/workflows';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
@@ -172,10 +173,13 @@ const patterns: QuickPattern[] = [
   // ── Lumi Status / Health ──
   {
     patterns: [/^\/status$|^状态$|^系统状态$|^健康检查$|^lumi.*状态|^检查.*系统/i],
-    handler: async (_, userId) => {
+    handler: async (_, userId, options) => {
       try {
         const { runHealthAudit } = await import('../agents/health_audit');
-        const report = runHealthAudit(userId);
+        const report = runHealthAudit(userId, {
+          domain: options?.domain === 'work' ? 'work' : 'personal',
+          orgId: options?.orgId || '',
+        });
         const lines = [
           `## Lumi 系统状态: ${report.overallStatus === 'healthy' ? '✅ 健康' : report.overallStatus === 'degraded' ? '⚠️ 部分降级' : '❌ 异常'}`,
           '',
@@ -201,19 +205,25 @@ const patterns: QuickPattern[] = [
   // ── Evolution / Self-awareness ──
   {
     patterns: [/^(你学到了什么|你有什么变化|你进化了吗|你变了吗|你更懂我了吗|你的成长|你的记忆|你记得什么|what.*learn|what.*change|how.*evolve)[。！？.!?]*$/i],
-    handler: async (_, userId) => {
+    handler: async (_, userId, options) => {
       try {
         const { personalityRegistry } = await import('../personality');
-        const personality = personalityRegistry.get('lumi');
+        const domain = options?.domain === 'work' ? 'work' : 'personal';
+        const orgId = domain === 'work' ? String(options?.orgId || '') : '';
+        const personality = personalityRegistry.getForUser('lumi', userId, orgId || undefined);
         if (!personality) return { responseText: '我还是出厂设置，还没开始学习呢。多和我互动吧！', matched: true };
 
-        const history = (personality as any).evolutionHistory;
+        const history = personalityRegistry.getEvolutionHistory('lumi', userId, orgId || undefined);
         const lines: string[] = [];
 
         // Memory stats
         try {
           const db = readDB();
-          const memories = (db as any).memories || [];
+          const memories = ((db as any).memories || []).filter((memory: any) => (
+            memory.userId === userId
+            && (memory.domain || 'personal') === domain
+            && (memory.orgId || '') === orgId
+          ));
           const byType: Record<string, number> = {};
           for (const m of memories) {
             const t = m.type || 'other';
@@ -230,7 +240,14 @@ const patterns: QuickPattern[] = [
         // Agent team
         try {
           const db = readDB();
-          const agents = (db as any).agents || [];
+          const agents = ((db as any).agents || []).filter((agent: any) => {
+            if (domain === 'work') {
+              return (agent.domain || 'work') === 'work' && (agent.orgId || '') === orgId;
+            }
+            return agent.domain !== 'work'
+              && !agent.orgId
+              && (!agent.ownerUid || agent.ownerUid === userId);
+          });
           const internal = agents.filter((a: any) => a.runtime !== 'external');
           const external = agents.filter((a: any) => a.runtime === 'external');
           lines.push(`**团队**: ${agents.length} 个 Agent (${internal.length} 内置, ${external.length} 外部)`);
@@ -240,8 +257,7 @@ const patterns: QuickPattern[] = [
 
         // Workflow count
         try {
-          const db = readDB();
-          const wfs = (db as any).workflows || [];
+          const wfs = listWorkflows(userId, undefined, { domain, orgId });
           lines.push(`**工作流**: ${wfs.length} 个已保存的自动化流程`);
         } catch {
           lines.push('**工作流**: 暂时无法读取');

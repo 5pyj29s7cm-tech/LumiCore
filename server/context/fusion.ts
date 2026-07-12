@@ -3,6 +3,7 @@
 
 import { SensoryContext } from '../personality/types';
 import { deviceRegistry } from '../devices';
+import type { DeviceScope } from '../devices';
 
 export interface RawModalityInput {
   modality: 'audio' | 'visual' | 'spatial' | 'haptic';
@@ -30,11 +31,12 @@ export function fuseContext(
   inputs: RawModalityInput[],
   userId: string,
   locationTag?: string,
+  scope?: DeviceScope,
 ): FusedContext {
   const now = new Date().toISOString();
 
   // Build sensory context from actual device capabilities
-  const deviceSensory = deviceRegistry.getSensoryContext(userId);
+  const deviceSensory = deviceRegistry.getSensoryContext(userId, scope);
 
   // Override with actual active inputs
   const sensory: SensoryContext = {

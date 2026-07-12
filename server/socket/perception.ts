@@ -1,6 +1,7 @@
 import { Socket, Server } from "socket.io";
 import { perceptionEvents, MAX_PERCEPTION_EVENTS } from "./shared";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState } from "../personality/state";
+import { resolveSocketScope, runtimeScopeStorageKey, scopedEmotionalStateKey } from './scope';
 
 function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
   return (...args: any[]) => {
@@ -18,7 +19,9 @@ function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
 export function registerPerceptionHandlers(socket: Socket, getUserId: (s: Socket) => string, _io: Server) {
   socket.on("perception:visual_scene", socketGuard((data: { description: string; objects?: string[]; faces?: number }) => {
     const uid = getUserId(socket);
-    const events = perceptionEvents.get(uid) || [];
+    const scope = resolveSocketScope(socket, uid);
+    const scopeKey = runtimeScopeStorageKey(uid, scope);
+    const events = perceptionEvents.get(scopeKey) || [];
     events.push({
       modality: 'visual',
       deviceId: socket.id,
@@ -26,12 +29,14 @@ export function registerPerceptionHandlers(socket: Socket, getUserId: (s: Socket
       data,
     });
     if (events.length > MAX_PERCEPTION_EVENTS) events.shift();
-    perceptionEvents.set(uid, events);
+    perceptionEvents.set(scopeKey, events);
   }));
 
   socket.on("perception:audio_emotion", socketGuard((data: { emotion: string; intensity?: number }) => {
     const uid = getUserId(socket);
-    const events = perceptionEvents.get(uid) || [];
+    const scope = resolveSocketScope(socket, uid);
+    const scopeKey = runtimeScopeStorageKey(uid, scope);
+    const events = perceptionEvents.get(scopeKey) || [];
     events.push({
       modality: 'audio',
       deviceId: socket.id,
@@ -39,7 +44,7 @@ export function registerPerceptionHandlers(socket: Socket, getUserId: (s: Socket
       data,
     });
     if (events.length > MAX_PERCEPTION_EVENTS) events.shift();
-    perceptionEvents.set(uid, events);
+    perceptionEvents.set(scopeKey, events);
 
     if (uid !== 'anonymous') {
       const emotionImpact: Record<string, number> = {
@@ -49,7 +54,8 @@ export function registerPerceptionHandlers(socket: Socket, getUserId: (s: Socket
       };
       const intensity = (emotionImpact[data.emotion] || 0) * (data.intensity || 0.5);
       if (Math.abs(intensity) > 0.05) {
-        const state = loadEmotionalState(uid);
+        const emotionalStateKey = scopedEmotionalStateKey(uid, scope);
+        const state = loadEmotionalState(emotionalStateKey);
         const eventType = intensity > 0 ? 'positive_feedback' : 'negative_feedback';
         const updated = updateEmotionalState(state, {
           type: eventType,
@@ -57,14 +63,16 @@ export function registerPerceptionHandlers(socket: Socket, getUserId: (s: Socket
           userId: uid,
           timestamp: new Date().toISOString(),
         });
-        saveEmotionalState(uid, updated);
+        saveEmotionalState(emotionalStateKey, updated);
       }
     }
   }));
 
   socket.on("perception:spatial_update", socketGuard((data: { roomType?: string; dimensions?: { x: number; y: number; z: number } }) => {
     const uid = getUserId(socket);
-    const events = perceptionEvents.get(uid) || [];
+    const scope = resolveSocketScope(socket, uid);
+    const scopeKey = runtimeScopeStorageKey(uid, scope);
+    const events = perceptionEvents.get(scopeKey) || [];
     events.push({
       modality: 'spatial',
       deviceId: socket.id,
@@ -72,6 +80,6 @@ export function registerPerceptionHandlers(socket: Socket, getUserId: (s: Socket
       data,
     });
     if (events.length > MAX_PERCEPTION_EVENTS) events.shift();
-    perceptionEvents.set(uid, events);
+    perceptionEvents.set(scopeKey, events);
   }));
 }

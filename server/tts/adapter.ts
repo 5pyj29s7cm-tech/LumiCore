@@ -6,20 +6,50 @@ import * as ark from './providers/ark';
 import { getKey } from '../config/keys';
 import { hasDoubaoSpeech } from './providers/ark';
 import { getVoicePreference } from '../config/voice_preference';
-import { isCircuitClosed } from '../cloud/circuit_breaker';
+import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
+
+function circuitProvider(provider: TTSProvider): string {
+  return provider === 'ark' ? 'doubao-tts' : provider;
+}
 
 export async function synthesizeSpeech(text: string, config: TTSConfig): Promise<TTSResult> {
-  switch (config.provider) {
-    case 'local-cosyvoice':
-      return localCosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
-    case 'gptsovits':
-      return gptsovits.synthesizeSpeech(text, config.voiceId, config.signal);
-    case 'cosyvoice':
-      return cosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
-    case 'ark':
-      return ark.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume);
-    default:
-      throw new Error(`Unknown TTS provider: ${config.provider}`);
+  const circuit = circuitProvider(config.provider);
+  try {
+    if (!isCircuitClosed(circuit)) {
+      throw new Error(`TTS provider ${config.provider} is temporarily unavailable`);
+    }
+    let result: TTSResult;
+    switch (config.provider) {
+      case 'local-cosyvoice':
+        result = await localCosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
+        break;
+      case 'gptsovits':
+        result = await gptsovits.synthesizeSpeech(text, config.voiceId, config.signal);
+        break;
+      case 'cosyvoice':
+        result = await cosyvoice.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume, config.model);
+        break;
+      case 'ark':
+        result = await ark.synthesizeSpeech(text, config.voiceId, config.signal, config.speechRate, config.pitch, config.volume);
+        break;
+      default:
+        throw new Error(`Unknown TTS provider: ${config.provider}`);
+    }
+    if (config.provider === 'local-cosyvoice') recordSuccess(circuit);
+    return result;
+  } catch (error: any) {
+    recordFailure(circuit, undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
+    if (config.allowFallback !== false) {
+      const fallbackProvider = getActiveProvider();
+      if (fallbackProvider && fallbackProvider !== config.provider) {
+        return synthesizeSpeech(text, {
+          ...config,
+          provider: fallbackProvider,
+          allowFallback: false,
+        });
+      }
+    }
+    throw error;
   }
 }
 
@@ -75,21 +105,20 @@ export function isTTSProviderConfigured(provider: TTSProvider): boolean {
   }
 }
 
-export function getActiveProvider(): TTSProvider | null {
+export function getActiveProvider(options: { requireHealthy?: boolean } = {}): TTSProvider | null {
   const pref = getVoicePreference();
-  if (pref.tts === 'local-cosyvoice' && localCosyvoice.isConfigured()) return 'local-cosyvoice';
-  if (pref.tts === 'gptsovits' && gptsovits.isConfigured()) return 'gptsovits';
-  if (pref.tts === 'cosyvoice') return 'cosyvoice';
-  if (pref.tts === 'ark' && hasDoubaoSpeech()) return 'ark';
-  // Auto mode — pick based on what's available, skip circuit-open providers
-  if (localCosyvoice.isConfigured()) return 'local-cosyvoice';
-  if (hasDoubaoSpeech()) return 'ark';
+  const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
+  if (pref.tts === 'local-cosyvoice' && localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
+  if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')) return 'gptsovits';
+  if (pref.tts === 'cosyvoice' && hasDashScopeKey() && available('cosyvoice')) return 'cosyvoice';
+  if (pref.tts === 'ark' && hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
+  // Auto mode and unavailable explicit selections — prefer local, then healthy cloud.
+  if (localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
+  if (gptsovits.isConfigured() && available('gptsovits')) return 'gptsovits';
+  if (hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
   const dashscopeKey = hasDashScopeKey();
-  if (dashscopeKey && isCircuitClosed('qwen')) return 'cosyvoice';
-  if (gptsovits.isConfigured()) return 'gptsovits';
-  // Fallback: try anyway if nothing healthy
-  if (dashscopeKey) return 'cosyvoice';
-  return 'cosyvoice';
+  if (dashscopeKey && available('cosyvoice')) return 'cosyvoice';
+  return null;
 }
 
 /**

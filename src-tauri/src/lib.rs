@@ -2948,6 +2948,13 @@ pub fn run() {
         .manage(Mutex::new(WallpaperState::default()))
         .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
         .manage(Mutex::new(DesktopWidgetState::default()))
+        .on_page_load(move |webview, payload| {
+            if !started_in_background
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
+                let _ = webview.window().show();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
             get_live_stats,

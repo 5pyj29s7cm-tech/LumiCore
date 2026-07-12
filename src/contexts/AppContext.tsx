@@ -77,6 +77,47 @@ function getSystemAppearanceMode(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
+function getVoiceStorageKeys(domain?: 'personal' | 'work', orgId?: string | null) {
+  let resolvedDomain = domain;
+  let resolvedOrgId = String(orgId || '').trim();
+  if (!resolvedDomain) {
+    try {
+      resolvedDomain = localStorage.getItem('lumi_work_domain') === 'work' ? 'work' : 'personal';
+      if (resolvedDomain === 'work' && !resolvedOrgId) {
+        resolvedOrgId = String(JSON.parse(localStorage.getItem('lumi_org_connection') || 'null')?.orgId || '').trim();
+      }
+    } catch {
+      resolvedDomain = 'personal';
+    }
+  }
+  const scope = resolvedDomain === 'work' && resolvedOrgId
+    ? `org_${resolvedOrgId}`
+    : resolvedDomain === 'work' ? 'org_pending' : 'personal';
+  return {
+    scope,
+    selected: `lumi_selected_voice_id_${scope}`,
+    provider: `lumi_selected_voice_provider_${scope}`,
+    favorites: `lumi_favorite_voices_${scope}`,
+  };
+}
+
+function readStoredVoiceId(keys: ReturnType<typeof getVoiceStorageKeys>): string | undefined {
+  const scoped = localStorage.getItem(keys.selected);
+  if (scoped) return scoped;
+  return keys.scope === 'personal' ? (localStorage.getItem('lumi_selected_voice_id') || undefined) : undefined;
+}
+
+function readStoredFavoriteVoices(keys: ReturnType<typeof getVoiceStorageKeys>): string[] {
+  try {
+    const scoped = localStorage.getItem(keys.favorites);
+    const raw = scoped ?? (keys.scope === 'personal' ? localStorage.getItem('lumi_favorite_voices') : null) ?? '[]';
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface OrgConnection {
   orgId: string;
   orgRole: string;
@@ -142,7 +183,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [aiConfig, setAiConfig] = useState<AIConfig>(() => {
     const saved = localStorage.getItem('lumi_ai_config');
-    return saved ? JSON.parse(saved) : { provider: 'deepseek', model: 'deepseek-chat', apiKey: '' };
+    if (!saved) return { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: '' };
+    try {
+      return { ...JSON.parse(saved), apiKey: '' };
+    } catch {
+      return { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: '' };
+    }
   });
   const [visionConfig, setVisionConfig] = useState<VisionConfig>(() => {
     const saved = localStorage.getItem('lumi_vision_config');
@@ -169,10 +215,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   // Voice state
   const [selectedVoiceId, setSelectedVoiceIdState] = useState<string | undefined>(() => {
-    return localStorage.getItem('lumi_selected_voice_id') || undefined;
+    return readStoredVoiceId(getVoiceStorageKeys());
   });
   const [favoriteVoices, setFavoriteVoices] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('lumi_favorite_voices') || '[]'); } catch { return []; }
+    return readStoredFavoriteVoices(getVoiceStorageKeys());
   });
 
   // Notifications state
@@ -191,6 +237,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [workDomain, setWorkDomain] = useState<'personal' | 'work'>(() => {
     try { return (localStorage.getItem('lumi_work_domain') as 'personal' | 'work') || 'personal'; } catch { return 'personal'; }
   });
+  const voiceStorageKeys = getVoiceStorageKeys(workDomain, orgConnection?.orgId);
+
+  useEffect(() => {
+    let cancelled = false;
+    const endpoint = workDomain === 'work' && orgConnection?.orgId
+      ? '/api/preferences/org-llm'
+      : '/api/preferences/llm';
+    apiFetch(endpoint)
+      .then(response => response.ok ? response.json() : null)
+      .then(preference => {
+        if (cancelled || !preference?.provider) return;
+        setAiConfig(previous => {
+          const next = {
+            ...previous,
+            provider: preference.provider,
+            model: preference.model || preference.models?.[preference.provider] || previous.model,
+            apiKey: '',
+          };
+          localStorage.setItem('lumi_ai_config', JSON.stringify(next));
+          if (preference.models && workDomain === 'personal') {
+            localStorage.setItem('lumi_llm_models', JSON.stringify(preference.models));
+          }
+          return next;
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [orgConnection?.orgId, workDomain]);
+
+  useEffect(() => {
+    setSelectedVoiceIdState(readStoredVoiceId(voiceStorageKeys));
+    setFavoriteVoices(readStoredFavoriteVoices(voiceStorageKeys));
+  }, [voiceStorageKeys.scope]);
 
   const switchDomain = async (domain: 'personal' | 'work'): Promise<DomainSwitchResult> => {
     if (domain === 'personal') {
@@ -325,8 +404,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
         })();
         const defaults: Record<string, string> = {
-          qwen: 'qwen-plus', deepseek: 'deepseek-chat', openai: 'gpt-4o',
+          qwen: 'qwen-plus', deepseek: 'deepseek-v4-flash', openai: 'gpt-4o',
           gemini: 'gemini-2.0-flash', anthropic: 'claude-sonnet-4-6',
+          ark: 'doubao-seed-2-0-lite-260215', xiaomi: 'mimo-v2.5-pro',
+          kimi: 'moonshot-v1-8k', glm: 'glm-5.1', relay: 'gpt-4o',
+          ollama: 'qwen2.5:7b', lmstudio: 'local-model', auto: 'qwen2.5:7b',
         };
         resolved.model = savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
       }
@@ -592,22 +674,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setSelectedVoiceId = (id: string, provider?: string) => {
     setSelectedVoiceIdState(id);
-    localStorage.setItem('lumi_selected_voice_id', id);
+    localStorage.setItem(voiceStorageKeys.selected, id);
     if (provider) {
-      localStorage.setItem('lumi_selected_voice_provider', provider);
-      // Auto-switch TTS provider to match the selected voice
-      apiFetch('/api/voice/provider', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tts: provider }),
-      }).catch(() => {});
+      localStorage.setItem(voiceStorageKeys.provider, provider);
+      if (workDomain === 'personal') {
+        apiFetch('/api/voice/provider', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tts: provider }),
+        }).catch(() => {});
+      }
     }
   };
 
   const toggleFavoriteVoice = (id: string) => {
     setFavoriteVoices(prev => {
       const next = prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id];
-      localStorage.setItem('lumi_favorite_voices', JSON.stringify(next));
+      localStorage.setItem(voiceStorageKeys.favorites, JSON.stringify(next));
       return next;
     });
   };

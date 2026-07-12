@@ -31,7 +31,7 @@ interface StoredDesktopAiTarget {
 interface DesktopAiTargetRun {
   target: string;
   label: string;
-  status: 'sent' | 'prepared' | 'blocked';
+  status: 'submitted_unverified' | 'prepared' | 'blocked';
   openTarget?: string;
   openResult?: string;
   activeWindow?: unknown;
@@ -156,8 +156,8 @@ const TARGETS: DesktopAiTarget[] = [
     id: 'ollama',
     label: 'Ollama',
     aliases: ['ollama chat'],
-    openTargets: ['Ollama', 'http://localhost:11434/'],
-    match: /ollama|localhost:11434/i,
+    openTargets: ['Ollama', 'http://127.0.0.1:11434/'],
+    match: /ollama|(?:localhost|127\.0\.0\.1):11434/i,
     surface: 'local_runtime',
   },
   {
@@ -387,6 +387,56 @@ function activeWindowMatches(raw: string, target: DesktopAiTarget): { ok: boolea
   return { ok: target.match.test(windowText(parsed)), parsed };
 }
 
+function finiteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function promptInputPoint(activeWindow: unknown): { x: number; y: number } | null {
+  if (!activeWindow || typeof activeWindow !== 'object') return null;
+  const info = activeWindow as Record<string, any>;
+  const bounds = info.bounds || info.rect || info.windowBounds || {};
+  const x = finiteNumber(info.x, info.left, bounds.x, bounds.left);
+  const y = finiteNumber(info.y, info.top, bounds.y, bounds.top);
+  const right = finiteNumber(info.right, bounds.right);
+  const bottom = finiteNumber(info.bottom, bounds.bottom);
+  const width = finiteNumber(info.width, bounds.width, x !== null && right !== null ? right - x : null);
+  const height = finiteNumber(info.height, bounds.height, y !== null && bottom !== null ? bottom - y : null);
+  if (x === null || y === null || width === null || height === null || width < 320 || height < 320) return null;
+  if (x < -10000 || y < -10000) return null;
+  return {
+    x: Math.round(x + width * 0.54),
+    y: Math.round(y + height * 0.84),
+  };
+}
+
+export function parseDesktopAiAnswerEvidence(value: unknown): {
+  ready: boolean;
+  answerText: string;
+  confidence: number;
+  reason: string;
+} {
+  const raw = String(value || '').trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return { ready: false, answerText: '', confidence: 0, reason: raw.slice(0, 300) || 'No structured answer evidence.' };
+  try {
+    const parsed = JSON.parse(match[0]);
+    const answerText = String(parsed.answerText || parsed.answer || '').trim();
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence || 0)));
+    return {
+      ready: parsed.ready === true && answerText.length > 0 && confidence >= 0.55,
+      answerText,
+      confidence,
+      reason: String(parsed.reason || '').trim().slice(0, 500),
+    };
+  } catch {
+    return { ready: false, answerText: '', confidence: 0, reason: raw.slice(0, 300) || 'Invalid answer evidence.' };
+  }
+}
+
 function resolveVisionProvider(context?: ToolContext): VisionProvider | null {
   const g = context?.llmGetters;
   if (!g) return null;
@@ -471,6 +521,7 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
   const desktopRelay = requireDesktopRelay(context);
   const openIfNeeded = args.openIfNeeded !== false;
   const send = args.send !== false;
+  const useVirtualCursor = args.useVirtualCursor !== false;
   const submitShortcut = String(args.submitShortcut || 'enter').trim() || 'enter';
   const collectAfterMs = Math.max(0, Math.min(Number(args.collectAfterMs) || 0, 30_000));
   const results: DesktopAiTargetRun[] = [];
@@ -492,6 +543,17 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
       continue;
     }
 
+    const inputPoint = promptInputPoint(focus.activeWindow);
+    if (useVirtualCursor && inputPoint) {
+      actions.push('desktop_cursor_glow_show');
+      await desktopRelay('desktop_cursor_glow_show', { source: 'desktop_ai_ask', timeoutMs: 12000 }).catch(() => '');
+      await desktopRelay('desktop_cursor_glow_update', inputPoint).catch(() => '');
+      actions.push('desktop_mouse_click_at');
+      await desktopRelay('desktop_mouse_click_at', { ...inputPoint, button: 'left' });
+      await desktopRelay('desktop_cursor_glow_click', inputPoint).catch(() => '');
+      await sleep(180);
+    }
+
     actions.push('desktop_clipboard_write');
     await desktopRelay('desktop_clipboard_write', { text: question });
     actions.push('desktop_keyboard_press:ctrl+v');
@@ -501,33 +563,40 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
       actions.push(`desktop_keyboard_press:${submitShortcut}`);
       await desktopRelay('desktop_keyboard_press', { key: submitShortcut });
     }
+    if (useVirtualCursor && inputPoint) {
+      await desktopRelay('desktop_cursor_glow_hide', { source: 'desktop_ai_ask' }).catch(() => '');
+    }
     if (collectAfterMs > 0) await sleep(collectAfterMs);
     const finalActive = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
 
     results.push({
       target: target.id,
       label: target.label,
-      status: send ? 'sent' : 'prepared',
+      status: send ? 'submitted_unverified' : 'prepared',
       openTarget: focus.openTarget,
       openResult: focus.openResult,
       activeWindow: finalActive.parsed,
       actions,
       note: finalActive.ok
-        ? (send ? 'Question pasted and submit shortcut pressed while target remained foreground.' : 'Question pasted; submit shortcut was not pressed.')
+        ? (send
+            ? 'Question was pasted and the submit shortcut was pressed while the target remained foreground. Submission is not marked verified until answer evidence is collected.'
+            : 'Question pasted; submit shortcut was not pressed.')
         : 'Question action finished, but foreground window no longer matches the target; verify before claiming completion.',
     });
   }
 
   return JSON.stringify({
-    ok: results.some(result => result.status === 'sent' || result.status === 'prepared'),
+    ok: results.some(result => result.status === 'submitted_unverified' || result.status === 'prepared'),
     question,
     send,
-    sentCount: results.filter(result => result.status === 'sent').length,
+    submittedCount: results.filter(result => result.status === 'submitted_unverified').length,
+    sentCount: 0,
+    verifiedSentCount: 0,
     preparedCount: results.filter(result => result.status === 'prepared').length,
     blockedCount: results.filter(result => result.status === 'blocked').length,
     results,
     next: send
-      ? 'Wait for each AI to answer, then run desktop_ai_collect_answer for each target. Use the collected texts to summarize agreement, disagreement, and useful next steps.'
+      ? 'Submission actions are unverified until visible answers are collected. Run desktop_ai_collect_answer for each target, or use desktop_ai_roundtable to collect all answers and synthesize them.'
       : 'Review the prepared messages, then press send manually or re-run with send=true.',
   }, null, 2);
 }
@@ -586,10 +655,11 @@ async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolC
   const query = [
     `Read the visible answer from ${target.label}.`,
     args.question ? `Original question: ${String(args.question).slice(0, 1200)}` : '',
-    'Return the actual answer text if visible. If the app is still loading or only the prompt is visible, say so clearly. Do not invent hidden content.',
+    'Use only visible evidence. Set ready=true only when a substantive assistant answer is visible, not when the app is loading or only the user prompt is visible.',
+    'Return only JSON: {"ready":boolean,"answerText":"visible answer or empty","confidence":number,"reason":"short evidence"}. Do not invent hidden or off-screen content.',
   ].filter(Boolean).join('\n');
 
-  const answerText = await analyzeScreen(
+  const rawAnswerEvidence = await analyzeScreen(
     captureRaw,
     query,
     { provider, model, userId: context?.userId || 'anonymous' },
@@ -606,16 +676,102 @@ async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolC
     g.getGlm,
     g.getRelay,
   );
+  const evidence = parseDesktopAiAnswerEvidence(rawAnswerEvidence);
 
   return JSON.stringify({
     target: target.id,
     label: target.label,
-    status: 'collected',
+    status: evidence.ready ? 'collected' : 'pending',
     activeWindow: focus.activeWindow,
     provider,
     model,
-    answerText,
-    note: 'Answer was extracted from the visible desktop screen with the configured vision model. Verify if the response is partially off-screen.',
+    answerText: evidence.ready ? evidence.answerText : null,
+    confidence: evidence.confidence,
+    evidenceReason: evidence.reason,
+    note: evidence.ready
+      ? 'A visible answer was extracted from the desktop screen. It may still be partial if the response extends off-screen.'
+      : 'No completed visible answer was verified yet. Wait and collect again instead of inventing an answer.',
+  }, null, 2);
+}
+
+async function desktopAiRoundtable(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const question = String(args.question || args.prompt || args.message || '').trim();
+  if (!question) return 'Error: question is required.';
+  const customTargets = runtimeTargetsFromContext(args, context);
+  const targets = resolveTargets(args.targets || args.target, customTargets);
+  if (targets.length === 0) return 'Error: no supported desktop AI targets matched.';
+
+  const ask = JSON.parse(await desktopAiAsk({
+    ...args,
+    question,
+    targets: targets.map(target => target.id),
+    send: true,
+    collectAfterMs: 0,
+  }, context));
+  const submitted = new Set(
+    (ask.results || [])
+      .filter((result: DesktopAiTargetRun) => result.status === 'submitted_unverified')
+      .map((result: DesktopAiTargetRun) => result.target),
+  );
+  const initialWaitMs = Math.max(0, Math.min(Number(args.initialWaitMs ?? 4000), 60_000));
+  const pollIntervalMs = Math.max(500, Math.min(Number(args.pollIntervalMs ?? 2500), 30_000));
+  const pollAttempts = Math.max(1, Math.min(Number(args.pollAttempts ?? 2), 5));
+  const answers: any[] = [];
+
+  let first = true;
+  for (const target of targets) {
+    if (!submitted.has(target.id)) {
+      const blocked = (ask.results || []).find((result: DesktopAiTargetRun) => result.target === target.id);
+      answers.push({
+        target: target.id,
+        label: target.label,
+        status: 'blocked',
+        answerText: null,
+        note: blocked?.note || 'Question was not submitted to this target.',
+      });
+      continue;
+    }
+
+    let collected: any = null;
+    for (let attempt = 0; attempt < pollAttempts; attempt++) {
+      const waitMs = first && attempt === 0 ? initialWaitMs : attempt > 0 ? pollIntervalMs : 0;
+      first = false;
+      collected = JSON.parse(await desktopAiCollectAnswer({
+        ...args,
+        question,
+        target: target.id,
+        targets: undefined,
+        waitMs,
+      }, context));
+      if (collected.status === 'collected' || collected.status === 'blocked' || collected.status === 'needs_vision_setup') break;
+    }
+    answers.push(collected || {
+      target: target.id,
+      label: target.label,
+      status: 'pending',
+      answerText: null,
+      note: 'No visible answer was collected.',
+    });
+  }
+
+  const collectedAnswers = answers.filter(answer => answer?.status === 'collected' && String(answer?.answerText || '').trim());
+  return JSON.stringify({
+    ok: collectedAnswers.length > 0,
+    question,
+    targets: targets.map(target => ({ id: target.id, label: target.label })),
+    ask,
+    answers,
+    collectedCount: collectedAnswers.length,
+    pendingCount: answers.filter(answer => answer?.status === 'pending').length,
+    blockedCount: answers.filter(answer => answer?.status === 'blocked').length,
+    needsVisionSetupCount: answers.filter(answer => answer?.status === 'needs_vision_setup').length,
+    synthesisInput: collectedAnswers.map(answer => ({
+      target: answer.label || answer.target,
+      answer: answer.answerText,
+    })),
+    next: collectedAnswers.length > 0
+      ? 'Synthesize the collected answers: agreements, disagreements, strongest evidence, and a final recommendation. Clearly name targets that are still pending or blocked.'
+      : 'No verified visible answer was collected. Configure vision if needed, wait for pending targets, and collect again.',
   }, null, 2);
 }
 
@@ -753,11 +909,35 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
         send: { type: 'boolean', description: 'Press the submit shortcut after pasting. Defaults true. Set false to only prepare the message.' },
         submitShortcut: { type: 'string', description: 'Shortcut used to submit, default enter. Use ctrl+enter for apps that need it.' },
         openIfNeeded: { type: 'boolean', description: 'Open/focus the app if it is not already foreground. Defaults true.' },
+        useVirtualCursor: { type: 'boolean', description: 'Focus the likely prompt area with Lumi\'s independent virtual cursor before pasting when window bounds are available. Defaults true.' },
         collectAfterMs: { type: 'number', description: 'Optional wait after sending before final foreground verification. Does not read the answer; use desktop_ai_collect_answer for that.' },
       },
       required: ['question'],
     },
     handler: desktopAiAsk,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'desktop_ai_roundtable',
+    description: 'Ask multiple desktop AI targets the same question, wait for their visible responses, collect each answer with screenshot vision evidence, and return a structured synthesis input for Lumi. Use this when the user wants WorkBuddy, Codex, or other desktop/web AI answers brought back and summarized together.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Question or task to send to every selected AI target.' },
+        targets: { type: 'array', items: { type: 'string' }, description: 'Target ids or names. Defaults to WorkBuddy and Codex.' },
+        customTargets: { type: 'array', items: { type: 'object' }, description: 'Optional one-off custom desktop AI targets.' },
+        submitShortcut: { type: 'string', description: 'Submit shortcut, default enter.' },
+        openIfNeeded: { type: 'boolean', description: 'Open/focus targets when needed. Defaults true.' },
+        useVirtualCursor: { type: 'boolean', description: 'Focus likely prompt areas with the virtual cursor. Defaults true.' },
+        initialWaitMs: { type: 'number', description: 'Initial wait before the first answer collection. Defaults 4000, max 60000.' },
+        pollIntervalMs: { type: 'number', description: 'Wait between retries for pending answers. Defaults 2500, max 30000.' },
+        pollAttempts: { type: 'number', description: 'Collection attempts per target, default 2, max 5.' },
+      },
+      required: ['question'],
+    },
+    handler: desktopAiRoundtable,
     permission: 'user',
     securityLevel: 'safe',
   });

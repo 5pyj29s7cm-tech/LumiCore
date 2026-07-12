@@ -219,7 +219,7 @@ async function callDistillLLM(
   const messages: NormalizedMessage[] = [{ role: 'user', content: prompt }];
   const result = await makeLLMCall(
     messages, [],
-    { provider, model: model || (provider === 'qwen' ? 'qwen-plus' : 'deepseek-chat'), maxTokens: 3000 },
+    { provider, model: model || (provider === 'qwen' ? 'qwen-plus' : 'deepseek-v4-flash'), maxTokens: 3000 },
     llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
   );
   return result.text || '';

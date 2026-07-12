@@ -31,6 +31,8 @@ export interface CapabilityExperimentRecord {
 export interface CapabilityLearningRecord {
   id: string;
   userId: string;
+  scopeDomain: 'personal' | 'work';
+  orgId: string;
   domain: string;
   goal: string;
   context?: string;
@@ -76,7 +78,16 @@ function readRecords(): CapabilityLearningRecord[] {
   if (!row?.value) return [];
   try {
     const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((record: any) => {
+      const orgId = String(record?.orgId || '').trim();
+      const scopeDomain = record?.scopeDomain === 'work' && orgId ? 'work' : 'personal';
+      return {
+        ...record,
+        scopeDomain,
+        orgId: scopeDomain === 'work' ? orgId : '',
+      } as CapabilityLearningRecord;
+    });
   } catch {
     return [];
   }
@@ -125,6 +136,7 @@ function mergeIndexFor(input: Omit<CapabilityLearningRecord, 'id' | 'createdAt' 
   const index = records
     .map((record, idx) => {
       if (record.userId !== input.userId) return { idx, score: -1 };
+      if (record.scopeDomain !== input.scopeDomain || record.orgId !== input.orgId) return { idx, score: -1 };
       let score = 0;
       if (record.domain === input.domain) score += 30;
       if (record.selectedRoute.id === input.selectedRoute.id) score += 70;
@@ -158,6 +170,8 @@ function mergeRecord(previous: CapabilityLearningRecord | null, incoming: Capabi
 
 export function listCapabilityLearningRecords(filter: {
   userId?: string;
+  scopeDomain?: 'personal' | 'work';
+  orgId?: string;
   domain?: string;
   goal?: string;
   status?: CapabilityLearningStatus;
@@ -165,6 +179,10 @@ export function listCapabilityLearningRecords(filter: {
 } = {}): CapabilityLearningRecord[] {
   let records = readRecords();
   if (filter.userId) records = records.filter(record => record.userId === filter.userId);
+  if (filter.scopeDomain) records = records.filter(record => record.scopeDomain === filter.scopeDomain);
+  if (filter.scopeDomain === 'work' || filter.orgId) {
+    records = records.filter(record => record.orgId === String(filter.orgId || '').trim());
+  }
   if (filter.domain) records = records.filter(record => record.domain === filter.domain);
   if (filter.status) records = records.filter(record => record.status === filter.status);
   if (filter.goal) {
@@ -186,6 +204,8 @@ export function upsertCapabilityLearningRecord(input: Omit<CapabilityLearningRec
   const previous = existingIndex >= 0 ? records[existingIndex] : null;
   const incoming: CapabilityLearningRecord = {
     ...input,
+    scopeDomain: input.scopeDomain === 'work' && input.orgId ? 'work' : 'personal',
+    orgId: input.scopeDomain === 'work' && input.orgId ? String(input.orgId) : '',
     id: previous?.id || input.id || id('cap_learn'),
     createdAt: previous?.createdAt || timestamp,
     updatedAt: timestamp,

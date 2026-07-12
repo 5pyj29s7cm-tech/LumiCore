@@ -2,6 +2,9 @@ import { readDB, writeDB } from "../../db_layer";
 
 export interface LumiPlan {
   id: string;
+  ownerUid: string;
+  domain: 'personal' | 'work';
+  orgId: string;
   title: string;
   description: string;
   status: "active" | "paused" | "completed" | "cancelled";
@@ -30,16 +33,65 @@ type PlanUpdate = Partial<Pick<LumiPlan, "title" | "description" | "priority" | 
   status?: LumiPlan["status"] | "done";
 };
 
+export interface PlanScope {
+  userId: string;
+  domain: 'personal' | 'work';
+  orgId: string;
+}
+
+type PlanFilter = { status?: string; source?: string; limit?: number };
+
+function normalizeScope(scope: PlanScope): PlanScope {
+  return scope.domain === 'work' && scope.orgId
+    ? { userId: scope.userId, domain: 'work', orgId: scope.orgId }
+    : { userId: scope.userId, domain: 'personal', orgId: '' };
+}
+
+function migrateLegacyPlans(db: any): LumiPlan[] {
+  const plans = (db.plans || []) as LumiPlan[];
+  const userIds = [...new Set<string>((db.users || []).map((user: any) => user?.uid).filter(Boolean))];
+  let changed = false;
+  for (const plan of plans) {
+    if (!plan.domain) {
+      plan.domain = plan.orgId ? 'work' : 'personal';
+      changed = true;
+    }
+    if (plan.domain !== 'work' && plan.orgId) {
+      plan.orgId = '';
+      changed = true;
+    }
+    if (!plan.ownerUid && plan.domain === 'personal' && userIds.length === 1) {
+      plan.ownerUid = userIds[0];
+      changed = true;
+    }
+  }
+  if (changed) writeDB(db);
+  return plans;
+}
+
+function planMatchesScope(plan: LumiPlan, input: PlanScope): boolean {
+  const scope = normalizeScope(input);
+  if (scope.domain === 'work') {
+    return plan.domain === 'work' && Boolean(scope.orgId) && plan.orgId === scope.orgId;
+  }
+  return plan.domain !== 'work' && !plan.orgId && plan.ownerUid === scope.userId;
+}
+
 export function createPlan(
   title: string,
   description: string,
+  inputScope: PlanScope,
   source: "user" | "lumi" | "auto" = "lumi",
   priority: "low" | "medium" | "high" | "critical" = "medium",
   steps: { title: string; description?: string }[] = [],
   tags: string[] = [],
 ): LumiPlan {
+  const scope = normalizeScope(inputScope);
   const plan: LumiPlan = {
     id: `plan_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    ownerUid: scope.userId,
+    domain: scope.domain,
+    orgId: scope.orgId,
     title,
     description,
     status: "active",
@@ -65,9 +117,10 @@ export function createPlan(
   return plan;
 }
 
-export function updatePlan(id: string, updates: PlanUpdate): LumiPlan | null {
+export function updatePlan(id: string, updates: PlanUpdate, scope: PlanScope): LumiPlan | null {
   const db = readDB();
-  const idx = ((db as any).plans || []).findIndex((p: LumiPlan) => p.id === id);
+  const plans = migrateLegacyPlans(db);
+  const idx = plans.findIndex((p: LumiPlan) => p.id === id && planMatchesScope(p, scope));
   if (idx === -1) return null;
 
   const plan = (db as any).plans[idx];
@@ -83,9 +136,9 @@ export function updatePlan(id: string, updates: PlanUpdate): LumiPlan | null {
   return plan;
 }
 
-export function updatePlanStep(planId: string, stepId: string, updates: Partial<Pick<PlanStep, "status" | "title" | "description" | "result">>): LumiPlan | null {
+export function updatePlanStep(planId: string, stepId: string, updates: Partial<Pick<PlanStep, "status" | "title" | "description" | "result">>, scope: PlanScope): LumiPlan | null {
   const db = readDB();
-  const plan = ((db as any).plans || []).find((p: LumiPlan) => p.id === planId);
+  const plan = migrateLegacyPlans(db).find((p: LumiPlan) => p.id === planId && planMatchesScope(p, scope));
   if (!plan) return null;
 
   const step = plan.steps.find((s: PlanStep) => s.id === stepId);
@@ -104,9 +157,9 @@ export function updatePlanStep(planId: string, stepId: string, updates: Partial<
   return plan;
 }
 
-export function listPlans(filter?: { status?: string; source?: string; limit?: number }): LumiPlan[] {
+export function listPlans(scope: PlanScope, filter?: PlanFilter): LumiPlan[] {
   const db = readDB();
-  let plans: LumiPlan[] = (((db as any).plans || []) as LumiPlan[]).map(plan => (
+  let plans: LumiPlan[] = migrateLegacyPlans(db).filter(plan => planMatchesScope(plan, scope)).map(plan => (
     (plan as any).status === "done"
       ? { ...plan, status: "completed", completedAt: plan.completedAt || plan.updatedAt }
       : plan
@@ -124,27 +177,28 @@ export function listPlans(filter?: { status?: string; source?: string; limit?: n
   return filter?.limit ? plans.slice(0, filter.limit) : plans;
 }
 
-export function getPlan(id: string): LumiPlan | null {
+export function getPlan(id: string, scope: PlanScope): LumiPlan | null {
   const db = readDB();
-  return ((db as any).plans || []).find((p: LumiPlan) => p.id === id) || null;
+  return migrateLegacyPlans(db).find((p: LumiPlan) => p.id === id && planMatchesScope(p, scope)) || null;
 }
 
-export function deletePlan(id: string): boolean {
+export function deletePlan(id: string, scope: PlanScope): boolean {
   const db = readDB();
-  const idx = ((db as any).plans || []).findIndex((p: LumiPlan) => p.id === id);
+  const plans = migrateLegacyPlans(db);
+  const idx = plans.findIndex((p: LumiPlan) => p.id === id && planMatchesScope(p, scope));
   if (idx === -1) return false;
   (db as any).plans.splice(idx, 1);
   writeDB(db);
   return true;
 }
 
-export function getActivePlanCount(): number {
-  return listPlans({ status: "active" }).length;
+export function getActivePlanCount(scope: PlanScope): number {
+  return listPlans(scope, { status: "active" }).length;
 }
 
-export function getTodayPlanSummary(): string {
-  const active = listPlans({ status: "active" });
-  const doneToday = listPlans({ status: "completed" }).filter(p => {
+export function getTodayPlanSummary(scope: PlanScope): string {
+  const active = listPlans(scope, { status: "active" });
+  const doneToday = listPlans(scope, { status: "completed" }).filter(p => {
     const today = new Date().toDateString();
     return p.completedAt && new Date(p.completedAt).toDateString() === today;
   });

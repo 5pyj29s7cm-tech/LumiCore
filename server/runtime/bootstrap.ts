@@ -10,6 +10,7 @@ import { runFirstBootExploration, isFirstBootComplete } from "../autonomy/system
 import { installProfessionAgents } from "../autonomy/profession_templates";
 import bcrypt from "bcryptjs";
 import { getLocalAdminPassword } from "../config/local_identity";
+import { repairCorruptedOrganizationNames } from "../org/db";
 
 interface BootstrapContext {
   server: any;
@@ -20,6 +21,7 @@ interface BootstrapContext {
   llm: {
     getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
     getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any; getKimi?: any; getGlm?: any; getRelay?: any;
+    refreshLocalModels?: () => Promise<{ ollama: boolean; lmstudio: boolean }>;
   };
   __dirname: string;
 }
@@ -62,6 +64,14 @@ export async function bootstrap(ctx: BootstrapContext) {
   try {
     await ensureDatabaseInitialized();
     console.log('Database initialized successfully');
+    if (llm.refreshLocalModels) {
+      const localModels = await llm.refreshLocalModels();
+      console.log(`[LLM] Local runtime ready — Ollama=${localModels.ollama}, LM Studio=${localModels.lmstudio}`);
+    }
+    const repairedOrgNames = repairCorruptedOrganizationNames();
+    if (repairedOrgNames > 0) {
+      console.warn(`[Bootstrap] Repaired ${repairedOrgNames} corrupted organization name(s)`);
+    }
     pruneOldData();
     await flushDB();
   } catch (error) {

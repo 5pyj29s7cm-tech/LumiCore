@@ -89,8 +89,9 @@ export async function synthesizeSpeech(
 
   const body = { model: resolvedModel, input };
 
-  const res = await withCloudResilience(
-    () => fetch(BASE_URL, {
+  const json = await withCloudResilience(
+    async () => {
+      const res = await fetch(BASE_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -98,20 +99,20 @@ export async function synthesizeSpeech(
       },
       body: JSON.stringify(body),
       signal,
-    }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(`CosyVoice TTS error (${res.status}): ${err.message || err.code || 'Unknown'}`);
+      }
+      const payload = await res.json();
+      if (!payload.output?.audio?.url) {
+        throw new Error(`CosyVoice response missing audio URL: ${JSON.stringify(payload)}`);
+      }
+      return payload;
+    },
     { provider: 'cosyvoice', maxRetries: 1 },
   );
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(`CosyVoice TTS error (${res.status}): ${err.message || err.code || 'Unknown'}`);
-  }
-
-  const json = await res.json();
   const audioUrl = json.output?.audio?.url;
-  if (!audioUrl) {
-    throw new Error(`CosyVoice response missing audio URL: ${JSON.stringify(json)}`);
-  }
 
   const audioRes = await fetch(audioUrl, { signal });
   if (!audioRes.ok) {

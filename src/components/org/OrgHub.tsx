@@ -33,6 +33,10 @@ interface NavItem {
   roles: Array<'owner' | 'admin' | 'member' | 'viewer'>;
 }
 
+interface OrgHubProps {
+  allowPersonalDomain?: boolean;
+}
+
 function OrgViewFallback() {
   return (
     <div className="flex min-h-[320px] items-center justify-center text-white/35">
@@ -44,7 +48,7 @@ function OrgViewFallback() {
   );
 }
 
-export function OrgHub() {
+export function OrgHub({ allowPersonalDomain = true }: OrgHubProps = {}) {
   const [subView, setSubView] = useState<SubView>('dashboard');
   const [editingArticleId, setEditingArticleId] = useState<string | undefined>(undefined);
   const [switchBusy, setSwitchBusy] = useState(false);
@@ -108,7 +112,7 @@ export function OrgHub() {
   };
 
   const handleDomainToggle = async () => {
-    if (switchBusy) return;
+    if (switchBusy || !allowPersonalDomain) return;
     setSwitchBusy(true);
     const target = workDomain === 'personal' ? 'work' : 'personal';
     const result = await switchDomain(target);
@@ -116,6 +120,10 @@ export function OrgHub() {
     if (result.success) toast.success(result.message || (target === 'work' ? ui('已进入工作域', 'Entered work domain') : ui('已进入个人域', 'Entered personal domain')));
     else toast.error(result.message || ui('工作域切换失败', 'Failed to switch domain'));
   };
+
+  const displayedDomain = !allowPersonalDomain || workDomain === 'work'
+    ? t.orgWorkDomain
+    : t.orgPersonalDomain;
 
   const renderView = () => {
     switch (subView) {
@@ -155,19 +163,26 @@ export function OrgHub() {
           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] ${roleInfo.color}`}>
             {roleInfo.icon} {roleInfo.label}
           </span>
-          {/* Domain switch */}
-          <button
-            onClick={handleDomainToggle}
-            disabled={switchBusy}
-            className={`lumi-button h-9 w-full justify-start px-3 ${
-              workDomain === 'work'
-                ? 'border-blue-400/25 bg-blue-500/10 text-blue-300'
-                : ''
-            }`}
-          >
-            {switchBusy ? <Loader2 size={12} className="animate-spin" /> : workDomain === 'work' ? <Briefcase size={12} /> : <User size={12} />}
-            {switchBusy ? (t.switching || ui('切换中...', 'Switching...')) : workDomain === 'work' ? t.orgWorkDomain : t.orgPersonalDomain}
-          </button>
+          {/* The standalone organization client never exposes personal-domain navigation. */}
+          {allowPersonalDomain ? (
+            <button
+              onClick={handleDomainToggle}
+              disabled={switchBusy}
+              className={`lumi-button h-9 w-full justify-start px-3 ${
+                workDomain === 'work'
+                  ? 'border-blue-400/25 bg-blue-500/10 text-blue-300'
+                  : ''
+              }`}
+            >
+              {switchBusy ? <Loader2 size={12} className="animate-spin" /> : workDomain === 'work' ? <Briefcase size={12} /> : <User size={12} />}
+              {switchBusy ? (t.switching || ui('切换中...', 'Switching...')) : displayedDomain}
+            </button>
+          ) : (
+            <div className="flex h-9 w-full items-center gap-2 rounded-xl border border-blue-400/25 bg-blue-500/10 px-3 text-xs font-semibold text-blue-300">
+              <Briefcase size={12} />
+              {t.orgWorkDomain}
+            </div>
+          )}
         </div>
 
         <nav className="custom-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
@@ -220,18 +235,22 @@ export function OrgHub() {
               )}
             </div>
           )}
-          <div className="my-2 border-t border-white/[0.08]" />
-          <button
-            onClick={() => {
-              void switchDomain('personal').finally(() => {
-                window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'home' } }));
-              });
-            }}
-            className="flex w-full items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-sm text-white/40 transition-colors hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/70"
-          >
-            <ArrowLeft size={16} />
-            <span className="min-w-0 truncate">{t.orgExitWorkSpace}</span>
-          </button>
+          {allowPersonalDomain && (
+            <>
+              <div className="my-2 border-t border-white/[0.08]" />
+              <button
+                onClick={() => {
+                  void switchDomain('personal').finally(() => {
+                    window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'home' } }));
+                  });
+                }}
+                className="flex w-full items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-sm text-white/40 transition-colors hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/70"
+              >
+                <ArrowLeft size={16} />
+                <span className="min-w-0 truncate">{t.orgExitWorkSpace}</span>
+              </button>
+            </>
+          )}
         </nav>
       </div>
 
@@ -244,7 +263,7 @@ export function OrgHub() {
               <h2 className="truncate text-sm font-black uppercase tracking-[0.14em]">{currentItem.label}</h2>
             </div>
             <p className="mt-0.5 truncate text-xs text-white/35">
-              {orgConnection?.orgName || t.orgWorkSpace} · {workDomain === 'work' ? t.orgWorkDomain : t.orgPersonalDomain}
+              {orgConnection?.orgName || t.orgWorkSpace} · {displayedDomain}
             </p>
           </div>
           <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${roleInfo.color}`}>

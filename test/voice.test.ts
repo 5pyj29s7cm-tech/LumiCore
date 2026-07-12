@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET, COOKIE_OPTS } from './helpers';
 import voiceRoutes from '../routes/voice';
 import { mountAuthRoutes } from '../server/routes/auth';
@@ -226,6 +227,7 @@ describe('Voice API', () => {
 
   it('returns active provider info', async () => {
     const res = await fetch(`${url}/api/voice/active-provider`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     expect(res.status).toBe(200);
@@ -257,6 +259,7 @@ describe('Voice API', () => {
       expect(saved.tts).toBe('local-cosyvoice');
 
       const status = await fetch(`${url}/api/voice/active-provider`, {
+        headers: authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
       const body = await status.json();
@@ -280,11 +283,22 @@ describe('Voice API', () => {
   it('rejects synthesize without body', async () => {
     const res = await fetch(`${url}/api/voice/synthesize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({}),
       signal: AbortSignal.timeout(5000),
     });
     expect(res.status).toBe(400);
+  });
+
+  it('requires authentication for direct speech synthesis and provider status', async () => {
+    const synth = await fetch(`${url}/api/voice/synthesize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'hello' }),
+    });
+    const provider = await fetch(`${url}/api/voice/active-provider`);
+    expect(synth.status).toBe(401);
+    expect(provider.status).toBe(401);
   });
 
   it('verifies enrolled voiceprints on the server', async () => {
@@ -376,6 +390,30 @@ describe('Voice API', () => {
       if (previousProvider === undefined) delete process.env.LUMI_VOICEPRINT_PROVIDER;
       else process.env.LUMI_VOICEPRINT_PROVIDER = previousProvider;
     }
+  });
+
+  it('reloads face embeddings in personal Lumi and hides biometrics in organization Lumi', async () => {
+    const embedding = Array.from({ length: 32 }, (_, index) => index / 100);
+    const enrolled = await fetch(`${url}/api/auth/biometric/face/enroll`, {
+      method: 'PUT',
+      headers: headers(),
+      body: JSON.stringify({ label: 'Owner face', embedding }),
+    });
+    expect(enrolled.ok).toBe(true);
+
+    const personalList = await fetch(`${url}/api/auth/biometric/list`, { headers: authHeaders() });
+    const personal = await personalList.json();
+    expect(personal.faces.some((face: any) => (
+      face.label === 'Owner face' && Array.isArray(face.embedding) && face.embedding.length === embedding.length
+    ))).toBe(true);
+
+    const identity = jwt.verify(token, JWT_SECRET) as any;
+    const workToken = jwt.sign({ ...identity, orgId: 'biometric-work-scope' }, JWT_SECRET);
+    const workList = await fetch(`${url}/api/auth/biometric/list`, {
+      headers: { Cookie: `token=${workToken}` },
+    });
+    const work = await workList.json();
+    expect(work).toMatchObject({ voiceprints: [], faces: [], personalContextRequired: true });
   });
 
   it('rejects unusable voiceprint enrollment when no embedding or MFCC frames are available', async () => {

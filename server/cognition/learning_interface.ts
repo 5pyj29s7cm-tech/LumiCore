@@ -65,6 +65,11 @@ function hasTool(toolNames: string[], name: string): boolean {
   return toolNames.includes(name);
 }
 
+function capabilityDomainForRoute(route: CapabilityRoute): string {
+  if (route.id.startsWith('lumi.')) return 'lumi_core';
+  return route.id.split('.')[0] || 'general';
+}
+
 function routeForLearningGoal(text: string, toolNames: string[]): CapabilityRoute {
   const preferredTools = [
     'capability_learning_list',
@@ -234,7 +239,9 @@ export function persistLumiLearningTurn(input: LumiLearningTurnInput): LumiLearn
     try {
       capabilityRecord = upsertCapabilityLearningRecord({
         userId: input.userId,
-        domain: input.domain || 'personal',
+        scopeDomain: input.domain === 'work' && input.orgId ? 'work' : 'personal',
+        orgId: input.domain === 'work' ? String(input.orgId || '') : '',
+        domain: capabilityDomainForRoute(candidate.route),
         goal: candidate.goal,
         context: compact(`${input.channel}: ${input.userText}`, 500),
         observedFailure: candidate.observedFailure,

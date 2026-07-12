@@ -187,7 +187,7 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
   ];
 
   const provider = request.provider || 'deepseek';
-  const model = request.model || 'deepseek-chat';
+  const model = request.model || 'deepseek-v4-flash';
 
   try {
     const response = await makeLLMCall(
@@ -431,6 +431,9 @@ export async function autoGenerateSkill(
   getOpenAI?: () => any,
   getAnthropic?: () => any,
   getQwen?: () => any,
+  userId: string = 'anonymous',
+  domain: string = 'personal',
+  orgId: string = '',
 ): Promise<SkillGenerateResult | null> {
   if (!isAutomaticSkillGenerationEnabled()) {
     console.log('[SkillGen] Automatic executable skill generation is disabled; repeated patterns remain reusable workflows until the user explicitly creates a skill.');
@@ -438,10 +441,10 @@ export async function autoGenerateSkill(
   }
   const { findWorkflowClusters, getRecentWorkflows, removeWorkflows } = await import('./worklog');
 
-  const all = getRecentWorkflows();
+  const all = getRecentWorkflows(userId, domain, orgId);
   if (all.length < 3) return null;
 
-  const clusters = findWorkflowClusters(3);
+  const clusters = findWorkflowClusters(3, userId, domain, orgId);
   if (clusters.length === 0) return null;
 
   for (const cluster of clusters) {
@@ -450,7 +453,7 @@ export async function autoGenerateSkill(
       `(${cluster.workflows.length}x, avg similarity: ${cluster.avgSimilarity.toFixed(2)})`,
     );
     const result = await generateSkill(
-      { workflows: cluster.workflows, provider: 'deepseek', model: 'deepseek-chat' },
+      { workflows: cluster.workflows, provider: 'deepseek', model: 'deepseek-v4-flash', userId },
       getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
     );
 

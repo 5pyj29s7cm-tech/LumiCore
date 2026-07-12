@@ -10,6 +10,13 @@ function requireDreamGetters(context: any) {
   return getters;
 }
 
+function dreamScope(context: any): { domain: 'personal' | 'work'; orgId: string } {
+  if (context?.domain === 'work' && context?.orgId) {
+    return { domain: 'work', orgId: String(context.orgId) };
+  }
+  return { domain: 'personal', orgId: '' };
+}
+
 export function registerSleepTools(registry: ToolRegistry): void {
   registry.register({
     name: 'lumi_sleep_status',
@@ -19,7 +26,10 @@ export function registerSleepTools(registry: ToolRegistry): void {
       properties: {},
       required: [],
     },
-    handler: async (_args, context) => JSON.stringify(getSleepCycleState(context?.userId || 'anonymous'), null, 2),
+    handler: async (_args, context) => {
+      const scope = dreamScope(context);
+      return JSON.stringify(getSleepCycleState(context?.userId || 'anonymous', scope.domain, scope.orgId), null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
   });
@@ -36,8 +46,6 @@ export function registerSleepTools(registry: ToolRegistry): void {
       properties: {
         force: { type: 'boolean', description: 'Run even if idle/night/cooldown gates would normally skip. Use only when the user explicitly asks Lumi to sleep/dream now.' },
         reason: { type: 'string', description: 'Short reason for auditability.' },
-        domain: { type: 'string', description: 'Memory domain, default personal.' },
-        orgId: { type: 'string', description: 'Organization id for organization-scoped dreams.' },
         minRecentMemories: { type: 'number', description: 'Minimum recent memories needed before dreaming, default 3.' },
         windowHours: { type: 'number', description: 'Recent memory window, default 36 hours.' },
         cooldownHours: { type: 'number', description: 'Cooldown before another non-forced dream, default 6 hours.' },
@@ -46,8 +54,7 @@ export function registerSleepTools(registry: ToolRegistry): void {
     },
     handler: async (args, context) => {
       const userId = context?.userId || 'anonymous';
-      const domain = args.domain || context?.domain || 'personal';
-      const orgId = args.orgId || context?.orgId || '';
+      const { domain, orgId } = dreamScope(context);
       const pref = getUserPreferredLLMConfig(userId, { maxTokens: 900, domain, orgId });
       const report = await runDreamCycle(
         {

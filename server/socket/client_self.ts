@@ -12,7 +12,7 @@ export function registerClientSelfHandlers(
       ...(state || {}),
       socketId: socket.id,
     });
-    io.to(`user:${uid}`).emit('client:state_ack', {
+    socket.emit('client:state_ack', {
       updatedAt: snapshot.updatedAt,
       mode: snapshot.mode,
     });

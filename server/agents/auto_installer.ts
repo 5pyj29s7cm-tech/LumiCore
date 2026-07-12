@@ -7,7 +7,7 @@ import os from 'os';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { mcpManager } from '../mcp';
-import { getMarketplaceSkills, recordInstall } from '../marketplace/registry';
+import { getMarketplaceSkills, recordInstall, type MarketplaceAgentScope } from '../marketplace/registry';
 import { createAgentForSkill } from './skill_agent';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -111,7 +111,11 @@ function getBundledVersion(name: string): string {
  * Auto-install or upgrade matching skills for the user's task.
  * Returns which skills were newly installed or upgraded.
  */
-export async function autoInstallForTask(userText: string, io?: { emit: (event: string, data: any) => void }): Promise<InstallResult[]> {
+export async function autoInstallForTask(
+  userText: string,
+  io?: { emit: (event: string, data: any) => void },
+  scope?: MarketplaceAgentScope & { userId?: string },
+): Promise<InstallResult[]> {
   const installed = getInstalledNames();
   const results: InstallResult[] = [];
 
@@ -124,7 +128,7 @@ export async function autoInstallForTask(userText: string, io?: { emit: (event: 
     if (!fs.existsSync(bundledPath)) continue;
 
     const isAlreadyInstalled = installed.has(dirName);
-    const skill = getMarketplaceSkills().find(s => s.id === entry.skillId);
+    const skill = getMarketplaceSkills(undefined, scope).find(s => s.id === entry.skillId);
     const displayName = skill?.name || dirName;
 
     // Check if upgrade is available
@@ -162,6 +166,7 @@ export async function autoInstallForTask(userText: string, io?: { emit: (event: 
         category: entry.category,
         toolCount: skill?.toolCount || tools.length,
         installSource: 'bundled',
+        scope,
       }, io);
 
       results.push({

@@ -660,7 +660,7 @@ function createEphemeralAgent(category: string, skillTag: string): AgentRecord {
     data: '{}',
     createdAt: new Date().toISOString(),
     status: 'idle',
-    modelPreference: 'deepseek-chat',
+    modelPreference: 'deepseek-v4-flash',
     memoryScope: 'private',
     autonomyLevel: 'reactive',
     runtimeConfig: '{}',
@@ -1098,12 +1098,16 @@ export function recordWorkflowPattern(
   subTaskCount: number,
   skillTags: string[],
   userId?: string,
+  domain: string = 'personal',
+  orgId: string = '',
 ): void {
   // Feed the worklog-based skill distillation pipeline
   if (userId && subTaskCount >= 2) {
     try {
       recordWorkflow({
         userId,
+        domain: domain === 'work' ? 'work' : 'personal',
+        orgId: domain === 'work' ? orgId : '',
         userIntent: task.slice(0, 120),
         toolSequence: skillTags.map(tag => ({
           name: `orchestrator_${tag}`,
@@ -1231,7 +1235,7 @@ export async function runOrchestratedTask(
 
   // Record workflow pattern for future skill distillation
   const skillTags = capped.map(s => s.requiredSkill);
-  recordWorkflowPattern(text, capped.length, skillTags, context.userId);
+  recordWorkflowPattern(text, capped.length, skillTags, context.userId, context.domain || 'personal', context.orgId || '');
 
   onProgress?.(`\n[Orchestrator] Workflow complete — ${workflowResult.totalAgentsUsed} agent(s) used\n`);
 

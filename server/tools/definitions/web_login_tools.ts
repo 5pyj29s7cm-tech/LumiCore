@@ -9,6 +9,8 @@ import {
   type WebLoginScope,
 } from '../../web_login/manager';
 import { getWebLoginSitePreset, listWebLoginSitePresets } from '../../web_login/legal_presets';
+import { getMember } from '../../org/db';
+import type { ToolContext } from '../types';
 
 function scopeFromContext(context?: { userId?: string; domain?: string; orgId?: string }): WebLoginScope {
   return {
@@ -16,6 +18,16 @@ function scopeFromContext(context?: { userId?: string; domain?: string; orgId?: 
     domain: context?.domain || 'personal',
     orgId: context?.orgId || '',
   };
+}
+
+function assertCanMutateWebLoginProfile(context?: ToolContext): void {
+  if (context?.domain !== 'work' && !context?.orgId) return;
+  const userId = String(context?.userId || '').trim();
+  const orgId = String(context?.orgId || '').trim();
+  const membership = userId && orgId ? getMember(orgId, userId) : null;
+  if (!membership || !['owner', 'admin'].includes(membership.role)) {
+    throw new Error('Only an organization owner or administrator can change shared website login profiles.');
+  }
 }
 
 export function registerWebLoginTools(registry: ToolRegistry): void {
@@ -61,6 +73,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       required: ['presetId'],
     },
     handler: async (args, context) => {
+      assertCanMutateWebLoginProfile(context);
       const preset = getWebLoginSitePreset(String(args.presetId || ''));
       if (!preset) throw new Error(`Unknown web login preset: ${args.presetId}`);
       const mergedNotes = [preset.notes, args.notes].filter(Boolean).join(' ');
@@ -129,22 +142,25 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       },
       required: ['loginUrl'],
     },
-    handler: async (args, context) => JSON.stringify({
-      profile: saveWebLoginProfile({
-        id: args.id,
-        label: args.label,
-        loginUrl: String(args.loginUrl || ''),
-        matchHosts: Array.isArray(args.matchHosts) ? args.matchHosts.map(String) : undefined,
-        username: args.username,
-        password: args.password,
-        usernameSelector: args.usernameSelector,
-        passwordSelector: args.passwordSelector,
-        submitSelector: args.submitSelector,
-        successUrlPattern: args.successUrlPattern,
-        notes: args.notes,
-      }, scopeFromContext(context)),
-      note: 'Saved. Run web_login_run to create or refresh the browser session.',
-    }, null, 2),
+    handler: async (args, context) => {
+      assertCanMutateWebLoginProfile(context);
+      return JSON.stringify({
+        profile: saveWebLoginProfile({
+          id: args.id,
+          label: args.label,
+          loginUrl: String(args.loginUrl || ''),
+          matchHosts: Array.isArray(args.matchHosts) ? args.matchHosts.map(String) : undefined,
+          username: args.username,
+          password: args.password,
+          usernameSelector: args.usernameSelector,
+          passwordSelector: args.passwordSelector,
+          submitSelector: args.submitSelector,
+          successUrlPattern: args.successUrlPattern,
+          notes: args.notes,
+        }, scopeFromContext(context)),
+        note: 'Saved. Run web_login_run to create or refresh the browser session.',
+      }, null, 2);
+    },
     permission: 'user',
     securityLevel: 'confirm',
   });
@@ -177,23 +193,26 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       },
       required: ['url'],
     },
-    handler: async (args, context) => JSON.stringify(await learnWebLoginSite({
-      url: String(args.url || ''),
-      profileId: args.profileId,
-      id: args.id,
-      label: args.label,
-      matchHosts: Array.isArray(args.matchHosts) ? args.matchHosts.map(String) : undefined,
-      username: args.username,
-      password: args.password,
-      usernameSelector: args.usernameSelector,
-      passwordSelector: args.passwordSelector,
-      submitSelector: args.submitSelector,
-      successUrlPattern: args.successUrlPattern,
-      notes: args.notes,
-      headless: args.headless === true,
-      autoSubmit: args.autoSubmit !== false,
-      waitForManualMs: Number(args.waitForManualMs) || undefined,
-    }, scopeFromContext(context)), null, 2),
+    handler: async (args, context) => {
+      assertCanMutateWebLoginProfile(context);
+      return JSON.stringify(await learnWebLoginSite({
+        url: String(args.url || ''),
+        profileId: args.profileId,
+        id: args.id,
+        label: args.label,
+        matchHosts: Array.isArray(args.matchHosts) ? args.matchHosts.map(String) : undefined,
+        username: args.username,
+        password: args.password,
+        usernameSelector: args.usernameSelector,
+        passwordSelector: args.passwordSelector,
+        submitSelector: args.submitSelector,
+        successUrlPattern: args.successUrlPattern,
+        notes: args.notes,
+        headless: args.headless === true,
+        autoSubmit: args.autoSubmit !== false,
+        waitForManualMs: Number(args.waitForManualMs) || undefined,
+      }, scopeFromContext(context)), null, 2);
+    },
     permission: 'user',
     securityLevel: 'confirm',
   });
@@ -208,9 +227,12 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       },
       required: ['id'],
     },
-    handler: async (args, context) => JSON.stringify({
-      deleted: deleteWebLoginProfile(String(args.id || ''), scopeFromContext(context)),
-    }, null, 2),
+    handler: async (args, context) => {
+      assertCanMutateWebLoginProfile(context);
+      return JSON.stringify({
+        deleted: deleteWebLoginProfile(String(args.id || ''), scopeFromContext(context)),
+      }, null, 2);
+    },
     permission: 'user',
     securityLevel: 'confirm',
   });
@@ -230,6 +252,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
         headless: { type: 'boolean', description: 'Run without showing browser. Defaults false so the user can complete 2FA.' },
         autoSubmit: { type: 'boolean', description: 'Submit after filling credentials. Defaults true.' },
         waitForManualMs: { type: 'number', description: 'How long to wait for manual 2FA/captcha, default 45000, max 180000.' },
+        keepOpenMs: { type: 'number', description: 'How long a visible browser stays open for continued viewing and work, default 30 minutes, max 24 hours.' },
       },
       required: [],
     },
@@ -239,6 +262,7 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       headless: args.headless === true,
       autoSubmit: args.autoSubmit !== false,
       waitForManualMs: Number(args.waitForManualMs) || undefined,
+      keepOpenMs: Number(args.keepOpenMs) || undefined,
     }, scopeFromContext(context)), null, 2),
     permission: 'user',
     securityLevel: 'safe',

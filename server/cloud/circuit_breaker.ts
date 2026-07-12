@@ -68,6 +68,15 @@ export function isCircuitClosed(provider: string, model?: string): boolean {
 }
 
 /**
+ * Read-only health check. Unlike isCircuitClosed, this never advances an open
+ * circuit into half-open merely because a status screen was viewed.
+ */
+export function isCircuitHealthy(provider: string, model?: string): boolean {
+  const entry = circuits.get(circuitKey(provider, model));
+  return !entry || entry.state === 'closed';
+}
+
+/**
  * Record a successful call. Closes the circuit if half-open threshold is met.
  */
 export function recordSuccess(provider: string, model?: string): void {
@@ -96,7 +105,12 @@ export function recordSuccess(provider: string, model?: string): void {
 /**
  * Record a failure. Opens the circuit if threshold is exceeded.
  */
-export function recordFailure(provider: string, model?: string, error?: Error): void {
+export function recordFailure(
+  provider: string,
+  model?: string,
+  error?: Error,
+  options: { openImmediately?: boolean } = {},
+): void {
   const key = circuitKey(provider, model);
   let entry = circuits.get(key);
   const now = Date.now();
@@ -114,7 +128,8 @@ export function recordFailure(provider: string, model?: string, error?: Error): 
   entry.failureCount++;
   entry.lastFailureTime = now;
 
-  if (entry.failureCount >= CONFIG.failureThreshold && entry.state === 'closed') {
+  const shouldOpen = options.openImmediately || entry.failureCount >= CONFIG.failureThreshold || entry.state === 'half-open';
+  if (shouldOpen && entry.state !== 'open') {
     entry.state = 'open';
     entry.lastStateChange = now;
     entry.successCount = 0;

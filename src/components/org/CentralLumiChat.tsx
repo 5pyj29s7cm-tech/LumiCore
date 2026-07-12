@@ -165,12 +165,10 @@ export function CentralLumiChat() {
   }, [orgConnection?.orgId]);
 
   const llmPolicyLabel = llmPolicy
-    ? llmPolicy.inheritPersonal
-      ? ui('继承个人模型', 'Inherits personal model')
-      : ui('组织独立模型', 'Organization model')
+    ? ui('组织独立模型', 'Organization model')
     : ui('模型策略', 'Model policy');
   const llmPolicyModel = llmPolicy
-    ? `${llmPolicy.provider || llmPolicy.inheritedProvider || '-'} / ${llmPolicy.model || llmPolicy.inheritedModel || '-'}`
+    ? `${llmPolicy.provider || '-'} / ${llmPolicy.model || '-'}`
     : ui('加载中', 'Loading');
   const openOrgSettings = () => {
     window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'settings' } }));
@@ -484,7 +482,7 @@ export function CentralLumiChat() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/60" title={llmPolicyModel}>
-            <BrainCircuit size={14} className={llmPolicy?.inheritPersonal ? 'text-white/45' : 'text-blue-300'} />
+            <BrainCircuit size={14} className="text-blue-300" />
             <span className="whitespace-nowrap">{llmPolicyLabel}</span>
             <span className="hidden max-w-[180px] truncate text-white/35 md:inline">{llmPolicyModel}</span>
           </div>

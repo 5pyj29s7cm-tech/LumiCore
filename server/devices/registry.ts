@@ -1,5 +1,18 @@
 import { readDB, writeDB } from '../../db_layer';
-import { DeviceInfo, DeviceType, DeviceCapabilities } from './types';
+import { DeviceInfo, DeviceType, DeviceCapabilities, DeviceScope } from './types';
+
+function normalizeDeviceScope(scope?: Partial<DeviceScope>): DeviceScope {
+  const orgId = String(scope?.orgId || '').trim();
+  return scope?.domain === 'work' && orgId
+    ? { domain: 'work', orgId }
+    : { domain: 'personal', orgId: '' };
+}
+
+function deviceMatchesScope(device: DeviceInfo, scope?: Partial<DeviceScope>): boolean {
+  if (!scope) return true;
+  const normalized = normalizeDeviceScope(scope);
+  return device.domain === normalized.domain && device.orgId === normalized.orgId;
+}
 
 class DeviceRegistry {
   private devices: Map<string, DeviceInfo> = new Map();
@@ -12,13 +25,15 @@ class DeviceRegistry {
   register(
     userId: string,
     socketId: string,
-    info: { name?: string; type?: DeviceType; capabilities?: Partial<DeviceCapabilities>; ipAddress?: string; osInfo?: string; deviceFingerprint?: string },
+    info: { name?: string; type?: DeviceType; capabilities?: Partial<DeviceCapabilities>; ipAddress?: string; osInfo?: string; deviceFingerprint?: string; domain?: DeviceScope['domain']; orgId?: string },
   ): DeviceInfo {
     const now = new Date().toISOString();
+    const scope = normalizeDeviceScope(info);
 
     // Use persistent fingerprint from client as dedup key, falling back to socketId
     const fingerprint = info.deviceFingerprint || socketId;
-    const id = `dev_${userId}_${fingerprint}`;
+    const scopeId = scope.domain === 'work' ? `org_${scope.orgId}` : 'personal';
+    const id = `dev_${userId}_${scopeId}_${fingerprint}`;
 
     // 1) Exact match — same device reconnected
     const existing = this.devices.get(id);
@@ -26,6 +41,8 @@ class DeviceRegistry {
       existing.status = 'online';
       existing.lastSeen = now;
       existing.socketId = socketId;
+      existing.domain = scope.domain;
+      existing.orgId = scope.orgId;
       if (info.ipAddress) existing.ipAddress = info.ipAddress;
       if (info.osInfo) existing.osInfo = info.osInfo;
       if (info.name) existing.name = info.name;
@@ -38,7 +55,7 @@ class DeviceRegistry {
     const deviceName = info.name || 'Unknown Device';
     const deviceType = info.type || 'desktop';
     for (const [key, dev] of this.devices) {
-      if (dev.userId === userId && dev.name === deviceName && dev.type === deviceType) {
+      if (dev.userId === userId && deviceMatchesScope(dev, scope) && dev.name === deviceName && dev.type === deviceType) {
         // Reuse this entry, update id to new fingerprint
         this.devices.delete(key);
         dev.id = id;
@@ -56,6 +73,8 @@ class DeviceRegistry {
     const device: DeviceInfo = {
       id,
       userId,
+      domain: scope.domain,
+      orgId: scope.orgId,
       name: deviceName,
       type: deviceType,
       status: 'online',
@@ -92,8 +111,8 @@ class DeviceRegistry {
     }
   }
 
-  getUserDevices(userId: string): DeviceInfo[] {
-    return Array.from(this.devices.values()).filter(d => d.userId === userId);
+  getUserDevices(userId: string, scope?: Partial<DeviceScope>): DeviceInfo[] {
+    return Array.from(this.devices.values()).filter(d => d.userId === userId && deviceMatchesScope(d, scope));
   }
 
   getAll(): DeviceInfo[] {
@@ -101,12 +120,12 @@ class DeviceRegistry {
   }
 
   /** Get cross-device context for personality */
-  getActiveDevices(userId: string): DeviceInfo[] {
-    return this.getUserDevices(userId).filter(d => d.status === 'online');
+  getActiveDevices(userId: string, scope?: Partial<DeviceScope>): DeviceInfo[] {
+    return this.getUserDevices(userId, scope).filter(d => d.status === 'online');
   }
 
   /** Build sensory context from all active devices */
-  getSensoryContext(userId: string): {
+  getSensoryContext(userId: string, scope?: Partial<DeviceScope>): {
     hasAudio: boolean;
     hasVideo: boolean;
     hasSpatial: boolean;
@@ -115,7 +134,7 @@ class DeviceRegistry {
     activeDeviceTypes: DeviceType[];
     deviceCount: number;
   } {
-    const active = this.getActiveDevices(userId);
+    const active = this.getActiveDevices(userId, scope);
     return {
       hasAudio: active.some(d => d.capabilities.audio),
       hasVideo: active.some(d => d.capabilities.video),
@@ -142,6 +161,8 @@ class DeviceRegistry {
     const device: DeviceInfo = {
       id,
       userId,
+      domain: 'personal',
+      orgId: '',
       name,
       type: 'web',
       status: 'online',

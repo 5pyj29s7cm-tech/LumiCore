@@ -168,6 +168,60 @@ export function createOrg(name: string, slug: string, ownerUid: string): Organiz
   return org;
 }
 
+function fallbackOrganizationName(org: Pick<Organization, 'id' | 'slug'>): string {
+  const fromSlug = String(org.slug || '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (fromSlug) {
+    return fromSlug.replace(/\b[a-z]/g, character => character.toUpperCase());
+  }
+  return `Organization ${String(org.id || '').slice(0, 8) || 'Local'}`;
+}
+
+export function repairCorruptedOrganizationNames(): number {
+  const db = entDB();
+  const organizations: Organization[] = db.organizations || [];
+  let repaired = 0;
+  for (const org of organizations) {
+    if (!String(org.name || '').includes('\uFFFD')) continue;
+    org.name = fallbackOrganizationName(org);
+    org.updatedAt = now();
+    repaired += 1;
+  }
+  if (repaired > 0) writeDB(db);
+  return repaired;
+}
+
+export function updateOrgProfile(
+  orgId: string,
+  updates: Record<string, any>,
+): Organization | null {
+  const db = entDB();
+  const org = db.organizations?.find((candidate: Organization) => candidate.id === orgId);
+  if (!org) return null;
+
+  if (typeof updates.name === 'string' && updates.name.trim()) {
+    org.name = updates.name.trim();
+  }
+
+  const explicitSettings = updates.settings && typeof updates.settings === 'object' && !Array.isArray(updates.settings)
+    ? updates.settings
+    : {};
+  const legacySettings = Object.fromEntries(
+    Object.entries(updates).filter(([key]) => !['id', 'name', 'slug', 'ownerUid', 'createdAt', 'updatedAt', 'settings'].includes(key)),
+  );
+  const settingsUpdate = { ...legacySettings, ...explicitSettings };
+  if (Object.keys(settingsUpdate).length > 0) {
+    const current = JSON.parse(org.settings || '{}');
+    org.settings = JSON.stringify({ ...current, ...settingsUpdate });
+  }
+
+  org.updatedAt = now();
+  writeDB(db);
+  return org;
+}
+
 export function updateOrgSettings(orgId: string, settings: Record<string, any>): Organization | null {
   const db = entDB();
   const org = db.organizations?.find((o: Organization) => o.id === orgId);

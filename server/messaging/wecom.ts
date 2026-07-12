@@ -15,6 +15,7 @@ import type {
   OutgoingMessage,
   CardPayload,
   MessagingPlatform,
+  IncomingAttachment,
 } from './types';
 
 export interface WeComConfig {
@@ -131,16 +132,36 @@ export class WeComAdapter implements MessageAdapter {
     const xml = this.extractXml(rawXml);
     if (!xml) return null;
 
-    const msgType = this.getTag(xml, 'MsgType');
-    if (msgType !== 'text') return null;
-
-    const content = this.getTag(xml, 'Content');
-    if (!content) return null;
+    const msgType = this.getTag(xml, 'MsgType') || '';
+    const content = this.getTag(xml, 'Content') || this.getTag(xml, 'Recognition') || '';
+    const mediaId = this.getTag(xml, 'MediaId') || '';
+    const supportedMedia = ['image', 'voice', 'video', 'file'].includes(msgType);
+    if (msgType !== 'text' && !supportedMedia) return null;
+    if (msgType === 'text' && !content) return null;
+    if (supportedMedia && !mediaId) return null;
 
     const fromUser = this.getTag(xml, 'FromUserName') || 'unknown';
     const toUser = this.getTag(xml, 'ToUserName') || '';
     const createTime = this.getTag(xml, 'CreateTime') || String(Date.now() / 1000);
     const msgId = this.getTag(xml, 'MsgId') || `${Date.now()}`;
+    const attachmentType: IncomingAttachment['type'] = msgType === 'image'
+      ? 'image'
+      : msgType === 'voice'
+        ? 'audio'
+        : msgType === 'video'
+        ? 'media'
+        : msgType === 'file'
+          ? 'file'
+          : 'unknown';
+    const fileName = this.getTag(xml, 'FileName') || `${msgType}-${mediaId}`;
+    const attachments: IncomingAttachment[] = supportedMedia ? [{
+      id: `${msgType}_${mediaId}`,
+      type: attachmentType,
+      fileName,
+      fileSize: Number(this.getTag(xml, 'FileSize') || 0) || undefined,
+      resourceKey: mediaId,
+      resourceType: msgType,
+    }] : [];
 
     return {
       platform: 'wecom',
@@ -149,7 +170,8 @@ export class WeComAdapter implements MessageAdapter {
       chatId: fromUser, // WeCom uses user ID as chat ID for single chat
       chatType: 'private',
       messageId: msgId,
-      text: content,
+      text: content || attachments.map(item => `[附件] ${item.fileName}`).join('\n'),
+      attachments: attachments.length > 0 ? attachments : undefined,
       raw: { xml: rawXml },
       timestamp: new Date(Number(createTime) * 1000 || Date.now()).toISOString(),
     };
@@ -168,6 +190,21 @@ export class WeComAdapter implements MessageAdapter {
   }
 
   // ── Send Message ──
+
+  async downloadMedia(mediaId: string): Promise<Buffer> {
+    const token = await this.getAccessToken();
+    const res = await fetch(`https://qyapi.weixin.qq.com/cgi-bin/media/get?access_token=${encodeURIComponent(token)}&media_id=${encodeURIComponent(mediaId)}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`WeCom media download failed: ${res.status} ${body.slice(0, 160)}`);
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const body: any = await res.json().catch(() => ({}));
+      throw new Error(`WeCom media download failed: ${body.errmsg || body.errcode || 'unknown error'}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
 
   async sendMessage(chatId: string, message: OutgoingMessage): Promise<string> {
     const token = await this.getAccessToken();

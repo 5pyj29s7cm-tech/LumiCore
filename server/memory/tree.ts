@@ -52,19 +52,30 @@ export function flattenTree(tree: MemoryTree[]): Memory[] {
 }
 
 /** Move a node to a new parent. Validates no circular references. */
-export function moveNode(id: string, newParentId: string | null): boolean {
+export function moveNode(
+  id: string,
+  newParentId: string | null,
+  scope?: { userId?: string; domain?: string; orgId?: string },
+): boolean {
   const db = readDB();
   if (!db.memories) return false;
 
   const memory = db.memories.find((m: Memory) => m.id === id);
   if (!memory) return false;
+  if (scope?.userId && memory.userId !== scope.userId) return false;
+  if (scope?.domain && (memory.domain || 'personal') !== scope.domain) return false;
+  if (scope?.orgId !== undefined && (memory.orgId || '') !== scope.orgId) return false;
 
   // Prevent circular: if newParentId is set, ensure it's not a descendant of id
   if (newParentId) {
     const descendants = getAllDescendantIds(id, db.memories);
     if (descendants.has(newParentId)) return false;
     // Parent must exist
-    if (!db.memories.find((m: Memory) => m.id === newParentId)) return false;
+    const parent = db.memories.find((m: Memory) => m.id === newParentId);
+    if (!parent) return false;
+    if (parent.userId !== memory.userId) return false;
+    if ((parent.domain || 'personal') !== (memory.domain || 'personal')) return false;
+    if ((parent.orgId || '') !== (memory.orgId || '')) return false;
   }
 
   memory.parentId = newParentId;

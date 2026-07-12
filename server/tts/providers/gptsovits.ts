@@ -7,6 +7,7 @@ import { withCloudResilience } from '../../cloud/resilience';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9880';
 
 const SEGMENTS_DIR = getDataPath('voice_training/segments');
+const TRAINING_FILE_LIST = getDataPath('voice_training/filelist.txt');
 
 function getBaseUrl(): string {
   return (process.env.GPTSOVITS_API_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -20,14 +21,39 @@ export function isConfigured(): boolean {
     && fs.existsSync(path.join(localDir, 'api_v2.py'));
 }
 
-function listReferenceFiles(): { path: string; name: string }[] {
+export function parseVoiceTrainingFileList(content: string): Record<string, string> {
+  const transcripts: Record<string, string> = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parts = line.split('|');
+    if (parts.length < 4) continue;
+    const filename = path.basename(parts[0].trim());
+    const transcript = parts.slice(3).join('|').trim();
+    if (filename && transcript) transcripts[filename] = transcript;
+  }
+  return transcripts;
+}
+
+function loadReferenceTranscripts(): Record<string, string> {
+  try {
+    if (!fs.existsSync(TRAINING_FILE_LIST)) return {};
+    return parseVoiceTrainingFileList(fs.readFileSync(TRAINING_FILE_LIST, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function listReferenceFiles(): { path: string; name: string; promptText: string }[] {
   try {
     if (!fs.existsSync(SEGMENTS_DIR)) return [];
+    const transcripts = loadReferenceTranscripts();
     return fs.readdirSync(SEGMENTS_DIR)
       .filter(f => f.endsWith('.wav'))
       .map(f => ({
         path: path.join(SEGMENTS_DIR, f),
         name: f.replace(/\.wav$/, '').replace(/_/g, ' '),
+        promptText: transcripts[f] || '',
       }));
   } catch {
     return [];
@@ -62,15 +88,15 @@ export async function synthesizeSpeech(
     const match = refs.find(r => r.name === voiceName);
     if (match) {
       refAudioPath = match.path;
-      promptText = match.name;
+      promptText = match.promptText;
     } else {
       // Fallback to first available or default
       refAudioPath = refs.length > 0 ? refs[0].path : getDataPath('voice_training/segments/segment_0000.wav');
-      promptText = refs.length > 0 ? refs[0].name : '各位朋友大家好，今天想和大家分享的';
+      promptText = refs.length > 0 ? refs[0].promptText : '各位朋友大家好，今天想和大家分享的';
     }
   } else if (refs.length > 0) {
     refAudioPath = refs[0].path;
-    promptText = refs[0].name;
+    promptText = refs[0].promptText;
   } else {
     refAudioPath = getDataPath('voice_training/segments/segment_0000.wav');
     promptText = '各位朋友大家好，今天想和大家分享的';
@@ -88,24 +114,24 @@ export async function synthesizeSpeech(
     streaming_mode: false,
   };
 
-  const res = await withCloudResilience(
-    () => fetch(`${getBaseUrl()}/tts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal,
-    }),
+  const audioBuffer = await withCloudResilience(
+    async () => {
+      const res = await fetch(`${getBaseUrl()}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(`GPT-SoVITS TTS error (${res.status}): ${err.message || err.detail}`);
+      }
+      return Buffer.from(await res.arrayBuffer());
+    },
     { provider: 'gptsovits', maxRetries: 2, baseDelayMs: 500 },
   );
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(`GPT-SoVITS TTS error (${res.status}): ${err.message || err.detail}`);
-  }
-
-  const arrayBuffer = await res.arrayBuffer();
   return {
-    audioBuffer: Buffer.from(arrayBuffer),
+    audioBuffer,
     format: 'audio/wav',
   };
 }

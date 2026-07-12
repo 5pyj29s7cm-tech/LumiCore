@@ -90,13 +90,14 @@ export function buildLocalBodyLearningTaskDescription(contextParts: string[]): s
   ].join('\n');
 }
 
-function createLearningPlanForTask(task: GeneratedAutonomousTask, workflowTitle: string): LumiPlan {
+function createLearningPlanForTask(userId: string, task: GeneratedAutonomousTask, workflowTitle: string): LumiPlan {
   return createPlan(
     task.title.slice(0, 120),
     [
       task.description.slice(0, 700),
       `来源工作流：${workflowTitle}`,
     ].join('\n\n'),
+    { userId, domain: 'personal', orgId: '' },
     'lumi',
     toPlanPriority(Math.max(1, Math.min(10, task.priority || 5))),
     [
@@ -168,7 +169,8 @@ function enqueueGeneratedLearningTask(
   generated: GeneratedAutonomousTask,
   descriptionLimit: number,
 ): boolean {
-  const plan = createLearningPlanForTask(generated, workflow.title);
+  const planScope = { userId, domain: 'personal' as const, orgId: '' };
+  const plan = createLearningPlanForTask(userId, generated, workflow.title);
   const task = enqueue({
     userId,
     workflowId: workflow.id,
@@ -184,7 +186,7 @@ function enqueueGeneratedLearningTask(
     updatePlan(plan.id, {
       status: 'cancelled',
       result: 'Autonomous queue is full, so this Lumi learning plan was not started.',
-    });
+    }, planScope);
     return false;
   }
   return true;
@@ -432,7 +434,8 @@ ${contextParts.join('\n')}
         console.log(`[AutoTasks] Skipped task with disallowed mode ${requestedMode} for workflow ${workflow.id}`);
         continue;
       }
-      const plan = createLearningPlanForTask(t, workflow.title);
+      const planScope = { userId, domain: 'personal' as const, orgId: '' };
+      const plan = createLearningPlanForTask(userId, t, workflow.title);
       const task = enqueue({
         userId,
         workflowId: workflow.id,
@@ -449,7 +452,7 @@ ${contextParts.join('\n')}
         updatePlan(plan.id, {
           status: 'cancelled',
           result: 'Autonomous queue is full, so this Lumi learning plan was not started.',
-        });
+        }, planScope);
       }
     }
 

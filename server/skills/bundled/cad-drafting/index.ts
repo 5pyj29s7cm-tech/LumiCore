@@ -116,7 +116,7 @@ server.registerTool('cad_renovation_folder_workflow', {
     knownDimensions: z.string().optional().describe('Known overall dimensions or calibration dimensions, for example 9000mm x 7600mm'),
     budget: z.string().optional().describe('Known budget range'),
     outputDir: z.string().optional().describe('Optional output directory. Defaults to a LumiCAD renovation folder inside folderPath.'),
-    writeFiles: z.boolean().optional().describe('When true, writes markdown, CSV, DXF, and SVG files. When false, returns previews only.'),
+    writeFiles: z.boolean().optional().describe('Writes markdown, CSV, DXF, and SVG files by default. Set false only for preview-only analysis.'),
     maxFiles: z.number().int().min(1).max(400).optional().describe('Maximum number of files to scan recursively'),
     maxChars: z.number().int().min(10000).max(900000).optional().describe('Maximum extracted text characters to include in analysis'),
   },

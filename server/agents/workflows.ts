@@ -25,6 +25,20 @@ export interface WorkflowDefinition {
   createdAt: string;
   lastRunAt?: string;
   runCount: number;
+  domain?: string;
+  orgId?: string;
+}
+
+export type WorkflowScope = { domain?: string; orgId?: string };
+
+function normalizedWorkflowScope(scope: WorkflowScope = {}): { domain: string; orgId: string } {
+  const domain = scope.domain === 'work' ? 'work' : 'personal';
+  return { domain, orgId: domain === 'work' ? (scope.orgId || '') : '' };
+}
+
+function workflowMatchesScope(workflow: WorkflowDefinition, scope: WorkflowScope = {}): boolean {
+  const normalized = normalizedWorkflowScope(scope);
+  return (workflow.domain || 'personal') === normalized.domain && (workflow.orgId || '') === normalized.orgId;
 }
 
 function genId(): string {
@@ -38,12 +52,16 @@ export function saveWorkflow(
   steps: WorkflowDefinition['steps'],
   agentAssignments?: Record<string, string>,
   category?: string,
+  scope: WorkflowScope = {},
 ): WorkflowDefinition {
   const db = readDB();
   if (!db.workflows) db.workflows = [];
 
   // Upsert: if a workflow with same name exists for this user, update it
-  const existing = db.workflows.find((w: WorkflowDefinition) => w.userId === userId && w.name === name);
+  const normalized = normalizedWorkflowScope(scope);
+  const existing = db.workflows.find((w: WorkflowDefinition) =>
+    w.userId === userId && w.name === name && workflowMatchesScope(w, normalized)
+  );
   if (existing) {
     existing.description = description;
     existing.steps = steps;
@@ -63,40 +81,42 @@ export function saveWorkflow(
     category,
     createdAt: new Date().toISOString(),
     runCount: 0,
+    domain: normalized.domain,
+    orgId: normalized.orgId,
   };
   db.workflows.push(wf);
   writeDB(db);
   return wf;
 }
 
-export function listWorkflows(userId: string, category?: string): WorkflowDefinition[] {
+export function listWorkflows(userId: string, category?: string, scope: WorkflowScope = {}): WorkflowDefinition[] {
   const db = readDB();
   if (!db.workflows) return [];
   return db.workflows
-    .filter((w: WorkflowDefinition) => w.userId === userId && (!category || w.category === category))
+    .filter((w: WorkflowDefinition) => w.userId === userId && workflowMatchesScope(w, scope) && (!category || w.category === category))
     .sort((a: WorkflowDefinition, b: WorkflowDefinition) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
-export function getWorkflow(userId: string, name: string): WorkflowDefinition | null {
+export function getWorkflow(userId: string, name: string, scope: WorkflowScope = {}): WorkflowDefinition | null {
   const db = readDB();
   if (!db.workflows) return null;
-  return db.workflows.find((w: WorkflowDefinition) => w.userId === userId && w.name === name) || null;
+  return db.workflows.find((w: WorkflowDefinition) => w.userId === userId && w.name === name && workflowMatchesScope(w, scope)) || null;
 }
 
-export function deleteWorkflow(userId: string, name: string): boolean {
+export function deleteWorkflow(userId: string, name: string, scope: WorkflowScope = {}): boolean {
   const db = readDB();
   if (!db.workflows) return false;
-  const idx = db.workflows.findIndex((w: WorkflowDefinition) => w.userId === userId && w.name === name);
+  const idx = db.workflows.findIndex((w: WorkflowDefinition) => w.userId === userId && w.name === name && workflowMatchesScope(w, scope));
   if (idx < 0) return false;
   db.workflows.splice(idx, 1);
   writeDB(db);
   return true;
 }
 
-export function recordWorkflowRun(userId: string, name: string): void {
+export function recordWorkflowRun(userId: string, name: string, scope: WorkflowScope = {}): void {
   const db = readDB();
   if (!db.workflows) return;
-  const wf = db.workflows.find((w: WorkflowDefinition) => w.userId === userId && w.name === name);
+  const wf = db.workflows.find((w: WorkflowDefinition) => w.userId === userId && w.name === name && workflowMatchesScope(w, scope));
   if (wf) {
     wf.lastRunAt = new Date().toISOString();
     wf.runCount++;
@@ -114,13 +134,14 @@ export function captureFromOrchestration(
   taskDescription: string,
   subTasks: SubTask[],
   agentAssignments: Record<string, string>,
+  scope: WorkflowScope = {},
 ): WorkflowDefinition {
   const steps = subTasks.map(st => ({
     description: st.description,
     requiredSkill: st.requiredSkill,
     executionMode: st.executionMode,
   }));
-  return saveWorkflow(userId, name, taskDescription, steps, agentAssignments);
+  return saveWorkflow(userId, name, taskDescription, steps, agentAssignments, undefined, scope);
 }
 
 /**
@@ -130,14 +151,15 @@ export function captureFromOrchestration(
  *
  * Returns the number of new workflows created.
  */
-export async function autoGenerateWorkflows(): Promise<number> {
+export async function autoGenerateWorkflows(userId: string, scope: WorkflowScope = {}): Promise<number> {
   try {
     const { findWorkflowClusters, getRecentWorkflows, removeWorkflows } = await import('../skills/worklog');
 
-    const all = getRecentWorkflows();
+    const normalized = normalizedWorkflowScope(scope);
+    const all = getRecentWorkflows(userId, normalized.domain, normalized.orgId);
     if (all.length < 3) return 0;
 
-    const clusters = findWorkflowClusters(3);
+    const clusters = findWorkflowClusters(3, userId, normalized.domain, normalized.orgId);
     if (clusters.length === 0) return 0;
 
     let created = 0;
@@ -147,10 +169,10 @@ export async function autoGenerateWorkflows(): Promise<number> {
       if (cluster.avgSimilarity < 0.55) continue;
 
       const wf = cluster.workflows[0];
-      const userId = wf.userId || 'anonymous';
+      const workflowUserId = wf.userId || userId;
 
       // Check if a workflow with a similar name already exists
-      const existing = listWorkflows(userId);
+      const existing = listWorkflows(workflowUserId, undefined, normalized);
       const nameBase = generateWorkflowName(cluster.representativeIntent);
       if (existing.some(e => e.name === nameBase)) continue;
 
@@ -162,7 +184,7 @@ export async function autoGenerateWorkflows(): Promise<number> {
 
       const autoDesc = `Auto-generated from ${cluster.workflows.length} similar sessions. Average similarity: ${(cluster.avgSimilarity * 100).toFixed(0)}%`;
 
-      saveWorkflow(userId, nameBase, autoDesc, steps, undefined, 'auto');
+      saveWorkflow(workflowUserId, nameBase, autoDesc, steps, undefined, 'auto', normalized);
       console.log(`[WorkflowGen] Auto-created workflow "${nameBase}" from ${cluster.workflows.length} sessions (similarity: ${cluster.avgSimilarity.toFixed(2)})`);
       created++;
 
@@ -203,6 +225,7 @@ export function captureRecentAsWorkflow(
   userId: string,
   name: string,
   toolTrace: Array<{ name: string; args: Record<string, any>; resultSummary: string }>,
+  scope: WorkflowScope = {},
 ): WorkflowDefinition | null {
   if (toolTrace.length === 0) return null;
 
@@ -213,5 +236,5 @@ export function captureRecentAsWorkflow(
   }));
 
   const description = `Captured workflow: ${name} (${steps.length} steps). Created from recent tool execution.`;
-  return saveWorkflow(userId, name, description, steps, undefined, 'manual');
+  return saveWorkflow(userId, name, description, steps, undefined, 'manual', scope);
 }

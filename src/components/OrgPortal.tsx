@@ -20,7 +20,15 @@ interface OrgStatus {
 
 type OrgPortalMode = 'select' | 'join' | 'create';
 
-export function OrgPortal({ onBack, initialMode = 'select' }: { onBack?: () => void; initialMode?: OrgPortalMode }) {
+export function OrgPortal({
+  onBack,
+  initialMode = 'select',
+  orgOnly = false,
+}: {
+  onBack?: () => void;
+  initialMode?: OrgPortalMode;
+  orgOnly?: boolean;
+}) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
@@ -215,7 +223,7 @@ export function OrgPortal({ onBack, initialMode = 'select' }: { onBack?: () => v
   }
 
   if (isConnected) {
-    return <OrgHub />;
+    return <OrgHub allowPersonalDomain={!orgOnly} />;
   }
 
   // Not connected — choose join or create

@@ -3,13 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      html, body, #root { width: 100%; height: 100%; margin: 0; background: #080a0d; }
+      #lumi-preload { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; color: #fff; background: #080a0d; font-family: Inter, "Noto Sans SC", system-ui, sans-serif; }
+      #lumi-preload-mark { position: relative; display: grid; width: 72px; height: 72px; place-items: center; border: 1px solid rgba(110, 231, 183, .42); border-radius: 50%; color: rgba(255,255,255,.92); font-size: 18px; }
+      #lumi-preload-mark::after { content: ""; position: absolute; inset: -12px; border: 1px solid rgba(255,255,255,.12); border-radius: 50%; }
+      #lumi-preload-title { margin-top: 28px; font-size: 36px; font-weight: 600; letter-spacing: 0; }
+      #lumi-preload-status { margin-top: 14px; color: rgba(255,255,255,.48); font-size: 13px; }
+    </style>
     <title>Lumi OS Desktop</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="lumi-preload" aria-label="Lumi is starting">
+        <div style="text-align:center">
+          <div id="lumi-preload-mark">L</div>
+          <div id="lumi-preload-title">LUMI</div>
+          <div id="lumi-preload-status">正在连接本地核心</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/entries/desktop-root.tsx"></script>
   </body>
 </html>

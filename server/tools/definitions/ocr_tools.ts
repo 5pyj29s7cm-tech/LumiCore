@@ -208,16 +208,62 @@ function extractJsonObject(text: string): any | null {
   return null;
 }
 
-function normalizeFloorplanGeometry(parsed: any, args: Record<string, any>, imagePath: string): Record<string, any> {
+function positiveNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function geometryExtent(cadArgs: Record<string, any>): { width: number; height: number } | null {
+  const points: Array<{ x: number; y: number }> = [];
+  const add = (x: unknown, y: unknown) => {
+    const px = Number(x);
+    const py = Number(y);
+    if (Number.isFinite(px) && Number.isFinite(py)) points.push({ x: px, y: py });
+  };
+  for (const wall of Array.isArray(cadArgs.walls) ? cadArgs.walls : []) {
+    add(wall?.x1 ?? wall?.from?.x, wall?.y1 ?? wall?.from?.y);
+    add(wall?.x2 ?? wall?.to?.x, wall?.y2 ?? wall?.to?.y);
+  }
+  for (const room of Array.isArray(cadArgs.rooms) ? cadArgs.rooms : []) {
+    if (Array.isArray(room?.points)) room.points.forEach((point: any) => add(point?.x, point?.y));
+    const x = Number(room?.x);
+    const y = Number(room?.y);
+    const width = Number(room?.width ?? room?.w);
+    const height = Number(room?.height ?? room?.h);
+    if ([x, y, width, height].every(Number.isFinite)) {
+      add(x, y);
+      add(x + width, y + height);
+    }
+  }
+  if (points.length < 2) return null;
+  const xs = points.map(point => point.x);
+  const ys = points.map(point => point.y);
+  const minX = Math.min(0, ...xs);
+  const minY = Math.min(0, ...ys);
+  const width = Math.max(...xs) - minX;
+  const height = Math.max(...ys) - minY;
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+export function normalizeFloorplanGeometry(parsed: any, args: Record<string, any>, imagePath: string): Record<string, any> {
   const geometry = parsed && typeof parsed === 'object' ? parsed : {};
   const cadArgs = geometry.cadArgs && typeof geometry.cadArgs === 'object'
     ? geometry.cadArgs
     : geometry;
+  const extent = geometryExtent(cadArgs);
+  const width = positiveNumber(cadArgs.width || geometry.width || geometry.outerWidth) || extent?.width || null;
+  const height = positiveNumber(cadArgs.height || geometry.height || geometry.outerHeight) || extent?.height || null;
+  const assumptions = Array.isArray(geometry.assumptions) ? geometry.assumptions.map(String).filter(Boolean) : [];
+  const missingForPrecision = Array.isArray(geometry.missingForPrecision)
+    ? geometry.missingForPrecision.map(String).filter(Boolean)
+    : [];
+  const inferredScale = geometry.inferredScale === true || (!positiveNumber(cadArgs.width || geometry.width || geometry.outerWidth) && Boolean(extent));
+  const confidence = Number.isFinite(Number(geometry.confidence)) ? Number(geometry.confidence) : null;
 
   return {
     title: cadArgs.title || geometry.projectName || args.projectName || 'floorplan_draft',
-    width: cadArgs.width || geometry.width || geometry.outerWidth || null,
-    height: cadArgs.height || geometry.height || geometry.outerHeight || null,
+    width,
+    height,
     unit: cadArgs.unit || geometry.unit || args.unit || 'mm',
     wallThickness: cadArgs.wallThickness || geometry.wallThickness || null,
     rooms: Array.isArray(cadArgs.rooms) ? cadArgs.rooms : Array.isArray(geometry.rooms) ? geometry.rooms : [],
@@ -230,6 +276,11 @@ function normalizeFloorplanGeometry(parsed: any, args: Record<string, any>, imag
     labels: Array.isArray(cadArgs.labels) ? cadArgs.labels : Array.isArray(geometry.labels) ? geometry.labels : [],
     sourcePath: imagePath,
     precisionNote: geometry.precisionNote || 'Generated from vision extraction. Verify scale and dimensions before production use.',
+    inferredScale,
+    confidence,
+    assumptions,
+    missingForPrecision,
+    precisionStatus: inferredScale || missingForPrecision.length > 0 ? 'inferred_requires_review' : 'source_calibrated_requires_review',
   };
 }
 
@@ -291,6 +342,8 @@ async function floorplanExtractGeometry(args: Record<string, any>, context?: any
     const imagePayload = JSON.stringify({ image_base64: base64, format: 'jpeg', width: meta.width || null, height: meta.height || null });
     const analysis = await analyzeScreen(imagePayload, prompt, { provider, model, userId: context?.userId || 'anonymous', maxTokens: 2200 }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
     const parsed = extractJsonObject(analysis);
+    const cadArgs = parsed ? normalizeFloorplanGeometry(parsed, args, imagePath) : null;
+    const geometryReady = Boolean(cadArgs && positiveNumber(cadArgs.width) && positiveNumber(cadArgs.height));
     return JSON.stringify({
       path: imagePath,
       image: { width: meta.width || null, height: meta.height || null },
@@ -298,10 +351,14 @@ async function floorplanExtractGeometry(args: Record<string, any>, context?: any
       model,
       parsed: Boolean(parsed),
       geometry: parsed,
-      cadGenerateDxfArgs: parsed ? normalizeFloorplanGeometry(parsed, args, imagePath) : null,
+      geometryReady,
+      cadGenerateDxfArgs: geometryReady ? cadArgs : null,
+      cadGenerateAutocadArgs: geometryReady ? cadArgs : null,
       rawAnalysis: parsed ? undefined : analysis,
-      next: parsed
-        ? 'Pass cadGenerateDxfArgs into cad_generate_dxf. If inferredScale is true, call the output a calibrated drafting base and ask the user for one confirmed dimension before claiming precision.'
+      next: geometryReady
+        ? 'Pass cadGenerateDxfArgs into cad_generate_dxf and cadGenerateAutocadArgs into cad_generate_autocad_draw_script. Preserve inferredScale, confidence, assumptions, missingForPrecision, and precisionStatus in the result.'
+        : parsed
+        ? 'Geometry was parsed but has no usable outer dimensions or coordinate extent. Ask for one confirmed dimension or retry a clearer crop before generating CAD.'
         : 'Vision did not return valid JSON. Retry with a tighter crop or use ocr_image_file for manual extraction.',
     }, null, 2);
   } catch (err: any) {

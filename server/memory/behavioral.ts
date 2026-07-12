@@ -12,9 +12,10 @@ export interface BehavioralPattern {
  * Extracts: active hours, frequently used tools, topic clusters, session patterns.
  * Called periodically by the scheduler when observer mode is active.
  */
-export function analyzeBehavioralPatterns(userId: string): BehavioralPattern[] {
+export function analyzeBehavioralPatterns(userId: string, domain = 'personal', orgId = ''): BehavioralPattern[] {
   const db = readDB();
   const interactions = (db.interactions || []).filter((i: any) => {
+    if ((i.domain || 'personal') !== domain || (i.orgId || '') !== orgId) return false;
     // Filter to a specific user if userId is provided
     if (userId && userId !== 'anonymous') return i.userId === userId;
     // For anonymous, use last 100 interactions
@@ -122,8 +123,8 @@ export function analyzeBehavioralPatterns(userId: string): BehavioralPattern[] {
  * Run behavioral analysis and save patterns as habit-type memories.
  * Returns the number of new patterns found.
  */
-export function runBehavioralAnalysis(userId: string = 'anonymous'): number {
-  const patterns = analyzeBehavioralPatterns(userId);
+export function runBehavioralAnalysis(userId: string = 'anonymous', domain = 'personal', orgId = ''): number {
+  const patterns = analyzeBehavioralPatterns(userId, domain, orgId);
   let saved = 0;
 
   for (const pattern of patterns) {
@@ -139,6 +140,11 @@ export function runBehavioralAnalysis(userId: string = 'anonymous'): number {
         keywords,
         confidence: pattern.confidence,
         sourceInteractionId: `behavioral_${Date.now()}`,
+      }, {
+        domain,
+        orgId,
+        source: 'system',
+        privacyClass: domain === 'work' ? 'organization' : 'private',
       });
       saved++;
     } catch {

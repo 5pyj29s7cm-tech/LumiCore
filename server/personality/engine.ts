@@ -246,6 +246,9 @@ export function generateSystemPrompt(
     userId?: string;
     /** User's latest input text for language detection */
     userText?: string;
+    /** Active data boundary for prompt labeling and context isolation. */
+    domain?: 'personal' | 'work';
+    orgId?: string;
   },
 ): string {
   const effective = resolveEffectiveConfig(config, ctx);
@@ -260,15 +263,21 @@ export function generateSystemPrompt(
 
   if (config.growthState) {
     const growth = config.growthState;
-    const growthLines: string[] = [
-      '## Local Growth State',
-      'This is owner-specific local growth context. Use it to personalize responses, but do not treat it as core identity.',
-    ];
+    const organizationScope = options?.domain === 'work' && Boolean(options.orgId);
+    const growthLines: string[] = organizationScope
+      ? [
+          '## Organization Growth State',
+          'This is organization-scoped working context. Apply it consistently for this organization, never as a member\'s personal preference or as Lumi\'s stable core identity.',
+        ]
+      : [
+          '## Personal Growth State',
+          'This is owner-specific personal growth context. Use it to personalize responses, but do not treat it as core identity or organization policy.',
+        ];
     if (growth.ownerInterests?.length) {
-      growthLines.push(`Owner interests: ${growth.ownerInterests.slice(0, 8).join(', ')}.`);
+      growthLines.push(`${organizationScope ? 'Organization focus areas' : 'Owner interests'}: ${growth.ownerInterests.slice(0, 8).join(', ')}.`);
     }
     if (growth.ownerExpressions?.length) {
-      growthLines.push(`Owner expressions and vocabulary: ${growth.ownerExpressions.slice(0, 8).join(', ')}.`);
+      growthLines.push(`${organizationScope ? 'Organization vocabulary' : 'Owner expressions and vocabulary'}: ${growth.ownerExpressions.slice(0, 8).join(', ')}.`);
     }
     if (growth.communicationPatterns?.length) {
       growthLines.push(`Communication patterns: ${growth.communicationPatterns.slice(0, 6).join('; ')}.`);
@@ -351,10 +360,14 @@ export function generateSystemPrompt(
 
   // Spatiotemporal + desktop context
   if (options?.userId) {
-    const spCtx = generateSpatiotemporalContext(options.userId);
+    const promptDomain = options.domain === 'work' ? 'work' : 'personal';
+    const promptOrgId = promptDomain === 'work' ? (options.orgId || '') : '';
+    const spCtx = generateSpatiotemporalContext(options.userId, promptDomain, promptOrgId);
     if (spCtx) blocks.push(spCtx);
-    const desktopCtx = getDesktopContext(options.userId);
-    if (desktopCtx) blocks.push(desktopCtx);
+    if (promptDomain === 'personal') {
+      const desktopCtx = getDesktopContext(options.userId);
+      if (desktopCtx) blocks.push(desktopCtx);
+    }
   }
 
   // Task mode

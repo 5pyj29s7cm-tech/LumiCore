@@ -89,14 +89,15 @@ interface DreamSynthesis {
 
 const SLEEP_STATE_KEY_PREFIX = 'lumi_sleep_cycle_state_';
 
-function stateKey(userId: string): string {
-  return `${SLEEP_STATE_KEY_PREFIX}${userId}`;
+function stateKey(userId: string, domain: string, orgId: string): string {
+  const scopeKey = domain === 'work' ? `work_${orgId || 'missing'}` : 'personal';
+  return `${SLEEP_STATE_KEY_PREFIX}${userId}_${scopeKey}`;
 }
 
-export function getSleepCycleState(userId: string): SleepCycleState {
+export function getSleepCycleState(userId: string, domain = 'personal', orgId = ''): SleepCycleState {
   try {
     const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === stateKey(userId));
+    const setting = (db.settings || []).find((s: any) => s.key === stateKey(userId, domain, orgId));
     if (setting?.value) {
       return {
         userId,
@@ -109,19 +110,19 @@ export function getSleepCycleState(userId: string): SleepCycleState {
   return { userId, status: 'awake', dreamCount: 0 };
 }
 
-function saveSleepCycleState(userId: string, patch: Partial<SleepCycleState>): SleepCycleState {
+function saveSleepCycleState(userId: string, domain: string, orgId: string, patch: Partial<SleepCycleState>): SleepCycleState {
   const next: SleepCycleState = {
-    ...getSleepCycleState(userId),
+    ...getSleepCycleState(userId, domain, orgId),
     ...patch,
     userId,
   };
   try {
     const db = readDB();
     if (!db.settings) db.settings = [];
-    let setting = db.settings.find((s: any) => s.key === stateKey(userId));
+    let setting = db.settings.find((s: any) => s.key === stateKey(userId, domain, orgId));
     const value = JSON.stringify(next);
     if (setting) setting.value = value;
-    else db.settings.push({ key: stateKey(userId), value });
+    else db.settings.push({ key: stateKey(userId, domain, orgId), value });
     writeDB(db);
   } catch {}
   return next;
@@ -157,7 +158,7 @@ function shouldRunSleepCycle(userId: string, options: DreamCycleOptions): { allo
   const gate = getGateConfig(userId);
   if (!gate.alwaysOnline) return { allowed: false, reason: 'Always Online is disabled' };
 
-  const state = getSleepCycleState(userId);
+  const state = getSleepCycleState(userId, options.domain || 'personal', options.orgId || '');
   const cooldownMs = Math.max(1, options.cooldownHours ?? 6) * 60 * 60 * 1000;
   if (state.lastCompletedAt && Date.now() - Date.parse(state.lastCompletedAt) < cooldownMs) {
     return { allowed: false, reason: `Sleep cycle cooldown is active (${options.cooldownHours ?? 6}h)` };
@@ -315,11 +316,11 @@ export async function runDreamCycle(
       questions: [],
       safety: ['No memory was changed because the sleep gate skipped this cycle.'],
     };
-    saveSleepCycleState(userId, { status: 'skipped', lastSkippedAt: completedAt, lastReason: allowed.reason, lastReport: report });
+    saveSleepCycleState(userId, domain, orgId, { status: 'skipped', lastSkippedAt: completedAt, lastReason: allowed.reason, lastReport: report });
     return report;
   }
 
-  saveSleepCycleState(userId, { status: 'dreaming', lastStartedAt: startedAt, lastReason: options.reason || 'sleep_cycle' });
+  saveSleepCycleState(userId, domain, orgId, { status: 'dreaming', lastStartedAt: startedAt, lastReason: options.reason || 'sleep_cycle' });
 
   const pref = getUserPreferredLLMConfig(userId, { maxTokens: 900 });
   const ctx: ConsolidationContext = {
@@ -362,7 +363,7 @@ export async function runDreamCycle(
       questions: [],
       safety: ['No memory was changed because the dream had too little material.'],
     };
-    saveSleepCycleState(userId, { status: 'skipped', lastSkippedAt: completedAt, lastReason: report.reason, lastReport: report });
+    saveSleepCycleState(userId, domain, orgId, { status: 'skipped', lastSkippedAt: completedAt, lastReason: report.reason, lastReport: report });
     return report;
   }
 
@@ -389,8 +390,9 @@ export async function runDreamCycle(
     if (dream) dreamMemory = addDreamMemory(ctx, dream);
 
     decayMemoryAssociations(userId);
-    const emotionalState = loadEmotionalState(userId);
-    promoteMemories(userId, emotionalState.intimacy);
+    const emotionalStateKey = domain === 'work' ? `${userId}:org:${orgId}` : userId;
+    const emotionalState = loadEmotionalState(emotionalStateKey);
+    promoteMemories(userId, emotionalState.intimacy, domain, orgId);
   } catch (err: any) {
     const completedAt = new Date().toISOString();
     const report: DreamCycleReport = {
@@ -416,7 +418,7 @@ export async function runDreamCycle(
       questions: Array.isArray(dream?.nextQuestions) ? dream!.nextQuestions!.map(String).slice(0, 3) : [],
       safety,
     };
-    saveSleepCycleState(userId, { status: report.status === 'failed' ? 'failed' : 'rested', lastCompletedAt: completedAt, lastReason: report.reason, lastReport: report });
+    saveSleepCycleState(userId, domain, orgId, { status: report.status === 'failed' ? 'failed' : 'rested', lastCompletedAt: completedAt, lastReason: report.reason, lastReport: report });
     return report;
   }
 
@@ -445,8 +447,8 @@ export async function runDreamCycle(
     safety,
   };
 
-  const prior = getSleepCycleState(userId);
-  saveSleepCycleState(userId, {
+  const prior = getSleepCycleState(userId, domain, orgId);
+  saveSleepCycleState(userId, domain, orgId, {
     status: report.status === 'dreamed' ? 'rested' : 'skipped',
     lastCompletedAt: completedAt,
     lastReason: report.reason,

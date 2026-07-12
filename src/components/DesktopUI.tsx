@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
-import { HardcoreBootSequence } from './HardcoreBootSequence';
 import { GlobalNodeMap } from './GlobalNodeMap';
 import { sounds } from '../services/soundService';
 import {
@@ -1833,6 +1832,23 @@ export function DesktopUI({
   const personalOpacity = useTransform(cameraZ, [0, -400], [1, 0]);
   const { isTauri } = usePlatform();
   const { selectedVoiceId, unreadCount, notifications, addNotification, orgConnection, workDomain, switchDomain, operationMode, setOperationMode, aiConfig, resolvedAppearanceMode } = useApp();
+  const petPreferenceScopeKey = workDomain === 'work'
+    ? `org_${orgConnection?.orgId || 'pending'}`
+    : `personal_${user?.uid || 'local'}`;
+  const petStorageKeys = useMemo(() => ({
+    pet: `lumi_selected_pet_${petPreferenceScopeKey}`,
+    accessories: `lumi_accessories_${petPreferenceScopeKey}`,
+  }), [petPreferenceScopeKey]);
+  const meetingPreferenceScopeKey = workDomain === 'work'
+    ? `org_${orgConnection?.orgId || 'pending'}`
+    : `personal_${user?.uid || 'local'}`;
+  const meetingStorageKeys = useMemo(() => ({
+    startedAt: `lumi_meeting_started_at_${meetingPreferenceScopeKey}`,
+    notes: `lumi_meeting_notes_${meetingPreferenceScopeKey}`,
+    report: `lumi_meeting_report_${meetingPreferenceScopeKey}`,
+  }), [meetingPreferenceScopeKey]);
+  const canCustomizeLumiAppearance = workDomain !== 'work'
+    || ['owner', 'admin'].includes(String(orgConnection?.orgRole || ''));
 
   const [openWindows, setOpenWindows] = useState<string[]>(activeTab !== 'home' && activeTab !== 'knowledge' ? [activeTab] : []);
   const [minimizedWindows, setMinimizedWindows] = useState<string[]>([]);
@@ -1860,13 +1876,17 @@ export function DesktopUI({
   const [memoryLabOpen, setMemoryLabOpen] = useState(false);
   const [equippedAccessories, setEquippedAccessories] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('lumi_accessories');
+      const saved = localStorage.getItem(petStorageKeys.accessories)
+        || (workDomain === 'personal' ? localStorage.getItem('lumi_accessories_personal') : null)
+        || (workDomain === 'personal' ? localStorage.getItem('lumi_accessories') : null);
       return saved ? JSON.parse(saved) : [];
     } catch { return []; }
   });
   const [selectedPet, setSelectedPet] = useState<PetConfig | null>(() => {
     try {
-      const saved = localStorage.getItem('lumi_selected_pet');
+      const saved = localStorage.getItem(petStorageKeys.pet)
+        || (workDomain === 'personal' ? localStorage.getItem('lumi_selected_pet_personal') : null)
+        || (workDomain === 'personal' ? localStorage.getItem('lumi_selected_pet') : null);
       if (saved) {
         const parsed = JSON.parse(saved);
         return resolvePetPreference(parsed);
@@ -1878,16 +1898,14 @@ export function DesktopUI({
   // Ref to prevent echoing our own preference changes back via socket
   const petPrefsSavingRef = useRef(false);
   const savePetPrefsToServer = useCallback(async (pet: PetConfig | null, accessories: string[]) => {
-    const storedPet = serializePetPreference(pet);
-    localStorage.setItem('lumi_accessories', JSON.stringify(accessories));
-    if (storedPet) {
-      localStorage.setItem('lumi_selected_pet', JSON.stringify(storedPet));
-    } else {
-      localStorage.removeItem('lumi_selected_pet');
+    if (!canCustomizeLumiAppearance) {
+      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+      return false;
     }
+    const storedPet = serializePetPreference(pet);
     petPrefsSavingRef.current = true;
     try {
-      await fetch('/api/preferences/pet', {
+      const response = await fetch('/api/preferences/pet', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1896,9 +1914,21 @@ export function DesktopUI({
         }),
         credentials: 'include',
       });
-    } catch {}
-    setTimeout(() => { petPrefsSavingRef.current = false; }, 500);
-  }, []);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Appearance save failed (${response.status})`);
+      }
+      localStorage.setItem(petStorageKeys.accessories, JSON.stringify(accessories));
+      if (storedPet) localStorage.setItem(petStorageKeys.pet, JSON.stringify(storedPet));
+      else localStorage.removeItem(petStorageKeys.pet);
+      return true;
+    } catch (err: any) {
+      toast.error(err?.message || (lang === 'zh' ? '形象保存失败' : 'Appearance save failed'));
+      return false;
+    } finally {
+      setTimeout(() => { petPrefsSavingRef.current = false; }, 500);
+    }
+  }, [canCustomizeLumiAppearance, lang, petStorageKeys]);
 
   const [theme, setTheme] = useState<string>('celestial');
   useEffect(() => {
@@ -2055,16 +2085,21 @@ export function DesktopUI({
   const [pendingOperationMode, setPendingOperationMode] = useState<OperationMode | null>(null);
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
+  const readMeetingItem = (scopedKey: string, legacyKey: string): string | null => (
+    localStorage.getItem(scopedKey)
+      ?? (workDomain === 'personal' ? localStorage.getItem(legacyKey) : null)
+  );
   const [meetingNotesOpen, setMeetingNotesOpen] = useState(false);
   const [meetingPaused, setMeetingPaused] = useState(false);
   const [meetingStartedAt, setMeetingStartedAt] = useState<number | null>(() => {
-    const saved = localStorage.getItem('lumi_meeting_started_at');
+    const saved = readMeetingItem(meetingStorageKeys.startedAt, 'lumi_meeting_started_at');
     return saved ? Number(saved) || null : null;
   });
   const [meetingNotes, setMeetingNotes] = useState<MeetingNote[]>(() => {
-    try { return JSON.parse(localStorage.getItem('lumi_meeting_notes') || '[]'); } catch { return []; }
+    try { return JSON.parse(readMeetingItem(meetingStorageKeys.notes, 'lumi_meeting_notes') || '[]'); } catch { return []; }
   });
-  const [meetingReport, setMeetingReport] = useState<string>(() => localStorage.getItem('lumi_meeting_report') || '');
+  const [meetingSpeakerCount, setMeetingSpeakerCount] = useState(0);
+  const [meetingReport, setMeetingReport] = useState<string>(() => readMeetingItem(meetingStorageKeys.report, 'lumi_meeting_report') || '');
   const [meetingReportGenerating, setMeetingReportGenerating] = useState(false);
   const [legalMeetingCaseTitle, setLegalMeetingCaseTitle] = useState(() => getLegalCaseLabel(getLegalConsultationCase()));
   const meetingModeRef = useRef(operationMode === 'meeting');
@@ -2073,6 +2108,22 @@ export function DesktopUI({
   const lastMeetingTranscriptRef = useRef<{ text: string; at: number; speakerKey: string }>({ text: '', at: 0, speakerKey: '' });
   const lastLegalMeetingArchiveRef = useRef('');
   useEffect(() => {
+    const savedStartedAt = readMeetingItem(meetingStorageKeys.startedAt, 'lumi_meeting_started_at');
+    let savedNotes: MeetingNote[] = [];
+    try {
+      const parsed = JSON.parse(readMeetingItem(meetingStorageKeys.notes, 'lumi_meeting_notes') || '[]');
+      savedNotes = Array.isArray(parsed) ? parsed : [];
+    } catch {}
+    setMeetingPaused(false);
+    setMeetingStartedAt(savedStartedAt ? Number(savedStartedAt) || null : null);
+    setMeetingNotes(savedNotes);
+    setMeetingSpeakerCount(new Set(savedNotes.map(note => note.speakerLabel).filter(Boolean)).size);
+    setMeetingReport(readMeetingItem(meetingStorageKeys.report, 'lumi_meeting_report') || '');
+    setLegalMeetingCaseTitle(workDomain === 'personal' ? getLegalCaseLabel(getLegalConsultationCase()) : '');
+    lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
+    lastLegalMeetingArchiveRef.current = '';
+  }, [meetingPreferenceScopeKey]);
+  useEffect(() => {
     meetingModeRef.current = operationMode === 'meeting';
   }, [operationMode]);
   useEffect(() => {
@@ -2080,22 +2131,23 @@ export function DesktopUI({
   }, [meetingPaused]);
 
   const persistMeetingNotes = useCallback((notes: MeetingNote[]) => {
-    localStorage.setItem('lumi_meeting_notes', JSON.stringify(notes.slice(-300)));
-  }, []);
+    localStorage.setItem(meetingStorageKeys.notes, JSON.stringify(notes.slice(-300)));
+  }, [meetingStorageKeys.notes]);
 
   const resetMeetingCapture = useCallback((startedAt = Date.now()) => {
     setMeetingPaused(false);
     setMeetingNotes([]);
+    setMeetingSpeakerCount(0);
     setMeetingReport('');
     setMeetingStartedAt(startedAt);
-    localStorage.setItem('lumi_meeting_notes', '[]');
-    localStorage.removeItem('lumi_meeting_report');
-    localStorage.setItem('lumi_meeting_started_at', String(startedAt));
+    localStorage.setItem(meetingStorageKeys.notes, '[]');
+    localStorage.removeItem(meetingStorageKeys.report);
+    localStorage.setItem(meetingStorageKeys.startedAt, String(startedAt));
     lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
-  }, []);
+  }, [meetingStorageKeys]);
 
   const meetingSpeakerLabel = useCallback((note: Pick<MeetingNote, 'speakerLabel' | 'speakerMatched'>) => {
-    if (note.speakerMatched && note.speakerLabel) return note.speakerLabel;
+    if (note.speakerLabel) return note.speakerLabel;
     return lang === 'zh' ? '未知说话人' : 'Unknown speaker';
   }, [lang]);
 
@@ -2117,8 +2169,8 @@ export function DesktopUI({
     const now = Date.now();
     const speakerConfidence = typeof meta?.speakerConfidence === 'number' ? meta.speakerConfidence : undefined;
     const speakerMatched = meta?.speakerMatched === true && Boolean(meta.speakerLabel);
-    const speakerLabel = speakerMatched ? String(meta?.speakerLabel || '').trim() : null;
-    const speakerKey = speakerMatched ? speakerLabel || 'matched' : 'unknown';
+    const speakerLabel = String(meta?.speakerLabel || '').trim() || null;
+    const speakerKey = speakerLabel || (speakerMatched ? 'matched' : 'unknown');
     if (
       lastMeetingTranscriptRef.current.text === clean &&
       lastMeetingTranscriptRef.current.speakerKey === speakerKey &&
@@ -2126,10 +2178,10 @@ export function DesktopUI({
     ) return;
     lastMeetingTranscriptRef.current = { text: clean, at: now, speakerKey };
     setMeetingReport('');
-    localStorage.removeItem('lumi_meeting_report');
+    localStorage.removeItem(meetingStorageKeys.report);
     setMeetingStartedAt(prev => {
       if (prev) return prev;
-      localStorage.setItem('lumi_meeting_started_at', String(now));
+      localStorage.setItem(meetingStorageKeys.startedAt, String(now));
       return now;
     });
     setMeetingNotes(prev => {
@@ -2145,10 +2197,10 @@ export function DesktopUI({
       persistMeetingNotes(next);
       return next;
     });
-  }, [persistMeetingNotes]);
+  }, [meetingStorageKeys.report, meetingStorageKeys.startedAt, persistMeetingNotes]);
 
   const socket = useSocket();
-  const applyRefinedMeetingTranscript = useCallback((data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[] }) => {
+  const applyRefinedMeetingTranscript = useCallback((data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[]; speakerCount?: number }) => {
     const clean = String(data.text || '').trim();
     if (!clean) return null;
     const now = Date.now();
@@ -2166,9 +2218,8 @@ export function DesktopUI({
           text,
           time: startedAt + Math.max(0, Number(segment.beginMs || 0)),
           speakerLabel: speakerLabel || null,
-          speakerConfidence: speakerLabel ? 1 : undefined,
           speakerSource,
-          speakerMatched: Boolean(speakerLabel),
+          speakerMatched: false,
         };
       })
       .filter((note): note is MeetingNote => Boolean(note));
@@ -2179,12 +2230,16 @@ export function DesktopUI({
       speakerSource,
     }];
     setMeetingNotes(next);
+    const separatedSpeakerCount = Number(data.speakerCount) || new Set(
+      next.map(note => note.speakerLabel).filter(Boolean),
+    ).size;
+    setMeetingSpeakerCount(separatedSpeakerCount);
     persistMeetingNotes(next);
     setMeetingReport('');
-    localStorage.removeItem('lumi_meeting_report');
+    localStorage.removeItem(meetingStorageKeys.report);
     toast.success(lang === 'zh' ? '\u4f1a\u8bae\u5df2\u7528\u9ad8\u7cbe\u5ea6\u6a21\u578b\u91cd\u65b0\u8f6c\u5199' : 'Meeting transcript refined with the high-accuracy model');
     return next;
-  }, [lang, meetingStartedAt, persistMeetingNotes]);
+  }, [lang, meetingStartedAt, meetingStorageKeys.report, persistMeetingNotes]);
 
   const waitForMeetingRefinement = useCallback(() => new Promise<MeetingNote[] | null>((resolve) => {
     if (!socket?.connected) {
@@ -2196,6 +2251,7 @@ export function DesktopUI({
       socket.off('meeting:refined_transcript', onRefined);
       socket.off('meeting:refine_error', onError);
       socket.off('meeting:refine_status', onStatus);
+      window.removeEventListener('lumi:domain-changed', onDomainChanged);
       window.clearTimeout(timeout);
     };
     const finish = (value: MeetingNote[] | null) => {
@@ -2207,13 +2263,14 @@ export function DesktopUI({
     const onStatus = (data?: { message?: string }) => {
       toast.info(data?.message || (lang === 'zh' ? '\u6b63\u5728\u7528\u9ad8\u7cbe\u5ea6\u6a21\u578b\u91cd\u8f6c\u4f1a\u8bae\u5f55\u97f3...' : 'Refining the meeting recording with the high-accuracy model...'));
     };
-    const onRefined = (data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[] }) => {
+    const onRefined = (data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[]; speakerCount?: number }) => {
       finish(applyRefinedMeetingTranscript(data));
     };
     const onError = (data: { message?: string }) => {
       toast.error(data?.message || (lang === 'zh' ? '\u9ad8\u7cbe\u5ea6\u4f1a\u8bae\u8f6c\u5199\u5931\u8d25\uff0c\u4fdd\u7559\u5b9e\u65f6\u7b14\u8bb0' : 'High-accuracy meeting transcription failed; keeping realtime notes'));
       finish(null);
     };
+    const onDomainChanged = () => finish(null);
     const timeout = window.setTimeout(() => {
       toast.error(lang === 'zh' ? '\u9ad8\u7cbe\u5ea6\u4f1a\u8bae\u8f6c\u5199\u8d85\u65f6\uff0c\u4fdd\u7559\u5b9e\u65f6\u7b14\u8bb0' : 'High-accuracy meeting transcription timed out; keeping realtime notes');
       finish(null);
@@ -2221,6 +2278,7 @@ export function DesktopUI({
     socket.once('meeting:refined_transcript', onRefined);
     socket.once('meeting:refine_error', onError);
     socket.on('meeting:refine_status', onStatus);
+    window.addEventListener('lumi:domain-changed', onDomainChanged, { once: true });
   }), [applyRefinedMeetingTranscript, lang, socket]);
 
   useMusicPlayerRuntime();
@@ -2285,6 +2343,16 @@ export function DesktopUI({
     voiceprint.templatesLoaded,
   ]);
   const meetingStartAttemptRef = useRef(0);
+  const activeVoiceScopeRef = useRef(meetingPreferenceScopeKey);
+
+  useEffect(() => {
+    if (activeVoiceScopeRef.current === meetingPreferenceScopeKey) return;
+    activeVoiceScopeRef.current = meetingPreferenceScopeKey;
+    meetingVoiceActiveRef.current = false;
+    meetingStartAttemptRef.current = Date.now();
+    if (callState !== 'idle') endCall();
+    if (operationMode === 'meeting') setOperationMode('assistant');
+  }, [callState, endCall, meetingPreferenceScopeKey, operationMode, setOperationMode]);
 
   const startStandardVoiceCall = useCallback(() => {
     void startCall(selectedVoiceId, activePersonality, activePersonality, getVoiceScopeOptions());
@@ -2318,7 +2386,7 @@ export function DesktopUI({
     setMeetingStartedAt(prev => {
       if (prev) return prev;
       const now = Date.now();
-      localStorage.setItem('lumi_meeting_started_at', String(now));
+      localStorage.setItem(meetingStorageKeys.startedAt, String(now));
       return now;
     });
 
@@ -2329,7 +2397,7 @@ export function DesktopUI({
       meetingVoiceActiveRef.current = true;
       void startCall(selectedVoiceId, activePersonality, activePersonality, { ...getVoiceScopeOptions(), transcriptionOnly: true });
     }
-  }, [activePersonality, callState, endCall, getVoiceScopeOptions, meetingPaused, operationMode, selectedVoiceId, startCall]);
+  }, [activePersonality, callState, endCall, getVoiceScopeOptions, meetingPaused, meetingStorageKeys.startedAt, operationMode, selectedVoiceId, startCall]);
   // Spacebar push-to-talk: track whether this call was started by spacebar
   const isSpacebarRecording = useRef(false);
   const callStateRef = useRef(callState);
@@ -2579,7 +2647,7 @@ export function DesktopUI({
     if (notesForAnalysis.length === 0) {
       const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
-      localStorage.setItem('lumi_meeting_report', fallback);
+      localStorage.setItem(meetingStorageKeys.report, fallback);
       toast.info(lang === 'zh' ? '会议没有收录到转写，已生成空会议报告' : 'No transcript captured; generated an empty meeting report');
       return fallback;
     }
@@ -2624,7 +2692,7 @@ export function DesktopUI({
       if (!res.ok) throw new Error(data.error || 'Failed to analyze meeting');
       const report = String(data.report || '').trim() || buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(report);
-      localStorage.setItem('lumi_meeting_report', report);
+      localStorage.setItem(meetingStorageKeys.report, report);
       if (data.legalCaseArchived && workLegalScope && legalCaseId && notesForAnalysis.length > 0) {
         const lastNote = notesForAnalysis[notesForAnalysis.length - 1];
         const archiveKey = `${legalCaseId}:${meetingStartedAt || ''}:${lastNote?.id || notesForAnalysis.length}`;
@@ -2638,13 +2706,13 @@ export function DesktopUI({
     } catch (err: any) {
       const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
-      localStorage.setItem('lumi_meeting_report', fallback);
+      localStorage.setItem(meetingStorageKeys.report, fallback);
       toast.error(err?.message || (lang === 'zh' ? '会议分析失败，已生成基础报告' : 'Meeting analysis failed; generated a basic report'));
       return fallback;
     } finally {
       setMeetingReportGenerating(false);
     }
-  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt, orgConnection?.connected, orgConnection?.orgId, workDomain]);
+  }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt, meetingStorageKeys.report, orgConnection?.connected, orgConnection?.orgId, workDomain]);
 
   const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number, notesOverride?: MeetingNote[]) => {
     const notesForArchive = notesOverride || meetingNotes;
@@ -2716,15 +2784,21 @@ export function DesktopUI({
   }, [formatMeetingNoteForExport, formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain]);
 
   const endMeetingAndReport = useCallback(async () => {
+    const endingScope = meetingPreferenceScopeKey;
     const endedAt = Date.now();
     setMeetingReportGenerating(true);
     const refinementPromise = callState !== 'idle' ? waitForMeetingRefinement() : Promise.resolve(null);
     stopMeetingAudio({ refineTranscript: true });
     setMeetingNotesOpen(true);
     const refinedNotes = await refinementPromise;
+    if (activeVoiceScopeRef.current !== endingScope) {
+      setMeetingReportGenerating(false);
+      return;
+    }
     const report = await analyzeMeetingNotes(endedAt, refinedNotes || undefined);
+    if (activeVoiceScopeRef.current !== endingScope) return;
     await archiveLegalMeetingReport(report, endedAt, refinedNotes || undefined);
-  }, [analyzeMeetingNotes, archiveLegalMeetingReport, callState, stopMeetingAudio, waitForMeetingRefinement]);
+  }, [analyzeMeetingNotes, archiveLegalMeetingReport, callState, meetingPreferenceScopeKey, stopMeetingAudio, waitForMeetingRefinement]);
 
   const endVoiceCallFromUI = useCallback(() => {
     if (operationMode === 'meeting') {
@@ -2792,15 +2866,16 @@ export function DesktopUI({
   const clearMeetingNotes = useCallback(() => {
     const now = Date.now();
     setMeetingNotes([]);
+    setMeetingSpeakerCount(0);
     setMeetingReport('');
     setMeetingStartedAt(now);
-    localStorage.setItem('lumi_meeting_notes', '[]');
-    localStorage.removeItem('lumi_meeting_report');
-    localStorage.setItem('lumi_meeting_started_at', String(now));
+    localStorage.setItem(meetingStorageKeys.notes, '[]');
+    localStorage.removeItem(meetingStorageKeys.report);
+    localStorage.setItem(meetingStorageKeys.startedAt, String(now));
     lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
     lastLegalMeetingArchiveRef.current = '';
     toast.success(lang === 'zh' ? '会议笔记已清空' : 'Meeting notes cleared');
-  }, [lang]);
+  }, [lang, meetingStorageKeys]);
 
   const requestOperationModeChange = useCallback((nextMode: OperationMode) => {
     if (nextMode === operationMode) return;
@@ -3252,23 +3327,25 @@ export function DesktopUI({
     socket.on('agent:response', onResponse);
     socket.on('agent:error', onError);
     socket.on('agent:proactive', onProactive);
-    const onPreferencesChanged = (data: { key: string; value: any }) => {
+    const onPreferencesChanged = (data: { key: string; value: any; domain?: string; orgId?: string }) => {
       if (petPrefsSavingRef.current) return; // ignore our own changes
+      if (data.domain && data.domain !== workDomain) return;
+      if (data.domain === 'work' && data.orgId !== orgConnection?.orgId) return;
       if (data.key === 'pet' && data.value) {
         const { pet, accessories } = data.value;
         if (pet) {
           const resolved = resolvePetPreference(pet);
           if (resolved) {
             setSelectedPet(resolved);
-            localStorage.setItem('lumi_selected_pet', JSON.stringify(serializePetPreference(resolved)));
+            localStorage.setItem(petStorageKeys.pet, JSON.stringify(serializePetPreference(resolved)));
           }
         } else {
           setSelectedPet(null);
-          localStorage.removeItem('lumi_selected_pet');
+          localStorage.removeItem(petStorageKeys.pet);
         }
         if (accessories) {
           setEquippedAccessories(accessories);
-          localStorage.setItem('lumi_accessories', JSON.stringify(accessories));
+          localStorage.setItem(petStorageKeys.accessories, JSON.stringify(accessories));
         }
         toast.info(lang === 'zh' ? '桌面形象已从另一设备同步' : 'Desktop avatar synced from another device');
       }
@@ -3353,11 +3430,13 @@ export function DesktopUI({
       socket.off('token:usage_update', onTokenUsageUpdate);
       socket.off('token:quota_update', onTokenQuotaUpdate);
     };
-  }, [socket]);
+  }, [socket, workDomain, orgConnection?.orgId, petStorageKeys]);
 
   // Fetch pet preferences from server on mount (cross-device sync source of truth)
   useEffect(() => {
     const fetchPrefs = async () => {
+      setSelectedPet(null);
+      setEquippedAccessories([]);
       try {
         const res = await fetch('/api/preferences/pet', { credentials: 'include' });
         if (res.ok) {
@@ -3366,18 +3445,19 @@ export function DesktopUI({
             const resolved = resolvePetPreference(data.pet);
             if (resolved) {
               setSelectedPet(resolved);
-              localStorage.setItem('lumi_selected_pet', JSON.stringify(serializePetPreference(resolved)));
+              localStorage.setItem(petStorageKeys.pet, JSON.stringify(serializePetPreference(resolved)));
             }
+          } else {
+            localStorage.removeItem(petStorageKeys.pet);
           }
-          if (data.accessories?.length > 0) {
-            setEquippedAccessories(data.accessories);
-            localStorage.setItem('lumi_accessories', JSON.stringify(data.accessories));
-          }
+          const accessories = Array.isArray(data.accessories) ? data.accessories : [];
+          setEquippedAccessories(accessories);
+          localStorage.setItem(petStorageKeys.accessories, JSON.stringify(accessories));
         }
       } catch {}
     };
     fetchPrefs();
-  }, []);
+  }, [petStorageKeys]);
 
   useEffect(() => {
     const isInputFocused = () => {
@@ -3431,16 +3511,16 @@ export function DesktopUI({
     };
   }, [endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperMode, selectedVoiceId, startCall, toggleWallpaperMode]);
 
-  const [bootVisible, setBootVisible] = useState(true);
-
-  // Remove the old interval-based boot logic since HardcoreBootSequence handles it
-
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const handleSelectPet = (pet: PetConfig) => {
+    if (!canCustomizeLumiAppearance) {
+      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+      return;
+    }
     setSelectedPet(pet);
     savePetPrefsToServer(pet, equippedAccessories);
     toast.info(`${pet.name} ${t.avatarSetAsDesktop || 'set as desktop avatar'}`);
@@ -4418,13 +4498,6 @@ export function DesktopUI({
       {/* CRT Scanline / Noise Overlay */}
       <div className={`fixed inset-0 z-[1000] pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] select-none transition-opacity duration-500 ${isWallpaperMode ? 'opacity-0' : 'opacity-[0.03]'}`} />
       
-      {/* Hardcore Boot Screen Overlay */}
-      <AnimatePresence>
-        {bootVisible && (
-          <HardcoreBootSequence onComplete={() => setBootVisible(false)} t={t} />
-        )}
-      </AnimatePresence>
-
       {/* Immersive Environment Layer (Wallpaper OS Foundation) */}
       <div 
         className={`fixed inset-0 z-0 overflow-hidden transition-all duration-1000 ${
@@ -4921,6 +4994,10 @@ export function DesktopUI({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (!canCustomizeLumiAppearance) {
+                      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+                      return;
+                    }
                     setSelectedPet(null);
                     savePetPrefsToServer(null, equippedAccessories);
                     toast.info(lang === 'zh' ? '已切换回粒子人脸' : 'Switched back to particle face');
@@ -5222,7 +5299,7 @@ export function DesktopUI({
                 </div>
               </div>
 
-              <div className="mt-5 grid shrink-0 grid-cols-3 gap-2 text-center md:gap-3">
+              <div className="mt-5 grid shrink-0 grid-cols-2 gap-2 text-center md:grid-cols-4 md:gap-3">
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
                   <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '状态' : 'State'}</div>
                   <div className={`mt-1 text-xs font-bold ${meetingPaused ? 'text-amber-300' : 'text-cyan-300'}`}>
@@ -5232,6 +5309,10 @@ export function DesktopUI({
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
                   <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '条目' : 'Items'}</div>
                   <div className="mt-1 text-xs font-bold text-white/75">{meetingNotes.length}</div>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '说话人' : 'Speakers'}</div>
+                  <div className="mt-1 text-xs font-bold text-white/75">{meetingSpeakerCount || '-'}</div>
                 </div>
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
                   <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '时长' : 'Time'}</div>
@@ -5576,10 +5657,18 @@ export function DesktopUI({
                       onSelectPet={handleSelectPet}
                       equippedAccessories={equippedAccessories}
                       onChangeAccessories={(ids) => {
+                        if (!canCustomizeLumiAppearance) {
+                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+                          return;
+                        }
                         setEquippedAccessories(ids);
                         savePetPrefsToServer(selectedPet, ids);
                       }}
                       onResetToSphere={() => {
+                        if (!canCustomizeLumiAppearance) {
+                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+                          return;
+                        }
                         setSelectedPet(null);
                         savePetPrefsToServer(null, equippedAccessories);
                         toast.info(lang === 'zh' ? '已切换回原始圆球' : 'Switched back to the default sphere');

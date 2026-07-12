@@ -11,6 +11,7 @@ import { isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate'
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import { analyzeScreen } from '../../llm/adapter';
 import { getUserPreferredVisionConfig, type VisionProvider } from '../../llm/vision_preferences';
+import { captureWindowsUiSnapshot } from '../../external_control/windows_uia';
 
 function requireDesktopRelay(context?: ToolContext) {
   if (!context?.desktopRelay) {
@@ -122,6 +123,53 @@ function hasReadableUiEvidence(snapshotText: string): boolean {
   );
   const readableChars = withoutUiBoilerplate.match(/[\u4e00-\u9fffA-Za-z0-9]/gu) || [];
   return readableChars.length >= 12;
+}
+
+function normalizeEvidenceText(value: unknown): string {
+  return String(value || '').replace(/\s+/g, '').toLowerCase();
+}
+
+function snapshotContainsNewMessage(before: string, after: string, message: string): boolean {
+  const target = normalizeEvidenceText(message);
+  if (target.length < 1) return false;
+  const beforeText = normalizeEvidenceText(before);
+  const afterText = normalizeEvidenceText(after);
+  return !beforeText.includes(target) && afterText.includes(target);
+}
+
+async function captureDesktopUiEvidence(
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  maxNodes: number,
+): Promise<string> {
+  try {
+    const relayed = await desktopRelay('desktop_ui_snapshot', { maxDepth: 5, maxNodes });
+    if (String(relayed || '').trim()) return String(relayed);
+  } catch {
+    // Older desktop clients do not expose UIA through the relay. The local
+    // backend remains a compatible fallback for the on-device deployment.
+  }
+  return JSON.stringify(await captureWindowsUiSnapshot({ maxDepth: 5, maxNodes }), null, 2);
+}
+
+export function parseWeChatSendVisionVerification(value: unknown): {
+  sent: boolean;
+  confidence: number;
+  reason: string;
+} {
+  const raw = String(value || '').trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return { sent: false, confidence: 0, reason: raw.slice(0, 240) || 'No verification result.' };
+  try {
+    const parsed = JSON.parse(match[0]);
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence || 0)));
+    return {
+      sent: parsed.sent === true && confidence >= 0.65,
+      confidence,
+      reason: String(parsed.reason || '').trim().slice(0, 400),
+    };
+  } catch {
+    return { sent: false, confidence: 0, reason: raw.slice(0, 240) || 'Invalid verification result.' };
+  }
 }
 
 function firstFiniteNumber(...values: any[]): number | null {
@@ -805,6 +853,30 @@ type AutocadDrawOperation =
   | { kind: 'arc'; layer: string; cx: number; cy: number; r: number; start: number; end: number; label?: string }
   | { kind: 'text'; layer: string; x: number; y: number; text: string; height: number; label?: string };
 
+function validateCadDraftArgs(args: Record<string, any>): Record<string, any> {
+  const width = Number(args.width);
+  const height = Number(args.height);
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+    throw new Error('CAD width and height must be positive finite values. Extract geometry or confirm one calibration dimension before generating a drawing.');
+  }
+  const missingForPrecision = Array.isArray(args.missingForPrecision)
+    ? args.missingForPrecision.map(String).filter(Boolean)
+    : [];
+  const assumptions = Array.isArray(args.assumptions) ? args.assumptions.map(String).filter(Boolean) : [];
+  const inferredScale = args.inferredScale === true;
+  const precisionStatus = String(args.precisionStatus || '').trim()
+    || (inferredScale || missingForPrecision.length > 0 ? 'inferred_requires_review' : 'unspecified_requires_review');
+  return {
+    ...args,
+    width,
+    height,
+    inferredScale,
+    assumptions,
+    missingForPrecision,
+    precisionStatus,
+  };
+}
+
 function cadNumber(value: number): string {
   const fixed = Number(value).toFixed(3).replace(/\.?0+$/g, '');
   return fixed === '-0' ? '0' : fixed;
@@ -1074,6 +1146,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
   scriptPath: string;
   powershellPath: string;
   markerPath: string;
+  manifestPath: string;
 } {
   const outputPath = String(args.outputPath || '').trim();
   const outputDirectory = String(args.outputDirectory || '').trim();
@@ -1084,7 +1157,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
     ? (path.isAbsolute(outputPath) ? expandHomePath(outputPath) : path.resolve(directory, outputPath))
     : path.join(directory, `${title}_autocad_draw_${Date.now()}`);
   const basePath = rawBase.replace(/\.(lsp|scr|ps1|dxf)$/i, '');
-  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`, `${basePath}_completed.txt`]) {
+  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`, `${basePath}_completed.txt`, `${basePath}_manifest.json`]) {
     assertWritableCadPath(filePath);
   }
   fs.mkdirSync(path.dirname(basePath), { recursive: true });
@@ -1094,6 +1167,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
     scriptPath: `${basePath}.scr`,
     powershellPath: `${basePath}_run_autocad.ps1`,
     markerPath: `${basePath}_completed.txt`,
+    manifestPath: `${basePath}_manifest.json`,
   };
 }
 
@@ -1208,6 +1282,21 @@ function autocadRunnerPathForScript(scriptPath: string): string {
 
 function autocadMarkerPathForScript(scriptPath: string): string {
   return scriptPath.replace(/\.(scr|lsp)$/i, '') + '_completed.txt';
+}
+
+function autocadManifestPathForScript(scriptPath: string): string {
+  return scriptPath.replace(/\.(scr|lsp)$/i, '') + '_manifest.json';
+}
+
+function readAutocadManifest(scriptPath: string): Record<string, any> | null {
+  try {
+    const manifestPath = autocadManifestPathForScript(scriptPath);
+    if (!fs.existsSync(manifestPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function waitForFile(filePath: string, waitSeconds: number): Promise<boolean> {
@@ -1432,7 +1521,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       progress('\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u804a\u5929\u53ef\u89c1\u5185\u5bb9\u3002');
       let uiSnapshot = '';
       try {
-        uiSnapshot = await desktopRelay('desktop_ui_snapshot', { maxNodes: 120, includeBounds: true });
+        uiSnapshot = await captureDesktopUiEvidence(desktopRelay, 180);
       } catch (err: any) {
         uiSnapshot = `UI snapshot unavailable: ${err?.message || String(err)}`;
       }
@@ -1566,6 +1655,11 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         await sleep(180);
       }
 
+      let beforeUiSnapshot = '';
+      try {
+        beforeUiSnapshot = await captureDesktopUiEvidence(desktopRelay, 220);
+      } catch {}
+
       progress('\u6b63\u5728\u7c98\u8d34\u5e76\u53d1\u9001\u5fae\u4fe1\u6d88\u606f\u3002');
       await desktopRelay('desktop_clipboard_write', { text: message });
       await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
@@ -1579,8 +1673,58 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         throw new Error(`Message send shortcut was pressed, but WeChat is no longer foreground. Active window: ${JSON.stringify(finalActiveWindow).slice(0, 300)}`);
       }
 
+      progress('\u6b63\u5728\u786e\u8ba4\u6d88\u606f\u5df2\u51fa\u73b0\u5728\u5fae\u4fe1\u804a\u5929\u4e2d\u3002');
+      let afterUiSnapshot = '';
+      try {
+        afterUiSnapshot = await captureDesktopUiEvidence(desktopRelay, 240);
+      } catch {}
+      const uiVerified = snapshotContainsNewMessage(beforeUiSnapshot, afterUiSnapshot, message);
+
+      let visionVerification = { sent: false, confidence: 0, reason: '' };
+      const visionConfig = hasVisionProvider(context);
+      if (!uiVerified && visionConfig) {
+        try {
+          const screenCapture = await desktopRelay('desktop_capture_screen', { quality: 70 });
+          const getters = context?.llmGetters;
+          const verificationText = await analyzeScreen(
+            screenCapture,
+            [
+              'Verify a foreground WeChat send using only visible evidence.',
+              `Expected recipient/group: ${JSON.stringify(contact || '(current conversation)')}.`,
+              `Expected exact message: ${JSON.stringify(message)}.`,
+              'Set sent=true only if the exact message is visibly present as the newest outgoing chat bubble in the intended conversation and is no longer merely sitting in the input box.',
+              'Return only JSON: {"sent":boolean,"confidence":number,"reason":"short visible evidence"}.',
+            ].join('\n'),
+            visionConfig,
+            getters?.getDeepSeek,
+            getters?.getGemini,
+            getters?.getOpenAI,
+            getters?.getAnthropic,
+            getters?.getQwen,
+            getters?.getOllama,
+            getters?.getLmStudio,
+            getters?.getArk,
+            getters?.getXiaomi,
+            getters?.getKimi,
+            getters?.getGlm,
+            getters?.getRelay,
+          );
+          visionVerification = parseWeChatSendVisionVerification(verificationText);
+        } catch (err: any) {
+          visionVerification.reason = err?.message || String(err);
+        }
+      }
+      const sent = uiVerified || visionVerification.sent;
+
       return JSON.stringify({
-        sent: true,
+        sent,
+        sendAttempted: true,
+        verificationStatus: sent ? 'verified' : 'uncertain',
+        verificationMethod: uiVerified ? 'uia_new_message' : visionVerification.sent ? 'screen_vision' : 'none',
+        verificationConfidence: uiVerified ? 0.8 : visionVerification.confidence,
+        verificationReason: uiVerified
+          ? 'The exact message appeared as new accessible UI text after the send action.'
+          : visionVerification.reason || 'No outgoing message-bubble evidence was available.',
         contact: contact || null,
         usedContactSearch: useSearch,
         sendShortcut,
@@ -1589,7 +1733,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         openResult,
         activeWindow: finalActiveWindow,
         messagePreview: message.slice(0, 80),
-        note: 'Foreground WeChat send shortcut was pressed after focusing the input area. If the local WeChat is configured to send with Ctrl+Enter, call again with sendShortcut=ctrl+enter.',
+        note: sent
+          ? 'The foreground send action completed and the result was verified from visible WeChat evidence.'
+          : 'The send shortcut was pressed, but completion was not verified. Do not report the message as sent.',
       }, null, 2);
     },
     permission: 'user',
@@ -1609,6 +1755,12 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         cornerRadius: { type: 'number', description: 'Reserved for compatibility with cad_generate_dxf; visible script draws rectangular outlines.' },
         wallThickness: { type: 'number', description: 'Default wall thickness for wall segments when individual wall.thickness is omitted.' },
         precisionNote: { type: 'string', description: 'Short note about source accuracy, scale assumptions, or missing dimensions.' },
+        inferredScale: { type: 'boolean', description: 'True when scale or coordinates were inferred rather than confirmed from source dimensions.' },
+        confidence: { type: 'number', description: 'Optional geometry extraction confidence from 0 to 1.' },
+        assumptions: { type: 'array', description: 'Assumptions inherited from image/folder geometry extraction.', items: { type: 'string' } },
+        missingForPrecision: { type: 'array', description: 'Inputs still needed before the drawing can be treated as dimensionally precise.', items: { type: 'string' } },
+        precisionStatus: { type: 'string', description: 'Traceable precision state from geometry extraction.' },
+        sourcePath: { type: 'string', description: 'Optional source image/drawing path used for traceability.' },
         northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
         titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional directory to save the .lsp, .scr, and runner .ps1 files.' },
@@ -1670,22 +1822,43 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       required: ['width', 'height'],
     },
     handler: async (args, context) => {
-      const title = safeFileName(String(args.title || 'lumi_autocad_draw'));
-      const delay = Math.max(0, Math.min(Number(args.strokeDelayMs) || 250, 5000));
-      const paths = resolveAutocadScriptPaths(args, title);
-      const operations = collectAutocadDrawOperations(args);
+      const draftArgs = validateCadDraftArgs(args);
+      const title = safeFileName(String(draftArgs.title || 'lumi_autocad_draw'));
+      const delay = Math.max(0, Math.min(Number(draftArgs.strokeDelayMs) || 250, 5000));
+      const paths = resolveAutocadScriptPaths(draftArgs, title);
+      const operations = collectAutocadDrawOperations(draftArgs);
       if (!operations.length) throw new Error('No drawable AutoCAD operations were generated. Provide width/height plus walls, rooms, doors, windows, or labels.');
 
-      const lisp = buildAutocadLisp(args, operations, title, delay, paths.markerPath);
+      const lisp = buildAutocadLisp(draftArgs, operations, title, delay, paths.markerPath);
       const script = buildAutocadScript(paths.lispPath);
-      const runner = buildAutocadRunPowerShell(paths.scriptPath, args.autocadExecutable ? String(args.autocadExecutable) : undefined);
+      const runner = buildAutocadRunPowerShell(paths.scriptPath, draftArgs.autocadExecutable ? String(draftArgs.autocadExecutable) : undefined);
       fs.writeFileSync(paths.lispPath, lisp, 'utf-8');
       fs.writeFileSync(paths.scriptPath, script, 'utf-8');
       fs.writeFileSync(paths.powershellPath, runner, 'utf-8');
+      const manifest = {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        title,
+        sourcePath: draftArgs.sourcePath || '',
+        unit: draftArgs.unit || 'unit',
+        width: draftArgs.width,
+        height: draftArgs.height,
+        inferredScale: draftArgs.inferredScale,
+        confidence: Number.isFinite(Number(draftArgs.confidence)) ? Number(draftArgs.confidence) : null,
+        assumptions: draftArgs.assumptions,
+        missingForPrecision: draftArgs.missingForPrecision,
+        precisionStatus: draftArgs.precisionStatus,
+        strokeDelayMs: delay,
+        operationCount: operations.length,
+        lispPath: paths.lispPath,
+        scriptPath: paths.scriptPath,
+        completionMarkerPath: paths.markerPath,
+      };
+      fs.writeFileSync(paths.manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
       try { fs.rmSync(paths.markerPath, { force: true }); } catch {}
 
       let launchResult: string | undefined;
-      if (args.launchAutoCAD) {
+      if (draftArgs.launchAutoCAD) {
         const desktopRelay = requireDesktopRelay(context);
         launchResult = await desktopRelay('desktop_run_command', {
           command: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
@@ -1703,9 +1876,14 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
       return JSON.stringify({
         title,
-        unit: args.unit || 'unit',
-        width: Number(args.width) || 100,
-        height: Number(args.height) || 60,
+        unit: draftArgs.unit || 'unit',
+        width: draftArgs.width,
+        height: draftArgs.height,
+        inferredScale: draftArgs.inferredScale,
+        confidence: manifest.confidence,
+        assumptions: draftArgs.assumptions,
+        missingForPrecision: draftArgs.missingForPrecision,
+        precisionStatus: draftArgs.precisionStatus,
         strokeDelayMs: delay,
         operationCount: operations.length,
         typeCounts,
@@ -1714,8 +1892,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         scriptPath: paths.scriptPath,
         powershellRunnerPath: paths.powershellPath,
         completionMarkerPath: paths.markerPath,
+        manifestPath: paths.manifestPath,
         launchCommand: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
-        launchAutoCAD: Boolean(args.launchAutoCAD),
+        launchAutoCAD: Boolean(draftArgs.launchAutoCAD),
         launchResult,
         preview: operations.slice(0, 20).map((op, index) => ({ index: index + 1, ...op })),
         note: 'Generated AutoCAD visible drawing playback. In AutoCAD, run SCRIPT and choose the .scr file, or run the PowerShell runner if acad.exe is available. Lumi still needs confirmed dimensions and professional review before production drawings.',
@@ -1753,7 +1932,14 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         ? path.resolve(expandHomePath(String(args.completionMarkerPath)))
         : autocadMarkerPathForScript(scriptPath);
       const runnerPath = autocadRunnerPathForScript(scriptPath);
-      const waitSeconds = Math.max(0, Math.min(Number(args.waitSeconds) || 20, 300));
+      const manifest = readAutocadManifest(scriptPath);
+      const estimatedWaitSeconds = Math.max(20, Math.min(300, Math.ceil(
+        45 + Math.max(0, Number(manifest?.operationCount) || 0) * Math.max(0, Number(manifest?.strokeDelayMs) || 0) / 1000 * 1.25,
+      )));
+      const explicitWaitSeconds = Number(args.waitSeconds);
+      const waitSeconds = Number.isFinite(explicitWaitSeconds) && explicitWaitSeconds >= 0
+        ? Math.min(explicitWaitSeconds, 300)
+        : estimatedWaitSeconds;
       if (args.recordRunner !== false) {
         assertWritableCadPath(runnerPath);
         fs.writeFileSync(runnerPath, buildAutocadRunPowerShell(scriptPath, args.autocadExecutable ? String(args.autocadExecutable) : undefined), 'utf-8');
@@ -1794,11 +1980,15 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         lispPath: lispPath || undefined,
         completionMarkerPath: markerPath,
         completionMarkerExists: markerCompleted,
+        manifestPath: autocadManifestPathForScript(scriptPath),
+        manifestFound: Boolean(manifest),
+        manifest,
         powershellRunnerPath: runnerPath,
         launchCommand,
         launch: shouldLaunch,
         launchResult,
         waitSeconds,
+        estimatedWaitSeconds,
         autocadObserved,
         activeWindowRaw: activeWindowRaw || undefined,
         runningProcessesRaw: runningProcessesRaw || undefined,
@@ -1826,6 +2016,11 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         cornerRadius: { type: 'number', description: 'Optional rounded corner radius.' },
         wallThickness: { type: 'number', description: 'Default wall thickness for wall segments when individual wall.thickness is omitted.' },
         precisionNote: { type: 'string', description: 'Short note about source accuracy, scale assumptions, or missing dimensions.' },
+        inferredScale: { type: 'boolean', description: 'True when scale or coordinates were inferred rather than confirmed from source dimensions.' },
+        confidence: { type: 'number', description: 'Optional geometry extraction confidence from 0 to 1.' },
+        assumptions: { type: 'array', description: 'Assumptions inherited from image/folder geometry extraction.', items: { type: 'string' } },
+        missingForPrecision: { type: 'array', description: 'Inputs still needed before the drawing can be treated as dimensionally precise.', items: { type: 'string' } },
+        precisionStatus: { type: 'string', description: 'Traceable precision state from geometry extraction.' },
         northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
         titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional directory to save the DXF, e.g. C:\\Users\\name\\Desktop. Use when the user asks to put the file somewhere visible.' },
@@ -1886,17 +2081,18 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       required: ['width', 'height'],
     },
     handler: async (args, context) => {
-      const title = safeFileName(String(args.title || 'lumi_cad_draft'));
-      const outPath = resolveCadOutputPath(args, title);
-      fs.writeFileSync(outPath, buildDxf(args), 'utf-8');
-      const previewSvg = buildCadPreviewSvg(args, title);
+      const draftArgs = validateCadDraftArgs(args);
+      const title = safeFileName(String(draftArgs.title || 'lumi_cad_draft'));
+      const outPath = resolveCadOutputPath(draftArgs, title);
+      fs.writeFileSync(outPath, buildDxf(draftArgs), 'utf-8');
+      const previewSvg = buildCadPreviewSvg(draftArgs, title);
       const previewPath = getCadPreviewPath(outPath);
       fs.writeFileSync(previewPath, previewSvg, 'utf-8');
       const stat = fs.statSync(outPath);
       const previewStat = fs.statSync(previewPath);
 
       let openResult: string | undefined;
-      if (args.openPreview) {
+      if (draftArgs.openPreview) {
         const desktopRelay = requireDesktopRelay(context);
         openResult = await desktopRelay('desktop_open', { target: outPath });
       }
@@ -1906,10 +2102,15 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         previewPath,
         previewSvg,
         title,
-        unit: args.unit || 'unit',
-        width: Number(args.width) || 100,
-        height: Number(args.height) || 60,
-        sourcePath: args.sourcePath || undefined,
+        unit: draftArgs.unit || 'unit',
+        width: draftArgs.width,
+        height: draftArgs.height,
+        sourcePath: draftArgs.sourcePath || undefined,
+        inferredScale: draftArgs.inferredScale,
+        confidence: Number.isFinite(Number(draftArgs.confidence)) ? Number(draftArgs.confidence) : null,
+        assumptions: draftArgs.assumptions,
+        missingForPrecision: draftArgs.missingForPrecision,
+        precisionStatus: draftArgs.precisionStatus,
         outputDirectory: path.dirname(outPath),
         exists: fs.existsSync(outPath),
         size: stat.size,
@@ -1919,17 +2120,17 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           { type: 'dxf', path: outPath },
           { type: 'svg_preview', path: previewPath },
         ],
-        walls: Array.isArray(args.walls) ? args.walls.length : Array.isArray(args.lines) ? args.lines.length : 0,
-        rooms: Array.isArray(args.rooms) ? args.rooms.length : 0,
-        doors: Array.isArray(args.doors) ? args.doors.length : 0,
-        windows: Array.isArray(args.windows) ? args.windows.length : 0,
-        dimensions: Array.isArray(args.dimensions) ? args.dimensions.length : 0,
-        furniture: Array.isArray(args.furniture) ? args.furniture.length : 0,
-        columns: Array.isArray(args.columns) ? args.columns.length : 0,
-        polylines: Array.isArray(args.polylines) ? args.polylines.length : 0,
-        labels: Array.isArray(args.labels) ? args.labels.length : 0,
-        holes: Array.isArray(args.holes) ? args.holes.length : 0,
-        opened: Boolean(args.openPreview),
+        walls: Array.isArray(draftArgs.walls) ? draftArgs.walls.length : Array.isArray(draftArgs.lines) ? draftArgs.lines.length : 0,
+        rooms: Array.isArray(draftArgs.rooms) ? draftArgs.rooms.length : 0,
+        doors: Array.isArray(draftArgs.doors) ? draftArgs.doors.length : 0,
+        windows: Array.isArray(draftArgs.windows) ? draftArgs.windows.length : 0,
+        dimensions: Array.isArray(draftArgs.dimensions) ? draftArgs.dimensions.length : 0,
+        furniture: Array.isArray(draftArgs.furniture) ? draftArgs.furniture.length : 0,
+        columns: Array.isArray(draftArgs.columns) ? draftArgs.columns.length : 0,
+        polylines: Array.isArray(draftArgs.polylines) ? draftArgs.polylines.length : 0,
+        labels: Array.isArray(draftArgs.labels) ? draftArgs.labels.length : 0,
+        holes: Array.isArray(draftArgs.holes) ? draftArgs.holes.length : 0,
+        opened: Boolean(draftArgs.openPreview),
         openResult,
         note: 'Generated and verified a structured DXF drafting file. If source dimensions were inferred from an image, review scale, wall thickness, and tolerances before production use.',
       }, null, 2);

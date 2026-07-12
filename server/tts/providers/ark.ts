@@ -54,8 +54,9 @@ export async function synthesizeSpeech(
   if (pitch !== undefined) body.audio.pitch_ratio = pitch;
   if (volume !== undefined) body.audio.volume_ratio = volume;
 
-  const res = await withCloudResilience(
-    () => fetch(BASE_URL, {
+  const json = await withCloudResilience(
+    async () => {
+      const res = await fetch(BASE_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer;${token}`,
@@ -63,24 +64,24 @@ export async function synthesizeSpeech(
       },
       body: JSON.stringify(body),
       signal,
-    }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(`Doubao TTS error (${res.status}): ${err.message || err.code || 'Unknown'}`);
+      }
+      const payload = await res.json() as any;
+      if (payload.code !== 3000) {
+        throw new Error(`Doubao TTS error: ${payload.message || JSON.stringify(payload)}`);
+      }
+      if (!(payload.data || payload.audio?.data)) {
+        throw new Error(`Doubao TTS response missing audio data: ${JSON.stringify(payload)}`);
+      }
+      return payload;
+    },
     { provider: 'doubao-tts', maxRetries: 1 },
   );
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(`Doubao TTS error (${res.status}): ${err.message || err.code || 'Unknown'}`);
-  }
-
-  const json = await res.json() as any;
-  if (json.code !== 3000) {
-    throw new Error(`Doubao TTS error: ${json.message || JSON.stringify(json)}`);
-  }
-
   const audioData = json.data || json.audio?.data;
-  if (!audioData) {
-    throw new Error(`Doubao TTS response missing audio data: ${JSON.stringify(json)}`);
-  }
 
   return {
     audioBuffer: Buffer.from(audioData, 'base64'),

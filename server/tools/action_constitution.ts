@@ -68,6 +68,9 @@ export function evaluateActionConstitution(
 
   const sensitiveClientAction = getSensitiveClientAction(args);
   if (toolName === 'client_action' && sensitiveClientAction) {
+    if (isExplicitSensitiveClientActionRequest(args, context)) {
+      return allow('desktop_control', `Current user instruction explicitly requested ${sensitiveClientAction}`);
+    }
     return confirm('desktop_control', `Sensitive client action "${sensitiveClientAction}" requires user confirmation`);
   }
 
@@ -306,4 +309,26 @@ function getSensitiveClientAction(args: Record<string, any> = {}): string {
     return `${action}:${mode}`;
   }
   return '';
+}
+
+export function isExplicitSensitiveClientActionRequest(
+  args: Record<string, any> = {},
+  context?: Pick<ToolContext, 'actionIntent' | 'autonomous' | 'source'>,
+): boolean {
+  if (context?.autonomous === true) return false;
+  const intent = String(context?.actionIntent || '').trim();
+  if (!intent) return false;
+  const action = String(args.action || '').trim();
+  const mode = String(args.mode || '').trim();
+  if (action === 'set_wallpaper_mode') {
+    return /壁纸|桌面融合|桌面陪伴|wallpaper/i.test(intent);
+  }
+  const meetingAction = action === 'start_meeting_mode'
+    || action === 'end_meeting_mode'
+    || ((action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting');
+  if (!meetingAction) return false;
+  if (action === 'end_meeting_mode') {
+    return /结束|停止|关闭|完成|end|stop|finish/i.test(intent);
+  }
+  return /会议|开会|会谈|访谈|会议记录|录音|转写|meeting|transcrib|record/i.test(intent);
 }

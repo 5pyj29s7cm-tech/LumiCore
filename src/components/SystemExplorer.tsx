@@ -30,6 +30,7 @@ interface SystemSnapshot {
   id?: string;
   timestamp?: string;
   type?: 'first_boot' | 'daily_scan';
+  computerScope?: 'lumi_server_host';
   hardware?: {
     platform?: string;
     arch?: string;
@@ -63,6 +64,8 @@ interface SystemSnapshot {
     downloadsFiles?: number;
     totalUserFiles?: number;
     largeDirs?: { path: string; sizeMB: number }[];
+    fileCountScope?: 'desktop_documents_downloads';
+    fileCountMaxDepth?: number;
   };
   network?: {
     hostname?: string;
@@ -126,8 +129,17 @@ const COMMON_APP_MATCHERS = [
   { id: 'python', label: 'Python', patterns: [/python/i] },
   { id: 'wps', label: 'WPS / Office', patterns: [/wps/i, /microsoft office/i, /word/i, /powerpoint/i, /excel/i] },
   { id: 'wechat', label: 'WeChat', patterns: [/wechat/i, /weixin/i, /wechat work/i] },
-  { id: 'cad', label: 'CAD', patterns: [/autocad/i, /\bcad\b/i, /zwcad/i, /solidworks/i] },
-  { id: 'ai_apps', label: 'Local AI Apps', patterns: [/chatgpt/i, /claude/i, /cursor/i, /ollama/i, /lm studio/i, /anythingllm/i] },
+  { id: 'cad', label: 'CAD', patterns: [/autocad/i, /\bcad\b/i, /zwcad/i, /gstarcad/i, /浩辰/i, /中望/i, /天正/i, /solidworks/i, /revit/i, /rhino/i] },
+  {
+    id: 'ai_apps',
+    label: 'Local AI Apps',
+    patterns: [
+      /workbuddy/i, /codex/i, /chatgpt/i, /claude/i, /gemini/i, /deepseek/i,
+      /kimi/i, /豆包/i, /doubao/i, /通义/i, /千问/i, /qwen/i, /文心/i,
+      /ernie/i, /copilot/i, /cursor/i, /cherry studio/i, /ollama/i,
+      /lm studio/i, /anythingllm/i,
+    ],
+  },
   { id: 'netease', label: 'NetEase Music', patterns: [/netease/i, /cloud music/i, /music\.163/i] },
 ];
 
@@ -479,6 +491,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       `${ui(isZh, '状态', 'Status')}: ${report.status}`,
       `${ui(isZh, '分数', 'Score')}: ${report.readyCount}/${report.totalCount} ${ui(isZh, '就绪', 'ready')}`,
       `${ui(isZh, '主机', 'Host')}: ${latest?.hardware?.hostname || latest?.network?.hostname || ui(isZh, '未知', 'Unknown')}`,
+      `${ui(isZh, '采集范围', 'Computer scope')}: ${ui(isZh, 'Lumi 服务运行本机', 'Lumi server host')}`,
       `OS: ${latest?.software?.osVersion || latest?.hardware?.platform || ui(isZh, '未知', 'Unknown')}`,
       `CPU: ${latest?.hardware?.cpus?.model || ui(isZh, '未知', 'Unknown')}`,
       `${ui(isZh, '内存', 'Memory')}: ${latest?.hardware?.totalMemoryGB || ui(isZh, '未知', 'Unknown')} GB`,
@@ -518,7 +531,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             </h3>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/45">
-            {ui(isZh, 'Lumi 会检查这台电脑的运行环境、权限、常用应用、MCP 工具和工作区状态。这个页面不会索引全盘，也不会主动请求传感器权限。', "Lumi checks this computer's runtime, permissions, common apps, MCP tools, and workspace state. It does not index the full disk or request sensor access from this page.")}
+            {ui(isZh, '这里检查的是运行 Lumi 服务的本机，不是组织网页访问者的电脑。文件统计只覆盖桌面、文档和下载目录的有限深度，不会索引全盘，也不会主动请求传感器权限。', 'This report describes the machine running the Lumi service, not an organization web visitor\'s computer. File counts use bounded scans of Desktop, Documents, and Downloads; this page does not index the full disk or request sensor access.')}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -566,6 +579,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             [ui(isZh, '主机', 'Host'), latest?.hardware?.hostname || latest?.network?.hostname || ui(isZh, '未知', 'Unknown')],
             ['OS', latest?.software?.osVersion || `${latest?.hardware?.platform || ui(isZh, '未知', 'unknown')} ${latest?.hardware?.arch || ''}`],
             ['CPU', latest?.hardware?.cpus?.model || ui(isZh, '未知', 'Unknown')],
+            [ui(isZh, '核心 / 线程', 'Cores / threads'), latest?.hardware?.cpus ? `${latest.hardware.cpus.cores ?? '?'} / ${latest.hardware.cpus.threads ?? '?'}` : ui(isZh, '未知', 'Unknown')],
             [ui(isZh, '内存', 'Memory'), latest?.hardware?.totalMemoryGB ? `${latest.hardware.totalMemoryGB} GB` : ui(isZh, '未知', 'Unknown')],
           ]}
         />
@@ -577,6 +591,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             [ui(isZh, '桌面项目', 'Desktop items'), String(latest?.filesystem?.desktopFiles ?? ui(isZh, '未知', 'Unknown'))],
             [ui(isZh, '文档项目', 'Documents items'), String(latest?.filesystem?.documentsFiles ?? ui(isZh, '未知', 'Unknown'))],
             [ui(isZh, '下载项目', 'Downloads items'), String(latest?.filesystem?.downloadsFiles ?? ui(isZh, '未知', 'Unknown'))],
+            [ui(isZh, '已统计文件', 'Counted files'), String(latest?.filesystem?.totalUserFiles ?? ui(isZh, '未知', 'Unknown'))],
           ]}
         />
         <InfoPanel
@@ -646,8 +661,8 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             <div className="mt-2 text-xs leading-relaxed text-white/28">
               {ui(
                 isZh,
-                `来源：注册表 ${discovery.registryEntries || 0}，开始菜单 ${discovery.startMenuShortcuts || 0}，桌面 ${discovery.desktopShortcuts || 0}，常见目录 ${discovery.commonFolderEntries || 0}，PATH ${discovery.pathExecutables || 0}。扫描根目录 ${discovery.scannedRoots?.length || 0} 个${discovery.limitReached ? '，已达到上限' : ''}。`,
-                `Sources: registry ${discovery.registryEntries || 0}, Start Menu ${discovery.startMenuShortcuts || 0}, Desktop ${discovery.desktopShortcuts || 0}, common folders ${discovery.commonFolderEntries || 0}, PATH ${discovery.pathExecutables || 0}. Scanned ${discovery.scannedRoots?.length || 0} roots${discovery.limitReached ? ', limit reached' : ''}.`,
+                `来源：注册表 ${discovery.registryEntries || 0}，开始菜单 ${discovery.startMenuShortcuts || 0}，桌面快捷方式 ${discovery.desktopShortcuts || 0}，应用目录可执行文件 ${discovery.commonFolderEntries || 0}，PATH ${discovery.pathExecutables || 0}。扫描根目录 ${discovery.scannedRoots?.length || 0} 个${discovery.limitReached ? '，已达到上限' : ''}。`,
+                `Sources: registry ${discovery.registryEntries || 0}, Start Menu ${discovery.startMenuShortcuts || 0}, Desktop shortcuts ${discovery.desktopShortcuts || 0}, app-folder executables ${discovery.commonFolderEntries || 0}, PATH ${discovery.pathExecutables || 0}. Scanned ${discovery.scannedRoots?.length || 0} roots${discovery.limitReached ? ', limit reached' : ''}.`,
               )}
             </div>
           )}
@@ -777,7 +792,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             {latest.hardware.disks.map(disk => (
               <div key={disk.name} className="rounded-xl bg-black/18 p-3">
                 <div className="flex items-center justify-between text-xs text-white/52">
-                  <span className="font-bold">{disk.name}</span>
+                  <span className="font-bold">{disk.name}{disk.fsType ? ` · ${disk.fsType}` : ''}</span>
                   <span>{ui(isZh, `可用 ${disk.freeGB} GB / 共 ${disk.totalGB} GB`, `${disk.freeGB} GB free / ${disk.totalGB} GB`)}</span>
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">

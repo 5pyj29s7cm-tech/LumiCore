@@ -124,4 +124,43 @@ describe('desktop relay routing', () => {
     await expect(promise).resolves.toBe('typed');
     expect(getPendingDesktopRelayCount()).toBe(0);
   });
+
+  it('never routes a work-domain action to the same user personal desktop', async () => {
+    const userId = `relay_scope_${Date.now()}`;
+    const sent: any[] = [];
+    const personalSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ target: 'personal', event, payload }),
+    };
+    const orgSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ target: 'org-a', event, payload }),
+    };
+
+    deviceRegistry.register(userId, 'scope_personal_socket', {
+      name: 'Scoped Desktop', type: 'desktop', domain: 'personal', orgId: '', deviceFingerprint: 'scope-personal',
+    });
+    deviceRegistry.register(userId, 'scope_org_socket', {
+      name: 'Scoped Desktop', type: 'desktop', domain: 'work', orgId: 'org-a', deviceFingerprint: 'scope-org-a',
+    });
+
+    const { io } = mockIo({
+      scope_personal_socket: personalSocket,
+      scope_org_socket: orgSocket,
+    });
+    const relay = createDesktopRelay({
+      io,
+      userId,
+      domain: 'work',
+      orgId: 'org-a',
+      source: 'chat',
+      timeoutMs: 1000,
+    });
+
+    const promise = relay('desktop_active_window', {});
+    expect(sent).toHaveLength(1);
+    expect(sent[0].target).toBe('org-a');
+    expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'org-window' }, 'scope_org_socket')).toBe(true);
+    await expect(promise).resolves.toBe('org-window');
+  });
 });

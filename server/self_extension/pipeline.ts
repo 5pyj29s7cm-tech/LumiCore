@@ -6,6 +6,8 @@ import { listCapabilityLearningRecords } from './capability_memory';
 
 export interface SelfExtensionPlanOptions {
   userId?: string;
+  scopeDomain?: 'personal' | 'work';
+  orgId?: string;
   goal: string;
   domain?: string;
   clientState?: Record<string, any> | null;
@@ -126,6 +128,8 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
     }));
   const learnedCapabilities = listCapabilityLearningRecords({
     userId: options.userId || 'anonymous',
+    scopeDomain: options.scopeDomain === 'work' && options.orgId ? 'work' : 'personal',
+    orgId: options.scopeDomain === 'work' ? String(options.orgId || '') : '',
     domain,
     goal,
     limit: 8,

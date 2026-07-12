@@ -13,7 +13,10 @@ const SAMPLE_TEXTS: Record<string, string> = {
 };
 
 export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: any; direction?: 'up' | 'down'; refreshTrigger?: number }) {
-  const { selectedVoiceId, setSelectedVoiceId, favoriteVoices, toggleFavoriteVoice } = useApp();
+  const {
+    selectedVoiceId, setSelectedVoiceId, favoriteVoices, toggleFavoriteVoice,
+    workDomain, orgConnection,
+  } = useApp();
   const [voices, setVoices] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -25,12 +28,14 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
   const pickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    setVoices([]);
+    setOpen(false);
     setLoadingVoices(true);
     listVoices()
       .then(data => { setVoices([...data.cloned, ...data.premade]); })
       .catch(() => toast.error(t.failedToLoadVoices || 'Failed to load voices'))
       .finally(() => setLoadingVoices(false));
-  }, [refreshTrigger]);
+  }, [refreshTrigger, workDomain, orgConnection?.orgId]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

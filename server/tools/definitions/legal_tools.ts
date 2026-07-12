@@ -1,4 +1,4 @@
-import fs from 'fs';
+﻿import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -113,6 +113,25 @@ function sanitizeLegalWorkProductOutput(text: string): string {
 
 function textArg(args: Record<string, any>, key: string): string {
   return String(args[key] || '').trim();
+}
+
+function legalWorkspaceId(args: Record<string, any>, context?: any): string {
+  if (context) {
+    if (context.domain === 'work') {
+      const orgId = String(context.orgId || '').trim();
+      if (!orgId) throw new Error('Organization legal work requires an active organization context.');
+      return orgId;
+    }
+    const userId = String(context.userId || textArg(args, 'userId') || 'anonymous')
+      .trim()
+      .replace(/[^a-zA-Z0-9_.@-]+/g, '_');
+    return `personal:${userId || 'anonymous'}`;
+  }
+
+  const explicit = textArg(args, 'orgId');
+  if (explicit) return explicit;
+  const userId = textArg(args, 'userId').replace(/[^a-zA-Z0-9_.@-]+/g, '_');
+  return `personal:${userId || 'anonymous'}`;
 }
 
 function listArg(args: Record<string, any>, key: string): string[] {
@@ -815,7 +834,6 @@ function buildEvidenceReviewRows(args: Record<string, any>): EvidenceReviewRow[]
     };
   });
 }
-
 function formatEvidenceReviewRows(rows: EvidenceReviewRow[]): string {
   return rows.map(row =>
     `| ${row.index} | ${row.name} | ${row.fact} | ${row.proofPurpose} | ${row.authenticity} | ${row.legality} | ${row.relevance} | ${row.gap} |`,
@@ -1019,7 +1037,7 @@ function appendLegalWorkProductArchiveSection(
     localPath?: string;
   },
 ): string {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const preflightSection = buildLegalWorkProductPreflightSection(report, args, orgId);
   const archivedContent = `${report}\n\n${preflightSection}`;
@@ -1239,7 +1257,7 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
   const transcript = textArg(args, 'transcript') || textArg(args, 'meetingText') || textArg(args, 'notes');
   if (!transcript) return '请提供 transcript / meetingText / notes，用于生成法律会议纪要。';
 
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const persist = args.persistCase !== false;
@@ -1433,7 +1451,7 @@ async function reasoningMatrixHandler(args: Record<string, any>, context?: any):
     listArg(args, 'issues').length > 0;
   if (!hasInput) return '请提供 facts / evidence / legalAuthorities / issues / materials 中至少一项，用于生成法律分析三段论底稿。';
 
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const persist = args.persistCase !== false;
@@ -1501,7 +1519,7 @@ async function reasoningMatrixHandler(args: Record<string, any>, context?: any):
 }
 
 async function caseWorkspaceHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || textArg(args, 'title') || '未命名案件';
   const role = roleLabel(textArg(args, 'role'));
@@ -1647,7 +1665,7 @@ ${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
 }
 
 async function caseWorkflowStatusHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const caseName = textArg(args, 'caseName') || textArg(args, 'title') || textArg(args, 'query');
   const caseId = textArg(args, 'caseId');
   const role = roleLabel(textArg(args, 'role'));
@@ -1742,7 +1760,7 @@ ${formatStandardLegalCaseworkSequence()}
 }
 
 async function legalMessageIntakeToCaseHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const platform = normalizeLegalRemoteMessagePlatform(
     textArg(args, 'platform') || textArg(args, 'source') || context?.source || 'other',
@@ -2355,7 +2373,7 @@ async function searchCaseHandler(args: Record<string, any>, context?: any): Prom
   if (!query) return '请提供案由或事实描述（query参数）';
 
   // Search local KB
-  const orgId = args.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const localResults = await searchSimilarCases(orgId, query, limit);
 
   if (localResults.length > 0) {
@@ -2371,11 +2389,11 @@ async function searchCaseHandler(args: Record<string, any>, context?: any): Prom
 
 // ── legal_search_statute ────────────────────────────────────────────────
 
-async function searchStatuteHandler(args: Record<string, any>): Promise<string> {
+async function searchStatuteHandler(args: Record<string, any>, context?: any): Promise<string> {
   const query = args.query as string;
   if (!query) return '请提供法条名称或关键词（query参数）';
 
-  const orgId = args.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const results = await searchStatutes(orgId, query);
   const externalResults = await searchLegalAuthorityDatabase({
     query,
@@ -2489,7 +2507,7 @@ async function generateBidHandler(args: Record<string, any>, context?: any): Pro
     const skipped = bidInput.skipped.length ? `\n\n## 未读取材料\n${bidInput.skipped.map(item => `- ${item}`).join('\n')}` : '';
     return `请提供招标要求内容（requirements参数），或提供可读取的 filePath / filePaths / folderPath。${skipped}`;
   }
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || projectName;
 
@@ -2577,7 +2595,7 @@ ${caseLine}
 
 async function reviewContractHandler(args: Record<string, any>, context?: any): Promise<string> {
   const contractText = args.contract as string;
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || textArg(args, 'title') || '合同审查';
   if (!contractText) return '请提供合同文本（contract参数）';
@@ -2681,7 +2699,7 @@ function detectRiskClauses(text: string): string {
 async function draftContractHandler(args: Record<string, any>, context?: any): Promise<string> {
   const contractType = (args.type as string) || '';
   const details = (args.details as string) || '';
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || `${contractType || '合同'}起草`;
   const templates = await searchMOHURDTemplates(contractType);
@@ -2874,7 +2892,7 @@ async function equityPenetrationHandler(args: Record<string, any>, context?: any
 
 async function caseStrategyHandler(args: Record<string, any>, context?: any): Promise<string> {
   const facts = args.facts as string;
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const caseName = textArg(args, 'caseName') || '诉讼策略分析';
   const caseType = textArg(args, 'caseType') || '诉讼策略';
   if (!facts) return '请提供案件事实描述（facts参数）';
@@ -2962,7 +2980,7 @@ ${statuteRefs || '未找到直接相关法条'}
 async function generateLitigationPacketHandler(args: Record<string, any>, context?: any): Promise<string> {
   const role = roleLabel(textArg(args, 'role'));
   const caseName = textArg(args, 'caseName') || '未命名案件';
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const facts = textArg(args, 'facts');
   const evidence = textArg(args, 'evidence');
   const caseContext = buildCaseContext(args);
@@ -3119,9 +3137,9 @@ ${evidenceGapList}
 
 // ── legal_prepare_filing_handoff ────────────────────────────────────────
 
-async function prepareFilingHandoffHandler(args: Record<string, any>): Promise<string> {
-  const orgId = textArg(args, 'orgId') || 'default';
-  const userId = textArg(args, 'userId') || 'system';
+async function prepareFilingHandoffHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const orgId = legalWorkspaceId(args, context);
+  const userId = context?.userId || textArg(args, 'userId') || 'system';
   const caseId = textArg(args, 'caseId');
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const role = roleLabel(textArg(args, 'role'));
@@ -3654,7 +3672,7 @@ ${skippedLines}
 
   let kbLine = '';
   if (args.importToKb === true || args.confirmedForKb === true) {
-    const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+    const orgId = legalWorkspaceId(args, context);
     const userId = textArg(args, 'userId') || context?.userId || 'system';
     const article = createLegalArticle(orgId, userId, {
       title: `${caseName} 代理词工作底稿`,
@@ -3696,7 +3714,7 @@ ${skippedLines}
 // ── legal_import_materials_to_kb ────────────────────────────────────────
 
 async function importMaterialsToKbHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const filePath = textArg(args, 'filePath');
   const folderPath = textArg(args, 'folderPath');
@@ -3852,7 +3870,7 @@ async function processNoticeLinkHandler(args: Record<string, any>, context?: any
   const urlValue = textArg(args, 'url') || extractFirstUrl(rawInput);
   const caseName = textArg(args, 'caseName');
   const materialTitle = textArg(args, 'title') || (isDocumentLink ? '链接文书材料' : '短信/法院通知链接材料');
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const confirmedForKb = args.confirmedForKb === true || args.importToKb === true;
   const includeExtractedText = args.includeExtractedText !== false;
@@ -4132,7 +4150,7 @@ async function searchExternalAuthoritiesHandler(args: Record<string, any>, conte
   const query = textArg(args, 'query') || textArg(args, 'facts') || textArg(args, 'issue') || textArg(args, 'caseType');
   if (!query) return '请提供 query（检索词、争议焦点、案由或案件事实）。';
 
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || '外部法律数据库检索';
   const sourceIds = [
@@ -4240,7 +4258,7 @@ async function companyDatabaseLookupHandler(args: Record<string, any>, context?:
   const name = textArg(args, 'name') || textArg(args, 'companyName') || textArg(args, 'subjectName');
   if (!name) return '请提供 name 或 companyName（公司/被执行主体名称）。';
 
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || `${name} 主体信息查询`;
   const sourceIds = [
@@ -4347,7 +4365,7 @@ ${rows}
 // ── legal_external_research_plan ────────────────────────────────────────
 
 async function externalResearchPlanHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || '半自动外部检索行动单';
   const facts = textArg(args, 'facts');
@@ -4450,7 +4468,7 @@ async function readLegalTextForReport(args: Record<string, any>): Promise<{ text
 }
 
 async function generateCitationVerificationReportHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const input = await readLegalTextForReport({ ...args, orgId });
   const caseName = textArg(args, 'caseName') || input.title || '未命名案件';
@@ -4504,7 +4522,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
   const content = textArg(args, 'content') || textArg(args, 'packetText') || textArg(args, 'documentText');
   if (!content) return '请提供 content / packetText / documentText，用于生成正式交付包。';
 
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseId = textArg(args, 'caseId');
   const caseName = textArg(args, 'caseName') || markdownTitle(content, '未命名案件');
@@ -4839,7 +4857,7 @@ function pickExternalLegalSources(args: Record<string, any>): typeof EXTERNAL_LE
 }
 
 async function prepareExternalBrowserWorkspaceHandler(args: Record<string, any>, context?: any): Promise<string> {
-  const orgId = textArg(args, 'orgId') || context?.orgId || 'default';
+  const orgId = legalWorkspaceId(args, context);
   const caseName = textArg(args, 'caseName') || '外部检索';
   const caseType = textArg(args, 'caseType') || '民事纠纷';
   const issues = listArg(args, 'issues');
@@ -4928,10 +4946,10 @@ async function prepareExternalBrowserWorkspaceHandler(args: Record<string, any>,
 
 // ── legal_verify_citation ───────────────────────────────────────────────
 
-async function verifyCitationHandler(args: Record<string, any>): Promise<string> {
+async function verifyCitationHandler(args: Record<string, any>, context?: any): Promise<string> {
   const citation = args.citation as string;
   const text = args.text as string;
-  const orgId = (args.orgId as string) || undefined;
+  const orgId = legalWorkspaceId(args, context);
 
   if (text) {
     const checks = verifyMultipleCitations(text, orgId);
@@ -4951,10 +4969,10 @@ async function verifyCitationHandler(args: Record<string, any>): Promise<string>
 
 // ── legal_import_judgment ───────────────────────────────────────────────
 
-async function importJudgmentHandler(args: Record<string, any>): Promise<string> {
+async function importJudgmentHandler(args: Record<string, any>, context?: any): Promise<string> {
   const filePath = args.filePath as string;
-  const orgId = (args.orgId as string) || 'default';
-  const userId = (args.userId as string) || 'system';
+  const orgId = legalWorkspaceId(args, context);
+  const userId = context?.userId || (args.userId as string) || 'system';
   const content = args.content as string;
 
   if (!filePath && !content) return '请提供filePath（文件路径）或content（文书正文）。';

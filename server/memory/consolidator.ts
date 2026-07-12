@@ -175,6 +175,9 @@ export async function consolidateEpisodic(
         importance: Math.min(1, Math.max(0.3, Number(parsed.importance) || 0.5)),
         parentId: null,
         source: 'consolidation',
+        domain: ctx.domain || 'personal',
+        orgId: ctx.orgId || '',
+        privacyClass: ctx.domain === 'work' ? 'organization' : 'private',
       },
     );
 
@@ -273,6 +276,9 @@ export async function selfReflect(
         importance: Math.min(1, Math.max(0.5, Number(parsed.importance) || 0.7)),
         parentId: null,
         source: 'consolidation',
+        domain: ctx.domain || 'personal',
+        orgId: ctx.orgId || '',
+        privacyClass: ctx.domain === 'work' ? 'organization' : 'private',
       },
     );
 
@@ -382,6 +388,9 @@ export async function consolidateNarrative(
         importance: Math.min(0.9, Math.max(0.4, Number(parsed.importance) || 0.6)),
         parentId: null,
         source: 'consolidation',
+        domain: ctx.domain || 'personal',
+        orgId: ctx.orgId || '',
+        privacyClass: ctx.domain === 'work' ? 'organization' : 'private',
       },
     );
 

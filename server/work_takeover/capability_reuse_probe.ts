@@ -159,6 +159,8 @@ function auditCapability(
   const names = toolNames(tools);
   const plan = buildSelfExtensionPlan({
     userId,
+    scopeDomain: task.domain === 'work' && task.orgId ? 'work' : 'personal',
+    orgId: task.domain === 'work' ? task.orgId : '',
     goal: capabilityGoal(task, capability),
     domain: capabilityDomain(capability),
     tools,

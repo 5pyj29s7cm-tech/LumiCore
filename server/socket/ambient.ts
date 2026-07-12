@@ -16,6 +16,8 @@ export function getAmbientNoise(userId: string): number | null {
 }
 
 export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) => string, io: Server) {
+  const isWorkDomainSocket = () => Boolean(String(socket.data?.authenticatedOrgId || '').trim());
+
   async function triggerIdleProcessing(userId: string, ioInstance: any) {
     try {
       const db = readDB();
@@ -52,6 +54,7 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
   }
 
   socket.on("ambient:window_update", guard((data: { title: string; process_name: string; pid: number }) => {
+    if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (!uid) return;
     const prev = getLastEvent(uid, 'window_changed');
@@ -66,6 +69,7 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
   }));
 
   socket.on("ambient:idle_report", guard((data: { idle_ms: number; idle_seconds: number }) => {
+    if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (!uid) return;
     const isIdle = data.idle_seconds > 60;
@@ -102,12 +106,14 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
   }));
 
   socket.on("ambient:noise_level", guard((data: { rms: number; isSpeaking: boolean; callState: string; timestamp: string }) => {
+    if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (!uid) return;
     ambientNoise.set(uid, { rms: data.rms, lastUpdate: data.timestamp });
   }));
 
   socket.on("ambient:clipboard_report", guard((data: { text: string }) => {
+    if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (!uid) return;
     const result = detectClipboardChange(uid, data.text || '');
@@ -120,6 +126,7 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
   }));
 
   socket.on("disconnect", () => {
+    if (isWorkDomainSocket()) return;
     const uid = getUserId(socket);
     if (uid) {
       ambientNoise.delete(uid);

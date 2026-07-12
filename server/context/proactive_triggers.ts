@@ -55,7 +55,7 @@ function rememberProactiveSuggestion(suggestion: ProactiveSuggestion): void {
 
 function emitProactiveSuggestion(userId: string, io: SocketIOServer, suggestion: ProactiveSuggestion): void {
   rememberProactiveSuggestion(suggestion);
-  io.to(`user:${userId}`).emit('agent:proactive', suggestion);
+  io.to(`user:${userId}:personal`).emit('agent:proactive', suggestion);
 }
 
 export function getRecentProactiveSuggestion(userId: string, maxAgeMs = 5 * 60_000): ProactiveSuggestion | null {

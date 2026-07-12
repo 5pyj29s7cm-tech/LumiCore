@@ -2,6 +2,7 @@ import { Socket, Server } from "socket.io";
 import { deviceRegistry } from "../devices";
 import { registerUserSocket, unregisterUserSocket } from "../memory";
 import { joinDesktopRelayRoom } from "./desktop_relay";
+import { resolveSocketScope } from './scope';
 
 function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
   return (...args: any[]) => {
@@ -24,6 +25,7 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
     osInfo?: string;
   }) => {
     const uid = getUserId(socket);
+    const scope = resolveSocketScope(socket, uid);
     const fingerprint = (socket.handshake.auth as any)?.fingerprint || socket.id;
     deviceRegistry.register(uid, socket.id, {
       name: data.name,
@@ -32,9 +34,11 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
       osInfo: data.osInfo,
       ipAddress: socket.handshake.address,
       deviceFingerprint: fingerprint,
+      domain: scope.domain,
+      orgId: scope.orgId,
     });
     registerUserSocket(uid, socket.id);
-    joinDesktopRelayRoom(socket, uid, data.type);
+    joinDesktopRelayRoom(socket, uid, data.type, scope.domain, scope.orgId);
   }));
 
   socket.on("disconnect", socketGuard(() => {

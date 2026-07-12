@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { getCircuitStatus, resetCircuit } from '../server/cloud/circuit_breaker';
 
 let tempRoot = '';
 let previousDataDir: string | undefined;
@@ -20,6 +21,7 @@ async function loadModule() {
 
 describe('audio file transcription helper', () => {
   beforeEach(() => {
+    resetCircuit();
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_audio_test_'));
     previousDataDir = process.env.LUMI_DATA_DIR;
     process.env.LUMI_DATA_DIR = tempRoot;
@@ -31,6 +33,7 @@ describe('audio file transcription helper', () => {
   });
 
   afterEach(() => {
+    resetCircuit();
     if (previousDataDir === undefined) delete process.env.LUMI_DATA_DIR;
     else process.env.LUMI_DATA_DIR = previousDataDir;
     for (const key of clearedEnvKeys) {
@@ -182,6 +185,32 @@ describe('audio file transcription helper', () => {
     expect(result.taskId).toBe('task-1');
     expect(calls.map(call => call.method)).toEqual(['GET', 'POST', 'POST', 'GET', 'GET']);
     expect(progress.some(message => message.includes('DashScope'))).toBe(true);
+  });
+
+  it('marks streaming Qwen ASR unavailable after a shared account failure', async () => {
+    process.env.DASHSCOPE_API_KEY = 'dashscope-test-key';
+    const mod = await loadModule();
+    const fetchImpl = async () => new Response(JSON.stringify({
+      message: 'Access denied: overdue-payment',
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    await expect(mod.transcribeAudioFile(Buffer.from('fake-audio'), {
+      fileName: 'meeting.wav',
+      preferredProvider: 'qwen',
+      allowLocal: false,
+      fetchImpl: fetchImpl as typeof fetch,
+      providerAvailability: {
+        qwen: true,
+        whisper: false,
+        ark: false,
+        'local-whisper': false,
+      },
+    })).rejects.toMatchObject({ code: 'AUDIO_TRANSCRIPTION_FAILED' });
+
+    expect(getCircuitStatus()).toContainEqual(expect.objectContaining({ key: 'qwen-stt', state: 'open' }));
   });
 
 });

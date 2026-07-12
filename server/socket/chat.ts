@@ -2,7 +2,6 @@
  * agent:chat socket handler — the core conversational AI pipeline
  */
 import { Server, Socket } from "socket.io";
-import jwt from "jsonwebtoken";
 import os from "os";
 import path from "path";
 import { readDB, writeDB } from "../../db_layer";
@@ -66,7 +65,6 @@ import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, runNLChai
 import { autoInstallForTask } from "../agents/auto_installer";
 import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { searchKnowledgeBase } from "../org/kb";
-import { getMember } from "../org/db";
 import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflows";
 import { buildProfessionOverlay } from "../autonomy/professions";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
@@ -75,9 +73,7 @@ import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
 import { createDesktopRelay } from "./desktop_relay";
-import { getJwtSecret } from "../config/local_identity";
-
-const JWT_SECRET = getJwtSecret();
+import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 
 function stripHistoricalAttachmentBlocks(value: string): string {
   const text = String(value || '').trim();
@@ -802,32 +798,12 @@ export function registerChatHandler(
     // Work context comes from the authenticated socket token. Personal mode can be
     // explicitly requested by the desktop UI to avoid a stale org token leaking into
     // local personal conversations.
-    let resolvedDomain = 'personal';
-    let resolvedOrgId = '';
-    try {
-      const authToken = socket.handshake?.auth?.token;
-      let decoded: any = null;
-      if (authToken) {
-        decoded = jwt.verify(authToken, JWT_SECRET);
-        if (data.domain === 'personal') {
-          resolvedDomain = 'personal';
-          resolvedOrgId = '';
-        } else if (decoded.orgId) {
-          resolvedDomain = 'work';
-          resolvedOrgId = decoded.orgId;
-        }
-      }
-      if (resolvedDomain !== 'work' && data.domain === 'work') {
-        const requestedOrgId = typeof data.orgId === 'string' ? data.orgId.trim() : '';
-        if (requestedOrgId) {
-          const membership = getMember(requestedOrgId, uid);
-            if (membership?.status === 'active') {
-            resolvedDomain = 'work';
-            resolvedOrgId = requestedOrgId;
-          }
-        }
-      }
-    } catch {}
+    const requestScope = resolveSocketScope(socket, uid, {
+      domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
+      orgId: data.orgId,
+    });
+    const resolvedDomain = requestScope.domain;
+    const resolvedOrgId = requestScope.orgId;
     console.log('[ChatHandler] domain:', resolvedDomain, 'orgId:', resolvedOrgId);
 
     // Abort any previous chat session for this user
@@ -847,7 +823,11 @@ export function registerChatHandler(
       const isSanctuary = agentRecord?.territory === 'sanctuary';
 
       // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
-      const personalityConfig = personalityRegistry.get(personalityId);
+      const personalityConfig = personalityRegistry.getForUser(
+        personalityId,
+        uid,
+        resolvedDomain === 'work' ? resolvedOrgId : undefined,
+      );
       console.log('[ChatHandler] personalityConfig:', !!personalityConfig);
       const retrievalBiases = personalityConfig?.personalityVector
         ? vectorMemoryBias(personalityConfig.personalityVector)
@@ -896,7 +876,7 @@ export function registerChatHandler(
         }
       }
 
-      const emotionKey = agentMemoryFilter ? `${uid}_agent_${agentId}` : uid;
+      const emotionKey = scopedEmotionalStateKey(uid, requestScope, agentMemoryFilter ? agentId : undefined);
       const emotionalState = loadEmotionalState(emotionKey);
       const himState = loadHIMState(emotionKey);
       console.log('[ChatHandler] emotionalState loaded');
@@ -963,6 +943,8 @@ export function registerChatHandler(
           emotionalState,
           userId: uid,
           userText: text,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
         },
       );
       console.log('[ChatHandler] systemPrompt built, personality name:', personality?.name);
@@ -1042,14 +1024,14 @@ export function registerChatHandler(
 
       // Inject profession context — adapt language and expertise to user's trade
       try {
-        const professionOverlay = buildProfessionOverlay();
+        const professionOverlay = resolvedDomain === 'personal' ? buildProfessionOverlay() : null;
         if (professionOverlay) {
           effectiveSystemPrompt += professionOverlay;
         }
       } catch {}
 
       // Inject contact context when user mentions people they know
-      try {
+      if (resolvedDomain === 'personal') try {
         const { matchContactsFromText } = await import('../contacts/store');
         const { formatContactsForContext } = await import('../contacts/context');
         const mentioned = matchContactsFromText(uid, text);
@@ -1156,6 +1138,8 @@ export function registerChatHandler(
       const desktopRelay = createDesktopRelay({
         io,
         userId: uid,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
         source: 'chat',
         requestSocket: socket,
         emitToolLifecycle,
@@ -1333,7 +1317,7 @@ export function registerChatHandler(
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
       const exposeAgentWork = turnFlow.exposeAgentWork;
-      effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid);
+      effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
       console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
       socket.emit('agent:intent_trace', intentTrace);
       if (toolRoute) {
@@ -1394,7 +1378,7 @@ export function registerChatHandler(
         : 'gemini' as const;
 
       let activeProvider = userLLMPrefs.provider || 'deepseek';
-      let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-chat';
+      let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-v4-flash';
 
       // Hybrid dispatch is opt-in only; do not change providers unless the user chose auto.
       if (llmGetters.isOllamaAvailable() && userLLMPrefs.provider === 'auto') {
@@ -1417,9 +1401,10 @@ export function registerChatHandler(
       // ── Named Workflow Quick-Path: "run my X" / "跑XX流程" ──
       const runWorkflowMatch = text.match(/(?:run|执行|跑|运行)\s+(?:my\s+)?(.+?)(?:\s*(?:routine|workflow|流程|工作流))?\s*$/i);
       let workflowQuickResult: string | null = null;
-      if (runWorkflowMatch) {
+      if (runWorkflowMatch && executionDecision.allowToolUse) {
         const wfName = runWorkflowMatch[1].trim().toLowerCase();
-        const allWfs = listWorkflows(uid);
+        const workflowScope = { domain: resolvedDomain, orgId: resolvedOrgId };
+        const allWfs = listWorkflows(uid, undefined, workflowScope);
         const matched = allWfs.find(w => w.name.toLowerCase().includes(wfName));
         if (matched) {
           console.log('[ChatHandler] Workflow quick-path matched:', matched.name);
@@ -1432,10 +1417,15 @@ export function registerChatHandler(
                   userId: uid,
                   domain: resolvedDomain,
                   orgId: resolvedOrgId,
+                  desktopRelay,
+                  llmGetters,
                   source: eventSource || 'chat',
                   supervisedExternalCommits: true,
                   allowLocalFileWrites,
                   localWriteIntentReason,
+                  requestConfirmation: requestToolConfirmation,
+                  actionIntent: visibleUserText,
+                  ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
                 });
                 steps.push(`Step ${i + 1} (${step.tool}): ${(result || 'OK').slice(0, 200)}`);
               } catch (e: any) {
@@ -1446,7 +1436,7 @@ export function registerChatHandler(
               steps.push(`Step ${i + 1}: ${step.description} (no tool bound — use this as a guide)`);
             }
           }
-          recordWorkflowRun(uid, matched.name);
+          recordWorkflowRun(uid, matched.name, workflowScope);
           workflowQuickResult = `Ran workflow "${matched.name}" (${matched.steps.length} steps):\n${steps.join('\n')}`;
         }
       }
@@ -1470,7 +1460,7 @@ export function registerChatHandler(
           orgId: resolvedOrgId,
           surface: turnSurface,
         });
-        if (quickResult?.matched) {
+        if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
           let quickResponseText = quickResult.responseText;
           let quickToolResult = '';
@@ -1499,6 +1489,7 @@ export function registerChatHandler(
                 localWriteIntentReason,
                 requestConfirmation: requestToolConfirmation,
                 actionIntent: visibleUserText,
+                ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
               });
               quickToolResult = tcResult || '';
               if (shouldEmitQuickTool) {
@@ -1522,6 +1513,8 @@ export function registerChatHandler(
             }
             if (quickResult.formatToolResult) {
               quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
+            } else if (quickToolError) {
+              quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
             }
             quickToolRecords.push({
               id: toolCid,
@@ -1531,13 +1524,22 @@ export function registerChatHandler(
               error: quickToolError,
             });
           }
+          const quickFinalized = finalizeLumiResponse({
+            taskText: visibleUserText,
+            responseText: quickResponseText,
+            toolRecords: quickToolRecords,
+            source: 'chat',
+            flow: turnFlow,
+          });
+          quickResponseText = quickFinalized.text;
+          if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
           emitAgent("agent:response", { text: quickResponseText, agentName: personality.name });
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
             if (quickResult.toolCall) {
               addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: `[Tool: ${quickResult.toolCall.name}] Called`, domain: resolvedDomain, orgId: resolvedOrgId });
             }
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: quickToolRecords.length ? quickToolRecords : undefined });
             socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
           }
           persistChatLearning(quickResponseText, {
@@ -1625,7 +1627,7 @@ export function registerChatHandler(
       const complexCategories = ['command', 'code', 'question', 'analysis'];
       const isComplex = complexCategories.includes(cognition.intent.category);
       if (activeProvider === 'deepseek') {
-        activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-chat';
+        activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
       } else if (activeProvider === 'qwen') {
         activeModel = isComplex ? 'qwen-max' : 'qwen-plus';
       } else if (activeProvider === 'gemini') {
@@ -1665,6 +1667,7 @@ export function registerChatHandler(
             isCancelled: () => abortController.signal.aborted,
             requestConfirmation: requestToolConfirmation,
             actionIntent: visibleUserText,
+            ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
           });
           record.result = result || '';
           if (shouldEmitLifecycle) {
@@ -1970,9 +1973,17 @@ export function registerChatHandler(
           emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, result: formatToolResultForUi(toolRecord.result) });
           const contact = String(foregroundWeChatSendArgs.contact || '').trim();
           const message = String(foregroundWeChatSendArgs.message || foregroundWeChatSendArgs.draft || '').trim();
-          responseText = contact
-            ? `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u7ed9${contact}\uff1a${message}`
-            : `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u91cc\u53d1\u9001\uff1a${message}`;
+          let sendResult: any = {};
+          try { sendResult = JSON.parse(toolRecord.result || '{}'); } catch {}
+          if (sendResult.sent === true && sendResult.verificationStatus === 'verified') {
+            responseText = contact
+              ? `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u7ed9${contact}\uff1a${message}`
+              : `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u91cc\u53d1\u9001\uff1a${message}`;
+          } else {
+            responseText = contact
+              ? `\u6211\u5df2\u5728\u5fae\u4fe1\u91cc\u5b9a\u4f4d${contact}\u5e76\u6267\u884c\u53d1\u9001\uff0c\u4f46\u8fd8\u6ca1\u770b\u5230\u53ef\u786e\u8ba4\u7684\u6d88\u606f\u6c14\u6ce1\uff0c\u56e0\u6b64\u4e0d\u6807\u8bb0\u4e3a\u5df2\u53d1\u9001\u3002`
+              : '\u6211\u5df2\u5728\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u6267\u884c\u53d1\u9001\uff0c\u4f46\u8fd8\u6ca1\u770b\u5230\u53ef\u786e\u8ba4\u7684\u6d88\u606f\u6c14\u6ce1\uff0c\u56e0\u6b64\u4e0d\u6807\u8bb0\u4e3a\u5df2\u53d1\u9001\u3002';
+          }
           llmWasCalled = false;
         } catch (sendErr: any) {
           toolRecord.error = sendErr?.message || String(sendErr);
@@ -2303,7 +2314,16 @@ export function registerChatHandler(
       // Path B2: NL Task Chainer — for office workflows that chain tools (search→read→create etc.)
       if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(text)) {
         // Pre-flight: auto-install any matching uninstalled/outdated skills
-        await autoInstallForTask(text, { emit: (event, data) => socket.emit(event, data) });
+        await autoInstallForTask(
+          text,
+          { emit: (event, data) => socket.emit(event, data) },
+          {
+            ownerUid: uid,
+            userId: uid,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          },
+        );
 
         try {
           emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background' });
@@ -2707,7 +2727,7 @@ export function registerChatHandler(
       // Auto-learn from corrections: when user corrects Lumi, extract high-confidence memories
       const correctionPatterns = [/不是/, /不对/, /错了/, /wrong/i, /incorrect/i, /actually/i, /no,?\s/i, /你弄错了/, /不是这样的/];
       const isCorrection = correctionPatterns.some(p => p.test(text));
-      if (isCorrection && responseText) {
+      if (resolvedDomain === 'personal' && isCorrection && responseText) {
         try {
           const corrected = await extractMemories(
             { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches: [] },
@@ -2744,7 +2764,7 @@ export function registerChatHandler(
                 removeInterest: identityResult.removeInterest || undefined,
                 removeFromMotivation: identityResult.removeInterest || undefined,
                 newMotivation: identityResult.rewriteMotivation || undefined,
-              });
+              }, uid);
               if (removed) {
                 console.log(`[ChatHandler] Identity corrected in real-time: removed "${identityResult.removeInterest}"`);
               }
@@ -2757,9 +2777,9 @@ export function registerChatHandler(
 
       // Lightweight per-conversation evolution — micro-shifts after meaningful chats
       // Fires if enough owner_trait memories have accumulated, no 7-day wait needed
-      if (!isSanctuary && responseText && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId)) {
+      if (resolvedDomain === 'personal' && !isSanctuary && responseText && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
         try {
-          const evolutionConfig = personalityRegistry.getEvolutionConfig(personalityId);
+          const evolutionConfig = personalityRegistry.getEvolutionConfig(personalityId, uid);
           const step = await lightweightEvolve(
             personalityConfig,
             uid,
@@ -2771,7 +2791,7 @@ export function registerChatHandler(
             llmGetters.getQwen,
           );
           if (step) {
-            personalityRegistry.applyEvolution(personalityId, step);
+            personalityRegistry.applyEvolution(personalityId, step, { userId: uid });
             console.log(`[ChatHandler] Lightweight evolution: v${step.version}, ${step.mutations.length} mutation(s)`);
           }
         } catch (evErr: any) {
@@ -2803,7 +2823,14 @@ export function registerChatHandler(
           } as any, { parentId, location: locationTag, domain: resolvedDomain, orgId: resolvedOrgId, source: 'chat' });
         }
         for (const rem of extracted.reminders) {
-          addReminder({ userId: uid, content: rem.content, dueAt: rem.dueAt, sourceInteractionId: interactionId });
+          addReminder({
+            userId: uid,
+            content: rem.content,
+            dueAt: rem.dueAt,
+            sourceInteractionId: interactionId,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          });
         }
       }).catch(err => console.error('[Memory] Extraction failed:', err));
       }

@@ -21,16 +21,24 @@ import { detectSpatiotemporalPatterns } from './time/spatiotemporal';
 import { cleanupEphemeralAgents } from './agents/orchestrator';
 import { getRecentActivity } from './context/activity_stream';
 import { runDailyScan, isFirstBootComplete } from './autonomy/system_explorer';
-import { getTodayPlanSummary } from './autonomy/planner';
 import { getGateConfig } from './autonomy/safety_gate';
 import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
+
+export interface ScheduledDelivery {
+  userId: string;
+  message: string;
+  domain?: 'personal' | 'work';
+  orgId?: string;
+}
+
+type ScheduledTaskResult = string | ScheduledDelivery[] | null;
 
 interface ScheduledTask {
   id: string;
   cron: string;
   lastRun: string | null;
-  handler: () => Promise<string | null>;
+  handler: () => Promise<ScheduledTaskResult>;
   /** If true, result is stored internally but NOT broadcast as a proactive notification */
   quiet?: boolean;
   /** If false, task is paused and will not fire */
@@ -159,34 +167,63 @@ class Scheduler {
     }));
   }
 
-  /** Persist a proactive message as an interaction so it survives restarts */
-  private saveProactiveMessage(taskId: string, message: string, timestamp: string) {
+  /** Persist a proactive message under its explicit owner and data boundary. */
+  private saveProactiveMessage(taskId: string, delivery: ScheduledDelivery, timestamp: string) {
     try {
       const db = readDB();
-      // Find the first valid userId — proactive messages are typically for a single user
-      const userIds = new Set<string>();
-      for (const m of db.memories || []) { if (m.userId) userIds.add(m.userId); }
-      for (const i of db.interactions || []) { if (i.userId) userIds.add(i.userId); }
-      const userId = userIds.size > 0 ? [...userIds][0] : 'anonymous';
-
       if (!db.interactions) db.interactions = [];
       db.interactions.push({
         id: `proactive_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        userId,
+        userId: delivery.userId,
         agentId: 'lumi',
         conversationId: '',
         module: 'lumi',
-        message: `[${taskId}] ${message}`,
+        message: `[${taskId}] ${delivery.message}`,
         response: '',
         role: 'assistant',
         personality: 'lumi',
         mode: 'proactive',
         toolCalls: '',
+        domain: delivery.domain || 'personal',
+        orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
         timestamp,
       });
       writeDB(db);
     } catch (err: any) {
       console.warn(`[Scheduler] Failed to persist proactive message:`, err.message);
+    }
+  }
+
+  private deliverTaskResult(task: ScheduledTask, result: ScheduledTaskResult, timestamp: string): void {
+    if (!result) return;
+    if (!Array.isArray(result)) {
+      if (!task.quiet) {
+        console.warn(`[Scheduler] Dropped unscoped proactive result from "${task.id}". Return ScheduledDelivery[] instead.`);
+      }
+      return;
+    }
+
+    for (const delivery of result) {
+      if (!delivery?.userId || !delivery.message?.trim()) continue;
+      const normalized: ScheduledDelivery = {
+        userId: delivery.userId,
+        message: delivery.message.trim(),
+        domain: delivery.domain === 'work' && delivery.orgId ? 'work' : 'personal',
+        orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
+      };
+      this.saveProactiveMessage(task.id, normalized, timestamp);
+      if (!task.quiet && this.io) {
+        const room = normalized.domain === 'work' && normalized.orgId
+          ? `org:${normalized.orgId}`
+          : `user:${normalized.userId}:personal`;
+        this.io.to(room).emit('agent:proactive', {
+          taskId: task.id,
+          message: normalized.message,
+          domain: normalized.domain,
+          orgId: normalized.orgId,
+          timestamp,
+        });
+      }
     }
   }
 
@@ -201,18 +238,9 @@ class Scheduler {
       // Simple fixed interval — use setInterval (backward compat)
       const timer = setInterval(async () => {
         try {
-          const message = await task.handler();
+          const result = await task.handler();
           task.lastRun = new Date().toISOString();
-          if (message && this.io) {
-            this.saveProactiveMessage(task.id, message, task.lastRun);
-            if (!task.quiet) {
-              this.io.emit('agent:proactive', {
-                taskId: task.id,
-                message,
-                timestamp: task.lastRun,
-              });
-            }
-          }
+          this.deliverTaskResult(task, result, task.lastRun);
         } catch (err: any) {
           console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
         }
@@ -223,18 +251,9 @@ class Scheduler {
       // Real cron expression — use recursive setTimeout to hit exact times
       const runAndReschedule = async () => {
         try {
-          const message = await task.handler();
+          const result = await task.handler();
           task.lastRun = new Date().toISOString();
-          if (message && this.io) {
-            this.saveProactiveMessage(task.id, message, task.lastRun);
-            if (!task.quiet) {
-              this.io.emit('agent:proactive', {
-                taskId: task.id,
-                message,
-                timestamp: task.lastRun,
-              });
-            }
-          }
+          this.deliverTaskResult(task, result, task.lastRun);
         } catch (err: any) {
           console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
         }
@@ -370,6 +389,13 @@ export function registerScheduledTasks(
     return [...ids];
   }
 
+  function getSystemAdminUserIds(): string[] {
+    const db = readDB();
+    return (db.users || [])
+      .filter((user: any) => user?.uid && user.role === 'admin')
+      .map((user: any) => user.uid);
+  }
+
   // Reminder check-in (every 5 min) — checks all users' reminders
   scheduler.register({
     id: 'reminder_check',
@@ -378,9 +404,21 @@ export function registerScheduledTasks(
     handler: async () => {
       const due = getDueReminders();
       if (due.length > 0) {
-        const messages = due.map(r => r.content);
+        const grouped = new Map<string, ScheduledDelivery>();
+        for (const reminder of due) {
+          const domain = reminder.domain === 'work' && reminder.orgId ? 'work' : 'personal';
+          const key = `${reminder.userId}:${domain}:${reminder.orgId || ''}`;
+          const existing = grouped.get(key);
+          if (existing) existing.message += ` | ${reminder.content}`;
+          else grouped.set(key, {
+            userId: reminder.userId,
+            message: `Reminder: ${reminder.content}`,
+            domain,
+            orgId: domain === 'work' ? reminder.orgId : '',
+          });
+        }
         for (const r of due) fireReminder(r.id);
-        return `Reminder: ${messages.join(' | ')}`;
+        return [...grouped.values()];
       }
       return null;
     },
@@ -395,12 +433,7 @@ export function registerScheduledTasks(
     handler: async () => {
       const userIds = getAllUserIds();
       for (const userId of userIds) {
-        dynamicDecayMemories(userId);
-      }
-      const lowConf = queryMemories({ minConfidence: 0, limit: 5 });
-      const decayed = lowConf.filter(m => m.confidence < 0.25 && m.confidence > 0.1);
-      if (decayed.length > 0) {
-        return `Some memories are fading. Would you like me to refresh what I know about you?`;
+        dynamicDecayMemories(userId, 'personal', '');
       }
       return null;
     },
@@ -418,9 +451,9 @@ export function registerScheduledTasks(
       let totalPromoted = 0;
       for (const userId of userIds) {
         const emotionalState = loadEmotionalState(userId);
-        totalPromoted += promoteMemories(userId, emotionalState.intimacy);
+        totalPromoted += promoteMemories(userId, emotionalState.intimacy, 'personal', '');
         // Auto-mark newly crystallized memories as cross-agent shareable
-        autoMarkCrossAgentShare(userId);
+        autoMarkCrossAgentShare(userId, 'personal', '');
       }
       if (totalPromoted > 0) {
         return `${totalPromoted} memories have crystallized into deeper knowledge.`;
@@ -439,9 +472,13 @@ export function registerScheduledTasks(
       const userIds = getAllUserIds();
       const messages: string[] = [];
       for (const userId of userIds) {
-        const episodic = getUnconsolidatedEpisodic(userId);
+        const episodic = getUnconsolidatedEpisodic(userId, 'personal', '');
         if (episodic.length < 10) continue;
-        const ctx: ConsolidationContext = getUserPreferredLLMConfig(userId);
+        const ctx: ConsolidationContext = {
+          ...getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '' }),
+          domain: 'personal',
+          orgId: '',
+        };
         const consolidated = await consolidateEpisodic(
           ctx, 10,
           getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
@@ -467,7 +504,11 @@ export function registerScheduledTasks(
 
       for (const userId of userIds) {
         try {
-          const ctx: ConsolidationContext = getUserPreferredLLMConfig(userId);
+          const ctx: ConsolidationContext = {
+            ...getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '' }),
+            domain: 'personal',
+            orgId: '',
+          };
           const result = await consolidateNarrative(
             ctx, 7, 6,
             getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
@@ -504,7 +545,11 @@ export function registerScheduledTasks(
 
       for (const userId of userIds) {
         try {
-          const ctx: ConsolidationContext = getUserPreferredLLMConfig(userId, { maxTokens: 900 });
+          const ctx: ConsolidationContext = {
+            ...getUserPreferredLLMConfig(userId, { maxTokens: 900, domain: 'personal', orgId: '' }),
+            domain: 'personal',
+            orgId: '',
+          };
           const report = await runDreamCycle(
             ctx,
             {
@@ -512,13 +557,15 @@ export function registerScheduledTasks(
               cooldownHours: 6,
               windowHours: 48,
               minRecentMemories: 3,
+              domain: 'personal',
+              orgId: '',
             },
             getters,
           );
           if (report.status === 'dreamed') {
             messages.push(`[${userId}] ${report.dreamTitle || '梦境整理'}: ${String(report.dreamSummary || '').slice(0, 120)}`);
             if (scheduler.io) {
-              scheduler.io.to(`user:${userId}`).emit('lumi:sleep_cycle', report);
+              scheduler.io.to(`user:${userId}:personal`).emit('lumi:sleep_cycle', report);
             }
           }
         } catch (err: any) {
@@ -537,14 +584,14 @@ export function registerScheduledTasks(
     lastRun: null,
     handler: async () => {
       const userIds = getAllUserIds();
-      const messages: string[] = [];
+      const messages: ScheduledDelivery[] = [];
 
       for (const userId of userIds) {
         try {
           const greeting = getTimeGreeting();
           const weather = await getWeatherBrief();
-          const pending = getDueReminders();
-          const recentMemories = queryMemories({ userId, limit: 3, minConfidence: 0.4 });
+          const pending = getDueReminders({ userId, domain: 'personal', orgId: '' });
+          const recentMemories = queryMemories({ userId, limit: 3, minConfidence: 0.4, domain: 'personal', orgId: '' });
 
           const contextParts: string[] = [];
           if (weather) contextParts.push(`天气: ${weather}`);
@@ -570,25 +617,25 @@ Output ONLY the greeting — no preamble, no labels.`;
             );
             const llmGreeting = result.text?.trim();
             if (llmGreeting && llmGreeting.length > 3) {
-              messages.push(`[${userId}] ${llmGreeting}`);
+              messages.push({ userId, message: llmGreeting, domain: 'personal' });
             } else {
               // Fallback to template
               const parts: string[] = [`${greeting}!`];
               if (weather) parts.push(weather);
               if (pending.length > 0) parts.push(`${pending.length} 条待办`);
-              messages.push(`[${userId}] ${parts.join(' - ')}`);
+              messages.push({ userId, message: parts.join(' - '), domain: 'personal' });
             }
           } catch {
             const parts: string[] = [`${greeting}!`];
             if (weather) parts.push(weather);
-            messages.push(`[${userId}] ${parts.join(' - ')}`);
+            messages.push({ userId, message: parts.join(' - '), domain: 'personal' });
           }
         } catch (err: any) {
           console.warn(`[DailySummary] Failed for ${userId}:`, err.message);
         }
       }
 
-      return messages.length > 0 ? messages.join('\n') : null;
+      return messages.length > 0 ? messages : null;
     },
   });
 
@@ -599,12 +646,12 @@ Output ONLY the greeting — no preamble, no labels.`;
     lastRun: null,
     handler: async () => {
       const userIds = getAllUserIds();
-      const messages: string[] = [];
+      const messages: ScheduledDelivery[] = [];
 
       for (const userId of userIds) {
         try {
-          const pending = getDueReminders();
-          const recentMemories = queryMemories({ userId, limit: 3, minConfidence: 0.4 });
+          const pending = getDueReminders({ userId, domain: 'personal', orgId: '' });
+          const recentMemories = queryMemories({ userId, limit: 3, minConfidence: 0.4, domain: 'personal', orgId: '' });
 
           const contextParts: string[] = [];
           if (pending.length > 0) contextParts.push(`${pending.length} 条待办仍然未完成`);
@@ -631,18 +678,18 @@ Output ONLY the reflection — no preamble, no labels.`;
             );
             const llmReflection = result.text?.trim();
             if (llmReflection && llmReflection.length > 3) {
-              messages.push(`[${userId}] ${llmReflection}`);
+              messages.push({ userId, message: llmReflection, domain: 'personal' });
             }
           } catch {
             // Simple fallback
-            messages.push(`[${userId}] 晚间回顾 — ${contextParts.join(' - ')}`);
+            messages.push({ userId, message: `晚间回顾 — ${contextParts.join(' - ')}`, domain: 'personal' });
           }
         } catch (err: any) {
           console.warn(`[EveningWrapup] Failed for ${userId}:`, err.message);
         }
       }
 
-      return messages.length > 0 ? messages.join('\n') : null;
+      return messages.length > 0 ? messages : null;
     },
   });
 
@@ -656,7 +703,7 @@ Output ONLY the reflection — no preamble, no labels.`;
       const userIds = getAllUserIds();
       let totalCount = 0;
       for (const userId of userIds) {
-        totalCount += runBehavioralAnalysis(userId);
+        totalCount += runBehavioralAnalysis(userId, 'personal', '');
       }
       if (totalCount > 0) {
         return `I've discovered ${totalCount} new behavioral patterns from your interactions. Check Memory Explorer to review.`;
@@ -681,11 +728,20 @@ Output ONLY the reflection — no preamble, no labels.`;
           const db = readDB();
           const allMemories: any[] = db.memories || [];
           const orphans = allMemories.filter(
-            (m: any) => m.userId === userId && m.nodeType !== 'branch' && !m.parentId,
+            (m: any) =>
+              m.userId === userId &&
+              (m.domain || 'personal') === 'personal' &&
+              (m.orgId || '') === '' &&
+              m.nodeType !== 'branch' &&
+              !m.parentId,
           );
           if (orphans.length < 3) continue;
 
-          const tree = buildTree(allMemories.filter((m: any) => m.userId === userId));
+          const tree = buildTree(allMemories.filter((m: any) =>
+            m.userId === userId &&
+            (m.domain || 'personal') === 'personal' &&
+            (m.orgId || '') === ''
+          ));
           const treeSummary = tree.map(
             t => `- ${t.node.content} [${t.node.nodeType}] (${t.children.length} children)`,
           ).join('\n');
@@ -715,7 +771,7 @@ Rules:
           const llmResult = await makeLLMCall(
             [{ role: 'user', content: prompt }],
             [],
-            getUserPreferredLLMConfig(userId),
+            getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '' }),
             getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
@@ -731,10 +787,10 @@ Rules:
 
           for (const branch of plan.branches) {
             if (!branch.title || !Array.isArray(branch.memoryIds)) continue;
-            const branchNode = ensureBranch(userId, branch.title, '', null);
+            const branchNode = ensureBranch(userId, branch.title, '', null, { domain: 'personal', orgId: '' });
             totalBranches++;
             for (const memId of branch.memoryIds) {
-              const ok = moveNode(memId, branchNode.id);
+              const ok = moveNode(memId, branchNode.id, { userId, domain: 'personal', orgId: '' });
               if (ok) totalAssigned++;
             }
           }
@@ -770,9 +826,9 @@ Rules:
       const messages: string[] = [];
       for (const userId of userIds) {
         try {
-          const config = personalityRegistry.get('lumi');
+          const config = personalityRegistry.getForUser('lumi', userId);
           if (!config) continue;
-          if (personalityRegistry.isEvolutionFrozen('lumi')) continue;
+          if (personalityRegistry.isEvolutionFrozen('lumi', userId)) continue;
 
           // Gate: only evolve if enough new owner_trait memories since last evolution
           const db = readDB();
@@ -780,6 +836,8 @@ Rules:
           const newMemoriesSince = lastEvolvedAt
             ? (db.memories || []).filter((m: any) =>
                 m.userId === userId &&
+                (m.domain || 'personal') === 'personal' &&
+                (m.orgId || '') === '' &&
                 m.perspective === 'owner_trait' &&
                 m.createdAt > lastEvolvedAt
               ).length
@@ -789,7 +847,7 @@ Rules:
             continue; // Not enough new data for a meaningful full evolution
           }
 
-          const evolutionConfig = personalityRegistry.getEvolutionConfig('lumi');
+          const evolutionConfig = personalityRegistry.getEvolutionConfig('lumi', userId);
           const emotionalState = loadEmotionalState(userId);
 
           const step = await evolvePersonality(
@@ -805,7 +863,7 @@ Rules:
           );
 
           if (step) {
-            personalityRegistry.applyEvolution('lumi', step);
+            personalityRegistry.applyEvolution('lumi', step, { userId });
             messages.push(
               `I've grown closer to understanding you. ${step.narrative}`
             );
@@ -830,18 +888,18 @@ Rules:
       const messages: string[] = [];
       for (const userId of userIds) {
         try {
-          const config = personalityRegistry.get('lumi');
+          const config = personalityRegistry.getForUser('lumi', userId);
           if (!config) continue;
           const db = readDB();
           const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
           const weekMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && m.createdAt >= weekAgo,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= weekAgo,
           );
           const weekInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && i.timestamp >= weekAgo,
+            i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= weekAgo,
           );
-          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi');
+          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
           const weekEvolutions = evolutionHistory.filter((e: any) => e.timestamp >= weekAgo);
 
           const prompt = generateReviewPrompt({
@@ -853,15 +911,15 @@ Rules:
             newInteractionCount: weekInteractions.length,
             topMemoryTopics: [...new Set<string>(weekMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 10),
             connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && m.type === 'preference').length,
-            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && c.status === 'active').length,
+            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'fact').length,
+            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'preference').length,
+            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
           });
 
           const result = await makeLLMCall(
             [{ role: 'user', content: prompt }],
             [],
-            getUserPreferredLLMConfig(userId, { maxTokens: 400 }),
+            getUserPreferredLLMConfig(userId, { maxTokens: 400, domain: 'personal', orgId: '' }),
             getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
@@ -875,7 +933,7 @@ Rules:
               keywords: ['weekly_review', `week_${new Date().toISOString().slice(0, 10)}`],
               confidence: 1.0,
               sourceInteractionId: 'weekly_review_scheduler',
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.95 });
+            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.95, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
             console.log(`[WeeklyReview] Generated for ${userId}: ${narrative.slice(0, 100)}`);
             messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
           }
@@ -898,18 +956,18 @@ Rules:
       const messages: string[] = [];
       for (const userId of userIds) {
         try {
-          const config = personalityRegistry.get('lumi');
+          const config = personalityRegistry.getForUser('lumi', userId);
           if (!config) continue;
           const db = readDB();
           const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
 
           const monthMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && m.createdAt >= monthAgo,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= monthAgo,
           );
           const monthInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && i.timestamp >= monthAgo,
+            i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= monthAgo,
           );
-          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi');
+          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
           const monthEvolutions = evolutionHistory.filter((e: any) => e.timestamp >= monthAgo);
 
           const prompt = generateReviewPrompt({
@@ -921,15 +979,15 @@ Rules:
             newInteractionCount: monthInteractions.length,
             topMemoryTopics: [...new Set<string>(monthMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 15),
             connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && m.type === 'preference').length,
-            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && c.status === 'active').length,
+            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'fact').length,
+            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'preference').length,
+            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
           });
 
           const result = await makeLLMCall(
             [{ role: 'user', content: prompt }],
             [],
-            getUserPreferredLLMConfig(userId, { maxTokens: 600 }),
+            getUserPreferredLLMConfig(userId, { maxTokens: 600, domain: 'personal', orgId: '' }),
             getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
@@ -942,7 +1000,7 @@ Rules:
               keywords: ['monthly_review', `month_${new Date().toISOString().slice(0, 7)}`],
               confidence: 1.0,
               sourceInteractionId: 'monthly_review_scheduler',
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.97 });
+            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.97, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
             console.log(`[MonthlyReview] Generated for ${userId}: ${narrative.slice(0, 100)}`);
             messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
           }
@@ -965,18 +1023,18 @@ Rules:
       const messages: string[] = [];
       for (const userId of userIds) {
         try {
-          const config = personalityRegistry.get('lumi');
+          const config = personalityRegistry.getForUser('lumi', userId);
           if (!config) continue;
           const db = readDB();
           const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
 
           const yearMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && m.createdAt >= yearAgo,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= yearAgo,
           );
           const yearInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && i.timestamp >= yearAgo,
+            i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= yearAgo,
           );
-          const fullEvolutionHistory = personalityRegistry.getEvolutionHistory('lumi');
+          const fullEvolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
           const yearEvolutions = fullEvolutionHistory.filter((e: any) => e.timestamp >= yearAgo);
 
           const prompt = generateReviewPrompt({
@@ -988,15 +1046,15 @@ Rules:
             newInteractionCount: yearInteractions.length,
             topMemoryTopics: [...new Set<string>(yearMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 20),
             connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && m.type === 'preference').length,
-            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && c.status === 'active').length,
+            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'fact').length,
+            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.type === 'preference').length,
+            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
           });
 
           const result = await makeLLMCall(
             [{ role: 'user', content: prompt }],
             [],
-            getUserPreferredLLMConfig(userId, { maxTokens: 800 }),
+            getUserPreferredLLMConfig(userId, { maxTokens: 800, domain: 'personal', orgId: '' }),
             getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
@@ -1009,7 +1067,7 @@ Rules:
               keywords: ['yearly_review', `year_${new Date().toISOString().slice(0, 4)}`],
               confidence: 1.0,
               sourceInteractionId: 'yearly_review_scheduler',
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 1.0 });
+            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 1.0, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
             console.log(`[YearlyReview] Generated for ${userId}: ${narrative.slice(0, 100)}`);
             messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
           }
@@ -1028,15 +1086,17 @@ Rules:
     quiet: true,
     lastRun: null,
     handler: async () => {
-      const result = await autoGenerateSkill(
-        getDeepSeek,
-        getGemini,
-        getOpenAI,
-        getAnthropic,
-        getQwen,
-      );
-      if (result && result.success) {
-        return `I've learned a new skill: "${result.skillName}" — now I can handle this type of task more efficiently.`;
+      for (const userId of getAllUserIds()) {
+        await autoGenerateSkill(
+          getDeepSeek,
+          getGemini,
+          getOpenAI,
+          getAnthropic,
+          getQwen,
+          userId,
+          'personal',
+          '',
+        );
       }
       return null;
     },
@@ -1050,12 +1110,11 @@ Rules:
     lastRun: null,
     handler: async () => {
       try {
-        const created = await autoGenerateWorkflows();
-        if (created > 0) {
-          const userIds = getAllUserIds();
-          for (const userId of userIds) {
+        for (const userId of getAllUserIds()) {
+          const created = await autoGenerateWorkflows(userId, { domain: 'personal', orgId: '' });
+          if (created > 0) {
             if (scheduler.io) {
-              scheduler.io.to(`user:${userId}`).emit('agent:proactive', {
+              scheduler.io.to(`user:${userId}:personal`).emit('agent:proactive', {
                 type: 'workflow_auto_generated',
                 message: `我发现了你的 ${created} 个操作习惯模式，已自动创建为工作流。你可以说"运行[名称]"来快速复用。`,
                 count: created,
@@ -1063,7 +1122,6 @@ Rules:
               });
             }
           }
-          return `Created ${created} new workflow(s) from repeated patterns`;
         }
       } catch (err) {
         console.error('[Scheduler] auto_workflow_gen failed:', err);
@@ -1084,7 +1142,7 @@ Rules:
         for (const userId of userIds) {
           const report = runHealthAudit(userId);
           if (report.recommendations.length > 0 && scheduler.io) {
-            scheduler.io.to(`user:${userId}`).emit('agent:proactive', {
+            scheduler.io.to(`user:${userId}:personal`).emit('agent:proactive', {
               type: 'health_audit',
               report: {
                 overallStatus: report.overallStatus,
@@ -1109,7 +1167,7 @@ Rules:
     lastRun: null,
     handler: async () => {
       const userIds = getAllUserIds();
-      const messages: string[] = [];
+      const messages: ScheduledDelivery[] = [];
 
       for (const userId of userIds) {
         try {
@@ -1119,12 +1177,12 @@ Rules:
 
           // Collect yesterday's stats
           const newMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && m.createdAt && m.createdAt >= yesterday,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && !m.orgId && m.createdAt && m.createdAt >= yesterday,
           );
           const newInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && i.timestamp && i.timestamp >= yesterday,
+            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday,
           );
-          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi');
+          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
           const recentEvolution = evolutionHistory.filter((e: any) => e.timestamp >= yesterday);
 
           // Memory stats by type and tier
@@ -1138,12 +1196,12 @@ Rules:
 
           // Conversation stats
           const conversations = (db.conversations || []).filter((c: any) =>
-            c.userId === userId && c.lastActiveAt && c.lastActiveAt >= yesterday,
+            c.userId === userId && (c.domain || 'personal') === 'personal' && !c.orgId && c.lastActiveAt && c.lastActiveAt >= yesterday,
           );
 
           // Skill changes
           const newSkills = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && i.timestamp && i.timestamp >= yesterday && (i as any).mode === 'skill_gen',
+            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday && (i as any).mode === 'skill_gen',
           );
 
           // Build summary data
@@ -1188,7 +1246,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             const narrativeResult = await makeLLMCall(
               [{ role: 'user', content: narrativePrompt }],
               [],
-              getUserPreferredLLMConfig(userId, { maxTokens: 300 }),
+              getUserPreferredLLMConfig(userId, { maxTokens: 300, domain: 'personal', orgId: '' }),
               getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
@@ -1205,7 +1263,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               confidence: 1.0,
               sourceInteractionId: 'growth_journal_scheduler',
               agentId: undefined,
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.9 });
+            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.9, domain: 'personal', orgId: '', source: 'system' });
 
             // Store structured data alongside
             addMemory({
@@ -1216,10 +1274,10 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               confidence: 1.0,
               sourceInteractionId: 'growth_journal_scheduler',
               agentId: undefined,
-            } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.5 });
+            } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.5, domain: 'personal', orgId: '', source: 'system' });
 
             console.log(`[GrowthJournal] Generated for ${userId}: ${narrative.slice(0, 100)}`);
-            messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
+            messages.push({ userId, message: narrative.slice(0, 200), domain: 'personal' });
           } catch (llmErr: any) {
             console.warn(`[GrowthJournal] LLM generation failed for ${userId}:`, llmErr.message);
             // Fallback: simple stats summary
@@ -1233,16 +1291,15 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               confidence: 1.0,
               sourceInteractionId: 'growth_journal_scheduler',
               agentId: undefined,
-            } as any, { tier: 'growth' });
+            } as any, { tier: 'growth', domain: 'personal', orgId: '', source: 'system' });
+            messages.push({ userId, message: fallback, domain: 'personal' });
           }
         } catch (err: any) {
           console.warn(`[GrowthJournal] Failed for ${userId}:`, err.message);
         }
       }
 
-      return messages.length > 0
-        ? `📖 Growth journal updated for ${messages.length} user(s).`
-        : null;
+      return messages.length > 0 ? messages : null;
     },
   });
 
@@ -1265,8 +1322,14 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
 
       for (const agentRecord of autonomousAgents) {
         try {
-          const personality = personalityRegistry.get(agentRecord.personalityId || 'lumi') || personalityRegistry.getDefault();
           const userId = agentRecord.ownerUid || agentRecord.userId || 'anonymous';
+          const domain = agentRecord.domain === 'work' && agentRecord.orgId ? 'work' : 'personal';
+          const orgId = domain === 'work' ? (agentRecord.orgId || '') : '';
+          const personality = personalityRegistry.getForUser(
+            agentRecord.personalityId || 'lumi',
+            userId,
+            domain === 'work' ? orgId : undefined,
+          ) || personalityRegistry.getDefault();
 
           // Gather recent data for analysis
           const recentMemories = queryMemories({
@@ -1274,10 +1337,17 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             limit: 30,
             minConfidence: 0.3,
             agentId: agentRecord.memoryScope === 'private' ? agentRecord.id : undefined,
+            domain,
+            orgId,
           });
           const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
           const recentInteractions = (db.interactions || [])
-            .filter((i: any) => i.userId === userId && i.timestamp >= sixHoursAgo)
+            .filter((i: any) =>
+              i.userId === userId &&
+              (i.domain || 'personal') === domain &&
+              (i.orgId || '') === orgId &&
+              i.timestamp >= sixHoursAgo
+            )
             .slice(0, 20);
 
           if (recentMemories.length < 3 && recentInteractions.length < 3) continue;
@@ -1291,7 +1361,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             const result = await makeLLMCall(
               [{ role: 'user', content: prompt }],
               [],
-              getUserPreferredLLMConfig(userId, { maxTokens: 200 }),
+              getUserPreferredLLMConfig(userId, { maxTokens: 200, domain, orgId }),
               getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
@@ -1336,10 +1406,10 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
 
           // 1. Memory spike detection: unusually high memory creation rate
           const recentMemories = (db.memories || []).filter(
-            (m: any) => m.userId === userId && m.createdAt >= oneHourAgo,
+            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= oneHourAgo,
           );
           const dayMemories = (db.memories || []).filter(
-            (m: any) => m.userId === userId && m.createdAt >= twentyFourHoursAgo,
+            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && m.createdAt >= twentyFourHoursAgo,
           );
 
           const anomalySignals: string[] = [];
@@ -1366,7 +1436,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
 
           // 2. Long inactivity check: >24h since last interaction
           const userInteractions = (db.interactions || [])
-            .filter((i: any) => i.userId === userId)
+            .filter((i: any) => i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '')
             .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
           if (userInteractions.length > 0) {
             const lastTs = new Date(userInteractions[0].timestamp).getTime();
@@ -1390,7 +1460,7 @@ Output ONLY the check-in message — no preamble, no labels.`;
               const result = await makeLLMCall(
                 [{ role: 'user', content: checkInPrompt }],
                 [],
-                getUserPreferredLLMConfig(userId, { maxTokens: 150 }),
+                getUserPreferredLLMConfig(userId, { maxTokens: 150, domain: 'personal', orgId: '' }),
                 getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
               );
@@ -1407,7 +1477,7 @@ Output ONLY the check-in message — no preamble, no labels.`;
                   confidence: 0.8,
                   sourceInteractionId: 'proactive_lumi_scan_scheduler',
                   agentId: undefined,
-                } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.4 });
+                } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.4, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
               }
             } catch {
               // LLM check-in failed — use a simple template
@@ -1427,6 +1497,8 @@ Output ONLY the check-in message — no preamble, no labels.`;
               type: 'habit',
               limit: 10,
               minConfidence: 0.3,
+              domain: 'personal',
+              orgId: '',
             });
             const activeHourPattern = behaviorMemories.find(
               m => m.type === 'habit' && m.content.includes('most active during hours'),
@@ -1489,7 +1561,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
               const predictionResult = await makeLLMCall(
                 [{ role: 'user', content: predictionPrompt }],
                 [],
-                getUserPreferredLLMConfig(userId, { maxTokens: 100 }),
+                getUserPreferredLLMConfig(userId, { maxTokens: 100, domain: 'personal', orgId: '' }),
                 getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
               );
@@ -1506,7 +1578,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
                   confidence: 0.5,
                   sourceInteractionId: 'predictive_lumi_scan_scheduler',
                   agentId: undefined,
-                } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.3 });
+                } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.3, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
               }
             }
           } catch (predErr: any) {
@@ -1551,6 +1623,8 @@ Output ONLY the prediction message — no preamble, no labels.`;
               after,
               before,
               limit: 20,
+              domain: 'personal',
+              orgId: '',
             });
 
             for (const m of matches) {
@@ -1576,7 +1650,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
               confidence: 1.0,
               sourceInteractionId: 'memory_this_day_scheduler',
               agentId: undefined,
-            } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.4 });
+            } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.4, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
           }
         } catch (err: any) {
           console.warn(`[MemoryThisDay] Failed for ${userId}:`, err.message);
@@ -1601,7 +1675,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
 
       for (const userId of userIds) {
         try {
-          const patterns = detectSpatiotemporalPatterns(userId);
+          const patterns = detectSpatiotemporalPatterns(userId, 'personal', '');
           if (patterns.length > 0) {
             // Store new patterns as growth memories
             const { addMemory } = await import('./memory');
@@ -1615,7 +1689,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
                 confidence: p.confidence,
                 sourceInteractionId: 'spatiotemporal_analysis_scheduler',
                 agentId: undefined,
-              } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.5 });
+              } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.5, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
             }
             messages.push(
               `[${userId}] 发现 ${newPatterns.length} 个时空行为模式`,
@@ -1656,7 +1730,10 @@ Output ONLY the prediction message — no preamble, no labels.`;
     lastRun: null,
     handler: async () => {
       if (scheduler.io) {
-        scheduler.io.emit('ambient:poll_request', { timestamp: new Date().toISOString() });
+        const payload = { timestamp: new Date().toISOString() };
+        for (const userId of getAllUserIds()) {
+          scheduler.io.to(`user:${userId}:personal`).emit('ambient:poll_request', payload);
+        }
       }
       return null; // Silent — frontend handles the actual work
     },
@@ -1669,8 +1746,10 @@ Output ONLY the prediction message — no preamble, no labels.`;
     lastRun: null,
     handler: async () => {
       if (scheduler.io) {
-        // Broadcast idle check request; frontend reports back with idle time
-        scheduler.io.emit('ambient:idle_check', { timestamp: new Date().toISOString() });
+        const payload = { timestamp: new Date().toISOString() };
+        for (const userId of getAllUserIds()) {
+          scheduler.io.to(`user:${userId}:personal`).emit('ambient:idle_check', payload);
+        }
       }
       return null;
     },
@@ -1680,6 +1759,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
   scheduler.register({
     id: 'autonomous_work_cycle',
     cron: 'every_10m',
+    quiet: true,
     lastRun: null,
     handler: async () => {
       if (!scheduler.io) return null;
@@ -1732,25 +1812,29 @@ Output ONLY the prediction message — no preamble, no labels.`;
   scheduler.register({
     id: 'daily_system_scan',
     cron: 'every_24h',
+    quiet: true,
     lastRun: null,
     handler: async () => {
       if (!isFirstBootComplete()) return null;
       const snapshot = runDailyScan();
       if (!snapshot) return null;
 
-      // Emit the scan result to all connected clients
+      // Host diagnostics belong to the local/system administration surface,
+      // never to organization members as organization knowledge.
       if (scheduler.io) {
-        scheduler.io.emit('system:scan_result', {
-          timestamp: snapshot.timestamp,
-          hostname: snapshot.hardware.hostname,
-          summary: snapshot.changeSummary,
-          diskFree: snapshot.hardware.disks.map(d => `${d.name}: ${d.freeGB.toFixed(1)}GB free`),
-          appCount: snapshot.software.installedApps.length,
-          planSummary: getTodayPlanSummary(),
-        });
+        for (const userId of getSystemAdminUserIds()) {
+          scheduler.io.to(`user:${userId}:personal`).emit('system:scan_result', {
+            timestamp: snapshot.timestamp,
+            computerScope: 'server_host',
+            hostname: snapshot.hardware.hostname,
+            summary: snapshot.changeSummary,
+            diskFree: snapshot.hardware.disks.map(d => `${d.name}: ${d.freeGB.toFixed(1)}GB free`),
+            appCount: snapshot.software.installedApps.length,
+          });
+        }
       }
 
-      return snapshot.changeSummary || 'Scan complete';
+      return null;
     },
   });
 }

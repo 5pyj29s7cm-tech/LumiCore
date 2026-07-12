@@ -48,6 +48,27 @@ export type LoginRunOptions = {
   headless?: boolean;
   autoSubmit?: boolean;
   waitForManualMs?: number;
+  keepOpenMs?: number;
+};
+
+export type LoginPageState = 'authenticated' | 'login_required' | 'verification_required' | 'uncertain';
+
+export type LoginPageSnapshot = {
+  url: string;
+  title?: string;
+  leadingText?: string;
+  explicitSuccess?: boolean;
+  hasPasswordField?: boolean;
+  hasUsernameField?: boolean;
+  hasSubmitControl?: boolean;
+  hasChallengeControl?: boolean;
+  hasAuthenticatedControl?: boolean;
+  navigatedAwayFromLogin?: boolean;
+};
+
+export type LoginPageAssessment = {
+  state: LoginPageState;
+  reason: string;
 };
 
 export type WebLoginLearnOptions = LoginRunOptions & {
@@ -67,6 +88,29 @@ export type WebLoginLearnOptions = LoginRunOptions & {
 const STORE_FILE = getDataPath('web_login/profiles.json');
 const SECRET_FILE = getDataPath('web_login/secret.key');
 const SESSION_ROOT = getDataPath('web_login/sessions/.keep');
+const DEFAULT_VISIBLE_SESSION_MS = 30 * 60 * 1000;
+
+type ActiveVisibleContext = {
+  context: BrowserContext;
+  closeTimer: ReturnType<typeof setTimeout> | null;
+};
+
+type AcquiredBrowserContext = {
+  context: BrowserContext;
+  key: string;
+  shared: boolean;
+  headless: boolean;
+};
+
+const activeVisibleContexts = new Map<string, ActiveVisibleContext>();
+
+function removeSessionDirectory(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    console.warn('[WebLogin] Could not remove session directory:', dir, error);
+  }
+}
 
 const COMMON_USERNAME_SELECTORS = [
   'input[autocomplete="username"]',
@@ -88,7 +132,6 @@ const COMMON_USERNAME_SELECTORS = [
   'input[placeholder*="邮箱"]',
   'input[placeholder*="用户名"]',
   'input[placeholder*="登录"]',
-  'input[type="text"]',
 ];
 
 const COMMON_SUBMIT_SELECTORS = [
@@ -106,6 +149,59 @@ const COMMON_SUBMIT_SELECTORS = [
   'input[value*="登录"]',
   'input[value*="Login"]',
 ];
+
+const VERIFICATION_SELECTORS = [
+  'input[autocomplete="one-time-code"]',
+  'input[name*="otp" i]',
+  'input[id*="otp" i]',
+  'input[name*="captcha" i]',
+  'input[id*="captcha" i]',
+  'iframe[src*="recaptcha" i]',
+  'iframe[src*="hcaptcha" i]',
+  '[class*="captcha" i]',
+  '[id*="captcha" i]',
+  '[class*="geetest" i]',
+  '[id*="geetest" i]',
+];
+
+const AUTHENTICATED_CONTROL_SELECTORS = [
+  'a[href*="logout" i]',
+  'a[href*="signout" i]',
+  'button:has-text("Logout")',
+  'button:has-text("Log out")',
+  'button:has-text("Sign out")',
+  'button:has-text("退出登录")',
+  '[data-testid*="avatar" i]',
+  '[aria-label*="profile" i]',
+  '[aria-label*="account menu" i]',
+];
+
+const LOGIN_URL_PATTERN = /(?:^|[\/_?&.-])(login|log-in|signin|sign-in|auth|passport|sso|oauth|verify|verification|challenge|captcha)(?:$|[\/_?&=.-])/i;
+const LOGIN_TEXT_PATTERN = /(?:\blog\s*in\b|\bsign\s*in\b|账号登录|密码登录|用户登录|立即登录)/i;
+const VERIFICATION_TEXT_PATTERN = /(?:captcha|verification code|one[- ]time code|two[- ]factor|\b2fa\b|passkey|scan (?:the )?qr|security check|验证码|人机验证|滑块验证|扫码登录|短信验证|二次验证|安全验证)/i;
+
+export function classifyLoginPageSnapshot(snapshot: LoginPageSnapshot): LoginPageAssessment {
+  if (snapshot.explicitSuccess) {
+    return { state: 'authenticated', reason: 'The configured success URL pattern matched.' };
+  }
+  const visibleText = `${snapshot.title || ''}\n${snapshot.leadingText || ''}`;
+  if (snapshot.hasChallengeControl || VERIFICATION_TEXT_PATTERN.test(visibleText)) {
+    return { state: 'verification_required', reason: 'The page is waiting for captcha, QR, OTP, passkey, or another verification step.' };
+  }
+  if (snapshot.hasPasswordField || (snapshot.hasUsernameField && snapshot.hasSubmitControl)) {
+    return { state: 'login_required', reason: 'A visible login form is still present.' };
+  }
+  if (snapshot.hasAuthenticatedControl) {
+    return { state: 'authenticated', reason: 'A visible account, profile, or sign-out control was found.' };
+  }
+  if (snapshot.navigatedAwayFromLogin && !LOGIN_URL_PATTERN.test(snapshot.url)) {
+    return { state: 'authenticated', reason: 'The browser left the login flow without a remaining login or verification control.' };
+  }
+  if (LOGIN_URL_PATTERN.test(snapshot.url) || LOGIN_TEXT_PATTERN.test(visibleText)) {
+    return { state: 'login_required', reason: 'The current page still looks like a login flow.' };
+  }
+  return { state: 'uncertain', reason: 'The page is accessible, but no reliable authenticated-session signal was found.' };
+}
 
 function ensureStore(): void {
   fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
@@ -241,8 +337,22 @@ export function saveWebLoginProfile(input: WebLoginProfileInput, scope?: WebLogi
 
 export function deleteWebLoginProfile(id: string, scope?: WebLoginScope): boolean {
   const profiles = readProfiles();
+  const removed = profiles.find(profile => profile.id === id && profileMatchesScope(profile, scope));
   const next = profiles.filter(profile => !(profile.id === id && profileMatchesScope(profile, scope)));
   writeProfiles(next);
+  if (removed) {
+    const dir = sessionDirectoryPath(removed, scope);
+    const active = activeVisibleContexts.get(dir);
+    if (active) {
+      activeVisibleContexts.delete(dir);
+      if (active.closeTimer) clearTimeout(active.closeTimer);
+      void active.context.close()
+        .catch(() => undefined)
+        .finally(() => removeSessionDirectory(dir));
+    } else {
+      removeSessionDirectory(dir);
+    }
+  }
   return next.length !== profiles.length;
 }
 
@@ -276,21 +386,62 @@ function findBrowserExecutable(): string {
   return found;
 }
 
-function sessionDir(profile: WebLoginProfile, scope?: WebLoginScope): string {
+function sessionDirectoryPath(profile: WebLoginProfile, scope?: WebLoginScope): string {
   const scoped = scopeDefaults(scope);
   const key = scoped.domain === 'work' ? `work-${toSlug(scoped.orgId || 'org')}` : `user-${toSlug(scoped.ownerUid)}`;
-  const dir = path.join(path.dirname(SESSION_ROOT), key, toSlug(profile.id));
+  return path.join(path.dirname(SESSION_ROOT), key, toSlug(profile.id));
+}
+
+function sessionDir(profile: WebLoginProfile, scope?: WebLoginScope): string {
+  const dir = sessionDirectoryPath(profile, scope);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-async function openContext(profile: WebLoginProfile, scope?: WebLoginScope, headless = false): Promise<BrowserContext> {
-  return chromium.launchPersistentContext(sessionDir(profile, scope), {
+function scheduleVisibleContextClose(key: string, keepOpenMs: number): void {
+  const active = activeVisibleContexts.get(key);
+  if (!active) return;
+  if (active.closeTimer) clearTimeout(active.closeTimer);
+  active.closeTimer = setTimeout(() => {
+    const current = activeVisibleContexts.get(key);
+    if (!current) return;
+    activeVisibleContexts.delete(key);
+    void current.context.close().catch(() => undefined);
+  }, keepOpenMs);
+  active.closeTimer.unref?.();
+}
+
+async function openContext(profile: WebLoginProfile, scope?: WebLoginScope, headless = false): Promise<AcquiredBrowserContext> {
+  const dir = sessionDir(profile, scope);
+  const existing = activeVisibleContexts.get(dir);
+  if (existing) {
+    try {
+      existing.context.pages();
+      return { context: existing.context, key: dir, shared: true, headless: false };
+    } catch {
+      if (existing.closeTimer) clearTimeout(existing.closeTimer);
+      activeVisibleContexts.delete(dir);
+    }
+  }
+
+  const context = await chromium.launchPersistentContext(dir, {
     executablePath: findBrowserExecutable(),
     headless,
     viewport: { width: 1360, height: 900 },
     args: ['--disable-blink-features=AutomationControlled'],
   });
+  if (!headless) {
+    activeVisibleContexts.set(dir, { context, closeTimer: null });
+    context.once('close', () => {
+      const active = activeVisibleContexts.get(dir);
+      if (active?.context === context) {
+        if (active.closeTimer) clearTimeout(active.closeTimer);
+        activeVisibleContexts.delete(dir);
+      }
+    });
+    scheduleVisibleContextClose(dir, DEFAULT_VISIBLE_SESSION_MS);
+  }
+  return { context, key: dir, shared: !headless, headless };
 }
 
 async function firstVisibleMatch(page: Page, selectors: string[]): Promise<{ locator: Locator; selector: string } | null> {
@@ -317,29 +468,64 @@ async function firstVisible(page: Page, selectors: string[]): Promise<Locator | 
   return (await firstVisibleMatch(page, selectors))?.locator || null;
 }
 
-async function loginLooksComplete(page: Page, profile: WebLoginProfile): Promise<boolean> {
+function matchesSuccessUrl(url: string, profile: WebLoginProfile): boolean {
   if (profile.successUrlPattern) {
     try {
-      if (new RegExp(profile.successUrlPattern).test(page.url())) return true;
+      return new RegExp(profile.successUrlPattern).test(url);
     } catch {
-      // Ignore invalid user-provided regexp and fall through to heuristics.
+      return false;
     }
   }
-  const password = await firstVisible(page, ['input[type="password"]']);
-  if (password) return false;
-  const username = await firstVisible(page, COMMON_USERNAME_SELECTORS);
-  const submit = await firstVisible(page, COMMON_SUBMIT_SELECTORS);
-  if (username && submit) return false;
-  return true;
+  return false;
 }
 
-async function waitForLoginCompletion(page: Page, profile: WebLoginProfile, waitMs: number): Promise<boolean> {
+function navigatedAwayFromLogin(currentUrl: string, loginUrl: string): boolean {
+  try {
+    const current = new URL(currentUrl);
+    const login = new URL(loginUrl);
+    if (current.origin !== login.origin) return !LOGIN_URL_PATTERN.test(currentUrl);
+    const normalizePath = (value: string) => value.replace(/\/+$/, '') || '/';
+    return normalizePath(current.pathname) !== normalizePath(login.pathname)
+      && !LOGIN_URL_PATTERN.test(currentUrl);
+  } catch {
+    return false;
+  }
+}
+
+async function assessLoginPage(page: Page, profile: WebLoginProfile): Promise<LoginPageAssessment> {
+  const currentUrl = page.url();
+  const title = await page.title().catch(() => '');
+  const leadingText = await page.locator('body').innerText({ timeout: 1500 })
+    .then(text => text.slice(0, 4000))
+    .catch(() => '');
+  const password = await firstVisible(page, ['input[type="password"]']);
+  const username = await visibleMatch(page, profile.usernameSelector, COMMON_USERNAME_SELECTORS);
+  const submit = await visibleMatch(page, profile.submitSelector, COMMON_SUBMIT_SELECTORS);
+  const challenge = await firstVisible(page, VERIFICATION_SELECTORS);
+  const authenticatedControl = await firstVisible(page, AUTHENTICATED_CONTROL_SELECTORS);
+  return classifyLoginPageSnapshot({
+    url: currentUrl,
+    title,
+    leadingText,
+    explicitSuccess: matchesSuccessUrl(currentUrl, profile),
+    hasPasswordField: Boolean(password),
+    hasUsernameField: Boolean(username),
+    hasSubmitControl: Boolean(submit),
+    hasChallengeControl: Boolean(challenge),
+    hasAuthenticatedControl: Boolean(authenticatedControl),
+    navigatedAwayFromLogin: navigatedAwayFromLogin(currentUrl, profile.loginUrl),
+  });
+}
+
+async function waitForLoginCompletion(page: Page, profile: WebLoginProfile, waitMs: number): Promise<LoginPageAssessment> {
   const deadline = Date.now() + Math.max(1000, waitMs);
+  let assessment = await assessLoginPage(page, profile);
   while (Date.now() < deadline) {
-    if (await loginLooksComplete(page, profile)) return true;
+    assessment = await assessLoginPage(page, profile);
+    if (assessment.state === 'authenticated') return assessment;
     await page.waitForTimeout(1000);
   }
-  return loginLooksComplete(page, profile);
+  return assessLoginPage(page, profile);
 }
 
 async function hasAutofilledValue(locator: Locator | null): Promise<boolean> {
@@ -437,14 +623,16 @@ export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScop
     : findWebLoginProfileForUrl(target, scope);
   if (!profile) throw new Error('No matching web login profile found. Save one first.');
 
-  const context = await openContext(profile, scope, options.headless === true);
+  const opened = await openContext(profile, scope, options.headless === true);
+  const { context } = opened;
   const page = context.pages()[0] || await context.newPage();
   const waitMs = Math.min(Math.max(Number(options.waitForManualMs) || 45000, 3000), 180000);
+  const keepOpenMs = Math.min(Math.max(Number(options.keepOpenMs) || DEFAULT_VISIBLE_SESSION_MS, 60_000), 24 * 60 * 60 * 1000);
   try {
     await page.goto(target || profile.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     const fill = await fillLoginForm(page, profile, options.autoSubmit !== false);
-    const ok = await waitForLoginCompletion(page, profile, waitMs);
-    const status = ok ? 'logged_in' : 'manual_required';
+    const assessment = await waitForLoginCompletion(page, profile, waitMs);
+    const status = assessment.state === 'authenticated' ? 'logged_in' : 'manual_required';
     const updatedProfile = updateProfileLoginStatus(profile, status, {
       usernameSelector: profile.usernameSelector || fill.usernameSelector || '',
       passwordSelector: profile.passwordSelector || fill.passwordSelector || '',
@@ -452,23 +640,31 @@ export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScop
     }) || profile;
     return {
       status,
+      loginState: assessment.state,
+      loginEvidence: assessment.reason,
       profile: publicProfile(updatedProfile),
       url: page.url(),
       filledUsername: fill.filledUsername,
       filledPassword: fill.filledPassword,
       submitted: fill.submitted,
       usedBrowserAutofill: fill.usedBrowserAutofill,
+      browserOpen: !opened.headless,
+      keepOpenMs: !opened.headless ? keepOpenMs : 0,
       learnedSelectors: {
         usernameSelector: updatedProfile.usernameSelector || '',
         passwordSelector: updatedProfile.passwordSelector || '',
         submitSelector: updatedProfile.submitSelector || '',
       },
-      note: ok
-        ? 'Login/session is available in the persistent browser profile.'
-        : 'Manual action may be required: captcha, QR login, 2FA, passkey, or non-standard login form. Complete it in the opened browser and run again.',
+      note: status === 'logged_in'
+        ? `Login/session is available in the persistent browser profile.${opened.headless ? '' : ' The visible browser remains open for continued viewing and work.'}`
+        : `${assessment.reason} Complete any required login or verification in the opened browser and run again.`,
     };
   } finally {
-    await context.close();
+    if (opened.headless) {
+      await context.close();
+    } else {
+      scheduleVisibleContextClose(opened.key, keepOpenMs);
+    }
   }
 }
 
@@ -535,26 +731,53 @@ export async function fetchWithWebLogin(url: string, scope?: WebLoginScope, prof
   const profile = profileId ? getProfile(profileId, scope) : findWebLoginProfileForUrl(target, scope);
   if (!profile) throw new Error('No matching web login profile found for this URL.');
 
-  const context = await openContext(profile, scope, true);
-  const page = context.pages()[0] || await context.newPage();
+  const opened = await openContext(profile, scope, true);
+  const { context } = opened;
+  const page = opened.shared ? await context.newPage() : (context.pages()[0] || await context.newPage());
   try {
     await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    const needsLogin = Boolean(await firstVisible(page, ['input[type="password"]']));
-    if (needsLogin && profile.passwordCipher) {
+    let assessment = await assessLoginPage(page, profile);
+    if (assessment.state === 'login_required' && profile.passwordCipher) {
       await page.goto(profile.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       await fillLoginForm(page, profile, true);
       await waitForLoginCompletion(page, profile, 20000);
       await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      assessment = await assessLoginPage(page, profile);
+    }
+    if (assessment.state === 'login_required' || assessment.state === 'verification_required') {
+      return {
+        status: 'manual_required',
+        loginState: assessment.state,
+        loginEvidence: assessment.reason,
+        profile: publicProfile(profile),
+        title: await page.title().catch(() => ''),
+        url: page.url(),
+        text: '',
+        note: 'The target content was not extracted because the browser is still on a login or verification step. Run web_login_run visibly and complete that step first.',
+      };
     }
     const html = await page.content();
     const title = await page.title().catch(() => '');
+    const authenticationVerified = assessment.state === 'authenticated';
     return {
+      status: authenticationVerified ? 'authenticated_content' : 'content_accessible',
+      authenticationVerified,
+      loginState: assessment.state,
+      loginEvidence: assessment.reason,
       profile: publicProfile(profile),
       title,
       url: page.url(),
       text: extractPlainText(html, Math.min(Math.max(maxChars, 500), 50000)),
+      note: authenticationVerified
+        ? 'The page was read with positive authenticated-session evidence.'
+        : 'The page was accessible through the saved browser profile, but the site did not expose a reliable signal proving which account is active.',
     };
   } finally {
-    await context.close();
+    if (opened.shared) {
+      await page.close().catch(() => undefined);
+      scheduleVisibleContextClose(opened.key, DEFAULT_VISIBLE_SESSION_MS);
+    } else {
+      await context.close();
+    }
   }
 }

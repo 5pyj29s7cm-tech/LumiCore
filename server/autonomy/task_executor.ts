@@ -14,6 +14,7 @@ import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getPlan, updatePlan, updatePlanStep } from './planner';
 import { createDesktopRelay } from '../socket/desktop_relay';
+import type { PlanScope } from './planner';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -76,9 +77,14 @@ function clipPlanResult(value: string, max = 1800): string {
   return value.length > max ? `${value.slice(0, max)}...` : value;
 }
 
+function planScopeForTask(task: AutonomousTask): PlanScope {
+  return { userId: task.userId, domain: 'personal', orgId: '' };
+}
+
 function markLinkedPlanRunning(task: AutonomousTask) {
   if (!task.planId) return;
-  const plan = getPlan(task.planId);
+  const scope = planScopeForTask(task);
+  const plan = getPlan(task.planId, scope);
   if (!plan || plan.status !== 'active') return;
   const step = plan.steps.find(item => item.status === 'in_progress')
     || plan.steps.find(item => item.status === 'pending');
@@ -86,13 +92,14 @@ function markLinkedPlanRunning(task: AutonomousTask) {
     updatePlanStep(plan.id, step.id, {
       status: 'in_progress',
       result: `Autonomous task started: ${task.title}`,
-    });
+    }, scope);
   }
 }
 
 function markLinkedPlanCompleted(task: AutonomousTask, summary: string) {
   if (!task.planId) return;
-  const plan = getPlan(task.planId);
+  const scope = planScopeForTask(task);
+  const plan = getPlan(task.planId, scope);
   if (!plan) return;
   const clipped = clipPlanResult(summary);
 
@@ -100,19 +107,20 @@ function markLinkedPlanCompleted(task: AutonomousTask, summary: string) {
     if (step.status === 'pending' || step.status === 'in_progress') {
       const stepUpdate: Parameters<typeof updatePlanStep>[2] = { status: 'done' };
       if (step.status === 'in_progress') stepUpdate.result = clipped;
-      updatePlanStep(plan.id, step.id, stepUpdate);
+      updatePlanStep(plan.id, step.id, stepUpdate, scope);
     }
   }
 
   updatePlan(plan.id, {
     status: 'completed',
     result: clipped,
-  });
+  }, scope);
 }
 
 function markLinkedPlanFailed(task: AutonomousTask, error: string) {
   if (!task.planId) return;
-  const plan = getPlan(task.planId);
+  const scope = planScopeForTask(task);
+  const plan = getPlan(task.planId, scope);
   if (!plan) return;
   const clipped = clipPlanResult(`自主学习受阻：${error}`, 1000);
   const step = plan.steps.find(item => item.status === 'in_progress')
@@ -122,13 +130,13 @@ function markLinkedPlanFailed(task: AutonomousTask, error: string) {
     updatePlanStep(plan.id, step.id, {
       status: 'skipped',
       result: clipped,
-    });
+    }, scope);
   }
 
   updatePlan(plan.id, {
     status: 'paused',
     result: clipped,
-  });
+  }, scope);
 }
 
 export async function executeNextAutonomousTask(
@@ -153,7 +161,7 @@ export async function executeNextAutonomousTask(
   if (!running) return { executed: false };
   markLinkedPlanRunning(running);
 
-  io.to(`user:${task.userId}`).emit('autonomous:task_started', {
+  io.to(`user:${task.userId}:personal`).emit('autonomous:task_started', {
     taskId: task.id,
     title: task.title,
     mode: task.mode,
@@ -167,6 +175,8 @@ export async function executeNextAutonomousTask(
     const desktopRelay = createDesktopRelay({
       io,
       userId: task.userId,
+      domain: 'personal',
+      orgId: '',
       source: 'autonomous',
     });
 
@@ -220,7 +230,7 @@ export async function executeNextAutonomousTask(
     markCompleted(task.id, summary, toolCallCount, tokensUsed);
     markLinkedPlanCompleted(task, summary);
 
-    io.to(`user:${task.userId}`).emit('autonomous:task_completed', {
+    io.to(`user:${task.userId}:personal`).emit('autonomous:task_completed', {
       taskId: task.id,
       title: task.title,
       result: summary,
@@ -236,7 +246,7 @@ export async function executeNextAutonomousTask(
     markFailed(task.id, errorMsg);
     markLinkedPlanFailed(task, errorMsg);
 
-    io.to(`user:${task.userId}`).emit('autonomous:task_failed', {
+    io.to(`user:${task.userId}:personal`).emit('autonomous:task_failed', {
       taskId: task.id,
       title: task.title,
       error: errorMsg,

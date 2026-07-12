@@ -9,6 +9,7 @@ function defaultState(userId: string): PresenceState {
   return {
     userId,
     facePresent: false,
+    faceMatched: false,
     faceConfidence: 0,
     voiceprintMatched: false,
     voiceprintConfidence: 0,
@@ -31,10 +32,11 @@ export function updatePresence(userId: string, heartbeat: PresenceHeartbeat): Pr
     ...prev,
     userId,
     facePresent: heartbeat.facePresent,
+    faceMatched: heartbeat.faceMatched,
     faceConfidence: heartbeat.faceConfidence,
     voiceprintMatched: heartbeat.voiceprintMatched,
     voiceprintConfidence: heartbeat.voiceprintConfidence,
-    lastFaceSeenAt: heartbeat.facePresent ? now : prev.lastFaceSeenAt,
+    lastFaceSeenAt: heartbeat.faceMatched ? now : prev.lastFaceSeenAt,
     lastVoiceHeardAt: heartbeat.voiceprintMatched ? now : prev.lastVoiceHeardAt,
   };
 
@@ -56,7 +58,12 @@ export function updatePresence(userId: string, heartbeat: PresenceHeartbeat): Pr
 }
 
 function detectOtherUsers(currentUserId: string): DetectedUser[] {
-  const db = readDB();
+  let db: ReturnType<typeof readDB>;
+  try {
+    db = readDB();
+  } catch {
+    return [];
+  }
   const users: DetectedUser[] = [];
 
   for (const row of (db.settings || [])) {

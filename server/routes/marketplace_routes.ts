@@ -9,7 +9,14 @@ import { createAgentForSkill } from "../agents/skill_agent";
 import { makeLLMCall, type NormalizedMessage } from "../llm/providers";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { getDataPath } from "../config/data_path";
-import { optionalAuth, resolveDomain, type AuthUser } from "../middleware/auth";
+import {
+  optionalAuth,
+  requireAdmin,
+  requireAuth,
+  requireLocalRequest,
+  resolveDomain,
+  type AuthUser,
+} from "../middleware/auth";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -154,7 +161,7 @@ export function mountMarketplaceRoutes(
   });
 
   // Acquire/install a skill from the marketplace
-  router.post("/marketplace/skills/acquire", optionalAuth, async (req, res) => {
+  router.post("/marketplace/skills/acquire", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const { skillId, skillName, installSource, installPath: reqInstallPath } = req.body;
       if (!skillId || !skillName) return res.status(400).json({ error: "skillId and skillName required" });
@@ -333,7 +340,7 @@ export function mountMarketplaceRoutes(
   });
 
   // Publish a community skill
-  router.post("/marketplace/publish", (req, res) => {
+  router.post("/marketplace/publish", requireAuth, requireAdmin, requireLocalRequest, (req, res) => {
     try {
       const { name, description, author, category, icon, installPath, version, toolCount } = req.body;
       if (!name || !description) return res.status(400).json({ error: 'name and description required' });
@@ -356,7 +363,7 @@ export function mountMarketplaceRoutes(
   });
 
   // Rate a skill
-  router.post("/marketplace/skills/:id/rate", (req, res) => {
+  router.post("/marketplace/skills/:id/rate", requireAuth, (req, res) => {
     try {
       const { rating, review } = req.body;
       const userId = (req as any).user?.uid || 'anonymous';
@@ -378,7 +385,7 @@ export function mountMarketplaceRoutes(
   });
 
   // Trigger batch translation of skill metadata
-  router.post("/marketplace/translate", async (req, res) => {
+  router.post("/marketplace/translate", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
     try {
       const lang = (req.query.lang as string) || (req.body?.lang) || 'zh';
       if (lang === 'en') return res.json({ ok: true, message: 'English is source language' });

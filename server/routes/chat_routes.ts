@@ -7,7 +7,7 @@ import { runWithTools } from "../llm/adapter";
 import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
 import { recordLatency } from "../monitor/latency_store";
-import { optionalAuth } from "../middleware/auth";
+import { optionalAuth, resolveDomain } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
@@ -120,21 +120,6 @@ function resolveLegalCaseworkOrgId(input: {
   return `personal:${safeLegalScopeSegment(input.userId)}`;
 }
 
-function validateLegalWorkOrgScope(input: {
-  domain: 'personal' | 'work';
-  explicitOrgId?: unknown;
-  userOrgId?: unknown;
-}): string {
-  if (input.domain !== 'work') return '';
-  const requestedOrgId = String(input.explicitOrgId || '').trim();
-  const sessionOrgId = String(input.userOrgId || '').trim();
-  if (!sessionOrgId) return 'Organization legal work requires an active organization session';
-  if (requestedOrgId && requestedOrgId !== sessionOrgId) {
-    return 'Requested organization does not match the active organization session';
-  }
-  return '';
-}
-
 function buildLegalMeetingMinutesArgs(input: {
   transcript: string;
   startedAt?: unknown;
@@ -199,8 +184,9 @@ export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
     .map((note: any) => {
       const time = note?.time ? new Date(note.time).toLocaleTimeString() : '';
       const text = String(note?.text || '').trim();
-      const speaker = note?.speakerMatched && note?.speakerLabel
-        ? `${String(note.speakerLabel).trim()}: `
+      const speakerLabel = String(note?.speakerLabel || '').trim();
+      const speaker = speakerLabel
+        ? `${speakerLabel}: `
         : (note?.speakerMatched === false ? 'Unknown speaker: ' : '');
       return text ? `[${time}] ${speaker}${text}` : '';
     })
@@ -219,10 +205,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const prompt = rawPrompt ?? message;
     const userKey = req.headers["x-api-key"] as string;
     const userId = req.user?.uid || 'anonymous';
-    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
-    const orgId = domain === 'work'
-      ? String(req.body?.orgId || req.user?.orgId || '').trim()
-      : '';
+    const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
+    const domain = requestScope.domain;
+    const orgId = requestScope.orgId;
     const toolContext = {
       userId,
       domain,
@@ -239,7 +224,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     });
 
     const isBYOK = userKey && userKey.length > 5;
-    const preferred = getUserPreferredLLMConfig(userId);
+    const preferred = getUserPreferredLLMConfig(userId, { domain, orgId });
     const provider = isBYOK ? reqProvider : preferred.provider;
     const model = isBYOK ? reqModel : preferred.model;
     if (!isBYOK && reqProvider && reqProvider !== provider) {
@@ -277,7 +262,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         } else {
           const client = new OpenAI({ apiKey: userKey, baseURL: provider === "deepseek" ? "https://api.deepseek.com/v1" : provider === "qwen" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : undefined });
           const response = await client.chat.completions.create({
-            model: model || (provider === "deepseek" ? "deepseek-chat" : provider === "qwen" ? "qwen-plus" : "gpt-4o"),
+            model: model || (provider === "deepseek" ? "deepseek-v4-flash" : provider === "qwen" ? "qwen-plus" : "gpt-4o"),
             messages: buildRestProviderMessages(messages, prompt, systemInstruction),
           });
           responseText = response.choices[0].message.content || '';
@@ -426,24 +411,16 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const rawArgs = req.body?.args && typeof req.body.args === 'object'
       ? req.body.args
       : (req.body || {});
-    const userId = req.user?.uid || String(rawArgs.userId || 'anonymous');
-    const domain = rawArgs.domain === 'work' || req.body?.domain === 'work' ? 'work' : 'personal';
-    const scopeError = validateLegalWorkOrgScope({
-      domain,
-      explicitOrgId: rawArgs.orgId || req.body?.orgId,
-      userOrgId: req.user?.orgId,
-    });
-    if (scopeError) return res.status(403).json({ error: scopeError });
-    const orgId = resolveLegalCaseworkOrgId({
-      domain,
-      explicitOrgId: rawArgs.orgId || req.body?.orgId,
-      userOrgId: req.user?.orgId,
-      userId,
-    });
+    const userId = req.user?.uid || 'anonymous';
+    const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
+    const domain = requestScope.domain;
+    const orgId = requestScope.orgId;
+    const legalOrgId = resolveLegalCaseworkOrgId({ domain, userOrgId: orgId, userId });
     const args = {
       ...rawArgs,
-      orgId,
+      orgId: legalOrgId,
       userId,
+      domain,
     };
 
     if (args.persistCase === undefined && (args.caseId || args.caseName || args.title)) {
@@ -467,22 +444,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     }
 
     const userId = req.user?.uid || 'anonymous';
-    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
-    const scopeError = validateLegalWorkOrgScope({
-      domain,
-      explicitOrgId: req.body?.orgId,
-      userOrgId: req.user?.orgId,
-    });
-    if (scopeError) return res.status(403).json({ error: scopeError });
-    const orgId = resolveLegalCaseworkOrgId({
-      domain,
-      explicitOrgId: req.body?.orgId,
-      userOrgId: req.user?.orgId,
-      userId,
-    });
+    const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
+    const domain = requestScope.domain;
+    const orgId = requestScope.orgId;
+    const legalOrgId = resolveLegalCaseworkOrgId({ domain, userOrgId: orgId, userId });
     const args = {
       contract,
-      orgId,
+      orgId: legalOrgId,
       userId,
       caseId: String(req.body?.caseId || '').trim(),
       caseName: String(req.body?.caseName || '').trim(),
@@ -527,17 +495,10 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
   router.post("/meeting/analyze", optionalAuth, asyncHandler(async (req, res) => {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
-    const domain = req.body?.domain === 'work' ? 'work' : 'personal';
-    const scopeError = validateLegalWorkOrgScope({
-      domain,
-      explicitOrgId: req.body?.orgId,
-      userOrgId: req.user?.orgId,
-    });
-    if (scopeError) return res.status(403).json({ error: scopeError });
-    const orgId = domain === 'work'
-      ? String(req.body?.orgId || req.user?.orgId || '').trim()
-      : '';
-    const preferred = getUserPreferredLLMConfig(userId, { maxTokens: 1800 });
+    const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
+    const domain = requestScope.domain;
+    const orgId = requestScope.orgId;
+    const preferred = getUserPreferredLLMConfig(userId, { maxTokens: 1800, domain, orgId });
     const provider = preferred.provider;
     const model = preferred.model;
     if (reqProvider && reqProvider !== provider) {

@@ -1,6 +1,7 @@
 import path from 'path';
 import { getKey } from '../config/keys';
 import { isCircuitClosed, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
+import { classifyCloudError } from '../cloud/core';
 import { recordLatency } from '../monitor/latency_store';
 import type { STTProvider, STTSegment } from './types';
 import * as dashscopeFile from './providers/dashscope-file';
@@ -270,7 +271,13 @@ export async function transcribeAudioFile(
         taskId: transcript.taskId,
       };
     } catch (err: any) {
-      recordFailure(circuitProvider(provider), plannedModel, err instanceof Error ? err : new Error(String(err)));
+      const failure = err instanceof Error ? err : new Error(String(err));
+      const classified = classifyCloudError(failure, provider);
+      const accountUnavailable = classified.category === 'auth' || classified.category === 'quota';
+      recordFailure(circuitProvider(provider), plannedModel, failure, { openImmediately: accountUnavailable });
+      if (accountUnavailable && provider === 'qwen') {
+        recordFailure('qwen-stt', undefined, failure, { openImmediately: true });
+      }
       failures.push(`${provider}: ${err?.message || String(err)}`);
       options.onProgress?.(`${provider} 转写失败，准备尝试下一个引擎`);
     }

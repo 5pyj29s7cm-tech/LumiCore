@@ -10,13 +10,18 @@ export interface KeyStore {
   PICOVOICE_ACCESS_KEY?: string;
   DASHSCOPE_API_KEY?: string;
   OPENAI_API_KEY?: string;
+  OPENAI_BASE_URL?: string;
   ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_BASE_URL?: string;
   GEMINI_API_KEY?: string;
   DEEPSEEK_API_KEY?: string;
+  DEEPSEEK_BASE_URL?: string;
   QWEN_API_KEY?: string;
+  QWEN_BASE_URL?: string;
   MINIMAX_API_KEY?: string;
   E2B_API_KEY?: string;
   ARK_API_KEY?: string;
+  ARK_BASE_URL?: string;
   DOUBAO_SPEECH_KEY?: string;
   NETEASE_APP_ID?: string;
   NETEASE_PRIVATE_KEY?: string;
@@ -24,8 +29,11 @@ export interface KeyStore {
   ALIYUN_AK_SECRET?: string;
   SILICONFLOW_API_KEY?: string;
   XIAOMI_API_KEY?: string;
+  XIAOMI_BASE_URL?: string;
   KIMI_API_KEY?: string;
+  KIMI_BASE_URL?: string;
   GLM_API_KEY?: string;
+  GLM_BASE_URL?: string;
   RELAY_API_KEY?: string;
   RELAY_BASE_URL?: string;
   QICHACHA_API_KEY?: string;
@@ -53,14 +61,27 @@ export interface KeyStore {
 
 /** Which circuit-breaker provider(s) a given key name affects */
 const KEY_TO_CIRCUIT: Partial<Record<keyof KeyStore, string[]>> = {
-  DASHSCOPE_API_KEY: ['qwen'],
-  QWEN_API_KEY: ['qwen'],
+  DASHSCOPE_API_KEY: ['qwen', 'qwen-stt', 'cosyvoice'],
+  QWEN_API_KEY: ['qwen', 'qwen-stt', 'cosyvoice'],
   DOUBAO_SPEECH_KEY: ['ark', 'doubao-tts', 'doubao-stt-stream'],
-  OPENAI_API_KEY: ['openai'],
+  OPENAI_API_KEY: ['openai', 'whisper'],
+  OPENAI_BASE_URL: ['openai'],
   ANTHROPIC_API_KEY: ['anthropic'],
+  ANTHROPIC_BASE_URL: ['anthropic'],
   GEMINI_API_KEY: ['gemini'],
   DEEPSEEK_API_KEY: ['deepseek'],
   KIMI_API_KEY: ['kimi'],
+  ARK_API_KEY: ['ark'],
+  ARK_BASE_URL: ['ark'],
+  XIAOMI_API_KEY: ['xiaomi'],
+  XIAOMI_BASE_URL: ['xiaomi'],
+  GLM_API_KEY: ['glm'],
+  GLM_BASE_URL: ['glm'],
+  RELAY_API_KEY: ['relay'],
+  RELAY_BASE_URL: ['relay'],
+  DEEPSEEK_BASE_URL: ['deepseek'],
+  QWEN_BASE_URL: ['qwen'],
+  KIMI_BASE_URL: ['kimi'],
 };
 
 export function loadKeys(): KeyStore {
@@ -76,13 +97,18 @@ const BUILTIN_KEY_NAMES = [
   'PICOVOICE_ACCESS_KEY',
   'DASHSCOPE_API_KEY',
   'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
   'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
   'GEMINI_API_KEY',
   'DEEPSEEK_API_KEY',
+  'DEEPSEEK_BASE_URL',
   'QWEN_API_KEY',
+  'QWEN_BASE_URL',
   'MINIMAX_API_KEY',
   'E2B_API_KEY',
   'ARK_API_KEY',
+  'ARK_BASE_URL',
   'DOUBAO_SPEECH_KEY',
   'NETEASE_APP_ID',
   'NETEASE_PRIVATE_KEY',
@@ -90,8 +116,11 @@ const BUILTIN_KEY_NAMES = [
   'ALIYUN_AK_SECRET',
   'SILICONFLOW_API_KEY',
   'XIAOMI_API_KEY',
+  'XIAOMI_BASE_URL',
   'KIMI_API_KEY',
+  'KIMI_BASE_URL',
   'GLM_API_KEY',
+  'GLM_BASE_URL',
   'RELAY_API_KEY',
   'RELAY_BASE_URL',
   'QICHACHA_API_KEY',

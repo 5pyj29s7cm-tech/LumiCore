@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
-import { getMember, getOrgById, listUserOrgs } from '../org/db';
+import { getMember, getOrgById } from '../org/db';
 
 export type MessagingPlatformId = 'feishu' | 'wechat' | 'wecom';
 
@@ -64,14 +64,12 @@ function pruneExpiredCodes(store: StoreShape) {
 }
 
 export function createBindingCode(platform: MessagingPlatformId, lumiUserId: string, orgId = ''): BindingCode {
-  if (orgId) {
-    const membership = getMember(orgId, lumiUserId);
-    if (!membership || membership.status !== 'active') {
-      throw new Error('User is not an active member of this organization');
-    }
-  } else {
-    const orgs = listUserOrgs(lumiUserId);
-    orgId = orgs[0]?.id || '';
+  if (!orgId) {
+    throw new Error('Choose an organization before creating a messaging binding');
+  }
+  const membership = getMember(orgId, lumiUserId);
+  if (!membership || membership.status !== 'active') {
+    throw new Error('User is not an active member of this organization');
   }
   if (!orgId || !getOrgById(orgId)) {
     throw new Error('No organization available for binding');
@@ -129,9 +127,13 @@ export function listBindingsForUser(lumiUserId: string): MessagingBinding[] {
   return readStore().bindings.filter(item => item.lumiUserId === lumiUserId);
 }
 
-export function deleteBindingForUser(lumiUserId: string, bindingId: string): boolean {
+export function deleteBindingForUser(lumiUserId: string, bindingId: string, orgId?: string): boolean {
   const store = readStore();
-  const idx = store.bindings.findIndex(item => item.id === bindingId && item.lumiUserId === lumiUserId);
+  const idx = store.bindings.findIndex(item =>
+    item.id === bindingId &&
+    item.lumiUserId === lumiUserId &&
+    (orgId === undefined || item.orgId === orgId)
+  );
   if (idx < 0) return false;
   store.bindings.splice(idx, 1);
   writeStore(store);

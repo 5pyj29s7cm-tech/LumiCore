@@ -57,7 +57,7 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('buildLegalMeetingMinutesArgs');
     expect(restChat).toContain('shouldArchiveLegalMeeting');
     expect(restChat).toContain("return isLegalMeeting && domain === 'work' && Boolean(orgId)");
-    expect(restChat).toContain("const orgId = domain === 'work'");
+    expect(restChat).toContain('const orgId = requestScope.orgId');
     expect(restChat).toContain("toolRegistry.execute('legal_meeting_minutes_to_case'");
     expect(restChat).toContain('shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)');
     expect(restChat).toContain("source: 'meeting-analyze'");
@@ -69,14 +69,12 @@ describe('chat and voice tool-call stability', () => {
     const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
 
     expect(restChat).toContain('function resolveLegalCaseworkOrgId');
-    expect(restChat).toContain('function validateLegalWorkOrgScope');
     expect(restChat).toContain("return `personal:${safeLegalScopeSegment(input.userId)}`");
-    expect(restChat).toContain('Organization legal work requires an active organization session');
-    expect(restChat).toContain('Requested organization does not match the active organization session');
-    expect(restChat).toContain('if (scopeError) return res.status(403).json({ error: scopeError })');
-    expect(restChat).toContain('explicitOrgId: rawArgs.orgId || req.body?.orgId');
+    expect(restChat).toContain('const requestScope = req.user ? resolveDomain(req.user)');
+    expect(restChat).toContain('const legalOrgId = resolveLegalCaseworkOrgId({ domain, userOrgId: orgId, userId })');
+    expect(restChat).toContain('...rawArgs,');
+    expect(restChat).toContain('orgId: legalOrgId,');
     expect(restChat).toContain("source: 'legal-direct-tool'");
-    expect(restChat).toContain('explicitOrgId: req.body?.orgId');
     expect(restChat).toContain("source: 'legal-contract-review'");
   });
 

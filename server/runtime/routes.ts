@@ -27,6 +27,7 @@ interface RouteContext {
   jwtSecret: string;
   llm: {
     getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any; getArk: any; getGlm: any;
+    getOllama?: any; getLmStudio?: any; getXiaomi?: any; getKimi?: any; getRelay?: any;
   };
   getCookieOptions: () => { httpOnly: true; secure: boolean; sameSite: "none" | "lax"; maxAge: number };
   io: Server;
@@ -41,7 +42,7 @@ export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io
   mountDeviceRoutes(apiRouter, jwtSecret);
 
   // System routes (health, tools, llm, settings, stats, ecosystem, modules)
-  mountSystemRoutes(apiRouter, jwtSecret, io);
+  mountSystemRoutes(apiRouter, jwtSecret, io, llm);
 
   // AI Chat
   mountChatRoutes(apiRouter, jwtSecret, llmGetters);

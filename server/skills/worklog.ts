@@ -17,6 +17,8 @@ export interface WorkflowRecord {
   toolSequence: WorkflowStep[];
   conversationExcerpt: string; // user's original message (for context)
   timestamp: string;
+  domain?: string;
+  orgId?: string;
 }
 
 const recentWorkflows: WorkflowRecord[] = [];
@@ -31,6 +33,8 @@ export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>)
   const entry: WorkflowRecord = {
     id: generateId(),
     ...record,
+    domain: record.domain === 'work' ? 'work' : 'personal',
+    orgId: record.domain === 'work' ? (record.orgId || '') : '',
     timestamp: new Date().toISOString(),
   };
   recentWorkflows.push(entry);
@@ -42,9 +46,13 @@ export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>)
 }
 
 /** Get recent workflows (for pattern detection) */
-export function getRecentWorkflows(userId?: string): WorkflowRecord[] {
-  if (userId) return recentWorkflows.filter(w => w.userId === userId);
-  return [...recentWorkflows];
+export function getRecentWorkflows(userId?: string, domain?: string, orgId?: string): WorkflowRecord[] {
+  return recentWorkflows.filter(w => {
+    if (userId && w.userId !== userId) return false;
+    if (domain !== undefined && (w.domain || 'personal') !== domain) return false;
+    if (orgId !== undefined && (w.orgId || '') !== orgId) return false;
+    return true;
+  });
 }
 
 /** Clear all workflows */
@@ -180,16 +188,22 @@ export interface WorkflowCluster {
  * Find clusters of similar workflows in the recorded history.
  * Uses multi-factor similarity scoring with a minimum cluster size threshold.
  */
-export function findWorkflowClusters(minSize: number = 3): WorkflowCluster[] {
-  if (recentWorkflows.length < minSize) return [];
+export function findWorkflowClusters(
+  minSize: number = 3,
+  userId?: string,
+  domain?: string,
+  orgId?: string,
+): WorkflowCluster[] {
+  const candidates = getRecentWorkflows(userId, domain, orgId);
+  if (candidates.length < minSize) return [];
 
   const clusters: WorkflowCluster[] = [];
   const assigned = new Set<string>();
 
-  for (const wf of recentWorkflows) {
+  for (const wf of candidates) {
     if (assigned.has(wf.id)) continue;
     const cluster: WorkflowRecord[] = [wf];
-    for (const other of recentWorkflows) {
+    for (const other of candidates) {
       if (other.id === wf.id || assigned.has(other.id)) continue;
       if (computeSimilarityScore(wf, other) > 0.35) {
         cluster.push(other);

@@ -4,7 +4,6 @@ import { ProactiveNotifications } from '../components/ProactiveNotifications';
 import { LoginModal } from '../core/components/Auth';
 import { Toaster } from 'sonner';
 import { motion } from 'motion/react';
-import { Rocket } from 'lucide-react';
 import { installApiBridge } from '../services/apiBridge';
 import '@fontsource-variable/geist';
 import '../index.css';
@@ -12,6 +11,7 @@ import { DesktopUI } from '../components/DesktopUI';
 import { LoginRequired } from '../core/components/Auth';
 import { useAppShell } from './useAppShell';
 import { useApp } from '../contexts/AppContext';
+import { StartupSequence } from '../components/StartupSequence';
 
 installApiBridge();
 
@@ -32,20 +32,17 @@ export function DesktopApp() {
   const [activeTab, setActiveTab] = useState('home');
   const [selectedAgent, setSelectedAgent] = useState<any>(null);
   const [showSetup, setShowSetup] = useState(() => localStorage.getItem(SETUP_DONE_KEY) !== '1');
+  const [startupVisible, setStartupVisible] = useState(true);
 
   useEffect(() => { document.body.classList.add('overflow-hidden'); return () => document.body.classList.remove('overflow-hidden'); }, []);
   useEffect(() => { window.scrollTo(0, 0); }, [activeTab]);
+  useEffect(() => {
+    if (shell.loading) return;
+    const timer = window.setTimeout(() => setStartupVisible(false), 320);
+    return () => window.clearTimeout(timer);
+  }, [shell.loading]);
 
-  if (shell.loading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-transparent">
-        <motion.div animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }} transition={{ duration: 2, repeat: Infinity }} className="flex flex-col items-center gap-4">
-          <Rocket size={48} className="text-celestial-saturn" />
-          <div className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-celestial-mars to-celestial-saturn">Lumi OS Booting...</div>
-        </motion.div>
-      </div>
-    );
-  }
+  if (shell.loading || startupVisible) return <StartupSequence ready={!shell.loading} />;
 
   const renderTabContent = (tab: string) => {
     switch (tab) {

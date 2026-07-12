@@ -51,7 +51,7 @@ export function listUserOrganizations(userId: string) {
 }
 
 export function updateOrganization(orgId: string, userId: string, settings: Record<string, any>) {
-  const org = EDB.updateOrgSettings(orgId, settings);
+  const org = EDB.updateOrgProfile(orgId, settings);
   if (org) {
     logAudit({
       orgId,

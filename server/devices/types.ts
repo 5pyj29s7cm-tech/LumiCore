@@ -1,6 +1,12 @@
 export type DeviceType = 'desktop' | 'mobile' | 'ar_glasses' | 'holographic_prototype' | 'web';
 
 export type DeviceStatus = 'online' | 'offline' | 'pairing';
+export type DeviceDomain = 'personal' | 'work';
+
+export interface DeviceScope {
+  domain: DeviceDomain;
+  orgId: string;
+}
 
 /** Which sensory modalities a device can provide */
 export interface DeviceCapabilities {
@@ -14,6 +20,8 @@ export interface DeviceCapabilities {
 export interface DeviceInfo {
   id: string;
   userId: string;
+  domain: DeviceDomain;
+  orgId: string;
   name: string;
   type: DeviceType;
   status: DeviceStatus;
