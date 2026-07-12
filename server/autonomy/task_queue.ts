@@ -21,6 +21,9 @@ export interface AutonomousTask {
   error?: string;
   toolCallsCount?: number;
   tokensUsed?: number;
+  cancelRequestedAt?: string;
+  recoveryCount?: number;
+  lastRecoveredAt?: string;
 }
 
 const MAX_QUEUE_SIZE = 20;
@@ -29,16 +32,38 @@ const TASK_TTL_DAYS = 7;
 
 let queue: AutonomousTask[] = [];
 let history: AutonomousTask[] = [];
+const cancellationRequests = new Set<string>();
+
+export function recoverPersistedTask(task: AutonomousTask, recoveredAt = new Date().toISOString()): AutonomousTask {
+  if (task.status !== 'running') return { ...task };
+  if (task.cancelRequestedAt) {
+    return {
+      ...task,
+      status: 'cancelled',
+      completedAt: recoveredAt,
+      error: task.error || 'Cancellation completed during restart recovery',
+    };
+  }
+  return {
+    ...task,
+    status: 'pending',
+    startedAt: undefined,
+    recoveryCount: (task.recoveryCount || 0) + 1,
+    lastRecoveredAt: recoveredAt,
+  };
+}
 
 function loadFromDb() {
   try {
     const db = readDB();
     if (db.autonomousTasks) {
-      const all: AutonomousTask[] = db.autonomousTasks;
+      const stored: AutonomousTask[] = db.autonomousTasks;
+      const all = stored.map(task => recoverPersistedTask(task));
       const now = Date.now();
       const cutoff = now - TASK_TTL_DAYS * 86400000;
       queue = all.filter(t => t.status === 'pending' || t.status === 'running');
       history = all.filter(t => (t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled') && new Date(t.createdAt).getTime() > cutoff);
+      if (stored.some(task => task.status === 'running')) persist();
     }
   } catch {}
 }
@@ -46,7 +71,7 @@ function loadFromDb() {
 function persist() {
   try {
     const db = readDB();
-    db.autonomousTasks = [...queue, ...history].slice(-MAX_HISTORY);
+    db.autonomousTasks = [...queue, ...history.slice(-MAX_HISTORY)];
     writeDB(db);
   } catch {}
 }
@@ -85,6 +110,7 @@ export function markRunning(id: string): AutonomousTask | null {
 export function markCompleted(id: string, result: string, toolCallsCount: number, tokensUsed: number): AutonomousTask | null {
   const task = findTask(id);
   if (!task) return null;
+  if (isTaskCancellationRequested(id)) return markCancelled(id);
   task.status = 'completed';
   task.completedAt = new Date().toISOString();
   task.result = result;
@@ -98,6 +124,7 @@ export function markCompleted(id: string, result: string, toolCallsCount: number
 export function markFailed(id: string, error: string): AutonomousTask | null {
   const task = findTask(id);
   if (!task) return null;
+  if (isTaskCancellationRequested(id)) return markCancelled(id, error);
   task.status = 'failed';
   task.completedAt = new Date().toISOString();
   task.error = error;
@@ -109,11 +136,30 @@ export function markFailed(id: string, error: string): AutonomousTask | null {
 export function cancelTask(id: string, userId?: string): boolean {
   const task = findTask(id, userId);
   if (!task || (task.status !== 'pending' && task.status !== 'running')) return false;
+  if (task.status === 'running') {
+    task.cancelRequestedAt = new Date().toISOString();
+    cancellationRequests.add(id);
+    persist();
+    return true;
+  }
+  markCancelled(id);
+  return true;
+}
+
+export function isTaskCancellationRequested(id: string, userId?: string): boolean {
+  const task = findTask(id, userId);
+  return cancellationRequests.has(id) || Boolean(task?.cancelRequestedAt);
+}
+
+export function markCancelled(id: string, reason = 'Cancelled by user'): AutonomousTask | null {
+  const task = findTask(id);
+  if (!task) return null;
   task.status = 'cancelled';
   task.completedAt = new Date().toISOString();
+  task.error = reason;
   moveToHistory(task);
   persist();
-  return true;
+  return task;
 }
 
 export function getTaskQueue(userId?: string): AutonomousTask[] {
@@ -137,6 +183,7 @@ function findTask(id: string, userId?: string): AutonomousTask | null {
 
 function moveToHistory(task: AutonomousTask) {
   queue = queue.filter(t => t.id !== task.id);
+  cancellationRequests.delete(task.id);
   history.push(task);
   // Trim history
   if (history.length > MAX_HISTORY) {

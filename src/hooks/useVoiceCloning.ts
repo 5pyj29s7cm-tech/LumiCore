@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { uploadSamples, cloneVoice as apiCloneVoice, listVoices } from '../services/voiceService';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
 
@@ -74,6 +74,8 @@ export function useVoiceCloning() {
   const analyser = useRef<AnalyserNode | null>(null);
   const animationFrame = useRef<number>(0);
   const chunks = useRef<Blob[]>([]);
+  const activeStream = useRef<MediaStream | null>(null);
+  const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const startDurationTimer = useCallback(() => {
     recordingStartTime.current = Date.now();
@@ -104,6 +106,7 @@ export function useVoiceCloning() {
     try {
       chunks.current = [];
       const stream = await requestMicrophoneStream(true);
+      activeStream.current = stream;
 
       audioContext.current = new AudioContext();
       const source = audioContext.current.createMediaStreamSource(stream);
@@ -126,7 +129,9 @@ export function useVoiceCloning() {
         const blob = new Blob(chunks.current, { type: mimeType });
         const hasData = chunks.current.some(c => c.size > 0);
         stream.getTracks().forEach(t => t.stop());
-        if (audioContext.current) audioContext.current.close();
+        activeStream.current = null;
+        if (audioContext.current) void audioContext.current.close().catch(() => {});
+        audioContext.current = null;
         cancelAnimationFrame(animationFrame.current);
         if (!hasData) {
           setState(prev => ({ ...prev, isRecording: false, error: 'Recording was empty — please try again and speak clearly.' }));
@@ -144,9 +149,15 @@ export function useVoiceCloning() {
       startDurationTimer();
       updateAudioLevel();
     } catch (err: any) {
-      setState(prev => ({ ...prev, error: err.message || 'Microphone access denied' }));
+      stopDurationTimer();
+      cancelAnimationFrame(animationFrame.current);
+      activeStream.current?.getTracks().forEach(track => track.stop());
+      activeStream.current = null;
+      if (audioContext.current) void audioContext.current.close().catch(() => {});
+      audioContext.current = null;
+      setState(prev => ({ ...prev, isRecording: false, audioLevel: 0, error: err.message || 'Microphone access denied' }));
     }
-  }, [updateAudioLevel, startDurationTimer]);
+  }, [updateAudioLevel, startDurationTimer, stopDurationTimer]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
@@ -182,9 +193,7 @@ export function useVoiceCloning() {
   }, []);
 
   const uploadAndClone = useCallback(async (name: string) => {
-    console.log('[VoiceClone] uploadAndClone called, recordings:', state.recordings.length);
     if (state.recordings.length === 0) {
-      console.log('[VoiceClone] No recordings, setting error');
       setState(prev => ({ ...prev, cloneError: 'No recordings to clone from', cloneStatus: 'error' }));
       return null;
     }
@@ -194,15 +203,11 @@ export function useVoiceCloning() {
 
       const files = state.recordings.slice(0, MAX_SAMPLES).map(toSampleFile);
 
-      console.log('[VoiceClone] Uploading', files.length, 'files...');
       const { urls } = await uploadSamples(files);
-      console.log('[VoiceClone] Uploaded, got URLs:', urls);
 
       setState(prev => ({ ...prev, isUploading: false, isCloning: true, cloneProgress: 'Cloning voice...', cloneStatus: 'cloning' }));
 
-      console.log('[VoiceClone] Starting clone with name:', name);
       const result = await apiCloneVoice(urls, name);
-      console.log('[VoiceClone] Clone result:', result);
 
       setState(prev => ({
         ...prev,
@@ -215,7 +220,8 @@ export function useVoiceCloning() {
       }));
 
       // Keep success state visible briefly then reset
-      setTimeout(() => {
+      if (successTimer.current) clearTimeout(successTimer.current);
+      successTimer.current = setTimeout(() => {
         setState(prev => prev.cloneStatus === 'success' ? { ...prev, cloneStatus: 'idle' as const, cloneProgress: '' } : prev);
       }, 3000);
 
@@ -245,6 +251,21 @@ export function useVoiceCloning() {
   const clearError = useCallback(() => {
     setState(prev => ({ ...prev, error: null }));
   }, []);
+
+  useEffect(() => () => {
+    stopDurationTimer();
+    if (successTimer.current) clearTimeout(successTimer.current);
+    cancelAnimationFrame(animationFrame.current);
+    if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
+      mediaRecorder.current.ondataavailable = null;
+      mediaRecorder.current.onstop = null;
+      try { mediaRecorder.current.stop(); } catch {}
+    }
+    activeStream.current?.getTracks().forEach(track => track.stop());
+    activeStream.current = null;
+    if (audioContext.current) void audioContext.current.close().catch(() => {});
+    audioContext.current = null;
+  }, [stopDurationTimer]);
 
   return {
     ...state,

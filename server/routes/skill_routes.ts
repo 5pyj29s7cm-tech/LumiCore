@@ -1,8 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
 import path from "path";
-import fs from "fs";
-import os from "os";
-import { execFileSync } from "child_process";
 import { readDB, writeDB } from "../../db_layer";
 import { mcpManager, getMCPConfig, updateMCPConfig, normalizeSkillInstallName } from "../mcp";
 import { generateSkill } from "../skills/generator";
@@ -60,6 +57,15 @@ export function mountSkillRoutes(
         }
       }
     } catch {}
+  };
+
+  const activateOrRollback = async (name: string) => {
+    try {
+      return await mcpManager.restartServer(name);
+    } catch (error) {
+      mcpManager.uninstallSkill(name);
+      throw error;
+    }
   };
 
   // List all installed skills (local + external MCP servers)
@@ -125,6 +131,7 @@ export function mountSkillRoutes(
       );
 
       if (result.success) {
+        await activateOrRollback(result.skillName!);
         io.emit('skill:updated', { name: result.skillName });
         createAgentForSkill(result.skillName, {
           description: description || 'Auto-generated skill',
@@ -147,42 +154,33 @@ export function mountSkillRoutes(
       const { source, url, package: pkgName, path: localPath, name } = req.body;
 
       if (source === 'git' && url) {
-        const skillName = normalizeSkillInstallName(name || url.split('/').pop()?.replace('.git', '') || 'unnamed');
-        const tmpDir = path.join(os.tmpdir(), `lumi_skill_${Date.now()}`);
-        let destDir = '';
-        try {
-          execFileSync('git', ['clone', String(url), tmpDir], { stdio: 'pipe', timeout: 30000, windowsHide: true });
-          destDir = mcpManager.installSkill(skillName, tmpDir);
-        } finally {
-          fs.rmSync(tmpDir, { recursive: true, force: true });
-        }
-
-        // Restart to pick up new skill
-        await mcpManager.restartServer(skillName);
+        const destDir = await mcpManager.installFromGitHub(String(url));
+        const skillName = path.basename(destDir);
+        await activateOrRollback(skillName);
         createAgentForSkill(skillName, { description: `Git install: ${url}`, category: 'general', installSource: 'git', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'local' && localPath) {
         const skillName = normalizeSkillInstallName(name || path.basename(localPath));
-        const destDir = mcpManager.installSkill(skillName, localPath);
-        await mcpManager.restartServer(skillName);
+        const destDir = await mcpManager.installSkillValidated(skillName, localPath);
+        await activateOrRollback(skillName);
         createAgentForSkill(skillName, { description: `Local install: ${localPath}`, category: 'general', installSource: 'local', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'npm' && pkgName) {
         const npmDir = await mcpManager.installFromNpm(pkgName);
         const npmName = path.basename(npmDir);
-        await mcpManager.restartServer(npmName);
+        await activateOrRollback(npmName);
         io.emit('skill:installed', { name: npmName, source: 'npm' });
         createAgentForSkill(npmName, { description: `npm package: ${pkgName}`, category: 'general', installSource: 'npm', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: npmName, directory: npmDir });
       } else if (source === 'github' && url) {
         const ghDir = await mcpManager.installFromGitHub(url);
         const ghName = path.basename(ghDir);
-        await mcpManager.restartServer(ghName);
+        await activateOrRollback(ghName);
         io.emit('skill:installed', { name: ghName, source: 'github' });
         createAgentForSkill(ghName, { description: `GitHub repo: ${url}`, category: 'general', installSource: 'github', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: ghName, directory: ghDir });
       } else {
-        res.status(400).json({ error: 'Invalid source. Use: git (with url), local (with path), or npm (with package)' });
+        res.status(400).json({ error: 'Invalid source. Use: github/git (with a GitHub HTTPS URL), local (with path), or npm (with package)' });
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message });

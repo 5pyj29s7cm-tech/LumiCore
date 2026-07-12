@@ -270,22 +270,21 @@ router.post('/voice/samples', requireAuth, (req: Request, res: Response) => {
   }
   upload.array('samples', 5)(req, res, (uploadErr: any) => {
     if (uploadErr) {
+      for (const file of (req.files as Express.Multer.File[] | undefined) || []) {
+        try { fs.rmSync(file.path, { force: true }); } catch {}
+      }
       return res.status(400).json({ error: uploadErr.message || 'Audio upload failed' });
     }
   try {
     const files = req.files as Express.Multer.File[];
-    console.log('[Voice Upload] Received files:', files?.length, 'userId:', getUserId(req));
     if (!files || files.length === 0) {
-      console.log('[Voice Upload] No files — req.file:', req.file, 'req.files:', req.files, 'req.body:', req.body);
       return res.status(400).json({ error: 'No audio files provided' });
     }
-    files.forEach(f => console.log('[Voice Upload] File:', f.filename, f.size, f.mimetype, f.path));
 
     const urls = files.map(f => `/api/voice/samples/${getUserId(req)}/${f.filename}`);
-    console.log('[Voice Upload] Returning URLs:', urls);
     res.json({ urls, filenames: files.map(f => f.filename), count: files.length });
   } catch (err: any) {
-    console.log('[Voice Upload] Error:', err.message);
+    logger.warn('[Voice Upload Error]', err.message);
     res.status(500).json({ error: err.message });
   }
   });
@@ -322,6 +321,7 @@ router.get('/voice/public-samples/:token', (req: Request, res: Response) => {
 
 // POST /api/voice/clone — Trigger voice cloning
 router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => {
+  const cleanupPaths = new Set<string>();
   try {
     assertCanMutateVoiceAssets(req);
     const { sampleUrls, name, provider } = req.body;
@@ -351,6 +351,7 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       return res.status(400).json({ error: 'Voice name is required' });
     }
     const localSamplePaths = sampleUrls.map((url: string) => resolveUserSamplePath(req, url));
+    localSamplePaths.forEach(filePath => cleanupPaths.add(filePath));
     const explicitCloneAudioMode = process.env.COSYVOICE_CLONE_AUDIO_MODE?.toLowerCase();
     const publicBaseUrl = getPublicBaseUrl(req);
     const cloneAudioMode = explicitCloneAudioMode || (isLocalOnlyBaseUrl(publicBaseUrl) ? 'data-url' : 'url');
@@ -362,18 +363,14 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
     }
 
     const cloneAudioPath = prepareCloneSampleFile(localSamplePaths, getUserId(req));
+    cleanupPaths.add(cloneAudioPath);
     const cloneSampleUrls = cloneAudioMode === 'data-url'
       ? [cloneAudioPath]
       : [createPublicSampleUrl(req, cloneAudioPath, getUserId(req))];
     const voiceModel = cloneAudioMode === 'data-url' ? getQwenCloneTargetModel() : getCosyVoiceCloneTargetModel();
-    console.log('[Voice Clone] samples:', sampleUrls.length, 'prepared:', cloneAudioPath, 'name:', cleanName, 'provider:', activeProvider, 'mode:', cloneAudioMode);
-
     const voiceId = await cloneVoice({ sampleUrls: cloneSampleUrls, name: cleanName }, activeProvider);
-    console.log('[Voice Clone] Got voiceId:', voiceId);
 
-    const userId = getUserId(req);
     const scope = getRequestVoiceScope(req);
-    console.log('[Voice Clone] Writing scoped profile for userId:', userId, 'domain:', scope.domain, 'orgId:', scope.orgId);
     addScopedVoiceProfile(scope, {
       voiceId,
       name: cleanName,
@@ -383,12 +380,17 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       source: 'cloned',
       createdAt: new Date().toISOString(),
     });
-    console.log('[Voice Clone] Scoped profile written, responding with voiceId:', voiceId);
-
     res.json({ voiceId, name: cleanName, provider: activeProvider, category: 'cloned', model: voiceModel, source: 'cloned' });
   } catch (err: any) {
     logger.error('[Voice Clone Error]', err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Voice cloning service unavailable' });
+  } finally {
+    for (const filePath of cleanupPaths) {
+      try { fs.rmSync(filePath, { force: true }); } catch {}
+      for (const [token, entry] of publicSampleTokens) {
+        if (entry.filePath === filePath) publicSampleTokens.delete(token);
+      }
+    }
   }
 });
 

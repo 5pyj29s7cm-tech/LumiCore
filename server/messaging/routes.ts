@@ -31,7 +31,7 @@ import * as LegalCases from '../org/legal_cases';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { addMessage, getMessagesByTokenBudget, getOrCreateActiveConversation } from '../conversation/manager';
-import { acceptMessageOnce } from './delivery_ledger';
+import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from './delivery_ledger';
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry } from '../tools/registry';
 import { buildUnifiedLegalEntryPrompt } from '../cognition/legal_entry';
@@ -389,7 +389,10 @@ export function dispatchIncomingMessage(
         const replyText = await processWithPersonality(enrichedMessage, options);
         await transport.reply(enrichedMessage, replyText);
       });
-    })().catch(async (err: any) => {
+    })().then(() => {
+      completeMessageDelivery(message.platform, message.messageId);
+    }).catch(async (err: any) => {
+      releaseMessageDelivery(message.platform, message.messageId);
       console.error(`[Messaging] ${message.platform} route failed:`, err?.message || err);
       await transport.reply(message, '这次处理没有完成，请稍后重试。').catch(() => undefined);
     });

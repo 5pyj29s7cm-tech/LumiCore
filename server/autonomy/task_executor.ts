@@ -2,7 +2,7 @@
  * Autonomous Task Executor — processes the autonomous task queue.
  * Executes tasks via runWithTools with tighter safety policy than user-initiated autonomous mode.
  */
-import { dequeue, markRunning, markCompleted, markFailed, getRunningTask } from './task_queue';
+import { dequeue, markRunning, markCompleted, markFailed, markCancelled, getRunningTask, isTaskCancellationRequested } from './task_queue';
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry } from '../tools/registry';
@@ -139,6 +139,17 @@ function markLinkedPlanFailed(task: AutonomousTask, error: string) {
   }, scope);
 }
 
+function markLinkedPlanCancelled(task: AutonomousTask) {
+  if (!task.planId) return;
+  const scope = planScopeForTask(task);
+  const plan = getPlan(task.planId, scope);
+  if (!plan) return;
+  const message = 'Autonomous task cancelled by user';
+  const step = plan.steps.find(item => item.status === 'in_progress');
+  if (step) updatePlanStep(plan.id, step.id, { status: 'skipped', result: message }, scope);
+  updatePlan(plan.id, { status: 'cancelled', result: message }, scope);
+}
+
 export async function executeNextAutonomousTask(
   io: SocketIOServer,
   getters: LLMGetters,
@@ -180,7 +191,6 @@ export async function executeNextAutonomousTask(
       source: 'autonomous',
     });
 
-    let cancelled = false;
     const toolPolicy = buildAutonomousToolPolicy(running, maxIterations);
 
     const context: ToolContext = {
@@ -189,7 +199,7 @@ export async function executeNextAutonomousTask(
       requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args, { actionIntent: task.description }),
       actionIntent: task.description,
       toolPolicy,
-      isCancelled: () => cancelled,
+      isCancelled: () => isTaskCancellationRequested(task.id, task.userId),
       autonomous: true,
       source: 'autonomous',
     };
@@ -226,6 +236,17 @@ export async function executeNextAutonomousTask(
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
     recordAutonomousTokens(task.userId, tokensUsed);
 
+    if (isTaskCancellationRequested(task.id, task.userId)) {
+      markCancelled(task.id);
+      markLinkedPlanCancelled(task);
+      io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
+        taskId: task.id,
+        title: task.title,
+        timestamp: new Date().toISOString(),
+      });
+      return { executed: true, taskId: task.id, result: 'Cancelled by user' };
+    }
+
     const summary = result.text || `Completed with ${toolCallCount} tool calls.`;
     markCompleted(task.id, summary, toolCallCount, tokensUsed);
     markLinkedPlanCompleted(task, summary);
@@ -243,6 +264,16 @@ export async function executeNextAutonomousTask(
     return { executed: true, taskId: task.id, result: summary };
   } catch (err: any) {
     const errorMsg = err.message || 'Unknown error';
+    if (isTaskCancellationRequested(task.id, task.userId)) {
+      markCancelled(task.id, errorMsg);
+      markLinkedPlanCancelled(task);
+      io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
+        taskId: task.id,
+        title: task.title,
+        timestamp: new Date().toISOString(),
+      });
+      return { executed: true, taskId: task.id, result: 'Cancelled by user' };
+    }
     markFailed(task.id, errorMsg);
     markLinkedPlanFailed(task, errorMsg);
 

@@ -20,6 +20,16 @@ export function normalizePresenceStatus(status: unknown): PresenceState['status'
     : 'away';
 }
 
+export function buildPresenceHeartbeat(faceResult: FaceRecognitionResult, voiceprintResult: VoiceprintResult) {
+  return {
+    facePresent: faceResult.facePresent,
+    faceMatched: faceResult.ownerPresent,
+    faceConfidence: faceResult.confidence,
+    voiceprintMatched: voiceprintResult.isOwnerSpeaking,
+    voiceprintConfidence: voiceprintResult.confidence,
+  };
+}
+
 export function usePresence({ socket, faceResult, voiceprintResult, userId }: UsePresenceOptions) {
   const [presence, setPresence] = useState<PresenceState>({
     isAway: false,
@@ -27,21 +37,26 @@ export function usePresence({ socket, faceResult, voiceprintResult, userId }: Us
   });
 
   const prevStatusRef = useRef<string>('present');
+  const faceResultRef = useRef(faceResult);
+  const voiceprintResultRef = useRef(voiceprintResult);
+  faceResultRef.current = faceResult;
+  voiceprintResultRef.current = voiceprintResult;
 
   // Send heartbeat every 2 seconds
   useEffect(() => {
     if (!socket || !userId) return;
-    const timer = setInterval(() => {
-      socket.emit('presence:heartbeat', {
-        facePresent: faceResult.facePresent,
-        faceMatched: faceResult.ownerPresent,
-        faceConfidence: faceResult.confidence,
-        voiceprintMatched: voiceprintResult.isOwnerSpeaking,
-        voiceprintConfidence: voiceprintResult.confidence,
-      });
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [socket, userId, faceResult, voiceprintResult]);
+    const sendHeartbeat = () => {
+      if (socket.connected === false) return;
+      socket.emit('presence:heartbeat', buildPresenceHeartbeat(faceResultRef.current, voiceprintResultRef.current));
+    };
+    sendHeartbeat();
+    socket.on?.('connect', sendHeartbeat);
+    const timer = setInterval(sendHeartbeat, 2000);
+    return () => {
+      clearInterval(timer);
+      socket.off?.('connect', sendHeartbeat);
+    };
+  }, [socket, userId]);
 
   // Listen for presence state changes from server
   useEffect(() => {

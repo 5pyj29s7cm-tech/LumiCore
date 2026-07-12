@@ -296,6 +296,7 @@ export class MCPClientManager {
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.staging-')) continue;
       const skillDir = path.join(SKILLS_DIR, entry.name);
       const pkgPath = path.join(skillDir, 'package.json');
       const indexPath = path.join(skillDir, 'index.ts');
@@ -359,6 +360,45 @@ export class MCPClientManager {
     this.registerLocalSkill(skillName, destDir, resultingPkg);
 
     return destDir;
+  }
+
+  /** Install a local skill as one transaction: stage, prepare, then atomically publish. */
+  async installSkillValidated(name: string, sourceDir: string): Promise<string> {
+    this.ensureSkillsDir();
+    const skillName = normalizeSkillInstallName(name);
+    const destDir = path.join(SKILLS_DIR, skillName);
+    const stagingDir = path.join(SKILLS_DIR, `.staging-${skillName}-${process.pid}-${Date.now()}`);
+    const config = this.getConfig();
+    if (fs.existsSync(destDir) || config[skillName]) {
+      throw new Error(`Skill "${skillName}" already exists. Uninstall it first.`);
+    }
+    if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
+      throw new Error('Local skill source directory not found');
+    }
+
+    try {
+      this.copyDirSync(sourceDir, stagingDir);
+      const pkg = this.readPkg(stagingDir);
+      const hasIndex = fs.existsSync(path.join(stagingDir, 'index.ts'));
+      const hasRunCommand = Boolean(pkg.lumi?.runCommand);
+      if (!hasIndex && !hasRunCommand) {
+        throw new Error('Skill package must provide index.ts or lumi.runCommand');
+      }
+
+      await this.prepareLocalSkillDependenciesSync(stagingDir);
+      this.patchInstalledMetadata(stagingDir);
+      this.patchInstalledVersion(stagingDir, this.readPkg(sourceDir).version || '0.0.0');
+      fs.renameSync(stagingDir, destDir);
+      try {
+        this.registerLocalSkill(skillName, destDir, this.readPkg(destDir));
+      } catch (error) {
+        fs.rmSync(destDir, { recursive: true, force: true });
+        throw error;
+      }
+      return destDir;
+    } finally {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    }
   }
 
   /** Remove incomplete local skill directories that cannot be started. */
@@ -974,6 +1014,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
     for (const entry of localEntries) {
       if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.staging-')) continue;
       const skillDir = path.join(SKILLS_DIR, entry.name);
       const indexPath = path.join(skillDir, 'index.ts');
       if (!fs.existsSync(indexPath)) continue;

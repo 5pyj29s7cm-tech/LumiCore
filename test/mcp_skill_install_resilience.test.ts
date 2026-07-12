@@ -190,4 +190,27 @@ describe('MCP skill install resilience', () => {
     expect(fs.existsSync(path.join(tempHome, 'unsafe-skill'))).toBe(false);
     expect(manager.getConfig()['unsafe-skill']).toBeTruthy();
   });
+
+  it('publishes validated local skills atomically and leaves no failed workspace', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const validSource = path.join(tempHome, 'valid-source');
+    fs.mkdirSync(validSource, { recursive: true });
+    fs.writeFileSync(path.join(validSource, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(validSource, 'package.json'), JSON.stringify({
+      name: 'atomic-skill', version: '1.0.0', lumi: { toolCount: 1 },
+    }));
+
+    const installed = await manager.installSkillValidated('atomic-skill', validSource);
+    expect(installed).toBe(path.join(tempHome, 'lumi_skills', 'atomic-skill'));
+    expect(manager.getConfig()['atomic-skill']).toBeTruthy();
+
+    const invalidSource = path.join(tempHome, 'invalid-source');
+    fs.mkdirSync(invalidSource, { recursive: true });
+    fs.writeFileSync(path.join(invalidSource, 'package.json'), JSON.stringify({ name: 'broken' }));
+    await expect(manager.installSkillValidated('broken', invalidSource)).rejects.toThrow(/index\.ts|runCommand/);
+    expect(fs.existsSync(path.join(tempHome, 'lumi_skills', 'broken'))).toBe(false);
+    expect(fs.readdirSync(path.join(tempHome, 'lumi_skills')).some(name => name.startsWith('.staging-broken-'))).toBe(false);
+  });
 });

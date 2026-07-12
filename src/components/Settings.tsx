@@ -16,6 +16,7 @@ import {
   Mic,
   CheckCircle,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   LogOut,
   Cloud,
@@ -89,7 +90,7 @@ export function Settings({
 }) {
   const { platform, isElectron } = usePlatform();
   const { operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, switchDomain } = useApp();
-  const [providerStatus, setProviderStatus] = useState<Record<string, { available: boolean; model: string }>>({});
+  const [providerStatus, setProviderStatus] = useState<Record<string, ProviderRuntimeStatus>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const visibleSection = activeSection === 'computer' || activeSection === 'messaging' ? 'general' : activeSection;
   const isZh = lang !== 'en';
@@ -1440,10 +1441,24 @@ function VisionModelPage({ t }: { t: any }) {
   );
 }
 
-function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, { available: boolean; model: string }> }) {
+interface ProviderRuntimeStatus {
+  available: boolean;
+  configured?: boolean;
+  model: string;
+  lastProbe?: {
+    ok: boolean;
+    testedAt: string;
+    latencyMs?: number;
+    errorCategory?: string;
+  } | null;
+}
+
+function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const { aiConfig, updateAIConfig } = useApp();
+  const failedProbes = Object.entries(providerStatus)
+    .filter(([, status]) => status.configured !== false && status.lastProbe?.ok === false);
   return (
     <div className="space-y-8">
       <SettingsSection title={t.llmProviders || ui('LLM 服务商', 'LLM Providers')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
@@ -1472,6 +1487,17 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
         <p className="text-sm text-white/40 max-w-xl mb-6">
           {t.apiMatrixLLMDesc || ui('为每个 LLM 服务商配置 API Key 和偏好模型。', 'Configure API keys and preferred models for each LLM provider.')}
         </p>
+        {failedProbes.length > 0 && (
+          <div className="mb-6 flex flex-wrap items-center gap-2 border-y border-red-400/15 py-3 text-xs text-red-200/80">
+            <AlertTriangle size={14} />
+            <span>{ui('最近实测不可用：', 'Last probe unavailable:')}</span>
+            {failedProbes.map(([provider, status]) => (
+              <span key={provider} className="font-mono">
+                {provider} ({status.lastProbe?.errorCategory || ui('连接失败', 'failed')})
+              </span>
+            ))}
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-6">
           <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="DeepSeek" providerId="deepseek" models={['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner']} placeholder="sk-..." serverKey="DEEPSEEK_API_KEY" t={t} />
           <LLMProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen / DashScope (Alibaba Cloud)" providerId="qwen" models={['qwen-plus', 'qwen-max', 'qwen-turbo']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />

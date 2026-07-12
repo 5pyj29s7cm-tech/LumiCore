@@ -25,33 +25,23 @@ export async function uploadSamples(files: File[]): Promise<{ urls: string[]; fi
   const form = new FormData();
   files.forEach(f => form.append('samples', f));
 
-  console.log('[VoiceService] Uploading', files.length, 'samples, sizes:', files.map(f => f.size));
-  const url = `${BASE}/samples`;
-  console.log('[VoiceService] POST', url);
   const res = await voiceFetch('/samples', { method: 'POST', body: form });
-  console.log('[VoiceService] Upload response:', res.status, res.statusText);
   if (!res.ok) {
     throw new Error(await readError(res, 'Upload failed'));
   }
-  const data = await res.json();
-  console.log('[VoiceService] Upload result:', data);
-  return data;
+  return res.json();
 }
 
 export async function cloneVoice(sampleUrls: string[], name: string, provider?: string): Promise<{ voiceId: string; name: string; provider: string; model?: string; source?: string }> {
-  console.log('[VoiceService] Cloning voice with name:', name, 'urls:', sampleUrls);
   const res = await voiceFetch('/clone', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sampleUrls, name, provider: provider || 'cosyvoice' }),
   });
-  console.log('[VoiceService] Clone response:', res.status, res.statusText);
   if (!res.ok) {
     throw new Error(await readError(res, 'Clone failed'));
   }
-  const data = await res.json();
-  console.log('[VoiceService] Clone result:', data);
-  return data;
+  return res.json();
 }
 
 export async function designVoice(prompt: string, name: string, provider?: string): Promise<{ voiceId: string; name: string; provider: string; source?: string }> {

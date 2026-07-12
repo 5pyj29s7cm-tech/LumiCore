@@ -30,6 +30,42 @@ interface EndCallOptions {
   refineTranscript?: boolean;
 }
 
+interface VoiceStartPayload {
+  voiceId?: string;
+  personalityId: string;
+  agentId?: string;
+  transcriptionOnly: boolean;
+  domain: 'personal' | 'work';
+  orgId?: string;
+  sessionId: string;
+}
+
+export function waitForVoiceSocket(socket: any, timeoutMs = 8000): Promise<void> {
+  if (socket?.connected) return Promise.resolve();
+  if (!socket) return Promise.reject(new Error('Voice connection is unavailable'));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off?.('connect', onConnect);
+      socket.off?.('connect_error', onError);
+      if (error) reject(error); else resolve();
+    };
+    const onConnect = () => finish();
+    const onError = (error: Error) => finish(new Error(error?.message || 'Voice connection failed'));
+    const timer = setTimeout(() => finish(new Error('Voice connection timed out')), timeoutMs);
+    socket.on?.('connect', onConnect);
+    socket.on?.('connect_error', onError);
+    socket.connect?.();
+  });
+}
+
+function createVoiceSessionId(): string {
+  try { return crypto.randomUUID(); } catch { return `voice-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+}
+
 export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFromVoice, canSendMicAudio }: UseVoiceCallOptions) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [audioLevel, setAudioLevel] = useState(0);
@@ -66,10 +102,15 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   const thinkingWatchdogStartedAt = useRef(0);
   const callStateRef = useRef<CallState>('idle');
   const lastPassiveSilenceKeepAlive = useRef(0);
+  const activeStartPayload = useRef<VoiceStartPayload | null>(null);
+  const socketRef = useRef(socket);
+  const callGenerationRef = useRef(0);
+  const startInFlightRef = useRef(false);
 
   useEffect(() => { canInterruptFromVoiceRef.current = canInterruptFromVoice; }, [canInterruptFromVoice]);
   useEffect(() => { canSendMicAudioRef.current = canSendMicAudio; }, [canSendMicAudio]);
   useEffect(() => { callStateRef.current = callState; }, [callState]);
+  useEffect(() => { socketRef.current = socket; }, [socket]);
 
   const clearThinkingWatchdog = useCallback(() => {
     if (thinkingWatchdogRef.current) {
@@ -230,6 +271,27 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     isTtsPlaying.current = false;
   }, []);
 
+  const cleanupCapture = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (scriptProcessorRef.current) {
+      try { scriptProcessorRef.current.disconnect(); } catch {}
+      scriptProcessorRef.current = null;
+    }
+    if (audioContext.current) {
+      void audioContext.current.close().catch(() => {});
+      audioContext.current = null;
+    }
+    if (timerInterval.current) {
+      clearInterval(timerInterval.current);
+      timerInterval.current = null;
+    }
+    cancelAnimationFrame(animationFrame.current);
+    analyser.current = null;
+  }, []);
+
   const audioQueue = useRef<Array<ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number }>>([]);
 
   useEffect(() => {
@@ -387,8 +449,14 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
 
     const onAudioError = (data: { message: string }) => {
       if (!isCallActive.current) return;
+      callGenerationRef.current++;
+      isCallActive.current = false;
+      activeStartPayload.current = null;
       setError(data.message);
       clearThinkingWatchdog();
+      cleanupCapture();
+      stopAllPlayback();
+      transcriptionOnlyRef.current = false;
       setCallState('idle');
     };
 
@@ -464,7 +532,31 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
       clearThinkingWatchdog();
     };
-  }, [socket, onTranscript, onResponse, stopAllPlayback, clearThinkingWatchdog, scheduleThinkingWatchdog]);
+  }, [socket, onTranscript, onResponse, stopAllPlayback, cleanupCapture, clearThinkingWatchdog, scheduleThinkingWatchdog]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onDisconnect = () => {
+      if (!isCallActive.current) return;
+      setConnectionQuality('poor');
+      setCallState('connecting');
+      clearThinkingWatchdog();
+      stopAllPlayback();
+    };
+    const onConnect = () => {
+      const payload = activeStartPayload.current;
+      if (!isCallActive.current || !payload) return;
+      setConnectionQuality('fair');
+      setCallState('connecting');
+      socket.emit('audio:start', payload);
+    };
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect', onConnect);
+    return () => {
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect', onConnect);
+    };
+  }, [socket, clearThinkingWatchdog, stopAllPlayback]);
 
   // Push audio emotion perception events when call state changes
   useEffect(() => {
@@ -515,16 +607,27 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   }, []);
 
   const startCall = useCallback(async (voiceId?: string, personalityId: string = 'lumi', agentId?: string, options: StartCallOptions = {}) => {
+    if (isCallActive.current || startInFlightRef.current) return;
+    const generation = ++callGenerationRef.current;
+    startInFlightRef.current = true;
     try {
       setError(null);
       setCallState('connecting');
       transcriptionOnlyRef.current = options.transcriptionOnly === true;
+
+      const activeSocket = socketRef.current;
+      await waitForVoiceSocket(activeSocket);
+      if (generation !== callGenerationRef.current) return;
 
       const stream = await requestMicrophoneStream({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
       });
+      if (generation !== callGenerationRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       streamRef.current = stream;
 
       // Set up audio level monitoring at the realtime STT sample rate.
@@ -540,7 +643,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       const scriptProcessor = audioContext.current.createScriptProcessor(bufferSize, 1, 1);
 
       scriptProcessor.onaudioprocess = (event) => {
-        if (!socket?.connected) return;
+        const currentSocket = socketRef.current;
+        if (!currentSocket?.connected) return;
         const input = event.inputBuffer.getChannelData(0);
         // Convert float32 [-1,1] to int16 PCM
         const int16 = new Int16Array(input.length);
@@ -578,13 +682,13 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
 
         if (flushTtsPreRollOnNextAudio.current && ttsPreRollChunks.current.length > 0) {
           for (const preRollChunk of ttsPreRollChunks.current) {
-            socket.emit('audio:chunk', preRollChunk);
+            currentSocket.emit('audio:chunk', preRollChunk);
           }
           ttsPreRollChunks.current = [];
           flushTtsPreRollOnNextAudio.current = false;
         }
 
-        socket.emit('audio:chunk', chunk);
+        currentSocket.emit('audio:chunk', chunk);
       };
 
       source.connect(scriptProcessor);
@@ -601,20 +705,29 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       timerInterval.current = setInterval(() => {
         setElapsedSeconds(Math.floor((Date.now() - callStartTime.current) / 1000));
       }, 1000);
-      socket.emit('audio:start', {
+      const startPayload: VoiceStartPayload = {
         voiceId,
         personalityId,
         agentId,
         transcriptionOnly: options.transcriptionOnly === true,
         domain: options.domain || 'personal',
         orgId: options.domain === 'work' ? options.orgId : undefined,
-      });
+        sessionId: createVoiceSessionId(),
+      };
+      activeStartPayload.current = startPayload;
+      activeSocket.emit('audio:start', startPayload);
     } catch (err: any) {
+      if (generation !== callGenerationRef.current) return;
+      cleanupCapture();
+      activeStartPayload.current = null;
+      isCallActive.current = false;
       transcriptionOnlyRef.current = false;
       setError(err.message || 'Failed to start voice call');
       setCallState('idle');
+    } finally {
+      startInFlightRef.current = false;
     }
-  }, [socket, updateAudioLevel]);
+  }, [cleanupCapture, updateAudioLevel]);
 
   const startCallRef = useRef(startCall);
   startCallRef.current = startCall;
@@ -648,30 +761,18 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   }, []);
 
   const endCall = useCallback((options: EndCallOptions = {}) => {
+    callGenerationRef.current++;
     isCallActive.current = false;
     clearPassiveTimers();
     clearThinkingWatchdog();
-    socket?.emit('audio:stop', { refineTranscript: options.refineTranscript === true });
+    const activeSocket = socketRef.current;
+    activeSocket?.emit('audio:stop', {
+      refineTranscript: options.refineTranscript === true,
+      sessionId: activeStartPayload.current?.sessionId,
+    });
+    activeStartPayload.current = null;
     stopAllPlayback();
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-
-    if (scriptProcessorRef.current) {
-      scriptProcessorRef.current.disconnect();
-      scriptProcessorRef.current = null;
-    }
-    if (audioContext.current) {
-      audioContext.current.close();
-      audioContext.current = null;
-    }
-
-    if (timerInterval.current) {
-      clearInterval(timerInterval.current);
-      timerInterval.current = null;
-    }
+    cleanupCapture();
 
     isTtsPlaying.current = false;
     transcriptionOnlyRef.current = false;
@@ -679,10 +780,23 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     setIsMuted(false);
     setElapsedSeconds(0);
 
-    cancelAnimationFrame(animationFrame.current);
     setCallState('idle');
     setAudioLevel(0);
-  }, [socket, stopAllPlayback, clearPassiveTimers, clearThinkingWatchdog]);
+  }, [cleanupCapture, stopAllPlayback, clearPassiveTimers, clearThinkingWatchdog]);
+
+  useEffect(() => () => {
+    callGenerationRef.current++;
+    if (isCallActive.current && activeStartPayload.current) {
+      socketRef.current?.emit('audio:stop', {
+        refineTranscript: false,
+        sessionId: activeStartPayload.current.sessionId,
+      });
+    }
+    isCallActive.current = false;
+    activeStartPayload.current = null;
+    cleanupCapture();
+    stopAllPlayback();
+  }, [cleanupCapture, stopAllPlayback]);
 
   // Barge-in: detect user speaking over TTS via audio level.
   // After TTS starts, wait 400ms before enabling barge-in so Lumi's own

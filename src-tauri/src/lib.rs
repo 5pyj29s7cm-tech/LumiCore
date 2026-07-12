@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use std::time::SystemTime;
 use tauri::{
@@ -83,6 +85,9 @@ pub struct SystemInfo {
     pub free_memory: u64,
     pub home_dir: String,
     pub cpus: usize,
+    pub logical_cpus: usize,
+    pub cpu_model: String,
+    pub memory_unit: String,
     pub uptime: u64,
 }
 
@@ -180,18 +185,25 @@ fn read_native_files(dir: &Path, limit: Option<usize>) -> Vec<NativeFile> {
 fn get_system_info() -> SystemInfo {
     use sysinfo::System;
     let sys = System::new_all();
-    // sysinfo reports memory in bytes; sys_info was KB. Preserve backward-compat by converting to KB.
+    let cpu_model = sys
+        .cpus()
+        .first()
+        .map(|cpu| cpu.brand().trim().to_string())
+        .unwrap_or_default();
     SystemInfo {
         platform: std::env::consts::OS.to_string(),
         release: System::long_os_version().unwrap_or_default(),
         arch: std::env::consts::ARCH.to_string(),
         hostname: System::host_name().unwrap_or_default(),
-        total_memory: sys.total_memory() / 1024,
-        free_memory: sys.available_memory() / 1024,
+        total_memory: sys.total_memory(),
+        free_memory: sys.available_memory(),
         home_dir: dirs_next::home_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
         cpus: sys.physical_core_count().unwrap_or(1),
+        logical_cpus: sys.cpus().len(),
+        cpu_model,
+        memory_unit: "bytes".to_string(),
         uptime: System::uptime(),
     }
 }
@@ -219,6 +231,24 @@ pub struct LiveStats {
 fn detect_gpu() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        let mut powershell = Command::new("powershell");
+        powershell
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Idd|Indirect|Mirror|Virtual' } | Select-Object -First 1 -ExpandProperty Name",
+            ])
+            .creation_flags(0x08000000u32);
+        if let Ok(out) = powershell.output() {
+            let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+
+        // Older Windows images may still expose WMIC when PowerShell CIM fails.
         let mut cmd = Command::new("wmic");
         cmd.args([
             "path",
@@ -495,11 +525,7 @@ fn delete_item(target: String) -> CommandResult {
             script,
             &target,
         ]);
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000u32);
-        }
+        cmd.creation_flags(0x08000000u32);
         return match cmd.output() {
             Ok(out) if out.status.success() => CommandResult {
                 success: true,

@@ -1,6 +1,14 @@
 import './helpers';
 import { describe, expect, it } from 'vitest';
-import { cancelTask, enqueue, getTaskQueue } from '../server/autonomy/task_queue';
+import {
+  cancelTask,
+  enqueue,
+  getTaskQueue,
+  isTaskCancellationRequested,
+  markCancelled,
+  markRunning,
+  recoverPersistedTask,
+} from '../server/autonomy/task_queue';
 
 describe('Autonomous task queue isolation', () => {
   it('lists and cancels tasks only for the owning user', () => {
@@ -17,5 +25,35 @@ describe('Autonomous task queue isolation', () => {
     expect(cancelTask(taskB!.id, userA)).toBe(false);
     expect(cancelTask(taskB!.id, userB)).toBe(true);
     expect(cancelTask(taskA!.id, userA)).toBe(true);
+  });
+
+  it('requests cancellation for running work until the executor acknowledges it', () => {
+    const userId = `queue-running-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const task = enqueue({ userId, title: 'Running', description: 'Running', source: 'user_request', priority: 5, mode: 'analysis' });
+    expect(markRunning(task!.id)?.status).toBe('running');
+    expect(cancelTask(task!.id, userId)).toBe(true);
+    expect(isTaskCancellationRequested(task!.id, userId)).toBe(true);
+    expect(getTaskQueue(userId)[0]).toMatchObject({ status: 'running' });
+    expect(markCancelled(task!.id)?.status).toBe('cancelled');
+    expect(getTaskQueue(userId)).toEqual([]);
+  });
+
+  it('recovers interrupted work without keeping a stale running lock', () => {
+    const base = {
+      id: 'recover-me', userId: 'owner', title: 'Task', description: 'Task',
+      status: 'running' as const, source: 'scheduler' as const, priority: 5,
+      mode: 'analysis' as const, createdAt: '2026-01-01T00:00:00.000Z',
+      startedAt: '2026-01-01T00:01:00.000Z',
+    };
+    expect(recoverPersistedTask(base, '2026-01-01T00:02:00.000Z')).toMatchObject({
+      status: 'pending',
+      startedAt: undefined,
+      recoveryCount: 1,
+      lastRecoveredAt: '2026-01-01T00:02:00.000Z',
+    });
+    expect(recoverPersistedTask({ ...base, cancelRequestedAt: '2026-01-01T00:01:30.000Z' }, '2026-01-01T00:02:00.000Z')).toMatchObject({
+      status: 'cancelled',
+      completedAt: '2026-01-01T00:02:00.000Z',
+    });
   });
 });

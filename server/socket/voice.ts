@@ -106,6 +106,7 @@ interface AudioSession {
   meetingPcmPath: string | null;
   meetingPcmBytes: number;
   meetingStartedAt: number;
+  sessionId: string;
 }
 
 // Module-level ambient noise tracking — used by both processVoiceInput and registerVoiceHandlers
@@ -325,6 +326,7 @@ function getAudioSession(socket: Socket): AudioSession {
       meetingPcmPath: null,
       meetingPcmBytes: 0,
       meetingStartedAt: 0,
+      sessionId: '',
     };
   }
   return socket.data.audioSession as AudioSession;
@@ -354,27 +356,43 @@ function writePcm16Wav(rawPath: string, wavPath: string, sampleRate = 16000): vo
   fs.writeFileSync(wavPath, Buffer.concat([header, pcm]));
 }
 
+function normalizeVoiceSessionId(value: unknown): string {
+  const normalized = String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  return normalized || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
 function startMeetingPcmRecording(session: AudioSession): void {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const stableId = normalizeVoiceSessionId(session.sessionId);
   const rawPath = path.join(getMeetingAudioDir({
     userId: session.userId,
     domain: session.domain,
     orgId: session.orgId,
-  }), `meeting_${stamp}_${Math.random().toString(36).slice(2)}.pcm`);
-  fs.writeFileSync(rawPath, Buffer.alloc(0));
+  }), `meeting_${stableId}.pcm`);
+  if (!fs.existsSync(rawPath)) fs.writeFileSync(rawPath, Buffer.alloc(0));
+  const stat = fs.statSync(rawPath);
   session.meetingPcmPath = rawPath;
-  session.meetingPcmBytes = 0;
-  session.meetingStartedAt = Date.now();
+  session.meetingPcmBytes = stat.size;
+  session.meetingStartedAt = stat.birthtimeMs || stat.ctimeMs || Date.now();
 }
 
-async function refineMeetingTranscript(socket: Socket, session: AudioSession, rawPath: string, bytes: number): Promise<void> {
+async function refineMeetingTranscript(io: Server, socket: Socket, session: AudioSession, rawPath: string, bytes: number): Promise<void> {
+  const emit = (event: string, payload: any) => {
+    if (socket.connected) socket.emit(event, payload);
+    else {
+      const room = session.domain === 'work' && session.orgId
+        ? `user:${session.userId}:org:${session.orgId}`
+        : `user:${session.userId}:personal`;
+      io.to(room).emit(event, payload);
+    }
+  };
   if (bytes < 16000 || !fs.existsSync(rawPath)) {
-    socket.emit('meeting:refine_error', { message: 'Meeting recording is too short for high-accuracy transcription.' });
+    try { fs.rmSync(rawPath, { force: true }); } catch {}
+    emit('meeting:refine_error', { message: 'Meeting recording is too short for high-accuracy transcription.' });
     return;
   }
   const wavPath = rawPath.replace(/\.pcm$/i, '.wav');
   try {
-    socket.emit('meeting:refine_status', { status: 'transcribing', bytes });
+    emit('meeting:refine_status', { status: 'transcribing', bytes });
     writePcm16Wav(rawPath, wavPath);
     try { fs.rmSync(rawPath, { force: true }); } catch {}
     const result = await transcribeAudioFile(fs.readFileSync(wavPath), {
@@ -383,9 +401,9 @@ async function refineMeetingTranscript(socket: Socket, session: AudioSession, ra
       preferredProvider: 'qwen',
       allowLocal: true,
       allowQwenFileStt: true,
-      onProgress: (message) => socket.emit('meeting:refine_status', { status: 'transcribing', bytes, message }),
+      onProgress: (message) => emit('meeting:refine_status', { status: 'transcribing', bytes, message }),
     });
-    socket.emit('meeting:refined_transcript', {
+    emit('meeting:refined_transcript', {
       text: result.text,
       provider: result.provider,
       model: result.model,
@@ -398,7 +416,7 @@ async function refineMeetingTranscript(socket: Socket, session: AudioSession, ra
     });
   } catch (err: any) {
     logger.error('[Meeting Refine Error]:', err);
-    socket.emit('meeting:refine_error', { message: err?.message || String(err) });
+    emit('meeting:refine_error', { message: err?.message || String(err) });
   }
 }
 
@@ -1555,7 +1573,7 @@ export function registerVoiceHandlers(
   getUserId: (s: Socket) => string,
   io: Server,
 ) {
-  socket.on("audio:start", async (data: { voiceId?: string; personalityId?: string; agentId?: string; transcriptionOnly?: boolean; domain?: 'personal' | 'work'; orgId?: string }) => {
+  socket.on("audio:start", async (data: { voiceId?: string; personalityId?: string; agentId?: string; transcriptionOnly?: boolean; domain?: 'personal' | 'work'; orgId?: string; sessionId?: string }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
     const session = getAudioSession(socket);
     session.isActive = true;
@@ -1566,6 +1584,7 @@ export function registerVoiceHandlers(
     session.lastChunkTime = 0;
     session.userId = getUserId(socket);
     session.agentId = data.agentId || 'lumi';
+    session.sessionId = normalizeVoiceSessionId(data.sessionId);
     const sessionScope = resolveSocketScope(socket, session.userId, data);
     session.domain = sessionScope.domain;
     session.orgId = sessionScope.orgId;
@@ -1619,7 +1638,7 @@ export function registerVoiceHandlers(
             if (session.lastChunkTime > 0) {
               recordLatency('stt', Date.now() - session.lastChunkTime);
             }
-            logger.info(`[Audio] Final transcript: "${result.text}"`);
+            logger.info(`[Audio] Final transcript received (${result.text.length} chars)`);
             // Feed voice sentiment into emotional state when a provider includes it.
             if (result.sentiment && session.userId) {
               try {
@@ -1647,13 +1666,13 @@ export function registerVoiceHandlers(
             // ── Filter filler words: single-char interjections ──
             const isFiller = /^[嗯啊哦呃哼唉呀哈呵嗨喂诶唔嘶啧哎哦哟嘿嘛哇啦嘞][。！？.!?，,～~]*$/.test(text);
             if (isFiller) {
-              logger.info(`[Audio] Ignored filler: "${text}"`);
+              logger.info(`[Audio] Ignored filler (${text.length} chars)`);
               return;
             }
             // ── Filter pure noise (no CJK, no letters, no digits) ──
             const hasContent = /[a-zA-Z一-鿿㐀-䶿\d]/.test(text);
             if (!hasContent) {
-              logger.info(`[Audio] Ignored pure noise: "${text}"`);
+              logger.info(`[Audio] Ignored pure noise (${text.length} chars)`);
               return;
             }
 
@@ -1669,10 +1688,10 @@ export function registerVoiceHandlers(
               // Short fragments (< 4 chars) are likely speaker echo, not user speech
               if (session.isSpeaking) {
                 if (!explicitInterrupt && isEchoText(text)) {
-                  logger.info(`[Audio] Echo cancelled during speech: "${text}"`);
+                  logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
                   return;
                 }
-                logger.info(`[Audio] Barge-in during speech: "${text}" — aborting`);
+                logger.info(`[Audio] Barge-in during speech (${text.length} chars)`);
                 cancelActiveVoiceTurn(session);
                 socket.emit("audio:status", { status: "interrupted" });
                 socket.emit("audio:interrupt-ack", {});
@@ -1684,7 +1703,7 @@ export function registerVoiceHandlers(
               } else {
                 // Processing but not speaking (LLM thinking / tool exec):
                 // Any real speech → barge-in, abort current pipeline
-                logger.info(`[Audio] Barge-in during processing: "${text}" — aborting`);
+                logger.info(`[Audio] Barge-in during processing (${text.length} chars)`);
                 cancelActiveVoiceTurn(session);
                 socket.emit("audio:status", { status: "interrupted" });
                 socket.emit("audio:interrupt-ack", {});
@@ -1699,7 +1718,7 @@ export function registerVoiceHandlers(
 
             // Echo confirmation — brief window for user to see what was heard and interrupt if wrong
             socket.emit("audio:confirm", { text });
-            logger.info(`[Audio] Heard: "${text}"`);
+            logger.info(`[Audio] Accepted transcript (${text.length} chars)`);
 
             if (session.transcriptionOnly) {
               socket.emit("audio:transcript", { text, isFinal: true, ...getVoiceprintSpeakerMeta(session) });
@@ -1805,9 +1824,10 @@ export function registerVoiceHandlers(
     socket.emit("audio:interrupt-ack", {});
   });
 
-  socket.on("audio:stop", (data?: { refineTranscript?: boolean }) => {
+  socket.on("audio:stop", (data?: { refineTranscript?: boolean; sessionId?: string }) => {
     logger.info(`[Audio] Voice call ended by ${socket.id}`);
     const session = getAudioSession(socket);
+    if (data?.sessionId && session.sessionId && data.sessionId !== session.sessionId) return;
     const shouldRefineMeeting = session.transcriptionOnly && data?.refineTranscript === true;
     const meetingPcmPath = session.meetingPcmPath;
     const meetingPcmBytes = session.meetingPcmBytes;
@@ -1824,7 +1844,9 @@ export function registerVoiceHandlers(
     // Clear tracked timers to prevent post-session mutations
     socket.emit("audio:status", { status: "idle" });
     if (shouldRefineMeeting && meetingPcmPath) {
-      void refineMeetingTranscript(socket, session, meetingPcmPath, meetingPcmBytes);
+      void refineMeetingTranscript(io, socket, session, meetingPcmPath, meetingPcmBytes);
+    } else if (meetingPcmPath) {
+      try { fs.rmSync(meetingPcmPath, { force: true }); } catch {}
     }
   });
 
@@ -2045,7 +2067,7 @@ export function registerVoiceHandlers(
         sourceInteractionId: `greeting_${Date.now()}`,
         agentId: undefined,
       } as any, { tier: 'episodic', perspective: 'shared_memory', importance: 0.2, domain: session.domain, orgId: session.orgId, source: 'voice' });
-      logger.info(`[Greeting] LLM-generated for ${userId}: "${greeting}"`);
+      logger.info(`[Greeting] LLM-generated for ${userId} (${greeting.length} chars)`);
     } catch (err: any) {
       logger.warn(`[Greeting] LLM generation failed, using fallback: ${err.message}`);
       const hour = new Date().getHours();
@@ -2071,6 +2093,8 @@ export function registerVoiceHandlers(
   socket.on("disconnect", () => {
     const session = socket.data.audioSession as AudioSession | undefined;
     if (session) {
+      session.isActive = false;
+      cancelActiveVoiceTurn(session);
       if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
       if (session.bargeinTimer) { clearTimeout(session.bargeinTimer); session.bargeinTimer = null; }
       for (const t of session.ttsDecayTimers) { clearTimeout(t); }

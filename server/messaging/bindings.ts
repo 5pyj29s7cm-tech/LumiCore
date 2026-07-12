@@ -112,12 +112,18 @@ export function consumeBindingCode(
   }
   const found = store.codes.splice(idx, 1)[0];
   const ts = now();
-  let existingIdx = store.bindings.findIndex(item =>
-    item.platform === platform
-    && item.platformUserId === platformUserId
-    && String(item.chatId || '') === String(chatId || '')
-  );
-  if (existingIdx < 0 && chatId) {
+  let existingIdx = chatType === 'group' && chatId
+    ? store.bindings.findIndex(item =>
+        item.platform === platform
+        && item.chatType === 'group'
+        && String(item.chatId || '') === String(chatId)
+      )
+    : store.bindings.findIndex(item =>
+        item.platform === platform
+        && item.platformUserId === platformUserId
+        && String(item.chatId || '') === String(chatId || '')
+      );
+  if (existingIdx < 0 && chatId && chatType === 'private') {
     existingIdx = store.bindings.findIndex(item =>
       item.platform === platform
       && item.platformUserId === platformUserId
@@ -148,6 +154,12 @@ export function getBinding(
   chatType: 'private' | 'group' = 'private',
 ): MessagingBinding | null {
   const store = readStore();
+  if (chatType === 'group') {
+    if (!chatId) return null;
+    return store.bindings
+      .filter(item => item.platform === platform && item.chatType === 'group' && item.chatId === chatId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
+  }
   const candidates = store.bindings
     .filter(item => item.platform === platform && item.platformUserId === platformUserId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -155,7 +167,6 @@ export function getBinding(
     const exact = candidates.find(item => item.chatId === chatId);
     if (exact) return exact;
   }
-  if (chatType === 'group') return null;
   return candidates.find(item => item.chatType === 'private')
     || candidates.find(item => !item.chatId)
     || (candidates.length === 1 ? candidates[0] : null);

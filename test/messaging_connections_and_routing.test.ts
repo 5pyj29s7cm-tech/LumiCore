@@ -156,9 +156,17 @@ describe('messaging long connections and organization routing', () => {
 
   it('deduplicates delivery receipts across an in-memory ledger reload', () => {
     expect(delivery.acceptMessageOnce('feishu', 'persistent-message')).toBe(true);
+    delivery.completeMessageDelivery('feishu', 'persistent-message');
     delivery.reloadDeliveryLedgerForTest();
     expect(delivery.acceptMessageOnce('feishu', 'persistent-message')).toBe(false);
     expect(delivery.acceptMessageOnce('wecom', 'persistent-message')).toBe(true);
+  });
+
+  it('releases failed message leases so the same platform delivery can retry', () => {
+    expect(delivery.acceptMessageOnce('feishu', 'retry-message')).toBe(true);
+    expect(delivery.acceptMessageOnce('feishu', 'retry-message')).toBe(false);
+    delivery.releaseMessageDelivery('feishu', 'retry-message');
+    expect(delivery.acceptMessageOnce('feishu', 'retry-message')).toBe(true);
   });
 
   it('routes the same platform identity to different organizations by exact group scope', async () => {
@@ -177,15 +185,35 @@ describe('messaging long connections and organization routing', () => {
 
     const privateMessage = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-private' }));
     const groupMessage = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-group-b', chatType: 'group' }));
+    const groupPeerMessage = await captureRoutedMessage(incoming({ userId: `group-peer-${suffix}`, chatId: 'oc-group-b', chatType: 'group' }));
     const unboundGroup = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-group-unbound', chatType: 'group' }));
 
     expect(privateMessage.boundOrgId).toBe(orgA.id);
     expect(groupMessage.boundOrgId).toBe(orgB.id);
+    expect(groupPeerMessage.boundOrgId).toBe(orgB.id);
     expect(unboundGroup.boundOrgId).toBeUndefined();
 
     orgDb.removeMember(orgB.id, lumiUserId);
     const revoked = await captureRoutedMessage(incoming({ userId: platformUserId, chatId: 'oc-group-b', chatType: 'group' }));
     expect(revoked.boundOrgId).toBeUndefined();
+  });
+
+  it('keeps one binding per group even when another member rebinds it', () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const lumiUserId = `lumi-group-${suffix}`;
+    const orgA = orgDb.createOrg('Group A', `group-a-${suffix}`, lumiUserId);
+    const orgB = orgDb.createOrg('Group B', `group-b-${suffix}`, lumiUserId);
+    orgDb.addMember(orgA.id, lumiUserId, 'owner');
+    orgDb.addMember(orgB.id, lumiUserId, 'owner');
+
+    const first = bindings.createBindingCode('wecom', lumiUserId, orgA.id);
+    bindings.consumeBindingCode('wecom', first.code, 'member-a', 'shared-group', 'group');
+    const second = bindings.createBindingCode('wecom', lumiUserId, orgB.id);
+    bindings.consumeBindingCode('wecom', second.code, 'member-b', 'shared-group', 'group');
+
+    const routed = bindings.getBinding('wecom', 'member-c', 'shared-group', 'group');
+    expect(routed?.orgId).toBe(orgB.id);
+    expect(bindings.listBindingsForUser(lumiUserId).filter((item: any) => item.chatId === 'shared-group')).toHaveLength(1);
   });
 
   it('parses WeCom long-connection text, voice, file, and mixed messages', () => {

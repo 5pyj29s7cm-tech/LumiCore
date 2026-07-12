@@ -46,6 +46,56 @@ interface ScheduledTask {
   enabled?: boolean;
 }
 
+export type ParsedSchedule =
+  | { type: 'interval'; intervalMs: number }
+  | { type: 'cron'; fields: number[] };
+
+const SCHEDULE_ALIASES: Record<string, ParsedSchedule> = {
+  every_10s: { type: 'interval', intervalMs: 10 * 1000 },
+  every_1m: { type: 'interval', intervalMs: 60 * 1000 },
+  every_5m: { type: 'interval', intervalMs: 5 * 60 * 1000 },
+  every_10m: { type: 'interval', intervalMs: 10 * 60 * 1000 },
+  every_30m: { type: 'interval', intervalMs: 30 * 60 * 1000 },
+  every_hour: { type: 'interval', intervalMs: 60 * 60 * 1000 },
+  every_1h: { type: 'interval', intervalMs: 60 * 60 * 1000 },
+  every_6h: { type: 'interval', intervalMs: 6 * 60 * 60 * 1000 },
+  every_24h: { type: 'interval', intervalMs: 24 * 60 * 60 * 1000 },
+  every_7d: { type: 'interval', intervalMs: 7 * 24 * 60 * 60 * 1000 },
+  daily_9am: { type: 'cron', fields: [0, 9, -1, -1, -1] },
+  evening_8pm: { type: 'cron', fields: [0, 20, -1, -1, -1] },
+};
+
+/** Parse supported fixed aliases or simple five-field cron expressions. */
+export function parseSchedule(cron: string): ParsedSchedule {
+  const normalized = String(cron || '').trim();
+  const alias = SCHEDULE_ALIASES[normalized];
+  if (alias) {
+    return alias.type === 'interval'
+      ? { ...alias }
+      : { ...alias, fields: [...alias.fields] };
+  }
+
+  const parts = normalized.split(/\s+/);
+  if (parts.length !== 5) {
+    throw new Error(`Unsupported schedule expression: "${normalized}"`);
+  }
+
+  const ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+  const fields = parts.map((part, index) => {
+    if (part === '*') return -1;
+    if (!/^\d+$/.test(part)) {
+      throw new Error(`Unsupported cron field "${part}" in "${normalized}"`);
+    }
+    const value = Number(part);
+    const [min, max] = ranges[index];
+    if (value < min || value > max) {
+      throw new Error(`Cron field "${part}" is out of range in "${normalized}"`);
+    }
+    return value;
+  });
+  return { type: 'cron', fields };
+}
+
 type LLMGetters = {
   getDeepSeek: () => any;
   getGemini: () => any;
@@ -61,9 +111,10 @@ type LLMGetters = {
   getRelay?: () => any;
 };
 
-class Scheduler {
+export class Scheduler {
   private tasks: ScheduledTask[] = [];
   private timers: Map<string, NodeJS.Timeout> = new Map();
+  private runningTasks: Set<string> = new Set();
   io: SocketIOServer | null = null;
   private llmGetters: LLMGetters | null = null;
   private disabledTasks: Set<string> = new Set();
@@ -83,7 +134,13 @@ class Scheduler {
       task.enabled = false;
       this.disabledTasks.add(task.id);
     }
-    this.tasks.push(task);
+    const existingIndex = this.tasks.findIndex(existing => existing.id === task.id);
+    if (existingIndex >= 0) {
+      this.clearTimer(task.id);
+      this.tasks[existingIndex] = task;
+    } else {
+      this.tasks.push(task);
+    }
     this.scheduleTask(task);
   }
 
@@ -229,35 +286,23 @@ class Scheduler {
   }
 
   private scheduleTask(task: ScheduledTask) {
+    this.clearTimer(task.id);
     if (task.enabled === false) {
       console.log(`[Scheduler] Task "${task.id}" is disabled — skipping schedule`);
       return;
     }
-    const parsed = this.parseCron(task.cron);
+    const parsed = parseSchedule(task.cron);
 
     if (parsed.type === 'interval') {
       // Simple fixed interval — use setInterval (backward compat)
-      const timer = setInterval(async () => {
-        try {
-          const result = await task.handler();
-          task.lastRun = new Date().toISOString();
-          this.deliverTaskResult(task, result, task.lastRun);
-        } catch (err: any) {
-          console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
-        }
-      }, parsed.intervalMs);
+      const timer = setInterval(() => { void this.runTask(task); }, parsed.intervalMs);
       this.timers.set(task.id, timer);
       console.log(`[Scheduler] Registered task "${task.id}" every ${parsed.intervalMs / 1000}s${task.quiet ? ' (quiet)' : ''}`);
     } else {
       // Real cron expression — use recursive setTimeout to hit exact times
       const runAndReschedule = async () => {
-        try {
-          const result = await task.handler();
-          task.lastRun = new Date().toISOString();
-          this.deliverTaskResult(task, result, task.lastRun);
-        } catch (err: any) {
-          console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
-        }
+        await this.runTask(task);
+        if (task.enabled === false || !this.tasks.some(item => item === task)) return;
         // Schedule next run
         const nextMs = this.nextCronTime(parsed.fields!);
         this.setTaskTimeout(task.id, runAndReschedule, nextMs);
@@ -266,6 +311,20 @@ class Scheduler {
       this.setTaskTimeout(task.id, runAndReschedule, firstMs);
       const [m, h, dom, mon, dow] = parsed.fields!;
       console.log(`[Scheduler] Registered cron task "${task.id}" — ${m} ${h} ${dom} ${mon} ${dow} (next in ${Math.round(firstMs / 1000)}s)`);
+    }
+  }
+
+  private async runTask(task: ScheduledTask): Promise<void> {
+    if (task.enabled === false || this.runningTasks.has(task.id)) return;
+    this.runningTasks.add(task.id);
+    try {
+      const result = await task.handler();
+      task.lastRun = new Date().toISOString();
+      this.deliverTaskResult(task, result, task.lastRun);
+    } catch (err: any) {
+      console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
+    } finally {
+      this.runningTasks.delete(task.id);
     }
   }
 
@@ -284,33 +343,6 @@ class Scheduler {
 
     this.timers.set(id, timer);
     return timer;
-  }
-
-  /** Parse a cron string — returns either a fixed interval or cron field array */
-  private parseCron(cron: string): { type: 'interval'; intervalMs: number } | { type: 'cron'; fields: number[] } {
-    // Aliases (backward compatible)
-    switch (cron) {
-      case 'every_5m': return { type: 'interval', intervalMs: 5 * 60 * 1000 };
-      case 'every_1h': return { type: 'interval', intervalMs: 60 * 60 * 1000 };
-      case 'every_6h': return { type: 'interval', intervalMs: 6 * 60 * 60 * 1000 };
-      case 'daily_9am': return { type: 'interval', intervalMs: 24 * 60 * 60 * 1000 };
-      case 'evening_8pm': return { type: 'interval', intervalMs: 24 * 60 * 60 * 1000 };
-      case 'every_30m': return { type: 'interval', intervalMs: 30 * 60 * 1000 };
-      case 'every_7d': return { type: 'interval', intervalMs: 7 * 24 * 60 * 60 * 1000 };
-    }
-
-    // Real cron: 5 fields — minute hour dom month dow
-    const parts = cron.trim().split(/\s+/);
-    if (parts.length === 5) {
-      const fields = parts.map(p => {
-        const n = parseInt(p, 10);
-        return isNaN(n) ? -1 : n; // -1 = wildcard (*)
-      });
-      return { type: 'cron', fields };
-    }
-
-    // Fallback: treat as interval alias
-    return { type: 'interval', intervalMs: 60 * 60 * 1000 };
   }
 
   /** Compute milliseconds until the next cron match */
@@ -350,6 +382,7 @@ class Scheduler {
       clearTimeout(timer); // Also clear cron timeouts
     }
     this.timers.clear();
+    this.runningTasks.clear();
   }
 }
 

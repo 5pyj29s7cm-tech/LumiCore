@@ -1,17 +1,22 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import type { MessagingPlatform } from './types';
 
 interface DeliveryReceipt {
   key: string;
   receivedAt: string;
+  updatedAt?: string;
+  status?: 'processing' | 'completed';
+  runtimeId?: string;
 }
 
 const LEDGER_PATH = getDataPath(path.join('messaging', 'delivery_receipts.json'));
 const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPTS = 5_000;
 let receipts: DeliveryReceipt[] | null = null;
+const deliveryRuntimeId = randomUUID();
 
 function loadReceipts(): DeliveryReceipt[] {
   if (receipts) return receipts;
@@ -42,14 +47,55 @@ export function acceptMessageOnce(platform: MessagingPlatform, messageId: string
     return Number.isFinite(timestamp) && timestamp >= cutoff;
   });
   const key = `${platform}:${normalizedId}`;
-  if (current.some(item => item.key === key)) {
+  const existingIndex = current.findIndex(item => item.key === key);
+  if (existingIndex >= 0) {
+    const existing = current[existingIndex];
+    // Legacy records and completed records are durable deduplication receipts.
+    if (!existing.status || existing.status === 'completed' || existing.runtimeId === deliveryRuntimeId) {
+      receipts = current;
+      return false;
+    }
+    // A processing receipt from an older server runtime is an interrupted lease.
+    current[existingIndex] = {
+      key,
+      receivedAt: existing.receivedAt || now.toISOString(),
+      updatedAt: now.toISOString(),
+      status: 'processing',
+      runtimeId: deliveryRuntimeId,
+    };
     receipts = current;
-    return false;
+    persistReceipts(receipts);
+    return true;
   }
-  current.push({ key, receivedAt: now.toISOString() });
+  current.push({
+    key,
+    receivedAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    status: 'processing',
+    runtimeId: deliveryRuntimeId,
+  });
   receipts = current.slice(-MAX_RECEIPTS);
   persistReceipts(receipts);
   return true;
+}
+
+export function completeMessageDelivery(platform: MessagingPlatform, messageId: string, now = new Date()): void {
+  const key = `${platform}:${String(messageId || '').trim()}`;
+  const current = loadReceipts();
+  const receipt = current.find(item => item.key === key && item.runtimeId === deliveryRuntimeId);
+  if (!receipt) return;
+  receipt.status = 'completed';
+  receipt.updatedAt = now.toISOString();
+  persistReceipts(current);
+}
+
+export function releaseMessageDelivery(platform: MessagingPlatform, messageId: string): void {
+  const key = `${platform}:${String(messageId || '').trim()}`;
+  const current = loadReceipts();
+  const next = current.filter(item => !(item.key === key && item.status === 'processing' && item.runtimeId === deliveryRuntimeId));
+  if (next.length === current.length) return;
+  receipts = next;
+  persistReceipts(next);
 }
 
 export function resetDeliveryLedgerForTest(): void {

@@ -6,6 +6,7 @@ import * as notificationService from '../services/notificationService';
 import { socketService } from '../services/socketService';
 import { saveServerKeys } from '../services/settingsKeys';
 import { apiFetch } from '../services/apiClient';
+import { getDomainReconciliation } from '../lib/domainSession';
 
 interface UserProfile {
   uid: string;
@@ -353,8 +354,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const [operationMode, setOperationModeState] = useState<OperationMode>(() => {
-    try { return normalizeOperationMode(localStorage.getItem('lumi_operation_mode')); } catch { return 'assistant'; }
+    try {
+      const stored = normalizeOperationMode(localStorage.getItem('lumi_operation_mode'));
+      return stored === 'meeting' ? 'assistant' : stored;
+    } catch { return 'assistant'; }
   });
+  const operationModeRef = React.useRef(operationMode);
+  const operationModeRequestRef = React.useRef(0);
   const [appearanceMode, setAppearanceModeState] = useState<AppearanceMode>(() => {
     try { return normalizeAppearanceMode(localStorage.getItem('lumi_appearance_mode')); } catch { return 'dark'; }
   });
@@ -363,17 +369,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setOperationMode = async (mode: OperationMode) => {
     const normalizedMode = normalizeOperationMode(mode);
+    const previousMode = operationModeRef.current;
+    const requestId = ++operationModeRequestRef.current;
+    operationModeRef.current = normalizedMode;
     setOperationModeState(normalizedMode);
-    localStorage.setItem('lumi_operation_mode', normalizedMode);
+    // Meeting is a live capture state. Persist assistant locally so a crash or
+    // restart never reopens the microphone without a fresh user action.
+    localStorage.setItem('lumi_operation_mode', normalizedMode === 'meeting' ? 'assistant' : normalizedMode);
     try {
-      await apiFetch('/api/preferences/operation_mode', {
+      const response = await apiFetch('/api/preferences/operation_mode', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: normalizedMode }),
         credentials: 'include',
       });
-    } catch {}
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch {
+      if (operationModeRequestRef.current !== requestId) return;
+      operationModeRef.current = previousMode;
+      setOperationModeState(previousMode);
+      localStorage.setItem('lumi_operation_mode', previousMode === 'meeting' ? 'assistant' : previousMode);
+      toast.error('Operation mode could not be synchronized');
+    }
   };
+
+  useEffect(() => {
+    operationModeRef.current = operationMode;
+  }, [operationMode]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    let cancelled = false;
+    const requestVersion = operationModeRequestRef.current;
+    apiFetch('/api/preferences/operation_mode')
+      .then(async response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (cancelled || operationModeRequestRef.current !== requestVersion) return;
+        const serverMode = normalizeOperationMode(data?.mode);
+        const restoredMode = serverMode === 'meeting' ? 'assistant' : serverMode;
+        operationModeRef.current = restoredMode;
+        setOperationModeState(restoredMode);
+        localStorage.setItem('lumi_operation_mode', restoredMode);
+        if (serverMode === 'meeting') {
+          await apiFetch('/api/preferences/operation_mode', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'assistant' }),
+            credentials: 'include',
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [user?.uid]);
 
   const setAppearanceMode = (mode: AppearanceMode) => {
     const normalizedMode = normalizeAppearanceMode(mode);
@@ -582,10 +631,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const init = async () => {
       setLoading(true);
       try {
-        const me = await authService.getMe();
-        // Re-bootstrap if session exists but lacks orgId (stale token from before org creation)
-        const needsRebootstrap = !me || !(me.user as any)?.orgId;
-        if (needsRebootstrap && !cancelled) {
+        let me = await authService.getMe();
+        if (!me && !cancelled) {
           // Clear stale token so apiBridge sends fresh one after bootstrap
           try { localStorage.removeItem('lumi_auth_token'); } catch {}
           let result = await authService.bootstrap();
@@ -598,8 +645,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (result.success && !cancelled) {
             console.log('[Auth] Auto-logged in via bootstrap as', result.user?.username);
             socketService.refreshAuth();
+            me = await authService.getMe();
           } else if (!cancelled) {
             console.warn('[Auth] Bootstrap failed after retries:', result.error);
+          }
+        }
+        if (me && !cancelled) {
+          const desiredDomain = (() => {
+            try { return localStorage.getItem('lumi_work_domain') === 'work' ? 'work' : 'personal'; }
+            catch { return 'personal'; }
+          })();
+          const activeOrgId = String((me.user as any)?.orgId || '');
+          const preferredOrgId = String(orgConnection?.orgId || '');
+          const reconciliation = getDomainReconciliation(desiredDomain, activeOrgId, preferredOrgId);
+          let domainResult: DomainSwitchResult | null = null;
+          if (reconciliation === 'switch_personal') domainResult = await switchDomain('personal');
+          if (reconciliation === 'switch_work') domainResult = await switchDomain('work');
+          if (domainResult && !domainResult.success) {
+            const fallback = await switchDomain('personal');
+            if (!fallback.success) {
+              try { localStorage.removeItem('lumi_auth_token'); } catch {}
+              const bootstrapped = await authService.bootstrap();
+              if (bootstrapped.success) socketService.refreshAuth();
+            }
+            setWorkDomain('personal');
+            localStorage.setItem('lumi_work_domain', 'personal');
           }
         }
         if (!cancelled) await refreshUser();

@@ -156,7 +156,7 @@ export function DeviceSyncCenter({ t }: { t: any }) {
         setFileAccessInfo({
           path: (info as any).home_dir || '/',
           size: `${(((info as any).total_memory || 0) / (1024 * 1024 * 1024)).toFixed(1)}GB RAM`,
-          os: (info as any).os || navigator.platform,
+          os: (info as any).platform || navigator.platform,
         });
       } catch (err: any) {
         setFileAccessError(err.message || String(err));

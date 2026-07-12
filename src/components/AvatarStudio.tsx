@@ -6,6 +6,7 @@ import { getDefaultPets, generateCustomPet, recolorPet } from '../pets/defaults'
 import { PetConfig, PetPalette, CustomPetTags, COLOR_PRESETS, BUILTIN_PALETTES } from '../pets/types';
 import { SpriteAnimator, PetAvatar } from './SpriteAnimator';
 import { ALL_ACCESSORIES, AccessoryDef, AccessoryCategory } from '../pets/accessories';
+import { apiFetch } from '@/services/apiClient';
 
 const BUILTIN_ANIMATIONS = ['idle', 'run', 'wave', 'jump', 'waiting'];
 const CUSTOM_PETS_KEY = 'lumi_custom_pets';
@@ -14,9 +15,14 @@ type LocalizedText = { zh: string; en: string };
 
 const pickText = (lang: UiLang, text: LocalizedText) => lang === 'zh' ? text.zh : text.en;
 
-function loadCustomPets(): PetConfig[] {
+function customPetsKey(scope: string): string {
+  return `${CUSTOM_PETS_KEY}_${scope.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function loadCustomPets(scope: string): PetConfig[] {
   try {
-    const raw = localStorage.getItem(CUSTOM_PETS_KEY);
+    const scoped = localStorage.getItem(customPetsKey(scope));
+    const raw = scoped ?? (scope === 'personal' ? localStorage.getItem(CUSTOM_PETS_KEY) : null);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -26,9 +32,9 @@ function loadCustomPets(): PetConfig[] {
   }
 }
 
-function storeCustomPets(pets: PetConfig[]) {
+function storeCustomPets(scope: string, pets: PetConfig[]) {
   try {
-    localStorage.setItem(CUSTOM_PETS_KEY, JSON.stringify(pets.slice(0, 30)));
+    localStorage.setItem(customPetsKey(scope), JSON.stringify(pets.slice(0, 30)));
   } catch {
     toast.error('Failed to save custom avatars locally');
   }
@@ -95,6 +101,7 @@ export function AvatarStudio({
   onResetToSphere,
   equippedAccessories,
   onChangeAccessories,
+  storageScope = 'personal',
 }: {
   t: any;
   lang?: UiLang;
@@ -103,14 +110,15 @@ export function AvatarStudio({
   onResetToSphere?: () => void;
   equippedAccessories?: string[];
   onChangeAccessories?: (ids: string[]) => void;
+  storageScope?: string;
 }) {
   const uiLang: UiLang = lang || (t?.langCode === 'en' ? 'en' : 'zh');
   const ui = useCallback((zh: string, en: string) => uiLang === 'zh' ? zh : en, [uiLang]);
   const pets = getDefaultPets();
-  const [customPets, setCustomPets] = useState<PetConfig[]>(loadCustomPets);
+  const [customPets, setCustomPets] = useState<PetConfig[]>(() => loadCustomPets(storageScope));
   const allPets = [...pets, ...customPets];
   const [activePet, setActivePet] = useState<PetConfig>(() =>
-    pets.find(p => p.id === selectedPetId) || loadCustomPets().find(p => p.id === selectedPetId) || pets[0],
+    pets.find(p => p.id === selectedPetId) || loadCustomPets(storageScope).find(p => p.id === selectedPetId) || pets[0],
   );
   const [previewAnim, setPreviewAnim] = useState('idle');
   const [animKey, setAnimKey] = useState(0);
@@ -126,8 +134,8 @@ export function AvatarStudio({
   const [activeColorSlot, setActiveColorSlot] = useState<keyof PetPalette>('body');
 
   useEffect(() => {
-    storeCustomPets(customPets);
-  }, [customPets]);
+    storeCustomPets(storageScope, customPets);
+  }, [customPets, storageScope]);
 
   // Sync palette when activePet changes
   useEffect(() => {
@@ -155,7 +163,7 @@ export function AvatarStudio({
     if (!genPrompt.trim()) return;
     setGenerating(true);
     try {
-      const res = await fetch('/api/pets/generate', {
+      const res = await apiFetch('/api/pets/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: genPrompt.trim(), mode: aiMode ? 'ai_enhanced' : 'procedural' }),

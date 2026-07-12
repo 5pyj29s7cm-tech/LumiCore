@@ -7,7 +7,7 @@ import { readDB, writeDB, isDbDirty } from "../../db_layer";
 import { logger } from "../../logger";
 import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
-import { getCloudHealth } from "../cloud/core";
+import { classifyCloudError, getCloudHealth, recordFailure, resetCircuit } from "../cloud/core";
 import { loadKeys, saveKeys, getKey, getAllKeyNames, isPersistableKeyName } from "../config/keys";
 import { requireAuth, requireLocalRequest, requireOrgMember, requireOrgRole } from "../middleware/auth";
 import { getLatencyStats } from "../monitor/latency_store";
@@ -22,7 +22,46 @@ import { analyzeScreen } from "../llm/adapter";
 
 // Cached GPU detection — queried once
 let _cachedGPU: { name?: string; util?: number } | null | undefined;
+let systemStatsCache: { at: number; value: any } | null = null;
+let systemStatsInFlight: Promise<any> | null = null;
 const serverStartedAt = new Date().toISOString();
+
+interface ProviderProbeRecord {
+  provider: string;
+  model: string;
+  ok: boolean;
+  testedAt: string;
+  latencyMs?: number;
+  error?: string;
+  errorCategory?: string;
+}
+
+function providerProbeKey(provider: string): string {
+  return `provider_probe_${provider}`;
+}
+
+function readProviderProbe(provider: string): ProviderProbeRecord | null {
+  try {
+    const db = readDB();
+    const setting = (db.settings || []).find((item: any) => item.key === providerProbeKey(provider));
+    return setting?.value ? JSON.parse(setting.value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveProviderProbe(probe: ProviderProbeRecord): void {
+  try {
+    const db = readDB();
+    if (!db.settings) db.settings = [];
+    const key = providerProbeKey(probe.provider);
+    const value = JSON.stringify(probe);
+    const setting = db.settings.find((item: any) => item.key === key);
+    if (setting) setting.value = value;
+    else db.settings.push({ key, value });
+    writeDB(db);
+  } catch {}
+}
 
 function readPackageMeta(): { name?: string; version?: string } {
   try {
@@ -98,11 +137,16 @@ export async function testLLMProviderConnection(
   } else if (provider === 'anthropic') {
     const client = llm.getAnthropic?.();
     if (!client) throw new Error('Anthropic is not configured');
-    await withConnectionTestTimeout(client.messages.create({
-      model,
-      max_tokens: 8,
-      messages: [{ role: 'user', content: 'Reply with only OK.' }],
-    }), 20_000);
+    const controller = new AbortController();
+    try {
+      await withConnectionTestTimeout(client.messages.create({
+        model,
+        max_tokens: 8,
+        messages: [{ role: 'user', content: 'Reply with only OK.' }],
+      }, { signal: controller.signal }), 20_000);
+    } finally {
+      controller.abort();
+    }
   } else {
     const getterByProvider: Record<string, (() => any) | undefined> = {
       deepseek: llm.getDeepSeek,
@@ -128,7 +172,15 @@ export async function testLLMProviderConnection(
     } else {
       request.max_tokens = 8;
     }
-    await withConnectionTestTimeout(client.chat.completions.create(request), provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000);
+    const controller = new AbortController();
+    try {
+      await withConnectionTestTimeout(
+        client.chat.completions.create(request, { signal: controller.signal }),
+        provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000,
+      );
+    } finally {
+      controller.abort();
+    }
   }
 
   return { ok: true, provider, model, latencyMs: Date.now() - startedAt };
@@ -232,6 +284,74 @@ function getUserIdFromRequest(req: any, jwtSecret: string): string {
 
 function sumTimes(times: Record<string, number>): number {
   return (times.user || 0) + (times.nice || 0) + (times.sys || 0) + (times.idle || 0) + (times.irq || 0);
+}
+
+async function collectSystemStatsSnapshot() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const cpuList = os.cpus();
+  const snap1 = cpuList.map(cpu => ({ total: sumTimes(cpu.times), idle: cpu.times.idle }));
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const snap2 = os.cpus().map(cpu => ({ total: sumTimes(cpu.times), idle: cpu.times.idle }));
+  const cpuPercent = Math.round(
+    snap1.reduce((sum, first, index) => {
+      const second = snap2[index];
+      if (!second) return sum;
+      const totalDelta = second.total - first.total;
+      const idleDelta = second.idle - first.idle;
+      return totalDelta > 0 ? sum + ((totalDelta - idleDelta) / totalDelta) * 100 : sum;
+    }, 0) / Math.max(1, snap1.length),
+  );
+
+  if (_cachedGPU === undefined) {
+    _cachedGPU = null;
+    if (process.platform === 'win32') {
+      try {
+        const { execFileSync } = await import('child_process');
+        const script = "Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Idd|Indirect|Mirror|Virtual' } | Select-Object -First 1 -ExpandProperty Name";
+        const output = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+          timeout: 5000,
+          encoding: 'utf-8',
+          windowsHide: true,
+        }).trim();
+        if (output) _cachedGPU = { name: output };
+      } catch {}
+    }
+  }
+
+  return {
+    computerScope: 'lumi_server_host',
+    cpu: Math.max(0, Math.min(100, cpuPercent)),
+    cpuModel: cpuList[0]?.model?.trim() || '',
+    logicalCpus: cpuList.length,
+    physicalCpus: null,
+    gpu: _cachedGPU,
+    ram: {
+      used: Math.round(usedMem / 1024 / 1024 / 1024 * 10) / 10,
+      total: Math.round(totalMem / 1024 / 1024 / 1024 * 10) / 10,
+      percent: Math.round((usedMem / totalMem) * 100),
+    },
+    platform: os.platform(),
+    release: os.release(),
+    arch: os.arch(),
+    hostname: os.hostname(),
+    cpus: cpuList.length,
+    uptime: Math.round(os.uptime()),
+  };
+}
+
+export async function getSystemStatsSnapshot() {
+  if (systemStatsCache && Date.now() - systemStatsCache.at < 1000) return systemStatsCache.value;
+  if (!systemStatsInFlight) {
+    systemStatsInFlight = collectSystemStatsSnapshot()
+      .then(value => {
+        systemStatsCache = { at: Date.now(), value };
+        return value;
+      })
+      .finally(() => { systemStatsInFlight = null; });
+  }
+  return systemStatsInFlight;
 }
 
 export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, llm: TestableLLMRuntime = {}) {
@@ -412,20 +532,26 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         !!(process.env[envKey] && process.env[envKey]!.length > 0) || !!stored[storeKey];
       const ollamaConfig = getLocalModelConfig('ollama');
       const lmstudioConfig = getLocalModelConfig('lmstudio');
+      const status = (provider: string, configured: boolean, model: string) => ({
+        available: configured,
+        configured,
+        model,
+        lastProbe: readProviderProbe(provider),
+      });
       res.json({
         providers: {
-          deepseek: { available: envOrStore('DEEPSEEK_API_KEY'), model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash' },
-          gemini: { available: envOrStore('GEMINI_API_KEY'), model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' },
-          openai: { available: envOrStore('OPENAI_API_KEY'), model: process.env.OPENAI_MODEL || 'gpt-4o' },
-          anthropic: { available: envOrStore('ANTHROPIC_API_KEY'), model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6' },
-          qwen: { available: envOrStore('QWEN_API_KEY') || envOrStore('DASHSCOPE_API_KEY'), model: process.env.QWEN_MODEL || 'qwen-plus' },
-          ark: { available: envOrStore('ARK_API_KEY'), model: process.env.ARK_MODEL || 'doubao-seed-2-0-lite-260215' },
-          xiaomi: { available: envOrStore('XIAOMI_API_KEY'), model: process.env.XIAOMI_MODEL || 'mimo-v2.5-pro' },
-          kimi: { available: envOrStore('KIMI_API_KEY'), model: process.env.KIMI_MODEL || 'moonshot-v1-8k' },
-          glm: { available: envOrStore('GLM_API_KEY'), model: process.env.GLM_MODEL || 'glm-5.1' },
-          relay: { available: envOrStore('RELAY_API_KEY') && envOrStore('RELAY_BASE_URL'), model: process.env.RELAY_MODEL || 'openai-compatible' },
-          ollama: { available: ollamaConfig.detected, model: ollamaConfig.models[0] || 'local' },
-          lmstudio: { available: lmstudioConfig.detected, model: lmstudioConfig.models[0] || 'local' },
+          deepseek: status('deepseek', envOrStore('DEEPSEEK_API_KEY'), process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'),
+          gemini: status('gemini', envOrStore('GEMINI_API_KEY'), process.env.GEMINI_MODEL || 'gemini-2.0-flash'),
+          openai: status('openai', envOrStore('OPENAI_API_KEY'), process.env.OPENAI_MODEL || 'gpt-4o'),
+          anthropic: status('anthropic', envOrStore('ANTHROPIC_API_KEY'), process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'),
+          qwen: status('qwen', envOrStore('QWEN_API_KEY') || envOrStore('DASHSCOPE_API_KEY'), process.env.QWEN_MODEL || 'qwen-plus'),
+          ark: status('ark', envOrStore('ARK_API_KEY'), process.env.ARK_MODEL || 'doubao-seed-2-0-lite-260215'),
+          xiaomi: status('xiaomi', envOrStore('XIAOMI_API_KEY'), process.env.XIAOMI_MODEL || 'mimo-v2.5-pro'),
+          kimi: status('kimi', envOrStore('KIMI_API_KEY'), process.env.KIMI_MODEL || 'moonshot-v1-8k'),
+          glm: status('glm', envOrStore('GLM_API_KEY'), process.env.GLM_MODEL || 'glm-5.1'),
+          relay: status('relay', envOrStore('RELAY_API_KEY') && envOrStore('RELAY_BASE_URL'), process.env.RELAY_MODEL || 'openai-compatible'),
+          ollama: status('ollama', ollamaConfig.detected, ollamaConfig.models[0] || 'local'),
+          lmstudio: status('lmstudio', lmstudioConfig.detected, lmstudioConfig.models[0] || 'local'),
         },
       });
     } catch (err: any) {
@@ -436,11 +562,33 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // LLM connection test
   router.post("/llm/test", requireLocalRequest, async (req, res) => {
     const { provider, model } = req.body || {};
+    const providerId = String(provider || '');
+    const modelId = typeof model === 'string' ? model : undefined;
     try {
-      const result = await testLLMProviderConnection(String(provider || ''), typeof model === 'string' ? model : undefined, llm);
+      const result = await testLLMProviderConnection(providerId, modelId, llm);
+      resetCircuit(result.provider);
+      saveProviderProbe({
+        provider: result.provider,
+        model: result.model,
+        ok: true,
+        testedAt: new Date().toISOString(),
+        latencyMs: result.latencyMs,
+      });
       res.json(result);
     } catch (err: any) {
       const message = sanitizedProviderError(err);
+      const classified = classifyCloudError(err instanceof Error ? err : new Error(message), providerId);
+      if (providerId) {
+        recordFailure(providerId, undefined, err instanceof Error ? err : new Error(message), { openImmediately: true });
+        saveProviderProbe({
+          provider: providerId,
+          model: String(modelId || ''),
+          ok: false,
+          testedAt: new Date().toISOString(),
+          error: message,
+          errorCategory: classified.category,
+        });
+      }
       const configurationError = /not configured|not currently reachable|unsupported provider|valid model/i.test(message);
       res.status(configurationError ? 400 : 502).json({ ok: false, provider, model, error: message });
     }
@@ -697,50 +845,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // System stats — real-time CPU / memory / platform info
   router.get("/system/stats", async (_req: any, res: any) => {
     try {
-      const totalMem = os.totalmem();
-      const freeMem = os.freemem();
-      const usedMem = totalMem - freeMem;
-      const memPercent = Math.round((usedMem / totalMem) * 100);
-
-      // CPU: delta between two snapshots for real-time usage (like Task Manager)
-      const snap1 = os.cpus().map(c => ({ total: sumTimes(c.times), idle: c.times.idle }));
-      await new Promise(r => setTimeout(r, 200));
-      const snap2 = os.cpus().map(c => ({ total: sumTimes(c.times), idle: c.times.idle }));
-      const cpuPercent = Math.round(
-        snap1.reduce((sum, s1, i) => {
-          const s2 = snap2[i];
-          const totalDelta = s2.total - s1.total;
-          const idleDelta = s2.idle - s1.idle;
-          if (totalDelta <= 0) return sum;
-          return sum + ((totalDelta - idleDelta) / totalDelta) * 100;
-        }, 0) / snap1.length
-      );
-
-      // GPU: detect once, cache forever
-      if (_cachedGPU === undefined) {
-        _cachedGPU = null;
-        if (process.platform === 'win32') {
-          try {
-            const { execSync } = await import('child_process');
-            const psCmd = `Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Idd|Indirect|Mirror|Virtual' } | Select-Object -First 1 -ExpandProperty Name`;
-            const out = execSync(`powershell -NoProfile -Command "${psCmd}"`, { timeout: 5000, encoding: 'utf-8' });
-            const trimmed = out.trim();
-            if (trimmed) _cachedGPU = { name: trimmed };
-          } catch {}
-        }
-      }
-
-      res.json({
-        cpu: cpuPercent,
-        gpu: _cachedGPU,
-        ram: { used: Math.round(usedMem / 1024 / 1024 / 1024 * 10) / 10, total: Math.round(totalMem / 1024 / 1024 / 1024 * 10) / 10, percent: memPercent },
-        platform: os.platform(),
-        release: os.release(),
-        arch: os.arch(),
-        hostname: os.hostname(),
-        cpus: os.cpus().length,
-        uptime: Math.round(os.uptime()),
-      });
+      res.json(await getSystemStatsSnapshot());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -53,7 +53,7 @@ export function TeamHub({ t }: { t?: any }) {
     setLoading(true);
     setLoadError('');
     try {
-      const res = await fetch('/api/agents', { credentials: 'include' });
+      const res = await apiFetch('/api/agents');
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || loadAgentsFailedText);
       setAgents(Array.isArray(data) ? data : data.agents || []);
@@ -135,7 +135,7 @@ export function TeamHub({ t }: { t?: any }) {
     if (!connectName.trim() || !connectCommand.trim()) return;
     setConnecting(true);
     try {
-      const res = await fetch('/api/agents', {
+      const res = await apiFetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -203,7 +203,7 @@ export function TeamHub({ t }: { t?: any }) {
   const handleTestConnection = async (agent: any) => {
     setTestingIds(prev => prev.includes(agent.id) ? prev : [...prev, agent.id]);
     try {
-      const res = await fetch(`/api/agents/${agent.id}/test`, {
+      const res = await apiFetch(`/api/agents/${agent.id}/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ task: `Lumi health check for ${agent.name || 'external agent'}. Reply briefly.` }),
@@ -311,7 +311,7 @@ export function TeamHub({ t }: { t?: any }) {
     ));
     if (!ok) return;
     try {
-      const res = await fetch(`/api/agents/${id}`, { method: 'DELETE', credentials: 'include' });
+      const res = await apiFetch(`/api/agents/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setAgents(prev => prev.filter(a => a.id !== id));
         setSelectedAgentId(current => current === id ? null : current);
@@ -329,7 +329,7 @@ export function TeamHub({ t }: { t?: any }) {
   const handleToggle = async (agent: any) => {
     const nextFrozen = !(agent.isFrozen ?? false);
     try {
-      const res = await fetch(`/api/agents/${agent.id}`, {
+      const res = await apiFetch(`/api/agents/${agent.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isFrozen: nextFrozen }),

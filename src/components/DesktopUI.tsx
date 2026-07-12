@@ -90,7 +90,6 @@ import {
   setLegalConsultationCaseId,
 } from '@/lib/legalCaseStore';
 import { PresenceIndicator } from './biometrics/PresenceIndicator';
-import { UserSwitchPrompt } from './biometrics/UserSwitchPrompt';
 import { systemService } from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
 
@@ -1082,14 +1081,60 @@ function DesktopWidgetPanel({
 
 function KernelMonitorApp({ t }: { t: any }) {
   const [data, setData] = useState<number[]>([]);
-  const [stats, setStats] = useState({ cpu: 0, ram: { used: 0, total: 0, percent: 0 }, platform: '', release: '', arch: '', hostname: '', cpus: 0, uptime: 0, gpu: null as { name?: string; util?: number } | null });
+  const overviewRef = useRef<any>(null);
+  const [stats, setStats] = useState({
+    cpu: 0,
+    cpuModel: '',
+    logicalCpus: 0,
+    physicalCpus: null as number | null,
+    ram: { used: 0, total: 0, percent: 0 },
+    platform: '', release: '', arch: '', hostname: '', uptime: 0,
+    gpu: null as { name?: string; util?: number } | null,
+  });
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('/api/system/stats');
-        if (!res.ok) return;
-        const sys = await res.json();
+        if (!overviewRef.current) {
+          const [response, nativeInfo] = await Promise.all([
+            fetch('/api/system/stats'),
+            systemService.getSystemStats(),
+          ]);
+          const serverInfo = response.ok ? await response.json() : {};
+          overviewRef.current = nativeInfo?.memory_unit === 'bytes'
+            ? {
+                ...serverInfo,
+                platform: nativeInfo.platform || serverInfo.platform,
+                release: nativeInfo.release || serverInfo.release,
+                arch: nativeInfo.arch || serverInfo.arch,
+                hostname: nativeInfo.hostname || serverInfo.hostname,
+                cpuModel: nativeInfo.cpu_model || serverInfo.cpuModel,
+                logicalCpus: nativeInfo.logical_cpus || serverInfo.logicalCpus,
+                physicalCpus: nativeInfo.cpus || serverInfo.physicalCpus,
+              }
+            : serverInfo;
+        }
+        const live = await systemService.getLiveStats();
+        const overview = overviewRef.current || {};
+        const sys = {
+          cpu: live.cpu_percent || 0,
+          cpuModel: overview.cpuModel || '',
+          logicalCpus: overview.logicalCpus || overview.cpus || 0,
+          physicalCpus: overview.physicalCpus ?? null,
+          ram: {
+            used: live.memory_used_gb || 0,
+            total: live.memory_total_gb || 0,
+            percent: live.memory_percent || 0,
+          },
+          platform: overview.platform || '',
+          release: overview.release || '',
+          arch: overview.arch || '',
+          hostname: live.hostname || overview.hostname || '',
+          uptime: live.uptime_seconds || overview.uptime || 0,
+          gpu: (live.gpu_vendor || overview.gpu?.name)
+            ? { name: live.gpu_vendor || overview.gpu?.name, util: live.gpu_utilization ?? overview.gpu?.util }
+            : null,
+        };
         setStats(sys);
         setData(prev => {
           const next = [...prev, sys.cpu || 0];
@@ -1102,7 +1147,7 @@ function KernelMonitorApp({ t }: { t: any }) {
     return () => clearInterval(interval);
   }, []);
 
-  const chipLabel = stats.platform ? `${stats.platform.toUpperCase()}_${stats.arch.toUpperCase()}_NODE` : 'NEURAL_NODE';
+  const chipLabel = stats.cpuModel || (stats.platform ? `${stats.platform.toUpperCase()}_${stats.arch.toUpperCase()}_NODE` : 'NEURAL_NODE');
   const uptimeFmt = stats.uptime ? `${Math.floor(stats.uptime / 3600)}h ${Math.floor((stats.uptime % 3600) / 60)}m` : '';
   const loadStatus = stats.cpu > 80 ? 'WARN' : stats.cpu > 50 ? 'LOAD' : 'IDLE';
 
@@ -1115,24 +1160,24 @@ function KernelMonitorApp({ t }: { t: any }) {
           </div>
           <div>
             <div className="text-xs font-black text-white/40 uppercase tracking-widest leading-none mb-1">{stats.hostname || t.localIntelNode || 'Local Node'}</div>
-            <div className="text-lg font-black text-white tracking-tight">{chipLabel}</div>
+            <div className="max-w-[min(50vw,38rem)] truncate text-lg font-black text-white tracking-tight" title={chipLabel}>{chipLabel}</div>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-xs font-black text-celestial-saturn uppercase tracking-widest leading-none mb-1">{loadStatus} · {stats.cpus}c · {uptimeFmt}</div>
+          <div className="text-xs font-black text-celestial-saturn uppercase tracking-widest leading-none mb-1">{loadStatus} / {stats.physicalCpus || '?'} cores / {stats.logicalCpus} threads / {uptimeFmt}</div>
           <div className="text-xs font-mono text-white/40">{stats.release || ''} / CPU {stats.cpu}%</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {[
           { label: t.neuralThroughput || 'CPU Load', value: `${stats.cpu}%`, bar: stats.cpu, color: 'bg-celestial-saturn' },
           { label: t.synapticLoad || 'Memory', value: `${stats.ram.used} / ${stats.ram.total} GB`, bar: stats.ram.percent, color: 'bg-emerald-500' },
-          { label: 'GPU', value: stats.gpu?.name || `${stats.cpus} Cores · ${stats.arch}`, bar: 0, color: 'bg-blue-500' }
+          { label: 'GPU', value: stats.gpu?.name || (t.notDetected || 'Not detected'), bar: stats.gpu?.util || 0, color: 'bg-blue-500' }
         ].map((stat, i) => (
           <div key={i} className="p-5 bg-white/5 rounded-[2rem] border border-white/5 space-y-3 hover:bg-white/10 transition-colors cursor-default">
             <div className="text-[12px] font-black text-white/45 uppercase tracking-[0.2em]">{stat.label}</div>
-            <div className="text-xl font-black text-white tracking-tighter">{stat.value}</div>
+            <div className="min-h-10 break-words text-base font-black text-white" title={String(stat.value)}>{stat.value}</div>
             <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
               <motion.div initial={{ width: 0 }} animate={{ width: `${stat.bar}%` }} className={`h-full ${stat.color}`} />
             </div>
@@ -2525,7 +2570,7 @@ export function DesktopUI({
   });
 
   // ── Biometrics: voiceprint + face recognition + presence ──
-  const faceRecognition = useFaceRecognition({ enabled: sensorPrimerSeen, socket });
+  const faceRecognition = useFaceRecognition({ enabled: sensorPrimerSeen && workDomain === 'personal', socket });
   const presence = usePresence({
     socket,
     faceResult: faceRecognition.result,
@@ -5653,8 +5698,10 @@ export function DesktopUI({
                     <SubscriptionPanel t={t} />
                   ) : windowId === 'avatar-studio' ? (
                     <AvatarStudio
+                      key={petPreferenceScopeKey}
                       t={t}
                       lang={lang}
+                      storageScope={petPreferenceScopeKey}
                       selectedPetId={selectedPet?.id}
                       onSelectPet={handleSelectPet}
                       equippedAccessories={equippedAccessories}
@@ -5847,7 +5894,6 @@ export function DesktopUI({
       </AnimatePresence>
 
       <ToolConfirmDialog socket={socket} isWallpaperMode={isWallpaperMode} />
-      <UserSwitchPrompt socket={socket} />
       {musicLayerLoaded && (
         <Suspense fallback={null}>
           <MusicMoodLayer />

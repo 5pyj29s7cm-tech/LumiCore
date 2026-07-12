@@ -49,6 +49,7 @@ interface FaceTemplate {
 }
 
 const FACE_RECOGNITION_INTERVAL_MS = 700;
+const FACE_LOST_GRACE_FRAMES = Math.ceil(3000 / FACE_RECOGNITION_INTERVAL_MS);
 
 function faceResultKey(result: FaceRecognitionResult): string {
   return [
@@ -71,6 +72,8 @@ interface UseFaceRecognitionOptions {
 export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
   const enabled = options?.enabled ?? true;
   const socketRef = useRef(options?.socket);
+
+  useEffect(() => { socketRef.current = options?.socket; }, [options?.socket]);
 
   const [result, setResult] = useState<FaceRecognitionResult>({
     facePresent: false,
@@ -197,7 +200,7 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
             } else {
               // Face lost counting
               faceLostRef.current++;
-              const stillPresent = faceLostRef.current < 20; // ~3s grace period at 10-frame intervals
+              const stillPresent = faceLostRef.current < FACE_LOST_GRACE_FRAMES;
               const lastKnown = lastKnownFaceResult.current;
 
               if (stillPresent && lastKnown) {

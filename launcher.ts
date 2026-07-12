@@ -135,6 +135,14 @@ function clearStaleProjectPortOwners(): void {
   }
 }
 
+let currentChild: ChildProcess | null = null;
+
+function scheduleServerRestart(delayMs: number): void {
+  setTimeout(() => {
+    currentChild = restartServer();
+  }, delayMs);
+}
+
 function restartServer(): ChildProcess {
   clearStaleProjectPortOwners();
   console.log(`[Launcher] Starting server: tsx ${path.basename(SERVER_SCRIPT)}`);
@@ -156,7 +164,7 @@ function restartServer(): ChildProcess {
     if (code === UPGRADE_EXIT_CODE) {
       console.log('[Launcher] Upgrade restart — launching new version...');
       crashTimestamps = []; // reset crash counter on successful upgrade
-      setTimeout(() => restartServer(), 500);
+      scheduleServerRestart(500);
       return;
     }
 
@@ -168,20 +176,20 @@ function restartServer(): ChildProcess {
       console.error(`[Launcher] ${MAX_CRASH_RETRIES} crashes in ${CRASH_WINDOW_MS / 1000}s. Rolling back...`);
       await handleFatalCrashes();
       crashTimestamps = [];
-      setTimeout(() => restartServer(), 1000);
+      scheduleServerRestart(1000);
       return;
     }
 
     const delay = BACKOFF_BASE_MS * Math.pow(2, crashes - 1);
     console.log(`[Launcher] Crash ${crashes}/${MAX_CRASH_RETRIES} — restarting in ${delay / 1000}s...`);
-    setTimeout(() => restartServer(), delay);
+    scheduleServerRestart(delay);
   });
 
   return child;
 }
 
 // Forward signals to child
-let currentChild = restartServer();
+currentChild = restartServer();
 
 process.on('SIGINT', () => {
   console.log('[Launcher] SIGINT — forwarding to server...');

@@ -11,7 +11,8 @@ export function BiometricsEnrollPanel() {
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const voiceprint = useVoiceprint();
-  const faceRecognition = useFaceRecognition({ enabled: true });
+  // Enrollment opens its own short-lived camera stream on demand.
+  const faceRecognition = useFaceRecognition({ enabled: false });
 
   const [voiceLabel, setVoiceLabel] = useState(() => ui('我的声音', 'My voice'));
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'recording' | 'done'>('idle');

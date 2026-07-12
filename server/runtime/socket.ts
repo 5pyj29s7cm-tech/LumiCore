@@ -141,12 +141,14 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     if (!socket.data.authenticatedOrgId) {
       socket.join(`user:${uid}`);
       socket.join(`user:${uid}:personal`);
+    } else {
+      socket.join(`user:${uid}:org:${socket.data.authenticatedOrgId}`);
     }
     console.log(`[Socket] Client connected: ${socket.id} (uid=${uid})`);
 
     const getUserId = (s: any) => getUserIdFromSocket(s, jwtSecret) || uid;
 
-    // DEBUG: log all incoming events
+    // Optional diagnostics. Event payloads may contain private user content.
     socket.onAny((event, ...args) => {
       if (event.startsWith('tool:desktop_result:')) {
         const correlationId = event.slice('tool:desktop_result:'.length);
@@ -162,8 +164,8 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
         'client:state',
         'presence:heartbeat',
       ]);
-      if (event !== 'device:register' && !noisyEvents.has(event)) {
-        console.log(`[Socket:${socket.id}] event: ${event} args:`, JSON.stringify(args).slice(0, 200));
+      if (process.env.LUMI_SOCKET_DEBUG === '1' && event !== 'device:register' && !noisyEvents.has(event)) {
+        console.log(`[Socket:${socket.id}] event=${event} argc=${args.length}`);
       }
     });
 

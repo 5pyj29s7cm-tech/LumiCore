@@ -176,7 +176,11 @@ export interface SystemHealthResponse {
 }
 
 export interface SystemStatsResponse {
+  computerScope: 'lumi_server_host';
   cpu: number;
+  cpuModel: string;
+  logicalCpus: number;
+  physicalCpus: number | null;
   ram: { used: number; total: number; percent: number };
   platform: string;
   release: string;

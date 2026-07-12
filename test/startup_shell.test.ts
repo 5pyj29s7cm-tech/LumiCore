@@ -30,4 +30,12 @@ describe('desktop startup shell', () => {
     expect(rustEntry).toContain('PageLoadEvent::Finished');
     expect(rustEntry).toContain('webview.window().show()');
   });
+
+  it('tracks the replacement backend after a supervised restart', () => {
+    const launcher = fs.readFileSync(path.join(process.cwd(), 'launcher.ts'), 'utf8');
+    expect(launcher).toContain('currentChild = restartServer()');
+    expect(launcher).toContain('scheduleServerRestart(500)');
+    expect(launcher).toContain('scheduleServerRestart(delay)');
+    expect(launcher).not.toContain('setTimeout(() => restartServer()');
+  });
 });

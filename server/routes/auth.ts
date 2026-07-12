@@ -457,34 +457,20 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     }
   });
 
-  // Switch to another user (biometric-triggered multi-user mode)
+  // Face/voice signals currently support presence and command gating, not
+  // cryptographic authentication. Keep old clients from silently impersonating
+  // another local user until an explicit biometric challenge is implemented.
   router.post("/auth/switch-user", (req, res) => {
     let token = req.cookies.token;
     if (!token && req.headers.authorization?.startsWith('Bearer ')) token = req.headers.authorization.slice(7);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
-      const { targetUid } = req.body;
-      if (!targetUid) return res.status(400).json({ error: "targetUid is required" });
-
-      const db = readDB();
-      const currentUser = db.users.find((u: any) => u.uid === decoded.uid);
-      if (!currentUser) return res.status(401).json({ error: "Current user not found" });
-      if (currentUser.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
-      }
-
-      const targetUser = db.users.find((u: any) => u.uid === targetUid);
-      if (!targetUser) return res.status(404).json({ error: "Target user not found" });
-
-      const newToken = jwt.sign(
-        { uid: targetUser.uid, username: targetUser.username, role: targetUser.role },
-        jwtSecret,
-        { expiresIn: "24h" },
-      );
-      res.cookie("token", newToken, getCookieOptions());
-      const { password: _, ...userWithoutPassword } = targetUser;
-      res.json({ success: true, user: userWithoutPassword, token: newToken });
+      void decoded;
+      return res.status(409).json({
+        error: 'Biometric user switching is unavailable until a verified challenge is completed',
+        code: 'BIOMETRIC_CHALLENGE_REQUIRED',
+      });
     } catch (e) {
       res.status(401).json({ error: "Invalid token" });
     }
