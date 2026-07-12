@@ -15,8 +15,9 @@ import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
 import { mcpManager } from '../../mcp';
 import { isExplicitSensitiveClientActionRequest } from '../action_constitution';
+import { PERSONAL_CLIENT_SURFACE_ACTIONS } from '../../../shared/client_surfaces';
 
-const ACTIONS = [
+const ACTIONS = Array.from(new Set([
   'open_app',
   'close_app',
   'set_mode',
@@ -26,32 +27,14 @@ const ACTIONS = [
   'show_desktop_widget',
   'exit_widget_mode',
   'expand_from_widget',
-  'open_nexus',
+  ...PERSONAL_CLIENT_SURFACE_ACTIONS,
   'close_nexus',
-  'open_music_center',
   'show_music_layer',
   'hide_music_layer',
   'start_meeting_mode',
   'end_meeting_mode',
   'open_meeting_notes',
-  'open_runtime_log',
-  'show_knowledge_base',
   'open_organization_workspace',
-  'open_files',
-  'open_settings',
-  'open_computer_adaptation',
-  'open_avatar_studio',
-  'open_sound_studio',
-  'open_memory_avatar',
-  'open_skills',
-  'open_tools',
-  'open_team',
-  'open_chat',
-  'open_plans',
-  'open_work_queue',
-  'open_subscription',
-  'open_activation',
-  'open_billing',
   'customer_takeover_panel',
   'close_customer_takeover_panel',
   'design_delivery_panel',
@@ -60,7 +43,7 @@ const ACTIONS = [
   'close_ecommerce_growth_panel',
   'refresh_client_state',
   'set_wallpaper_mode',
-];
+]));
 
 const RECOVERY_SURFACE_TARGETS: Record<string, string> = {
   skills: 'skills',
@@ -172,7 +155,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     name: 'client_action',
     description: [
       'Safely control Lumi client UI surfaces through the client action router.',
-      'Use explicit client-native actions like refresh_client_state, open_nexus, open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_organization_workspace(section=...), open_avatar_studio, open_sound_studio, open_computer_adaptation, open_settings, open_subscription, enter_widget_mode, customer_takeover_panel, design_delivery_panel, ecommerce_growth_panel, or set_wallpaper_mode.',
+      'Use the explicit action from the complete personal-client interface registry, including personality, notifications, reminders, devices, token usage, terminal, profile, MCP settings, Voice Forge, skill generation, app launcher, knowledge, organization, meeting, music, and runtime surfaces.',
       'Legacy open_app/close_app/set_mode are still accepted for compatibility.',
       'This does not use mouse/keyboard control and should be preferred over computer_use for Lumi client UI navigation.',
     ].join(' '),
@@ -186,7 +169,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         target: {
           type: 'string',
-          description: 'Target app/surface for open_app or close_app, e.g. nexus, org, knowledge, runtime-log, skills, team, music-center, settings. The legacy files target opens knowledge.',
+          description: 'Target app/surface for backward-compatible open_app or close_app. Prefer a registered explicit action when opening a Lumi interface.',
         },
         mode: {
           type: 'string',
@@ -223,7 +206,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         section: {
           type: 'string',
-          description: 'Optional section. For open_organization_workspace use dashboard, kb, chat, messaging, templates, review, members, audit, settings, branch, legal, spatial-design, or brand-design. For open_settings use a settings section such as computer, llm, voice, vision, or autonomy.',
+          description: 'Optional section. For open_organization_workspace use dashboard, kb, chat, messaging, templates, review, members, audit, settings, branch, legal, spatial-design, or brand-design. For open_settings use general, neural/autonomy, llm-providers, vision-models, voice-services, security, hardware, mcp, voice, or computer.',
         },
         confirmed: {
           type: 'boolean',

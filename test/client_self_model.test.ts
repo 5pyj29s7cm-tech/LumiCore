@@ -201,6 +201,7 @@ describe('Lumi client self model', () => {
           activeTab: 'settings',
           windows: { open: ['settings'], focused: 'settings', minimized: [] },
           surfaces: {},
+          settings: { activeSection: 'general' },
         },
         matched: 'surface:settings:open',
       },

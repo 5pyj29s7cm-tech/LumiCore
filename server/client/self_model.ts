@@ -12,6 +12,14 @@ import {
   normalizeOrganizationWorkspaceView,
   type OrganizationWorkspaceView,
 } from '../../shared/org_workspace';
+import {
+  CLIENT_SETTINGS_SECTIONS,
+  PERSONAL_CLIENT_SURFACES,
+  PERSONAL_CLIENT_SURFACE_ACTIONS,
+  getPersonalClientSurfaceByAction,
+  isComputerAdaptationSettingsTarget,
+  normalizeClientSettingsSection,
+} from '../../shared/client_surfaces';
 
 export type ClientMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 export type ClientCapabilityKind =
@@ -86,8 +94,11 @@ export interface ClientStateSnapshot {
   };
   windows?: { open?: string[]; focused?: string | null; minimized?: string[] };
   surfaces?: {
+    appLauncherOpen?: boolean;
     knowledgeOpen?: boolean;
     chatOpen?: boolean;
+    notificationsOpen?: boolean;
+    memoryAvatarOpen?: boolean;
     runtimeLogOpen?: boolean;
     meetingOpen?: boolean;
     musicLayerVisible?: boolean;
@@ -101,6 +112,7 @@ export interface ClientStateSnapshot {
     ecommerceGrowthOpen?: boolean;
     ecommerceGrowthStage?: string | null;
   };
+  settings?: { activeSection?: string };
   voice?: { state?: string; muted?: boolean };
   music?: {
     visible?: boolean;
@@ -187,8 +199,10 @@ export type ClientActionVerificationStatus = 'verified' | 'pending' | 'failed' |
 
 export interface ClientStateDigest {
   mode: string;
+  workDomain: string;
   activeTab: string;
   viewMode: string;
+  settingsSection: string;
   focusedWindow: string;
   openWindows: string[];
   openSurfaces: string[];
@@ -337,8 +351,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.interface_awareness',
     label: 'Interface awareness',
     kind: 'system',
-    actions: ['client_get_state', 'client_action', 'adapter_registry_list'],
-    notes: 'Lumi knows her own client interfaces and can choose the right surface for a task: home, chat, knowledge, runtime log, skills, tools, team, avatar, sound, organization, plans, settings, music, meeting, wallpaper, widget mode, subscription/activation/billing, computer adaptation, and large work takeover panels.',
+    actions: ['client_get_state', 'client_action', 'adapter_registry_list', ...PERSONAL_CLIENT_SURFACE_ACTIONS],
+    notes: `Lumi knows every registered personal-client interface, its purpose, native route, current state, and verification contract: ${PERSONAL_CLIENT_SURFACES.map(surface => surface.id).join(', ')}. Organization, meeting, wallpaper, widget, and large takeover surfaces remain additional scoped interfaces.`,
     stateKeys: ['windows', 'surfaces', 'tools', 'runtimeLog', 'music', 'meeting', 'org'],
   },
   {
@@ -634,7 +648,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
 ];
 
-const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
+const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
   {
     id: 'home',
     label: 'Home / desktop shell',
@@ -858,6 +872,29 @@ const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     useWhen: 'Show system profile, common apps, permissions, local readiness, and setup recommendations.',
     closeAfterUse: true,
   },
+];
+
+const registeredPersonalSurfaceIds = new Set<string>(PERSONAL_CLIENT_SURFACES.map(surface => surface.id));
+const registeredSettingsSurfaceIds = new Set<string>(CLIENT_SETTINGS_SECTIONS.map(section => `settings-${section.id}`));
+const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
+  ...PERSONAL_CLIENT_SURFACES.map(surface => ({
+    id: surface.id,
+    label: surface.label,
+    actions: [...surface.actions],
+    useWhen: surface.useWhen,
+    closeAfterUse: surface.closeAfterUse ?? true,
+  })),
+  ...CLIENT_SETTINGS_SECTIONS.map(section => ({
+    id: `settings-${section.id}`,
+    label: section.label,
+    actions: [`open_settings(section=${section.id})`],
+    useWhen: section.useWhen,
+    closeAfterUse: true,
+  })),
+  ...LEGACY_CLIENT_INTERFACE_SURFACES.filter(surface => (
+    !registeredPersonalSurfaceIds.has(surface.id)
+    && !registeredSettingsSurfaceIds.has(surface.id)
+  )),
 ];
 
 const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
@@ -1119,6 +1156,11 @@ export function normalizeClientActionTarget(value?: string): string {
     organization: 'org',
     workspace: 'org',
     'org-workspace': 'org',
+    launcher: 'app-launcher',
+    spotlight: 'app-launcher',
+    search: 'app-launcher',
+    personality: 'personality',
+    'personality-lab': 'personality',
     notifications: 'notifications',
     notification: 'notifications',
     reminders: 'reminders',
@@ -1126,6 +1168,21 @@ export function normalizeClientActionTarget(value?: string): string {
     devices: 'devices',
     device: 'devices',
     'device-sync': 'devices',
+    terminal: 'terminal',
+    tokens: 'tokens',
+    usage: 'tokens',
+    profile: 'profile',
+    mcp: 'mcp',
+    'mcp-settings': 'mcp',
+    voice: 'voice',
+    'voice-forge': 'voice',
+    'github-mcp': 'github-mcp',
+    generate: 'generate',
+    'skill-generator': 'generate',
+    ecosystem: 'ecosystem',
+    docs: 'docs',
+    documentation: 'docs',
+    founders: 'founders',
     'avatar-studio': 'avatar-studio',
     avatar: 'avatar-studio',
     'sound-studio': 'sound',
@@ -1158,6 +1215,10 @@ export function normalizeClientActionTarget(value?: string): string {
     '首页': 'home',
     '聊天': 'chat',
     '聊天窗口': 'chat',
+    '应用启动器': 'app-launcher',
+    '应用搜索': 'app-launcher',
+    '人格': 'personality',
+    '人格实验室': 'personality',
     '团队': 'team',
     '团队面板': 'team',
     '工具': 'tools',
@@ -1182,6 +1243,16 @@ export function normalizeClientActionTarget(value?: string): string {
     '提醒窗口': 'reminders',
     '设备': 'devices',
     '设备同步': 'devices',
+    '终端': 'terminal',
+    '用量': 'tokens',
+    '令牌用量': 'tokens',
+    '个人资料': 'profile',
+    '语音工坊': 'voice',
+    '声音克隆': 'voice',
+    '技能生成': 'generate',
+    '智能体生态': 'ecosystem',
+    '文档': 'docs',
+    '创始人空间': 'founders',
     '电脑适配中心': 'kernel',
     '计算机适配中心': 'kernel',
     '电脑适配': 'kernel',
@@ -1223,8 +1294,11 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   if (state.activeTab) openSurfaces.push(`tab:${state.activeTab}`);
   if (state.viewMode) openSurfaces.push(`view:${state.viewMode}`);
   if (state.viewMode === 'world' || state.surfaces?.nexusOpen) openSurfaces.push('nexus');
+  if (state.surfaces?.appLauncherOpen) openSurfaces.push('app-launcher');
   if (state.surfaces?.knowledgeOpen) openSurfaces.push('knowledge');
   if (state.surfaces?.chatOpen) openSurfaces.push('chat');
+  if (state.surfaces?.notificationsOpen) openSurfaces.push('notifications');
+  if (state.surfaces?.memoryAvatarOpen) openSurfaces.push('memory-avatar');
   if (state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) openSurfaces.push('runtime-log');
   if (state.surfaces?.meetingOpen || state.meeting?.active) openSurfaces.push('meeting');
   if (state.surfaces?.musicLayerVisible || state.music?.layerVisible) openSurfaces.push('music-layer');
@@ -1250,8 +1324,10 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
     : 'unknown';
   return {
     mode: state.mode || 'unknown',
+    workDomain: state.workDomain || 'personal',
     activeTab: state.activeTab || 'unknown',
     viewMode: state.viewMode || 'unknown',
+    settingsSection: state.settings?.activeSection || 'none',
     focusedWindow: state.windows?.focused || 'none',
     openWindows,
     openSurfaces,
@@ -1277,6 +1353,7 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
   const enabled = Boolean(args.enabled);
   let target = normalizeClientActionTarget(args.target);
   const requestedOrganizationView = normalizeOrganizationWorkspaceView(section || target);
+  const registeredSurface = getPersonalClientSurfaceByAction(action);
   let expectedState: string[] = [];
   let verification = 'Check the latest client state after the action before claiming success.';
   let naturalCompletion = 'Done.';
@@ -1299,6 +1376,13 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       break;
     case 'focus_home':
       setSurface('home', 'home');
+      break;
+    case 'open_personal_workspace':
+      setSurface('home', 'personal workspace');
+      expectedState.push('domain:personal');
+      verification = 'The personal workspace should be active and the organization data overlay should be closed.';
+      naturalCompletion = 'Personal workspace is open.';
+      naturalPending = 'I asked to return to the personal workspace, but fresh state has not confirmed the domain switch yet.';
       break;
     case 'open_nexus':
       setSurface('nexus', 'Nexus / central world');
@@ -1386,7 +1470,20 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       }
       break;
     case 'open_settings':
-      setSurface(section === 'computer' ? 'kernel' : 'settings', section === 'computer' ? 'computer adaptation center' : 'settings');
+      if (isComputerAdaptationSettingsTarget(section)) {
+        setSurface('kernel', 'computer adaptation center');
+        break;
+      }
+      setSurface('settings', 'settings');
+      {
+        const normalizedSettingsSection = normalizeClientSettingsSection(section);
+        if (normalizedSettingsSection) {
+          expectedState.push(`settings-section:${normalizedSettingsSection}`);
+          verification = `Settings should be visible on the ${normalizedSettingsSection} section in fresh client state.`;
+          naturalCompletion = `Settings is open on ${normalizedSettingsSection}.`;
+          naturalPending = `I asked to open the ${normalizedSettingsSection} settings section, but fresh state has not confirmed that exact section yet.`;
+        }
+      }
       break;
     case 'open_computer_adaptation':
       setSurface('kernel', 'computer adaptation center');
@@ -1455,10 +1552,18 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       naturalPending = `I asked to ${enabled ? 'enable' : 'disable'} wallpaper mode, but state has not confirmed it yet.`;
       break;
     default:
-      expectedState = [];
-      verification = 'No built-in state expectation is known for this client action.';
-      naturalCompletion = 'The client action completed.';
-      naturalPending = 'The client action was sent, but I need its action result or fresh state before claiming success.';
+      if (registeredSurface) {
+        setSurface(registeredSurface.target, registeredSurface.label);
+        if (registeredSurface.settingsSection) {
+          expectedState.push(`settings-section:${registeredSurface.settingsSection}`);
+          verification = `${registeredSurface.label} should be visible in the ${registeredSurface.settingsSection} settings section.`;
+        }
+      } else {
+        expectedState = [];
+        verification = 'No built-in state expectation is known for this client action.';
+        naturalCompletion = 'The client action completed.';
+        naturalPending = 'The client action was sent, but I need its action result or fresh state before claiming success.';
+      }
       break;
   }
 
@@ -1547,7 +1652,7 @@ export function getClientSelfAwarenessReport(
   if (health.findings.length) gaps.push(...health.findings.slice(0, 3).map(f => `${f.area}: ${f.message}`));
 
   const bodySummary = digest
-    ? `mode=${digest.mode}; active=${digest.activeTab}; view=${digest.viewMode}; orgView=${digest.orgView}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; knowledge=${digest.knowledge}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
+    ? `mode=${digest.mode}; domain=${digest.workDomain}; active=${digest.activeTab}; view=${digest.viewMode}; settings=${digest.settingsSection}; orgView=${digest.orgView}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; knowledge=${digest.knowledge}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
     : `no live client body; health=${health.level}`;
 
   return {
@@ -1555,7 +1660,8 @@ export function getClientSelfAwarenessReport(
     bodySummary,
     currentState: digest,
     knows: [
-      'client surfaces and their native client_action routes',
+      'the complete registered personal-client surface map and each native client_action route',
+      'the exact active settings section when settings are visible',
       'the exact current organization workspace view and the views allowed by the authenticated member role',
       'the current-domain knowledge inventory and the difference between saved, indexed, partial, pending, failed, unsupported, missing-index, and stale content',
       'one continuous Lumi identity with personal and organization workspace overlays; organization access never grants another member personal memory access',
@@ -1593,9 +1699,12 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   const openWindows = state.windows?.open || [];
   if (target === 'home') return state.activeTab === 'home';
   if (target === 'nexus') return state.viewMode === 'world' || Boolean(state.surfaces?.nexusOpen);
+  if (target === 'app-launcher') return Boolean(state.surfaces?.appLauncherOpen);
   if (target === 'org') return state.activeTab === 'org' || openWindows.includes('org') || state.windows?.focused === 'org';
   if (target === 'knowledge') return Boolean(state.surfaces?.knowledgeOpen) || openWindows.includes('knowledge');
   if (target === 'chat') return Boolean(state.surfaces?.chatOpen) || openWindows.includes('chat');
+  if (target === 'notifications') return Boolean(state.surfaces?.notificationsOpen) || openWindows.includes('notifications');
+  if (target === 'memory-avatar') return Boolean(state.surfaces?.memoryAvatarOpen) || openWindows.includes('memory-avatar');
   if (target === 'runtime-log') return Boolean(state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) || openWindows.includes('runtime-log');
   if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
   if (target === 'music-layer') return Boolean(state.surfaces?.musicLayerVisible || state.music?.layerVisible);
@@ -1618,6 +1727,14 @@ function clientStateMatchesExpectation(
   }
   if (expected.startsWith('mode:not:')) return after?.mode !== expected.slice('mode:not:'.length);
   if (expected.startsWith('mode:')) return after?.mode === expected.slice('mode:'.length);
+  if (expected.startsWith('domain:')) return after?.workDomain === expected.slice('domain:'.length);
+  if (expected.startsWith('settings-section:')) {
+    const requestedSection = normalizeClientSettingsSection(expected.slice('settings-section:'.length));
+    const activeSection = after?.settings?.activeSection
+      ? normalizeClientSettingsSection(after.settings.activeSection)
+      : null;
+    return Boolean(requestedSection && activeSection === requestedSection && surfaceIsOpen(after, 'settings'));
+  }
   if (expected.startsWith('org-view:')) {
     const requestedView = normalizeOrganizationWorkspaceView(expected.slice('org-view:'.length));
     const activeView = normalizeOrganizationWorkspaceView(after?.orgWorkspace?.activeView);
@@ -1750,13 +1867,14 @@ export function formatClientSelfPrompt(
     `- Current mode: ${state.mode || 'unknown'}`,
     `- Active tab: ${state.activeTab || 'unknown'}`,
     `- View mode: ${state.viewMode || 'personal'}${state.viewMode === 'world' || state.surfaces?.nexusOpen ? ' (Nexus / central world visible)' : ''}`,
+    `- Settings section: ${state.settings?.activeSection || 'none'}`,
     `- Work domain: ${state.workDomain || 'personal'}`,
     `- Organization: ${state.org?.connected ? `${state.org.name || state.org.id || 'connected'} (${state.org.role || 'member'}${state.org.id ? `, id=${state.org.id}` : ''})` : 'not connected or personal domain'}`,
     `- Organization workspace: visible=${Boolean(state.orgWorkspace?.visible)}, active=${state.orgWorkspace?.activeView || 'none'}, allowed=${state.orgWorkspace?.availableViews?.join(', ') || 'none reported'}`,
     `- Knowledge ingestion: domain=${state.knowledge?.domain || state.workDomain || 'personal'}, files=${state.knowledge?.totalFiles || 0}, indexed=${state.knowledge?.indexedFiles || 0}, partial=${state.knowledge?.partialFiles || 0}, pending=${state.knowledge?.pendingFiles || 0}, failed=${state.knowledge?.failedFiles || 0}, unsupported=${state.knowledge?.unsupportedFiles || 0}${state.knowledge?.orgArticles ? `, orgArticles=${state.knowledge.orgArticles.total || 0}, orgPublished=${state.knowledge.orgArticles.published || 0}, orgIndexed=${state.knowledge.orgArticles.indexed || 0}, orgMissingIndex=${state.knowledge.orgArticles.missingIndex || 0}, orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}${state.knowledge?.lastError ? `, error=${state.knowledge.lastError}` : ''}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}, customerPanel=${state.surfaces?.customerTakeoverStage || false}, designPanel=${state.surfaces?.designDeliveryStage || false}, ecommercePanel=${state.surfaces?.ecommerceGrowthStage || false}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}, customerPanel=${state.surfaces?.customerTakeoverStage || false}, designPanel=${state.surfaces?.designDeliveryStage || false}, ecommercePanel=${state.surfaces?.ecommerceGrowthStage || false}`,
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
     `- Music: ${state.music?.isPlaying ? 'playing' : 'idle'}${state.music?.trackName ? `, track="${state.music.trackName}"` : ''}${state.music?.volume != null ? `, volume=${state.music.volume}` : ''}, layer=${Boolean(state.music?.layerVisible ?? state.surfaces?.musicLayerVisible)}`,
     `- Music taste profile: ${formatMusicProfileForPrompt(musicProfile)}`,
@@ -1816,7 +1934,7 @@ export function formatClientSelfPrompt(
     'Keep three maps separate and current: local machine (host, files, apps, processes), visible desktop (foreground window, screen/UI controls, cursor, logged-in sessions), and background runtime (client visibility, autostart, close-to-background, backend health, runtime log, confirmed autonomous workflows).',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
-    'Prefer explicit client actions such as open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_settings, open_subscription, enter_widget_mode, customer_takeover_panel, design_delivery_panel, ecommerce_growth_panel, and set_wallpaper_mode instead of mouse/keyboard control for Lumi UI.',
+    'Use the registered explicit client action for every Lumi interface, including personality, notifications, reminders, devices, tokens, terminal, profile, MCP settings, Voice Forge, skill generation, and the app launcher. Use open_app only as backward compatibility, never as a guess about an undocumented target.',
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
     'Use client_get_state or client_health_check before claiming local machine, desktop, or background runtime status. Use desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_running_processes, desktop_active_window, desktop_ui_snapshot, and desktop_capture_screen to refresh the OS/desktop layer.',

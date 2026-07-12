@@ -99,6 +99,11 @@ import {
   normalizeOrganizationWorkspaceView,
   type OrganizationWorkspaceView,
 } from '../../shared/org_workspace';
+import {
+  getPersonalClientSurfaceByAction,
+  isComputerAdaptationSettingsTarget,
+  normalizeClientSettingsSection,
+} from '../../shared/client_surfaces';
 import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
 
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
@@ -4026,6 +4031,8 @@ export function DesktopUI({
           setKnowledgeOpen(false);
           setChatOpen(false);
           setIsNotificationPanelOpen(false);
+          setIsSearchOpen(false);
+          setMemoryLabOpen(false);
           setViewMode('personal');
           setActiveTab('home');
           return;
@@ -4033,6 +4040,10 @@ export function DesktopUI({
         if (windowId === 'nexus') {
           setViewMode('world');
           setActiveTab('home');
+          return;
+        }
+        if (windowId === 'app-launcher') {
+          setIsSearchOpen(true);
           return;
         }
         if (windowId === 'org') {
@@ -4108,8 +4119,16 @@ export function DesktopUI({
           setViewMode('personal');
           return;
         }
+        if (windowId === 'app-launcher') {
+          setIsSearchOpen(false);
+          return;
+        }
         if (windowId === 'notifications') {
           setIsNotificationPanelOpen(false);
+          return;
+        }
+        if (windowId === 'memory-avatar') {
+          setMemoryLabOpen(false);
           return;
         }
         if (windowId === 'org' && activeTab === 'org') {
@@ -4229,25 +4248,53 @@ export function DesktopUI({
           respond({ ok: true, action, mode });
           return;
         }
-        if (action === 'focus_home') {
+        if (action === 'open_personal_workspace') {
+          if (workDomain !== 'personal') {
+            const switched = await switchDomain('personal');
+            if (!switched.success) {
+              respond({
+                ok: false,
+                action,
+                target: 'home',
+                domain: workDomain,
+                reason: switched.message || 'personal_domain_switch_failed',
+              });
+              return;
+            }
+          }
           openSurface('home');
-          respond({ ok: true, action });
+          respond({ ok: true, action, target: 'home', domain: 'personal' });
           return;
         }
-        if (action === 'open_nexus') {
-          setViewMode('world');
-          setActiveTab('home');
-          respond({ ok: true, action, target: 'nexus', viewMode: 'world' });
+        if (action === 'open_settings') {
+          if (isComputerAdaptationSettingsTarget(section)) {
+            openSurface('kernel');
+            respond({ ok: true, action, target: 'kernel', section: 'computer' });
+            return;
+          }
+          const requestedSection = normalizeClientSettingsSection(section);
+          if (!requestedSection) throw new Error(`Unknown settings section: ${section}`);
+          setSettingsSection(requestedSection);
+          openSurface('settings');
+          respond({ ok: true, action, target: 'settings', section: requestedSection });
+          return;
+        }
+        const registeredSurface = getPersonalClientSurfaceByAction(action);
+        if (registeredSurface) {
+          if (registeredSurface.settingsSection) setSettingsSection(registeredSurface.settingsSection);
+          openSurface(registeredSurface.target);
+          respond({
+            ok: true,
+            action,
+            target: registeredSurface.target,
+            surface: registeredSurface.id,
+            section: registeredSurface.settingsSection || '',
+          });
           return;
         }
         if (action === 'close_nexus') {
           setViewMode('personal');
           respond({ ok: true, action, target: 'nexus', viewMode: 'personal' });
-          return;
-        }
-        if (action === 'open_music_center') {
-          openSurface('music-center');
-          respond({ ok: true, action, target: 'music-center', mode: operationMode });
           return;
         }
         if (action === 'show_music_layer' || action === 'hide_music_layer') {
@@ -4281,16 +4328,6 @@ export function DesktopUI({
         if (action === 'open_meeting_notes') {
           setMeetingNotesOpen(true);
           respond({ ok: true, action });
-          return;
-        }
-        if (action === 'open_runtime_log') {
-          openSurface('runtime-log');
-          respond({ ok: true, action, target: 'runtime-log' });
-          return;
-        }
-        if (action === 'show_knowledge_base') {
-          openSurface('knowledge');
-          respond({ ok: true, action, target: 'knowledge' });
           return;
         }
         if (action === 'open_organization_workspace') {
@@ -4332,64 +4369,6 @@ export function DesktopUI({
             section: requestedView,
             domain: orgConnection?.connected ? 'work' : workDomain,
           });
-          return;
-        }
-        if (action === 'open_files') {
-          openSurface('knowledge');
-          respond({ ok: true, action, target: 'knowledge' });
-          return;
-        }
-        if (action === 'open_settings') {
-          if (section === 'computer') {
-            openSurface('kernel');
-            respond({ ok: true, action, target: 'kernel' });
-            return;
-          }
-          if (section) setSettingsSection(section);
-          openSurface('settings');
-          respond({ ok: true, action, target: 'settings', section });
-          return;
-        }
-        if (action === 'open_computer_adaptation') {
-          openSurface('kernel');
-          respond({ ok: true, action, target: 'kernel' });
-          return;
-        }
-        if (action === 'open_plans' || action === 'open_work_queue') {
-          openSurface('plans');
-          respond({ ok: true, action, target: 'plans' });
-          return;
-        }
-        if (action === 'open_subscription' || action === 'open_activation' || action === 'open_billing') {
-          openSurface('subscription');
-          respond({ ok: true, action, target: 'subscription' });
-          return;
-        }
-        if (action === 'open_avatar_studio') {
-          openSurface('avatar-studio');
-          respond({ ok: true, action, target: 'avatar-studio' });
-          return;
-        }
-        if (action === 'open_sound_studio') {
-          openSurface('sound');
-          respond({ ok: true, action, target: 'sound' });
-          return;
-        }
-        if (action === 'open_memory_avatar') {
-          openSurface('memory-avatar');
-          respond({ ok: true, action, target: 'memory-avatar' });
-          return;
-        }
-        if (action === 'open_skills' || action === 'open_tools' || action === 'open_team' || action === 'open_chat') {
-          const mapped = action === 'open_skills'
-            ? 'skills'
-            : action === 'open_tools'
-              ? 'tools'
-              : action === 'open_team'
-                ? 'team'
-                : 'chat';
-          openSurface(mapped);
-          respond({ ok: true, action, target: mapped });
           return;
         }
         if (action === 'set_wallpaper_mode') {
@@ -4450,14 +4429,20 @@ export function DesktopUI({
           visible: activeTab === 'org' && workDomain === 'work' && Boolean(orgConnection?.connected),
         },
         knowledge: reportedKnowledgeRuntimeState,
+        settings: {
+          activeSection: settingsSection,
+        },
         windows: {
           open: openWindows,
           focused: focusedWindow,
           minimized: minimizedWindows,
         },
         surfaces: {
+          appLauncherOpen: isSearchOpen,
           knowledgeOpen,
           chatOpen,
+          notificationsOpen: isNotificationPanelOpen,
+          memoryAvatarOpen: memoryLabOpen,
           runtimeLogOpen: openWindows.includes('runtime-log'),
           meetingOpen: meetingNotesOpen,
           musicLayerVisible: musicVisible,
@@ -4542,8 +4527,11 @@ export function DesktopUI({
     isMuted,
     isTauri,
     isDesktopWidgetMode,
+    isNotificationPanelOpen,
+    isSearchOpen,
     isWallpaperMode,
     knowledgeOpen,
+    memoryLabOpen,
     mcpActivities.length,
     meetingNotes.length,
     meetingNotesOpen,
@@ -4562,6 +4550,7 @@ export function DesktopUI({
     organizationWorkspaceView,
     reportedKnowledgeRuntimeState,
     socket,
+    settingsSection,
     viewMode,
     workDomain,
     workflowSteps,

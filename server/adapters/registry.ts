@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { getGateConfig } from '../autonomy/safety_gate';
 import { mcpManager } from '../mcp/client';
+import {
+  PERSONAL_CLIENT_SURFACES,
+  PERSONAL_CLIENT_SURFACE_ACTIONS,
+} from '../../shared/client_surfaces';
 
 export type AdapterStatus =
   | 'ready'
@@ -214,14 +218,14 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Lumi Interface Map',
       category: 'client',
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
-      actions: ['client_get_state', 'client_action', 'adapter_registry_list'],
-      surfaces: ['home', 'chat', 'knowledge', 'runtime-log', 'skills', 'tools', 'team', 'avatar-studio', 'sound', 'org', 'plans', 'settings', 'music-center', 'meeting', 'wallpaper'],
+      actions: ['client_get_state', 'client_action', 'adapter_registry_list', ...PERSONAL_CLIENT_SURFACE_ACTIONS],
+      surfaces: [...PERSONAL_CLIENT_SURFACES.map(surface => surface.id), 'org', 'meeting', 'wallpaper', 'widget'],
       setup: hasState ? [] : ['Open Lumi desktop client so the live surface map can include current windows and state.'],
       diagnostics: [
         state?.windows?.focused ? `focused=${state.windows.focused}` : '',
         state?.windows?.open?.length ? `open=${state.windows.open.slice(0, 5).join(',')}` : '',
       ].filter(Boolean),
-      notes: 'Use when Lumi needs to know, explain, open, close, or choose among her own client interfaces. Prefer this over generic guessing about UI.',
+      notes: 'Use when Lumi needs to know, explain, open, close, or choose among her own client interfaces. This registry is shared with the desktop action router; prefer its explicit actions over generic target guessing.',
     },
     {
       id: 'system.local_machine_awareness',
