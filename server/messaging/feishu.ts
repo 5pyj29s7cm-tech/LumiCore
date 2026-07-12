@@ -22,6 +22,7 @@ export interface FeishuConfig {
   appId: string;
   appSecret: string;
   verificationToken?: string; // optional extra security
+  transport?: 'long_connection' | 'webhook';
 }
 
 export class FeishuAdapter implements MessageAdapter {
@@ -29,6 +30,7 @@ export class FeishuAdapter implements MessageAdapter {
   private config: FeishuConfig;
   private tenantToken: string | null = null;
   private tokenExpiry: number = 0;
+  private tokenPromise: Promise<string> | null = null;
 
   constructor(config: FeishuConfig) {
     this.config = config;
@@ -40,6 +42,7 @@ export class FeishuAdapter implements MessageAdapter {
     this.config = config;
     this.tenantToken = null;
     this.tokenExpiry = 0;
+    this.tokenPromise = null;
   }
 
   // ── Token Management ──
@@ -48,16 +51,24 @@ export class FeishuAdapter implements MessageAdapter {
     if (this.tenantToken && Date.now() < this.tokenExpiry - 60_000) {
       return this.tenantToken;
     }
-    const res = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: this.config.appId, app_secret: this.config.appSecret }),
-    });
-    const data: any = await res.json();
-    if (data.code !== 0) throw new Error(`Feishu auth error: ${data.msg || data.error}`);
-    this.tenantToken = data.tenant_access_token;
-    this.tokenExpiry = Date.now() + (data.expire || 7200) * 1000;
-    return this.tenantToken!;
+    if (this.tokenPromise) return this.tokenPromise;
+    this.tokenPromise = (async () => {
+      const res = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app_id: this.config.appId, app_secret: this.config.appSecret }),
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok || data.code !== 0) throw new Error(`Feishu auth error: ${data.msg || data.error || res.status}`);
+      this.tenantToken = data.tenant_access_token;
+      this.tokenExpiry = Date.now() + (data.expire || 7200) * 1000;
+      return this.tenantToken!;
+    })();
+    try {
+      return await this.tokenPromise;
+    } finally {
+      this.tokenPromise = null;
+    }
   }
 
   // ── Webhook Verification ──
@@ -78,7 +89,8 @@ export class FeishuAdapter implements MessageAdapter {
 
   parseEvent(body: any): IncomingMessage | null {
     // Feishu wraps events in: { schema: "2.0", header: {...}, event: {...} }
-    const eventData = body.event || body;
+    const dispatchedEvent = Boolean(body?.message && body?.sender);
+    const eventData = dispatchedEvent ? body : (body.event || body);
     const header = body.header || {};
 
     // URL verification challenge
@@ -87,7 +99,7 @@ export class FeishuAdapter implements MessageAdapter {
       return null;
     }
 
-    const eventType = eventData.type || header.event_type || '';
+    const eventType = eventData.type || header.event_type || (dispatchedEvent ? 'im.message.receive_v1' : '');
 
     if (eventType !== 'im.message.receive_v1') return null;
 
@@ -98,14 +110,14 @@ export class FeishuAdapter implements MessageAdapter {
     const parsedContent = this.parseMessageContent(message.content);
     const attachments = this.parseAttachments(message.message_type, parsedContent);
     const textContent = message.message_type === 'text'
-      ? (parsedContent.text || '')
+      ? String(parsedContent.text || '').trim()
       : attachments.length > 0
         ? attachments.map(att => `[附件] ${att.fileName}`).join('\n')
         : '';
     if (!textContent && attachments.length === 0) return null;
 
     const chatId = message.chat_id || '';
-    const isGroup = chatId.startsWith('oc_');
+    const isGroup = message.chat_type === 'group';
 
     return {
       platform: 'feishu',

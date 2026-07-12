@@ -22,6 +22,35 @@ describe('messaging adapter boundaries', () => {
     expect(adapter.verifyWebhook({ header: { event_type: 'im.message.receive_v1' } })).toBe(false);
   });
 
+  it('parses direct Feishu long-connection payloads without treating every chat ID as a group', () => {
+    const adapter = new FeishuAdapter({ appId: 'app-test', appSecret: 'secret-test' });
+    const privateMessage = adapter.parseEvent({
+      sender: { sender_id: { open_id: 'ou-user' } },
+      message: {
+        message_id: 'om-private',
+        chat_id: 'oc-private',
+        chat_type: 'p2p',
+        message_type: 'text',
+        content: JSON.stringify({ text: '你好' }),
+        create_time: String(Date.now()),
+      },
+    });
+    const groupMessage = adapter.parseEvent({
+      sender: { sender_id: { open_id: 'ou-user' } },
+      message: {
+        message_id: 'om-group',
+        chat_id: 'oc-group',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: '大家好' }),
+        create_time: String(Date.now()),
+      },
+    });
+
+    expect(privateMessage).toMatchObject({ chatType: 'private', text: '你好', userId: 'ou-user' });
+    expect(groupMessage).toMatchObject({ chatType: 'group', text: '大家好', userId: 'ou-user' });
+  });
+
   it('parses WeCom file callbacks into downloadable attachments', () => {
     const adapter = new WeComAdapter({
       corpId: 'corp-test',

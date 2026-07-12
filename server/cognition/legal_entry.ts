@@ -22,6 +22,8 @@ export const LEGAL_ENTRY_PREFERRED_TOOLS = [
   'legal_analyze_folder_and_draft_argument',
   'legal_generate_citation_verification_report',
   'legal_finalize_delivery_package',
+  'legal_authority_source_status',
+  'legal_refresh_authoritative_sources',
   'legal_prepare_filing_handoff',
   'legal_prepare_external_browser_workspace',
   'legal_search_case',
@@ -95,7 +97,7 @@ export function buildUnifiedLegalEntryPrompt(input: {
       ? 'Remote bot intake must resolve the organization/case binding first. If orgId is available, archive into the organization case workspace and organization knowledge base; if not, keep it as personal intake and do not claim organization persistence.'
       : '',
     'Core legal method: major premise = retrieve current law, explain the rule, and reinforce with ranked similar cases; minor premise = organize facts, materials, evidence, burden, and cross-examination; conclusion = subsume facts into the rule and produce the complaint, defense, argument, legal opinion, filing handoff, or delivery package.',
-    'Current-law gate: every generated legal document must verify cited law through legal_generate_citation_verification_report, legal_search_statute, legal_search_external_authorities, or an equivalent authoritative source before being marked final. If currency cannot be verified, label it unverified instead of presenting it as current effective law.',
+    'Current-law gate: every generated legal document must verify cited law through legal_generate_citation_verification_report, legal_search_statute, legal_search_external_authorities, or an equivalent authoritative source before being marked final. Check legal_authority_source_status first; if the snapshot is missing, expired, changed, or unavailable beyond its review deadline, run legal_refresh_authoritative_sources. If currency still cannot be verified, label it unverified instead of presenting it as current effective law.',
     'External legal platforms: court filing portals, Fachan, Alpha, China Judgments Online, Qichacha, and enterprise credit systems are authorized-collaboration surfaces. Do not claim full automation; archive sources/results and run the delivery gate before formal use.',
     'External-platform boundary: court filing, signatures, payment, public submission, settlement commitment, final legal position, or service confirmation require lawyer/party confirmation. Authorized browser/database work may prepare, search, verify, and stage the result.',
   ].filter(Boolean).join('\n');

@@ -31,23 +31,32 @@ import * as LegalCases from '../org/legal_cases';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { addMessage, getMessagesByTokenBudget, getOrCreateActiveConversation } from '../conversation/manager';
+import { acceptMessageOnce } from './delivery_ledger';
+import { runWithTools } from '../llm/adapter';
+import { toolRegistry } from '../tools/registry';
+import { buildUnifiedLegalEntryPrompt } from '../cognition/legal_entry';
+import { finalizeLumiResponse } from '../cognition/result_finalizer';
+import { recordTokenUsage } from '../llm/token_tracker';
+import type { ToolPolicy } from '../personality/types';
+import type { NormalizedMessage } from '../llm/providers';
 
-// Dedup cache: prevent duplicate processing when Feishu retries events
-// Feishu retries if no 200 within 1s, but AI reply may take 5-30s
-const recentMessages = new Map<string, number>();
 const messageRouteQueues = new Map<string, Promise<void>>();
-const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 min
-const MAX_FEISHU_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-function isDuplicate(platform: string, messageId: string): boolean {
-  const now = Date.now();
-  // Cleanup stale entries
-  for (const [id, ts] of recentMessages) {
-    if (now - ts > DEDUP_TTL_MS) recentMessages.delete(id);
-  }
-  const key = `${platform}:${messageId}`;
-  if (recentMessages.has(key)) return true;
-  recentMessages.set(key, now);
-  return false;
+const MAX_MESSAGING_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+export interface MessagingRouteOptions {
+  onMessage?: MessageHandler;
+  llmGetters?: Record<string, () => any>;
+  personalityRegistry?: any;
+  queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
+  loadEmotionalState?: (userId: string) => any;
+  onConfigChanged?: () => void | Promise<void>;
+  getConnectionStatus?: (platform: 'feishu' | 'wecom') => Record<string, any> | null;
+  sendProactive?: (platform: 'feishu' | 'wecom', chatId: string, text: string) => Promise<string>;
+}
+
+export interface IncomingMessageTransport {
+  enrich: (message: IncomingMessage) => Promise<IncomingMessage>;
+  reply: (message: IncomingMessage, text: string) => Promise<void>;
 }
 
 function messageRouteKey(message: IncomingMessage): string {
@@ -116,19 +125,7 @@ function bindingOrgId(req: any): string {
 
 export function createMessagingRoutes(
   feishuConfig: FeishuConfig,
-  options?: {
-    onMessage?: MessageHandler;
-    llmGetters?: {
-      getDeepSeek?: () => any;
-      getGemini?: () => any;
-      getOpenAI?: () => any;
-      getAnthropic?: () => any;
-      getQwen?: () => any;
-    };
-    personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
-    loadEmotionalState?: (userId: string) => any;
-  },
+  options?: MessagingRouteOptions,
 ): Router {
   const router = Router();
   const adapter = new FeishuAdapter(feishuConfig);
@@ -156,55 +153,17 @@ export function createMessagingRoutes(
         return res.json({ code: 0 });
       }
 
-      // Dedup: Feishu retries events if no ack, but we process async below
-      if (isDuplicate('feishu', msg.messageId)) {
-        console.log(`[Feishu] Ignoring duplicate: ${msg.messageId}`);
-        return res.json({ code: 0 });
-      }
-
-      console.log(`[Feishu] ${msg.userName} (${msg.chatType}): ${msg.text.slice(0, 80)}`);
+      console.log(`[Feishu] Received ${msg.chatType} message ${msg.messageId}`);
 
       // Respond to Feishu IMMEDIATELY (must be < 1s), process AI reply async
       res.json({ code: 0 });
-
-      const bindingReply = handleFeishuBindingCommand(msg);
-      if (bindingReply) {
-        await adapter.replyMessage(msg.messageId, bindingReply).catch(() =>
-          adapter.sendMessage(msg.chatId, { text: bindingReply, platform: 'feishu' }));
-        return;
-      }
-
-      const boundMsg = applyMessagingBinding(msg);
-      await enqueueMessageRoute(boundMsg, async () => {
-        const enrichedMsg = await enrichFeishuAttachments(boundMsg, adapter);
-        const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMsg);
-        if (legalNoticeReply) {
-          persistBoundMessagingExchange(enrichedMsg, legalNoticeReply);
-          await adapter.replyMessage(msg.messageId, legalNoticeReply).catch(() =>
-            adapter.sendMessage(msg.chatId, { text: legalNoticeReply, platform: 'feishu' }));
-          return;
-        }
-        const remoteOrgReply = await handleRemoteOrgCommand(enrichedMsg);
-        if (remoteOrgReply) {
-          persistBoundMessagingExchange(enrichedMsg, remoteOrgReply);
-          await adapter.replyMessage(msg.messageId, remoteOrgReply).catch(() =>
-            adapter.sendMessage(msg.chatId, { text: remoteOrgReply, platform: 'feishu' }));
-          return;
-        }
-
-        if (options?.onMessage) {
-          const reply = await options.onMessage(enrichedMsg);
-          if (reply) {
-            persistBoundMessagingExchange(enrichedMsg, reply.text);
-            await adapter.replyMessage(msg.messageId, reply.text).catch(() =>
-              adapter.sendMessage(msg.chatId, { text: reply.text, platform: 'feishu' }));
-          }
-        } else {
-          const replyText = await processWithPersonality(enrichedMsg, options);
-          await adapter.replyMessage(msg.messageId, replyText).catch(() =>
-            adapter.sendMessage(msg.chatId, { text: replyText, platform: 'feishu' }));
-        }
-      });
+      dispatchIncomingMessage(msg, {
+        enrich: message => enrichFeishuAttachments(message, adapter),
+        reply: async (message, text) => {
+          await adapter.replyMessage(message.messageId, text).catch(() =>
+            adapter.sendMessage(message.chatId, { text, platform: 'feishu' }));
+        },
+      }, options);
     } catch (err: any) {
       console.error('[Feishu] Event error:', err.message);
       if (!res.headersSent) {
@@ -241,6 +200,8 @@ export function createMessagingRoutes(
     res.json({
       platform: 'feishu',
       configured: cfg.enabled,
+      transport: cfg.transport,
+      connection: options?.getConnectionStatus?.('feishu') || null,
       appId: cfg.appId ? `${cfg.appId.slice(0, 8)}...` : null,
       hasSecret: !!cfg.appSecret,
     });
@@ -255,6 +216,8 @@ export function createMessagingRoutes(
       appIdMasked: cfg.appId ? `${cfg.appId.slice(0, 8)}...` : '',
       hasSecret: !!cfg.appSecret,
       verificationToken: cfg.verificationToken ? '***' : undefined,
+      transport: cfg.transport,
+      connection: options?.getConnectionStatus?.('feishu') || null,
       enabled: cfg.enabled,
     });
   });
@@ -263,13 +226,25 @@ export function createMessagingRoutes(
   router.post('/feishu/config', requireAuth, async (req, res) => {
     try {
       if (!requireMessagingAdmin(req, res)) return;
-      const { appId, appSecret, verificationToken } = req.body;
-      const updated = updateMessagingConfig({ appId, appSecret, verificationToken });
+      const { appId, appSecret, verificationToken, transport } = req.body;
+      const updated = updateMessagingConfig({ appId, appSecret, verificationToken, transport });
       // Reload adapter with new config
-      const newConfig = { appId: updated.feishu.appId, appSecret: updated.feishu.appSecret, verificationToken: updated.feishu.verificationToken };
+      const newConfig = {
+        appId: updated.feishu.appId,
+        appSecret: updated.feishu.appSecret,
+        verificationToken: updated.feishu.verificationToken,
+        transport: updated.feishu.transport,
+      };
       Object.assign(feishuConfig, newConfig);
       adapter.reload?.(newConfig);
-      res.json({ success: true, configured: updated.feishu.enabled, appId: updated.feishu.appId ? `${updated.feishu.appId.slice(0, 8)}...` : '' });
+      await options?.onConfigChanged?.();
+      res.json({
+        success: true,
+        configured: updated.feishu.enabled,
+        transport: updated.feishu.transport,
+        connection: options?.getConnectionStatus?.('feishu') || null,
+        appId: updated.feishu.appId ? `${updated.feishu.appId.slice(0, 8)}...` : '',
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -336,19 +311,21 @@ function remoteMaterialSource(platform: IncomingMessage['platform']): 'feishu' |
   return 'feishu';
 }
 
-function handleFeishuBindingCommand(msg: IncomingMessage): string | null {
+function handleMessagingBindingCommand(msg: IncomingMessage): string | null {
+  if (msg.platform !== 'feishu' && msg.platform !== 'wecom') return null;
   const text = msg.text.trim();
   const match = text.match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
   if (!match) return null;
-  const binding = consumeBindingCode('feishu', match[1], msg.userId);
+  const binding = consumeBindingCode(msg.platform, match[1], msg.userId, msg.chatId, msg.chatType);
   if (!binding) {
-    return '绑定码无效或已过期。请在 Lumi 桌面端重新生成飞书绑定码。';
+    return `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。`;
   }
-  return `绑定成功。之后你可以通过飞书让 Lumi 查询组织知识库、查询案件，或发送案件文件让 Lumi 归档到组织案件。`;
+  return `绑定成功。这个${msg.chatType === 'group' ? '群聊' : '会话'}现在会按所选组织和你的 Lumi 身份路由；可以查询组织知识库、查询案件，或发送案件文件归档。`;
 }
 
 function applyMessagingBinding(msg: IncomingMessage): IncomingMessage {
-  const binding = getBinding('feishu', msg.userId);
+  if (msg.platform !== 'feishu' && msg.platform !== 'wecom') return msg;
+  const binding = getBinding(msg.platform, msg.userId, msg.chatId, msg.chatType);
   if (!binding) return msg;
   const membership = getMember(binding.orgId, binding.lumiUserId);
   if (!membership || membership.status !== 'active') return msg;
@@ -357,6 +334,67 @@ function applyMessagingBinding(msg: IncomingMessage): IncomingMessage {
     boundUserId: binding.lumiUserId,
     boundOrgId: binding.orgId,
   };
+}
+
+export function dispatchIncomingMessage(
+  message: IncomingMessage,
+  transport: IncomingMessageTransport,
+  options?: MessagingRouteOptions,
+): boolean {
+  try {
+    if (!acceptMessageOnce(message.platform, message.messageId)) {
+      console.log(`[Messaging] Ignoring duplicate ${message.platform} message: ${message.messageId}`);
+      return false;
+    }
+  } catch (err: any) {
+    console.warn('[Messaging] Delivery ledger unavailable; continuing with this message:', err?.message || err);
+  }
+
+  setImmediate(() => {
+    void (async () => {
+      const bindingReply = handleMessagingBindingCommand(message);
+      if (bindingReply) {
+        await transport.reply(message, bindingReply);
+        return;
+      }
+
+      const boundMessage = applyMessagingBinding(message);
+      // Long-connection attachment URLs can expire within minutes. Download before
+      // waiting behind another long-running task from the same conversation.
+      const enrichedMessage = await transport.enrich(boundMessage);
+      await enqueueMessageRoute(enrichedMessage, async () => {
+        const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMessage);
+        if (legalNoticeReply) {
+          persistBoundMessagingExchange(enrichedMessage, legalNoticeReply);
+          await transport.reply(enrichedMessage, legalNoticeReply);
+          return;
+        }
+
+        const remoteOrgReply = await handleRemoteOrgCommand(enrichedMessage);
+        if (remoteOrgReply) {
+          persistBoundMessagingExchange(enrichedMessage, remoteOrgReply);
+          await transport.reply(enrichedMessage, remoteOrgReply);
+          return;
+        }
+
+        if (options?.onMessage) {
+          const reply = await options.onMessage(enrichedMessage);
+          if (reply) {
+            persistBoundMessagingExchange(enrichedMessage, reply.text);
+            await transport.reply(enrichedMessage, reply.text);
+          }
+          return;
+        }
+
+        const replyText = await processWithPersonality(enrichedMessage, options);
+        await transport.reply(enrichedMessage, replyText);
+      });
+    })().catch(async (err: any) => {
+      console.error(`[Messaging] ${message.platform} route failed:`, err?.message || err);
+      await transport.reply(message, '这次处理没有完成，请稍后重试。').catch(() => undefined);
+    });
+  });
+  return true;
 }
 
 function needsBinding(text: string): boolean {
@@ -776,17 +814,24 @@ function attachmentPromptBlock(attachment: IncomingAttachment): string {
   return parts.join('\n');
 }
 
-async function enrichFeishuAttachments(msg: IncomingMessage, adapter: FeishuAdapter): Promise<IncomingMessage> {
+export async function enrichMessagingAttachments(
+  msg: IncomingMessage,
+  platformFolder: 'feishu' | 'wecom',
+  contextPrompt: string,
+  downloader: (attachment: IncomingAttachment) => Promise<Buffer>,
+): Promise<IncomingMessage> {
   if (!msg.attachments || msg.attachments.length === 0) return msg;
 
   const enrichedAttachments: IncomingAttachment[] = [];
   for (const attachment of msg.attachments) {
     const enriched: IncomingAttachment = { ...attachment };
     try {
-      if (!attachment.resourceKey) throw new Error('missing resource key');
-      const buffer = await adapter.downloadMessageResource(msg.messageId, attachment.resourceKey, attachment.resourceType || 'file');
+      if (attachment.fileSize && attachment.fileSize > MAX_MESSAGING_ATTACHMENT_BYTES) {
+        throw new Error(`file too large (${Math.round(attachment.fileSize / 1024 / 1024)} MB)`);
+      }
+      const buffer = await downloader(attachment);
       enriched.fileSize = enriched.fileSize || buffer.byteLength;
-      if (buffer.byteLength > MAX_FEISHU_ATTACHMENT_BYTES) {
+      if (buffer.byteLength > MAX_MESSAGING_ATTACHMENT_BYTES) {
         throw new Error(`file too large (${Math.round(buffer.byteLength / 1024 / 1024)} MB)`);
       }
 
@@ -794,7 +839,8 @@ async function enrichFeishuAttachments(msg: IncomingMessage, adapter: FeishuAdap
       const scopeDir = msg.boundOrgId
         ? `org-${sanitizeFileName(msg.boundOrgId)}`
         : 'unbound-quarantine';
-      const savePath = getDataPath(path.join('messaging', 'feishu', 'attachments', scopeDir, `${Date.now()}_${safeName}`));
+      const messageKey = sanitizeFileName(msg.messageId).slice(0, 80);
+      const savePath = getDataPath(path.join('messaging', platformFolder, 'attachments', scopeDir, `${Date.now()}_${messageKey}_${safeName}`));
       fs.mkdirSync(path.dirname(savePath), { recursive: true });
       fs.writeFileSync(savePath, buffer);
       enriched.localPath = savePath;
@@ -817,7 +863,7 @@ async function enrichFeishuAttachments(msg: IncomingMessage, adapter: FeishuAdap
   const text = [
     msg.text,
     '',
-    '以下是用户通过飞书发送的附件内容。请优先结合附件内容回答；如果像案件材料，请按案件事实、争议焦点、证据/材料缺口、下一步建议来整理，并提醒最终由律师确认。',
+    contextPrompt,
     attachmentBlocks,
   ].filter(Boolean).join('\n');
 
@@ -828,61 +874,33 @@ async function enrichFeishuAttachments(msg: IncomingMessage, adapter: FeishuAdap
   };
 }
 
-async function enrichWeComAttachments(msg: IncomingMessage, adapter: WeComAdapter): Promise<IncomingMessage> {
-  if (!msg.attachments || msg.attachments.length === 0) return msg;
+export function enrichFeishuAttachments(msg: IncomingMessage, adapter: FeishuAdapter): Promise<IncomingMessage> {
+  return enrichMessagingAttachments(
+    msg,
+    'feishu',
+    '以下是用户通过飞书发送的附件内容。请优先结合附件内容回答；如果像案件材料，请按案件事实、争议焦点、证据/材料缺口、下一步建议来整理，并提醒最终由律师确认。',
+    async attachment => {
+      if (!attachment.resourceKey) throw new Error('missing resource key');
+      return adapter.downloadMessageResource(msg.messageId, attachment.resourceKey, attachment.resourceType || 'file');
+    },
+  );
+}
 
-  const enrichedAttachments: IncomingAttachment[] = [];
-  for (const attachment of msg.attachments) {
-    const enriched: IncomingAttachment = { ...attachment };
-    try {
+export function enrichWeComAttachments(msg: IncomingMessage, adapter: WeComAdapter): Promise<IncomingMessage> {
+  return enrichMessagingAttachments(
+    msg,
+    'wecom',
+    '以下是用户通过企业微信发送的附件内容。请结合附件回答；如属案件材料，按事实、争议焦点、证据缺口和下一步建议整理。',
+    async attachment => {
       if (!attachment.resourceKey) throw new Error('missing media id');
-      const buffer = await adapter.downloadMedia(attachment.resourceKey);
-      enriched.fileSize = enriched.fileSize || buffer.byteLength;
-      if (buffer.byteLength > MAX_FEISHU_ATTACHMENT_BYTES) {
-        throw new Error(`file too large (${Math.round(buffer.byteLength / 1024 / 1024)} MB)`);
-      }
-
-      const safeName = sanitizeFileName(enriched.fileName);
-      const scopeDir = msg.boundOrgId
-        ? `org-${sanitizeFileName(msg.boundOrgId)}`
-        : 'unbound-quarantine';
-      const savePath = getDataPath(path.join('messaging', 'wecom', 'attachments', scopeDir, `${Date.now()}_${safeName}`));
-      fs.mkdirSync(path.dirname(savePath), { recursive: true });
-      fs.writeFileSync(savePath, buffer);
-      enriched.localPath = savePath;
-
-      if (isParseableAttachment(safeName, enriched.type)) {
-        const parsed = await parseDocument(savePath);
-        if (parsed?.text?.trim()) enriched.extractedText = parsed.text.trim();
-        else enriched.parseError = '文件已保存，但没有抽取到可读文本';
-      }
-    } catch (err: any) {
-      enriched.parseError = err?.message || String(err);
-    }
-    enrichedAttachments.push(enriched);
-  }
-
-  const attachmentBlocks = enrichedAttachments.map(attachmentPromptBlock).join('\n\n');
-  return {
-    ...msg,
-    text: [
-      msg.text,
-      '',
-      '以下是用户通过企业微信发送的附件内容。请结合附件回答；如属案件材料，按事实、争议焦点、证据缺口和下一步建议整理。',
-      attachmentBlocks,
-    ].filter(Boolean).join('\n'),
-    attachments: enrichedAttachments,
-  };
+      return adapter.downloadMedia(attachment.resourceKey);
+    },
+  );
 }
 
 export async function processWithPersonality(
   msg: IncomingMessage,
-  options?: {
-    llmGetters?: Record<string, () => any>;
-    personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
-    loadEmotionalState?: (userId: string) => any;
-  },
+  options?: MessagingRouteOptions,
 ): Promise<string> {
   const llm = options?.llmGetters;
   const registry = options?.personalityRegistry;
@@ -950,88 +968,105 @@ export async function processWithPersonality(
     systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户尚未绑定 Lumi 身份。可以分析用户直接提供的文本/附件，但不要声称可以访问组织知识库、组织案件或本地私人数据。`;
   }
 
-  // ── Determine model order from user LLM prefs ──
-  const userLLMPrefs = getUserPreferredLLMConfig(effectiveUserId, { domain, orgId });
-  const activeProvider = userLLMPrefs.provider || 'deepseek';
-  const activeModel = userLLMPrefs.model || 'deepseek-v4-flash';
+  const legalOverlay = buildUnifiedLegalEntryPrompt({
+    text: msg.text,
+    domain,
+    orgId,
+    channel: msg.platform,
+    source: `${msg.platform}_bot`,
+  });
+  if (legalOverlay) systemPrompt += `\n\n${legalOverlay}`;
 
-  // Respect the selected primary brain. Do not silently fall back to another
-  // configured provider from Feishu, because that can create unexpected billing.
-  const modelProviders = resolveProviderOrder(activeProvider, activeModel, [], llm);
-
-  for (const { getter, model } of modelProviders) {
-    try {
-      const client = getter();
-      if (!client) continue;
-
-      if (model.includes('gemini')) {
-        const genAI = client;
-        const modelInstance = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
-        const result = await modelInstance.generateContent({
-          contents: [
-            ...conversationHistory.map(item => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.content }] })),
-            { role: 'user', parts: [{ text: msg.text }] },
-          ],
-        });
-        const text = result.response.text();
-        if (text) {
-          persistBoundMessagingExchange(msg, text);
-          return text;
-        }
-      } else {
-        const response = await client.chat.completions.create({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...conversationHistory,
-            { role: 'user', content: msg.text },
-          ],
-        });
-        const text = response.choices?.[0]?.message?.content;
-        if (text) {
-          persistBoundMessagingExchange(msg, text);
-          return text;
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[Feishu] Model ${model} failed:`, err.message);
-    }
-  }
-
-  return `收到你的消息："${msg.text.slice(0, 100)}"。当前暂无 AI 回复，请稍后再试。`;
-}
-
-function resolveProviderOrder(
-  activeProvider: string,
-  activeModel: string,
-  fallbackCandidates: { provider: string; model: string }[],
-  llmGetters?: Record<string, () => any>,
-): { getter: () => any; model: string }[] {
-  const keyMap: Record<string, string> = {
-    qwen: 'getQwen', deepseek: 'getDeepSeek', gemini: 'getGemini',
-    openai: 'getOpenAI', anthropic: 'getAnthropic',
+  const commonRemoteTools = [
+    'legal_search_statute',
+    'legal_verify_citation',
+    'legal_authority_source_status',
+  ];
+  const organizationRemoteTools = [
+    'legal_review_contract',
+    'legal_draft_contract',
+    'legal_search_case',
+    'legal_case_workspace',
+    'legal_case_workflow_status',
+    'legal_case_reasoning_matrix',
+    'legal_extract_dispute_focus',
+    'legal_generate_argument_or_opinion',
+    'legal_generate_litigation_packet',
+    'legal_generate_bid',
+    'legal_generate_citation_verification_report',
+    'legal_finalize_delivery_package',
+  ];
+  const personalityPolicy = personality?.toolPolicy as ToolPolicy | undefined;
+  const allowedByPersonality = new Set(personalityPolicy?.allowedTools || ['*']);
+  const forbiddenByPersonality = new Set(personalityPolicy?.forbiddenTools || []);
+  const personalityForbidsAll = forbiddenByPersonality.has('*');
+  const remoteAllowed = [...commonRemoteTools, ...(isBound ? organizationRemoteTools : [])]
+    .filter(() => !personalityForbidsAll)
+    .filter(name => !forbiddenByPersonality.has(name))
+    .filter(name => allowedByPersonality.has('*') || allowedByPersonality.has(name));
+  const remoteToolPolicy: ToolPolicy = {
+    allowedTools: remoteAllowed,
+    requireConfirmation: personalityPolicy?.requireConfirmation || [],
+    forbiddenTools: [...forbiddenByPersonality],
+    maxIterations: Math.min(3, personalityPolicy?.maxIterations || 3),
+    securityOverrides: personalityPolicy?.securityOverrides,
   };
 
-  const ordered: { getter: () => any; model: string }[] = [];
-  const seen = new Set<string>();
+  const userLLMPrefs = getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096 });
+  const messages: NormalizedMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...conversationHistory.map(item => ({
+      role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
+      content: item.content,
+    })),
+    { role: 'user', content: msg.text },
+  ];
 
-  // Active provider first
-  const getterKey = keyMap[activeProvider];
-  if (getterKey && llmGetters?.[getterKey]) {
-    ordered.push({ getter: llmGetters[getterKey], model: activeModel });
-    seen.add(getterKey);
-  }
-
-  // User's other configured models as fallbacks
-  for (const { provider, model } of fallbackCandidates) {
-    const gk = keyMap[provider];
-    if (gk && llmGetters?.[gk] && !seen.has(gk)) {
-      ordered.push({ getter: llmGetters[gk], model });
-      seen.add(gk);
+  try {
+    const result = await runWithTools(
+      messages,
+      toolRegistry,
+      userLLMPrefs,
+      undefined,
+      3,
+      llm?.getDeepSeek,
+      llm?.getGemini,
+      llm?.getOpenAI,
+      llm?.getAnthropic,
+      llm?.getQwen,
+      undefined,
+      {
+        userId: effectiveUserId,
+        domain,
+        orgId,
+        actionIntent: msg.text,
+        toolPolicy: remoteToolPolicy,
+        source: `${msg.platform}_bot`,
+        llmGetters: llm as any,
+      },
+      llm?.getOllama,
+      llm?.getLmStudio,
+      llm?.getArk,
+      llm?.getXiaomi,
+      llm?.getKimi,
+      llm?.getGlm,
+      llm?.getRelay,
+    );
+    for (const usage of result.usageRecords || []) {
+      recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, `messaging_${msg.platform}_${Date.now()}`, 'chat');
     }
+    const finalized = finalizeLumiResponse({
+      taskText: msg.text,
+      responseText: result.text || '这次没有生成可用回复，请稍后重试。',
+      toolRecords: result.toolCalls,
+      source: `${msg.platform}_bot`,
+    });
+    persistBoundMessagingExchange(msg, finalized.text);
+    return finalized.text;
+  } catch (err: any) {
+    console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
+    return '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
   }
-
-  return ordered;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1042,13 +1077,7 @@ import { WeComAdapter, type WeComConfig } from './wecom';
 
 export function createWeComRoutes(
   config: WeComConfig,
-  options?: {
-    onMessage?: MessageHandler;
-    llmGetters?: Record<string, () => any>;
-    personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
-    loadEmotionalState?: (userId: string) => any;
-  },
+  options?: MessagingRouteOptions,
 ): Router {
   const router = Router();
   const adapter = new WeComAdapter(config);
@@ -1065,14 +1094,7 @@ export function createWeComRoutes(
 
       if (!echostr) return res.status(400).send('Missing echostr');
 
-      console.log('[WeCom] URL verify — k/v:',
-        'sig:', msg_signature?.slice(0, 12),
-        'ts:', timestamp,
-        'nonce:', nonce,
-        'echostr_head:', fix(echostr).slice(0, 16),
-        'token_head:', config.token?.slice(0, 4) + '***',
-        'aeskey_len:', config.encodingAESKey?.length
-      );
+      console.log('[WeCom] URL verification request received');
 
       // echostr may have + that Express turned into space
       const plaintext = adapter.verifyUrl(fix(echostr), { msg_signature, timestamp, nonce });
@@ -1106,7 +1128,6 @@ export function createWeComRoutes(
       }
       try {
         decryptedXml = (adapter as any).decrypt(echostr);
-        console.log('[WeCom] XML decrypted:', decryptedXml.slice(0, 200));
       } catch (err: any) {
         console.error('[WeCom] Decrypt failed:', err.message);
         return res.status(403).send('decrypt failed');
@@ -1115,53 +1136,20 @@ export function createWeComRoutes(
       const msg = adapter.parseEvent({ rawBody: decryptedXml });
       if (!msg) {
         console.log('[WeCom] parseEvent returned null — msgType may not be text, or XML parse failed');
-        console.log('[WeCom] XML was:', decryptedXml.slice(0, 300));
         return res.send('success');
       }
 
-      if (isDuplicate('wecom', msg.messageId)) {
-        return res.send('success');
-      }
-
-      console.log(`[WeCom] ${msg.userName}: ${msg.text.slice(0, 80)}`);
+      console.log(`[WeCom] Received ${msg.chatType} message ${msg.messageId}`);
 
       // Respond IMMEDIATELY (WeCom requires < 5s)
       res.type('text/plain').send('success');
 
-      // Process AI reply async
-      const bindingReply = handleWeComBindingCommand(msg);
-      if (bindingReply) {
-        await adapter.sendMessage(msg.chatId, { text: bindingReply, platform: 'wecom' });
-        return;
-      }
-
-      const boundMsg = applyWeComBinding(msg);
-      await enqueueMessageRoute(boundMsg, async () => {
-        const enrichedMsg = await enrichWeComAttachments(boundMsg, adapter);
-        const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMsg);
-        if (legalNoticeReply) {
-          persistBoundMessagingExchange(enrichedMsg, legalNoticeReply);
-          await adapter.sendMessage(msg.chatId, { text: legalNoticeReply, platform: 'wecom' });
-          return;
-        }
-        const remoteOrgReply = await handleRemoteOrgCommand(enrichedMsg);
-        if (remoteOrgReply) {
-          persistBoundMessagingExchange(enrichedMsg, remoteOrgReply);
-          await adapter.sendMessage(msg.chatId, { text: remoteOrgReply, platform: 'wecom' });
-          return;
-        }
-
-        if (options?.onMessage) {
-          const reply = await options.onMessage(enrichedMsg);
-          if (reply) {
-            persistBoundMessagingExchange(enrichedMsg, reply.text);
-            await adapter.sendMessage(msg.chatId, { text: reply.text, platform: 'wecom' });
-          }
-        } else {
-          const replyText = await processWithPersonality(enrichedMsg, options);
-          await adapter.sendMessage(msg.chatId, { text: replyText, platform: 'wecom' });
-        }
-      });
+      dispatchIncomingMessage(msg, {
+        enrich: message => enrichWeComAttachments(message, adapter),
+        reply: async (message, text) => {
+          await adapter.sendMessage(message.chatId, { text, platform: 'wecom' });
+        },
+      }, options);
     } catch (err: any) {
       console.error('[WeCom] Event error:', err.message);
       if (!res.headersSent) {
@@ -1177,7 +1165,9 @@ export function createWeComRoutes(
       const { userId, text } = req.body;
       if (!userId) return res.status(400).json({ error: 'userId required' });
       if (!text) return res.status(400).json({ error: 'text required' });
-      const messageId = await adapter.sendMessage(userId, { text, platform: 'wecom' });
+      const messageId = config.mode === 'aibot_long_connection' && options?.sendProactive
+        ? await options.sendProactive('wecom', userId, text)
+        : await adapter.sendMessage(userId, { text, platform: 'wecom' });
       res.json({ success: true, messageId });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1186,24 +1176,35 @@ export function createWeComRoutes(
 
   // ── GET /wecom/status ──
   router.get('/wecom/status', requireAuth, (_req, res) => {
+    const current = getMessagingConfig().wecom;
     res.json({
       platform: 'wecom',
-      configured: config.corpId && config.appSecret ? true : false,
-      corpId: config.corpId ? `${config.corpId.slice(0, 8)}...` : null,
-      agentId: config.agentId || null,
+      configured: current.enabled,
+      mode: current.mode,
+      connection: options?.getConnectionStatus?.('wecom') || null,
+      corpId: current.corpId ? `${current.corpId.slice(0, 8)}...` : null,
+      botId: current.botId ? `${current.botId.slice(0, 8)}...` : null,
+      agentId: current.agentId || null,
     });
   });
 
   // ── GET /wecom/config ──
   router.get('/wecom/config', requireAuth, (req, res) => {
     if (!requireMessagingAdmin(req, res)) return;
+    const current = getMessagingConfig().wecom;
     res.json({
-      corpId: config.corpId,
-      corpIdMasked: config.corpId ? `${config.corpId.slice(0, 8)}...` : '',
-      agentId: config.agentId,
-      hasSecret: !!config.appSecret,
-      hasAesKey: !!config.encodingAESKey,
-      enabled: !!(config.corpId && config.appSecret),
+      mode: current.mode,
+      botId: current.botId || '',
+      botIdMasked: current.botId ? `${current.botId.slice(0, 8)}...` : '',
+      hasBotSecret: !!current.botSecret,
+      corpId: current.corpId,
+      corpIdMasked: current.corpId ? `${current.corpId.slice(0, 8)}...` : '',
+      agentId: current.agentId,
+      hasSecret: !!current.appSecret,
+      hasToken: !!current.token,
+      hasAesKey: !!current.encodingAESKey,
+      connection: options?.getConnectionStatus?.('wecom') || null,
+      enabled: current.enabled,
     });
   });
 
@@ -1211,13 +1212,19 @@ export function createWeComRoutes(
   router.post('/wecom/config', requireAuth, async (req, res) => {
     try {
       if (!requireMessagingAdmin(req, res)) return;
-      const { corpId, agentId, appSecret, token, encodingAESKey } = req.body;
+      const { mode, botId, botSecret, corpId, agentId, appSecret, token, encodingAESKey } = req.body;
       const updated = updateMessagingConfig({
-        wecom: { corpId, agentId, appSecret, token, encodingAESKey },
+        wecom: { mode, botId, botSecret, corpId, agentId, appSecret, token, encodingAESKey },
       });
       Object.assign(config, updated.wecom);
       adapter.reload(config);
-      res.json({ success: true, configured: updated.wecom.enabled });
+      await options?.onConfigChanged?.();
+      res.json({
+        success: true,
+        configured: updated.wecom.enabled,
+        mode: updated.wecom.mode,
+        connection: options?.getConnectionStatus?.('wecom') || null,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1249,27 +1256,4 @@ export function createWeComRoutes(
   });
 
   return router;
-}
-
-function handleWeComBindingCommand(msg: IncomingMessage): string | null {
-  const text = msg.text.trim();
-  const match = text.match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
-  if (!match) return null;
-  const binding = consumeBindingCode('wecom', match[1], msg.userId);
-  if (!binding) {
-    return '绑定码无效或已过期。请在 Lumi 桌面端重新生成企微绑定码。';
-  }
-  return '绑定成功。之后你可以通过企业微信转发法院短信链接、查询案件或发送案件材料，Lumi 会按组织案件空间处理。';
-}
-
-function applyWeComBinding(msg: IncomingMessage): IncomingMessage {
-  const binding = getBinding('wecom', msg.userId);
-  if (!binding) return msg;
-  const membership = getMember(binding.orgId, binding.lumiUserId);
-  if (!membership || membership.status !== 'active') return msg;
-  return {
-    ...msg,
-    boundUserId: binding.lumiUserId,
-    boundOrgId: binding.orgId,
-  };
 }

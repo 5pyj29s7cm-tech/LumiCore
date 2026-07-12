@@ -11,6 +11,7 @@ import { installProfessionAgents } from "../autonomy/profession_templates";
 import bcrypt from "bcryptjs";
 import { getLocalAdminPassword } from "../config/local_identity";
 import { repairCorruptedOrganizationNames } from "../org/db";
+import { startMessagingConnections, stopMessagingConnections } from "./messaging";
 
 interface BootstrapContext {
   server: any;
@@ -163,6 +164,9 @@ export async function bootstrap(ctx: BootstrapContext) {
 
   server.listen(PORT, HOST, () => {
     console.log(`Server running on http://${HOST}:${PORT}`);
+    void startMessagingConnections().catch((err: any) => {
+      console.warn('[Messaging] Long-connection startup failed:', err?.message || err);
+    });
     scheduler.setIO(io);
     registerScheduledTasks(llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen, llm.getOllama, llm.getLmStudio, llm.getArk, llm.getXiaomi, llm.getKimi, llm.getGlm, llm.getRelay);
 
@@ -216,6 +220,12 @@ export async function bootstrap(ctx: BootstrapContext) {
     cleaningUp = true;
     console.log('[Shutdown] Cleaning up...');
     scheduler.stop();
+    try {
+      await stopMessagingConnections();
+      console.log('[Messaging] Long connections stopped');
+    } catch (err: any) {
+      console.warn('[Messaging] Shutdown error:', err?.message || err);
+    }
     try {
       await flushDB();
       console.log('[Shutdown] Database flushed');

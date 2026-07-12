@@ -28,6 +28,8 @@ export interface IncomingAttachment {
   mimeType?: string;
   resourceKey?: string;
   resourceType?: string;
+  downloadUrl?: string;
+  encryptionKey?: string;
   localPath?: string;
   extractedText?: string;
   parseError?: string;

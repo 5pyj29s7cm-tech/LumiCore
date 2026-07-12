@@ -155,7 +155,7 @@ export function createWeChatRoutes(
   // Auto-start polling if already configured (survives restarts)
   if (config?.botToken) {
     if (!config.botId) config.botId = (config.botToken.split(':')[0] || config.botToken);
-    console.log('[WeChat] Already logged in — botId:', config.botId?.slice(0,12)+'...', 'starting poll loop');
+    console.log('[WeChat] Existing bot session found; starting poll loop');
     startWeChatPolling(adapter, config, options);
   }
 

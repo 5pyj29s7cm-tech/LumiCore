@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessagesSquare, Save, Key, ExternalLink, CheckCircle, AlertCircle, Copy, Unlink } from 'lucide-react';
+import { MessagesSquare, Save, Key, ExternalLink, CheckCircle, AlertCircle, Copy, Unlink, Loader2, Radio, Webhook } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
@@ -8,9 +8,21 @@ import { appConfirm } from '../lib/appConfirm';
 interface FeishuBinding {
   id: string;
   platformUserId: string;
+  chatId?: string;
+  chatType?: 'private' | 'group';
   orgId: string;
   createdAt: string;
   updatedAt: string;
+}
+
+type FeishuTransport = 'long_connection' | 'webhook';
+
+interface ConnectionStatus {
+  state?: 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+  lastConnectedAt?: string;
+  lastMessageAt?: string;
+  lastError?: string;
+  reconnectAttempts?: number;
 }
 
 export function FeishuSettings({ t }: { t?: any }) {
@@ -18,6 +30,10 @@ export function FeishuSettings({ t }: { t?: any }) {
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
+  const [verificationToken, setVerificationToken] = useState('');
+  const [hasVerificationToken, setHasVerificationToken] = useState(false);
+  const [transport, setTransport] = useState<FeishuTransport>('long_connection');
+  const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   const [configured, setConfigured] = useState(false);
   const [appIdMasked, setAppIdMasked] = useState('');
   const [loading, setLoading] = useState(true);
@@ -28,17 +44,33 @@ export function FeishuSettings({ t }: { t?: any }) {
   const [bindingLoading, setBindingLoading] = useState(false);
   const [bindings, setBindings] = useState<FeishuBinding[]>([]);
 
+  const loadStatus = async () => {
+    try {
+      const res = await fetch('/api/feishu/status', { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setConfigured(Boolean(data.configured));
+        setConnection(data.connection || null);
+      }
+    } catch {}
+  };
+
   useEffect(() => {
-    fetch('/api/feishu/config')
+    fetch('/api/feishu/config', { credentials: 'include' })
       .then(r => r.json())
       .then(d => {
         setAppId(d.appId || '');
         setAppIdMasked(d.appIdMasked || '');
-        setConfigured(d.enabled);
+        setConfigured(Boolean(d.enabled));
+        setTransport(d.transport === 'webhook' ? 'webhook' : 'long_connection');
+        setHasVerificationToken(Boolean(d.verificationToken));
+        setConnection(d.connection || null);
       })
       .catch(() => toast.error(t?.failedToLoadConfig || 'Failed to load config'))
       .finally(() => setLoading(false));
     void loadBindings();
+    const timer = window.setInterval(() => void loadStatus(), 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   async function loadBindings() {
@@ -62,13 +94,20 @@ export function FeishuSettings({ t }: { t?: any }) {
         body: JSON.stringify({
           appId: appId.trim(),
           appSecret: appSecret.trim() || undefined,
+          verificationToken: verificationToken.trim() || undefined,
+          transport,
         }),
       });
       const data = await res.json();
       if (data.success) {
         setConfigured(data.configured);
+        setConnection(data.connection || null);
         setAppIdMasked(data.appId || '');
         if (appSecret.trim()) setAppSecret('');
+        if (verificationToken.trim()) {
+          setVerificationToken('');
+          setHasVerificationToken(true);
+        }
         toast.success(ui('飞书配置已保存', 'Feishu configuration saved'));
       } else {
         toast.error(data.error || (t?.saveFailed || 'Save failed'));
@@ -144,24 +183,74 @@ export function FeishuSettings({ t }: { t?: any }) {
     );
   }
 
+  const connectionState = connection?.state || 'disabled';
+  const online = transport === 'webhook' ? configured : connectionState === 'connected';
+  const statusLabel = !configured
+    ? ui('飞书未配置', 'Feishu not configured')
+    : transport === 'webhook'
+      ? ui('回调模式已配置', 'Webhook configured')
+      : connectionState === 'connected'
+        ? ui('飞书长连接在线', 'Feishu long connection online')
+        : connectionState === 'reconnecting'
+          ? ui('飞书正在重连', 'Feishu reconnecting')
+          : connectionState === 'connecting'
+            ? ui('飞书正在连接', 'Feishu connecting')
+            : connectionState === 'error'
+              ? ui('飞书连接失败', 'Feishu connection failed')
+              : ui('已配置，等待连接', 'Configured, waiting for connection');
+
   return (
     <div className="space-y-6">
       {/* Status Bar */}
-      <div className="flex items-center gap-3 p-4 rounded-xl bg-white/5 border border-white/10">
-        <div className={`w-3 h-3 rounded-full ${configured ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-white/20'}`} />
-        <div>
+      <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 p-4">
+        <div className={`h-3 w-3 rounded-full ${online ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : connectionState === 'error' ? 'bg-red-400' : configured ? 'bg-amber-400' : 'bg-white/20'}`} />
+        <div className="min-w-0">
           <div className="text-sm font-bold text-white">
-            {configured ? ui('飞书已连接', 'Feishu connected') : ui('飞书未配置', 'Feishu not configured')}
+            {statusLabel}
           </div>
-          <div className="text-xs text-white/40 uppercase tracking-widest">
+          <div className="truncate text-xs text-white/40">
             {configured ? `App ID: ${appIdMasked}` : ui('请输入 App ID 和 App Secret', 'Enter App ID and App Secret')}
           </div>
+          {connection?.lastError && transport === 'long_connection' && (
+            <div className="mt-1 line-clamp-2 text-[11px] text-red-300/75">{connection.lastError}</div>
+          )}
         </div>
-        {configured ? (
+        {online ? (
           <CheckCircle size={16} className="text-green-500 ml-auto" />
         ) : (
           <AlertCircle size={16} className="text-white/45 ml-auto" />
         )}
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-xs font-black uppercase tracking-widest text-white/50">{ui('接收方式', 'Connection Mode')}</div>
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1" role="tablist" aria-label={ui('飞书接收方式', 'Feishu connection mode')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={transport === 'long_connection'}
+            onClick={() => setTransport('long_connection')}
+            className={`flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-xs font-bold transition-colors ${transport === 'long_connection' ? 'bg-white/12 text-white' : 'text-white/45 hover:bg-white/5 hover:text-white/70'}`}
+          >
+            <Radio size={14} />
+            {ui('长连接（推荐）', 'Long Connection')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={transport === 'webhook'}
+            onClick={() => setTransport('webhook')}
+            className={`flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-xs font-bold transition-colors ${transport === 'webhook' ? 'bg-white/12 text-white' : 'text-white/45 hover:bg-white/5 hover:text-white/70'}`}
+          >
+            <Webhook size={14} />
+            {ui('公网回调', 'Webhook')}
+          </button>
+        </div>
+        <p className="text-xs leading-relaxed text-white/40">
+          {transport === 'long_connection'
+            ? ui('适合本地部署，不需要公网地址；Lumi 启动后会主动连接飞书。', 'Best for local deployments. No public URL is required; Lumi connects to Feishu after startup.')
+            : ui('仅在你已有稳定公网 HTTPS 地址时使用。', 'Use only when you already have a stable public HTTPS endpoint.')}
+        </p>
       </div>
 
       <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
@@ -207,6 +296,10 @@ export function FeishuSettings({ t }: { t?: any }) {
                 <div key={binding.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.04] px-3 py-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs font-mono text-white/70">{binding.platformUserId}</div>
+                    <div className="text-[11px] text-white/32">
+                      {binding.chatType === 'group' ? ui('群聊路由', 'Group route') : ui('私聊路由', 'Private route')}
+                      {binding.chatId ? ` · ${binding.chatId}` : ''}
+                    </div>
                     <div className="text-[11px] text-white/32">
                       {ui('绑定于', 'Bound at')} {new Date(binding.createdAt).toLocaleString()}
                     </div>
@@ -260,12 +353,27 @@ export function FeishuSettings({ t }: { t?: any }) {
           </div>
         </div>
 
+        {transport === 'webhook' && (
+          <div>
+            <label className="mb-2 block text-xs font-black uppercase tracking-widest text-white/50">
+              <Key size={12} className="mr-1 inline" /> Verification Token
+            </label>
+            <Input
+              type="password"
+              value={verificationToken}
+              onChange={e => setVerificationToken(e.target.value)}
+              placeholder={hasVerificationToken ? ui('留空则保持现有 Token 不变', 'Leave blank to keep the current token') : ui('输入事件订阅 Verification Token', 'Enter the event verification token')}
+              className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45"
+            />
+          </div>
+        )}
+
         <Button
           onClick={save}
           disabled={saving || !appId.trim()}
           className="w-full h-10 bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-black uppercase tracking-widest"
         >
-          <Save size={14} className="mr-2" />
+          {saving ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Save size={14} className="mr-2" />}
           {saving ? ui('保存中...', 'Saving...') : ui('保存配置', 'Save Configuration')}
         </Button>
       </div>
@@ -280,7 +388,11 @@ export function FeishuSettings({ t }: { t?: any }) {
           <p>{ui('1. 前往', '1. Go to')} <a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer" className="text-celestial-saturn underline inline-flex items-center gap-0.5">{ui('飞书开放平台', 'Feishu Open Platform')}<ExternalLink size={10} /></a> {ui('创建应用', 'and create an app')}</p>
           <p>{ui('2. 左侧菜单「应用能力」-> 启用「机器人」', '2. In App Capabilities, enable Bot')}</p>
           <p>{ui('3. 左侧菜单「凭证与基础信息」-> 复制 App ID 和 App Secret', '3. In Credentials & Basic Info, copy App ID and App Secret')}</p>
-          <p>{ui('4. 左侧菜单「事件订阅」-> 请求 URL 填：', '4. In Event Subscriptions, set Request URL to:')}<code className="text-celestial-jupiter bg-white/5 px-1 rounded">https://lumiai.asia/api/feishu/events</code></p>
+          {transport === 'long_connection' ? (
+            <p>{ui('4. 左侧菜单「事件订阅」-> 选择「使用长连接接收事件」', '4. In Event Subscriptions, select “Use long connection to receive events”')}</p>
+          ) : (
+            <p>{ui('4. 左侧菜单「事件订阅」-> 填入你自己的公网 HTTPS 地址：', '4. In Event Subscriptions, enter your own public HTTPS endpoint:')}<code className="ml-1 rounded bg-white/5 px-1 text-celestial-jupiter">https://你的域名/api/feishu/events</code></p>
+          )}
           <p>{ui('5. 订阅事件：添加「接收消息」im.message.receive_v1', '5. Subscribe to event: im.message.receive_v1')}</p>
           <p>{ui('6. 左侧菜单「权限管理」-> 开通「获取并发送单聊、群聊消息」', '6. In Permissions, enable reading and sending direct/group messages')}</p>
           <p>{ui('7. 左侧菜单「应用发布」-> 创建版本并发布', '7. In App Release, create a version and publish it')}</p>

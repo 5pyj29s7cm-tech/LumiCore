@@ -9,6 +9,7 @@ import * as EDB from '../org/db';
 import { generateEmbedding, cosineSimilarity } from '../memory/store';
 import { chunkLegalText } from './parser';
 import { LUMI_EMBEDDING_MODEL } from './types';
+import { getStatuteAuthorityCheck, type StatuteAuthorityCheck } from './statute_authority_store';
 
 // ── Legal Article Types ──────────────────────────────────────────────────
 
@@ -159,13 +160,13 @@ export interface StatuteResult {
   chunk: string;
   score: number;
   isEffective: boolean;
-  verificationStatus?: 'verified' | 'expired' | 'missing' | 'repealed';
+  verificationStatus?: 'verified' | 'expired' | 'missing' | 'repealed' | 'changed' | 'unavailable';
   sourceUrl?: string;
   reviewAfter?: string;
   content?: string;
 }
 
-interface StatuteVerificationSnapshot {
+export interface StatuteVerificationSnapshot {
   source: string;
   sourceUrl: string;
   verifiedAt: string;
@@ -176,7 +177,7 @@ interface StatuteVerificationSnapshot {
   articleMax?: number;
 }
 
-interface StatuteRegistryEntry {
+export interface StatuteRegistryEntry {
   title: string;
   aliases?: string[];
   effective: boolean;
@@ -206,6 +207,10 @@ function officialStatuteSnapshot(
   };
 }
 
+function officialDatabaseUrl(recordId: string, title: string): string {
+  return `https://flk.npc.gov.cn/detail?id=${encodeURIComponent(recordId)}&title=${encodeURIComponent(title)}`;
+}
+
 const CIVIL_CODE_VERIFICATION = officialStatuteSnapshot(
   'https://flk.npc.gov.cn/detail?fileId=&id=ff808081729d1efe01729d50b5c500bf&title=%E4%B8%AD%E5%8D%8E%E4%BA%BA%E6%B0%91%E5%85%B1%E5%92%8C%E5%9B%BD%E6%B0%91%E6%B3%95%E5%85%B8&type=',
   '2020-05-28',
@@ -221,11 +226,10 @@ const COMPANY_LAW_VERIFICATION = officialStatuteSnapshot(
 );
 
 const CIVIL_PROCEDURE_LAW_VERIFICATION = officialStatuteSnapshot(
-  'https://www.npc.gov.cn/npc/c2/c30834/202401/P020240108541839745616.pdf',
+  officialDatabaseUrl('ff8081818a21dc13018b425303b7086d', '中华人民共和国民事诉讼法'),
   '2023-09-01',
   '2024-01-01',
   306,
-  '中国人大网（全国人大常委会公报现行全文）',
 );
 
 const CRIMINAL_PROCEDURE_LAW_VERIFICATION = officialStatuteSnapshot(
@@ -271,27 +275,101 @@ const PATENT_LAW_VERIFICATION = officialStatuteSnapshot(
 );
 
 const ANTI_UNFAIR_COMPETITION_LAW_VERIFICATION = officialStatuteSnapshot(
-  'https://www.npc.gov.cn/npc/c2/c30834/202506/t20250627_446247.html',
+  officialDatabaseUrl('ff808181971552b40197b1016efc5437', '中华人民共和国反不正当竞争法'),
   '2025-06-27',
   '2025-10-15',
   41,
-  '中国人大网（现行全文）',
 );
 
 const CONSUMER_PROTECTION_LAW_VERIFICATION = officialStatuteSnapshot(
-  'https://www.npc.gov.cn/zgrdw/npc/lfzt/xfzqybhfxza/2014-01/02/content_1872488.htm',
+  officialDatabaseUrl('2c909fdd678bf17901678bf7670606ef', '中华人民共和国消费者权益保护法'),
   '2013-10-25',
   '2014-03-15',
   63,
-  '中国人大网（现行全文）',
 );
 
 const ENTERPRISE_BANKRUPTCY_LAW_VERIFICATION = officialStatuteSnapshot(
-  'https://www.npc.gov.cn/npc/c2/c183/c198/201905/t20190522_25968.html',
+  officialDatabaseUrl('2c909fdd678bf17901678bf63c7c0343', '中华人民共和国企业破产法'),
   '2006-08-27',
   '2007-06-01',
   136,
-  '中国人大网（现行全文）',
+);
+
+const COPYRIGHT_LAW_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff808081752b7d430175e4766bab1557', '中华人民共和国著作权法'),
+  '2020-11-11',
+  '2021-06-01',
+  67,
+);
+
+const SECURITIES_LAW_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff80808171e9e18101727e32b94d7de6', '中华人民共和国证券法'),
+  '2019-12-28',
+  '2020-03-01',
+  226,
+);
+
+const TENDERING_AND_BIDDING_LAW_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('2c909fdd678bf17901678bf88f170b31', '中华人民共和国招标投标法'),
+  '2017-12-27',
+  '2017-12-28',
+  68,
+);
+
+const GOVERNMENT_PROCUREMENT_LAW_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('2c909fdd678bf17901678bf77e170753', '中华人民共和国政府采购法'),
+  '2014-08-31',
+  '2014-08-31',
+  88,
+);
+
+const PERSONAL_INFORMATION_PROTECTION_LAW_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff8081817b6472a3017b656cc2040044', '中华人民共和国个人信息保护法'),
+  '2021-08-20',
+  '2021-11-01',
+  74,
+);
+
+const ADMINISTRATIVE_RECONSIDERATION_LAW_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff8081818a21e6c3018a508d491a0c98', '中华人民共和国行政复议法'),
+  '2023-09-01',
+  '2024-01-01',
+  90,
+);
+
+const CIVIL_PROCEDURE_INTERPRETATION_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff80818181cdceb30181d801c31c4070', '最高人民法院关于适用《中华人民共和国民事诉讼法》的解释'),
+  '2022-04-01',
+  '2022-04-10',
+  552,
+);
+
+const CIVIL_EVIDENCE_PROVISIONS_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff808081777d0c940177ccd29d894ded', '最高人民法院关于民事诉讼证据的若干规定'),
+  '2019-12-25',
+  '2020-05-01',
+  100,
+);
+
+const CIVIL_CODE_CONTRACT_GENERAL_INTERPRETATION_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff8081818c24e05b018c814e6de45ab5', '最高人民法院关于适用《中华人民共和国民法典》合同编通则若干问题的解释'),
+  '2023-12-04',
+  '2023-12-05',
+  69,
+);
+
+const CIVIL_CODE_GUARANTEE_INTERPRETATION_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff80808177e757ac01780077d2291b77', '最高人民法院关于适用《中华人民共和国民法典》有关担保制度的解释'),
+  '2020-12-31',
+  '2021-01-01',
+  71,
+);
+
+const SALE_CONTRACT_INTERPRETATION_VERIFICATION = officialStatuteSnapshot(
+  officialDatabaseUrl('ff808181799def980179b09685cf1802', '最高人民法院关于审理买卖合同纠纷案件适用法律问题的解释'),
+  '2020-12-29',
+  '2021-01-01',
+  33,
 );
 
 /** Law-name registry. Formal article verification requires a sourced snapshot. */
@@ -311,21 +389,127 @@ const STATUTE_REGISTRY: Record<string, StatuteRegistryEntry> = {
   '担保法': { title: '中华人民共和国担保法', effective: false, repealedDate: '2021-01-01', verification: CIVIL_CODE_VERIFICATION },
   '劳动合同法': { title: '中华人民共和国劳动合同法', effective: true, verification: LABOR_CONTRACT_LAW_VERIFICATION },
   '劳动法': { title: '中华人民共和国劳动法', effective: true, verification: LABOR_LAW_VERIFICATION },
-  '知识产权法': { title: '中华人民共和国著作权法', effective: true },
+  '著作权法': { title: '中华人民共和国著作权法', effective: true, verification: COPYRIGHT_LAW_VERIFICATION },
   '商标法': { title: '中华人民共和国商标法', effective: true, verification: TRADEMARK_LAW_VERIFICATION },
   '专利法': { title: '中华人民共和国专利法', effective: true, verification: PATENT_LAW_VERIFICATION },
   '反不正当竞争法': { title: '中华人民共和国反不正当竞争法（2025修订）', effective: true, verification: ANTI_UNFAIR_COMPETITION_LAW_VERIFICATION },
   '消费者权益保护法': { title: '中华人民共和国消费者权益保护法', effective: true, verification: CONSUMER_PROTECTION_LAW_VERIFICATION },
   '企业破产法': { title: '中华人民共和国企业破产法', effective: true, verification: ENTERPRISE_BANKRUPTCY_LAW_VERIFICATION },
-  '证券法': { title: '中华人民共和国证券法', effective: true },
-  '招标投标法': { title: '中华人民共和国招标投标法', effective: true },
-  '政府采购法': { title: '中华人民共和国政府采购法', effective: true },
+  '证券法': { title: '中华人民共和国证券法', effective: true, verification: SECURITIES_LAW_VERIFICATION },
+  '招标投标法': { title: '中华人民共和国招标投标法', effective: true, verification: TENDERING_AND_BIDDING_LAW_VERIFICATION },
+  '政府采购法': { title: '中华人民共和国政府采购法', effective: true, verification: GOVERNMENT_PROCUREMENT_LAW_VERIFICATION },
+  '个人信息保护法': { title: '中华人民共和国个人信息保护法', aliases: ['个保法'], effective: true, verification: PERSONAL_INFORMATION_PROTECTION_LAW_VERIFICATION },
+  '行政复议法': { title: '中华人民共和国行政复议法', effective: true, verification: ADMINISTRATIVE_RECONSIDERATION_LAW_VERIFICATION },
+  '民事诉讼法解释': {
+    title: '最高人民法院关于适用《中华人民共和国民事诉讼法》的解释',
+    aliases: ['民事诉讼法司法解释', '民诉法解释', '民诉解释'],
+    effective: true,
+    verification: CIVIL_PROCEDURE_INTERPRETATION_VERIFICATION,
+  },
+  '民事诉讼证据规定': {
+    title: '最高人民法院关于民事诉讼证据的若干规定',
+    aliases: ['民事证据规定', '民诉证据规定', '证据规定'],
+    effective: true,
+    verification: CIVIL_EVIDENCE_PROVISIONS_VERIFICATION,
+  },
+  '民法典合同编通则解释': {
+    title: '最高人民法院关于适用《中华人民共和国民法典》合同编通则若干问题的解释',
+    aliases: ['民法典合同编通则司法解释', '合同编通则解释', '合同编通则司法解释'],
+    effective: true,
+    verification: CIVIL_CODE_CONTRACT_GENERAL_INTERPRETATION_VERIFICATION,
+  },
+  '民法典担保制度解释': {
+    title: '最高人民法院关于适用《中华人民共和国民法典》有关担保制度的解释',
+    aliases: ['民法典担保制度司法解释', '担保制度解释', '担保制度司法解释'],
+    effective: true,
+    verification: CIVIL_CODE_GUARANTEE_INTERPRETATION_VERIFICATION,
+  },
+  '买卖合同司法解释': {
+    title: '最高人民法院关于审理买卖合同纠纷案件适用法律问题的解释',
+    aliases: ['买卖合同解释', '买卖合同纠纷司法解释'],
+    effective: true,
+    verification: SALE_CONTRACT_INTERPRETATION_VERIFICATION,
+  },
   '民法典婚姻家庭编': { title: '中华人民共和国民法典 第五编 婚姻家庭', aliases: ['民法典婚姻家庭编'], effective: true, verification: { ...CIVIL_CODE_VERIFICATION, articleMin: 1040, articleMax: 1118 } },
   '民法典继承编': { title: '中华人民共和国民法典 第六编 继承', aliases: ['民法典继承编'], effective: true, verification: { ...CIVIL_CODE_VERIFICATION, articleMin: 1119, articleMax: 1163 } },
   '民法典合同编': { title: '中华人民共和国民法典 第三编 合同', aliases: ['民法典合同编'], effective: true, verification: { ...CIVIL_CODE_VERIFICATION, articleMin: 463, articleMax: 988 } },
   '民法典物权编': { title: '中华人民共和国民法典 第二编 物权', aliases: ['民法典物权编'], effective: true, verification: { ...CIVIL_CODE_VERIFICATION, articleMin: 205, articleMax: 462 } },
   '民法典侵权责任编': { title: '中华人民共和国民法典 第七编 侵权责任', aliases: ['民法典侵权责任编'], effective: true, verification: { ...CIVIL_CODE_VERIFICATION, articleMin: 1164, articleMax: 1258 } },
 };
+
+export interface StatuteVerificationCatalogEntry {
+  key: string;
+  title: string;
+  sourceTitle: string;
+  recordId?: string;
+  verification: StatuteVerificationSnapshot;
+}
+
+function sourceIdentity(entry: StatuteRegistryEntry): { sourceTitle: string; recordId?: string } {
+  const verification = entry.verification;
+  let recordId: string | undefined;
+  if (verification) {
+    try {
+      const sourceUrl = new URL(verification.sourceUrl);
+      const sourceTitle = sourceUrl.searchParams.get('title')?.trim();
+      recordId = sourceUrl.searchParams.get('id')?.trim() || undefined;
+      if (sourceTitle) return { sourceTitle, recordId: recordId || undefined };
+    } catch { /* use normalized registry title */ }
+  }
+  return {
+    sourceTitle: entry.title
+      .replace(/（\d{4}修订）/g, '')
+      .replace(/\s+第[一二三四五六七八九十]+编.*$/g, '')
+      .trim(),
+    recordId,
+  };
+}
+
+function normalizeStatuteName(value: string): string {
+  return String(value || '')
+    .replace(/[《》〈〉<>“”"'（）()\s]/g, '')
+    .replace(/中华人民共和国/g, '')
+    .replace(/\d{4}修订/g, '')
+    .trim();
+}
+
+function statuteNameMatchScore(entry: StatuteRegistryEntry, candidate: string, key?: string): number {
+  const normalizedCandidate = normalizeStatuteName(candidate);
+  if (normalizedCandidate.length < 2) return 0;
+  return [key || '', entry.title, ...(entry.aliases || [])]
+    .map(normalizeStatuteName)
+    .filter(name => name.length >= 2)
+    .reduce((best, name) => {
+      if (name === normalizedCandidate) return Math.max(best, 10_000 + name.length);
+      if (name.includes(normalizedCandidate) || normalizedCandidate.includes(name)) {
+        return Math.max(best, name.length * 100 - Math.abs(name.length - normalizedCandidate.length));
+      }
+      return best;
+    }, 0);
+}
+
+function statuteNameMatches(entry: StatuteRegistryEntry, candidate: string, key?: string): boolean {
+  return statuteNameMatchScore(entry, candidate, key) > 0;
+}
+
+export function listStatuteVerificationCatalog(): StatuteVerificationCatalogEntry[] {
+  const bySourceTitle = new Map<string, StatuteVerificationCatalogEntry>();
+  for (const [key, entry] of Object.entries(STATUTE_REGISTRY)) {
+    if (!entry.effective || !entry.verification) continue;
+    const identity = sourceIdentity(entry);
+    const existing = bySourceTitle.get(identity.sourceTitle);
+    if (!existing || (entry.verification.articleMax || 0) > (existing.verification.articleMax || 0)) {
+      bySourceTitle.set(identity.sourceTitle, {
+        key,
+        title: entry.title,
+        sourceTitle: identity.sourceTitle,
+        recordId: identity.recordId,
+        verification: { ...entry.verification },
+      });
+    }
+  }
+  return [...bySourceTitle.values()].sort((a, b) => a.sourceTitle.localeCompare(b.sourceTitle, 'zh-CN'));
+}
 
 const CHINESE_DIGITS: Record<string, number> = {
   零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
@@ -384,6 +568,49 @@ function isVerificationSnapshotCurrent(snapshot: StatuteVerificationSnapshot, as
   return verificationAsOfDate(asOf) <= snapshot.reviewAfter;
 }
 
+interface ResolvedStatuteVerification {
+  snapshot?: StatuteVerificationSnapshot;
+  authorityCheck?: StatuteAuthorityCheck;
+  blockingReason?: string;
+}
+
+function resolveStatuteVerification(entry: StatuteRegistryEntry): ResolvedStatuteVerification {
+  const baseline = entry.verification;
+  if (!baseline) return {};
+  const identity = sourceIdentity(entry);
+  const authorityCheck = getStatuteAuthorityCheck(identity.sourceTitle) || undefined;
+  if (!authorityCheck) return { snapshot: baseline };
+
+  if (authorityCheck.status === 'changed' || authorityCheck.status === 'invalid') {
+    return {
+      snapshot: baseline,
+      authorityCheck,
+      blockingReason: `${identity.sourceTitle} 的国家法律法规数据库记录发生变化，已进入人工复核队列：${authorityCheck.reasons.join('；') || '官方版本待复核'}`,
+    };
+  }
+
+  const runtimeCanExtend = Boolean(
+    authorityCheck.lastVerifiedAt
+    && authorityCheck.reviewAfter
+    && authorityCheck.expectedVersionDate === baseline.versionDate
+    && authorityCheck.expectedEffectiveDate === baseline.effectiveDate
+    && (authorityCheck.observed?.articleMax === null
+      || authorityCheck.observed?.articleMax === undefined
+      || baseline.articleMax === undefined
+      || baseline.articleMax <= authorityCheck.observed.articleMax),
+  );
+  if (!runtimeCanExtend) return { snapshot: baseline, authorityCheck };
+  return {
+    authorityCheck,
+    snapshot: {
+      ...baseline,
+      sourceUrl: authorityCheck.observed?.sourceUrl || baseline.sourceUrl,
+      verifiedAt: authorityCheck.lastVerifiedAt!.slice(0, 10),
+      reviewAfter: authorityCheck.reviewAfter!,
+    },
+  };
+}
+
 export async function searchStatutes(
   orgId: string,
   query: string,
@@ -393,20 +620,30 @@ export async function searchStatutes(
 
   // 1. Check built-in registry first
   for (const [key, info] of Object.entries(STATUTE_REGISTRY)) {
-    if (query.includes(key) || key.includes(query) || info.title.includes(query)) {
+    if (query.includes(key) || key.includes(query) || statuteNameMatches(info, query, key)) {
+      const resolved = resolveStatuteVerification(info);
+      const verification = resolved.snapshot;
       const verificationStatus: NonNullable<StatuteResult['verificationStatus']> = !info.effective
         ? 'repealed'
-        : !info.verification
+        : !verification
           ? 'missing'
-          : isVerificationSnapshotCurrent(info.verification)
+          : resolved.blockingReason
+            ? 'changed'
+            : resolved.authorityCheck?.status === 'unavailable'
+              ? 'unavailable'
+              : isVerificationSnapshotCurrent(verification)
             ? 'verified'
             : 'expired';
       const verificationSummary = !info.effective
-        ? info.verification ? `；废止状态来源：${info.verification.source}` : '；废止状态待权威来源复核'
-        : info.verification
+        ? verification ? `；废止状态来源：${verification.source}` : '；废止状态待权威来源复核'
+        : resolved.blockingReason
+          ? `；${resolved.blockingReason}`
+          : verification
           ? verificationStatus === 'verified'
-            ? `；权威快照核验于 ${info.verification.verifiedAt}，复核期限 ${info.verification.reviewAfter}`
-            : `；权威快照已于 ${info.verification.reviewAfter} 到期，正式交付前必须刷新`
+            ? `；权威快照核验于 ${verification.verifiedAt}，复核期限 ${verification.reviewAfter}`
+            : verificationStatus === 'unavailable'
+              ? `；本次官方源暂不可用，沿用最近有效快照至 ${verification.reviewAfter}`
+              : `；权威快照已于 ${verification.reviewAfter} 到期，正式交付前必须刷新`
           : '；正式交付前需权威来源核验';
       results.push({
         articleId: `statute:${key}`,
@@ -415,8 +652,8 @@ export async function searchStatutes(
         score: 1.0,
         isEffective: info.effective,
         verificationStatus,
-        sourceUrl: info.verification?.sourceUrl,
-        reviewAfter: info.verification?.reviewAfter,
+        sourceUrl: verification?.sourceUrl,
+        reviewAfter: verification?.reviewAfter,
       });
     }
   }
@@ -473,7 +710,8 @@ export interface CitationCheck {
   isEffective: boolean | null;
   source: string;
   detail: string;
-  verificationStatus?: 'verified' | 'expired' | 'missing' | 'repealed' | 'not_found';
+  verificationStatus?: 'verified' | 'expired' | 'missing' | 'repealed' | 'not_found' | 'changed';
+  authorityRefreshStatus?: StatuteAuthorityCheck['status'];
   sourceUrl?: string;
   verifiedAt?: string;
   reviewAfter?: string;
@@ -502,14 +740,14 @@ export function verifyCitation(
   const statuteMatch = citation.match(/《([^》]+)》/);
   if (statuteMatch) {
     const statuteName = statuteMatch[1].trim();
-    const found = Object.values(STATUTE_REGISTRY).find(
-      s => s.title.includes(statuteName)
-        || statuteName.includes(s.title)
-        || s.aliases?.some(alias => alias.includes(statuteName) || statuteName.includes(alias)),
-    );
+    const found = Object.entries(STATUTE_REGISTRY)
+      .map(([key, entry]) => ({ entry, score: statuteNameMatchScore(entry, statuteName, key) }))
+      .filter(match => match.score > 0)
+      .sort((a, b) => b.score - a.score)[0]?.entry;
     if (found) {
       const articleNumber = extractArticleNumber(citation);
-      const verification = found.verification;
+      const resolved = resolveStatuteVerification(found);
+      const verification = resolved.snapshot;
 
       if (!found.effective) {
         return {
@@ -520,6 +758,21 @@ export function verifyCitation(
           source: verification ? verificationSource(verification) : '内置法名状态表（待权威来源复核）',
           detail: `${found.title} 已于${found.repealedDate || '民法典施行日'}废止，请引用现行法律相关条款`,
           verificationStatus: 'repealed',
+          authorityRefreshStatus: resolved.authorityCheck?.status,
+          ...snapshotMetadata(verification),
+        };
+      }
+
+      if (resolved.blockingReason) {
+        return {
+          citation,
+          type: 'statute',
+          exists: true,
+          isEffective: null,
+          source: verification ? verificationSource(verification) : '国家法律法规数据库自动巡检',
+          detail: `${resolved.blockingReason}。在律师完成版本、条文和生效状态复核前，正式交付 gate 保持阻断。`,
+          verificationStatus: 'changed',
+          authorityRefreshStatus: resolved.authorityCheck?.status,
           ...snapshotMetadata(verification),
         };
       }
@@ -533,6 +786,7 @@ export function verifyCitation(
           source: verificationSource(verification),
           detail: `${found.title} 的权威核验快照已于 ${verification.reviewAfter} 到期，必须重新访问权威来源确认当前版本和生效状态后才能正式交付。`,
           verificationStatus: 'expired',
+          authorityRefreshStatus: resolved.authorityCheck?.status,
           ...snapshotMetadata(verification),
         };
       }
@@ -554,6 +808,7 @@ export function verifyCitation(
               ? `《${statuteName}》存在，但第${articleNumber}条超出已核验条文范围（${verification.articleMin}-${verification.articleMax}条）。`
               : `《${statuteName}》法名已识别，但第${articleNumber}条尚未通过权威文本核验。`,
             verificationStatus: verification ? 'not_found' : 'missing',
+            authorityRefreshStatus: resolved.authorityCheck?.status,
             ...snapshotMetadata(verification),
           };
         }
@@ -566,6 +821,7 @@ export function verifyCitation(
           source: '内置法名状态表（非实时权威核验）',
           detail: `${found.title} 法名已识别，但正式交付前仍需核验当前版本和生效状态。`,
           verificationStatus: 'missing',
+          authorityRefreshStatus: resolved.authorityCheck?.status,
         };
       }
 
@@ -577,8 +833,9 @@ export function verifyCitation(
         source: verification ? verificationSource(verification) : '内置法名状态表（非实时权威核验）',
         detail: articleNumber === null
           ? `${found.title} 已按所列权威来源核验。`
-          : `${found.title} 第${articleNumber}条位于已核验权威文本条文范围内。`,
+          : `${found.title} 第${articleNumber}条位于已核验权威文本条文范围内。${resolved.authorityCheck?.status === 'unavailable' ? ' 本次自动巡检暂不可用，当前结论沿用最近一次仍在复核期限内的成功快照。' : ''}`,
         verificationStatus: verification ? 'verified' : 'missing',
+        authorityRefreshStatus: resolved.authorityCheck?.status,
         ...snapshotMetadata(verification),
       };
     }

@@ -174,6 +174,8 @@ const DIRECT_LEGAL_TOOL_ALLOWLIST = new Set([
   'legal_company_database_lookup',
   'legal_generate_citation_verification_report',
   'legal_finalize_delivery_package',
+  'legal_refresh_authoritative_sources',
+  'legal_authority_source_status',
   'legal_verify_citation',
   'legal_import_judgment',
 ]);

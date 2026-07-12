@@ -19,6 +19,11 @@ import { generateEmbedding } from '../../memory/store';
 import { makeLLMCall, type NormalizedMessage } from '../../llm/providers';
 import { getUserPreferredLLMConfig } from '../../llm/user_preferences';
 import * as LegalCases from '../../org/legal_cases';
+import {
+  formatStatuteAuthorityRefreshReport,
+  refreshAuthoritativeStatuteSources,
+} from '../../legal/statute_authority_refresh';
+import { loadStatuteAuthorityRefreshState } from '../../legal/statute_authority_store';
 
 async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Promise<string | null> {
   const getters = context?.llmGetters;
@@ -5374,6 +5379,8 @@ async function prepareExternalBrowserWorkspaceHandler(args: Record<string, any>,
 function formatCitationVerificationResult(check: CitationCheck): string {
   const verificationLabel = check.verificationStatus === 'verified'
     ? '权威快照有效'
+    : check.verificationStatus === 'changed'
+      ? '权威记录已变化，正式交付阻断'
     : check.verificationStatus === 'expired'
       ? '权威快照已过期，正式交付阻断'
       : check.verificationStatus === 'repealed'
@@ -5389,6 +5396,7 @@ function formatCitationVerificationResult(check: CitationCheck): string {
     `  存在: ${check.exists ? '是' : '否'}`,
     `  有效: ${check.isEffective === null ? '尚未确认' : check.isEffective ? '现行有效' : '已废止'}`,
     `  核验状态: ${verificationLabel}`,
+    check.authorityRefreshStatus ? `  自动巡检: ${check.authorityRefreshStatus}` : '',
     check.verifiedAt ? `  核验日期: ${check.verifiedAt}` : '',
     check.reviewAfter ? `  复核期限: ${check.reviewAfter}` : '',
     `  ${check.detail}`,
@@ -5414,6 +5422,21 @@ async function verifyCitationHandler(args: Record<string, any>, context?: any): 
   }
 
   return '请提供citation（单个引用）或text（批量验证）参数。';
+}
+
+async function refreshAuthoritativeSourcesHandler(args: Record<string, any>): Promise<string> {
+  const timeoutMs = Number.isFinite(Number(args.timeoutMs))
+    ? Math.max(2_000, Math.min(30_000, Number(args.timeoutMs)))
+    : undefined;
+  const result = await refreshAuthoritativeStatuteSources({ timeoutMs });
+  return [
+    formatStatuteAuthorityRefreshReport(result),
+    result.archivePath ? `\n巡检记录：${result.archivePath}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+async function authoritySourceStatusHandler(): Promise<string> {
+  return formatStatuteAuthorityRefreshReport(loadStatuteAuthorityRefreshState());
 }
 
 // ── legal_import_judgment ───────────────────────────────────────────────
@@ -6209,6 +6232,29 @@ export function registerLegalTools(registry: ToolRegistry): void {
       },
     },
     handler: prepareExternalBrowserWorkspaceHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_refresh_authoritative_sources',
+    description: '立即巡检现行法权威来源 — 逐项访问国家法律法规数据库，核对版本日期、施行日期、效力状态、官方记录 ID、条文范围和稳定指纹。发现变化即阻断正式文书交付并进入人工复核，不会把网络失败当成有效。',
+    parameters: {
+      type: 'object',
+      properties: {
+        timeoutMs: { type: 'number', description: '单个官方请求超时毫秒数，范围 2000-30000；默认 12000' },
+      },
+    },
+    handler: refreshAuthoritativeSourcesHandler,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
+    name: 'legal_authority_source_status',
+    description: '查看现行法权威来源巡检状态 — 显示最近运行时间、已验证法源、待人工复核项目和暂时不可用来源，不发起新的外部请求。',
+    parameters: { type: 'object', properties: {} },
+    handler: authoritySourceStatusHandler,
     permission: 'user',
     securityLevel: 'safe',
   });

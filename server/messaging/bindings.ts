@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import { getMember, getOrgById } from '../org/db';
 
@@ -10,6 +10,8 @@ export interface MessagingBinding {
   id: string;
   platform: MessagingPlatformId;
   platformUserId: string;
+  chatId?: string;
+  chatType?: 'private' | 'group';
   lumiUserId: string;
   orgId: string;
   createdAt: string;
@@ -51,11 +53,13 @@ function readStore(): StoreShape {
 
 function writeStore(store: StoreShape) {
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+  const tempPath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(store, null, 2), 'utf8');
+  fs.renameSync(tempPath, STORE_PATH);
 }
 
 function makeCode() {
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
+  return randomBytes(6).toString('base64url').slice(0, 8).toUpperCase();
 }
 
 function pruneExpiredCodes(store: StoreShape) {
@@ -91,7 +95,13 @@ export function createBindingCode(platform: MessagingPlatformId, lumiUserId: str
   return bindingCode;
 }
 
-export function consumeBindingCode(platform: MessagingPlatformId, code: string, platformUserId: string): MessagingBinding | null {
+export function consumeBindingCode(
+  platform: MessagingPlatformId,
+  code: string,
+  platformUserId: string,
+  chatId = '',
+  chatType: 'private' | 'group' = 'private',
+): MessagingBinding | null {
   const store = readStore();
   pruneExpiredCodes(store);
   const normalized = code.trim().toUpperCase();
@@ -102,11 +112,24 @@ export function consumeBindingCode(platform: MessagingPlatformId, code: string, 
   }
   const found = store.codes.splice(idx, 1)[0];
   const ts = now();
-  const existingIdx = store.bindings.findIndex(item => item.platform === platform && item.platformUserId === platformUserId);
+  let existingIdx = store.bindings.findIndex(item =>
+    item.platform === platform
+    && item.platformUserId === platformUserId
+    && String(item.chatId || '') === String(chatId || '')
+  );
+  if (existingIdx < 0 && chatId) {
+    existingIdx = store.bindings.findIndex(item =>
+      item.platform === platform
+      && item.platformUserId === platformUserId
+      && !item.chatId
+    );
+  }
   const binding: MessagingBinding = {
     id: existingIdx >= 0 ? store.bindings[existingIdx].id : randomUUID(),
     platform,
     platformUserId,
+    chatId: chatId || undefined,
+    chatType,
     lumiUserId: found.lumiUserId,
     orgId: found.orgId,
     createdAt: existingIdx >= 0 ? store.bindings[existingIdx].createdAt : ts,
@@ -118,9 +141,28 @@ export function consumeBindingCode(platform: MessagingPlatformId, code: string, 
   return binding;
 }
 
-export function getBinding(platform: MessagingPlatformId, platformUserId: string): MessagingBinding | null {
+export function getBinding(
+  platform: MessagingPlatformId,
+  platformUserId: string,
+  chatId = '',
+  chatType: 'private' | 'group' = 'private',
+): MessagingBinding | null {
   const store = readStore();
-  return store.bindings.find(item => item.platform === platform && item.platformUserId === platformUserId) || null;
+  const candidates = store.bindings
+    .filter(item => item.platform === platform && item.platformUserId === platformUserId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (chatId) {
+    const exact = candidates.find(item => item.chatId === chatId);
+    if (exact) return exact;
+  }
+  if (chatType === 'group') return null;
+  return candidates.find(item => item.chatType === 'private')
+    || candidates.find(item => !item.chatId)
+    || (candidates.length === 1 ? candidates[0] : null);
+}
+
+export function resetMessagingBindingsForTest(): void {
+  try { fs.rmSync(STORE_PATH, { force: true }); } catch {}
 }
 
 export function listBindingsForUser(lumiUserId: string): MessagingBinding[] {

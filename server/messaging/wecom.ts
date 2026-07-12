@@ -19,6 +19,9 @@ import type {
 } from './types';
 
 export interface WeComConfig {
+  mode?: 'aibot_long_connection' | 'app_webhook';
+  botId?: string;
+  botSecret?: string;
   corpId: string;
   agentId: string;
   appSecret: string;
@@ -88,7 +91,7 @@ export class WeComAdapter implements MessageAdapter {
     const receiveid = content.subarray(4 + msgLen).toString('utf-8');
     // Verify receiveid matches corpId (handles both corpId format: plain ID or with wx prefix)
     if (receiveid && !receiveid.includes(this.config.corpId) && !this.config.corpId.includes(receiveid)) {
-      console.warn('[WeCom] receiveid mismatch — expected:', this.config.corpId, 'got:', receiveid);
+      console.warn('[WeCom] Callback receiver ID does not match the configured corporation');
     }
     return xml;
   }
@@ -105,8 +108,7 @@ export class WeComAdapter implements MessageAdapter {
     const expected = this.sha1(this.config.token, timestamp, nonce, echostr || '');
     const match = expected === msg_signature;
     if (!match) {
-      console.log('[WeCom] SIG MISMATCH — expected:', expected.slice(0, 20), 'got:', msg_signature.slice(0, 20));
-      console.log('[WeCom] token:', this.config.token?.slice(0, 5) + '***', 'ts:', timestamp, 'nonce:', nonce);
+      console.log('[WeCom] Callback signature mismatch');
     }
     return match;
   }
@@ -118,7 +120,7 @@ export class WeComAdapter implements MessageAdapter {
     // Validate corpId is in the decrypted message
     const parsed = this.extractXml(plaintext);
     const appId = parsed && this.getTag(parsed, 'ToUserName');
-    console.log('[WeCom] Decrypted — appId/ToUserName:', appId, 'corpId:', this.config.corpId);
+    if (!appId) console.warn('[WeCom] Callback verification payload did not include a receiver ID');
     return plaintext;
   }
 

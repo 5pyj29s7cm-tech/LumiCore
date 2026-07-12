@@ -1554,11 +1554,15 @@ describe('semi-automated legal workflows', () => {
     expect(chatRoutesSource).toContain('legal_case_workflow_status');
     expect(chatRoutesSource).toContain('legal_message_intake_to_case');
     expect(chatRoutesSource).toContain('legal_finalize_delivery_package');
+    expect(chatRoutesSource).toContain('legal_refresh_authoritative_sources');
+    expect(chatRoutesSource).toContain('legal_authority_source_status');
     expect(chatRoutesSource).toContain('legal_process_notice_link');
     expect(registry.get('legal_triad_analysis')).toBeUndefined();
     expect(registry.get('legal_case_reasoning_matrix')).toBeTruthy();
     expect(registry.get('legal_case_workflow_status')).toBeTruthy();
     expect(registry.get('legal_message_intake_to_case')).toBeTruthy();
+    expect(registry.get('legal_refresh_authoritative_sources')).toBeTruthy();
+    expect(registry.get('legal_authority_source_status')).toBeTruthy();
     expect(legalToolsSource).toContain('三段论是 Lumi 法律工作的核心基础');
     expect(legalToolsSource).toContain('Standard Legal Casework Sequence');
     expect(legalToolsSource).toContain('Major premise');

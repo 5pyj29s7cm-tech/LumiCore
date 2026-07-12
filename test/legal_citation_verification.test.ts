@@ -38,6 +38,17 @@ describe('Authoritative legal citation verification', () => {
     ['《反不正当竞争法》第四十一条', 41],
     ['《消费者权益保护法》第六十三条', 63],
     ['《企业破产法》第一百三十六条', 136],
+    ['《著作权法》第六十七条', 67],
+    ['《证券法》第二百二十六条', 226],
+    ['《招标投标法》第六十八条', 68],
+    ['《政府采购法》第八十八条', 88],
+    ['《个人信息保护法》第七十四条', 74],
+    ['《行政复议法》第九十条', 90],
+    ['《民诉法解释》第五百五十二条', 552],
+    ['《民事诉讼证据规定》第一百条', 100],
+    ['《合同编通则解释》第六十九条', 69],
+    ['《担保制度解释》第七十一条', 71],
+    ['《买卖合同司法解释》第三十三条', 33],
   ])('verifies the final article in a sourced current-law snapshot: %s', (citation, articleMax) => {
     const check = verifyCitation(citation);
     expect(check.exists).toBe(true);
@@ -64,8 +75,8 @@ describe('Authoritative legal citation verification', () => {
     expect(outsideBook.detail).toContain('463-988条');
   });
 
-  it('still blocks effective laws whose article text has no authoritative snapshot', () => {
-    const check = verifyCitation('《证券法》第五十条');
+  it('still blocks effective laws whose consolidated article text has no authoritative snapshot', () => {
+    const check = verifyCitation('《刑法》第五十条');
     expect(check.exists).toBe(false);
     expect(check.isEffective).toBeNull();
     expect(check.verificationStatus).toBe('missing');

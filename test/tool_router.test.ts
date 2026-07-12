@@ -98,6 +98,8 @@ const DECLARATIONS = [
   'legal_generate_citation_verification_report',
   'legal_finalize_delivery_package',
   'legal_prepare_external_browser_workspace',
+  'legal_authority_source_status',
+  'legal_refresh_authoritative_sources',
   'legal_verify_citation',
   'legal_import_judgment',
   'authority_research',
@@ -347,6 +349,21 @@ describe('tool router', () => {
       'legal_prepare_external_browser_workspace',
       'web_login_run',
       'create_docx',
+    ]));
+  });
+
+  it('routes current-law questions through authority status and refresh tools', () => {
+    const route = routeToolsForTurn(
+      '正式交付前检查所有引用是不是现行有效，刷新权威法源和司法解释版本',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('legal');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'legal_authority_source_status',
+      'legal_refresh_authoritative_sources',
+      'legal_verify_citation',
+      'legal_finalize_delivery_package',
     ]));
   });
 

@@ -24,6 +24,7 @@ import { runDailyScan, isFirstBootComplete } from './autonomy/system_explorer';
 import { getGateConfig } from './autonomy/safety_gate';
 import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
+import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
 
 export interface ScheduledDelivery {
   userId: string;
@@ -395,6 +396,30 @@ export function registerScheduledTasks(
       .filter((user: any) => user?.uid && user.role === 'admin')
       .map((user: any) => user.uid);
   }
+
+  // Public legal-source metadata is global. Notify personal system admins only
+  // when an official record actually enters the review queue.
+  scheduler.register({
+    id: 'legal_authority_source_refresh',
+    cron: '23 4 * * *',
+    lastRun: null,
+    handler: async () => {
+      const result = await refreshAuthoritativeStatuteSources();
+      if (result.newPendingReview === 0) return null;
+      const admins = getSystemAdminUserIds();
+      const recipients = admins.length > 0 ? admins : getAllUserIds();
+      const reviewLines = result.pendingReview
+        .map(check => `${check.title}：${check.reasons.join('；')}`)
+        .join('\n');
+      const message = [
+        `现行法权威法源巡检发现 ${result.newPendingReview} 项新变化，相关正式文书交付已自动阻断。`,
+        reviewLines,
+        result.archivePath ? `巡检记录：${result.archivePath}` : '',
+        '请由律师核对官方标准文本后更新法源快照。',
+      ].filter(Boolean).join('\n');
+      return recipients.map(userId => ({ userId, message, domain: 'personal' as const }));
+    },
+  });
 
   // Reminder check-in (every 5 min) — checks all users' reminders
   scheduler.register({

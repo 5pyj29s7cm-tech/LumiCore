@@ -10,6 +10,7 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^cad_run_autocad_draw_script$/i.test(name)) return 30 * 60_000;
   if (/^cad_generate_autocad_draw_script$/i.test(name)) return 5 * 60_000;
   if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 3 * 60_000;
+  if (name === 'legal_refresh_authoritative_sources') return 3 * 60_000;
   if (name === 'desktop_ai_roundtable') return 15 * 60_000;
   if (/^(wechat_|desktop_ai_)/i.test(name)) return 3 * 60_000;
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
