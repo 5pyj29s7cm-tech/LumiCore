@@ -18,6 +18,11 @@ import {
 import { toast } from 'sonner';
 import { usePlatform } from '@/hooks/usePlatform';
 import { getSensorPermissionSnapshot, SENSOR_PERMISSIONS_CHANGED } from '@/services/sensorPermissionService';
+import {
+  COMMON_APP_MATCHERS,
+  getSystemAppMatches,
+  isSystemAppDetected,
+} from '../../shared/system_apps';
 
 interface DiskInfo {
   name: string;
@@ -121,28 +126,6 @@ interface SetupSuggestion {
   priority: 'high' | 'medium' | 'low';
 }
 
-const COMMON_APP_MATCHERS = [
-  { id: 'browser', label: 'Browser', patterns: [/chrome/i, /edge/i, /firefox/i, /brave/i] },
-  { id: 'vscode', label: 'VS Code', patterns: [/visual studio code/i, /\bvs code\b/i] },
-  { id: 'git', label: 'Git', patterns: [/\bgit\b/i] },
-  { id: 'node', label: 'Node.js', patterns: [/node\.js/i] },
-  { id: 'python', label: 'Python', patterns: [/python/i] },
-  { id: 'wps', label: 'WPS / Office', patterns: [/wps/i, /microsoft office/i, /word/i, /powerpoint/i, /excel/i] },
-  { id: 'wechat', label: 'WeChat', patterns: [/wechat/i, /weixin/i, /wechat work/i] },
-  { id: 'cad', label: 'CAD', patterns: [/autocad/i, /\bcad\b/i, /zwcad/i, /gstarcad/i, /浩辰/i, /中望/i, /天正/i, /solidworks/i, /revit/i, /rhino/i] },
-  {
-    id: 'ai_apps',
-    label: 'Local AI Apps',
-    patterns: [
-      /workbuddy/i, /codex/i, /chatgpt/i, /claude/i, /gemini/i, /deepseek/i,
-      /kimi/i, /豆包/i, /doubao/i, /通义/i, /千问/i, /qwen/i, /文心/i,
-      /ernie/i, /copilot/i, /cursor/i, /cherry studio/i, /ollama/i,
-      /lm studio/i, /anythingllm/i,
-    ],
-  },
-  { id: 'netease', label: 'NetEase Music', patterns: [/netease/i, /cloud music/i, /music\.163/i] },
-];
-
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
@@ -166,10 +149,6 @@ function StatusIcon({ status }: { status: CapabilityItem['status'] }) {
   if (status === 'ready') return <CheckCircle2 size={16} className="text-emerald-300" />;
   if (status === 'partial') return <AlertCircle size={16} className="text-amber-300" />;
   return <XCircle size={16} className="text-red-300" />;
-}
-
-function isAppDetected(apps: string[], matcher: (typeof COMMON_APP_MATCHERS)[number]) {
-  return apps.some(app => matcher.patterns.some(pattern => pattern.test(app)));
 }
 
 function getPermissionLabel(value?: PermissionStateValue, isZh = false) {
@@ -218,15 +197,19 @@ function buildReport(
   isZh: boolean,
 ): AdaptationReport {
   const apps = latest?.software?.installedApps || [];
-  const detectedApps = COMMON_APP_MATCHERS.filter(item => isAppDetected(apps, item));
+  const detectedApps = COMMON_APP_MATCHERS.filter(item => isSystemAppDetected(apps, item));
   const llmReady = Object.values(providers).filter(p => p.available).length;
   const nodeReady = Boolean(latest?.software?.nodeVersion) || detectedApps.some(a => a.id === 'node');
   const pythonReady = Boolean(latest?.software?.pythonVersion) || detectedApps.some(a => a.id === 'python');
   const hasOffice = detectedApps.some(a => a.id === 'wps');
-  const hasComms = detectedApps.some(a => a.id === 'wechat');
-  const hasCad = detectedApps.some(a => a.id === 'cad');
-  const hasAiApps = detectedApps.some(a => a.id === 'ai_apps');
-  const hasMusic = detectedApps.some(a => a.id === 'netease');
+  const commApps = getSystemAppMatches(apps, 'wechat', 4);
+  const cadApps = getSystemAppMatches(apps, 'cad', 4);
+  const aiApps = getSystemAppMatches(apps, 'ai_apps', 4);
+  const musicApps = getSystemAppMatches(apps, 'netease', 4);
+  const hasComms = commApps.length > 0;
+  const hasCad = cadApps.length > 0;
+  const hasAiApps = aiApps.length > 0;
+  const hasMusic = musicApps.length > 0;
 
   const capabilities: CapabilityItem[] = [
     {
@@ -287,25 +270,33 @@ function buildReport(
       id: 'messaging',
       label: ui(isZh, '通讯应用', 'Messaging apps'),
       status: hasComms ? 'ready' : 'partial',
-      detail: hasComms ? ui(isZh, '已检测到微信/企业通讯应用。', 'WeChat/enterprise messaging app detected.') : ui(isZh, '尚未检测到通讯应用。', 'Messaging app not detected yet.'),
+      detail: hasComms
+        ? ui(isZh, `已检测到：${commApps.join('、')}。环境识别已就绪，实际发送仍以窗口、收件人和发送结果验收为准。`, `Detected: ${commApps.join(', ')}. Environment detection is ready; actual sending still requires window, recipient, and result verification.`)
+        : ui(isZh, '尚未检测到通讯应用。', 'Messaging app not detected yet.'),
     },
     {
       id: 'cad',
       label: ui(isZh, 'CAD 制图', 'CAD drafting'),
       status: hasCad ? 'ready' : 'partial',
-      detail: hasCad ? ui(isZh, '已检测到 CAD 应用。Lumi 可以生成 DXF 草图供你检查。', 'CAD app detected. Lumi can generate DXF drafts for review.') : ui(isZh, '未检测到 CAD 应用；Lumi 仍可生成 DXF 草稿文件。', 'No CAD app detected; Lumi can still generate DXF draft files.'),
+      detail: hasCad
+        ? ui(isZh, `已检测到：${cadApps.join('、')}。环境已就绪；实际绘图仍需完成窗口控制、保存文件和图纸验收。`, `Detected: ${cadApps.join(', ')}. The environment is ready; actual drafting still requires window control, file save, and drawing verification.`)
+        : ui(isZh, '未检测到 CAD 应用；Lumi 仍可生成 DXF 草稿文件。', 'No CAD app detected; Lumi can still generate DXF draft files.'),
     },
     {
       id: 'external_ai',
       label: ui(isZh, '外部 AI 应用', 'External AI apps'),
       status: hasAiApps ? 'ready' : 'partial',
-      detail: hasAiApps ? ui(isZh, '已检测到本地 AI 应用。优先通过 MCP、文件或浏览器交接，再使用视觉控制。', 'Local AI app detected. Prefer MCP/file/browser handoff before visual control.') : ui(isZh, '未检测到本地 AI 应用；Lumi 仍可通过浏览器和 MCP 协同。', 'No local AI app detected; Lumi can still coordinate through browser and MCP.'),
+      detail: hasAiApps
+        ? ui(isZh, `已检测到：${aiApps.join('、')}。应用登录、提问和回答回收需在实际任务中验收。`, `Detected: ${aiApps.join(', ')}. App login, prompting, and answer collection must be verified in a real task.`)
+        : ui(isZh, '未检测到本地 AI 应用；Lumi 仍可通过浏览器和 MCP 协同。', 'No local AI app detected; Lumi can still coordinate through browser and MCP.'),
     },
     {
       id: 'music',
       label: ui(isZh, '音乐工作流', 'Music workflow'),
       status: hasMusic ? 'ready' : 'partial',
-      detail: hasMusic ? ui(isZh, '已检测到网易云/音乐应用。', 'NetEase/Cloud Music app detected.') : ui(isZh, '未检测到音乐应用；Lumi 音乐能力仍可使用已配置服务。', 'Music app not detected; Lumi music playback can still use configured services.'),
+      detail: hasMusic
+        ? ui(isZh, `已检测到：${musicApps.join('、')}。播放与控制能力仍以实际播放器状态验收。`, `Detected: ${musicApps.join(', ')}. Playback and controls still require verification against the actual player state.`)
+        : ui(isZh, '未检测到音乐应用；Lumi 音乐能力仍可使用已配置服务。', 'Music app not detected; Lumi music playback can still use configured services.'),
     },
   ];
 
@@ -480,7 +471,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
   const detectedAppGroups = COMMON_APP_MATCHERS
     .map(item => ({
       ...item,
-      matches: apps.filter(app => item.patterns.some(pattern => pattern.test(app))).slice(0, 4),
+      matches: getSystemAppMatches(apps, item, 4),
     }))
     .filter(item => item.matches.length > 0);
 
@@ -562,11 +553,11 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             </div>
           </div>
           <div className="text-sm leading-relaxed text-white/65 md:max-w-md">
-            {report.status === 'ready'
-              ? ui(isZh, 'Lumi 已经比较了解这台电脑，可以更稳地调度大多数桌面工作流。', 'Lumi has a strong map of this computer and can route most desktop workflows safely.')
-              : report.status === 'partial'
-                ? ui(isZh, 'Lumi 可以在这里工作，但补齐少量权限或本地工具后会更顺手。', 'Lumi can work here, but a few permissions or local tools would make the client smoother.')
-                : ui(isZh, '这台电脑还需要完成几项设置，Lumi 才能真正适配。', 'Lumi needs a few setup steps before this computer feels fully adapted.')}
+             {report.status === 'ready'
+               ? ui(isZh, '这台电脑的运行环境已完成识别；“就绪”代表适配条件满足，不代替具体任务的执行验收。', 'This computer environment has been mapped. Ready means adaptation prerequisites are present, not that a real task has already passed execution verification.')
+               : report.status === 'partial'
+                 ? ui(isZh, '已识别部分运行环境；仍有适配条件未确认，不能据此判断对应工作流已经可用。', 'Part of the environment is mapped, but some prerequisites remain unconfirmed; workflow readiness cannot be inferred yet.')
+                 : ui(isZh, '这台电脑仍有关键适配条件缺失，相关工作流尚不能标记为就绪。', 'Key adaptation prerequisites are still missing, so related workflows cannot be marked ready.')}
           </div>
         </div>
       </section>
@@ -714,7 +705,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       )}
 
       <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
-        <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '可用工作流', 'Ready Workflows')}</div>
+        <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '工作流环境', 'Workflow Environment')}</div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <WorkflowTile
             title={ui(isZh, '知识库文件', 'Knowledge files')}
@@ -733,7 +724,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           />
           <WorkflowTile
             title={ui(isZh, '文档工作', 'Document work')}
-            detail={detectedAppGroups.some(group => group.id === 'wps') ? ui(isZh, 'Office/WPS 工作流大概率可用。', 'Office/WPS workflow is likely available.') : ui(isZh, '最近扫描未检测到 Office/WPS 应用。', 'No Office/WPS app was detected in the latest scan.')}
+            detail={detectedAppGroups.some(group => group.id === 'wps') ? ui(isZh, '已检测到 Office/WPS；实际编辑与保存仍需任务验收。', 'Office/WPS was detected; actual editing and saving still require task verification.') : ui(isZh, '最近扫描未检测到 Office/WPS 应用。', 'No Office/WPS app was detected in the latest scan.')}
             ready={detectedAppGroups.some(group => group.id === 'wps')}
           />
           <WorkflowTile
@@ -748,7 +739,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           />
           <WorkflowTile
             title={ui(isZh, '音乐能力', 'Music playback')}
-            detail={detectedAppGroups.some(group => group.id === 'netease') ? ui(isZh, '已检测到音乐应用；Lumi 可以协同播放。', 'Music app detected; Lumi can coordinate playback.') : ui(isZh, '音乐能力仍可通过已配置的音乐服务工作。', 'Music playback can still work through configured music services.')}
+            detail={detectedAppGroups.some(group => group.id === 'netease') ? ui(isZh, '已检测到音乐应用；实际播放和控制仍需运行验收。', 'A music app was detected; playback and controls still require runtime verification.') : ui(isZh, '未检测到本地音乐应用；已配置服务不等于本地播放器已通过验收。', 'No local music app was detected; configured services do not prove that a local player has passed verification.')}
             ready={detectedAppGroups.some(group => group.id === 'netease')}
           />
         </div>

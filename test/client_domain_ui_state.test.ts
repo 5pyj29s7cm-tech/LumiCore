@@ -28,11 +28,13 @@ describe('personal and organization client state boundaries', () => {
   it('keeps host exploration local and recognizes the broader desktop tool set', () => {
     const routes = source('server/routes/plan_explore_routes.ts');
     const explorer = source('src/components/SystemExplorer.tsx');
+    const appCatalog = source('shared/system_apps.ts');
 
     expect(routes).toContain('requirePersonalSystemAdmin, requireLocalRequest');
-    expect(explorer).toContain('/workbuddy/i');
-    expect(explorer).toContain('/codex/i');
-    expect(explorer).toContain('/gstarcad/i');
+    expect(explorer).toContain("from '../../shared/system_apps'");
+    expect(appCatalog).toContain('/workbuddy/i');
+    expect(appCatalog).toContain('/codex/i');
+    expect(appCatalog).toContain('/gstarcad/i');
   });
 
   it('does not let organization-only presence states crash the personal indicator', async () => {

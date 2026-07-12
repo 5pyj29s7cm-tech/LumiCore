@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 import { readDB, writeDB } from "../../db_layer";
+import { isAppDiscoveryNoise } from "../../shared/system_apps";
 import { detectProfession, saveProfessionProfile } from "./professions";
 
 export interface SystemSnapshot {
@@ -99,7 +100,7 @@ function cleanAppName(raw: string): string | null {
   name = name.replace(/\s*\(\d+\)$/i, "");
   name = name.replace(/\s+/g, " ").trim();
   if (name.length < 2) return null;
-  if (NOISE_APP_NAME.test(name) || NOISE_APP_SEGMENT.test(name)) return null;
+  if (NOISE_APP_NAME.test(name) || NOISE_APP_SEGMENT.test(name) || isAppDiscoveryNoise(name)) return null;
   return name;
 }
 
