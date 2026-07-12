@@ -106,19 +106,65 @@ describe('semi-automated legal workflows', () => {
       const filingChecklistPath = path.join(dir, '01_filing-material-checklist.md');
       const authorizationChecklistPath = path.join(dir, '02_authorization-checklist.md');
       const evidenceMatrixPath = path.join(dir, '03_evidence-review-matrix.md');
+      const complaintPath = path.join(dir, '10_civil-complaint.md');
+      const elementComplaintPath = path.join(dir, '11_element-complaint.md');
+      const engagementPath = path.join(dir, '12_engagement-agreement.md');
+      const powerOfAttorneyPath = path.join(dir, '12_power-of-attorney.md');
+      const lawFirmLetterPath = path.join(dir, '12_law-firm-letter.md');
+      const serviceAddressPath = path.join(dir, '15_service-address-confirmation.md');
+      const evidenceCatalogPath = path.join(dir, '16_evidence-catalog.md');
+      const manifestPath = path.join(dir, '99_manifest.md');
 
       expect(output).toContain('诉讼文书包文件输出');
       expect(output).toContain('文书包总稿文件');
       expect(output).toContain('立案材料清单文件');
       expect(output).toContain('授权委托手续清单文件');
       expect(output).toContain('证据目录与三性矩阵文件');
+      expect(output).toContain('独立文书清单文件');
+      expect(output).toContain('DOCX 生成：全部成功');
       expect(fs.existsSync(packetPath)).toBe(true);
       expect(fs.existsSync(filingChecklistPath)).toBe(true);
       expect(fs.existsSync(authorizationChecklistPath)).toBe(true);
       expect(fs.existsSync(evidenceMatrixPath)).toBe(true);
+      expect(fs.existsSync(complaintPath)).toBe(true);
+      expect(fs.existsSync(elementComplaintPath)).toBe(true);
+      expect(fs.existsSync(engagementPath)).toBe(true);
+      expect(fs.existsSync(powerOfAttorneyPath)).toBe(true);
+      expect(fs.existsSync(lawFirmLetterPath)).toBe(true);
+      expect(fs.existsSync(serviceAddressPath)).toBe(true);
+      expect(fs.existsSync(evidenceCatalogPath)).toBe(true);
+      expect(fs.existsSync(manifestPath)).toBe(true);
       expect(fs.readFileSync(filingChecklistPath, 'utf8')).toContain('Filing Material Checklist');
       expect(fs.readFileSync(authorizationChecklistPath, 'utf8')).toContain('Authorization Checklist');
       expect(fs.readFileSync(evidenceMatrixPath, 'utf8')).toContain('Evidence Catalog And Three-Property Review');
+      const complaint = fs.readFileSync(complaintPath, 'utf8');
+      expect(complaint).toContain('民事起诉状（系统草稿）');
+      expect(complaint).toContain('待结合请求权基础检索并核验现行有效法律');
+      expect(complaint).toContain('legal_finalize_delivery_package');
+      expect(complaint).not.toMatch(/《[^》]+》第/);
+      expect(fs.readFileSync(elementComplaintPath, 'utf8')).toContain('要素式诉状（系统草稿）');
+      expect(fs.readFileSync(engagementPath, 'utf8')).toContain('委托代理合同（系统草稿）');
+      expect(fs.readFileSync(powerOfAttorneyPath, 'utf8')).toContain('特别授权');
+      expect(fs.readFileSync(lawFirmLetterPath, 'utf8')).toContain('律师事务所函（系统草稿）');
+      expect(fs.readFileSync(serviceAddressPath, 'utf8')).toContain('电子送达意愿');
+      expect(fs.readFileSync(evidenceCatalogPath, 'utf8')).toContain('原告证据目录（系统草稿）');
+      expect(fs.readFileSync(manifestPath, 'utf8')).toContain('尚未通过正式交付 gate');
+
+      for (const baseName of [
+        '00_litigation-packet',
+        '10_civil-complaint',
+        '11_element-complaint',
+        '12_engagement-agreement',
+        '12_power-of-attorney',
+        '12_law-firm-letter',
+        '15_service-address-confirmation',
+        '16_evidence-catalog',
+        '99_manifest',
+      ]) {
+        const docxPath = path.join(dir, `${baseName}.docx`);
+        expect(fs.existsSync(docxPath), `${baseName}.docx should exist`).toBe(true);
+        expect(fs.statSync(docxPath).size, `${baseName}.docx should not be empty`).toBeGreaterThan(1000);
+      }
 
       const LegalCases = await import('../server/org/legal_cases');
       const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
@@ -128,6 +174,56 @@ describe('semi-automated legal workflows', () => {
         && material.title.includes('半自动诉讼文书包')
         && material.localPath === packetPath
       ))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes separate defendant answer, cross-examination, procedural, and authorization documents', async () => {
+    const registry = createLegalRegistry();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_defendant_packet_'));
+
+    try {
+      const output = await registry.execute('legal_generate_litigation_packet', {
+        orgId: `test-legal-defendant-files-${Date.now()}`,
+        userId: 'vitest',
+        caseName: '被告独立文书输出测试案',
+        role: '被告',
+        caseType: '买卖合同纠纷',
+        court: '上海市黄浦区人民法院',
+        parties: '被告 Beta；原告 Alpha',
+        claims: '请求驳回原告缺乏事实和证据依据的诉讼请求',
+        facts: '被告认为货物存在质量问题，双方曾协商退货。',
+        evidence: '质量异议函；退货沟通记录；检测记录。',
+        opponentMaterials: '原告起诉状；合同复印件；送货单。',
+        outputDir: dir,
+      });
+
+      expect(output).toContain('DOCX 生成：全部成功');
+      const expected = [
+        ['20_statement-of-defense', '民事答辩状（系统草稿）'],
+        ['21_cross-examination-opinion', '质证意见（系统草稿）'],
+        ['22_procedural-defense-checklist', '程序抗辩检查表（系统草稿）'],
+        ['23_argument-outline', '代理词框架（系统草稿）'],
+        ['24_engagement-agreement', '委托代理合同（系统草稿）'],
+        ['24_power-of-attorney', '授权委托书（系统草稿）'],
+        ['24_law-firm-letter', '律师事务所函（系统草稿）'],
+        ['27_evidence-catalog', '被告证据目录与反证矩阵（系统草稿）'],
+      ];
+
+      for (const [baseName, heading] of expected) {
+        const markdownPath = path.join(dir, `${baseName}.md`);
+        const docxPath = path.join(dir, `${baseName}.docx`);
+        expect(fs.existsSync(markdownPath), `${baseName}.md should exist`).toBe(true);
+        expect(fs.readFileSync(markdownPath, 'utf8')).toContain(heading);
+        expect(fs.existsSync(docxPath), `${baseName}.docx should exist`).toBe(true);
+        expect(fs.statSync(docxPath).size, `${baseName}.docx should not be empty`).toBeGreaterThan(1000);
+      }
+
+      const answer = fs.readFileSync(path.join(dir, '20_statement-of-defense.md'), 'utf8');
+      expect(answer).toContain('逐项答辩意见');
+      expect(answer).toContain('待围绕抗辩要件检索并核验现行有效法律');
+      expect(answer).not.toMatch(/《[^》]+》第/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

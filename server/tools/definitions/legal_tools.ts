@@ -45,6 +45,25 @@ async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Pro
   return response.text || null;
 }
 
+async function runLegalLLMWithin(
+  prompt: string,
+  context: any,
+  maxTokens: number,
+  timeoutMs: number,
+): Promise<string | null> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      runLegalLLM(prompt, context, maxTokens),
+      new Promise<null>(resolve => {
+        timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
 const EXTERNAL_LEGAL_SOURCES = [
   {
     label: '国家法律法规数据库',
@@ -2977,6 +2996,369 @@ ${statuteRefs || '未找到直接相关法条'}
 
 // ── legal_generate_litigation_packet ────────────────────────────────────
 
+interface LitigationPacketDraft {
+  baseName: string;
+  label: string;
+  markdown: string;
+}
+
+function litigationDraftValue(value: string, label: string): string {
+  return value || `［${label}待补充］`;
+}
+
+function litigationDraftBoundary(caseName: string): string {
+  return [
+    '',
+    '## 状态与交付边界',
+    '',
+    `- 本文件属于“${caseName}”系统草稿，只能作为律师工作底稿。`,
+    '- 当事人身份、事实、请求、金额、证据、授权范围、签字盖章和提交信息均须逐项人工确认。',
+    '- 法律依据必须先检索并核验现行有效版本；未核验内容不得转为正式文书。',
+    '- 正式交付前必须调用 `legal_finalize_delivery_package`，通过现行有效法律、引用来源和法律分析完整性硬门槛。',
+  ].join('\n');
+}
+
+function buildLitigationPacketDrafts(
+  args: Record<string, any>,
+  role: '原告' | '被告' | '通用',
+  evidenceReviewTable: string,
+  evidenceGapList: string,
+): LitigationPacketDraft[] {
+  const caseName = textArg(args, 'caseName') || '未命名案件';
+  const caseType = litigationDraftValue(textArg(args, 'caseType'), '案由/案件类型');
+  const court = litigationDraftValue(textArg(args, 'court'), '受理/审理法院');
+  const parties = litigationDraftValue(textArg(args, 'parties'), '当事人身份信息');
+  const claims = litigationDraftValue(textArg(args, 'claims') || textArg(args, 'objective'), '诉讼请求或抗辩目标');
+  const facts = litigationDraftValue(textArg(args, 'facts'), '案件事实与时间线');
+  const evidence = litigationDraftValue(textArg(args, 'evidence'), '证据材料');
+  const opponentMaterials = litigationDraftValue(textArg(args, 'opponentMaterials'), '对方起诉状及证据材料');
+  const lawFirmName = litigationDraftValue(textArg(args, 'lawFirmName'), '律师事务所名称');
+  const lawyerName = litigationDraftValue(textArg(args, 'lawyerName'), '承办律师姓名');
+  const boundary = litigationDraftBoundary(caseName);
+
+  const common: LitigationPacketDraft[] = [
+    {
+      baseName: '01_filing-material-checklist',
+      label: '立案/应诉材料清单',
+      markdown: [
+        `# ${caseName} Filing Material Checklist`,
+        '',
+        '| No. | Material | Use | Review point |',
+        '| --- | --- | --- | --- |',
+        '| 1 | Complaint / application / answer materials | Court filing or defense response | Lawyer review, signature, seal |',
+        '| 2 | Party identity materials | Subject qualification | ID, business license, legal representative certificate |',
+        '| 3 | Authorization materials | Attorney authority | Engagement, power of attorney, law firm letter, lawyer certificate |',
+        '| 4 | Evidence catalog and copies | Proof package | Originals, page numbers, copy count, proof purpose |',
+        '| 5 | Service address / fee / preservation materials | Court platform fields | Manual confirmation before submission |',
+        '',
+        `- 拟提交法院：${court}`,
+        `- 案由：${caseType}`,
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '02_authorization-checklist',
+      label: '授权委托手续清单',
+      markdown: [
+        `# ${caseName} Authorization Checklist`,
+        '',
+        '- 委托代理合同：代理阶段、工作范围、费用、解除条件和保密条款待确认。',
+        '- 授权委托书：一般授权和特别授权事项逐项勾选，不得概括推定。',
+        '- 律师事务所函：案号、法院、承办律师和有效期待确认。',
+        '- 律师执业证复印件及年度考核状态。',
+        '- 当事人身份证明、营业执照、法定代表人身份证明。',
+        '- 全部签字、盖章、日期、份数和扫描件清晰度。',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '03_evidence-review-matrix',
+      label: '证据目录与三性审查矩阵',
+      markdown: [
+        `# ${caseName} Evidence Catalog And Three-Property Review`,
+        '',
+        '| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        evidenceReviewTable,
+        '',
+        '## Evidence Gaps',
+        evidenceGapList,
+        boundary,
+      ].join('\n'),
+    },
+  ];
+
+  const authorizationDrafts = (prefix: string): LitigationPacketDraft[] => [
+    {
+      baseName: `${prefix}_engagement-agreement`,
+      label: '委托代理合同',
+      markdown: [
+        '# 委托代理合同（系统草稿）',
+        '',
+        `- 案件：${caseName}`,
+        `- 甲方/委托人：${parties}`,
+        `- 乙方：${lawFirmName}`,
+        `- 委托事项：就${caseName}（${caseType}）提供诉讼代理服务。`,
+        '- 代理阶段：［一审/二审/执行/再审/其他，待勾选］',
+        '- 工作范围：材料审查、法律检索、文书起草、立案/应诉协作、出庭代理及约定事项。',
+        '- 律师费及支付：［金额、计费方式、税费、差旅费、支付节点待双方确认］',
+        '- 双方义务：委托人如实完整提供材料；律师依法、勤勉、保密并及时报告进展。',
+        '- 解除与终止：［解除条件、费用结算、材料返还待双方确认］',
+        '- 争议解决：［协商/诉讼/仲裁条款待双方确认］',
+        '',
+        '甲方签字/盖章：［待签署］',
+        '',
+        '乙方盖章：［待签署］',
+        '',
+        '日期：［待填写］',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: `${prefix}_power-of-attorney`,
+      label: '授权委托书',
+      markdown: [
+        '# 授权委托书（系统草稿）',
+        '',
+        `委托人：${parties}`,
+        '',
+        `受托人：${lawyerName}，${lawFirmName}律师。`,
+        '',
+        `现委托上述受托人在${caseName}（${caseType}）中担任诉讼代理人。`,
+        '',
+        '## 授权范围',
+        '',
+        '- 一般代理：代为调查取证、查阅材料、参加庭审、陈述事实和法律意见、接收普通程序性材料。',
+        '- 特别授权：［代为承认、放弃、变更诉讼请求，进行和解，提起反诉或上诉，申请执行，代收法律文书或款项等必须逐项勾选］',
+        '- 授权期限：［起止日期或至本代理阶段终结，待确认］',
+        '',
+        '委托人签字/盖章：［待签署］',
+        '',
+        '日期：［待填写］',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: `${prefix}_law-firm-letter`,
+      label: '律师事务所函',
+      markdown: [
+        '# 律师事务所函（系统草稿）',
+        '',
+        `${court}：`,
+        '',
+        `${lawFirmName}接受委托，指派${lawyerName}律师担任${caseName}（${caseType}）的诉讼代理人。`,
+        '',
+        '请依法办理相关诉讼手续。具体代理权限以经委托人签署的授权委托书为准。',
+        '',
+        `律师事务所：${lawFirmName}`,
+        '',
+        '（盖章处）',
+        '',
+        '日期：［待填写］',
+        boundary,
+      ].join('\n'),
+    },
+  ];
+
+  const plaintiff: LitigationPacketDraft[] = [
+    {
+      baseName: '10_civil-complaint',
+      label: '民事起诉状',
+      markdown: [
+        '# 民事起诉状（系统草稿）',
+        '',
+        `## 当事人\n${parties}`,
+        '',
+        `## 案由\n${caseType}`,
+        '',
+        `## 诉讼请求\n${claims}`,
+        '',
+        `## 事实与理由\n${facts}`,
+        '',
+        `## 证据和证据来源\n${evidence}`,
+        '',
+        '## 法律依据',
+        '- ［待结合请求权基础检索并核验现行有效法律、司法解释和类案，不得凭模型记忆补写］',
+        '',
+        `此致\n${court}`,
+        '',
+        '具状人：［待签字/盖章］',
+        '',
+        '日期：［待填写］',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '11_element-complaint',
+      label: '要素式诉状',
+      markdown: [
+        '# 要素式诉状（系统草稿）',
+        '',
+        '| 要素 | 已有内容 | 证据绑定/待补项 |',
+        '| --- | --- | --- |',
+        `| 当事人主体 | ${parties.replace(/\|/g, '\\|')} | 身份证明、主体资格、送达信息待核验 |`,
+        `| 案由与法律关系 | ${caseType.replace(/\|/g, '\\|')} | 请求权基础待检索、待核验 |`,
+        `| 诉讼请求 | ${claims.replace(/\|/g, '\\|')} | 金额、计算方式、履行方式待核对 |`,
+        `| 主要事实 | ${facts.replace(/\|/g, '\\|')} | 每项事实须绑定证据，缺失处标记待补证 |`,
+        `| 现有证据 | ${evidence.replace(/\|/g, '\\|')} | 原件、来源、页码、三性和证明目的待复核 |`,
+        `| 管辖 | ${court.replace(/\|/g, '\\|')} | 级别、地域、专属/协议管辖待核验 |`,
+        '| 法律依据 | 待检索/待核验 | 正式交付前通过现行有效法律 gate |',
+        boundary,
+      ].join('\n'),
+    },
+    ...authorizationDrafts('12'),
+    {
+      baseName: '15_service-address-confirmation',
+      label: '送达地址确认底稿',
+      markdown: [
+        '# 送达地址确认底稿（系统草稿）',
+        '',
+        `- 案件：${caseName}`,
+        `- 当事人：${parties}`,
+        '- 收件人：［待填写］',
+        '- 送达地址及邮编：［待填写］',
+        '- 手机号码：［待填写并核验］',
+        '- 电子邮箱/电子送达账号：［待填写并单独确认电子送达意愿］',
+        '- 地址变更告知义务和送达后果：［由律师向当事人说明并确认］',
+        '',
+        '确认人签字/盖章：［待签署］',
+        '',
+        '日期：［待填写］',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '16_evidence-catalog',
+      label: '原告证据目录',
+      markdown: [
+        '# 原告证据目录（系统草稿）',
+        '',
+        '| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        evidenceReviewTable,
+        '',
+        '## 待补证与风险',
+        evidenceGapList,
+        boundary,
+      ].join('\n'),
+    },
+  ];
+
+  const defendant: LitigationPacketDraft[] = [
+    {
+      baseName: '20_statement-of-defense',
+      label: '民事答辩状',
+      markdown: [
+        '# 民事答辩状（系统草稿）',
+        '',
+        `## 当事人\n${parties}`,
+        '',
+        `## 对方诉请及材料\n${opponentMaterials}`,
+        '',
+        `## 答辩目标\n${claims}`,
+        '',
+        `## 答辩事实\n${facts}`,
+        '',
+        `## 我方证据\n${evidence}`,
+        '',
+        '## 逐项答辩意见',
+        '- ［按对方每项诉讼请求、事实主张和证据编号逐项回应；未取得材料的部分标记待补充］',
+        '',
+        '## 法律依据',
+        '- ［待围绕抗辩要件检索并核验现行有效法律、司法解释和类案］',
+        '',
+        `此致\n${court}`,
+        '',
+        '答辩人：［待签字/盖章］',
+        '',
+        '日期：［待填写］',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '21_cross-examination-opinion',
+      label: '质证意见',
+      markdown: [
+        '# 质证意见（系统草稿）',
+        '',
+        `## 对方材料范围\n${opponentMaterials}`,
+        '',
+        '| 对方证据编号 | 证据名称 | 真实性意见 | 合法性意见 | 关联性意见 | 对证明目的意见 | 反证/补证 | 待核验项 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| ［待对应］ | ［待填写］ | ［认可/不认可及理由］ | ［取得方式、形式、程序］ | ［与待证事实关系］ | ［能否达到证明目的］ | ［我方对应材料］ | ［原件、完整性、形成时间等］ |',
+        '',
+        '## 我方材料参考',
+        evidence,
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '22_procedural-defense-checklist',
+      label: '程序抗辩检查表',
+      markdown: [
+        '# 程序抗辩检查表（系统草稿）',
+        '',
+        '| 检查项 | 初步状态 | 所需材料 | 处理动作 |',
+        '| --- | --- | --- | --- |',
+        '| 级别/地域/专属管辖 | 待核验 | 合同、履行地、住所地、管辖条款 | 在法定期限内决定是否提出异议 |',
+        '| 仲裁协议 | 待核验 | 合同正本、补充协议 | 核验有效性和适用范围 |',
+        '| 诉讼时效/除斥期间 | 待核验 | 履行期限、催告、确认债务、送达凭证 | 建立时间线并计算 |',
+        '| 原告/被告主体资格 | 待核验 | 身份材料、工商档案、权利转让文件 | 核验适格性 |',
+        '| 重复起诉/既判力 | 待核验 | 既往案件材料、裁判文书 | 核对当事人、标的、请求 |',
+        '| 送达和举证期限 | 待核验 | 送达凭证、法院通知 | 记录期限并设置提醒 |',
+        boundary,
+      ].join('\n'),
+    },
+    {
+      baseName: '23_argument-outline',
+      label: '代理词框架',
+      markdown: [
+        '# 代理词框架（系统草稿）',
+        '',
+        `- 案件：${caseName}`,
+        `- 审理法院：${court}`,
+        `- 我方核心目标：${claims}`,
+        '',
+        '## 一、案件立场与结论请求',
+        '［待在完成事实、证据和法律核验后填写］',
+        '',
+        '## 二、争议焦点',
+        '［从起诉状、答辩状、证据和庭审笔录中提炼］',
+        '',
+        '## 三、事实与证据评价',
+        facts,
+        '',
+        '## 四、法律适用与类案补强',
+        '［按最高人民法院、高级人民法院、中级人民法院、基层人民法院顺序检索；逐条登记来源并核验］',
+        '',
+        '## 五、结论',
+        '［待完成事实适用分析后形成，不得预设裁判结果］',
+        boundary,
+      ].join('\n'),
+    },
+    ...authorizationDrafts('24'),
+    {
+      baseName: '27_evidence-catalog',
+      label: '被告证据目录与反证矩阵',
+      markdown: [
+        '# 被告证据目录与反证矩阵（系统草稿）',
+        '',
+        '| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        evidenceReviewTable,
+        '',
+        '## 待补证与风险',
+        evidenceGapList,
+        boundary,
+      ].join('\n'),
+    },
+  ];
+
+  if (role === '原告') return [...common, ...plaintiff];
+  if (role === '被告') return [...common, ...defendant];
+  return [...common, ...plaintiff, ...defendant];
+}
+
 async function generateLitigationPacketHandler(args: Record<string, any>, context?: any): Promise<string> {
   const role = roleLabel(textArg(args, 'role'));
   const caseName = textArg(args, 'caseName') || '未命名案件';
@@ -2989,76 +3371,119 @@ async function generateLitigationPacketHandler(args: Record<string, any>, contex
   const evidenceReviewTable = formatEvidenceReviewRows(evidenceReviewRows);
   const evidenceGapList = formatEvidenceGapList(evidenceReviewRows);
   const writeFiles = args.writeFiles !== false && args.writeFile !== false;
-  const finish = (report: string) => {
+  const includeDocx = args.includeDocx !== false;
+  const packetDrafts = buildLitigationPacketDrafts(args, role, evidenceReviewTable, evidenceGapList);
+  const finish = async (report: string) => {
     let packetPath = '';
     let filingChecklistPath = '';
     let authorizationChecklistPath = '';
     let evidenceMatrixPath = '';
+    let manifestPath = '';
+    let outputDir = '';
+    const markdownPaths = new Map<string, string>();
+    const docxPaths: string[] = [];
+    const docxFailures: string[] = [];
+    const boundary = litigationDraftBoundary(caseName);
+    const normalizedReport = report.includes('legal_finalize_delivery_package')
+      ? report
+      : `${report.trim()}\n${boundary}`;
+
     if (writeFiles) {
-      const outputDir = resolveWritableOutputDir(
+      outputDir = resolveWritableOutputDir(
         textArg(args, 'outputDir'),
         ensureLegalDeliveryRoot(orgId),
         caseName,
         'litigation_packet',
       );
-      packetPath = path.join(outputDir, '00_litigation-packet.md');
-      filingChecklistPath = path.join(outputDir, '01_filing-material-checklist.md');
-      authorizationChecklistPath = path.join(outputDir, '02_authorization-checklist.md');
-      evidenceMatrixPath = path.join(outputDir, '03_evidence-review-matrix.md');
-      fs.writeFileSync(packetPath, report, 'utf-8');
-      fs.writeFileSync(filingChecklistPath, [
-        `# ${caseName} Filing Material Checklist`,
+      const documents: LitigationPacketDraft[] = [
+        {
+          baseName: '00_litigation-packet',
+          label: '诉讼文书包总稿',
+          markdown: normalizedReport,
+        },
+        ...packetDrafts,
+      ];
+
+      for (const document of documents) {
+        const markdownPath = path.join(outputDir, `${document.baseName}.md`);
+        fs.writeFileSync(markdownPath, document.markdown, 'utf-8');
+        markdownPaths.set(document.baseName, markdownPath);
+
+        if (includeDocx) {
+          const docxPath = path.join(outputDir, `${document.baseName}.docx`);
+          try {
+            await writeDocxFromMarkdown(document.markdown, docxPath);
+            docxPaths.push(docxPath);
+          } catch (err: any) {
+            docxFailures.push(`${document.label}: ${err?.message || String(err)}`);
+          }
+        }
+      }
+
+      const manifestMarkdown = [
+        `# ${caseName} 诉讼文书包清单`,
         '',
-        '| No. | Material | Use | Review point |',
-        '| --- | --- | --- | --- |',
-        '| 1 | Complaint / application / answer materials | Court filing or defense response | Lawyer review, signature, seal |',
-        '| 2 | Party identity materials | Subject qualification | ID, business license, legal representative certificate |',
-        '| 3 | Authorization materials | Attorney authority | Engagement, power of attorney, law firm letter, lawyer certificate |',
-        '| 4 | Evidence catalog and copies | Proof package | Originals, page numbers, copy count, proof purpose |',
-        '| 5 | Service address / fee / preservation materials | Court platform fields | Manual confirmation before submission |',
+        `- 我方身份：${role}`,
+        `- 输出目录：${outputDir}`,
+        `- 生成时间：${new Date().toISOString()}`,
+        '- 交付状态：系统草稿，尚未通过正式交付 gate。',
         '',
-        'Boundary: Lumi prepares and names materials only; court submission, signature, seal, payment, service confirmation, withdrawal, and settlement commitment require lawyer or party confirmation.',
-      ].join('\n'), 'utf-8');
-      fs.writeFileSync(authorizationChecklistPath, [
-        `# ${caseName} Authorization Checklist`,
+        '| 序号 | 文书 | Markdown | DOCX | 状态 |',
+        '| --- | --- | --- | --- | --- |',
+        ...documents.map((document, index) => {
+          const markdownFile = `${document.baseName}.md`;
+          const docxFile = `${document.baseName}.docx`;
+          const hasDocx = docxPaths.some(filePath => path.basename(filePath) === docxFile);
+          return `| ${index + 1} | ${document.label} | ${markdownFile} | ${includeDocx ? (hasDocx ? docxFile : '生成失败') : '未请求'} | 待律师复核 |`;
+        }),
         '',
-        '- Engagement / retainer key terms',
-        '- Power of attorney scope and special authorization items',
-        '- Law firm letter',
-        '- Lawyer certificate copy',
-        '- Party identity / business license / legal representative certificate',
-        '- Signature and seal status',
+        '## 正式交付前必经步骤',
         '',
-        'All authorization scope and signature/seal status must be reviewed manually.',
-      ].join('\n'), 'utf-8');
-      fs.writeFileSync(evidenceMatrixPath, [
-        `# ${caseName} Evidence Catalog And Three-Property Review`,
-        '',
-        '| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |',
-        '| --- | --- | --- | --- | --- | --- | --- | --- |',
-        evidenceReviewTable,
-        '',
-        '## Evidence Gaps',
-        evidenceGapList,
-      ].join('\n'), 'utf-8');
+        '1. 补齐当事人、事实、请求、证据、金额、法院和授权信息。',
+        '2. 完成法律检索、法条解释、类案来源登记、证据三性和证明目的复核。',
+        '3. 对拟交付文书调用 `legal_finalize_delivery_package`；gate 未通过不得标记正式版或对外提交。',
+        ...(docxFailures.length ? ['', '## DOCX 生成异常', '', ...docxFailures.map(item => `- ${item}`)] : []),
+      ].join('\n');
+
+      manifestPath = path.join(outputDir, '99_manifest.md');
+      fs.writeFileSync(manifestPath, manifestMarkdown, 'utf-8');
+      if (includeDocx) {
+        const manifestDocxPath = path.join(outputDir, '99_manifest.docx');
+        try {
+          await writeDocxFromMarkdown(manifestMarkdown, manifestDocxPath);
+          docxPaths.push(manifestDocxPath);
+        } catch (err: any) {
+          docxFailures.push(`诉讼文书包清单: ${err?.message || String(err)}`);
+        }
+      }
+
+      packetPath = markdownPaths.get('00_litigation-packet') || '';
+      filingChecklistPath = markdownPaths.get('01_filing-material-checklist') || '';
+      authorizationChecklistPath = markdownPaths.get('02_authorization-checklist') || '';
+      evidenceMatrixPath = markdownPaths.get('03_evidence-review-matrix') || '';
     }
     const reportWithFiles = packetPath
-      ? `${report}
+      ? `${normalizedReport}
 
 ## 七、诉讼文书包文件输出
 - 文书包总稿文件：${packetPath}
 - 立案材料清单文件：${filingChecklistPath}
 - 授权委托手续清单文件：${authorizationChecklistPath}
-- 证据目录与三性矩阵文件：${evidenceMatrixPath}`
-      : report;
+- 证据目录与三性矩阵文件：${evidenceMatrixPath}
+- 独立文书清单文件：${manifestPath}
+- 输出目录：${outputDir}
+- Markdown 文件：${markdownPaths.size + 1} 份
+- DOCX 文件：${docxPaths.length} 份
+${!includeDocx ? '- DOCX 生成：未请求' : docxFailures.length ? `- DOCX 生成异常：${docxFailures.join('；')}` : '- DOCX 生成：全部成功'}`
+      : normalizedReport;
     return appendLegalWorkProductArchiveSection(reportWithFiles, args, context, {
-    caseName,
-    title: `${caseName}半自动诉讼文书包`,
-    type: 'pleading',
-    cause: textArg(args, 'caseType') || '诉讼文书包',
-    court: textArg(args, 'court'),
-    localPath: packetPath || undefined,
-  });
+      caseName,
+      title: `${caseName}半自动诉讼文书包`,
+      type: 'pleading',
+      cause: textArg(args, 'caseType') || '诉讼文书包',
+      court: textArg(args, 'court'),
+      localPath: packetPath || undefined,
+    });
   };
 
   const prompt = `你是一名律所诉讼支持律师。请生成半自动诉讼文书包草稿，所有内容均用于律师复核，不得宣称可直接提交。
@@ -3087,7 +3512,7 @@ ${evidenceReviewTable}
 请用中文 Markdown 输出。`;
 
   try {
-    const text = await runLegalLLM(prompt, context, 3000);
+    const text = await runLegalLLMWithin(prompt, context, 1800, 8000);
     if (text) return finish(sanitizeLegalWorkProductOutput(text));
   } catch { /* fall through */ }
 
@@ -4946,6 +5371,32 @@ async function prepareExternalBrowserWorkspaceHandler(args: Record<string, any>,
 
 // ── legal_verify_citation ───────────────────────────────────────────────
 
+function formatCitationVerificationResult(check: CitationCheck): string {
+  const verificationLabel = check.verificationStatus === 'verified'
+    ? '权威快照有效'
+    : check.verificationStatus === 'expired'
+      ? '权威快照已过期，正式交付阻断'
+      : check.verificationStatus === 'repealed'
+        ? '已确认废止，正式交付阻断'
+        : check.verificationStatus === 'missing'
+          ? '缺少权威条文快照，正式交付阻断'
+          : check.verificationStatus === 'not_found'
+            ? '未找到或超出已核验条文范围，正式交付阻断'
+            : '不适用';
+  return [
+    check.citation,
+    `  类型: ${check.type === 'statute' ? '法条引用' : '案例引用'}`,
+    `  存在: ${check.exists ? '是' : '否'}`,
+    `  有效: ${check.isEffective === null ? '尚未确认' : check.isEffective ? '现行有效' : '已废止'}`,
+    `  核验状态: ${verificationLabel}`,
+    check.verifiedAt ? `  核验日期: ${check.verifiedAt}` : '',
+    check.reviewAfter ? `  复核期限: ${check.reviewAfter}` : '',
+    `  ${check.detail}`,
+    `  来源: ${check.source || 'N/A'}`,
+    check.sourceUrl ? `  官方链接: ${check.sourceUrl}` : '',
+  ].filter(Boolean).join('\n');
+}
+
 async function verifyCitationHandler(args: Record<string, any>, context?: any): Promise<string> {
   const citation = args.citation as string;
   const text = args.text as string;
@@ -4954,14 +5405,12 @@ async function verifyCitationHandler(args: Record<string, any>, context?: any): 
   if (text) {
     const checks = verifyMultipleCitations(text, orgId);
     if (checks.length === 0) return '未在文本中检测到法条引用（《XX法》格式）或案号引用。';
-    return checks.map(c =>
-      `${c.citation}\n  类型: ${c.type === 'statute' ? '法条引用' : '案例引用'}\n  存在: ${c.exists ? '是' : '否'}\n  有效: ${c.isEffective === null ? '不适用' : c.isEffective ? '现行有效' : '已废止'}\n  ${c.detail}\n  来源: ${c.source || 'N/A'}`,
-    ).join('\n\n');
+    return checks.map(formatCitationVerificationResult).join('\n\n');
   }
 
   if (citation) {
     const check = verifyCitation(citation, orgId);
-    return `${check.citation}\n  类型: ${check.type === 'statute' ? '法条引用' : '案例引用'}\n  存在: ${check.exists ? '是' : '否'}\n  有效: ${check.isEffective === null ? '不适用' : check.isEffective ? '现行有效' : '已废止'}\n  ${check.detail}\n  来源: ${check.source || 'N/A'}`;
+    return formatCitationVerificationResult(check);
   }
 
   return '请提供citation（单个引用）或text（批量验证）参数。';
@@ -5388,8 +5837,11 @@ export function registerLegalTools(registry: ToolRegistry): void {
         facts: { type: 'string', description: '案件事实和时间线' },
         evidence: { type: 'string', description: '已有证据材料摘要' },
         opponentMaterials: { type: 'string', description: '对方起诉状、证据或其他材料摘要' },
+        lawFirmName: { type: 'string', description: '律师事务所名称；未提供时在委托手续中保留待补字段' },
+        lawyerName: { type: 'string', description: '承办律师姓名；未提供时在委托手续中保留待补字段' },
         outputDir: { type: 'string', description: '可选输出目录；默认写入 data/legal_delivery/{orgId}' },
         writeFiles: { type: 'boolean', description: '是否写入诉讼文书包 Markdown 文件，默认 true' },
+        includeDocx: { type: 'boolean', description: '是否为总稿和每份独立文书同时生成可编辑 DOCX，默认 true' },
         persistCase: { type: 'boolean', description: '是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭' },
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
