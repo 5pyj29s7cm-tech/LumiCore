@@ -363,7 +363,7 @@ apiRouter.get('/ncm/login/status', async (_req, res) => {
 }
 
 // ── Infrastructure ──
-setupMessaging(apiRouter, llm);
+setupMessaging(apiRouter, llm, io);
 setupMcpServer(app, server, io, llm, path.join(__dirname, 'server'));
 initSocketRuntime({ io, jwtSecret: JWT_SECRET, llm });
 

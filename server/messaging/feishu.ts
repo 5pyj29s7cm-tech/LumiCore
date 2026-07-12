@@ -125,6 +125,7 @@ export class FeishuAdapter implements MessageAdapter {
       userName: event?.sender?.sender_id?.open_id || 'FeishuUser',
       chatId,
       chatType: isGroup ? 'group' : 'private',
+      threadId: message.thread_id || message.root_id || message.parent_id || undefined,
       messageId: message.message_id || `${Date.now()}`,
       text: textContent,
       attachments: attachments.length > 0 ? attachments : undefined,

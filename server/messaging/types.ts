@@ -11,6 +11,7 @@ export interface IncomingMessage {
   userName: string;        // display name
   chatId: string;          // conversation/group ID
   chatType: 'private' | 'group';
+  threadId?: string;       // platform thread/topic/root-message ID
   messageId: string;       // platform message ID
   text: string;            // plain text content
   attachments?: IncomingAttachment[];

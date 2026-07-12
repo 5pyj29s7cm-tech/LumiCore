@@ -41,6 +41,7 @@ describe('messaging adapter boundaries', () => {
         message_id: 'om-group',
         chat_id: 'oc-group',
         chat_type: 'group',
+        root_id: 'om-thread-root',
         message_type: 'text',
         content: JSON.stringify({ text: '大家好' }),
         create_time: String(Date.now()),
@@ -48,7 +49,7 @@ describe('messaging adapter boundaries', () => {
     });
 
     expect(privateMessage).toMatchObject({ chatType: 'private', text: '你好', userId: 'ou-user' });
-    expect(groupMessage).toMatchObject({ chatType: 'group', text: '大家好', userId: 'ou-user' });
+    expect(groupMessage).toMatchObject({ chatType: 'group', threadId: 'om-thread-root', text: '大家好', userId: 'ou-user' });
   });
 
   it('parses WeCom file callbacks into downloadable attachments', () => {

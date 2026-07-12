@@ -7,6 +7,7 @@ import { socketService } from '../services/socketService';
 import { saveServerKeys } from '../services/settingsKeys';
 import { apiFetch } from '../services/apiClient';
 import { getDomainReconciliation } from '../lib/domainSession';
+import { mergeNotificationState, notificationClearStorageKey } from '../lib/notificationState';
 
 interface UserProfile {
   uid: string;
@@ -577,17 +578,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Load persisted notifications from server
         try {
           const notifData = await notificationService.fetchNotifications();
-          if (notifData.notifications?.length > 0) {
-            setNotifications(prev => {
-              const existingIds = new Set(prev.map(n => n.id));
-              const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
-              const newNotifs = notifData.notifications.filter((n: any) =>
-                !existingIds.has(n.id) &&
-                (proactiveGreetingEnabled || n.type !== 'greeting')
-              );
-              return [...newNotifs, ...prev].slice(0, 50);
-            });
-          }
+          const clearKey = notificationClearStorageKey(String(customAuth.user.uid || ''));
+          const clearedAt = Number(localStorage.getItem(clearKey) || 0);
+          const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
+          setNotifications(prev => mergeNotificationState(
+            prev,
+            Array.isArray(notifData.notifications) ? notifData.notifications as NotificationItem[] : [],
+            { clearedAt, allowGreeting: proactiveGreetingEnabled, limit: 50 },
+          ));
         } catch {}
         // Load tool overrides from server
         try {
@@ -777,10 +775,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const markAllNotificationsRead = () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    void notificationService.markAllNotificationsRead().catch(err => {
+      console.warn('Failed to persist notification read state:', err);
+    });
   };
 
   const clearNotifications = () => {
+    const clearedAt = Date.now();
+    if (user?.uid) {
+      localStorage.setItem(notificationClearStorageKey(user.uid), String(clearedAt));
+    }
     setNotifications([]);
+    void notificationService.clearAllNotifications().catch(err => {
+      console.warn('Failed to clear persisted notifications:', err);
+      toast.error('Notifications were hidden locally, but server cleanup will retry later.');
+    });
   };
 
   const setToolOverride = (name: string, override: ToolOverride) => {

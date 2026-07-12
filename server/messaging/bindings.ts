@@ -5,6 +5,7 @@ import { getDataPath } from '../config/data_path';
 import { getMember, getOrgById } from '../org/db';
 
 export type MessagingPlatformId = 'feishu' | 'wechat' | 'wecom';
+export type MessagingBindingDomain = 'personal' | 'work';
 
 export interface MessagingBinding {
   id: string;
@@ -14,18 +15,25 @@ export interface MessagingBinding {
   chatType?: 'private' | 'group';
   lumiUserId: string;
   orgId: string;
+  domain: MessagingBindingDomain;
   createdAt: string;
   updatedAt: string;
 }
 
-interface BindingCode {
+export interface BindingCode {
   code: string;
   platform: MessagingPlatformId;
   lumiUserId: string;
   orgId: string;
+  domain: MessagingBindingDomain;
   expiresAt: string;
   createdAt: string;
 }
+
+export type MessagingBindingCommand =
+  | { kind: 'bind'; code: string }
+  | { kind: 'status' }
+  | { kind: 'invalid' };
 
 interface StoreShape {
   bindings: MessagingBinding[];
@@ -43,8 +51,16 @@ function readStore(): StoreShape {
     if (!fs.existsSync(STORE_PATH)) return { bindings: [], codes: [] };
     const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
     return {
-      bindings: Array.isArray(parsed?.bindings) ? parsed.bindings : [],
-      codes: Array.isArray(parsed?.codes) ? parsed.codes : [],
+      bindings: Array.isArray(parsed?.bindings) ? parsed.bindings.map((item: any) => ({
+        ...item,
+        orgId: String(item?.orgId || ''),
+        domain: item?.domain === 'personal' || !item?.orgId ? 'personal' : 'work',
+      })) : [],
+      codes: Array.isArray(parsed?.codes) ? parsed.codes.map((item: any) => ({
+        ...item,
+        orgId: String(item?.orgId || ''),
+        domain: item?.domain === 'personal' || !item?.orgId ? 'personal' : 'work',
+      })) : [],
     };
   } catch {
     return { bindings: [], codes: [] };
@@ -59,7 +75,28 @@ function writeStore(store: StoreShape) {
 }
 
 function makeCode() {
-  return randomBytes(6).toString('base64url').slice(0, 8).toUpperCase();
+  // Hex keeps future codes copy-safe across chat clients while retaining 48 bits
+  // of entropy for a short-lived one-time code.
+  return randomBytes(6).toString('hex').toUpperCase();
+}
+
+export function parseMessagingBindingCommand(text: string): MessagingBindingCommand | null {
+  const normalized = String(text || '').trim();
+  if (!normalized) return null;
+
+  const codeMatch = normalized.match(
+    /^(?:绑定|bind)\s*(?:Lumi|露米)?\s*([A-Z0-9_-]{4,16})\s*[。.!！]?$/i,
+  );
+  if (codeMatch) return { kind: 'bind', code: codeMatch[1].toUpperCase() };
+
+  if (/^(?:我)?\s*(?:(?:已经|已|现在|是否|有没有)\s*)?绑定(?:成功|完成|好了|好)?(?:了|吗|了吗|没有)?\s*[?？。.!！]*$/i.test(normalized)) {
+    return { kind: 'status' };
+  }
+
+  if (/^(?:绑定|bind)\s*(?:lumi(?:\s|$)|露米(?:\s|$))/i.test(normalized)) {
+    return { kind: 'invalid' };
+  }
+  return null;
 }
 
 function pruneExpiredCodes(store: StoreShape) {
@@ -67,16 +104,25 @@ function pruneExpiredCodes(store: StoreShape) {
   store.codes = store.codes.filter(item => item.expiresAt > ts);
 }
 
-export function createBindingCode(platform: MessagingPlatformId, lumiUserId: string, orgId = ''): BindingCode {
-  if (!orgId) {
-    throw new Error('Choose an organization before creating a messaging binding');
-  }
-  const membership = getMember(orgId, lumiUserId);
-  if (!membership || membership.status !== 'active') {
-    throw new Error('User is not an active member of this organization');
-  }
-  if (!orgId || !getOrgById(orgId)) {
-    throw new Error('No organization available for binding');
+export function createBindingCode(
+  platform: MessagingPlatformId,
+  lumiUserId: string,
+  orgId = '',
+  domain: MessagingBindingDomain = 'work',
+): BindingCode {
+  if (domain === 'work') {
+    if (!orgId) {
+      throw new Error('Choose an organization before creating a messaging binding');
+    }
+    const membership = getMember(orgId, lumiUserId);
+    if (!membership || membership.status !== 'active') {
+      throw new Error('User is not an active member of this organization');
+    }
+    if (!getOrgById(orgId)) {
+      throw new Error('No organization available for binding');
+    }
+  } else if (orgId) {
+    throw new Error('Personal messaging bindings cannot target an organization');
   }
   const store = readStore();
   pruneExpiredCodes(store);
@@ -87,6 +133,7 @@ export function createBindingCode(platform: MessagingPlatformId, lumiUserId: str
     platform,
     lumiUserId,
     orgId,
+    domain,
     createdAt: now(),
     expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
   };
@@ -112,17 +159,11 @@ export function consumeBindingCode(
   }
   const found = store.codes.splice(idx, 1)[0];
   const ts = now();
-  let existingIdx = chatType === 'group' && chatId
-    ? store.bindings.findIndex(item =>
-        item.platform === platform
-        && item.chatType === 'group'
-        && String(item.chatId || '') === String(chatId)
-      )
-    : store.bindings.findIndex(item =>
-        item.platform === platform
-        && item.platformUserId === platformUserId
-        && String(item.chatId || '') === String(chatId || '')
-      );
+  let existingIdx = store.bindings.findIndex(item =>
+    item.platform === platform
+    && item.platformUserId === platformUserId
+    && String(item.chatId || '') === String(chatId || '')
+  );
   if (existingIdx < 0 && chatId && chatType === 'private') {
     existingIdx = store.bindings.findIndex(item =>
       item.platform === platform
@@ -138,6 +179,7 @@ export function consumeBindingCode(
     chatType,
     lumiUserId: found.lumiUserId,
     orgId: found.orgId,
+    domain: found.domain,
     createdAt: existingIdx >= 0 ? store.bindings[existingIdx].createdAt : ts,
     updatedAt: ts,
   };
@@ -157,7 +199,12 @@ export function getBinding(
   if (chatType === 'group') {
     if (!chatId) return null;
     return store.bindings
-      .filter(item => item.platform === platform && item.chatType === 'group' && item.chatId === chatId)
+      .filter(item =>
+        item.platform === platform
+        && item.platformUserId === platformUserId
+        && item.chatType === 'group'
+        && item.chatId === chatId
+      )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
   }
   const candidates = store.bindings
@@ -166,10 +213,11 @@ export function getBinding(
   if (chatId) {
     const exact = candidates.find(item => item.chatId === chatId);
     if (exact) return exact;
+    return candidates.find(item => !item.chatId && item.chatType !== 'group') || null;
   }
   return candidates.find(item => item.chatType === 'private')
     || candidates.find(item => !item.chatId)
-    || (candidates.length === 1 ? candidates[0] : null);
+    || null;
 }
 
 export function resetMessagingBindingsForTest(): void {
@@ -180,12 +228,34 @@ export function listBindingsForUser(lumiUserId: string): MessagingBinding[] {
   return readStore().bindings.filter(item => item.lumiUserId === lumiUserId);
 }
 
-export function deleteBindingForUser(lumiUserId: string, bindingId: string, orgId?: string): boolean {
+export function listActiveBindingCodesForUser(
+  lumiUserId: string,
+  platform?: MessagingPlatformId,
+  domain?: MessagingBindingDomain,
+): BindingCode[] {
+  const store = readStore();
+  const before = store.codes.length;
+  pruneExpiredCodes(store);
+  if (store.codes.length !== before) writeStore(store);
+  return store.codes
+    .filter(item => item.lumiUserId === lumiUserId)
+    .filter(item => !platform || item.platform === platform)
+    .filter(item => !domain || item.domain === domain)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function deleteBindingForUser(
+  lumiUserId: string,
+  bindingId: string,
+  orgId?: string,
+  domain?: MessagingBindingDomain,
+): boolean {
   const store = readStore();
   const idx = store.bindings.findIndex(item =>
     item.id === bindingId &&
     item.lumiUserId === lumiUserId &&
-    (orgId === undefined || item.orgId === orgId)
+    (orgId === undefined || item.orgId === orgId) &&
+    (domain === undefined || item.domain === domain)
   );
   if (idx < 0) return false;
   store.bindings.splice(idx, 1);

@@ -261,6 +261,9 @@ export function FeishuSettings({ t }: { t?: any }) {
         <p className="text-xs leading-relaxed text-white/40">
           {ui('生成一次性绑定码后，在飞书里发送“绑定 Lumi 绑定码”。绑定后，Lumi 才能通过飞书安全地查询组织知识库、查案件或归档案件文件。', 'Generate a one-time code, then send “绑定 Lumi CODE” in Feishu. After binding, Lumi can securely query org KB, search cases, and archive case files from Feishu.')}
         </p>
+        <p className="text-xs leading-relaxed text-white/40">
+          {ui('每位组织成员都必须使用自己的 Lumi 账号单独绑定。私聊、群成员和群话题分别隔离，未绑定成员不会继承他人的组织权限。', 'Each organization member must bind with their own Lumi account. Direct chats, group members, and group threads are isolated; unbound members never inherit another person’s organization access.')}
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             onClick={generateBindingCode}

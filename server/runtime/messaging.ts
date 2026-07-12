@@ -1,5 +1,6 @@
 // Messaging integrations (Feishu, WeCom, etc.)
 import { Router } from "express";
+import type { Server as SocketIOServer } from "socket.io";
 import { createMessagingRoutes, createWeComRoutes } from "../messaging";
 import { createWeChatRoutes } from "../messaging/wechat-routes";
 import { getMessagingConfig } from "../messaging/config";
@@ -16,6 +17,7 @@ export function setupMessaging(
     getArk?: any; getOllama?: any; getLmStudio?: any; getXiaomi?: any; getKimi?: any;
     getGlm?: any; getRelay?: any;
   },
+  io?: SocketIOServer,
 ) {
   const cfg = getMessagingConfig();
   const llmGetters = {
@@ -43,6 +45,17 @@ export function setupMessaging(
     },
     getConnectionStatus: platform => messagingConnectionManager.status(platform),
     sendProactive: (platform, chatId, text) => messagingConnectionManager.sendProactive(platform, chatId, text),
+    onConversationUpdated: update => {
+      if (!io) return;
+      const room = update.domain === 'work' && update.orgId
+        ? `user:${update.userId}:org:${update.orgId}`
+        : `user:${update.userId}:personal`;
+      io.to(room).emit('chat:conversation_updated', {
+        conversationId: update.conversationId,
+        agentId: update.agentId,
+        source: update.source,
+      });
+    },
   };
   messagingConnectionManager.configure(cfg, routeOptions);
 
@@ -56,12 +69,7 @@ export function setupMessaging(
   console.log(cfg.wecom.enabled ? `[WeCom] Mounted (${cfg.wecom.mode})` : '[WeCom] Mounted (not configured)');
 
   // WeChat ClawBot — always mounted so UI can manage QR login + config
-  apiRouter.use("/", createWeChatRoutes(cfg.wechat, {
-    llmGetters,
-    personalityRegistry,
-    queryMemories,
-    loadEmotionalState,
-  }));
+  apiRouter.use("/", createWeChatRoutes(cfg.wechat, routeOptions));
   console.log(cfg.wechat?.botToken && cfg.wechat?.botId ? '[WeChat] Active' : '[WeChat] Mounted (not configured)');
 }
 

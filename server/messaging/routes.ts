@@ -20,6 +20,7 @@ import {
   deleteBindingForUser,
   getBinding,
   listBindingsForUser,
+  parseMessagingBindingCommand,
 } from './bindings';
 import { readDB } from '../../db_layer';
 import { requireAuth } from '../middleware/auth';
@@ -52,6 +53,16 @@ export interface MessagingRouteOptions {
   onConfigChanged?: () => void | Promise<void>;
   getConnectionStatus?: (platform: 'feishu' | 'wecom') => Record<string, any> | null;
   sendProactive?: (platform: 'feishu' | 'wecom', chatId: string, text: string) => Promise<string>;
+  onConversationUpdated?: (update: MessagingConversationUpdate) => void;
+}
+
+export interface MessagingConversationUpdate {
+  userId: string;
+  domain: 'personal' | 'work';
+  orgId: string;
+  conversationId: string;
+  agentId: string;
+  source: string;
 }
 
 export interface IncomingMessageTransport {
@@ -63,37 +74,63 @@ function messageRouteKey(message: IncomingMessage): string {
   return [
     message.platform,
     message.boundOrgId || 'unbound',
-    message.boundUserId || message.userId,
+    message.boundUserId || 'anonymous',
+    message.userId,
+    message.chatType,
     message.chatId,
+    message.threadId || 'main',
   ].join(':');
 }
 
-function messagingConversationAgentId(message: IncomingMessage): string {
-  return `lumi:${message.platform}:${message.chatId}`;
+export function messagingConversationAgentId(message: IncomingMessage): string {
+  if (message.platform === 'wechat' && message.boundUserId && !message.boundOrgId) {
+    return 'lumi';
+  }
+  const scope = message.chatType === 'group'
+    ? `group:${message.chatId}:member:${message.userId}:thread:${message.threadId || 'main'}`
+    : `private:${message.chatId || message.userId}`;
+  return `lumi:${message.platform}:${scope}`;
 }
 
-export function persistBoundMessagingExchange(message: IncomingMessage, reply: string): void {
-  if (!message.boundUserId || !message.boundOrgId) return;
+export function persistBoundMessagingExchange(
+  message: IncomingMessage,
+  reply: string,
+  onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
+): MessagingConversationUpdate | null {
+  persistBoundMessagingMessage(message, 'user', message.text);
+  return persistBoundMessagingMessage(message, 'assistant', reply, onConversationUpdated);
+}
+
+export function persistBoundMessagingMessage(
+  message: IncomingMessage,
+  role: 'user' | 'assistant',
+  content: string,
+  onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
+): MessagingConversationUpdate | null {
+  if (!message.boundUserId) return null;
   const agentId = messagingConversationAgentId(message);
-  const conversation = getOrCreateActiveConversation(message.boundUserId, agentId, 'work', message.boundOrgId);
+  const domain = message.boundOrgId ? 'work' as const : 'personal' as const;
+  const orgId = message.boundOrgId || '';
+  const conversation = getOrCreateActiveConversation(message.boundUserId, agentId, domain, orgId);
   addMessage({
     userId: message.boundUserId,
     agentId,
     conversationId: conversation.id,
-    role: 'user',
-    content: message.text,
-    domain: 'work',
-    orgId: message.boundOrgId,
+    role,
+    content,
+    domain,
+    orgId,
   });
-  addMessage({
+  const update: MessagingConversationUpdate = {
     userId: message.boundUserId,
-    agentId,
+    domain,
+    orgId,
     conversationId: conversation.id,
-    role: 'assistant',
-    content: reply,
-    domain: 'work',
-    orgId: message.boundOrgId,
-  });
+    agentId,
+    source: `${message.platform}_bot`,
+  };
+  onConversationUpdated?.(update);
+  return update;
 }
 
 export async function enqueueMessageRoute(message: IncomingMessage, work: () => Promise<void>): Promise<void> {
@@ -313,14 +350,29 @@ function remoteMaterialSource(platform: IncomingMessage['platform']): 'feishu' |
 
 function handleMessagingBindingCommand(msg: IncomingMessage): string | null {
   if (msg.platform !== 'feishu' && msg.platform !== 'wecom') return null;
-  const text = msg.text.trim();
-  const match = text.match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
-  if (!match) return null;
-  const binding = consumeBindingCode(msg.platform, match[1], msg.userId, msg.chatId, msg.chatType);
+  const command = parseMessagingBindingCommand(msg.text);
+  if (!command) return null;
+  if (command.kind === 'status') {
+    const current = getBinding(msg.platform, msg.userId, msg.chatId, msg.chatType);
+    if (!current) {
+      return `当前${remotePlatformLabel(msg.platform)}身份尚未绑定 Lumi。请在组织工作台生成一次性绑定码后发送“绑定 Lumi 绑定码”。`;
+    }
+    const membership = getMember(current.orgId, current.lumiUserId);
+    if (!membership || membership.status !== 'active') {
+      return '已找到绑定记录，但对应组织成员权限已经失效。请在 Lumi 中恢复成员权限或重新绑定。';
+    }
+    return `绑定状态已核验：当前${msg.chatType === 'group' ? '群成员身份' : '会话身份'}已连接到 Lumi 组织工作域。`;
+  }
+  if (command.kind === 'invalid') {
+    return `绑定命令格式不完整。请原样发送“绑定 Lumi 绑定码”，或在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。`;
+  }
+  const binding = consumeBindingCode(msg.platform, command.code, msg.userId, msg.chatId, msg.chatType);
   if (!binding) {
     return `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(msg.platform)}绑定码。`;
   }
-  return `绑定成功。这个${msg.chatType === 'group' ? '群聊' : '会话'}现在会按所选组织和你的 Lumi 身份路由；可以查询组织知识库、查询案件，或发送案件文件归档。`;
+  return msg.chatType === 'group'
+    ? '绑定成功。你在这个群里的消息会按你的 Lumi 身份和组织权限独立路由；其他成员仍需分别绑定，不会共享你的权限或对话。'
+    : '绑定成功。这个会话现在会按所选组织和你的 Lumi 身份路由；可以查询组织知识库、查询案件，或发送案件文件归档。';
 }
 
 function applyMessagingBinding(msg: IncomingMessage): IncomingMessage {
@@ -365,14 +417,14 @@ export function dispatchIncomingMessage(
       await enqueueMessageRoute(enrichedMessage, async () => {
         const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMessage);
         if (legalNoticeReply) {
-          persistBoundMessagingExchange(enrichedMessage, legalNoticeReply);
+          persistBoundMessagingExchange(enrichedMessage, legalNoticeReply, options?.onConversationUpdated);
           await transport.reply(enrichedMessage, legalNoticeReply);
           return;
         }
 
         const remoteOrgReply = await handleRemoteOrgCommand(enrichedMessage);
         if (remoteOrgReply) {
-          persistBoundMessagingExchange(enrichedMessage, remoteOrgReply);
+          persistBoundMessagingExchange(enrichedMessage, remoteOrgReply, options?.onConversationUpdated);
           await transport.reply(enrichedMessage, remoteOrgReply);
           return;
         }
@@ -380,7 +432,7 @@ export function dispatchIncomingMessage(
         if (options?.onMessage) {
           const reply = await options.onMessage(enrichedMessage);
           if (reply) {
-            persistBoundMessagingExchange(enrichedMessage, reply.text);
+            persistBoundMessagingExchange(enrichedMessage, reply.text, options?.onConversationUpdated);
             await transport.reply(enrichedMessage, reply.text);
           }
           return;
@@ -907,12 +959,13 @@ export async function processWithPersonality(
 ): Promise<string> {
   const llm = options?.llmGetters;
   const registry = options?.personalityRegistry;
-  const isBound = Boolean(msg.boundUserId && msg.boundOrgId);
-  const effectiveUserId = isBound ? msg.boundUserId! : 'anonymous';
-  const domain = isBound ? 'work' as const : 'personal' as const;
-  const orgId = isBound ? msg.boundOrgId! : '';
+  const isIdentityBound = Boolean(msg.boundUserId);
+  const isOrganizationBound = Boolean(msg.boundUserId && msg.boundOrgId);
+  const effectiveUserId = isIdentityBound ? msg.boundUserId! : 'anonymous';
+  const domain = isOrganizationBound ? 'work' as const : 'personal' as const;
+  const orgId = isOrganizationBound ? msg.boundOrgId! : '';
   const conversationAgentId = messagingConversationAgentId(msg);
-  const conversation = isBound
+  const conversation = isIdentityBound
     ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
     : null;
   const priorMessages = conversation
@@ -931,17 +984,21 @@ export async function processWithPersonality(
     return [];
   }).slice(-16);
 
+  if (isIdentityBound) {
+    persistBoundMessagingMessage(msg, 'user', msg.text, options?.onConversationUpdated);
+  }
+
   // ── Build system prompt from Lumi personality ──
   let systemPrompt = '';
   let personality: any = null;
 
   if (registry) {
     try {
-      const memories = isBound && options?.queryMemories
+      const memories = isIdentityBound && options?.queryMemories
         ? options.queryMemories({ userId: effectiveUserId, query: msg.text, limit: 5, minConfidence: 0.4, domain, orgId })
         : [];
       const emotionalStateKey = domain === 'work' ? `${effectiveUserId}:org:${orgId}` : effectiveUserId;
-      const emotionalState = isBound && options?.loadEmotionalState ? options.loadEmotionalState(emotionalStateKey) : undefined;
+      const emotionalState = isIdentityBound && options?.loadEmotionalState ? options.loadEmotionalState(emotionalStateKey) : undefined;
 
       const result = registry.buildSystemPrompt(
         'lumi',
@@ -965,10 +1022,12 @@ export async function processWithPersonality(
   if (!systemPrompt) {
     systemPrompt = `你是一个名为 Lumi 的 AI 助手，通过${remotePlatformLabel(msg.platform)}与用户交流。保持回复简洁、有帮助、自然。`;
   }
-  if (msg.boundOrgId) {
+  if (isOrganizationBound) {
     systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户已绑定到 Lumi 组织工作域。你可以基于本轮消息和已提供的附件内容进行分析；查询组织知识库、查询/归档案件由服务端安全工具提前处理。不要声称已经写入组织数据，除非系统消息或用户看到的回复明确说明已完成。涉及法律材料时必须提醒最终由执业律师确认。`;
+  } else if (isIdentityBound) {
+    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户已绑定到个人 Lumi。使用该用户的个人身份、人格与对话记忆，并把本轮收发同步到个人 Lumi 聊天；不要访问或声称访问任何组织数据。`;
   } else {
-    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户尚未绑定 Lumi 身份。可以分析用户直接提供的文本/附件，但不要声称可以访问组织知识库、组织案件或本地私人数据。`;
+    systemPrompt += `\n\n当前${remotePlatformLabel(msg.platform)}用户尚未绑定 Lumi 身份。可以分析用户直接提供的文本/附件，但不要声称可以访问组织知识库、组织案件或本地私人数据。绑定状态只能由服务端绑定记录确认；即使用户自称“已经绑定”或要求你确认，也绝不能口头宣称绑定成功。`;
   }
 
   const legalOverlay = buildUnifiedLegalEntryPrompt({
@@ -1003,7 +1062,7 @@ export async function processWithPersonality(
   const allowedByPersonality = new Set(personalityPolicy?.allowedTools || ['*']);
   const forbiddenByPersonality = new Set(personalityPolicy?.forbiddenTools || []);
   const personalityForbidsAll = forbiddenByPersonality.has('*');
-  const remoteAllowed = [...commonRemoteTools, ...(isBound ? organizationRemoteTools : [])]
+  const remoteAllowed = [...commonRemoteTools, ...(isOrganizationBound ? organizationRemoteTools : [])]
     .filter(() => !personalityForbidsAll)
     .filter(name => !forbiddenByPersonality.has(name))
     .filter(name => allowedByPersonality.has('*') || allowedByPersonality.has(name));
@@ -1064,11 +1123,15 @@ export async function processWithPersonality(
       toolRecords: result.toolCalls,
       source: `${msg.platform}_bot`,
     });
-    persistBoundMessagingExchange(msg, finalized.text);
+    persistBoundMessagingMessage(msg, 'assistant', finalized.text, options?.onConversationUpdated);
     return finalized.text;
   } catch (err: any) {
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
-    return '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
+    const fallback = '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
+    if (isIdentityBound) {
+      persistBoundMessagingMessage(msg, 'assistant', fallback, options?.onConversationUpdated);
+    }
+    return fallback;
   }
 }
 

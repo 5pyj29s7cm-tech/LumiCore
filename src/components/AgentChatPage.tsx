@@ -1338,7 +1338,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     // would replace messages with different ids, causing React to remount & re-animate them.
     const onConversationUpdated = (data: { conversationId: string; agentId: string; source?: string }) => {
       if (data.agentId !== agentId) return;
-      if (data.source === 'chat' || textChatActiveRef.current) return;
+      const isExternalMessagingSync = /^(wechat|feishu|wecom)_bot$/.test(String(data.source || ''));
+      if (data.source === 'chat' || (textChatActiveRef.current && !isExternalMessagingSync)) return;
       if (streamingMsgId.current) streamingMsgId.current = null;
       fetch(scopedConversationUrl(`/api/conversations/${data.conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`))
         .then(r => r.json())
@@ -1916,7 +1917,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                 <div>
                   <h3 className="text-sm font-bold text-white">{ui('个人微信连接', 'Personal WeChat')}</h3>
-                  <p className="mt-1 text-xs text-white/40">{ui('扫码后，Lumi 可以通过你的个人微信接收消息。', 'After scanning, Lumi can receive messages through your personal WeChat.')}</p>
+                  <p className="mt-1 text-xs text-white/40">{ui('扫码授权并完成一次绑定后，微信收发会同步到当前个人 Lumi 聊天。', 'After QR authorization and one-time linking, WeChat messages sync with this personal Lumi chat.')}</p>
                 </div>
                 <button
                   type="button"

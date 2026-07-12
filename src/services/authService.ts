@@ -1,6 +1,7 @@
 import { apiFetch } from './apiClient';
 
 export interface User {
+  uid: string;
   username: string;
   role: string;
   phone?: string;

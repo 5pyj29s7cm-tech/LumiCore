@@ -3,13 +3,15 @@ import { Router } from 'express';
 import { WeChatClawBotAdapter, type WeChatClawBotConfig } from './wechat-clawbot';
 import { getMessagingConfig, updateMessagingConfig } from './config';
 import { requireAuth } from '../middleware/auth';
-import type { IncomingMessage, MessageHandler } from './types';
+import type { IncomingMessage } from './types';
 import {
   consumeBindingCode,
   createBindingCode,
   deleteBindingForUser,
   getBinding,
+  listActiveBindingCodesForUser,
   listBindingsForUser,
+  parseMessagingBindingCommand,
 } from './bindings';
 import { getMember } from '../org/db';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
@@ -19,6 +21,7 @@ import {
   persistBoundMessagingExchange,
   processWithPersonality,
 } from './routes';
+import type { MessagingRouteOptions } from './routes';
 
 function requireWechatAdmin(req: any, res: any): boolean {
   if (req.user?.role === 'admin') return true;
@@ -26,24 +29,20 @@ function requireWechatAdmin(req: any, res: any): boolean {
   return false;
 }
 
-function requestedBindingOrgId(req: any): string {
+function requestedBinding(req: any): { domain: 'personal' | 'work'; orgId: string } {
+  const domain = req.body?.scope === 'personal' ? 'personal' : 'work';
+  if (domain === 'personal') return { domain, orgId: '' };
   const sessionOrgId = String(req.user?.orgId || '').trim();
   const requestedOrgId = String(req.body?.orgId || '').trim();
   if (sessionOrgId && requestedOrgId && sessionOrgId !== requestedOrgId) {
     throw new Error('Requested organization does not match the active organization context');
   }
-  return sessionOrgId || requestedOrgId;
+  return { domain, orgId: sessionOrgId || requestedOrgId };
 }
 
 export function createWeChatRoutes(
   config: WeChatClawBotConfig,
-  options?: {
-    onMessage?: MessageHandler;
-    llmGetters?: Record<string, () => any>;
-    personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
-    loadEmotionalState?: (userId: string) => any;
-  },
+  options?: MessagingRouteOptions,
 ): Router {
   const router = Router();
   const adapter = new WeChatClawBotAdapter(config);
@@ -78,6 +77,7 @@ export function createWeChatRoutes(
         // Persist the login credentials
         updateMessagingConfig({ wechat: conf });
         Object.assign(config, conf);
+        adapter.stopPolling();
         adapter.reload(config);
         // Start polling in background
         startWeChatPolling(adapter, config, options);
@@ -89,12 +89,29 @@ export function createWeChatRoutes(
   });
 
   // ── GET /wechat/status — connection status ──
-  router.get('/wechat/status', requireAuth, (_req, res) => {
+  router.get('/wechat/status', requireAuth, (req, res) => {
+    const personalBinding = listBindingsForUser(req.user!.uid).find(item =>
+      item.platform === 'wechat' && item.domain === 'personal'
+    );
+    const pendingPersonalBinding = personalBinding
+      ? null
+      : listActiveBindingCodesForUser(req.user!.uid, 'wechat', 'personal')[0] || null;
     res.json({
       platform: 'wechat',
       configured: !!(config.botToken && config.botId),
-      listening: adapter.isPolling(),
+      ...adapter.getStatus(),
       botId: config.botId ? `${config.botId.slice(0, 12)}...` : null,
+      canConfigure: req.user?.role === 'admin',
+      personalBound: Boolean(personalBinding),
+      personalBinding: personalBinding ? {
+        id: personalBinding.id,
+        platformUserId: personalBinding.platformUserId,
+        updatedAt: personalBinding.updatedAt,
+      } : null,
+      pendingPersonalBinding: pendingPersonalBinding ? {
+        code: pendingPersonalBinding.code,
+        expiresAt: pendingPersonalBinding.expiresAt,
+      } : null,
     });
   });
 
@@ -115,6 +132,7 @@ export function createWeChatRoutes(
       const { botToken, botId } = req.body;
       const updated = updateMessagingConfig({ wechat: { botToken, botId, baseUrl: 'https://ilinkai.weixin.qq.com' } });
       Object.assign(config, updated.wechat);
+      adapter.stopPolling();
       adapter.reload(config);
       if (updated.wechat.enabled) {
         startWeChatPolling(adapter, config, options);
@@ -129,10 +147,12 @@ export function createWeChatRoutes(
 
   router.post('/wechat/bindings/code', requireAuth, (req, res) => {
     try {
-      const code = createBindingCode('wechat', req.user!.uid, requestedBindingOrgId(req));
+      const requested = requestedBinding(req);
+      const code = createBindingCode('wechat', req.user!.uid, requested.orgId, requested.domain);
       res.json({
         code: code.code,
         expiresAt: code.expiresAt,
+        scope: code.domain,
         instruction: `在微信 Lumi Bot 里发送：绑定 Lumi ${code.code}`,
       });
     } catch (err: any) {
@@ -142,13 +162,18 @@ export function createWeChatRoutes(
 
   router.get('/wechat/bindings', requireAuth, (req, res) => {
     const orgId = String(req.user?.orgId || '').trim();
+    const scope = req.query.scope === 'personal' ? 'personal' : req.query.scope === 'work' ? 'work' : '';
     res.json({ bindings: listBindingsForUser(req.user!.uid).filter(item =>
-      item.platform === 'wechat' && (!orgId || item.orgId === orgId)
+      item.platform === 'wechat'
+      && (!scope || item.domain === scope)
+      && (item.domain === 'personal' || !orgId || item.orgId === orgId)
     ) });
   });
 
   router.delete('/wechat/bindings/:bindingId', requireAuth, (req, res) => {
-    const ok = deleteBindingForUser(req.user!.uid, req.params.bindingId, req.user?.orgId || undefined);
+    const scope = req.query.scope === 'personal' ? 'personal' : req.query.scope === 'work' ? 'work' : undefined;
+    const orgFilter = scope === 'personal' ? '' : req.user?.orgId || undefined;
+    const ok = deleteBindingForUser(req.user!.uid, req.params.bindingId, orgFilter, scope);
     res.json({ success: ok });
   });
 
@@ -167,15 +192,9 @@ export function createWeChatRoutes(
 function startWeChatPolling(
   adapter: WeChatClawBotAdapter,
   _config: WeChatClawBotConfig,
-  options?: {
-    onMessage?: MessageHandler;
-    llmGetters?: Record<string, () => any>;
-    personalityRegistry?: any;
-    queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
-    loadEmotionalState?: (userId: string) => any;
-  },
+  options?: MessagingRouteOptions,
 ): void {
-  adapter.startPolling(async (msg) => {
+  void adapter.startPolling(async (msg) => {
     const bindingReply = handleWeChatBindingCommand(msg);
     if (bindingReply) return { text: bindingReply, platform: 'wechat' as const };
 
@@ -184,13 +203,13 @@ function startWeChatPolling(
     await enqueueMessageRoute(boundMsg, async () => {
       const legalNoticeReply = await handleRemoteLegalNoticeIntake(boundMsg);
       if (legalNoticeReply) {
-        persistBoundMessagingExchange(boundMsg, legalNoticeReply);
+        persistBoundMessagingExchange(boundMsg, legalNoticeReply, options?.onConversationUpdated);
         outgoing = { text: legalNoticeReply, platform: 'wechat' };
         return;
       }
       const remoteOrgReply = await handleRemoteOrgCommand(boundMsg);
       if (remoteOrgReply) {
-        persistBoundMessagingExchange(boundMsg, remoteOrgReply);
+        persistBoundMessagingExchange(boundMsg, remoteOrgReply, options?.onConversationUpdated);
         outgoing = { text: remoteOrgReply, platform: 'wechat' };
         return;
       }
@@ -198,7 +217,7 @@ function startWeChatPolling(
       if (options?.onMessage) {
         const reply = await options.onMessage(boundMsg);
         if (reply) {
-          persistBoundMessagingExchange(boundMsg, reply.text);
+          persistBoundMessagingExchange(boundMsg, reply.text, options?.onConversationUpdated);
           outgoing = { text: reply.text, platform: 'wechat' };
         }
         return;
@@ -207,27 +226,43 @@ function startWeChatPolling(
       outgoing = { text: replyText, platform: 'wechat' };
     });
     return outgoing;
-  });
+  }).catch(err => console.error('[WeChat] Polling failed:', err?.message || err));
 }
 
-function handleWeChatBindingCommand(msg: IncomingMessage): string | null {
-  const match = msg.text.trim().match(/^(?:绑定|bind)\s*(?:Lumi|露米|lumi)?\s*([A-Z0-9]{4,12})$/i);
-  if (!match) return null;
-  const binding = consumeBindingCode('wechat', match[1], msg.userId);
+export function handleWeChatBindingCommand(msg: IncomingMessage): string | null {
+  const command = parseMessagingBindingCommand(msg.text);
+  if (!command) return null;
+  if (command.kind === 'status') {
+    const current = getBinding('wechat', msg.userId, msg.chatId, msg.chatType);
+    if (!current) {
+      return '微信 Bot 已连接，但当前微信身份尚未绑定到个人 Lumi。请在 Lumi 客户端生成绑定码后，原样发送“绑定 Lumi 绑定码”。';
+    }
+    return current.domain === 'personal'
+      ? '绑定状态已核验：当前微信身份已连接到你的个人 Lumi，后续消息会同步到个人聊天窗口。'
+      : '绑定状态已核验：当前微信身份已连接到 Lumi 组织工作域。';
+  }
+  if (command.kind === 'invalid') {
+    return '绑定命令格式不完整。请从 Lumi 客户端复制完整命令，并原样发送“绑定 Lumi 绑定码”。';
+  }
+  const binding = consumeBindingCode('wechat', command.code, msg.userId, msg.chatId, msg.chatType);
   if (!binding) {
     return '绑定码无效或已过期。请在 Lumi 桌面端重新生成微信绑定码。';
   }
-  return '绑定成功。之后你可以把法院短信链接、案件材料或查询指令发给我，我会按组织案件空间处理。';
+  return binding.domain === 'personal'
+    ? '绑定成功。这里的消息会由你的个人 Lumi 处理，并同步到 Lumi 客户端聊天。'
+    : '绑定成功。之后你可以把法院短信链接、案件材料或查询指令发给我，我会按组织案件空间处理。';
 }
 
 function applyWeChatBinding(msg: IncomingMessage): IncomingMessage {
   const binding = getBinding('wechat', msg.userId);
   if (!binding) return msg;
-  const membership = getMember(binding.orgId, binding.lumiUserId);
-  if (!membership || membership.status !== 'active') return msg;
+  if (binding.domain === 'work') {
+    const membership = getMember(binding.orgId, binding.lumiUserId);
+    if (!membership || membership.status !== 'active') return msg;
+  }
   return {
     ...msg,
     boundUserId: binding.lumiUserId,
-    boundOrgId: binding.orgId,
+    boundOrgId: binding.domain === 'work' ? binding.orgId : undefined,
   };
 }
