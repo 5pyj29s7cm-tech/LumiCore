@@ -9,8 +9,6 @@
   "scripts": {
     "dev": "tsx launcher.ts",
     "dev:direct": "tsx server.ts",
-    "dev:org": "LUMI_ROLE=org tsx launcher.ts",
-    "dev:org:direct": "LUMI_ROLE=org tsx server.ts",
     "serve": "node dist-server/entry.cjs",
     "build": "npm run build:desktop-ui",
     "build:desktop-ui": "vite build --mode desktop",

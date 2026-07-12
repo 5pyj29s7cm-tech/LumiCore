@@ -1,6 +1,5 @@
-// Org Portal — shown in personal edition's "Org" tab.
-// Three paths: join existing org, create new org (upgrade personal→org),
-// or open the Org workbench if already connected.
+// Organization portal inside the unified Lumi client.
+// Users can join or create an organization, then switch between personal and work domains.
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Briefcase, Building2, Plus, Users, ArrowRight, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
@@ -23,11 +22,9 @@ type OrgPortalMode = 'select' | 'join' | 'create';
 export function OrgPortal({
   onBack,
   initialMode = 'select',
-  orgOnly = false,
 }: {
   onBack?: () => void;
   initialMode?: OrgPortalMode;
-  orgOnly?: boolean;
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
@@ -125,23 +122,27 @@ export function OrgPortal({
       const data = await res.json();
       if (res.ok) {
         if (data.token) localStorage.setItem('lumi_auth_token', data.token);
-        localStorage.setItem('lumi_org_connection', JSON.stringify({
+        const createdConnection = {
           orgId: data.id,
           orgRole: data.orgRole || 'owner',
           orgName: data.name || orgForm.name.trim(),
           connected: true,
-        }));
+        };
+        localStorage.setItem('lumi_org_connection', JSON.stringify(createdConnection));
         setCreateResult('success');
-        setCreateMsg(ui('组织创建成功，正在刷新会话...', 'Organization created successfully. Refreshing session...'));
-        // Refresh user session so JWT picks up the orgId
+        setCreateMsg(ui('组织创建成功，正在进入工作域...', 'Organization created. Opening the work domain...'));
         try { await refreshUser(); } catch {}
-        // Re-check org status
-        setTimeout(async () => {
-          try {
-            const s = await apiFetch('/api/org/status').then(r => r.json());
-            setStatus({ connected: !!s.orgId, orgId: s.orgId, orgRole: s.orgRole });
-          } catch {}
-        }, 500);
+        const switched = await switchDomain('work');
+        setStatus({
+          connected: true,
+          orgId: switched.connection?.orgId || createdConnection.orgId,
+          orgRole: switched.connection?.orgRole || createdConnection.orgRole,
+          orgName: switched.connection?.orgName || createdConnection.orgName,
+          sessionConnected: switched.success,
+        });
+        if (!switched.success) {
+          setSwitchMsg(switched.message || ui('组织已创建，请重试进入工作域', 'Organization created. Retry entering the work domain.'));
+        }
       } else {
         setCreateResult('error');
         setCreateMsg(data.error || ui('创建组织失败', 'Failed to create organization'));
@@ -223,7 +224,7 @@ export function OrgPortal({
   }
 
   if (isConnected) {
-    return <OrgHub allowPersonalDomain={!orgOnly} />;
+    return <OrgHub />;
   }
 
   // Not connected — choose join or create
@@ -270,7 +271,7 @@ export function OrgPortal({
                 </div>
                 <div className="flex-1">
                   <h3 className="text-white font-semibold">{t.createOrganization || 'Create Organization'}</h3>
-                  <p className="text-white/40 text-sm">{t.createOrganizationDesc || 'Become the admin. Your instance will upgrade to org mode.'}</p>
+                  <p className="text-white/40 text-sm">{t.createOrganizationDesc || 'Create a shared workspace and become its owner.'}</p>
                 </div>
                 <ArrowRight size={20} className="text-white/45" />
               </motion.button>
@@ -307,7 +308,7 @@ export function OrgPortal({
               <div className="bg-white/5 border border-white/10 rounded-2xl p-6 space-y-4">
                 <h2 className="text-xl font-bold text-white">{t.createOrganization || 'Create Organization'}</h2>
                 <p className="text-white/40 text-sm">
-                  {t.createOrganizationNote || 'This will upgrade your LumiOS instance to org mode. The server will restart automatically.'}
+                  {t.createOrganizationNote || 'The workspace, roles, knowledge, and team tools stay inside this Lumi client.'}
                 </p>
 
                 <div>
@@ -348,7 +349,7 @@ export function OrgPortal({
                 </button>
 
                 <p className="text-white/45 text-xs text-center">
-                  {t.createOrganizationHint || 'Your server will restart as org after creation. This takes a few seconds.'}
+                  {t.createOrganizationHint || 'After creation, Lumi enters the organization work domain in this client.'}
                 </p>
               </div>
             )}

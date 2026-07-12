@@ -1,25 +1,16 @@
-# LumiOS Docker Compose
+# LumiOS unified deployment
 #
-# Personal:
-#   docker compose --profile personal up -d
-#   → http://localhost:3000
-#
-# Org (company server):
-#   docker compose --profile org up -d
-#   → http://localhost:3001
-#
-# Both:
-#   docker compose --profile personal --profile org up -d
+# Personal and organization work domains run in the same service:
+#   docker compose up -d
+#   http://localhost:3000
 
 services:
-  lumi-personal:
-    profiles: [personal]
+  lumi:
     build: .
-    container_name: lumi-personal
+    container_name: lumi
     ports:
       - "3000:3000"
     environment:
-      LUMI_ROLE: personal
       HOST: 0.0.0.0
       LUMI_DATA_DIR: /app
       JWT_SECRET: ${JWT_SECRET:-}
@@ -31,31 +22,9 @@ services:
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
     volumes:
+      # Keep the existing volume key so upgrades retain local data.
       - lumi_personal_data:/app/data
-    restart: unless-stopped
-
-  lumi-org:
-    profiles: [org]
-    build: .
-    container_name: lumi-org
-    ports:
-      - "3001:3000"
-    environment:
-      LUMI_ROLE: org
-      HOST: 0.0.0.0
-      LUMI_DATA_DIR: /app
-      JWT_SECRET: ${JWT_SECRET:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      QWEN_API_KEY: ${QWEN_API_KEY:-}
-      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
-    volumes:
-      - lumi_org_data:/app/data
     restart: unless-stopped
 
 volumes:
   lumi_personal_data:
-  lumi_org_data:

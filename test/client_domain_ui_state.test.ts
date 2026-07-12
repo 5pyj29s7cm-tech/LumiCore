@@ -34,4 +34,16 @@ describe('personal and organization client state boundaries', () => {
     expect(explorer).toContain('/codex/i');
     expect(explorer).toContain('/gstarcad/i');
   });
+
+  it('does not let organization-only presence states crash the personal indicator', async () => {
+    const { normalizePresenceStatus } = await import('../src/hooks/usePresence');
+    const desktop = source('src/components/DesktopUI.tsx');
+    const indicator = source('src/components/biometrics/PresenceIndicator.tsx');
+
+    expect(normalizePresenceStatus('unavailable_in_organization')).toBe('away');
+    expect(normalizePresenceStatus('present')).toBe('present');
+    expect(desktop).toContain("userId: workDomain === 'personal' ? user?.uid : undefined");
+    expect(desktop).toContain("workDomain === 'personal' && (");
+    expect(indicator).toContain('colors[status] || colors.away');
+  });
 });

@@ -1,6 +1,6 @@
-# LumiOS — unified Docker image for personal + org deployments
+# LumiOS unified client/server image. Organization workspaces live inside the same deployment.
 # Build:  docker build -t lumios .
-# Run:    docker run -p 3000:3000 -e JWT_SECRET=xxx -e LUMI_ROLE=personal lumios
+# Run:    docker run -p 3000:3000 -e JWT_SECRET=xxx lumios
 
 # ── Build stage ──────────────────────────────────────────────────────────
 FROM node:22-slim AS build

@@ -1,6 +1,4 @@
-// LumiOS Unified Server
-// / → personal AI OS desktop
-// /index.org.html → org workbench (create/manage orgs, legal tools)
+// LumiOS unified server. Personal and organization work domains share one client.
 import "dotenv/config";
 import fs from "fs";
 import os from "os";
@@ -97,7 +95,6 @@ import { lapRoutes } from "./server/lap/routes";
 import voiceRoutes from "./routes/voice";
 import fileRoutes, { configureKnowledgeFileRoutes } from "./routes/files";
 import { subscriptionRoutes } from "./server/subscription/routes";
-import { resolveRole } from "./server/runtime/role";
 import {
   configureNcmCredentials,
   normalizeNcmAppId as normalizeStoredNcmAppId,
@@ -107,8 +104,6 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const ROLE = resolveRole();
 
 const { app, server, io, apiRouter, PORT, HOST, JWT_SECRET, getCookieOptions } = createApp();
 const llm = createLLMRuntime();
@@ -354,8 +349,7 @@ apiRouter.get('/ncm/login/status', async (_req, res) => {
 });
 
 // ── Org routes ──
-// Org routes are always mounted — personal and org coexist at different URLs.
-// / → personal desktop, /index.org.html → org workbench.
+// Organization routes are always mounted for the work domain in the unified client.
 {
   const { mountOrgRoutes } = await import("./server/org/routes");
   mountOrgRoutes(apiRouter, io);
@@ -384,7 +378,7 @@ process.on('exit', () => {
 // SIGINT/SIGTERM are handled by bootstrap.ts with proper cleanup + flushDB
 
 async function start() {
-  await setupStatic(app, __filename, __dirname, ROLE);
+  await setupStatic(app, __filename, __dirname);
   await bootstrap({ server, io, PORT, HOST, jwtSecret: JWT_SECRET, llm, __dirname });
 }
 

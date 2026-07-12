@@ -14,6 +14,12 @@ export interface PresenceState {
   status: 'present' | 'uncertain' | 'away';
 }
 
+export function normalizePresenceStatus(status: unknown): PresenceState['status'] {
+  return status === 'present' || status === 'uncertain' || status === 'away'
+    ? status
+    : 'away';
+}
+
 export function usePresence({ socket, faceResult, voiceprintResult, userId }: UsePresenceOptions) {
   const [presence, setPresence] = useState<PresenceState>({
     isAway: false,
@@ -41,9 +47,10 @@ export function usePresence({ socket, faceResult, voiceprintResult, userId }: Us
   useEffect(() => {
     if (!socket) return;
     const handler = (data: { isAway: boolean; status: string }) => {
-      setPresence({ isAway: data.isAway, status: data.status as PresenceState['status'] });
-      if (data.status !== prevStatusRef.current) {
-        prevStatusRef.current = data.status;
+      const status = normalizePresenceStatus(data.status);
+      setPresence({ isAway: Boolean(data.isAway), status });
+      if (status !== prevStatusRef.current) {
+        prevStatusRef.current = status;
       }
     };
     socket.on('presence:state_change', handler);

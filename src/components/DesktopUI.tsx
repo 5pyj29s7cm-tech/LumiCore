@@ -2530,7 +2530,7 @@ export function DesktopUI({
     socket,
     faceResult: faceRecognition.result,
     voiceprintResult: voiceprint.result,
-    userId: user?.uid,
+    userId: workDomain === 'personal' ? user?.uid : undefined,
   });
 
   // Idle→active return greeting — listens for ambient idle reports and fires on return
@@ -5011,13 +5011,15 @@ export function DesktopUI({
             ) : (
               <>
               {/* Biometrics presence indicator — above particle sphere */}
-            <div className="absolute -top-10 left-1/2 -translate-x-1/2 z-30">
-              <PresenceIndicator
-                status={presence.status}
-                faceConfidence={faceRecognition.result.confidence}
-                voiceConfidence={voiceprint.result.confidence}
-              />
-            </div>
+            {workDomain === 'personal' && (
+              <div className="absolute -top-10 left-1/2 -translate-x-1/2 z-30">
+                <PresenceIndicator
+                  status={presence.status}
+                  faceConfidence={faceRecognition.result.confidence}
+                  voiceConfidence={voiceprint.result.confidence}
+                />
+              </div>
+            )}
             <LocalAgentSphere
                 t={t}
                 sentiment={sphereSentiment}

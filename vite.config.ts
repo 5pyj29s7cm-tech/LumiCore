@@ -12,11 +12,11 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const target = env.LUMI_TARGET || (['desktop', 'web', 'mobile', 'all'].includes(mode) ? mode : 'desktop');
   const inputs: Record<string, string> = target === 'web'
-    ? { web: 'index.web.html', org: 'index.org.html' }
+    ? { web: 'index.web.html' }
     : target === 'mobile'
       ? { mobile: 'index.mobile.html' }
       : target === 'all'
-        ? { desktop: 'index.html', web: 'index.web.html', mobile: 'index.mobile.html', org: 'index.org.html' }
+        ? { desktop: 'index.html', web: 'index.web.html', mobile: 'index.mobile.html' }
         : { desktop: 'index.html' };
   const outDir = target === 'all' ? 'dist' : `dist/${target}`;
 

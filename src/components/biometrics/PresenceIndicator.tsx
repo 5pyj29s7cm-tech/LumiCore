@@ -16,7 +16,7 @@ export function PresenceIndicator({ status, faceConfidence, voiceConfidence }: P
     away: { bg: 'rgba(244,67,54,0.8)', ring: 'rgba(244,67,54,0.3)', label: isZh ? '离场' : 'Away' },
   };
 
-  const c = colors[status];
+  const c = colors[status] || colors.away;
 
   return (
     <motion.div

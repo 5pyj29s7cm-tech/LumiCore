@@ -1,6 +1,6 @@
 /**
  * Pre-built legal agent templates for the org template marketplace.
- * Installed automatically on bootstrap when LUMI_ROLE=org.
+ * Available to organization workspaces in the unified Lumi client.
  */
 import * as EDB from '../org/db';
 

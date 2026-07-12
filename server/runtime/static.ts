@@ -3,7 +3,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 
-export async function setupStatic(app: express.Express, __filename: string, __dirname: string, role: string = 'personal') {
+export async function setupStatic(app: express.Express, __filename: string, __dirname: string) {
   const isBundledServer = path.basename(process.cwd()).toLowerCase() === "dist-server" ||
     path.basename(__dirname).toLowerCase() === "dist-server";
   const isSourceServer = __filename.endsWith("server.ts") ||
@@ -13,9 +13,8 @@ export async function setupStatic(app: express.Express, __filename: string, __di
     (!isSourceServer && process.env.NODE_ENV !== "development" && fs.existsSync(path.join(process.cwd(), "dist")));
 
   // Frontend bundles are split by target: desktop, web, or mobile.
-  const frontendTarget = process.env.LUMI_FRONTEND_TARGET ||
-    (role === 'org' ? 'web' : 'desktop');
-  const defaultFile = role === 'org' ? 'index.org.html' : 'index.html';
+  const frontendTarget = process.env.LUMI_FRONTEND_TARGET || 'desktop';
+  const defaultFile = 'index.html';
 
   if (!isProduction) {
     console.log(`Starting in DEVELOPMENT mode (Vite)...`);
@@ -33,7 +32,7 @@ export async function setupStatic(app: express.Express, __filename: string, __di
     });
     app.use(vite.middlewares);
   } else {
-    console.log(`Starting in PRODUCTION mode (Static) as ${role}, frontend=${frontendTarget}...`);
+    console.log(`Starting in PRODUCTION mode (Static), frontend=${frontendTarget}...`);
     const explicitDist = process.env.LUMI_FRONTEND_DIST;
     const candidates = [
       explicitDist,

@@ -1,7 +1,7 @@
 /**
  * Org REST API routes.
  *
- * Mounted under /api/org when LUMI_MODE=org.
+ * Mounted under /api/org for the organization work domain in every deployment.
  * All routes use the unified auth middleware (no inline JWT copy-paste).
  */
 
@@ -12,7 +12,6 @@ import * as Org from './org';
 import * as EDB from './db';
 import * as KB from './kb';
 import * as LegalCases from './legal_cases';
-import { persistRole } from '../runtime/role';
 import * as Templates from './templates';
 import * as Audit from './audit';
 import { Server as SocketIOServer } from 'socket.io';
@@ -53,7 +52,6 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       { expiresIn: '24h' },
     );
     res.cookie('token', newToken, { httpOnly: true, secure: false, sameSite: 'lax', maxAge: 24 * 60 * 60 * 1000 });
-    persistRole('org', org.id);
     res.status(201).json({ ...org, token: newToken, orgRole: 'owner' });
   });
 
