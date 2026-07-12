@@ -406,7 +406,7 @@ export function KnowledgeBaseBrowser() {
             {t.orgKB || ui('组织知识库', 'Knowledge Base')}
           </h2>
           <p className="mt-1 text-sm text-white/50">
-            {ui('集中管理制度、项目资料、上传文件和团队经验，供组织 Lumi 检索调用。', 'Manage policies, project files, uploads, and team knowledge for organization Lumi.')}
+            {ui('集中管理制度、项目资料、上传文件和团队经验，供成员的工作域 Lumi 检索调用。', 'Manage policies, project files, uploads, and team knowledge for each member\'s Lumi in this work workspace.')}
           </p>
         </div>
         <div className="flex items-center gap-2">

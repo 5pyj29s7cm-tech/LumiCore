@@ -6,7 +6,7 @@ import { ToolContext } from '../types';
 import { getDataPath } from '../../config/data_path';
 import { getExternalAppAdapters } from '../../external_apps/adapters';
 import { getAdapterRegistry } from '../../adapters/registry';
-import { getClientState } from '../../client/self_model';
+import { getClientStateForScope } from '../../client/self_model';
 import { isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import { analyzeScreen } from '../../llm/adapter';
@@ -1319,7 +1319,10 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     handler: async (_args, context) => {
       const userId = context?.userId || 'anonymous';
-      const adapterRegistry = getAdapterRegistry({ userId, clientState: getClientState(userId) as Record<string, any> | null });
+      const adapterRegistry = getAdapterRegistry({
+        userId,
+        clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
+      });
       return JSON.stringify({
         externalAppAutomationGate: 'removed',
         messagingSendRequiresConfirmation: isMessagingSendConfirmationRequired(userId),

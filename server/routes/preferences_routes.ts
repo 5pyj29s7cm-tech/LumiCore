@@ -29,7 +29,7 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
     try {
       const uid = req.user!.uid;
       if (req.user!.orgId && !['owner', 'admin'].includes(String(req.user!.orgRole || ''))) {
-        return res.status(403).json({ error: 'Only an organization owner or administrator can change the organization Lumi appearance.' });
+        return res.status(403).json({ error: 'Only an organization owner or administrator can change the shared organization appearance overlay.' });
       }
       const { pet, accessories } = req.body || {};
       const db = readDB();

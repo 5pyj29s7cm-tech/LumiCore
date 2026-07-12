@@ -242,13 +242,13 @@ export function Settings({
                   <BiometricsEnrollPanel />
                 ) : (
                   <div className="space-y-3 text-sm text-white/65">
-                    <p>{ui('声纹和人脸属于当前成员的个人 Lumi 与本机设备，不写入组织 Lumi。', 'Voiceprints and face data belong to the current member\'s personal Lumi and device, not the organization Lumi.')}</p>
+                    <p>{ui('声纹和人脸属于当前成员的个人域与本机设备，不写入组织工作域。', 'Voiceprints and face data belong to the current member\'s personal workspace and device, not the organization workspace.')}</p>
                     <button
                       type="button"
                       onClick={() => { void switchDomain('personal'); }}
                       className="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs font-bold text-amber-200 transition-colors hover:bg-amber-400/15"
                     >
-                      {ui('切换到个人 Lumi 管理', 'Switch to personal Lumi')}
+                      {ui('切换到个人域管理', 'Switch to Personal Workspace')}
                     </button>
                   </div>
                 )}

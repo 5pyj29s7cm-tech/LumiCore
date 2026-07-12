@@ -23,7 +23,9 @@ import { recordLatency } from "../monitor/latency_store";
 import { getOrCreateActiveConversation, addMessage, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
 import { processInput, CognitiveContext, extractSentiment } from "../cognition";
 import { runOrchestratedTask, classifyComplexity, type LlmGetters } from "../agents/orchestrator";
+import { retrieveChunks } from "../agents/rag";
 import { queryMemories, addMemory } from "../memory/store";
+import { searchKnowledgeBase } from "../org/kb";
 import { matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
@@ -530,6 +532,38 @@ async function processVoiceInput(
     });
   } catch {}
 
+  // Voice and text share the same current-workspace knowledge retrieval path.
+  const voiceRagKnowledge: string[] = [];
+  try {
+    const ragAgentIds = Array.from(new Set([session.agentId, 'lumi'].filter(Boolean)));
+    for (const ragAgentId of ragAgentIds) {
+      const chunks = retrieveChunks(session.userId, ragAgentId, routedUserText, 3, {
+        domain: voiceScope.domain,
+        orgId: voiceScope.domain === 'work' ? voiceScope.orgId : '',
+      });
+      for (const chunk of chunks) {
+        const content = String((chunk as any)?.content || '').trim();
+        if (content && !voiceRagKnowledge.includes(content)) voiceRagKnowledge.push(content);
+        if (voiceRagKnowledge.length >= 5) break;
+      }
+      if (voiceRagKnowledge.length >= 5) break;
+    }
+  } catch (err: any) {
+    logger.warn(`[Audio] Scoped RAG retrieval failed: ${err?.message || String(err)}`);
+  }
+
+  let voiceOrganizationKnowledge = '';
+  if (voiceScope.domain === 'work' && voiceScope.orgId) {
+    try {
+      const results = await searchKnowledgeBase(voiceScope.orgId, routedUserText, 3);
+      voiceOrganizationKnowledge = results
+        .map(result => `[${result.title}] ${result.chunk}`)
+        .join('\n');
+    } catch (err: any) {
+      logger.warn(`[Audio] Organization knowledge retrieval failed: ${err?.message || String(err)}`);
+    }
+  }
+
   const sensoryAudio = sensoryFn(session.userId);
   const { config: personality, systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
     session.personalityId || 'lumi',
@@ -537,6 +571,7 @@ async function processVoiceInput(
     {
       userId: session.userId,
       memories: voiceMemories.length > 0 ? voiceMemories : undefined,
+      ragKnowledge: voiceRagKnowledge.length > 0 ? voiceRagKnowledge : undefined,
       userText: routedUserText,
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
@@ -691,7 +726,10 @@ async function processVoiceInput(
     flow: turnFlow,
   });
   const proactiveContextOverlay = proactiveContextPrompt ? `\n\n${proactiveContextPrompt}` : '';
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + clientSelfPrompt + topicContext + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const organizationKnowledgeOverlay = voiceOrganizationKnowledge
+    ? `\n\n## Company Knowledge Base\n${voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
+    : '';
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';

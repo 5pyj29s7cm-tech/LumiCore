@@ -8,6 +8,7 @@ import {
   getClientCapabilities,
   getClientInterfaceSurfaces,
   getClientSelfAwarenessReport,
+  getClientStateForScope,
   normalizeClientActionTarget,
   updateClientState,
   verifyClientActionResult,
@@ -106,7 +107,45 @@ describe('Lumi client self model', () => {
       'ecommerce-growth-panel',
       'subscription',
       'widget',
+      'org-dashboard',
+      'org-knowledge',
+      'org-lumi',
+      'org-messaging',
+      'org-legal',
+      'org-spatial-design',
+      'org-brand-design',
     ]));
+  });
+
+  it('verifies an exact organization workspace destination', () => {
+    const before = updateClientState('client_self_model_org_view_user', {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'home',
+      workDomain: 'work',
+      org: { connected: true, id: 'org-view-test', role: 'owner' },
+      orgWorkspace: { activeView: 'dashboard', availableViews: ['dashboard', 'legal'], visible: false },
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: {},
+    });
+    const after = updateClientState('client_self_model_org_view_user', {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'org',
+      workDomain: 'work',
+      org: { connected: true, id: 'org-view-test', role: 'owner' },
+      orgWorkspace: { activeView: 'legal', availableViews: ['dashboard', 'legal'], visible: true },
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: {},
+    });
+
+    const args = { action: 'open_organization_workspace', section: 'legal' };
+    const expectation = getClientActionExpectation(args);
+    const verified = verifyClientActionResult(args, before, after, { ok: true, section: 'legal' });
+
+    expect(expectation.expectedState).toEqual(expect.arrayContaining(['surface:org:open', 'org-view:legal']));
+    expect(verified.status).toBe('verified');
+    expect(verified.after?.openSurfaces).toContain('org:legal');
   });
 
   it('exposes local machine, visible desktop, and background runtime awareness', () => {
@@ -369,9 +408,82 @@ describe('Lumi client self model', () => {
     expect(prompt).toContain('Client Action Verification Contract');
     expect(prompt).toContain('verification.status');
   });
+
+  it('describes one Lumi with scoped knowledge and hides live work state from personal context', () => {
+    const userId = 'client_self_model_unified_scope_user';
+    updateClientState(userId, {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'org',
+      workDomain: 'work',
+      org: { connected: true, id: 'unified-scope-org', name: 'Private Work Org', role: 'owner' },
+      orgWorkspace: { activeView: 'kb', availableViews: ['dashboard', 'kb', 'chat'], visible: true },
+      knowledge: {
+        domain: 'work',
+        orgId: 'unified-scope-org',
+        totalFiles: 5,
+        indexedFiles: 3,
+        partialFiles: 1,
+        failedFiles: 1,
+        orgArticles: { total: 7, published: 6, indexed: 5, missingIndex: 1, stale: 1 },
+      },
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: {},
+    });
+
+    const workPrompt = formatClientSelfPrompt(userId, { domain: 'work', orgId: 'unified-scope-org' });
+    const personalPrompt = formatClientSelfPrompt(userId, { domain: 'personal', orgId: '' });
+
+    expect(workPrompt).toContain('same Lumi');
+    expect(workPrompt).toContain('active=kb');
+    expect(workPrompt).toContain('orgArticles=7');
+    expect(workPrompt).toContain('Never load the organization creator\'s personal data for an employee');
+    expect(personalPrompt).toContain('same continuous Lumi');
+    expect(personalPrompt).toContain('No live desktop client state has been reported yet.');
+    expect(personalPrompt).not.toContain('Private Work Org');
+    expect(personalPrompt).not.toContain('orgArticles=7');
+    expect(getClientStateForScope(userId, { domain: 'personal' })).toBeNull();
+    expect(getClientStateForScope(userId, { domain: 'work', orgId: 'another-org' })).toBeNull();
+    expect(getClientStateForScope(userId, { domain: 'work', orgId: 'unified-scope-org' })?.orgWorkspace?.activeView).toBe('kb');
+  });
 });
 
 describe('client self tools', () => {
+  it('scopes client state and personal autonomy data to the active workspace', async () => {
+    const userId = 'client_self_tool_scope_user';
+    updateClientState(userId, {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'org',
+      workDomain: 'work',
+      org: { connected: true, id: 'client-self-scope-org', name: 'Scoped Tool Org', role: 'owner' },
+      orgWorkspace: { activeView: 'chat', availableViews: ['dashboard', 'chat'], visible: true },
+      knowledge: { domain: 'work', orgId: 'client-self-scope-org', totalFiles: 2, indexedFiles: 2 },
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: {},
+    });
+
+    const registry = new ToolRegistry();
+    registerClientSelfTools(registry);
+    const personal = JSON.parse(await registry.execute('client_get_state', {}, {
+      userId,
+      domain: 'personal',
+      orgId: '',
+    }));
+    const work = JSON.parse(await registry.execute('client_get_state', {}, {
+      userId,
+      domain: 'work',
+      orgId: 'client-self-scope-org',
+    }));
+
+    expect(personal.state).toBeNull();
+    expect(JSON.stringify(personal)).not.toContain('Scoped Tool Org');
+    expect(work.state.orgWorkspace.activeView).toBe('chat');
+    expect(work.scope).toEqual({ domain: 'work', orgId: 'client-self-scope-org' });
+    expect(work.autonomyGate).toBeNull();
+    expect(work.autonomyWorkflows).toEqual([]);
+  });
+
   it('declares all client-native surfaces that the self model routes to', () => {
     const registry = new ToolRegistry();
     registerClientSelfTools(registry);

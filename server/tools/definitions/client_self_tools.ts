@@ -6,6 +6,7 @@ import {
   getClientInterfaceSurfaces,
   getClientSelfAwarenessReport,
   getClientState,
+  getClientStateForScope,
   getClientStateDigest,
   getVisibleExecutionHabits,
   verifyClientActionResult,
@@ -146,18 +147,21 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     },
     handler: async (_args, context) => {
       const userId = context?.userId || 'anonymous';
-      const state = getClientState(userId);
+      const scope = { domain: context?.domain, orgId: context?.orgId };
+      const isWork = context?.domain === 'work' && Boolean(context?.orgId);
+      const state = getClientStateForScope(userId, scope);
       return JSON.stringify({
-        selfAwareness: getClientSelfAwarenessReport(userId),
+        selfAwareness: getClientSelfAwarenessReport(userId, scope),
         capabilities: getClientCapabilities(),
         interfaceSurfaces: getClientInterfaceSurfaces(),
         visibleExecutionHabits: getVisibleExecutionHabits(),
         state,
         stateDigest: getClientStateDigest(state),
-        health: getClientHealthReport(userId),
+        health: getClientHealthReport(userId, scope),
         skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: getGateConfig(userId),
-        autonomyWorkflows: listAutonomousWorkflows(userId),
+        autonomyGate: isWork ? null : getGateConfig(userId),
+        autonomyWorkflows: isWork ? [] : listAutonomousWorkflows(userId),
+        scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
       }, null, 2);
     },
     permission: 'user',
@@ -168,7 +172,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     name: 'client_action',
     description: [
       'Safely control Lumi client UI surfaces through the client action router.',
-      'Use explicit client-native actions like refresh_client_state, open_nexus, open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_avatar_studio, open_sound_studio, open_computer_adaptation, open_settings, open_subscription, enter_widget_mode, customer_takeover_panel, design_delivery_panel, ecommerce_growth_panel, or set_wallpaper_mode.',
+      'Use explicit client-native actions like refresh_client_state, open_nexus, open_music_center, start_meeting_mode, open_runtime_log, show_knowledge_base, open_organization_workspace(section=...), open_avatar_studio, open_sound_studio, open_computer_adaptation, open_settings, open_subscription, enter_widget_mode, customer_takeover_panel, design_delivery_panel, ecommerce_growth_panel, or set_wallpaper_mode.',
       'Legacy open_app/close_app/set_mode are still accepted for compatibility.',
       'This does not use mouse/keyboard control and should be preferred over computer_use for Lumi client UI navigation.',
     ].join(' '),
@@ -219,7 +223,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         section: {
           type: 'string',
-          description: 'Optional settings section for open_settings.',
+          description: 'Optional section. For open_organization_workspace use dashboard, kb, chat, messaging, templates, review, members, audit, settings, branch, legal, spatial-design, or brand-design. For open_settings use a settings section such as computer, llm, voice, vision, or autonomy.',
         },
         confirmed: {
           type: 'boolean',
@@ -275,6 +279,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         action: payload.action,
         target: payload.target || expectation.target || '',
         mode: payload.mode || expectation.mode || '',
+        section: payload.section || '',
         expectation,
         relayResult,
         refreshResult,
@@ -297,11 +302,15 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (_args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const scope = { domain: context?.domain, orgId: context?.orgId };
+      const isWork = context?.domain === 'work' && Boolean(context?.orgId);
       return JSON.stringify({
-        report: getClientHealthReport(context?.userId || 'anonymous'),
+        report: getClientHealthReport(userId, scope),
         skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: getGateConfig(context?.userId),
-        autonomyWorkflows: listAutonomousWorkflows(context?.userId || 'anonymous'),
+        autonomyGate: isWork ? null : getGateConfig(userId),
+        autonomyWorkflows: isWork ? [] : listAutonomousWorkflows(userId),
+        scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
       }, null, 2);
     },
     permission: 'user',

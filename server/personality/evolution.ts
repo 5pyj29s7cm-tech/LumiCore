@@ -178,7 +178,7 @@ export async function synthesizeOwnerProfile(
   const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
   const orgId = domain === 'work' ? String(scope.orgId) : '';
   const memories = queryMemories({
-    ...(domain === 'personal' ? { userId } : {}),
+    userId,
     perspective: 'owner_trait',
     limit: 50,
     minConfidence: 0.3,
@@ -194,7 +194,7 @@ export async function synthesizeOwnerProfile(
     `[${i + 1}] confidence=${m.confidence.toFixed(2)} | ${m.content}`
   ).join('\n');
 
-  const subject = domain === 'work' ? 'an organization and its shared working style' : 'a person';
+  const subject = domain === 'work' ? 'one member\'s working style inside an organization' : 'a person';
   const synthesisPrompt = `You are analyzing accumulated observations about ${subject} to build a structured communication profile.
 
 Below are ${memories.length} observational memories collected over time about this person. Each has a confidence score.

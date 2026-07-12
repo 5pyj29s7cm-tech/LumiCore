@@ -102,6 +102,26 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('onProgress');
   });
 
+  it('keeps personal and organization knowledge retrieval aligned across text and voice', () => {
+    const root = process.cwd();
+    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const messaging = readFileSync(path.join(root, 'server/messaging/routes.ts'), 'utf8');
+
+    for (const source of [chat, voice]) {
+      expect(source).toContain('retrieveChunks');
+      expect(source).toContain('searchKnowledgeBase');
+      expect(source).toContain('ragKnowledge');
+      expect(source).toContain('## Company Knowledge Base');
+      expect(source).toContain("domain === 'work'");
+    }
+    expect(voice).toContain('voiceScope.orgId');
+    expect(voice).toContain('cite article titles');
+    expect(messaging).toContain('searchOrgKnowledge(msg.boundOrgId');
+    expect(messaging).toContain('OrgKB.createArticle(msg.boundOrgId!');
+    expect(messaging).toContain('getMember(binding.orgId, binding.lumiUserId)');
+  });
+
   it('keeps ordinary tools silent and records hard boundaries for one-time text confirmation', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');

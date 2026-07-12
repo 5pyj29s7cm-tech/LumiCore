@@ -150,7 +150,7 @@ export function OrgSettings() {
       if (!res.ok) throw new Error(data.error || ui(`大模型策略保存失败（${res.status}）`, `Failed to save LLM policy (${res.status})`));
       setLlmProvider(data.provider || llmProvider);
       setLlmModels(data.models && typeof data.models === 'object' ? data.models : nextModels);
-      setFeedback({ type: 'success', text: ui('公司 Lumi 大模型策略已保存', 'Company Lumi model policy saved') });
+      setFeedback({ type: 'success', text: ui('组织工作域模型策略已保存', 'Organization workspace model policy saved') });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
     } finally {
@@ -337,10 +337,10 @@ export function OrgSettings() {
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
           <div className="mb-4 flex items-center gap-2">
             <BrainCircuit size={17} className="text-blue-300" />
-            <h3 className="text-sm font-medium text-white">{ui('公司 Lumi 大模型', 'Company Lumi Model')}</h3>
+            <h3 className="text-sm font-medium text-white">{ui('组织工作域模型策略', 'Organization Workspace Model Policy')}</h3>
           </div>
           <p className="mb-4 text-sm leading-6 text-white/50">
-            {ui('组织域聊天、语音和子 agent 编排统一使用公司 Lumi 的独立模型策略，不读取任何成员的个人模型偏好。', 'Work-domain chat, voice, and agent orchestration use one independent company policy and never read a member\'s personal model preference.')}
+            {ui('组织域聊天、语音和子 agent 编排统一叠加组织模型策略，不读取或改写任何成员的个人模型偏好。', 'Work-domain chat, voice, and agent orchestration apply the organization model policy without reading or changing any member\'s personal model preference.')}
           </p>
 
           <div className="grid gap-4 md:grid-cols-[220px_1fr_auto]">

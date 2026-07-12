@@ -33,6 +33,15 @@ describe('Lumi client action routing', () => {
     expect(hasClientActionOnlyIntent('close subscription page')).toBe(true);
   });
 
+  it('routes concrete organization workspace destinations as client navigation', () => {
+    expect(hasClientActionOnlyIntent('\u6253\u5f00\u7ec4\u7ec7\u77e5\u8bc6\u5e93')).toBe(true);
+    expect(hasClientActionOnlyIntent('\u8fdb\u5165\u5f8b\u6240\u5de5\u4f5c\u53f0')).toBe(true);
+    expect(hasClientActionOnlyIntent('\u6253\u5f00\u7a7a\u95f4\u5efa\u7b51\u8bbe\u8ba1')).toBe(true);
+    expect(hasClientActionOnlyIntent('\u6253\u5f00\u54c1\u724c\u521b\u610f\u8bbe\u8ba1')).toBe(true);
+    expect(hasClientActionOnlyIntent('open company Lumi')).toBe(true);
+    expect(hasClientActionOnlyIntent('open members and permissions')).toBe(true);
+  });
+
   it('keeps information-only client questions conversational', () => {
     expect(hasClientActionOnlyIntent('中枢世界是什么')).toBe(false);
   });

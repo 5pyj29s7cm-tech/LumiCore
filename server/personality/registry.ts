@@ -134,7 +134,7 @@ class PersonalityRegistry {
   }
 
   private userStateKey(personalityId: string, userId: string, orgId?: string): string {
-    const owner = orgId ? `org:${orgId}` : `personal:${userId}`;
+    const owner = orgId ? `org:${orgId}:member:${userId}` : `personal:${userId}`;
     return `${USER_PERSONALITY_STATE_PREFIX}${personalityId}:${owner}`;
   }
 
@@ -178,23 +178,36 @@ class PersonalityRegistry {
     const base = this.get(personalityId);
     if (!base || !userId) return base;
     const config = cloneConfig(base);
-    const state = this.loadUserState(personalityId, userId, orgId);
-    if (!state) {
-      delete config.growthState;
-      delete config.lastEvolvedAt;
-      delete config.evolutionHistory;
-      delete config.evolutionAudit;
-      delete config.evolutionFrozenAt;
+    delete config.growthState;
+    delete config.lastEvolvedAt;
+    delete config.evolutionHistory;
+    delete config.evolutionAudit;
+    delete config.evolutionFrozenAt;
+
+    const applyState = (state: UserPersonalityState | null, includeGrowth: boolean) => {
+      if (!state) return;
+      config.version = state.personalityVersion || config.version;
+      if (state.expressionStyle) config.expressionStyle = cloneConfig(state.expressionStyle);
+      if (state.personalityVector) config.personalityVector = cloneConfig(state.personalityVector);
+      if (!includeGrowth) return;
+      if (state.growthState) config.growthState = cloneConfig(state.growthState);
+      config.lastEvolvedAt = state.lastEvolvedAt;
+      config.evolutionHistory = cloneConfig(state.evolutionHistory || []);
+      config.evolutionAudit = cloneConfig(state.evolutionAudit || []);
+      config.evolutionFrozenAt = state.evolutionFrozenAt;
+    };
+
+    const personalState = this.loadUserState(personalityId, userId);
+    if (!orgId) {
+      applyState(personalState, true);
       return config;
     }
-    config.version = state.personalityVersion || config.version;
-    if (state.expressionStyle) config.expressionStyle = cloneConfig(state.expressionStyle);
-    if (state.personalityVector) config.personalityVector = cloneConfig(state.personalityVector);
-    if (state.growthState) config.growthState = cloneConfig(state.growthState);
-    config.lastEvolvedAt = state.lastEvolvedAt;
-    config.evolutionHistory = cloneConfig(state.evolutionHistory || []);
-    config.evolutionAudit = cloneConfig(state.evolutionAudit || []);
-    config.evolutionFrozenAt = state.evolutionFrozenAt;
+
+    // Work keeps the member's recognizable Lumi style, then adds only that
+    // member's organization-specific adaptation. Private growth details never
+    // become organization context, and another member cannot change this key.
+    applyState(personalState, false);
+    applyState(this.loadUserState(personalityId, userId, orgId), true);
     return config;
   }
 

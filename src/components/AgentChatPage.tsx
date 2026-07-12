@@ -368,7 +368,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
-  const activeDomainLabel = isWorkChat ? ui('公司域 Lumi', 'Company Lumi') : ui('个人 Lumi', 'Personal Lumi');
+  const activeDomainLabel = isWorkChat ? ui('Lumi · 组织工作域', 'Lumi · Work Workspace') : ui('Lumi · 个人域', 'Lumi · Personal Workspace');
   const activeDomainDetail = isWorkChat
     ? ui('当前消息、附件、记忆和工具调用进入组织工作域。', 'Messages, attachments, memories, and tools are scoped to the organization.')
     : ui('当前消息只进入个人域，不写入组织知识和组织记忆。', 'Messages stay in your personal domain and do not write to organization knowledge or memory.');

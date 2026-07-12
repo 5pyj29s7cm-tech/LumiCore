@@ -153,6 +153,9 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
       const message = articleId ? ui('文章已更新', 'Article updated') : ui('文章已创建', 'Article created');
       setSuccess(message);
       toast.success(message);
+      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
+        detail: { domain: 'work', source: 'organization-knowledge-editor', articleId: data?.id || articleId || '' },
+      }));
       if (!articleId) {
         setTitle('');
         setContent('');

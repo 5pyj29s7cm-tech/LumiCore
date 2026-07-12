@@ -62,6 +62,38 @@ describe('organization workspace information architecture', () => {
     expect(branchPanel).not.toContain("ui('分支终端', 'Branch Terminal')");
   });
 
+  it('reports exact organization views and preserves routed destinations until the workspace mounts', () => {
+    const orgHub = source('src/components/org/OrgHub.tsx');
+    const desktop = source('src/components/DesktopUI.tsx');
+    const navigation = source('src/lib/orgWorkspaceNavigation.ts');
+    const contract = source('shared/org_workspace.ts');
+
+    expect(orgHub).toContain('takePendingOrganizationWorkspaceRoute');
+    expect(orgHub).toContain("'lumi:org-view-changed'");
+    expect(orgHub).toContain('canAccessOrganizationWorkspaceView');
+    expect(desktop).toContain('queueOrganizationWorkspaceRoute');
+    expect(desktop).toContain('organizationWorkspaceView');
+    expect(desktop).toContain('availableOrganizationWorkspaceViews');
+    expect(contract).toContain("'spatial-design'");
+    expect(contract).toContain("'brand-design'");
+    expect(navigation).toContain('sessionStorage');
+  });
+
+  it('reports post-ingestion health to the same current-workspace Lumi', () => {
+    const desktop = source('src/components/DesktopUI.tsx');
+    const editor = source('src/components/org/KnowledgeBaseEditor.tsx');
+    const selfModel = source('server/client/self_model.ts');
+
+    expect(desktop).toContain("'/api/org/kb/stats'");
+    expect(desktop).toContain('indexedFiles');
+    expect(desktop).toContain('partialFiles');
+    expect(desktop).toContain('pendingFiles');
+    expect(desktop).toContain("'lumi:knowledge-updated'");
+    expect(editor).toContain("'organization-knowledge-editor'");
+    expect(selfModel).toContain('A saved upload is not automatically fully usable');
+    expect(selfModel).toContain('orgMissingIndex');
+  });
+
   it('gives legal tools a shared current-case and execution-state context', () => {
     const legalHub = source('src/components/org/LegalHub.tsx');
     const contextBar = source('src/components/org/LegalCaseContextBar.tsx');

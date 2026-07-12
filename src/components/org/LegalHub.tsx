@@ -789,7 +789,7 @@ export function LegalHub() {
                 onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
                 className="inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 text-xs font-bold text-cyan-100 transition hover:bg-cyan-500/18"
               >
-                <span>{ui('去公司 Lumi 引用', 'Ask Company Lumi')}</span>
+                <span>{ui('去工作域 Lumi 引用', 'Ask Lumi in Work Workspace')}</span>
                 <ArrowRight size={14} />
               </button>
             )}
@@ -2191,7 +2191,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
         },
       }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-      setStatus(ui('已同步到组织知识库。公司 Lumi 可以在组织知识中检索并引用这份案件归档。', 'Synced to the organization knowledge base. Company Lumi can retrieve and cite this case archive.'));
+      setStatus(ui('已同步到组织知识库。工作域 Lumi 可以在组织知识中检索并引用这份案件归档。', 'Synced to the organization knowledge base. Lumi can retrieve and cite this case archive in the work workspace.'));
       toast.success(ui('案件已同步到组织知识库', 'Case synced to organization knowledge base'));
     } catch (err: any) {
       const message = err?.message || ui('同步知识库失败', 'Failed to sync to knowledge base');
@@ -2228,7 +2228,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
               <div className="min-w-0">
                 <h2 className="truncate text-xl font-semibold text-white">{ui('同步到组织知识库', 'Sync to Organization Knowledge')}</h2>
                 <p className="mt-1 text-sm leading-6 text-white/50">
-                  {ui('把当前案件、事实摘要、会谈纪要、裁判文书和工具产物汇总成组织知识，供公司 Lumi 后续引用。', 'Package the current case, facts, consultation notes, judgments, and tool outputs into organization knowledge for Company Lumi.')}
+                  {ui('把当前案件、事实摘要、会谈纪要、裁判文书和工具产物汇总成组织知识，供工作域 Lumi 后续引用。', 'Package the current case, facts, consultation notes, judgments, and tool outputs into organization knowledge for Lumi in the work workspace.')}
                 </p>
               </div>
             </div>
@@ -2263,7 +2263,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
               onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
               className="lumi-button h-9 px-3 text-xs"
             >
-              {ui('去公司 Lumi 引用', 'Ask Company Lumi')}
+              {ui('去工作域 Lumi 引用', 'Ask Lumi in Work Workspace')}
             </button>
           </div>
         </section>

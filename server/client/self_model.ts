@@ -8,6 +8,10 @@ import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getActionConstitutionPolicy } from '../tools/action_constitution';
 import { formatDesktopAwarenessForPrompt } from './desktop_awareness';
 import { listCapabilityLearningRecords } from '../self_extension/capability_memory';
+import {
+  normalizeOrganizationWorkspaceView,
+  type OrganizationWorkspaceView,
+} from '../../shared/org_workspace';
 
 export type ClientMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 export type ClientCapabilityKind =
@@ -56,6 +60,30 @@ export interface ClientStateSnapshot {
   viewMode?: 'personal' | 'world' | string;
   workDomain?: 'personal' | 'work';
   org?: { connected?: boolean; id?: string; name?: string; role?: string };
+  orgWorkspace?: {
+    activeView?: OrganizationWorkspaceView | string;
+    availableViews?: string[];
+    visible?: boolean;
+  };
+  knowledge?: {
+    domain?: 'personal' | 'work';
+    orgId?: string;
+    totalFiles?: number;
+    indexedFiles?: number;
+    partialFiles?: number;
+    pendingFiles?: number;
+    failedFiles?: number;
+    unsupportedFiles?: number;
+    orgArticles?: {
+      total?: number;
+      published?: number;
+      indexed?: number;
+      missingIndex?: number;
+      stale?: number;
+    };
+    refreshedAt?: number;
+    lastError?: string;
+  };
   windows?: { open?: string[]; focused?: string | null; minimized?: string[] };
   surfaces?: {
     knowledgeOpen?: boolean;
@@ -168,6 +196,8 @@ export interface ClientStateDigest {
   music: string;
   meetingActive: boolean;
   runtimeStatus: string;
+  orgView: string;
+  knowledge: string;
   stateAgeSeconds: number | null;
   socketId: string;
 }
@@ -267,9 +297,9 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'workspace.org',
     label: 'Organization workspace',
     kind: 'organization',
-    actions: ['open_organization_workspace'],
-    notes: 'Organization hub for local/cloud org work, knowledge base, templates, members, audit, and settings.',
-    stateKeys: ['workDomain', 'org'],
+    actions: ['open_organization_workspace(section=dashboard|kb|chat|messaging|templates|review|members|audit|settings|branch|legal|spatial-design|brand-design)'],
+    notes: 'A work-space overlay for the same Lumi identity. It exposes role-scoped organization knowledge, company Lumi chat, messaging, templates, members, audit, settings/branch connection, legal, spatial architecture, and brand creative work without merging any member personal memory.',
+    stateKeys: ['workDomain', 'org', 'orgWorkspace', 'knowledge'],
   },
   {
     id: 'workspace.runtime_log',
@@ -284,8 +314,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Knowledge base and memory',
     kind: 'knowledge',
     actions: ['show_knowledge_base', 'open_files'],
-    notes: 'Personal knowledge, uploaded knowledge-base files, memories, imports, and memory organization. Use this as Lumi\'s single file knowledge surface.',
-    stateKeys: ['surfaces.knowledgeOpen'],
+    notes: 'The current-domain knowledge surface. Personal uploads remain personal; work uploads become organization knowledge. Saved, extracted, indexed, partial, pending, and failed are distinct states.',
+    stateKeys: ['surfaces.knowledgeOpen', 'knowledge'],
   },
   {
     id: 'window.device_sync',
@@ -629,7 +659,7 @@ const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     id: 'knowledge',
     label: 'Knowledge base and memory',
     actions: ['show_knowledge_base', 'open_files'],
-    useWhen: 'Show personal knowledge, imported files, memories, and source-bound context.',
+    useWhen: 'Show knowledge, imported files, memories, and indexing health for the currently active personal or organization workspace.',
     closeAfterUse: true,
   },
   {
@@ -678,7 +708,77 @@ const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     id: 'org',
     label: 'Organization workspace',
     actions: ['open_organization_workspace'],
-    useWhen: 'Show work-domain knowledge, templates, members, audit, or team organization surfaces.',
+    useWhen: 'Enter the role-scoped organization overlay for the same Lumi identity; use a section-specific action for a concrete destination.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-dashboard',
+    label: 'Organization dashboard',
+    actions: ['open_organization_workspace(section=dashboard)'],
+    useWhen: 'Show organization status, shared work, and the main organization destinations.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-knowledge',
+    label: 'Organization knowledge base',
+    actions: ['open_organization_workspace(section=kb)'],
+    useWhen: 'Browse role-authorized organization articles, uploaded sources, and post-ingestion index health.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-lumi',
+    label: 'Lumi in the organization workspace',
+    actions: ['open_organization_workspace(section=chat)'],
+    useWhen: 'Chat with the same Lumi under the active organization overlay and organization knowledge scope.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-messaging',
+    label: 'Organization messaging',
+    actions: ['open_organization_workspace(section=messaging)'],
+    useWhen: 'Manage Feishu and WeCom organization access and routed organization messages; viewer roles cannot open it.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-templates',
+    label: 'Agent templates and review',
+    actions: ['open_organization_workspace(section=templates)', 'open_organization_workspace(section=review)'],
+    useWhen: 'Use the organization template marketplace; review is available only to owners and administrators.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-governance',
+    label: 'Members, permissions, and audit',
+    actions: ['open_organization_workspace(section=members)', 'open_organization_workspace(section=audit)'],
+    useWhen: 'Administer members, permissions, and audit records; available only to owners and administrators.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-settings',
+    label: 'Organization settings and branch connection',
+    actions: ['open_organization_workspace(section=settings)', 'open_organization_workspace(section=branch)'],
+    useWhen: 'Open organization settings or branch connection without creating a separate organization client.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-legal',
+    label: 'Law firm workspace',
+    actions: ['open_organization_workspace(section=legal)'],
+    useWhen: 'Open organization-scoped cases, evidence, legal research, documents, delivery gates, and filing handoff.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-spatial-design',
+    label: 'Spatial and architecture workspace',
+    actions: ['open_organization_workspace(section=spatial-design)'],
+    useWhen: 'Open spatial, interior, architecture, CAD, and design-delivery work.',
+    closeAfterUse: true,
+  },
+  {
+    id: 'org-brand-design',
+    label: 'Brand and creative workspace',
+    actions: ['open_organization_workspace(section=brand-design)'],
+    useWhen: 'Open brand identity, campaign, visual, and creative-delivery work separately from spatial design.',
     closeAfterUse: true,
   },
   {
@@ -826,8 +926,25 @@ export function getClientState(userId: string): ClientStateSnapshot | null {
   return stateByUser.get(userId || 'anonymous') || null;
 }
 
-export function getClientHealthReport(userId: string): ClientHealthReport {
+export function getClientStateForScope(
+  userId: string,
+  scope: { domain?: string; orgId?: string } = {},
+): ClientStateSnapshot | null {
   const state = getClientState(userId);
+  if (!state || !scope.domain) return state;
+  if (scope.domain === 'work') {
+    const knowledgeMatches = !state.knowledge
+      || (state.knowledge.domain === 'work' && (!state.knowledge.orgId || state.knowledge.orgId === scope.orgId));
+    return scope.orgId && state.workDomain === 'work' && state.org?.id === scope.orgId && knowledgeMatches ? state : null;
+  }
+  return state.workDomain === 'work' || state.knowledge?.domain === 'work' ? null : state;
+}
+
+export function getClientHealthReport(
+  userId: string,
+  scope: { domain?: string; orgId?: string } = {},
+): ClientHealthReport {
+  const state = getClientStateForScope(userId, scope);
   const now = Date.now();
   const findings: ClientHealthFinding[] = [];
   const stateAgeSeconds = state?.updatedAt ? Math.round((now - state.updatedAt) / 1000) : null;
@@ -894,6 +1011,41 @@ export function getClientHealthReport(userId: string): ClientHealthReport {
       message: 'Runtime log reports a client/runtime issue.',
       evidence: state.runtimeLog.lastError,
       safeActions: ['client_self_repair(open_recovery_surface:runtime-log)'],
+    });
+  }
+
+  if (state?.knowledge?.lastError) {
+    add({
+      id: 'knowledge.refresh_error',
+      level: 'attention',
+      area: 'knowledge',
+      message: 'The current workspace knowledge inventory could not be fully refreshed.',
+      evidence: state.knowledge.lastError,
+      safeActions: ['client_action(show_knowledge_base)', 'client_self_repair(refresh_client_state)'],
+    });
+  }
+  const failedKnowledgeFiles = Number(state?.knowledge?.failedFiles || 0);
+  const unsupportedKnowledgeFiles = Number(state?.knowledge?.unsupportedFiles || 0);
+  const partialKnowledgeFiles = Number(state?.knowledge?.partialFiles || 0);
+  const pendingKnowledgeFiles = Number(state?.knowledge?.pendingFiles || 0);
+  if (failedKnowledgeFiles || unsupportedKnowledgeFiles || partialKnowledgeFiles || pendingKnowledgeFiles) {
+    add({
+      id: 'knowledge.ingestion_attention',
+      level: 'attention',
+      area: 'knowledge',
+      message: 'Some saved knowledge files are not fully indexed and should not be treated as completely retrievable.',
+      evidence: `partial=${partialKnowledgeFiles}, pending=${pendingKnowledgeFiles}, failed=${failedKnowledgeFiles}, unsupported=${unsupportedKnowledgeFiles}`,
+      safeActions: ['client_action(show_knowledge_base)'],
+    });
+  }
+  if (Number(state?.knowledge?.orgArticles?.missingIndex || 0) || Number(state?.knowledge?.orgArticles?.stale || 0)) {
+    add({
+      id: 'knowledge.organization_index_attention',
+      level: 'attention',
+      area: 'knowledge',
+      message: 'Some organization articles have a missing or stale semantic index; keyword retrieval may still work.',
+      evidence: `missing=${state?.knowledge?.orgArticles?.missingIndex || 0}, stale=${state?.knowledge?.orgArticles?.stale || 0}`,
+      safeActions: ['client_action(open_organization_workspace, section=kb)'],
     });
   }
 
@@ -1087,10 +1239,15 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   if (state.surfaces?.ecommerceGrowthOpen || state.surfaces?.ecommerceGrowthStage) {
     openSurfaces.push(`ecommerce-growth-panel${state.surfaces?.ecommerceGrowthStage ? `:${state.surfaces.ecommerceGrowthStage}` : ''}`);
   }
+  const orgView = state.orgWorkspace?.activeView || 'none';
+  if (state.activeTab === 'org' && orgView !== 'none') openSurfaces.push(`org:${orgView}`);
   for (const win of openWindows) {
     if (!openSurfaces.includes(win)) openSurfaces.push(win);
   }
   const stateAgeSeconds = state.updatedAt ? Math.max(0, Math.round((Date.now() - state.updatedAt) / 1000)) : null;
+  const knowledge = state.knowledge
+    ? `${state.knowledge.domain || state.workDomain || 'personal'}:files=${state.knowledge.totalFiles || 0},indexed=${state.knowledge.indexedFiles || 0},partial=${state.knowledge.partialFiles || 0},pending=${state.knowledge.pendingFiles || 0},failed=${state.knowledge.failedFiles || 0},unsupported=${state.knowledge.unsupportedFiles || 0}${state.knowledge.orgArticles ? `,orgArticles=${state.knowledge.orgArticles.total || 0},orgIndexed=${state.knowledge.orgArticles.indexed || 0},orgMissing=${state.knowledge.orgArticles.missingIndex || 0},orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}`
+    : 'unknown';
   return {
     mode: state.mode || 'unknown',
     activeTab: state.activeTab || 'unknown',
@@ -1106,6 +1263,8 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
         : 'idle',
     meetingActive: Boolean(state.meeting?.active),
     runtimeStatus: state.runtimeLog?.status || (state.runtime?.lastError ? 'attention' : 'ready'),
+    orgView,
+    knowledge,
     stateAgeSeconds,
     socketId: state.socketId || 'unknown',
   };
@@ -1117,6 +1276,7 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
   const section = String(args.section || '').trim();
   const enabled = Boolean(args.enabled);
   let target = normalizeClientActionTarget(args.target);
+  const requestedOrganizationView = normalizeOrganizationWorkspaceView(section || target);
   let expectedState: string[] = [];
   let verification = 'Check the latest client state after the action before claiming success.';
   let naturalCompletion = 'Done.';
@@ -1218,6 +1378,12 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       break;
     case 'open_organization_workspace':
       setSurface('org', 'organization workspace');
+      if (requestedOrganizationView) {
+        expectedState.push(`org-view:${requestedOrganizationView}`);
+        verification = `The organization workspace and its ${requestedOrganizationView} view should be visible in fresh client state.`;
+        naturalCompletion = `Organization workspace is open on ${requestedOrganizationView}.`;
+        naturalPending = `I asked to open the organization ${requestedOrganizationView} view, but fresh client state has not confirmed that exact view yet.`;
+      }
       break;
     case 'open_settings':
       setSurface(section === 'computer' ? 'kernel' : 'settings', section === 'computer' ? 'computer adaptation center' : 'settings');
@@ -1362,19 +1528,26 @@ export function verifyClientActionResult(
   };
 }
 
-export function getClientSelfAwarenessReport(userId: string): ClientSelfAwarenessReport {
-  const state = getClientState(userId);
-  const health = getClientHealthReport(userId);
+export function getClientSelfAwarenessReport(
+  userId: string,
+  scope: { domain?: string; orgId?: string } = {},
+): ClientSelfAwarenessReport {
+  const state = getClientStateForScope(userId, scope);
+  const health = getClientHealthReport(userId, scope);
   const digest = getClientStateDigest(state);
   const stale = health.stateAgeSeconds != null && health.stateAgeSeconds > 30;
   const level: ClientSelfAwarenessReport['level'] = !state ? 'missing' : stale ? 'stale' : 'live';
   const gaps: string[] = [];
   if (!state) gaps.push('No live client state has arrived yet.');
   if (stale) gaps.push(`Client state is ${health.stateAgeSeconds}s old; refresh before acting.`);
+  if (state?.knowledge?.lastError) gaps.push(`Knowledge inventory: ${state.knowledge.lastError}`);
+  if (Number(state?.knowledge?.failedFiles || 0) || Number(state?.knowledge?.unsupportedFiles || 0)) {
+    gaps.push(`Knowledge ingestion needs attention: failed=${state?.knowledge?.failedFiles || 0}, unsupported=${state?.knowledge?.unsupportedFiles || 0}.`);
+  }
   if (health.findings.length) gaps.push(...health.findings.slice(0, 3).map(f => `${f.area}: ${f.message}`));
 
   const bodySummary = digest
-    ? `mode=${digest.mode}; active=${digest.activeTab}; view=${digest.viewMode}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
+    ? `mode=${digest.mode}; active=${digest.activeTab}; view=${digest.viewMode}; orgView=${digest.orgView}; focused=${digest.focusedWindow}; surfaces=${digest.openSurfaces.join(', ') || 'none'}; knowledge=${digest.knowledge}; health=${health.level}; age=${digest.stateAgeSeconds ?? 'unknown'}s`
     : `no live client body; health=${health.level}`;
 
   return {
@@ -1383,6 +1556,9 @@ export function getClientSelfAwarenessReport(userId: string): ClientSelfAwarenes
     currentState: digest,
     knows: [
       'client surfaces and their native client_action routes',
+      'the exact current organization workspace view and the views allowed by the authenticated member role',
+      'the current-domain knowledge inventory and the difference between saved, indexed, partial, pending, failed, unsupported, missing-index, and stale content',
+      'one continuous Lumi identity with personal and organization workspace overlays; organization access never grants another member personal memory access',
       'current mode, active tab, windows, focused window, voice/music/meeting/runtime state when the desktop reports it',
       'local machine identity, installed/launchable apps, files, folders, startup entries, services, and running processes when refreshed through desktop relay tools',
       'visible desktop state: foreground window, screen pixels, accessible UI controls, clipboard, cursor/input focus, and existing taskbar/background app sessions',
@@ -1396,6 +1572,7 @@ export function getClientSelfAwarenessReport(userId: string): ClientSelfAwarenes
       'Before saying what this machine has installed, where a file is, what is on the desktop, or what is running, refresh with desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_active_window, desktop_running_processes, or desktop_capture_screen as needed.',
       'Before saying Lumi can keep working in the background, read client_get_state or client_health_check and distinguish resident runtime from autonomous workflow execution.',
       'After client_action, trust verified state or explicit failure, not intention alone.',
+      'After an upload or article save, inspect current-domain ingestion and index health before claiming that the source is fully retrievable.',
       'For external apps, inspect the active window/screen and use adapters before mouse/keyboard control.',
       'Report only done, blocked, and needs-confirmation items for takeover work.',
     ],
@@ -1441,6 +1618,11 @@ function clientStateMatchesExpectation(
   }
   if (expected.startsWith('mode:not:')) return after?.mode !== expected.slice('mode:not:'.length);
   if (expected.startsWith('mode:')) return after?.mode === expected.slice('mode:'.length);
+  if (expected.startsWith('org-view:')) {
+    const requestedView = normalizeOrganizationWorkspaceView(expected.slice('org-view:'.length));
+    const activeView = normalizeOrganizationWorkspaceView(after?.orgWorkspace?.activeView);
+    return Boolean(requestedView && activeView === requestedView && after?.activeTab === 'org');
+  }
   const surfaceMatch = expected.match(/^surface:(.+):(open|closed)$/);
   if (surfaceMatch) {
     const [, surface, desired] = surfaceMatch;
@@ -1496,7 +1678,7 @@ function formatLearnedCapabilityRoutes(
       .filter(record => ['learned', 'experiment_prepared', 'experiment_passed'].includes(record.status));
     if (!records.length) {
       return [scope.domain === 'work'
-        ? '- No organization-scoped learned routes yet. Organization Lumi does not inherit member personal capability routes.'
+        ? '- No organization-scoped learned routes yet. The current work workspace does not expose any member\'s personal learned routes.'
         : '- No persisted learned capability routes yet. When a capability gap appears, use capability_gap_autofix to create one.'];
     }
     return records.map(record => [
@@ -1517,17 +1699,17 @@ export function formatClientSelfPrompt(
   scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
 ): string {
   const isWork = scope.domain === 'work' && Boolean(scope.orgId);
-  const rawState = getClientState(userId);
-  const state = isWork
-    ? rawState?.workDomain === 'work' && rawState.org?.id === scope.orgId ? rawState : null
-    : rawState;
-  const health = state ? getClientHealthReport(userId) : {
+  const state = getClientStateForScope(userId, {
+    domain: isWork ? 'work' : 'personal',
+    orgId: isWork ? scope.orgId : '',
+  });
+  const health = state ? getClientHealthReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }) : {
     level: 'unknown' as const,
     stateAgeSeconds: null,
     findings: [],
     autonomyBoundary: { automatic: [], confirmFirst: [], forbidden: [] },
   };
-  const awareness = state ? getClientSelfAwarenessReport(userId) : {
+  const awareness = state ? getClientSelfAwarenessReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }) : {
     level: 'missing' as const,
     bodySummary: isWork
       ? 'No live desktop state has been verified for this member in the active organization.'
@@ -1570,6 +1752,8 @@ export function formatClientSelfPrompt(
     `- View mode: ${state.viewMode || 'personal'}${state.viewMode === 'world' || state.surfaces?.nexusOpen ? ' (Nexus / central world visible)' : ''}`,
     `- Work domain: ${state.workDomain || 'personal'}`,
     `- Organization: ${state.org?.connected ? `${state.org.name || state.org.id || 'connected'} (${state.org.role || 'member'}${state.org.id ? `, id=${state.org.id}` : ''})` : 'not connected or personal domain'}`,
+    `- Organization workspace: visible=${Boolean(state.orgWorkspace?.visible)}, active=${state.orgWorkspace?.activeView || 'none'}, allowed=${state.orgWorkspace?.availableViews?.join(', ') || 'none reported'}`,
+    `- Knowledge ingestion: domain=${state.knowledge?.domain || state.workDomain || 'personal'}, files=${state.knowledge?.totalFiles || 0}, indexed=${state.knowledge?.indexedFiles || 0}, partial=${state.knowledge?.partialFiles || 0}, pending=${state.knowledge?.pendingFiles || 0}, failed=${state.knowledge?.failedFiles || 0}, unsupported=${state.knowledge?.unsupportedFiles || 0}${state.knowledge?.orgArticles ? `, orgArticles=${state.knowledge.orgArticles.total || 0}, orgPublished=${state.knowledge.orgArticles.published || 0}, orgIndexed=${state.knowledge.orgArticles.indexed || 0}, orgMissingIndex=${state.knowledge.orgArticles.missingIndex || 0}, orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}${state.knowledge?.lastError ? `, error=${state.knowledge.lastError}` : ''}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
     `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}, customerPanel=${state.surfaces?.customerTakeoverStage || false}, designPanel=${state.surfaces?.designDeliveryStage || false}, ecommercePanel=${state.surfaces?.ecommerceGrowthStage || false}`,
@@ -1582,7 +1766,7 @@ export function formatClientSelfPrompt(
     `- Tools: agent=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
     `- Native runtime: autostartSupported=${Boolean(state.runtime?.autostartSupported)}, autostart=${Boolean(state.runtime?.autostartEnabled)}, closeToBackground=${Boolean(state.runtime?.closeToBackground)}, startedInBackground=${Boolean(state.runtime?.startedInBackground)}, backendNode=${state.runtime?.backendNodeRunning ? 'running' : 'dev/not-spawned'}, backendPython=${state.runtime?.backendPythonRunning ? 'running' : 'dev/not-spawned'}, nodeRestarts=${state.runtime?.nodeRestarts ?? 0}, pythonRestarts=${state.runtime?.pythonRestarts ?? 0}, shortcut=${state.runtime?.globalShortcut || 'Alt+Space'}${state.runtime?.lastError ? `, error=${state.runtime.lastError}` : ''}`,
     isWork
-      ? '- Organization scope does not inherit personal autonomy settings, autonomous workflows, music profile, or local learning state.'
+      ? '- The work workspace does not expose personal autonomy settings, autonomous workflows, music profile, private memories, or local learning records.'
       : `- Autonomy level: ${gate.autonomyLevel} (alwaysOnline=${gate.alwaysOnline}, autoProcess=${gate.autoProcessEnabled}, messagingSendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}, maxConsecutiveTasks=${gate.maxConsecutiveTasks}, externalAppAutomationGate=removed)`,
     isWork
       ? '- Organization autonomous workflows: not configured on this personal client surface.'
@@ -1607,12 +1791,28 @@ export function formatClientSelfPrompt(
     ...awareness.gaps.slice(0, 4).map(gap => `- Gap: ${gap}`),
     ...awareness.nextBestActions.slice(0, 3).map(action => `- Next: ${action}`),
   ];
+  const workspaceIdentityLines = isWork ? [
+    '- Identity: this is the same Lumi personality and capability core serving the authenticated member, with an organization overlay for the active workspace; it is not a second or replacement Lumi.',
+    `- Active organization scope: ${scope.orgId}. Use only organization data allowed by the authenticated member role and keep every action attributed to that member.`,
+    '- Organization knowledge, cases, templates, and explicitly shared artifacts belong to the organization and may be visible to other authorized members.',
+    '- Each member keeps their own personal memories, private conversations, personality preferences, local-machine learning, files, and autonomous workflows. Never load the organization creator\'s personal data for an employee.',
+    '- A creator or owner has broader organization permissions, not an automatic data merge. Moving a source between personal and organization workspaces must be explicit and source-attributed.',
+    '- Organization conversations are member-scoped unless a message, artifact, case record, or result is explicitly archived into a shared organization resource.',
+    '- A saved upload is not automatically fully usable. Treat indexed as retrievable, partial as incomplete, pending as not ready, and failed/unsupported as unavailable. Missing or stale semantic indexes may still have keyword fallback, but must be reported accurately.',
+    '- Text chat, voice chat, organization-workspace chat, and bound Feishu/WeCom entry points must retrieve from the same authorized organization knowledge scope and cite organization article titles when used.',
+  ] : [
+    '- Identity: this is the same continuous Lumi that can enter organization workspaces; switching workspaces changes the authorized context, not Lumi\'s personality or relationship continuity.',
+    '- Personal memories, private conversations, personality preferences, local-machine learning, files, and autonomous workflows belong only to this user.',
+    '- Lumi may know the organization interface map while in the personal workspace, but must not read or silently absorb organization data until an authenticated work workspace is active.',
+    '- Creating or owning an organization grants role-based access; it does not merge organization assets into personal memory. Cross-workspace copy or promotion must be explicit and source-attributed.',
+    '- A saved upload is not automatically fully usable. Treat indexed as retrievable, partial as incomplete, pending as not ready, and failed/unsupported as unavailable.',
+  ];
 
   return [
     '## Lumi Client Self Model',
     isWork
-      ? `You are the organization Lumi for organization ${scope.orgId}. Keep organization identity, knowledge, conversations, and routing separate from every member's personal Lumi. A member's device is an authorized execution endpoint, not organization memory or organization identity.`
-      : 'You are Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
+      ? `You are the same Lumi operating in organization workspace ${scope.orgId} for the currently authenticated member. Apply the organization overlay and role permissions without changing the member's core Lumi identity or exposing any other member's personal data.`
+      : 'You are the user\'s continuous Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',
     'Keep three maps separate and current: local machine (host, files, apps, processes), visible desktop (foreground window, screen/UI controls, cursor, logged-in sessions), and background runtime (client visibility, autostart, close-to-background, backend health, runtime log, confirmed autonomous workflows).',
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
@@ -1644,6 +1844,9 @@ export function formatClientSelfPrompt(
     'If a routed client action, music playback, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',
     'Do not shrink yourself into voice interaction. Voice, chat, Feishu, runtime logs, organization, music, meeting, tools, skills, files, and desktop control are different entrances into the same local Lumi.',
     'Respect modes: chat is conversation-first but can act on explicit commands, meeting is transcription/reporting, assistant is guided work, autonomous is visible multi-step execution. Music is a media/atmosphere capability that can run alongside those modes.',
+    '',
+    '### Workspace Identity And Data Boundaries',
+    ...workspaceIdentityLines,
     '',
     '### Interface Map',
     ...interfaceLines,
@@ -1695,7 +1898,7 @@ export function formatClientSelfPrompt(
     '### Action Constitution',
     ...actionConstitution.rules.map(rule => `- ${rule}`),
     '',
-    isWork ? 'Organization scope does not inherit the member\'s personal LAP profile.' : formatLAPSelfPrompt(),
+    isWork ? 'The active work workspace does not expose the member\'s personal LAP profile.' : formatLAPSelfPrompt(),
   ].join('\n');
 }
 

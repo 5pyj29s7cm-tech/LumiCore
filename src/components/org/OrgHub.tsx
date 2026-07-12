@@ -8,6 +8,16 @@ import {
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import { toast } from 'sonner';
+import {
+  canAccessOrganizationWorkspaceView,
+  listOrganizationWorkspaceViewsForRole,
+  normalizeOrganizationWorkspaceView,
+  type OrganizationWorkspaceView,
+} from '../../../shared/org_workspace';
+import {
+  clearPendingOrganizationWorkspaceRoute,
+  takePendingOrganizationWorkspaceRoute,
+} from '../../lib/orgWorkspaceNavigation';
 
 const AuditLogViewer = lazy(() => import('./AuditLogViewer').then(m => ({ default: m.AuditLogViewer })));
 const AgentTemplateWorkspace = lazy(() => import('./AgentTemplateWorkspace').then(m => ({ default: m.AgentTemplateWorkspace })));
@@ -22,7 +32,7 @@ const OrgMembers = lazy(() => import('./OrgMembers').then(m => ({ default: m.Org
 const OrganizationSettingsWorkspace = lazy(() => import('./OrganizationSettingsWorkspace').then(m => ({ default: m.OrganizationSettingsWorkspace })));
 const TemplateCreator = lazy(() => import('./TemplateCreator').then(m => ({ default: m.TemplateCreator })));
 
-type SubView = 'dashboard' | 'kb' | 'kb-edit' | 'templates' | 'templates-create' | 'review' | 'chat' | 'messaging' | 'members' | 'settings' | 'audit' | 'legal' | 'spatial-design' | 'brand-design' | 'branch';
+type SubView = OrganizationWorkspaceView;
 
 interface NavItem {
   id: SubView;
@@ -44,11 +54,16 @@ function OrgViewFallback() {
 }
 
 export function OrgHub() {
-  const [subView, setSubView] = useState<SubView>('dashboard');
-  const [editingArticleId, setEditingArticleId] = useState<string | undefined>(undefined);
+  const { workDomain, switchDomain, orgConnection } = useApp();
+  const orgRole = orgConnection?.orgRole || 'member';
+  const [initialRoute] = useState(() => {
+    const route = takePendingOrganizationWorkspaceRoute();
+    return route && canAccessOrganizationWorkspaceView(orgRole, route.view) ? route : null;
+  });
+  const [subView, setSubView] = useState<SubView>(() => initialRoute?.view || 'dashboard');
+  const [editingArticleId, setEditingArticleId] = useState<string | undefined>(() => initialRoute?.articleId);
   const [switchBusy, setSwitchBusy] = useState(false);
   const [orgModulesOpen, setOrgModulesOpen] = useState(false);
-  const { workDomain, switchDomain, orgConnection } = useApp();
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
@@ -80,18 +95,23 @@ export function OrgHub() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.tab === 'org' && detail?.sub) {
-        const requestedView = detail.sub === 'design' ? 'spatial-design' : detail.sub;
+        const requestedView = normalizeOrganizationWorkspaceView(detail.sub);
+        if (!requestedView || !canAccessOrganizationWorkspaceView(orgRole, requestedView)) return;
         if (requestedView === 'kb-edit') setEditingArticleId(detail.articleId || undefined);
         else if (requestedView === 'kb') setEditingArticleId(undefined);
-        setSubView(requestedView as SubView);
+        setSubView(requestedView);
+        window.setTimeout(clearPendingOrganizationWorkspaceRoute, 0);
       }
     };
     window.addEventListener('lumi:navigate', handler);
     return () => window.removeEventListener('lumi:navigate', handler);
-  }, []);
+  }, [orgRole]);
 
-  const orgRole = orgConnection?.orgRole || 'member';
   const visibleItems = allNavItems.filter(item => item.roles.includes(orgRole as any));
+  const availableWorkspaceViews = useMemo(
+    () => listOrganizationWorkspaceViewsForRole(orgRole),
+    [orgRole],
+  );
   const moduleItemIds = useMemo(() => new Set<SubView>(['legal', 'spatial-design', 'brand-design']), []);
   const primaryNavItems = visibleItems.filter(item => item.showInNav !== false && !moduleItemIds.has(item.id));
   const moduleNavItems = visibleItems.filter(item => moduleItemIds.has(item.id));
@@ -102,6 +122,24 @@ export function OrgHub() {
   React.useEffect(() => {
     if (isModuleView) setOrgModulesOpen(true);
   }, [isModuleView]);
+
+  React.useEffect(() => {
+    if (!canAccessOrganizationWorkspaceView(orgRole, subView)) {
+      setEditingArticleId(undefined);
+      setSubView('dashboard');
+    }
+  }, [orgRole, subView]);
+
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent('lumi:org-view-changed', {
+      detail: {
+        activeView: subView,
+        availableViews: availableWorkspaceViews,
+        orgId: orgConnection?.orgId || '',
+        role: orgRole,
+      },
+    }));
+  }, [availableWorkspaceViews, orgConnection?.orgId, orgRole, subView]);
 
   const openSubView = (view: SubView) => {
     if (view !== 'kb-edit') setEditingArticleId(undefined);

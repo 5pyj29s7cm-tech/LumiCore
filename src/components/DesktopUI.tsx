@@ -92,6 +92,14 @@ import {
 import { PresenceIndicator } from './biometrics/PresenceIndicator';
 import { systemService } from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
+import { apiFetch } from '@/services/apiClient';
+import {
+  canAccessOrganizationWorkspaceView,
+  listOrganizationWorkspaceViewsForRole,
+  normalizeOrganizationWorkspaceView,
+  type OrganizationWorkspaceView,
+} from '../../shared/org_workspace';
+import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
 
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
@@ -130,6 +138,41 @@ type ProactiveChatDetail = {
   context?: Record<string, any>;
   timestamp?: string;
 };
+
+interface ClientKnowledgeRuntimeState {
+  domain: 'personal' | 'work';
+  orgId: string;
+  totalFiles: number;
+  indexedFiles: number;
+  partialFiles: number;
+  pendingFiles: number;
+  failedFiles: number;
+  unsupportedFiles: number;
+  orgArticles?: {
+    total: number;
+    published: number;
+    indexed: number;
+    missingIndex: number;
+    stale: number;
+  };
+  refreshedAt: number;
+  lastError: string;
+}
+
+function emptyKnowledgeRuntimeState(domain: 'personal' | 'work', orgId = ''): ClientKnowledgeRuntimeState {
+  return {
+    domain,
+    orgId,
+    totalFiles: 0,
+    indexedFiles: 0,
+    partialFiles: 0,
+    pendingFiles: 0,
+    failedFiles: 0,
+    unsupportedFiles: 0,
+    refreshedAt: 0,
+    lastError: '',
+  };
+}
 
 function proactiveActionLabel(action: string | undefined, lang: 'en' | 'zh'): string {
   const labels: Record<string, { zh: string; en: string }> = {
@@ -1901,6 +1944,29 @@ export function DesktopUI({
   const [windowOrder, setWindowOrder] = useState<string[]>(activeTab !== 'home' && activeTab !== 'knowledge' ? [activeTab] : []);
   const [knowledgeOpen, setKnowledgeOpen] = useState(activeTab === 'knowledge');
   const [knowledgeLoaded, setKnowledgeLoaded] = useState(activeTab === 'knowledge');
+  const [organizationWorkspaceView, setOrganizationWorkspaceView] = useState<OrganizationWorkspaceView>('dashboard');
+  const availableOrganizationWorkspaceViews = useMemo(
+    () => listOrganizationWorkspaceViewsForRole(orgConnection?.orgRole),
+    [orgConnection?.orgRole],
+  );
+  const [knowledgeRuntimeState, setKnowledgeRuntimeState] = useState<ClientKnowledgeRuntimeState>(() => (
+    emptyKnowledgeRuntimeState(
+      workDomain === 'work' ? 'work' : 'personal',
+      workDomain === 'work' ? orgConnection?.orgId || '' : '',
+    )
+  ));
+  const reportedKnowledgeRuntimeState = useMemo(() => {
+    const expectedDomain = workDomain === 'work' ? 'work' : 'personal';
+    const expectedOrgId = expectedDomain === 'work' ? orgConnection?.orgId || '' : '';
+    if (knowledgeRuntimeState.domain === expectedDomain && knowledgeRuntimeState.orgId === expectedOrgId) {
+      return knowledgeRuntimeState;
+    }
+    return {
+      ...emptyKnowledgeRuntimeState(expectedDomain, expectedOrgId),
+      lastError: 'knowledge_inventory_refreshing',
+    };
+  }, [knowledgeRuntimeState, orgConnection?.orgId, workDomain]);
+  const knowledgeRefreshSequenceRef = useRef(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatLoaded, setChatLoaded] = useState(false);
   const [chatPrefill, setChatPrefill] = useState('');
@@ -1944,7 +2010,7 @@ export function DesktopUI({
   const petPrefsSavingRef = useRef(false);
   const savePetPrefsToServer = useCallback(async (pet: PetConfig | null, accessories: string[]) => {
     if (!canCustomizeLumiAppearance) {
-      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
       return false;
     }
     const storedPet = serializePetPreference(pet);
@@ -2993,6 +3059,106 @@ export function DesktopUI({
     requestOperationModeChange('meeting');
   }, [operationMode, requestOperationModeChange]);
 
+  const refreshKnowledgeRuntimeState = useCallback(async () => {
+    const sequence = ++knowledgeRefreshSequenceRef.current;
+    const domain: 'personal' | 'work' = workDomain === 'work' ? 'work' : 'personal';
+    const orgId = domain === 'work' ? orgConnection?.orgId || '' : '';
+    const next = emptyKnowledgeRuntimeState(domain, orgId);
+    const errors: string[] = [];
+
+    if (domain === 'work' && (!orgConnection?.connected || !orgId)) {
+      next.refreshedAt = Date.now();
+      next.lastError = 'organization_context_unavailable';
+      if (sequence === knowledgeRefreshSequenceRef.current) setKnowledgeRuntimeState(next);
+      return;
+    }
+
+    try {
+      const query = new URLSearchParams({ domain });
+      if (orgId) query.set('orgId', orgId);
+      const response = await apiFetch(`/api/files/list?${query.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || `knowledge_files_${response.status}`);
+      const files = Array.isArray(payload?.files) ? payload.files : [];
+      next.totalFiles = files.length;
+      for (const file of files) {
+        const status = String(file?.extractionStatus || file?.status || 'ready').toLowerCase();
+        if (file?.syncError && status !== 'partial') next.failedFiles += 1;
+        else if (status === 'indexed') next.indexedFiles += 1;
+        else if (status === 'partial') next.partialFiles += 1;
+        else if (status === 'failed') next.failedFiles += 1;
+        else if (status === 'unsupported') next.unsupportedFiles += 1;
+        else next.pendingFiles += 1;
+      }
+    } catch (error: any) {
+      errors.push(error?.message || String(error));
+    }
+
+    if (domain === 'work') {
+      try {
+        const response = await apiFetch('/api/org/kb/stats');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || `organization_knowledge_${response.status}`);
+        next.orgArticles = {
+          total: Number(payload?.totalArticles || 0),
+          published: Number(payload?.publishedArticles || 0),
+          indexed: Number(payload?.indexedArticles || 0),
+          missingIndex: Number(payload?.missingIndexArticles || 0),
+          stale: Number(payload?.staleArticles || 0),
+        };
+      } catch (error: any) {
+        errors.push(error?.message || String(error));
+      }
+    }
+
+    next.refreshedAt = Date.now();
+    next.lastError = errors.join('; ');
+    if (sequence === knowledgeRefreshSequenceRef.current) setKnowledgeRuntimeState(next);
+  }, [orgConnection?.connected, orgConnection?.orgId, workDomain]);
+
+  useEffect(() => {
+    void refreshKnowledgeRuntimeState();
+    const interval = window.setInterval(() => void refreshKnowledgeRuntimeState(), 60000);
+    return () => {
+      knowledgeRefreshSequenceRef.current += 1;
+      window.clearInterval(interval);
+    };
+  }, [refreshKnowledgeRuntimeState]);
+
+  useEffect(() => {
+    let delayedRefresh: number | null = null;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      if (detail.domain && detail.domain !== workDomain) return;
+      if (workDomain === 'work' && detail.orgId && detail.orgId !== orgConnection?.orgId) return;
+      void refreshKnowledgeRuntimeState();
+      if (delayedRefresh !== null) window.clearTimeout(delayedRefresh);
+      delayedRefresh = window.setTimeout(() => void refreshKnowledgeRuntimeState(), 1800);
+    };
+    window.addEventListener('lumi:knowledge-updated', handler);
+    return () => {
+      window.removeEventListener('lumi:knowledge-updated', handler);
+      if (delayedRefresh !== null) window.clearTimeout(delayedRefresh);
+    };
+  }, [orgConnection?.orgId, refreshKnowledgeRuntimeState, workDomain]);
+
+  useEffect(() => {
+    setOrganizationWorkspaceView('dashboard');
+  }, [orgConnection?.orgId]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      if (detail.orgId && detail.orgId !== orgConnection?.orgId) return;
+      const view = normalizeOrganizationWorkspaceView(detail.activeView);
+      if (view && canAccessOrganizationWorkspaceView(orgConnection?.orgRole, view)) {
+        setOrganizationWorkspaceView(view);
+      }
+    };
+    window.addEventListener('lumi:org-view-changed', handler);
+    return () => window.removeEventListener('lumi:org-view-changed', handler);
+  }, [orgConnection?.orgId, orgConnection?.orgRole]);
+
   // Listen for org navigation events
   useEffect(() => {
     const handler = (e: Event) => {
@@ -3007,6 +3173,9 @@ export function DesktopUI({
         return;
       }
       if (detail?.tab) {
+        if (detail.tab === 'org' && detail.sub) {
+          queueOrganizationWorkspaceRoute(detail.sub, detail.articleId);
+        }
         // Anyone can open the org tab — join/create/connect handled by OrgPortal
         setActiveTab(detail.tab);
       }
@@ -3563,7 +3732,7 @@ export function DesktopUI({
 
   const handleSelectPet = (pet: PetConfig) => {
     if (!canCustomizeLumiAppearance) {
-      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
       return;
     }
     setSelectedPet(pet);
@@ -3821,7 +3990,7 @@ export function DesktopUI({
   };
 
   useEffect(() => {
-    const handler = (event: Event) => {
+    const handler = async (event: Event) => {
       const detail = (event as CustomEvent<any>).detail || {};
       const action = String(detail.action || '');
       const target = String(detail.target || '');
@@ -4125,8 +4294,44 @@ export function DesktopUI({
           return;
         }
         if (action === 'open_organization_workspace') {
+          const requestedView = normalizeOrganizationWorkspaceView(section || (target !== 'org' ? target : '') || 'dashboard');
+          if (!requestedView) throw new Error(`Unknown organization workspace section: ${section || target}`);
+          if (orgConnection?.connected && !canAccessOrganizationWorkspaceView(orgConnection?.orgRole, requestedView)) {
+            respond({
+              ok: false,
+              action,
+              target: 'org',
+              section: requestedView,
+              reason: 'organization_role_not_allowed',
+            });
+            return;
+          }
+          queueOrganizationWorkspaceRoute(requestedView);
+          if (orgConnection?.connected && workDomain !== 'work') {
+            const switched = await switchDomain('work');
+            if (!switched.success) {
+              openSurface('org');
+              respond({
+                ok: false,
+                action,
+                target: 'org',
+                section: requestedView,
+                reason: switched.message || 'organization_domain_switch_failed',
+              });
+              return;
+            }
+          }
           openSurface('org');
-          respond({ ok: true, action, target: 'org' });
+          window.dispatchEvent(new CustomEvent('lumi:navigate', {
+            detail: { tab: 'org', sub: requestedView },
+          }));
+          respond({
+            ok: true,
+            action,
+            target: 'org',
+            section: requestedView,
+            domain: orgConnection?.connected ? 'work' : workDomain,
+          });
           return;
         }
         if (action === 'open_files') {
@@ -4208,10 +4413,14 @@ export function DesktopUI({
     closeWindow,
     endMeetingAndReport,
     musicSnapshot.track,
+    orgConnection?.connected,
+    orgConnection?.orgRole,
     resetMeetingCapture,
     setActiveTab,
     setOperationMode,
     setViewMode,
+    switchDomain,
+    workDomain,
   ]);
 
   useEffect(() => {
@@ -4235,6 +4444,12 @@ export function DesktopUI({
           name: orgConnection?.orgName || '',
           role: orgConnection?.orgRole || '',
         },
+        orgWorkspace: {
+          activeView: workDomain === 'work' && orgConnection?.connected ? organizationWorkspaceView : '',
+          availableViews: availableOrganizationWorkspaceViews,
+          visible: activeTab === 'org' && workDomain === 'work' && Boolean(orgConnection?.connected),
+        },
+        knowledge: reportedKnowledgeRuntimeState,
         windows: {
           open: openWindows,
           focused: focusedWindow,
@@ -4313,6 +4528,7 @@ export function DesktopUI({
     };
   }, [
     activeTab,
+    availableOrganizationWorkspaceViews,
     callState,
     chatOpen,
     clientPermissions,
@@ -4340,8 +4556,11 @@ export function DesktopUI({
     openWindows,
     operationMode,
     orgConnection?.connected,
+    orgConnection?.orgId,
     orgConnection?.orgName,
     orgConnection?.orgRole,
+    organizationWorkspaceView,
+    reportedKnowledgeRuntimeState,
     socket,
     viewMode,
     workDomain,
@@ -5040,7 +5259,7 @@ export function DesktopUI({
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!canCustomizeLumiAppearance) {
-                      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+                      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
                       return;
                     }
                     setSelectedPet(null);
@@ -5707,7 +5926,7 @@ export function DesktopUI({
                       equippedAccessories={equippedAccessories}
                       onChangeAccessories={(ids) => {
                         if (!canCustomizeLumiAppearance) {
-                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
                           return;
                         }
                         setEquippedAccessories(ids);
@@ -5715,7 +5934,7 @@ export function DesktopUI({
                       }}
                       onResetToSphere={() => {
                         if (!canCustomizeLumiAppearance) {
-                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改公司 Lumi 形象' : 'Only an organization owner or administrator can change the company Lumi appearance');
+                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
                           return;
                         }
                         setSelectedPet(null);

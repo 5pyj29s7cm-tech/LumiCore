@@ -266,18 +266,18 @@ export function generateSystemPrompt(
     const organizationScope = options?.domain === 'work' && Boolean(options.orgId);
     const growthLines: string[] = organizationScope
       ? [
-          '## Organization Growth State',
-          'This is organization-scoped working context. Apply it consistently for this organization, never as a member\'s personal preference or as Lumi\'s stable core identity.',
+          '## Member Work-Space Growth State',
+          'This is the authenticated member\'s optional adaptation inside the active organization, layered over that member\'s same recognizable Lumi style. It is keyed by both member and organization: never expose it to another member, treat it as organization policy, or write it back into personal memory or Lumi\'s stable core identity.',
         ]
       : [
           '## Personal Growth State',
           'This is owner-specific personal growth context. Use it to personalize responses, but do not treat it as core identity or organization policy.',
         ];
     if (growth.ownerInterests?.length) {
-      growthLines.push(`${organizationScope ? 'Organization focus areas' : 'Owner interests'}: ${growth.ownerInterests.slice(0, 8).join(', ')}.`);
+      growthLines.push(`${organizationScope ? 'Member work focus areas' : 'Owner interests'}: ${growth.ownerInterests.slice(0, 8).join(', ')}.`);
     }
     if (growth.ownerExpressions?.length) {
-      growthLines.push(`${organizationScope ? 'Organization vocabulary' : 'Owner expressions and vocabulary'}: ${growth.ownerExpressions.slice(0, 8).join(', ')}.`);
+      growthLines.push(`${organizationScope ? 'Member work vocabulary' : 'Owner expressions and vocabulary'}: ${growth.ownerExpressions.slice(0, 8).join(', ')}.`);
     }
     if (growth.communicationPatterns?.length) {
       growthLines.push(`Communication patterns: ${growth.communicationPatterns.slice(0, 6).join('; ')}.`);

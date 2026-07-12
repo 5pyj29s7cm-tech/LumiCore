@@ -24,7 +24,7 @@ export function setSkillLLMGetters(getters: typeof _llmGetters): void {
 
 function hostSkillMutationBlocked(context?: ToolContext): string | null {
   if (context?.domain === 'work' || context?.orgId) {
-    return 'Host-level skill changes are not performed from organization Lumi. A local system administrator can install or generate the skill in the desktop settings; the organization can then use the approved capability.';
+    return 'Host-level skill changes are not performed from an organization workspace. A local system administrator can install or generate the skill in desktop settings; the organization workspace can then use the approved capability.';
   }
   return null;
 }

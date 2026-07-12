@@ -60,7 +60,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     },
     handler: async (args, context?: ToolContext) => {
       if (context?.domain === 'work' || context?.orgId) {
-        throw new Error('Organization Lumi cannot change this computer\'s MCP configuration. Configure host capabilities from the local personal Lumi or desktop settings.');
+        throw new Error('An organization workspace cannot change this computer\'s MCP configuration. Configure host capabilities from the member\'s local personal workspace or desktop settings.');
       }
       const candidate = getExternalControlCandidate(String(args.candidateId || ''));
       if (!candidate) throw new Error(`Unknown external control candidate: ${args.candidateId}`);

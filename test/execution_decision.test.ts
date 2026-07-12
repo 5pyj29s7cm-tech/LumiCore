@@ -256,7 +256,7 @@ describe('Lumi execution decision', () => {
 
     expect(decision.allowToolUse).toBe(true);
     expect(decision.toolRoute?.categories).toContain('legal');
-    expect(decision.promptOverlay).toContain('personal Lumi legal work');
+    expect(decision.promptOverlay).toContain('legal work in the personal workspace');
     expect(decision.promptOverlay).toContain('major premise');
   });
 

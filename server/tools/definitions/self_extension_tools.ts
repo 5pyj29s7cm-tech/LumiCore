@@ -1,7 +1,7 @@
 import { buildSelfExtensionPlan } from '../../self_extension/pipeline';
 import { runCapabilityGapAutofix } from '../../self_extension/autofix';
 import { listCapabilityLearningRecords, summarizeCapabilityRecord } from '../../self_extension/capability_memory';
-import { getClientState } from '../../client/self_model';
+import { getClientStateForScope } from '../../client/self_model';
 import { ToolRegistry } from '../registry';
 
 export function registerSelfExtensionTools(registry: ToolRegistry): void {
@@ -35,7 +35,7 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         orgId: context?.domain === 'work' ? context?.orgId : '',
         goal: String(args.goal || ''),
         domain: args.domain ? String(args.domain) : undefined,
-        clientState: getClientState(userId) as Record<string, any> | null,
+        clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
         tools: registry.list(),
       });
       return JSON.stringify(plan, null, 2);
@@ -83,7 +83,7 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         allowResearch: args.allowResearch !== false,
         allowSkillDraft: args.allowSkillDraft === true,
         record: args.record !== false,
-        clientState: getClientState(userId) as Record<string, any> | null,
+        clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
         tools: registry.list(),
         executeTool: (name, toolArgs) => registry.execute(name, toolArgs, context),
       });

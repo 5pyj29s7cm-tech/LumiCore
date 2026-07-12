@@ -416,7 +416,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.post("/voice/provider", requireAuth, requireLocalRequest, (req, res) => {
     if (req.user?.orgId) {
-      return res.status(403).json({ error: 'Voice provider selection belongs to the local personal Lumi settings.' });
+      return res.status(403).json({ error: 'Voice provider selection belongs to the member\'s local personal workspace settings.' });
     }
     const { stt, tts } = req.body || {};
     const allowedStt = new Set<VoicePreference['stt']>(['auto', 'local-whisper', 'qwen', 'ark', 'whisper']);

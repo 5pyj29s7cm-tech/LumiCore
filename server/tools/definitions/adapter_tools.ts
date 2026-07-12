@@ -1,5 +1,5 @@
 import { getAdapterRegistry, summarizeAdapters, AdapterCapability, AdapterCategory, AdapterStatus } from '../../adapters/registry';
-import { getClientState } from '../../client/self_model';
+import { getClientStateForScope } from '../../client/self_model';
 import { ToolRegistry } from '../registry';
 
 const STATUSES: AdapterStatus[] = [
@@ -57,7 +57,7 @@ export function registerAdapterTools(registry: ToolRegistry): void {
       const userId = context?.userId || 'anonymous';
       const report = getAdapterRegistry({
         userId,
-        clientState: getClientState(userId),
+        clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }),
         includePlanned: args.includePlanned !== false,
       });
       const adapters = filterAdapters(report.adapters, args);
@@ -93,7 +93,7 @@ export function registerAdapterTools(registry: ToolRegistry): void {
       const userId = context?.userId || 'anonymous';
       const report = getAdapterRegistry({
         userId,
-        clientState: getClientState(userId),
+        clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }),
         includePlanned: true,
       });
       const adapters = filterAdapters(report.adapters, args)

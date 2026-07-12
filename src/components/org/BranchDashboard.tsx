@@ -324,7 +324,7 @@ export function BranchDashboard() {
           />
           <QuickAction
             icon={<Activity size={18} />}
-            label={ui('组织 Lumi', 'Organization Lumi')}
+            label={ui('工作域 Lumi', 'Lumi (Work Workspace)')}
             desc={ui('向组织知识、制度、项目和团队资料发起查询。', 'Ask organization-level questions about knowledge, policies, projects, and teams.')}
             onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
           />

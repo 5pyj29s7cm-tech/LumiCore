@@ -279,7 +279,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       const decoded: any = jwt.verify(token, jwtSecret);
       if (decoded.orgId) {
         return res.status(409).json({
-          error: 'Biometric enrollment belongs to personal Lumi. Switch to personal context to manage it.',
+          error: 'Biometric enrollment belongs to the member\'s personal workspace. Switch to personal context to manage it.',
           code: 'PERSONAL_CONTEXT_REQUIRED',
         });
       }
@@ -340,7 +340,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       const decoded: any = jwt.verify(token, jwtSecret);
       if (decoded.orgId) {
         return res.status(409).json({
-          error: 'Voiceprint verification belongs to personal Lumi. Organization meeting mode uses speaker separation without reading personal biometrics.',
+          error: 'Voiceprint verification belongs to the member\'s personal workspace. Organization meeting mode uses speaker separation without reading personal biometrics.',
           code: 'PERSONAL_CONTEXT_REQUIRED',
         });
       }
@@ -377,7 +377,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       const decoded: any = jwt.verify(token, jwtSecret);
       if (decoded.orgId) {
         return res.status(409).json({
-          error: 'Face enrollment belongs to personal Lumi. Switch to personal context to manage it.',
+          error: 'Face enrollment belongs to the member\'s personal workspace. Switch to personal context to manage it.',
           code: 'PERSONAL_CONTEXT_REQUIRED',
         });
       }
@@ -408,7 +408,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
           voiceprints: [],
           faces: [],
           personalContextRequired: true,
-          note: 'Personal biometric templates are not exposed to organization Lumi.',
+          note: 'Personal biometric templates are not exposed to the organization workspace.',
         });
       }
       const voiceprints = getVoiceprints(decoded.uid).map(v => ({
@@ -438,7 +438,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       const decoded: any = jwt.verify(token, jwtSecret);
       if (decoded.orgId) {
         return res.status(409).json({
-          error: 'Biometric management belongs to personal Lumi. Switch to personal context to manage it.',
+          error: 'Biometric management belongs to the member\'s personal workspace. Switch to personal context to manage it.',
           code: 'PERSONAL_CONTEXT_REQUIRED',
         });
       }

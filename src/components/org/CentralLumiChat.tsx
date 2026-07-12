@@ -165,7 +165,7 @@ export function CentralLumiChat() {
   }, [orgConnection?.orgId]);
 
   const llmPolicyLabel = llmPolicy
-    ? ui('组织独立模型', 'Organization model')
+    ? ui('组织模型策略', 'Organization model policy')
     : ui('模型策略', 'Model policy');
   const llmPolicyModel = llmPolicy
     ? `${llmPolicy.provider || '-'} / ${llmPolicy.model || '-'}`
@@ -259,7 +259,7 @@ export function CentralLumiChat() {
       if (failedAudio?.transcriptionError) {
         toast.error(failedAudio.transcriptionError);
       } else {
-        toast.success('Attached to Company Lumi.');
+        toast.success('Attached to Lumi in the organization workspace.');
       }
     } catch (err: any) {
       toast.error(err?.message || 'Upload failed.');
@@ -377,7 +377,7 @@ export function CentralLumiChat() {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
         role: 'assistant',
-        content: data.message || ui('公司 Lumi 暂时无法回答这个问题。', "Company Lumi can't answer right now."),
+        content: data.message || ui('工作域 Lumi 暂时无法回答这个问题。', "Lumi can't answer in the organization workspace right now."),
         timestamp: Date.now(),
         source: 'error',
       }]);
@@ -446,8 +446,8 @@ export function CentralLumiChat() {
       timeoutRef.current = null;
       setLoading(false);
       setRequestNotice(ui(
-        '公司 Lumi 处理时间比平时久，我会继续等后端的真实回复，不会在聊天里生成兜底回答。',
-        'Company Lumi is taking longer than usual. I will keep waiting for the backend response instead of writing a fallback answer.',
+        '工作域 Lumi 处理时间比平时久，我会继续等后端的真实回复，不会在聊天里生成兜底回答。',
+        'Lumi is taking longer than usual in the organization workspace. I will keep waiting for the backend response instead of writing a fallback answer.',
       ));
     }, 60000);
 
@@ -478,7 +478,7 @@ export function CentralLumiChat() {
         </div>
         <div>
           <h2 className="text-lg font-bold text-white">{t.orgChat}</h2>
-          <p className="text-white/55 text-xs">{ui('组织 AI：询问制度、文化和知识', 'Organizational AI — ask about policies, culture, and knowledge')}</p>
+          <p className="text-white/55 text-xs">{ui('同一个 Lumi · 当前使用组织权限和知识', 'Same Lumi · organization permissions and knowledge active')}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/60" title={llmPolicyModel}>

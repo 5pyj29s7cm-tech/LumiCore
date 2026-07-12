@@ -83,7 +83,7 @@ export function buildUnifiedLegalEntryPrompt(input: {
   const remoteIntake = isRemoteLegalMessageTurn(input.text || '') || /(?:feishu|wechat|wecom|bot|message)/i.test(input.source || '');
   const scopeLine = workScoped
     ? 'Scope: this is work/company legal work. Prefer the organization case workspace, organization knowledge base, source registration, and case-state tools before drafting.'
-    : 'Scope: this is personal Lumi legal work unless the user selects an organization case. You may analyze and draft, but do not claim organization persistence before a workspace is chosen.';
+    : 'Scope: this is legal work in the personal workspace unless the user selects an organization case. You may analyze and draft, but do not claim organization persistence before a work workspace is chosen.';
 
   return [
     '## Unified Legal Casework Entry',

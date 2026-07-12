@@ -387,7 +387,7 @@ describe('Lumi capability selection', () => {
     expect(selection.lane).toBe('legal_casework');
     expect(selection.preferredTools).toContain('legal_case_workspace');
     expect(selection.preferredTools).toContain('legal_generate_citation_verification_report');
-    expect(execution.promptOverlay).toContain('personal Lumi legal work');
+    expect(execution.promptOverlay).toContain('legal work in the personal workspace');
     expect(execution.promptOverlay).toContain('Current-law gate');
   });
 

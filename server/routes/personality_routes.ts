@@ -140,7 +140,7 @@ export function mountPersonalityRoutes(router: Router, _jwtSecret: string, llm: 
       const scope = resolvePersonalityScope(req, res);
       if (!scope) return;
       if (!canMutateScopedPersonality(scope)) {
-        return res.status(403).json({ error: 'Only organization owners and admins can evolve organization Lumi.' });
+        return res.status(403).json({ error: 'Only organization owners and admins can evolve their member-scoped work-space adaptation.' });
       }
       const uid = scope.userId;
       const config = personalityRegistry.getForUser(req.params.id, uid, scope.orgId);
