@@ -58,8 +58,8 @@ describe('organization workspace information architecture', () => {
     expect(settingsWorkspace).toContain('<OrgSettings />');
     expect(settingsWorkspace).toContain('<OrgBranchPanel />');
     expect(settingsWorkspace).toContain("type OrganizationSettingsTab = 'general' | 'branch'");
-    expect(branchPanel).toContain("ui('分支连接', 'Branch Connection')");
-    expect(branchPanel).not.toContain("ui('分支终端', 'Branch Terminal')");
+    expect(branchPanel).toContain("uiMessage('org-branch-panel.branch-connection.9cecc72547')");
+    expect(branchPanel).not.toContain("ui('分支连接', 'Branch Connection')");
   });
 
   it('reports exact organization views and preserves routed destinations until the workspace mounts', () => {
@@ -101,8 +101,9 @@ describe('organization workspace information architecture', () => {
 
     expect(legalHub).toContain('<LegalCaseContextBar');
     expect(contextBar).toContain("export type LegalToolState = 'input' | 'running' | 'result'");
-    expect(contextBar).toContain("ui('当前案件', 'Current case')");
-    expect(contextBar).toContain("ui('已结案', 'Closed')");
+    expect(contextBar).toContain("uiMessage('legal-case-context-bar.current-case.0708a66402')");
+    expect(contextBar).toContain("uiMessage('legal-case-context-bar.closed.f9c16bb807')");
+    expect(contextBar).not.toContain("ui('当前案件', 'Current case')");
     expect(toolClient).toContain("'lumi:org-legal-cases-changed'");
   });
 });
