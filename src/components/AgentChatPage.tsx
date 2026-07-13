@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -29,6 +29,15 @@ import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { CN_FOUNDER_ALIASES } from '../i18n/regions/cn/recognition';
+import {
+  MAX_CHAT_ATTACHMENTS,
+  chatAttachmentIdentity,
+  chatAttachmentRequestMatchesScope,
+  createChatAttachmentReference,
+  mergeChatAttachmentReferences,
+  type ChatAttachmentReference,
+  type ChatAttachmentRequest,
+} from '@/lib/chatAttachmentReferences';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -39,23 +48,7 @@ function makeChatMessageId(prefix = 'msg'): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-type ChatAttachment = {
-  id: string;
-  fileName: string;
-  path?: string;
-  content?: string | null;
-  preview?: string | null;
-  mimeType?: string;
-  size?: number;
-  kind: 'image' | 'audio' | 'file';
-  fileId?: string;
-  downloadUrl?: string;
-  transcript?: string | null;
-  transcriptionStatus?: string;
-  transcriptionError?: string | null;
-  transcriptionProvider?: string;
-  transcriptionModel?: string;
-};
+type ChatAttachment = ChatAttachmentReference;
 
 type GeneratedFileLink = {
   id: string;
@@ -76,6 +69,8 @@ type ChatFilePanelItem = {
   openUrl?: string;
   saveUrl?: string;
   status?: string;
+  mimeType?: string;
+  size?: number;
 };
 
 type KnowledgeUpdateDetail = {
@@ -361,7 +356,7 @@ function extractGeneratedFiles(text: string): GeneratedFileLink[] {
     });
 }
 
-export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage, prefillSource = 'proactive', onPrefillConsumed }: { t: any; user: any; agent?: any; isOpen: boolean; onClose: () => void; prefillMessage?: string; prefillSource?: string; onPrefillConsumed?: () => void }) {
+export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage, prefillSource = 'proactive', onPrefillConsumed, attachmentRequest, onAttachmentRequestConsumed }: { t: any; user: any; agent?: any; isOpen: boolean; onClose: () => void; prefillMessage?: string; prefillSource?: string; onPrefillConsumed?: () => void; attachmentRequest?: ChatAttachmentRequest; onAttachmentRequestConsumed?: (requestId: string) => void }) {
   const [messages, setMessages] = useState<any[]>([]);
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
@@ -425,7 +420,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [voices, setVoices] = useState<any[]>([]);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [showWeChatSettings, setShowWeChatSettings] = useState(false);
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const voicePickerRef = useRef<HTMLDivElement>(null);
+  const attachmentMenuRef = useRef<HTMLDivElement>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [installedSkillNames, setInstalledSkillNames] = useState<string[]>([]);
   const inputDictationActiveRef = useRef(false);
@@ -502,6 +499,17 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     return () => document.removeEventListener('mousedown', onClick);
   }, [showVoicePicker]);
 
+  useEffect(() => {
+    if (!showAttachmentMenu) return;
+    const onClick = (event: MouseEvent) => {
+      if (attachmentMenuRef.current && !attachmentMenuRef.current.contains(event.target as Node)) {
+        setShowAttachmentMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [showAttachmentMenu]);
+
   const messageInputRef = useRef<HTMLInputElement>(null);
   const draftTextRef = useRef('');
   const [hasDraftText, setHasDraftText] = useState(false);
@@ -510,6 +518,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [isListening, setIsListening] = useState(false);
   const [optimizationProgress, setOptimizationProgress] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
   const [knowledgeFiles, setKnowledgeFiles] = useState<FileEntry[]>([]);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -537,6 +546,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
 
   useEffect(() => {
     if (inputDictationActiveRef.current && callState === 'idle') {
@@ -643,11 +656,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (e.key === 'Escape') {
         if (showVoicePicker) setShowVoicePicker(false);
         if (showWeChatSettings) setShowWeChatSettings(false);
+        if (showAttachmentMenu) setShowAttachmentMenu(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showVoicePicker, showWeChatSettings]);
+  }, [showAttachmentMenu, showVoicePicker, showWeChatSettings]);
 
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
@@ -805,6 +819,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       openUrl: item.downloadUrl,
       saveUrl: item.fileId ? scopedFileUrl(`/api/files/download/${encodeURIComponent(item.fileId)}`) : item.downloadUrl,
       status: item.transcript ? 'STT' : undefined,
+      mimeType: item.mimeType,
+      size: item.size,
     }));
 
     const generated: ChatFilePanelItem[] = generatedChatFiles.map(file => ({
@@ -837,11 +853,20 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         openUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`),
         saveUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}`),
         status: ready ? undefined : (file.extractionStatus || file.status),
+        size: file.rawSize,
       };
     });
 
     return { pending, generated, knowledge };
   }, [generatedChatFiles, isKnowledgeReady, isZh, knowledgeFiles, pendingAttachments, scopedFileUrl]);
+  const pendingAttachmentKeys = useMemo(
+    () => new Set(pendingAttachments.map(chatAttachmentIdentity)),
+    [pendingAttachments],
+  );
+  const referenceableChatFiles = useMemo(
+    () => [...chatFileSections.generated, ...chatFileSections.knowledge].slice(0, 8),
+    [chatFileSections.generated, chatFileSections.knowledge],
+  );
   const requestMeetingMode = useCallback(() => {
     window.dispatchEvent(new CustomEvent('lumi:request-meeting-mode'));
   }, []);
@@ -1035,6 +1060,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       setMessages([]);
       messagesRef.current = [];
       setPendingAttachments([]);
+      pendingAttachmentsRef.current = [];
       recentAttachmentContextRef.current = [];
       recentAttachmentContextSinceRef.current = 0;
     }
@@ -1534,7 +1560,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       return next;
     });
     setDraftText('');
-    setPendingAttachments(prev => prev.filter(item => !outgoingAttachments.some(sent => sent.id === item.id)));
+    setPendingAttachments(prev => {
+      const next = prev.filter(item => !outgoingAttachments.some(sent => sent.id === item.id));
+      pendingAttachmentsRef.current = next;
+      return next;
+    });
     if (outgoingAttachments.length > 0) rememberAttachmentContext(outgoingAttachments);
     stop();
     setIsTyping(true);
@@ -1706,12 +1736,56 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const appendPendingAttachments = useCallback((
+    incoming: ChatAttachment[],
+    options: { announce?: boolean } = {},
+  ) => {
+    const result = mergeChatAttachmentReferences(pendingAttachmentsRef.current, incoming);
+    if (result.added.length > 0) {
+      pendingAttachmentsRef.current = result.attachments;
+      setPendingAttachments(result.attachments);
+    }
+    if (result.added.length > 0) {
+      rememberAttachmentContext(result.added);
+      if (options.announce !== false) {
+        toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
+      }
+    } else if (result.duplicateCount > 0 && options.announce !== false) {
+      toast.info(uiMessage('agent-chat-page.file-already-attached.24544e870a'));
+    }
+    if (result.overflowCount > 0) {
+      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
+    }
+    return result;
+  }, [rememberAttachmentContext]);
+
+  useEffect(() => {
+    if (!isOpen || !attachmentRequest?.requestId) return;
+    const scopeMatches = chatAttachmentRequestMatchesScope(attachmentRequest, activeDomain, activeOrgId);
+    if (scopeMatches) {
+      appendPendingAttachments([createChatAttachmentReference(attachmentRequest)]);
+      setShowAttachmentMenu(false);
+      requestAnimationFrame(() => messageInputRef.current?.focus());
+    } else {
+      toast.error(uiMessage('agent-chat-page.file-reference-scope-mismatch.7655432d8b'));
+    }
+    onAttachmentRequestConsumed?.(attachmentRequest.requestId);
+  }, [activeDomain, activeOrgId, appendPendingAttachments, attachmentRequest, isOpen, onAttachmentRequestConsumed]);
+
   const uploadChatAttachments = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
+    const remainingSlots = MAX_CHAT_ATTACHMENTS - pendingAttachmentsRef.current.length;
+    if (remainingSlots <= 0) {
+      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
+      return;
+    }
     setIsOptimizing(true);
     setOptimizationProgress(30);
 
-    const fileList = Array.from(files);
+    const fileList = Array.from(files).slice(0, remainingSlots);
+    if (files.length > remainingSlots) {
+      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
+    }
     const formData = new FormData();
     fileList.forEach(f => formData.append('files', f));
 
@@ -1750,21 +1824,21 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             transcriptionModel: f.extractionModel || undefined,
           };
         });
-        setPendingAttachments(prev => [...prev, ...attachments]);
-        rememberAttachmentContext(attachments);
+        const mergeResult = appendPendingAttachments(attachments, { announce: false });
+        const addedAttachments = mergeResult.added;
         setOptimizationProgress(100);
         setTimeout(() => { setIsOptimizing(false); setOptimizationProgress(0); }, 500);
-        const audioTranscripts = attachments
+        const audioTranscripts = addedAttachments
           .filter(item => item.kind === 'audio' && item.transcript)
           .map(item => `${item.fileName}:\n${item.transcript}`);
         if (audioTranscripts.length > 0) {
           const current = draftTextRef.current.trim();
           setDraftText([current, audioTranscripts.join('\n\n')].filter(Boolean).join('\n\n'));
           toast.success(uiMessage('agent-chat-page.audio-transcript-inserted-into-the.cd2c9c3972'));
-        } else if (attachments.some(item => item.kind === 'audio' && item.transcriptionError)) {
-          const failed = attachments.find(item => item.kind === 'audio' && item.transcriptionError);
+        } else if (addedAttachments.some(item => item.kind === 'audio' && item.transcriptionError)) {
+          const failed = addedAttachments.find(item => item.kind === 'audio' && item.transcriptionError);
           toast.error(failed?.transcriptionError || uiMessage('agent-chat-page.audio-transcription-failed.becab97e32'));
-        } else if (attachments.length > 0) {
+        } else if (addedAttachments.length > 0) {
           toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
         }
         notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
@@ -1786,42 +1860,87 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   };
 
   const removePendingAttachment = (id: string) => {
-    setPendingAttachments(prev => prev.filter(item => item.id !== id));
+    setPendingAttachments(prev => {
+      const next = prev.filter(item => item.id !== id);
+      pendingAttachmentsRef.current = next;
+      return next;
+    });
     recentAttachmentContextRef.current = recentAttachmentContextRef.current.filter(item => item.id !== id);
     if (recentAttachmentContextRef.current.length === 0) {
       recentAttachmentContextSinceRef.current = 0;
     }
   };
 
-  const renderChatFileRow = (item: ChatFilePanelItem) => (
-    <div
-      key={item.id}
-      className="group flex items-center gap-2 rounded-2xl border border-white/10 bg-black/25 px-2.5 py-2 transition-colors hover:border-emerald-300/25 hover:bg-emerald-400/10"
-      title={item.path || item.fileName}
-    >
-      <button
-        type="button"
-        onClick={() => openChatFile(item)}
-        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+  const referenceChatFile = useCallback((item: ChatFilePanelItem) => {
+    if (item.source === 'pending') return;
+    const attachment = createChatAttachmentReference({
+      fileId: item.fileId,
+      fileName: item.fileName,
+      path: item.path,
+      mimeType: item.mimeType,
+      size: item.size,
+      kind: item.kind,
+      openUrl: item.openUrl,
+      saveUrl: item.saveUrl,
+    });
+    const result = appendPendingAttachments([attachment]);
+    if (result.added.length > 0) setShowAttachmentMenu(false);
+  }, [appendPendingAttachments]);
+
+  const renderChatFileRow = (item: ChatFilePanelItem) => {
+    const isAttached = item.source === 'pending' || pendingAttachmentKeys.has(chatAttachmentIdentity(item));
+    return (
+      <div
+        key={item.id}
+        className={`group flex items-center gap-2 rounded-2xl border px-2.5 py-2 transition-colors ${
+          isAttached
+            ? 'border-emerald-300/20 bg-emerald-400/[0.08]'
+            : 'border-white/10 bg-black/25 hover:border-emerald-300/25 hover:bg-emerald-400/10'
+        }`}
+        title={item.path || item.fileName}
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-white/58 group-hover:text-emerald-100">
-          {item.kind === 'image' ? <ImageIcon size={15} /> : item.kind === 'audio' ? <Mic size={15} /> : <FileText size={15} />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-semibold text-white/78">{item.fileName}</span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-white/38">
-            <ExternalLink size={10} className="shrink-0" />
-            <span className="truncate">{item.subtitle || fileKindLabel(item.kind)}</span>
-            {item.status && (
-              <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/38">
-                {item.status}
-              </span>
-            )}
+        <button
+          type="button"
+          onClick={() => referenceChatFile(item)}
+          disabled={isAttached}
+          className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+          title={isAttached
+            ? uiMessage('agent-chat-page.file-already-attached.24544e870a')
+            : uiMessage('agent-chat-page.reference-file-in-message.5ed1d9986a')}
+          aria-label={isAttached
+            ? uiMessage('agent-chat-page.file-already-attached.24544e870a')
+            : uiMessage('agent-chat-page.reference-file-in-message.5ed1d9986a')}
+        >
+          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+            isAttached ? 'bg-emerald-300/12 text-emerald-100' : 'bg-white/[0.06] text-white/58 group-hover:text-emerald-100'
+          }`}>
+            {item.kind === 'image' ? <ImageIcon size={15} /> : item.kind === 'audio' ? <Mic size={15} /> : <FileText size={15} />}
           </span>
-        </span>
-      </button>
-    </div>
-  );
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-semibold text-white/78">{item.fileName}</span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-white/38">
+              {isAttached ? <Check size={10} className="shrink-0 text-emerald-200/75" /> : <Paperclip size={10} className="shrink-0" />}
+              <span className="truncate">{item.subtitle || fileKindLabel(item.kind)}</span>
+              {item.status && (
+                <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/38">
+                  {item.status}
+                </span>
+              )}
+            </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => void openChatFile(item)}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white/30 transition-colors hover:bg-white/10 hover:text-white/75"
+          title={uiMessage('agent-chat-page.open-file.01b8938ac4')}
+          aria-label={uiMessage('agent-chat-page.open-file.01b8938ac4')}
+        >
+          <ExternalLink size={13} />
+        </button>
+      </div>
+    );
+  };
 
   if (isFounder) {
     return <FoundersSanctuary t={t} user={user} onBack={onClose} />;
@@ -2423,17 +2542,87 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               </div>
             )}
             <form onSubmit={handleSendMessage} className="relative flex gap-3">
-              <Button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isTyping || isOptimizing}
-                variant="ghost"
-                className="h-12 w-12 shrink-0 rounded-2xl border border-white/10 bg-black/30 p-0 text-white/45 transition-all hover:border-celestial-saturn/30 hover:bg-celestial-saturn/10 hover:text-celestial-saturn disabled:opacity-40"
-                title={uiMessage('agent-chat-page.attach-image-or-file.966f49c5b6')}
-                aria-label={uiMessage('agent-chat-page.attach-image-or-file.966f49c5b6')}
-              >
-                {isOptimizing ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
-              </Button>
+              <div ref={attachmentMenuRef} className="relative shrink-0">
+                <Button
+                  type="button"
+                  onClick={() => setShowAttachmentMenu(value => !value)}
+                  disabled={isTyping || isOptimizing}
+                  variant="ghost"
+                  className={`h-12 w-12 shrink-0 rounded-2xl border bg-black/30 p-0 transition-all disabled:opacity-40 ${
+                    showAttachmentMenu
+                      ? 'border-celestial-saturn/35 bg-celestial-saturn/10 text-celestial-saturn'
+                      : 'border-white/10 text-white/45 hover:border-celestial-saturn/30 hover:bg-celestial-saturn/10 hover:text-celestial-saturn'
+                  }`}
+                  title={uiMessage('agent-chat-page.add-file-to-message.50db7cd91e')}
+                  aria-label={uiMessage('agent-chat-page.add-file-to-message.50db7cd91e')}
+                  aria-expanded={showAttachmentMenu}
+                >
+                  {isOptimizing ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+                </Button>
+                <AnimatePresence>
+                  {showAttachmentMenu && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                      transition={{ duration: 0.14 }}
+                      className="absolute bottom-full left-0 z-50 mb-2 w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-2xl border border-white/12 bg-zinc-950/96 shadow-2xl backdrop-blur-2xl"
+                    >
+                      <div className="flex items-center gap-2 border-b border-white/[0.07] px-3 py-2.5 text-[11px] font-bold text-white/55">
+                        <FolderOpen size={13} />
+                        <span>{uiMessage('agent-chat-page.reference-existing-file.6fa56c6cba')}</span>
+                      </div>
+                      <div className="max-h-64 overflow-y-auto p-1.5 custom-scrollbar">
+                        {referenceableChatFiles.map(item => {
+                          const attached = pendingAttachmentKeys.has(chatAttachmentIdentity(item));
+                          return (
+                            <button
+                              key={`attach-menu-${item.id}`}
+                              type="button"
+                              onClick={() => referenceChatFile(item)}
+                              disabled={attached}
+                              className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.07] disabled:cursor-default disabled:bg-emerald-300/[0.06]"
+                              title={item.path || item.fileName}
+                            >
+                              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                                attached ? 'bg-emerald-300/12 text-emerald-100' : 'bg-white/[0.06] text-white/50'
+                              }`}>
+                                {attached ? <Check size={13} /> : item.kind === 'image' ? <ImageIcon size={13} /> : item.kind === 'audio' ? <Mic size={13} /> : <FileText size={13} />}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-semibold text-white/75">{item.fileName}</span>
+                                <span className="mt-0.5 block truncate text-[10px] text-white/35">{item.subtitle}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {referenceableChatFiles.length === 0 && (
+                          <div className="px-3 py-4 text-center text-xs text-white/35">
+                            {knowledgeLoading
+                              ? uiMessage('agent-chat-page.syncing-knowledge.21a09d4faa')
+                              : uiMessage('agent-chat-page.no-existing-files.84d0f3dc9e')}
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-t border-white/[0.07] p-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAttachmentMenu(false);
+                            fileInputRef.current?.click();
+                          }}
+                          className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs font-semibold text-white/65 transition-colors hover:bg-white/[0.07] hover:text-white/85"
+                        >
+                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.06] text-white/55">
+                            <Upload size={13} />
+                          </span>
+                          <span>{uiMessage('agent-chat-page.import-new-file-from-computer.45aa481ab4')}</span>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
               <div className="relative flex-1">
                 <Input
                   ref={messageInputRef}

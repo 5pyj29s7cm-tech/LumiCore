@@ -3,6 +3,22 @@
     "en": "24h autonomous work",
     "zh": "24h 自主运行"
   },
+  "agent-chat-page.add-file-to-message.50db7cd91e": {
+    "en": "Add file to message",
+    "zh": "添加文件到本条消息"
+  },
+  "agent-chat-page.file-reference-scope-mismatch.7655432d8b": {
+    "en": "This file belongs to a different workspace",
+    "zh": "该文件属于另一个工作域"
+  },
+  "desktop-ui.file-reference-scope-mismatch.2962eb0cbf": {
+    "en": "Switch to the file's workspace before referencing it",
+    "zh": "请先切换到文件所属工作域再引用"
+  },
+  "node-detail-panel.reference-in-chat.0c358cdb70": {
+    "en": "Reference in Chat",
+    "zh": "在聊天中引用"
+  },
   "agent-chat-page.after-qr-authorization-and-one.a49fcea5c7": {
     "en": "After QR authorization and one-time linking, WeChat messages sync with this personal Lumi chat.",
     "zh": "扫码授权并完成一次绑定后，微信收发会同步到当前个人 Lumi 聊天。"
@@ -99,6 +115,10 @@
     "en": "Failed to open file",
     "zh": "打开文件失败"
   },
+  "agent-chat-page.file-already-attached.24544e870a": {
+    "en": "File already attached",
+    "zh": "文件已引用到本条消息"
+  },
   "agent-chat-page.fetch-this-article-and-summarize.56b2a4e0a2": {
     "en": "Fetch this article and summarize the key points",
     "zh": "帮我抓取这篇文章的内容并总结要点"
@@ -171,6 +191,10 @@
     "en": "Knowledge Files",
     "zh": "对话资料"
   },
+  "agent-chat-page.import-new-file-from-computer.45aa481ab4": {
+    "en": "Import new file from computer",
+    "zh": "从电脑导入新文件"
+  },
   "agent-chat-page.live-notes.578276ba0a": {
     "en": "Live notes",
     "zh": "会议记录"
@@ -210,6 +234,14 @@
   "agent-chat-page.no-files-available-yet.6ac4767777": {
     "en": "No files available yet",
     "zh": "暂无可操作文件"
+  },
+  "agent-chat-page.no-existing-files.84d0f3dc9e": {
+    "en": "No existing files",
+    "zh": "暂无已有文件"
+  },
+  "agent-chat-page.open-file.01b8938ac4": {
+    "en": "Open file",
+    "zh": "打开文件"
   },
   "agent-chat-page.no-knowledge-files.40ce139e3c": {
     "en": "No knowledge files",
@@ -254,6 +286,14 @@
   "agent-chat-page.refresh-files.7b90fd0f8a": {
     "en": "Refresh files",
     "zh": "刷新文件"
+  },
+  "agent-chat-page.reference-existing-file.6fa56c6cba": {
+    "en": "Reference existing file",
+    "zh": "引用已有文件"
+  },
+  "agent-chat-page.reference-file-in-message.5ed1d9986a": {
+    "en": "Reference file in this message",
+    "zh": "引用到本条消息"
   },
   "agent-chat-page.remove-attachment.10963433c4": {
     "en": "Remove attachment",
@@ -302,6 +342,10 @@
   "agent-chat-page.transcribed-attachment.08a3fe2e67": {
     "en": "Transcribed attachment",
     "zh": "已转写附件"
+  },
+  "agent-chat-page.up-to-value0-files-can.349aa29325": {
+    "en": "Up to {value0} files can be attached",
+    "zh": "每条消息最多引用 {value0} 个文件"
   },
   "agent-chat-page.value0-older-messages-hidden-use.3f41a4ca89": {
     "en": "{value0} older messages hidden; use search to find them",

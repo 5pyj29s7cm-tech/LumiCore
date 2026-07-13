@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useT } from '../lib/useT';
 import { X, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, Sparkles, CheckCircle2, Loader2, MessageSquare, Eye, EyeOff, FileText, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
+import { uiMessage } from '../i18n/uiMessages';
 
 interface FileEntry {
   id: string;
@@ -85,6 +86,7 @@ interface NodeDetailPanelProps {
   onToggleProtect?: (id: string) => void;
   onChangeTier?: (id: string, tier: string, confirmed?: boolean) => void;
   onEdit?: (id: string, content: string) => void;
+  onReferenceInChat?: (id: string) => void;
 }
 
 const TIER_LABELS: Record<string, string> = {
@@ -110,6 +112,7 @@ export function NodeDetailPanel({
   onToggleProtect,
   onChangeTier,
   onEdit,
+  onReferenceInChat,
 }: NodeDetailPanelProps) {
   const t = useT();
   const [previewContent, setPreviewContent] = useState<string | null>(null);
@@ -541,6 +544,14 @@ export function NodeDetailPanel({
             <div className="px-5 pb-5 flex items-center gap-2 flex-wrap">
               {node.type === 'file' && (
                 <>
+                  {onReferenceInChat && (
+                    <button
+                      onClick={() => onReferenceInChat(node.id)}
+                      className="flex items-center gap-1.5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs font-bold text-emerald-200 transition-colors hover:bg-emerald-400/16"
+                    >
+                      <MessageSquare size={13} /> {uiMessage('node-detail-panel.reference-in-chat.0c358cdb70')}
+                    </button>
+                  )}
                   <button
                     onClick={handleOpenFile}
                     className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold text-white/60 transition-colors"

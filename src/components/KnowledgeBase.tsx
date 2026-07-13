@@ -9,6 +9,7 @@ import { MemoryTreeScene, layoutTree3D } from './MemoryTree';
 import type { TreeNode3D, BranchCurve3D, MemoryNode as MemNode, FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { CN_BROKEN_TEXT_MARKERS } from '../i18n/regions/cn/recognition';
+import type { ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 
 interface MemoryTree { node: MemNode; children: MemoryTree[]; }
 
@@ -113,6 +114,21 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
     window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', { detail: { domain, files } }));
     window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
   }, [domain]);
+  const referenceKnowledgeFileInChat = useCallback((fileId: string) => {
+    const file = files.find(item => item.id === fileId);
+    if (!file) return;
+    const detail: ChatAttachmentRequest = {
+      requestId: `knowledge-reference-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      domain: file.domain || domain,
+      orgId: file.orgId,
+      fileId: file.id,
+      fileName: file.displayName || file.name || file.id,
+      path: file.path,
+      rawSize: file.rawSize,
+      kind: 'file',
+    };
+    window.dispatchEvent(new CustomEvent<ChatAttachmentRequest>('lumi:reference-file-in-chat', { detail }));
+  }, [domain, files]);
 
   const fetchObsidianStatus = useCallback(async () => {
     try {
@@ -974,6 +990,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
             onToggleProtect={handleToggleProtect}
             onChangeTier={handleChangeTier}
             onEdit={handleEdit}
+            onReferenceInChat={referenceKnowledgeFileInChat}
           />
 
           {/* Bottom hint */}

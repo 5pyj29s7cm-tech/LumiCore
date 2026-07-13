@@ -107,6 +107,7 @@ import {
 import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
+import { chatAttachmentRequestMatchesScope, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
@@ -1547,6 +1548,7 @@ export function DesktopUI({
   const [chatLoaded, setChatLoaded] = useState(false);
   const [chatPrefill, setChatPrefill] = useState('');
   const [chatPrefillSource, setChatPrefillSource] = useState('proactive');
+  const [chatAttachmentRequest, setChatAttachmentRequest] = useState<ChatAttachmentRequest | null>(null);
   const [sanctuaryOpen, setSanctuaryOpen] = useState(false);
   const [sanctuaryLoaded, setSanctuaryLoaded] = useState(false);
   const [sanctuaryAgent, setSanctuaryAgent] = useState<any>(null);
@@ -1676,6 +1678,28 @@ export function DesktopUI({
     window.addEventListener('lumi:open-proactive-chat', handleOpenProactiveChat);
     return () => window.removeEventListener('lumi:open-proactive-chat', handleOpenProactiveChat);
   }, [openProactiveChat]);
+
+  useEffect(() => {
+    const handleFileReference = (event: Event) => {
+      const detail = (event as CustomEvent<ChatAttachmentRequest>).detail;
+      if (!detail?.requestId || !detail.fileName) return;
+      const activeDomain = workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId
+        ? 'work'
+        : 'personal';
+      const scopeMatches = chatAttachmentRequestMatchesScope(detail, activeDomain, orgConnection?.orgId);
+      if (!scopeMatches) {
+        toast.error(uiMessage('desktop-ui.file-reference-scope-mismatch.2962eb0cbf', lang));
+        return;
+      }
+      setChatAttachmentRequest(detail);
+      setKnowledgeOpen(false);
+      setChatLoaded(true);
+      setChatOpen(true);
+      setActiveTab('chat');
+    };
+    window.addEventListener('lumi:reference-file-in-chat', handleFileReference);
+    return () => window.removeEventListener('lumi:reference-file-in-chat', handleFileReference);
+  }, [lang, orgConnection?.connected, orgConnection?.orgId, setActiveTab, workDomain]);
 
   const getDefaultDesktopIconPosition = useCallback((index: number) => ({
     x: desktopIconLayout.startX + (index % desktopIconLayout.columns) * desktopIconLayout.cellWidth,
@@ -5453,6 +5477,10 @@ export function DesktopUI({
             prefillMessage={chatPrefill}
             prefillSource={chatPrefillSource}
             onPrefillConsumed={() => { setChatPrefill(''); setChatPrefillSource('proactive'); }}
+            attachmentRequest={chatAttachmentRequest || undefined}
+            onAttachmentRequestConsumed={(requestId) => {
+              setChatAttachmentRequest(current => current?.requestId === requestId ? null : current);
+            }}
           />
         </Suspense>
       )}
