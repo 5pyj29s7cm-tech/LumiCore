@@ -274,35 +274,6 @@ type DesktopWidgetFallbackState = {
   maximized?: boolean;
 };
 
-type CustomerTakeoverStage = 'intake' | 'rules' | 'wechat' | 'result';
-type DesignDeliveryStage = 'intake' | 'concept' | 'cad' | 'revit' | 'handoff' | 'result';
-type EcommerceGrowthStage = 'intake' | 'diagnosis' | 'content' | 'tools' | 'publish' | 'result';
-type CustomerTakeoverBrief = {
-  customer: string;
-  quote: string;
-  amount: string;
-  period: string;
-  risk: string;
-  status: string;
-};
-
-function createDefaultCustomerTakeoverBrief(): CustomerTakeoverBrief {
-  return { ...desktopWorkflowCopy().customerDefault };
-}
-
-function normalizeCustomerTakeoverBrief(input: any): CustomerTakeoverBrief {
-  const source = input && typeof input === 'object' ? input : {};
-  const defaults = createDefaultCustomerTakeoverBrief();
-  return {
-    customer: String(source.customer || defaults.customer),
-    quote: String(source.quote || defaults.quote),
-    amount: String(source.amount || defaults.amount),
-    period: String(source.period || defaults.period),
-    risk: String(source.risk || defaults.risk),
-    status: String(source.status || defaults.status),
-  };
-}
-
 declare global {
   interface Window {
     lumiElectron?: {
@@ -1309,300 +1280,6 @@ function Spotlight({ isOpen, onClose, onSelect, apps, t }: { isOpen: boolean; on
   );
 }
 
-function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage; onClose: () => void }) {
-  const copy = desktopWorkflowCopy();
-  const stageMeta = copy.ecommerce.stageMeta;
-
-  const stageOrder: EcommerceGrowthStage[] = ['intake', 'diagnosis', 'content', 'tools', 'publish', 'result'];
-  const currentIndex = stageOrder.indexOf(stage);
-  const meta = stageMeta[stage];
-  const pipeline = [
-    { key: 'intake' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[0][0], value: copy.ecommerce.pipeline[0][1], icon: <MessageSquare size={16} /> },
-    { key: 'diagnosis' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[1][0], value: copy.ecommerce.pipeline[1][1], icon: <Activity size={16} /> },
-    { key: 'content' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[2][0], value: copy.ecommerce.pipeline[2][1], icon: <FileText size={16} /> },
-    { key: 'tools' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[3][0], value: copy.ecommerce.pipeline[3][1], icon: <Globe size={16} /> },
-    { key: 'publish' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[4][0], value: copy.ecommerce.pipeline[4][1], icon: <Upload size={16} /> },
-  ];
-  const resultItems = [
-    [copy.ecommerce.resultLabels[0], currentIndex >= 1 ? copy.common.generated : copy.common.preparing],
-    [copy.ecommerce.resultLabels[1], currentIndex >= 2 ? copy.ecommerce.resultValues.topics : copy.common.preparing],
-    [copy.ecommerce.resultLabels[2], currentIndex >= 2 ? copy.ecommerce.resultValues.storyboard : copy.common.preparing],
-    [copy.ecommerce.resultLabels[3], currentIndex >= 3 ? copy.ecommerce.resultValues.promptSets : copy.common.preparing],
-    [copy.ecommerce.resultLabels[4], currentIndex >= 4 ? copy.ecommerce.resultValues.confirmation : copy.common.preparing],
-    [copy.ecommerce.resultLabels[5], stage === 'result' ? copy.ecommerce.resultValues.draftReady : copy.ecommerce.resultValues.notSent],
-  ];
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 24, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 24, scale: 0.97 }}
-      transition={{ duration: 0.28 }}
-      className="fixed inset-0 z-[260] flex items-center justify-center px-4 py-10 pointer-events-none"
-    >
-      <div className="pointer-events-auto w-[min(1060px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-fuchsia-300/18 bg-zinc-950/93 shadow-2xl shadow-fuchsia-950/25 backdrop-blur-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
-          <div>
-            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-fuchsia-200">{meta.eyebrow}</div>
-            <h3 className="mt-2 text-2xl font-black tracking-tight text-white">{meta.title}</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/58">{meta.desc}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-            title="Close"
-          >
-            <X size={15} />
-          </button>
-        </div>
-        <div className="grid gap-4 p-5 lg:grid-cols-[1fr_1.1fr]">
-          <div className="space-y-3">
-            {pipeline.map((item) => {
-              const active = stage === 'result' || stageOrder.indexOf(item.key) <= currentIndex;
-              return (
-                <div
-                  key={item.key}
-                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
-                    active
-                      ? 'border-fuchsia-300/18 bg-fuchsia-300/[0.075] text-fuchsia-50'
-                      : 'border-white/8 bg-white/[0.025] text-white/35'
-                  }`}
-                >
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-fuchsia-300/12 text-fuchsia-200' : 'bg-white/5 text-white/30'}`}>
-                    {item.icon}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-black uppercase tracking-[0.16em]">{item.label}</div>
-                    <div className="mt-1 truncate text-sm font-semibold text-white/65">{item.value}</div>
-                  </div>
-                  <div className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-fuchsia-300 shadow-[0_0_16px_rgba(240,171,252,0.75)]' : 'bg-white/15'}`} />
-                </div>
-              );
-            })}
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">GROWTH RESULT</div>
-                <div className="mt-1 text-lg font-black text-white">{copy.ecommerce.resultTitle}</div>
-              </div>
-              <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-emerald-200">
-                {stage === 'result' ? copy.common.ready : copy.common.running}
-              </div>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {resultItems.map(([label, value]) => (
-                <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
-                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</div>
-                  <div className="mt-1 text-sm font-bold text-white/78">{value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 rounded-lg border border-cyan-300/20 bg-cyan-300/[0.08] px-3 py-3 text-sm leading-relaxed text-white/65">
-              {copy.ecommerce.resultSummary}
-            </div>
-          </div>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function CustomerTakeoverPanel({ stage, brief, onClose }: { stage: CustomerTakeoverStage; brief: CustomerTakeoverBrief; onClose: () => void }) {
-  const copy = desktopWorkflowCopy();
-  const stageMeta = copy.customer.stageMeta;
-
-  const meta = stageMeta[stage];
-  const pipeline = [
-    { label: copy.customer.pipeline[0][0], value: copy.customer.pipeline[0][1], icon: <MessageSquare size={16} /> },
-    { label: copy.customer.pipeline[1][0], value: brief.quote, icon: <FileText size={16} /> },
-    { label: copy.customer.pipeline[2][0], value: copy.customer.pipeline[2][1], icon: <Globe size={16} /> },
-    { label: copy.customer.pipeline[3][0], value: copy.customer.pipeline[3][1], icon: <Copy size={16} /> },
-  ];
-  const resultItems = [
-    [copy.customer.resultLabels[0], brief.customer],
-    [copy.customer.resultLabels[1], stage === 'result' ? brief.status : copy.customerDefault.status],
-    [copy.customer.resultLabels[2], brief.amount],
-    [copy.customer.resultLabels[3], stage === 'result' ? copy.common.generated : copy.common.preparing],
-    [copy.customer.resultLabels[4], brief.period],
-    [copy.customer.resultLabels[5], brief.risk],
-  ];
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 24, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 24, scale: 0.97 }}
-      transition={{ duration: 0.28 }}
-      className="fixed inset-0 z-[258] flex items-center justify-center px-4 py-10 pointer-events-none"
-    >
-      <div className="pointer-events-auto w-[min(960px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-cyan-300/20 bg-zinc-950/92 shadow-2xl shadow-cyan-950/30 backdrop-blur-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
-          <div>
-            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-cyan-200">{meta.eyebrow}</div>
-            <h3 className="mt-2 text-2xl font-black tracking-tight text-white">{meta.title}</h3>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/55">{meta.desc}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-            title="Close"
-          >
-            <X size={15} />
-          </button>
-        </div>
-        <div className="grid gap-4 p-5 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-3">
-            {pipeline.map((item, index) => {
-              const active = stage === 'result' || index <= (stage === 'wechat' ? 3 : stage === 'rules' ? 1 : 0);
-              return (
-                <div
-                  key={item.label}
-                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
-                    active
-                      ? 'border-cyan-300/18 bg-cyan-300/[0.075] text-cyan-50'
-                      : 'border-white/8 bg-white/[0.025] text-white/35'
-                  }`}
-                >
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-cyan-300/12 text-cyan-200' : 'bg-white/5 text-white/30'}`}>
-                    {item.icon}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-black uppercase tracking-[0.16em]">{item.label}</div>
-                    <div className="mt-1 truncate text-sm font-semibold text-white/65">{item.value}</div>
-                  </div>
-                  <div className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-cyan-300 shadow-[0_0_16px_rgba(103,232,249,0.8)]' : 'bg-white/15'}`} />
-                </div>
-              );
-            })}
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">CUSTOMER RESULT</div>
-                <div className="mt-1 text-lg font-black text-white">{copy.customer.resultTitle}</div>
-              </div>
-              <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-emerald-200">
-                {stage === 'result' ? 'READY' : 'RUNNING'}
-              </div>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {resultItems.map(([label, value]) => (
-                <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
-                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</div>
-                  <div className="mt-1 text-sm font-bold text-white/78">{value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 rounded-lg border border-celestial-saturn/20 bg-celestial-saturn/[0.08] px-3 py-3 text-sm leading-relaxed text-white/65">
-              {copy.customer.resultSummary}
-            </div>
-          </div>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; onClose: () => void }) {
-  const copy = desktopWorkflowCopy();
-  const stageMeta = copy.design.stageMeta;
-
-  const meta = stageMeta[stage];
-  const stageOrder: DesignDeliveryStage[] = ['intake', 'concept', 'cad', 'revit', 'handoff', 'result'];
-  const currentIndex = stageOrder.indexOf(stage);
-  const pipeline = [
-    { key: 'intake' as DesignDeliveryStage, label: copy.design.pipeline[0][0], value: copy.design.pipeline[0][1], icon: <MessageSquare size={16} /> },
-    { key: 'concept' as DesignDeliveryStage, label: copy.design.pipeline[1][0], value: copy.design.pipeline[1][1], icon: <FileText size={16} /> },
-    { key: 'cad' as DesignDeliveryStage, label: copy.design.pipeline[2][0], value: copy.design.pipeline[2][1], icon: <Brush size={16} /> },
-    { key: 'revit' as DesignDeliveryStage, label: copy.design.pipeline[3][0], value: copy.design.pipeline[3][1], icon: <Box size={16} /> },
-    { key: 'handoff' as DesignDeliveryStage, label: copy.design.pipeline[4][0], value: copy.design.pipeline[4][1], icon: <Copy size={16} /> },
-  ];
-  const resultItems = [
-    [copy.design.resultLabels[0], copy.design.resultValues.project],
-    [copy.design.resultLabels[1], stage === 'result' ? copy.common.completed : copy.common.generating],
-    [copy.design.resultLabels[2], currentIndex >= 1 ? 'PPTX + PDF' : copy.common.preparing],
-    [copy.design.resultLabels[3], copy.design.resultValues.budget],
-    [copy.design.resultLabels[4], currentIndex >= 2 ? copy.design.resultValues.cadReady : copy.common.preparing],
-    [copy.design.resultLabels[5], currentIndex >= 3 ? copy.design.resultValues.revitReady : copy.common.preparing],
-  ];
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 24, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 24, scale: 0.97 }}
-      transition={{ duration: 0.28 }}
-      className="fixed inset-0 z-[259] flex items-center justify-center px-4 py-10 pointer-events-none"
-    >
-      <div className="pointer-events-auto w-[min(1040px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-emerald-300/20 bg-zinc-950/93 shadow-2xl shadow-emerald-950/30 backdrop-blur-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
-          <div>
-            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-emerald-200">{meta.eyebrow}</div>
-            <h3 className="mt-2 text-2xl font-black tracking-tight text-white">{meta.title}</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/58">{meta.desc}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-            title="Close"
-          >
-            <X size={15} />
-          </button>
-        </div>
-        <div className="grid gap-4 p-5 lg:grid-cols-[1fr_1.1fr]">
-          <div className="space-y-3">
-            {pipeline.map((item) => {
-              const active = stage === 'result' || stageOrder.indexOf(item.key) <= currentIndex;
-              return (
-                <div
-                  key={item.key}
-                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
-                    active
-                      ? 'border-emerald-300/18 bg-emerald-300/[0.075] text-emerald-50'
-                      : 'border-white/8 bg-white/[0.025] text-white/35'
-                  }`}
-                >
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-emerald-300/12 text-emerald-200' : 'bg-white/5 text-white/30'}`}>
-                    {item.icon}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-black uppercase tracking-[0.16em]">{item.label}</div>
-                    <div className="mt-1 truncate text-sm font-semibold text-white/65">{item.value}</div>
-                  </div>
-                  <div className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-emerald-300 shadow-[0_0_16px_rgba(110,231,183,0.8)]' : 'bg-white/15'}`} />
-                </div>
-              );
-            })}
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">DESIGN DELIVERY</div>
-                <div className="mt-1 text-lg font-black text-white">{copy.design.resultTitle}</div>
-              </div>
-              <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-cyan-200">
-                {stage === 'result' ? copy.common.completed : copy.common.running}
-              </div>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {resultItems.map(([label, value]) => (
-                <div key={label} className="rounded-lg border border-white/[0.07] bg-white/[0.035] px-3 py-2.5">
-                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/32">{label}</div>
-                  <div className="mt-1 text-sm font-bold text-white/78">{value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 rounded-lg border border-emerald-300/18 bg-emerald-300/[0.07] px-3 py-3 text-sm leading-relaxed text-white/68">
-              {copy.design.resultSummary}
-            </div>
-          </div>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
 function ExecutionWorkQueue({ t }: { t: any }) {
   const isZh = t?.langCode !== 'en';
   return (
@@ -1970,10 +1647,6 @@ export function DesktopUI({
   const wallpaperWorkPromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
-  const [customerTakeoverStage, setCustomerTakeoverStage] = useState<CustomerTakeoverStage | null>(null);
-  const [customerTakeoverBrief, setCustomerTakeoverBrief] = useState<CustomerTakeoverBrief>(createDefaultCustomerTakeoverBrief);
-  const [designDeliveryStage, setDesignDeliveryStage] = useState<DesignDeliveryStage | null>(null);
-  const [ecommerceGrowthStage, setEcommerceGrowthStage] = useState<EcommerceGrowthStage | null>(null);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
@@ -4082,53 +3755,6 @@ export function DesktopUI({
           })();
           return;
         }
-        if (action === 'customer_takeover_panel' || action === 'demo_customer_takeover') {
-          const stage = String(detail.stage || target || 'intake') as CustomerTakeoverStage;
-          const allowedStages: CustomerTakeoverStage[] = ['intake', 'rules', 'wechat', 'result'];
-          if (!allowedStages.includes(stage)) throw new Error(`Unsupported customer takeover stage: ${stage}`);
-          setCustomerTakeoverBrief(normalizeCustomerTakeoverBrief(detail.brief || detail.customerBrief || detail.payload));
-          setCustomerTakeoverStage(stage);
-          setDesignDeliveryStage(null);
-          setEcommerceGrowthStage(null);
-          respond({ ok: true, action, stage });
-          return;
-        }
-        if (action === 'close_customer_takeover_panel' || action === 'demo_close_customer_takeover') {
-          setCustomerTakeoverStage(null);
-          setCustomerTakeoverBrief(createDefaultCustomerTakeoverBrief());
-          respond({ ok: true, action });
-          return;
-        }
-        if (action === 'design_delivery_panel' || action === 'demo_design_delivery') {
-          const stage = String(detail.stage || target || 'intake') as DesignDeliveryStage;
-          const allowedStages: DesignDeliveryStage[] = ['intake', 'concept', 'cad', 'revit', 'handoff', 'result'];
-          if (!allowedStages.includes(stage)) throw new Error(`Unsupported design delivery stage: ${stage}`);
-          setDesignDeliveryStage(stage);
-          setCustomerTakeoverStage(null);
-          setEcommerceGrowthStage(null);
-          respond({ ok: true, action, stage });
-          return;
-        }
-        if (action === 'close_design_delivery_panel' || action === 'demo_close_design_delivery') {
-          setDesignDeliveryStage(null);
-          respond({ ok: true, action });
-          return;
-        }
-        if (action === 'ecommerce_growth_panel' || action === 'demo_ecommerce_growth') {
-          const stage = String(detail.stage || target || 'intake') as EcommerceGrowthStage;
-          const allowedStages: EcommerceGrowthStage[] = ['intake', 'diagnosis', 'content', 'tools', 'publish', 'result'];
-          if (!allowedStages.includes(stage)) throw new Error(`Unsupported ecommerce growth stage: ${stage}`);
-          setEcommerceGrowthStage(stage);
-          setCustomerTakeoverStage(null);
-          setDesignDeliveryStage(null);
-          respond({ ok: true, action, stage });
-          return;
-        }
-        if (action === 'close_ecommerce_growth_panel' || action === 'demo_close_ecommerce_growth') {
-          setEcommerceGrowthStage(null);
-          respond({ ok: true, action });
-          return;
-        }
         if (action === 'close_app') {
           closeSurface(target);
           respond({ ok: true, action, target });
@@ -4340,12 +3966,6 @@ export function DesktopUI({
           wallpaperMode: isWallpaperMode,
           widgetMode: isDesktopWidgetMode,
           nexusOpen: viewMode === 'world',
-          customerTakeoverOpen: Boolean(customerTakeoverStage),
-          customerTakeoverStage,
-          designDeliveryOpen: Boolean(designDeliveryStage),
-          designDeliveryStage,
-          ecommerceGrowthOpen: Boolean(ecommerceGrowthStage),
-          ecommerceGrowthStage,
         },
         voice: {
           state: callState,
@@ -4410,9 +4030,6 @@ export function DesktopUI({
     clientPermissions,
     clientRuntime,
     callError,
-    customerTakeoverStage,
-    designDeliveryStage,
-    ecommerceGrowthStage,
     focusedWindow,
     agentStatus,
     isMuted,
@@ -5607,7 +5224,7 @@ export function DesktopUI({
         )}
       </AnimatePresence>
 
-      {workflowPanelVisible && !customerTakeoverStage && !designDeliveryStage && !ecommerceGrowthStage && (
+      {workflowPanelVisible && (
         <Suspense fallback={null}>
           <WorkflowPanel
             visible={true}
@@ -5620,34 +5237,6 @@ export function DesktopUI({
           />
         </Suspense>
       )}
-      <AnimatePresence>
-        {customerTakeoverStage && (
-          <CustomerTakeoverPanel
-            stage={customerTakeoverStage}
-            brief={customerTakeoverBrief}
-            onClose={() => {
-              setCustomerTakeoverStage(null);
-              setCustomerTakeoverBrief(createDefaultCustomerTakeoverBrief());
-            }}
-          />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {designDeliveryStage && (
-          <DesignDeliveryPanel
-            stage={designDeliveryStage}
-            onClose={() => setDesignDeliveryStage(null)}
-          />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {ecommerceGrowthStage && (
-          <EcommerceGrowthPanel
-            stage={ecommerceGrowthStage}
-            onClose={() => setEcommerceGrowthStage(null)}
-          />
-        )}
-      </AnimatePresence>
       <CursorGlow />
       <AnimatePresence>
         {wallpaperWorkPromptVisible && !isWallpaperMode && !chatOpen && (

@@ -290,7 +290,7 @@ async function handleDesktopExec(socket: Socket, data: {
       }
       case 'desktop_set_wallpaper_mode': {
         const source = String(args.source || '');
-        const allowedSources = new Set(['computer_use', 'wechat_send_message', 'self_intro_demo', 'customer_takeover_workflow', 'design_delivery_workflow', 'ecommerce_growth_workflow']);
+        const allowedSources = new Set(['computer_use', 'wechat_send_message', 'self_intro_demo']);
         if (!allowedSources.has(source)) {
           output = 'Wallpaper mode request ignored: only controlled desktop sessions may toggle it.';
           break;

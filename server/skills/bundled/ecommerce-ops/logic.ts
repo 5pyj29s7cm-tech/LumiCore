@@ -34,13 +34,14 @@ function firstMetric(line: string, labels: RegExp[]): number | undefined {
 }
 
 function skuFromLine(line: string, index: number): string {
-  const firstToken = line.trim().split(/\s|,|;|，|；|\t/)[0];
-  if (/^[A-Za-z0-9][A-Za-z0-9._-]+$/.test(firstToken) && !/^(sku|spu|item)$/i.test(firstToken)) {
+  const firstToken = line.trim().split(/[\s,;\uFF0C\uFF1B\t]+/)[0];
+  if (/^[\p{L}\p{N}][\p{L}\p{N}._-]+$/u.test(firstToken)
+    && !/^(sku|spu|item|\u5546\u54C1|\u8D27\u53F7|\u6B3E\u53F7)$/iu.test(firstToken)) {
     return firstToken;
   }
-  const explicit = line.match(/(?:sku|spu|item|商品|货号|款号)\s*[:=：]\s*([A-Za-z0-9._-]+)/i);
+  const explicit = line.match(/(?:sku|spu|item|\u5546\u54C1|\u8D27\u53F7|\u6B3E\u53F7)\s*[:=\uFF1A]?\s*([\p{L}\p{N}._-]+)/iu);
   if (explicit) return explicit[1];
-  const firstPart = line.split(/,|;|，|；|\t/)[0]?.trim();
+  const firstPart = line.split(/[,;\uFF0C\uFF1B\t]/)[0]?.trim();
   return firstPart ? firstPart.slice(0, 60) : `item-${index + 1}`;
 }
 
@@ -111,7 +112,7 @@ export function parseOrderRows(orderText: string, defaults: {
 } = {}): OrderMetricRow[] {
   const platformFeeRate = toRate(defaults.platformFeeRate);
   const adCostRate = toRate(defaults.adCostRate);
-  return String(orderText || '').split(/\n|;/).map((line, index) => {
+  return String(orderText || '').split(/\r?\n|;|\uFF1B/).map((line, index) => {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);
@@ -223,7 +224,7 @@ export function parseInventoryRows(inventoryText: string, defaults: {
   leadTimeDays?: number;
   safetyStockDays?: number;
 } = {}): InventoryRow[] {
-  return String(inventoryText || '').split(/\n|;/).map((line, index) => {
+  return String(inventoryText || '').split(/\r?\n|;|\uFF1B/).map((line, index) => {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);
@@ -286,7 +287,7 @@ export function planInventoryRestock(args: {
 
 function sumLabeledAmounts(text: string, labels: RegExp[]): number {
   let total = 0;
-  for (const line of String(text || '').split(/\n|;/)) {
+  for (const line of String(text || '').split(/\r?\n|;|\uFF1B/)) {
     if (!labels.some(label => label.test(line))) continue;
     total += extractNumbers(line).slice(-1)[0] || 0;
   }
@@ -330,6 +331,10 @@ export function reconcileSettlement(args: {
 }
 
 function rowName(line: string, index: number): string {
+  const firstToken = line.trim().split(/[\s,;\uFF0C\uFF1B\t]+/)[0];
+  if (/^(?:campaign|ad.?group)[-_.][\p{L}\p{N}._-]+$/iu.test(firstToken)) return firstToken;
+  const explicit = line.match(/(?:campaign|ad.?group|\u8BA1\u5212|\u5E7F\u544A\u7EC4)\s*[:=\uFF1A]?\s*([^\s,;\uFF0C\uFF1B:\uFF1A]+)/i);
+  if (explicit?.[1]) return explicit[1];
   return skuFromLine(line, index);
 }
 
@@ -341,7 +346,7 @@ export function analyzeCampaignRoi(args: {
 }) {
   const grossMarginRate = toRate(args.grossMarginRate, 0.35);
   const targetRoas = Math.max(toNumber(args.targetRoas, grossMarginRate > 0 ? 1 / grossMarginRate : 3), 0);
-  const rows = String(args.campaignText || '').split(/\n|;/).map((line, index) => {
+  const rows = String(args.campaignText || '').split(/\r?\n|;|\uFF1B/).map((line, index) => {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);
@@ -422,7 +427,7 @@ export function buildAfterSalesRiskReport(args: {
   totalRevenue?: number;
   currency?: string;
 }) {
-  const rows = String(args.afterSalesText || '').split(/\n|;/).map((line, index) => {
+  const rows = String(args.afterSalesText || '').split(/\r?\n|;|\uFF1B/).map((line, index) => {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);

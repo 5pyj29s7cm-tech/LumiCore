@@ -136,7 +136,8 @@ const ACTION_PROMISE_RE =
   /(?:\b(?:i(?:'ll| will| am going to|'m going to)|let me|i need to|i'll first|let me first)\b[^.\n]{0,120}\b(?:read|open|check|review|analy[sz]e|inspect|process|search|generate|create|export)\b)|(?:(?:我|让我|我先|让我先|先|现在|马上|接下来)[^。\n]{0,80}(?:读取|读|打开|查看|看看|审查|分析|检查|处理|调用|搜索|查找|生成|导出|保存))/iu;
 
 const CLIENT_SURFACE_TASK_RE =
-  /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|订阅|激活|账单|桌面小组件|小组件|客户接管面板|客户结果面板|设计交付面板|电商增长面板|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view|subscription|activation|billing|desktop\s+widget|widget\s+mode|customer\s+takeover\s+panel|design\s+delivery\s+panel|ecommerce\s+growth\s+panel)\b/iu;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|订阅|激活|账单|桌面小组件|小组件|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view|subscription|activation|billing|desktop\s+widget|widget\s+mode)\b/iu;
 
 function isClientSurfaceTask(task: string): boolean {
   return CLIENT_SURFACE_TASK_RE.test(task || '');

@@ -14,7 +14,7 @@ function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-const server = new McpServer({ name: 'ecommerce-ops', version: '1.1.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'ecommerce-ops', version: '1.3.0' }, { capabilities: { tools: {} } });
 
 server.registerTool('product_listing_optimizer', {
   description: 'Create marketplace-ready product title options, selling points, search keywords, image shot list, and compliance checks.',

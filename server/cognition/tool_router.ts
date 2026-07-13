@@ -141,6 +141,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'generate_image',
     'generate_image_dalle',
     'edit_image',
+    'generate_video',
     'cad_generate_dxf',
     'cad_prepare_autocad_operations',
     'mcp_cad-drafting_autocad_playback_file',
@@ -267,8 +268,6 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'work_takeover_task_advance',
     'work_takeover_task_autorun',
     'work_takeover_capability_reuse_probe',
-    'work_takeover_real_smoke_run',
-    'work_takeover_task_prepare_industry_package',
     'work_takeover_task_verify_result',
     'work_takeover_task_export_packet',
     'work_takeover_task_run_suggested_tool',
@@ -446,12 +445,35 @@ const ROUTES: RouteDefinition[] = [
     groups: ['skills'],
   },
   {
-    category: 'work_takeover',
-    reason: 'work takeover, real closed-loop task run, or capability reuse pressure test',
+    category: 'customer_operations',
+    reason: 'customer sales, service, lead, or account operations request',
     patterns: [
-      /工作接管|接管.*微信|接管.*客户|真实闭环|先跑一遍|跑出结果|能力复用|压测|重复能力|会不会重复|稳不稳定|稳定性|任务中心/u,
+      /(?:\u5ba2\u6237|\u9500\u552e|\u7ebf\u7d22|\u552e\u540e|\u5ba2\u670d|\u5de5\u5355|\u5546\u673a).{0,32}(?:\u63a5\u7ba1|\u8ddf\u8fdb|\u63a8\u8fdb|\u5904\u7406|\u5206\u6790|\u8bc4\u5206|\u62a5\u4ef7|\u56de\u8bbf|\u5f02\u8bae|\u5206\u7c7b|\u7ef4\u62a4|\u8fd0\u8425)/u,
+      /\b(?:customer|sales|lead|after[-\s]?sales|support\s+ticket|crm)\b.{0,48}\b(?:take\s*over|follow\s*up|advance|handle|triage|score|quote|operate|manage)\b/i,
+      /\b(?:take\s*over|follow\s*up|advance|handle|triage|score|quote|operate|manage|analy[sz]e|prepare)\b.{0,48}\b(?:customer|sales|lead|after[-\s]?sales|support\s+ticket|crm)\b/i,
+    ],
+    prefixes: ['mcp_sales-customer-ops_'],
+    groups: ['workTakeover', 'messaging', 'documents'],
+  },
+  {
+    category: 'ecommerce_operations',
+    reason: 'ecommerce store, listing, order, inventory, campaign, or content operations request',
+    patterns: [
+      /(?:\u7535\u5546|\u5e97\u94fa|\u5546\u54c1|\u5546\u5bb6\u540e\u53f0|\u8ba2\u5355|\u5e93\u5b58|\u8865\u8d27|\u6295\u653e|\u5e7f\u544a|\u6296\u5e97|\u6dd8\u5b9d|\u5929\u732b|\u4eac\u4e1c|\u62fc\u591a\u591a|\u5c0f\u7ea2\u4e66).{0,40}(?:\u63a5\u7ba1|\u8fd0\u8425|\u4f18\u5316|\u5206\u6790|\u4f53\u68c0|\u6838\u7b97|\u5bf9\u8d26|\u8865\u8d27|\u589e\u957f|\u5185\u5bb9|\u77ed\u89c6\u9891|\u4e0a\u67b6|\u53d1\u5e03)/u,
+      /\b(?:e-?commerce|marketplace|seller|shopify|store|inventory|campaign|listing|sku)\b.{0,48}\b(?:take\s*over|operate|optim|analy|audit|reconcile|restock|growth|content|publish|manage)\b/i,
+      /\b(?:take\s*over|operate|optim|analy|audit|reconcile|restock|growth|create|publish|manage)\w*\b.{0,48}\b(?:e-?commerce|marketplace|seller|shopify|store|inventory|campaign|listing|sku)\b/i,
+    ],
+    prefixes: ['mcp_ecommerce-ops_', 'mcp_content-ops_'],
+    groups: ['files', 'documents', 'web', 'authenticatedWeb', 'publicPost', 'design', 'workTakeover'],
+  },
+  {
+    category: 'work_takeover',
+    reason: 'work takeover coordination or capability reuse pressure test',
+    patterns: [
+      // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+      /工作接管|接管.*微信|接管.*客户|闭环执行|先跑一遍|跑出结果|能力复用|压测|重复能力|会不会重复|稳不稳定|稳定性|任务中心/u,
       /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b).*(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee)/u,
-      /\b(work\s*takeover|real\s*smoke|closed\s*loop|capability\s*reuse|pressure\s*test|task\s*center|take\s*over)\b/i,
+      /\b(work\s*takeover|closed\s*loop|capability\s*reuse|pressure\s*test|task\s*center|take\s*over)\b/i,
     ],
     groups: ['workTakeover', 'skills'],
   },
@@ -633,6 +655,43 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         'desktop_ui_snapshot',
       );
     }
+  }
+  if (categories.includes('customer_operations')) {
+    priorities.push(
+      'mcp_sales-customer-ops_lead_score',
+      'mcp_sales-customer-ops_customer_health_review',
+      'mcp_sales-customer-ops_support_ticket_triage',
+      'mcp_sales-customer-ops_objection_response_builder',
+      'mcp_sales-customer-ops_sales_followup_draft',
+      'work_takeover_task_create',
+      'work_takeover_task_orchestrate',
+      'work_takeover_task_run_suggested_tool',
+      'wechat_send_message',
+      'create_docx',
+      'create_pdf',
+      'work_product_verify',
+    );
+  }
+  if (categories.includes('ecommerce_operations')) {
+    priorities.push(
+      'mcp_ecommerce-ops_product_listing_optimizer',
+      'mcp_ecommerce-ops_ecommerce_order_profit',
+      'mcp_ecommerce-ops_inventory_restock_plan',
+      'mcp_ecommerce-ops_platform_settlement_reconcile',
+      'mcp_ecommerce-ops_campaign_roi_analyzer',
+      'mcp_ecommerce-ops_after_sales_risk_report',
+      'mcp_content-ops_short_video_script',
+      'mcp_content-ops_content_calendar',
+      'generate_image',
+      'generate_video',
+      'web_login_run',
+      'mcp_playwright_browser_snapshot',
+      'mcp_playwright_browser_navigate',
+      'mcp_playwright_browser_click',
+      'create_xlsx',
+      'create_docx',
+      'work_product_verify',
+    );
   }
   if (categories.includes('public_post')) {
     priorities.push(

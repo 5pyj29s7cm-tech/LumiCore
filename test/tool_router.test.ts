@@ -125,6 +125,12 @@ const DECLARATIONS = [
   'cad_prepare_autocad_operations',
   'mcp_cad-drafting_autocad_playback_file',
   'generate_image',
+  'generate_video',
+  'mcp_sales-customer-ops_lead_score',
+  'mcp_sales-customer-ops_sales_followup_draft',
+  'mcp_ecommerce-ops_product_listing_optimizer',
+  'mcp_ecommerce-ops_campaign_roi_analyzer',
+  'mcp_content-ops_short_video_script',
   'git_status',
   'git_commit',
   'list_skills',
@@ -137,8 +143,6 @@ const DECLARATIONS = [
   'lumi_sleep_status',
   'lumi_sleep_cycle',
   'work_takeover_capability_reuse_probe',
-  'work_takeover_real_smoke_run',
-  'work_takeover_task_prepare_industry_package',
   'work_takeover_task_verify_result',
   'work_takeover_task_export_packet',
 ].map(name => declaration(name));
@@ -702,9 +706,30 @@ describe('tool router', () => {
     expect(route.categories).toEqual(expect.arrayContaining(['work_takeover', 'skills_agents']));
     expect(route.toolNames).toEqual(expect.arrayContaining([
       'work_takeover_capability_reuse_probe',
-      'work_takeover_real_smoke_run',
       'self_extension_plan',
       'capability_learning_list',
+    ]));
+  });
+
+  it('routes customer operations to real sales tools instead of a fixed takeover script', () => {
+    const route = routeToolsForTurn('Analyze this customer lead and prepare the next sales follow-up.', DECLARATIONS);
+
+    expect(route.categories).toContain('customer_operations');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'mcp_sales-customer-ops_lead_score',
+      'mcp_sales-customer-ops_sales_followup_draft',
+    ]));
+    expect(route.toolNames).not.toContain('work_takeover_real_smoke_run');
+  });
+
+  it('routes ecommerce work to data, content, media, and authenticated platform tools', () => {
+    const route = routeToolsForTurn('Analyze this ecommerce campaign and create a short video for the store.', DECLARATIONS);
+
+    expect(route.categories).toContain('ecommerce_operations');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'mcp_ecommerce-ops_campaign_roi_analyzer',
+      'mcp_content-ops_short_video_script',
+      'generate_video',
     ]));
   });
 

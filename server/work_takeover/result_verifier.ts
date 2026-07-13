@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import type { WorkTakeoverTask } from './tasks';
+import { buildActionContract, hasCoreActionEvidence } from '../cognition/action_contract';
+import type { ToolExecutionRecord } from '../tools/types';
 
 export type WorkTakeoverExpectedSurface =
   | 'wechat'
@@ -72,6 +74,8 @@ export interface WorkTakeoverVerificationInput {
   expectedContentTerms?: string[];
   minMatchedContentTerms?: number;
   minFileBytes?: number;
+  requireExternalOutcome?: boolean;
+  outcomeEvidence?: ToolExecutionRecord[];
 }
 
 const SURFACE_PATTERNS: Record<WorkTakeoverExpectedSurface, RegExp[]> = {
@@ -267,6 +271,25 @@ function check(id: string, label: string, passed: boolean, detail: string): Work
   return { id, label, passed, detail };
 }
 
+function taskOutcomeEvidence(task: WorkTakeoverTask, input: WorkTakeoverVerificationInput): ToolExecutionRecord[] {
+  const recorded = Array.isArray(task.metadata?.workTakeoverToolRuns)
+    ? task.metadata.workTakeoverToolRuns
+    : [];
+  const fromTask = recorded
+    .filter((run: any) => run?.status === 'completed' && run?.toolName && String(run?.result || '').trim())
+    .map((run: any) => ({
+      id: run.id,
+      name: String(run.toolName),
+      arguments: run.toolArgs && typeof run.toolArgs === 'object' ? run.toolArgs : {},
+      result: String(run.result),
+    }));
+  return [...fromTask, ...(input.outcomeEvidence || [])];
+}
+
+function taskActionText(task: WorkTakeoverTask): string {
+  return [task.title, task.summary, task.sourceMessage, ...task.nextActions].map(compact).filter(Boolean).join('\n');
+}
+
 export function verifyWorkTakeoverResult(
   task: WorkTakeoverTask,
   input: WorkTakeoverVerificationInput = {},
@@ -278,6 +301,21 @@ export function verifyWorkTakeoverResult(
   const expectedSurfaces = unique(input.expectedSurfaces || []);
   const filePaths = unique([...(input.filePaths || []), ...taskArtifactPaths(task)]);
   const checks: WorkTakeoverVerificationCheck[] = [];
+
+  if (input.requireExternalOutcome) {
+    const actionText = taskActionText(task);
+    const contract = buildActionContract(actionText);
+    const evidence = taskOutcomeEvidence(task, input);
+    const outcomePassed = contract.applies && hasCoreActionEvidence(contract, evidence, actionText);
+    checks.push(check(
+      'business_outcome_evidence',
+      'External business outcome is verified',
+      outcomePassed,
+      outcomePassed
+        ? `Verified through the ${contract.kind} action contract with ${evidence.length} recorded tool result(s).`
+        : `No qualifying ${contract.applies ? contract.kind : 'external action'} evidence was recorded. Local drafts, task packets, opened windows, screenshots, and industry-package integrity checks do not prove completion.`,
+    ));
+  }
 
   checks.push(check(
     'task_context',
@@ -416,7 +454,7 @@ export function verifyWorkTakeoverResult(
   const passed = failed.length === 0;
   const status: WorkTakeoverResultVerification['status'] = passed
     ? 'passed'
-    : failed.some(item => ['task_context', 'confirmation_boundaries'].includes(item.id))
+    : failed.some(item => ['task_context', 'confirmation_boundaries', 'business_outcome_evidence'].includes(item.id))
     ? 'blocked'
     : 'needs_review';
 

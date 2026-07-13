@@ -59,7 +59,7 @@ const CATEGORY_KEYWORDS: Record<Exclude<WechatWorkCategory, 'unknown'>, string[]
 };
 
 const WORKFLOW_BY_CATEGORY: Record<WechatWorkCategory, string> = {
-  customer: 'customer_takeover_workflow',
+  customer: 'customer_operations',
   store: 'store_operations_takeover',
   account: 'account_operations_takeover',
   legal_case: 'case_filing_takeover',

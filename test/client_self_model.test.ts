@@ -98,13 +98,10 @@ describe('Lumi client self model', () => {
     expect(verified.matched).toContain('surface:knowledge:closed');
   });
 
-  it('includes large client panels in the interface map', () => {
+  it('includes real client and organization surfaces in the interface map', () => {
     const ids = getClientInterfaceSurfaces().map(surface => surface.id);
 
     expect(ids).toEqual(expect.arrayContaining([
-      'customer-takeover-panel',
-      'design-delivery-panel',
-      'ecommerce-growth-panel',
       'subscription',
       'widget',
       'org-dashboard',
@@ -293,31 +290,6 @@ describe('Lumi client self model', () => {
         },
         matched: 'surface:subscription:open',
       },
-      {
-        name: 'open customer takeover panel',
-        args: { action: 'customer_takeover_panel', stage: 'result' },
-        after: {
-          activeTab: 'home',
-          windows: { open: [], focused: null, minimized: [] },
-          surfaces: { customerTakeoverOpen: true, customerTakeoverStage: 'result' },
-        },
-        matched: 'surface:customer-takeover-panel:open',
-      },
-      {
-        name: 'close design delivery panel',
-        args: { action: 'close_design_delivery_panel' },
-        before: {
-          activeTab: 'home',
-          windows: { open: [], focused: null, minimized: [] },
-          surfaces: { designDeliveryOpen: true, designDeliveryStage: 'cad' },
-        },
-        after: {
-          activeTab: 'home',
-          windows: { open: [], focused: null, minimized: [] },
-          surfaces: { designDeliveryOpen: false, designDeliveryStage: null },
-        },
-        matched: 'surface:design-delivery-panel:closed',
-      },
     ];
 
     for (const item of cases) {
@@ -501,12 +473,11 @@ describe('client self tools', () => {
       'open_subscription',
       'open_activation',
       'open_billing',
+    ]));
+    expect(actionEnum).not.toEqual(expect.arrayContaining([
       'customer_takeover_panel',
-      'close_customer_takeover_panel',
       'design_delivery_panel',
-      'close_design_delivery_panel',
       'ecommerce_growth_panel',
-      'close_ecommerce_growth_panel',
     ]));
   });
 

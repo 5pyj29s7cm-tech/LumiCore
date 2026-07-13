@@ -1,9 +1,6 @@
 import type { Socket } from 'socket.io';
 import type { ToolExecutionRecord } from '../tools/types';
-import { cadDraftingWorkflow } from './bundled/cad-drafting/workflow_manifest';
 import { desktopAutomationWorkflow } from './bundled/desktop-automation/workflow_manifest';
-import { ecommerceOpsWorkflow } from './bundled/ecommerce-ops/workflow_manifest';
-import { salesCustomerOpsWorkflow } from './bundled/sales-customer-ops/workflow_manifest';
 
 export type SkillWorkflowDesktopRelay = (name: string, args?: Record<string, any>) => Promise<any>;
 export type SkillWorkflowSpeak = (line: string) => number | Promise<number>;
@@ -46,9 +43,6 @@ export interface SkillWorkflowDescriptor {
 }
 
 const SKILL_WORKFLOWS: SkillWorkflowDescriptor[] = [
-  cadDraftingWorkflow,
-  ecommerceOpsWorkflow,
-  salesCustomerOpsWorkflow,
   desktopAutomationWorkflow,
 ];
 

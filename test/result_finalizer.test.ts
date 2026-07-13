@@ -508,6 +508,79 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toBe(responseText);
   });
 
+  it('blocks legacy customer packages from claiming customer work completed', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: 'Analyze this customer lead and advance the sales follow-up.',
+      responseText: 'The customer takeover and follow-up are completed.',
+      toolRecords: [{
+        name: 'legacy_scripted_customer_package',
+        arguments: { customerName: 'Example customer' },
+        result: '{"quoteReady":true,"contractReady":true,"completionEligible":false}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing core evidence for customer_operations.');
+  });
+
+  it('blocks legacy ecommerce packages from claiming platform work completed', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: 'Analyze this ecommerce campaign and optimize the store listing.',
+      responseText: 'The ecommerce operation and store optimization are completed.',
+      toolRecords: [{
+        name: 'legacy_scripted_ecommerce_package',
+        arguments: { productName: 'Example product' },
+        result: '{"contentMatrixReady":true,"publishDraftReady":true,"completionEligible":false}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing core evidence for ecommerce_operations.');
+  });
+
+  it('blocks legacy design packages from claiming composite design delivery', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: 'Based on the attached plan, create a design PPT, finished render, and budget schedule.',
+      responseText: 'The full design package has been generated and completed.',
+      toolRecords: [{
+        name: 'legacy_scripted_design_package',
+        arguments: { area: 120 },
+        result: '{"pptReady":true,"renderPreviewReady":true,"budgetReady":true,"completionEligible":false}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing core evidence for design_delivery.');
+  });
+
+  it('allows grounded customer analysis from the real sales capability', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = 'Customer lead analysis completed with a concrete next action.';
+
+    const result = finalizeLumiResponse({
+      taskText: 'Analyze this customer lead and score the sales opportunity.',
+      responseText,
+      toolRecords: [{
+        name: 'mcp_sales-customer-ops_lead_score',
+        arguments: { leadText: 'The buyer needs 30 seats this month and requested a formal quote.' },
+        result: '{"score":80,"grade":"hot","signals":{"budget":true,"timing":true},"nextBestAction":"Confirm authority and prepare a scoped quotation."}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
   it('blocks ordinary chat formal legal documents without production and citation gates', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 

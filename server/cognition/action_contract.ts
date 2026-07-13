@@ -8,6 +8,9 @@ export type LumiActionContractKind =
   | 'browser_account'
   | 'public_post'
   | 'cad_drafting'
+  | 'customer_operations'
+  | 'ecommerce_operations'
+  | 'design_delivery'
   | 'stock_monitor'
   | 'legal_document'
   | 'desktop_operation'
@@ -49,6 +52,37 @@ function unique(values: string[]): string[] {
 
 function matches(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
+}
+
+function isCustomerOperationsTurn(text: string): boolean {
+  const customerSurface = /(?:\u5ba2\u6237|\u9500\u552e|\u7ebf\u7d22|\u552e\u540e|\u5ba2\u670d|\u5de5\u5355|\u5546\u673a|\u5ba2\u6237\u5173\u7cfb|\bCRM\b|customer|sales|lead|after[-\s]?sales|support\s+ticket)/iu.test(text);
+  const operationalIntent = /(?:\u63a5\u7ba1|\u8ddf\u8fdb|\u63a8\u8fdb|\u5904\u7406|\u5206\u6790|\u8bc4\u5206|\u62a5\u4ef7|\u56de\u8bbf|\u6210\u4ea4|\u5f02\u8bae|\u5206\u7c7b|\u6d3e\u5355|\u7ef4\u62a4|\u8fd0\u8425|take\s*over|follow\s*up|advance|triage|qualif|score|quote|handle|operate|manage)/iu.test(text);
+  const legalOnly = /(?:\u5408\u540c\u5ba1\u67e5|\u6cd5\u5f8b\u610f\u89c1|\u8d77\u8bc9|\u7b54\u8fa9|\u4ee3\u7406\u8bcd|contract\s+review|legal\s+opinion|pleading)/iu.test(text);
+  return customerSurface && operationalIntent && !legalOnly;
+}
+
+function isEcommerceOperationsTurn(text: string): boolean {
+  const commerceSurface = /(?:\u7535\u5546|\u5e97\u94fa|\u5546\u54c1|\u5546\u5bb6\u540e\u53f0|\u8ba2\u5355|\u5e93\u5b58|\u8865\u8d27|\u6295\u653e|\u5e7f\u544a|\u8d26\u6237\u8fd0\u8425|\u5546\u54c1\u8be6\u60c5|\u6296\u5e97|\u6dd8\u5b9d|\u5929\u732b|\u4eac\u4e1c|\u62fc\u591a\u591a|\u5c0f\u7ea2\u4e66|\u6296\u97f3|\u5feb\u624b|\bSKU\b|e-?commerce|marketplace|seller|shopify|\bstore\b|inventory|campaign|listing)/iu.test(text);
+  const operationalIntent = /(?:\u63a5\u7ba1|\u8fd0\u8425|\u4f18\u5316|\u5206\u6790|\u4f53\u68c0|\u6838\u7b97|\u5bf9\u8d26|\u8865\u8d27|\u589e\u957f|\u5185\u5bb9|\u77ed\u89c6\u9891|\u4e0a\u67b6|\u53d1\u5e03|\u7ba1\u7406|take\s*over|operate|optim|analy|audit|reconcile|restock|growth|content|publish|manage)/iu.test(text);
+  return commerceSurface && operationalIntent;
+}
+
+function isCompositeDesignDeliveryTurn(text: string): boolean {
+  if (/(?:\u5168\u5957\u8bbe\u8ba1|\u5168\u6848\u8bbe\u8ba1|\u5b8c\u6574\u4ea4\u4ed8\u5305|\u8bbe\u8ba1\u4ea4\u4ed8|\u88c5\u4fee\u4ea4\u4ed8|full\s+(?:design|renovation|interior)|design\s+(?:delivery|package|handoff))/iu.test(text)) return true;
+  const groups = [
+    /(?:\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u65bd\u5de5\u56fe|\u5e73\u9762\u56fe)/iu,
+    /(?:Revit|\bBIM\b|\bIFC\b|Dynamo)/iu,
+    /(?:PPT|\u6c47\u62a5|\u65b9\u6848\u4e66|proposal|presentation)/iu,
+    /(?:\u6548\u679c\u56fe|\u6e32\u67d3|\u6d77\u62a5|logo|\u54c1\u724c\u89c6\u89c9|render|visual)/iu,
+    /(?:\u9884\u7b97|\u6e05\u5355|\u6750\u6599\u8868|BOQ|bill\s+of\s+quantit)/iu,
+  ].filter(pattern => pattern.test(text)).length;
+  return groups >= 2;
+}
+
+function isDesignDeliveryTurn(text: string): boolean {
+  const designSurface = /(?:\u88c5\u4fee|\u5bb6\u88c5|\u5de5\u88c5|\u5ba4\u5185\u8bbe\u8ba1|\u7a7a\u95f4\u8bbe\u8ba1|\u5efa\u7b51\u8bbe\u8ba1|\u54c1\u724c\u8bbe\u8ba1|\u89c6\u89c9\u8bbe\u8ba1|\u54c1\u724c\u521b\u610f|\u6548\u679c\u56fe|\u6e32\u67d3|\u6d77\u62a5|logo|Revit|\bBIM\b|\bIFC\b|interior\s+design|spatial\s+design|architectural\s+design|brand\s+design|visual\s+design|render)/iu.test(text);
+  const deliveryIntent = /(?:\u8bbe\u8ba1|\u751f\u6210|\u5236\u4f5c|\u7ed8\u5236|\u51fa\u56fe|\u4ea4\u4ed8|\u63a5\u7ba1|\u65b9\u6848|\u6a21\u578b|\u6539\u56fe|design|create|generate|produce|deliver|take\s*over|model|revise)/iu.test(text);
+  return isCompositeDesignDeliveryTurn(text) || (designSurface && deliveryIntent);
 }
 
 function hasNegatedMessagingSendIntent(text: string): boolean {
@@ -162,6 +196,123 @@ function buildLegalDocumentContract(): LumiActionContract {
   });
 }
 
+function buildCustomerOperationsContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'customer_operations',
+    label: 'Customer operations',
+    coreAction: 'Inspect the supplied customer context, perform the requested sales/service work, and record a verifiable customer-facing or operational result.',
+    preparationIsNotCompletion: [
+      'a canned quotation or contract template',
+      'a local customer takeover packet',
+      'opening WeChat, CRM, or a customer page',
+      'a reply draft that was not sent',
+      'a task record with no customer or business outcome',
+    ],
+    requiredEvidence: [
+      'grounded customer analysis based on supplied records when analysis is requested',
+      'sent=true or an equivalent channel receipt when contact/reply is requested',
+      'a verified document artifact when a quotation, proposal, or agreement is requested',
+      'a concrete task/result record that distinguishes completed work from drafts and blockers',
+    ],
+    preferredTools: [
+      'mcp_sales-customer-ops_lead_score',
+      'mcp_sales-customer-ops_sales_followup_draft',
+      'mcp_sales-customer-ops_objection_response_builder',
+      'mcp_sales-customer-ops_customer_health_review',
+      'mcp_sales-customer-ops_support_ticket_triage',
+      'work_takeover_task_create',
+      'work_takeover_task_orchestrate',
+      'work_takeover_task_run_suggested_tool',
+      'wechat_send_message',
+      'create_docx',
+      'create_pdf',
+      'work_product_verify',
+    ],
+    verificationTools: ['wechat_send_message', 'work_takeover_task_get', 'work_product_verify', 'desktop_path_info'],
+    nextStep: 'Read the actual customer context, choose the relevant customer-operations tool, execute the requested outcome, then verify the channel receipt, artifact, or recorded business result.',
+    caution: 'Do not report customer takeover as complete from a local packet, generic template, opened window, or unsent draft.',
+  });
+}
+
+function buildEcommerceOperationsContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'ecommerce_operations',
+    label: 'Ecommerce operations',
+    coreAction: 'Use real supplied store, order, SKU, campaign, inventory, or platform state to perform the requested analysis, content production, or store operation.',
+    preparationIsNotCompletion: [
+      'a generic store audit checklist',
+      'a local ecommerce growth packet',
+      'image or video prompts without generated media',
+      'opening a seller or creator platform',
+      'a publish draft without a platform submission receipt',
+    ],
+    requiredEvidence: [
+      'source-backed ecommerce analysis for analysis requests',
+      'an actual image/video/file result for requested content production',
+      'authenticated post-action platform state for store changes',
+      'post-submit receipt or visible platform feedback for publishing',
+    ],
+    preferredTools: [
+      'mcp_ecommerce-ops_product_listing_optimizer',
+      'mcp_ecommerce-ops_ecommerce_order_profit',
+      'mcp_ecommerce-ops_inventory_restock_plan',
+      'mcp_ecommerce-ops_platform_settlement_reconcile',
+      'mcp_ecommerce-ops_campaign_roi_analyzer',
+      'mcp_ecommerce-ops_after_sales_risk_report',
+      'mcp_content-ops_short_video_script',
+      'generate_image',
+      'generate_video',
+      'web_login_run',
+      'mcp_playwright_browser_snapshot',
+      'work_product_verify',
+    ],
+    verificationTools: ['work_product_verify', 'desktop_path_info', 'mcp_playwright_browser_snapshot', 'desktop_capture_screen'],
+    nextStep: 'Obtain the real source data or authenticated platform session, run the matching ecommerce operation, and verify the produced asset or post-action platform state.',
+    caution: 'A local preparation packet or generated copy is not evidence that a store was operated, media was generated, or content was published.',
+  });
+}
+
+function buildDesignDeliveryContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'design_delivery',
+    label: 'Design delivery',
+    coreAction: 'Inspect the real brief and source materials, create every requested design/CAD/BIM/document output through the corresponding production tools, and verify each deliverable.',
+    preparationIsNotCompletion: [
+      'a generic design package built from defaults',
+      'a concept DXF presented as a construction drawing',
+      'a Dynamo handoff script presented as a Revit model',
+      'prompts presented as finished visuals',
+      'one file presented as a complete multi-output delivery',
+    ],
+    requiredEvidence: [
+      'source brief/files were inspected when the task depends on supplied materials',
+      'each requested output group has a real artifact or application result',
+      'visible AutoCAD requests have MCP/COM completion-marker evidence',
+      'Revit/BIM requests have a real model/export/application result, not a handoff script',
+      'artifacts pass path/content verification and assumptions are disclosed',
+    ],
+    preferredTools: [
+      'desktop_list_files',
+      'read_file',
+      'read_pdf',
+      'ocr_image_file',
+      'floorplan_extract_geometry',
+      'generate_image',
+      'cad_generate_dxf',
+      'cad_prepare_autocad_operations',
+      'mcp_cad-drafting_autocad_playback_file',
+      'create_ppt',
+      'create_pdf',
+      'create_docx',
+      'adapter_execute',
+      'work_product_verify',
+    ],
+    verificationTools: ['work_product_verify', 'desktop_path_info', 'desktop_capture_screen', 'adapter_health_check'],
+    nextStep: 'Inspect the supplied brief and files, enumerate the requested deliverable groups, produce each through its real tool path, and verify the complete set before reporting completion.',
+    caution: 'Concept files, scripts, previews, and local package integrity checks do not prove a professional design, AutoCAD, or Revit delivery was completed.',
+  });
+}
+
 export function buildActionContract(input: string): LumiActionContract {
   const text = compact(input);
   if (!text) return NONE_CONTRACT;
@@ -232,9 +383,10 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  if (
-    matches(text, /\u89c6\u9891\u7f51\u7ad9|\u8bc4\u8bba|\u53d1\u5e03|\u70b9\u8d5e|\u6295\u7a3f|comment|post|publish|like/i)
-  ) {
+  const hasPublicPlatformSurface = matches(text, /(?:\u89c6\u9891\u7f51\u7ad9|\u521b\u4f5c\u8005\u5e73\u53f0|\u793e\u4ea4\u5e73\u53f0|\u5546\u5bb6\u540e\u53f0|\u5e97\u94fa\u540e\u53f0|\u7f51\u7ad9|\u7f51\u9875|\u6296\u97f3|\u5feb\u624b|\u5c0f\u7ea2\u4e66|\u6296\u5e97|\u6dd8\u5b9d|\u5929\u732b|\u4eac\u4e1c|\u62fc\u591a\u591a|video\s*site|creator\s*platform|social\s*(?:site|platform)|seller\s*(?:center|platform)|marketplace|website|web\s*page)/iu);
+  const hasPublicCommitIntent = matches(text, /(?:\u8bc4\u8bba|\u53d1\u5e03|\u70b9\u8d5e|\u6295\u7a3f|\u4e0a\u67b6|\u516c\u5f00\u56de\u590d|comment|post|publish|like|submit|list(?:ing)?)/iu);
+  const asksForDraftOnly = matches(text, /(?:\u8349\u7a3f|\u6587\u6848|\u63d0\u793a\u8bcd|\u4e0d\u8981\u53d1\u5e03|\u6682\u4e0d\u53d1\u5e03|draft|copy\s*only|do\s+not\s+(?:post|publish|submit))/iu);
+  if (hasPublicPlatformSurface && hasPublicCommitIntent && !asksForDraftOnly) {
     return withDefaults({
       kind: 'public_post',
       label: '\u516c\u5f00\u7f51\u7ad9\u53d1\u5e03/\u8bc4\u8bba',
@@ -263,6 +415,18 @@ export function buildActionContract(input: string): LumiActionContract {
       nextStep: '\u5148\u68c0\u67e5\u5df2\u4fdd\u5b58\u7684\u767b\u5f55 profile/\u4f1a\u8bdd\uff1b\u5df2\u77e5\u7ad9\u70b9\u53ef\u5148\u521b\u5efa\u5bf9\u5e94 preset profile \u5e76\u8fd0\u884c web_login_run\uff1b\u9047\u5230\u5bc6\u7801\u3001\u626b\u7801\u3001\u9a8c\u8bc1\u7801\u30012FA \u6216\u672a\u4fdd\u5b58\u51ed\u636e\u5c31\u505c\u4e0b\u8bf4\u660e\u3002',
       caution: '\u4e0d\u80fd\u628a\u6253\u5f00\u7f51\u9875\u8bf4\u6210\u5df2\u767b\u5f55\u6216\u5df2\u5b8c\u6210\u8d26\u53f7\u64cd\u4f5c\u3002',
     });
+  }
+
+  if (isDesignDeliveryTurn(text)) {
+    return buildDesignDeliveryContract();
+  }
+
+  if (isEcommerceOperationsTurn(text)) {
+    return buildEcommerceOperationsContract();
+  }
+
+  if (isCustomerOperationsTurn(text)) {
+    return buildCustomerOperationsContract();
   }
 
   if (
@@ -351,9 +515,227 @@ export function buildActionContract(input: string): LumiActionContract {
   return NONE_CONTRACT;
 }
 
-export function hasCoreActionEvidence(contract: LumiActionContract, records: ToolExecutionRecord[] = []): boolean {
+function expandSuccessfulRecords(records: ToolExecutionRecord[]): ToolExecutionRecord[] {
+  const expanded: ToolExecutionRecord[] = [];
+  for (const record of records) {
+    if (record.error || !String(record.result || '').trim()) continue;
+    expanded.push(record);
+    if (record.name !== 'work_takeover_task_run_suggested_tool') continue;
+    const payload = parseRecordJson(record);
+    const run = payload?.run;
+    if (!run || run.status !== 'completed' || !run.toolName || !String(run.result || '').trim()) continue;
+    expanded.push({
+      id: run.id,
+      name: String(run.toolName),
+      arguments: run.toolArgs && typeof run.toolArgs === 'object' ? run.toolArgs : {},
+      result: String(run.result),
+    });
+  }
+  return expanded;
+}
+
+function recordText(record: ToolExecutionRecord): string {
+  return `${record.name}\n${JSON.stringify(record.arguments || {})}\n${String(record.result || '')}`;
+}
+
+function hasMeaningfulArguments(record: ToolExecutionRecord): boolean {
+  return Object.values(record.arguments || {}).some(value => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (value && typeof value === 'object') return Object.keys(value).length > 0;
+    return String(value ?? '').trim().length > 0;
+  });
+}
+
+function isPreparationOnlyTool(name: string): boolean {
+  return /^(?:work_product_plan|work_takeover_task_(?:create|from_wechat|from_clipboard|list|get|update|continue|orchestrate|execute_step|advance|autorun|export_packet)|work_takeover_capability_reuse_probe|mcp_cad-drafting_cad_renovation_folder_workflow|desktop_(?:open|list_apps|list_files|active_window|capture_screen|ui_snapshot)|browser_open_task|write_clipboard)$/i.test(name);
+}
+
+function hasArtifactVerification(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => {
+    if (record.name === 'work_product_verify') {
+      const payload = parseRecordJson(record);
+      return payload?.status === 'pass' || /"status"\s*:\s*"pass"/i.test(record.result);
+    }
+    if (record.name === 'desktop_path_info') {
+      const payload = parseRecordJson(record);
+      return (payload?.exists === true && Number(payload?.size ?? payload?.sizeBytes ?? 1) > 0)
+        || /"exists"\s*:\s*true/i.test(record.result) && !/"(?:size|sizeBytes)"\s*:\s*0\b/i.test(record.result);
+    }
+    return false;
+  });
+}
+
+function hasCreatedArtifact(records: ToolExecutionRecord[], namePattern: RegExp): boolean {
+  return records.some(record => {
+    if (!namePattern.test(record.name) || isPreparationOnlyTool(record.name)) return false;
+    const result = String(record.result || '');
+    return /(?:[A-Za-z]:\\|\/[^\s"']+|\bpath\b|\bfile\b|\bsaved\b|\bcreated\b|\boutput\b|\burl\b)/i.test(result)
+      && !/(?:prompt\s*only|draft\s*only|not\s+(?:created|generated)|missing|failed|blocked)/i.test(result);
+  });
+}
+
+function hasActualMediaEvidence(records: ToolExecutionRecord[], kind: 'image' | 'video' | 'either'): boolean {
+  const namePattern = kind === 'image'
+    ? /^(?:generate_image(?:_dalle)?|edit_image|mcp_.+_(?:generate|edit)_image)$/i
+    : kind === 'video'
+      ? /^(?:generate_video|mcp_.+_(?:generate|create)_video)$/i
+      : /^(?:generate_image(?:_dalle)?|edit_image|generate_video|mcp_.+_(?:generate|edit|create)_(?:image|video))$/i;
+  return records.some(record => {
+    if (!namePattern.test(record.name)) return false;
+    const result = String(record.result || '');
+    return /(?:image_url|video_url|output_url|download_url|savedPath|outputPath|"path"\s*:|https?:\/\/)/i.test(result)
+      && !/(?:prompt\s*only|not\s+generated|failed|blocked)/i.test(result);
+  });
+}
+
+function hasPublicPostEvidence(records: ToolExecutionRecord[]): boolean {
+  const explicitReceipt = records.some(record =>
+    /(?:publish|post|comment|submit|listing)/i.test(record.name)
+      && /"(?:published|posted|submitted|commented|success)"\s*:\s*true|"status"\s*:\s*"(?:published|posted|submitted|success|completed)"/i.test(record.result)
+  );
+  if (explicitReceipt) return true;
+
+  const commitIndex = records.findIndex(record => {
+    if (!/(?:playwright_browser_click|desktop_ui_(?:click|invoke)|computer_use|mouse_click)/i.test(record.name)) return false;
+    return /(?:\u53d1\u5e03|\u8bc4\u8bba|\u6295\u7a3f|\u4e0a\u67b6|\u63d0\u4ea4|publish|post|comment|submit|list(?:ing)?)/iu.test(recordText(record));
+  });
+  if (commitIndex < 0) return false;
+  return records.slice(commitIndex + 1).some(record =>
+    /(?:snapshot|evaluate|ui_snapshot|ocr|capture_screen)/i.test(record.name)
+      && /(?:\u53d1\u5e03\u6210\u529f|\u8bc4\u8bba\u6210\u529f|\u63d0\u4ea4\u6210\u529f|\u5df2\u53d1\u5e03|\u5df2\u4e0a\u67b6|published|posted|submitted|comment\s+(?:is\s+)?visible|success(?:fully)?)/iu.test(record.result)
+  );
+}
+
+function hasCustomerOperationsEvidence(records: ToolExecutionRecord[], taskText: string): boolean {
+  const wantsSend = /(?:\u53d1\u7ed9|\u53d1\u9001|\u76f4\u63a5\u56de\u590d|\u56de\u590d\u5ba2\u6237|\u8054\u7cfb\u5ba2\u6237|\u8ddf\u8fdb\u5ba2\u6237|\u56de\u8bbf\u5ba2\u6237|\u63a8\u8fdb\u8ddf\u8fdb|send|message|reply\s+to|contact\s+the\s+customer|follow\s+up\s+with|advance.{0,24}follow[-\s]?up)/iu.test(taskText)
+    && !/(?:\u8349\u7a3f|\u8bdd\u672f|\u51c6\u5907|\u62df\u4e00\u4efd|draft|prepare|copy\s*only)/iu.test(taskText);
+  const wantsDocument = /(?:\u62a5\u4ef7\u5355|\u62a5\u4ef7\u4e66|\u65b9\u6848\u4e66|\u5408\u540c|\u534f\u8bae|\u63d0\u6848|PPT|PDF|DOCX|quotation|proposal|agreement|contract)/iu.test(taskText);
+  const wantsAnalysis = /(?:\u5206\u6790|\u8bc4\u5206|\u5206\u7c7b|\u5f02\u8bae|\u5065\u5eb7\u5ea6|\u5de5\u5355|analy|score|triage|objection|health\s+review)/iu.test(taskText);
+  const takeoverOnly = /(?:\u63a5\u7ba1|\u5168\u6743\u5904\u7406|\u76f4\u63a5\u63a8\u8fdb|take\s*over|handle\s+everything)/iu.test(taskText)
+    && !wantsSend && !wantsDocument && !wantsAnalysis;
+
+  const sent = records.some(record => record.name === 'wechat_send_message' && /"sent"\s*:\s*true|sent:\s*true/i.test(record.result));
+  const analyzed = records.some(record => /^mcp_sales-customer-ops_/i.test(record.name) && hasMeaningfulArguments(record) && String(record.result).trim().length > 20);
+  const documentProduced = hasCreatedArtifact(records, /^(?:create_docx|create_pdf|create_ppt|write_file)$/i) && hasArtifactVerification(records);
+
+  if (wantsSend && !sent) return false;
+  if (wantsDocument && !documentProduced) return false;
+  if (wantsAnalysis && !analyzed) return false;
+  if (takeoverOnly) return sent || documentProduced;
+  return sent || analyzed || documentProduced;
+}
+
+function hasAuthenticatedPlatformOutcome(records: ToolExecutionRecord[]): boolean {
+  return records.some(record =>
+    /(?:playwright_browser_snapshot|playwright_browser_evaluate|url_fetch_logged_in|computer_use)/i.test(record.name)
+      && /(?:\u64cd\u4f5c\u6210\u529f|\u4fee\u6539\u6210\u529f|\u5df2\u66f4\u65b0|\u5df2\u4fdd\u5b58|\u751f\u6548|operation\s+(?:succeeded|completed)|updated|saved|applied)/iu.test(record.result)
+      && !/(?:login|required|captcha|manual_required|blocked|failed)/i.test(record.result)
+  );
+}
+
+function hasEcommerceOperationsEvidence(records: ToolExecutionRecord[], taskText: string): boolean {
+  const wantsAnalysis = /(?:\u5206\u6790|\u4f53\u68c0|\u5229\u6da6|\u6838\u7b97|\u5bf9\u8d26|\u8865\u8d27|\u5e93\u5b58|ROI|ROAS|\u98ce\u9669|\u6807\u9898\u4f18\u5316|analy|audit|profit|reconcile|restock|inventory|risk|listing\s+optim)/iu.test(taskText);
+  const wantsImage = /(?:\u751f\u6210|\u5236\u4f5c|\u51fa).{0,16}(?:\u56fe\u7247|\u4e3b\u56fe|\u6d77\u62a5|\u56fe\u6587)|(?:generate|create).{0,16}(?:image|poster|creative)/iu.test(taskText);
+  const wantsVideo = /(?:\u751f\u6210|\u5236\u4f5c|\u51fa).{0,16}(?:\u89c6\u9891|\u6210\u7247)|(?:generate|create|produce).{0,16}(?:video|clip)/iu.test(taskText);
+  const wantsCopyOrScript = /(?:\u6587\u6848|\u811a\u672c|\u8be6\u60c5\u9875|\u6807\u9898|\u5356\u70b9|\u53d1\u5e03\u8349\u7a3f|copy|script|listing|caption|draft)/iu.test(taskText);
+  const wantsPlatformChange = /(?:\u6539\u4ef7|\u6539\u5e93\u5b58|\u4e0a\u67b6|\u4e0b\u67b6|\u5f00\u59cb\u6295\u653e|\u8c03\u6574\u6295\u653e|\u4fee\u6539\u5e97\u94fa|change\s+price|update\s+inventory|list\s+the\s+product|start\s+campaign|change\s+the\s+store)/iu.test(taskText);
+  const takeoverOnly = /(?:\u63a5\u7ba1|\u5168\u6258|take\s*over|fully\s+manage)/iu.test(taskText)
+    && !wantsAnalysis && !wantsImage && !wantsVideo && !wantsCopyOrScript && !wantsPlatformChange;
+
+  const analyzed = records.some(record => /^mcp_ecommerce-ops_/i.test(record.name) && hasMeaningfulArguments(record) && String(record.result).trim().length > 20);
+  const copyProduced = records.some(record => /^(?:mcp_content-ops_|mcp_ecommerce-ops_product_listing_optimizer)/i.test(record.name) && hasMeaningfulArguments(record) && String(record.result).trim().length > 20)
+    || hasCreatedArtifact(records, /^(?:create_docx|create_pdf|create_xlsx|write_file)$/i) && hasArtifactVerification(records);
+  const platformChanged = hasAuthenticatedPlatformOutcome(records);
+
+  if (wantsAnalysis && !analyzed) return false;
+  if (wantsImage && !hasActualMediaEvidence(records, 'image')) return false;
+  if (wantsVideo && !hasActualMediaEvidence(records, 'video')) return false;
+  if (wantsCopyOrScript && !copyProduced) return false;
+  if (wantsPlatformChange && !platformChanged) return false;
+  if (takeoverOnly) return platformChanged;
+  return analyzed || copyProduced || hasActualMediaEvidence(records, 'either') || platformChanged;
+}
+
+function hasSourceInspectionEvidence(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => /^(?:read_file|read_files_batch|read_pdf|read_docx|extract_document_text|ocr_image_file|floorplan_extract_geometry)$/i.test(record.name));
+}
+
+function requiresSourceGrounding(taskText: string): boolean {
+  return /(?:\u6839\u636e|\u6309\u7167|\u91cc\u9762|\u6587\u4ef6\u5939|\u9644\u4ef6|\u56fe\u7247|\u539f\u56fe|\u73b0\u573a\u5c3a\u5bf8|provided|attached|source\s+(?:file|folder|drawing)|based\s+on)/iu.test(taskText);
+}
+
+function hasGroundedCadGeometryEvidence(records: ToolExecutionRecord[]): boolean {
+  return records.some(record => {
+    if (record.name === 'floorplan_extract_geometry') {
+      const payload = parseRecordJson(record);
+      const geometry = payload?.cadGenerateDxfArgs && typeof payload.cadGenerateDxfArgs === 'object'
+        ? payload.cadGenerateDxfArgs
+        : payload;
+      const width = Number(geometry?.width);
+      const height = Number(geometry?.height);
+      const geometryCount = [geometry?.walls, geometry?.rooms, geometry?.doors, geometry?.windows]
+        .reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0);
+      return payload?.geometryReady !== false && width > 0 && height > 0 && geometryCount > 0
+        && !/No configured vision model|not available|failed|blocked/i.test(String(record.result || ''));
+    }
+    if (!/^(?:cad_generate_dxf|cad_prepare_autocad_operations)$/i.test(record.name)) return false;
+    const args = record.arguments || {};
+    const geometryCount = [args.walls, args.polylines, args.rooms, args.doors, args.windows]
+      .reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0);
+    return Boolean(String(args.sourcePath || '').trim()) && geometryCount > 0;
+  });
+}
+
+function hasDesignDeliveryEvidence(records: ToolExecutionRecord[], taskText: string): boolean {
+  const sourceRequired = requiresSourceGrounding(taskText);
+  const wantsCompositePackage = /(?:\u5168\u5957\u8bbe\u8ba1|\u5168\u6848\u8bbe\u8ba1|\u5b8c\u6574\u4ea4\u4ed8\u5305|\u8bbe\u8ba1\u4ea4\u4ed8|\u88c5\u4fee\u4ea4\u4ed8|full\s+(?:design|renovation|interior)|design\s+(?:delivery|package|handoff))/iu.test(taskText);
+  const wantsCad = /(?:\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u65bd\u5de5\u56fe|\u5e73\u9762\u56fe)/iu.test(taskText);
+  const wantsBim = /(?:Revit|\bBIM\b|\bIFC\b|Dynamo)/iu.test(taskText);
+  const wantsPresentation = /(?:PPT|\u6c47\u62a5|\u65b9\u6848\u4e66|presentation|proposal)/iu.test(taskText);
+  const wantsVisual = /(?:\u6548\u679c\u56fe|\u6e32\u67d3|\u6d77\u62a5|logo|\u54c1\u724c\u89c6\u89c9|render|visual)/iu.test(taskText);
+  const wantsSchedule = /(?:\u9884\u7b97|\u6e05\u5355|\u6750\u6599\u8868|BOQ|bill\s+of\s+quantit)/iu.test(taskText);
+
+  if (sourceRequired && !hasSourceInspectionEvidence(records)) return false;
+  if (sourceRequired && wantsCad && !hasGroundedCadGeometryEvidence(records)) return false;
+
+  if (wantsCad) {
+    if (requiresVisibleAutoCadExecution(taskText) || requiresAutoCadMcpPlayback(taskText)) {
+      if (!hasVisibleAutoCadExecutionEvidence(records, taskText)) return false;
+    } else {
+      const cadCreated = hasCreatedArtifact(records, /^(?:cad_generate_dxf|mcp_cad-drafting_.+)$/i);
+      if (!cadCreated || !hasArtifactVerification(records)) return false;
+    }
+  }
+
+  if (wantsBim) {
+    const realBim = records.some(record => {
+      if (!/(?:revit|bim|ifc)/i.test(record.name) || /(?:prepare|package|handoff|dynamo)/i.test(record.name)) return false;
+      return /"status"\s*:\s*"(?:completed|success)"|"(?:modelPath|ifcPath|outputPath|path)"\s*:/i.test(record.result);
+    });
+    if (!realBim) return false;
+  }
+
+  if (wantsPresentation) {
+    if (!hasCreatedArtifact(records, /^(?:create_ppt|create_docx|create_pdf)$/i) || !hasArtifactVerification(records)) return false;
+  }
+  if (wantsVisual && !hasActualMediaEvidence(records, 'image')) return false;
+  if (wantsSchedule) {
+    if (!hasCreatedArtifact(records, /^(?:create_xlsx|create_docx|create_pdf|write_file)$/i) || !hasArtifactVerification(records)) return false;
+  }
+
+  const requestedSpecificOutput = wantsCad || wantsBim || wantsPresentation || wantsVisual || wantsSchedule;
+  if (wantsCompositePackage && !requestedSpecificOutput) return false;
+  if (!requestedSpecificOutput) return hasActualMediaEvidence(records, 'image') || hasCreatedArtifact(records, /^(?:create_ppt|create_pdf|create_docx)$/i) && hasArtifactVerification(records);
+  return true;
+}
+
+export function hasCoreActionEvidence(
+  contract: LumiActionContract,
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+): boolean {
   if (!contract.applies) return true;
-  const successful = records.filter(record => !record.error && String(record.result || '').trim());
+  const successful = expandSuccessfulRecords(records);
   if (successful.length === 0) return false;
   const toolNames = successful.map(record => record.name);
   if (contract.kind === 'messaging_read') {
@@ -366,11 +748,31 @@ export function hasCoreActionEvidence(contract: LumiActionContract, records: Too
       record.name === 'wechat_send_message' && /"sent"\s*:\s*true|sent:\s*true/i.test(String(record.result || ''))
     );
   }
-  if (contract.kind === 'public_post' || contract.kind === 'browser_account') {
-    return successful.some(record => /browser|playwright|desktop_capture_screen|desktop_ui_snapshot/i.test(record.name));
+  if (contract.kind === 'public_post') {
+    return hasPublicPostEvidence(successful);
+  }
+  if (contract.kind === 'browser_account') {
+    return hasAuthenticatedWebResultEvidence(successful, taskText);
   }
   if (contract.kind === 'cad_drafting') {
-    return successful.some(record => /cad_|desktop_path_info|work_product_verify/i.test(record.name));
+    if (requiresVisibleAutoCadExecution(taskText) || requiresAutoCadMcpPlayback(taskText)) {
+      return hasVisibleAutoCadExecutionEvidence(successful, taskText);
+    }
+    if (requiresSourceGrounding(taskText) && (
+      !hasSourceInspectionEvidence(successful)
+      || !hasGroundedCadGeometryEvidence(successful)
+    )) return false;
+    return hasCreatedArtifact(successful, /^(?:cad_generate_dxf|mcp_cad-drafting_.+)$/i)
+      && hasArtifactVerification(successful);
+  }
+  if (contract.kind === 'customer_operations') {
+    return hasCustomerOperationsEvidence(successful, taskText);
+  }
+  if (contract.kind === 'ecommerce_operations') {
+    return hasEcommerceOperationsEvidence(successful, taskText);
+  }
+  if (contract.kind === 'design_delivery') {
+    return hasDesignDeliveryEvidence(successful, taskText);
   }
   if (contract.kind === 'stock_monitor') {
     return successful.some(record =>

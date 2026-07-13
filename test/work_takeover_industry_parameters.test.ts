@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { analyzeWechatIntake } from '../server/work_takeover/wechat_intake';
 import { planWorkTakeoverExecution } from '../server/work_takeover/execution_planner';
 import { verifyWorkTakeoverResult } from '../server/work_takeover/result_verifier';
-import { createEcommerceGrowthFiles } from '../server/skills/bundled/ecommerce-ops/workflows/ecommerce_growth_workflow';
 import type { WorkTakeoverTask } from '../server/work_takeover/tasks';
 
 function makeTaskFromIntake(message: string): WorkTakeoverTask {
@@ -103,67 +101,52 @@ describe('work takeover industry parameterization', () => {
     expect(plan.contextSignals.join('；')).toContain('空气炸锅');
     expect(plan.verificationChecklist.join('；')).toContain('任务参数关键词');
     expect(plan.capabilities.map(capability => capability.id)).toContain('video.content_publish_pack');
-    expect(plan.capabilities.flatMap(capability => capability.tools)).toContain('work_takeover_task_prepare_industry_package');
-    expect(plan.capabilities.flatMap(capability => capability.tools)).not.toContain('work_takeover_task_prepare_ecommerce_growth');
+    expect(plan.capabilities.map(capability => capability.id)).toContain('ecommerce.operations');
+    expect(plan.capabilities.flatMap(capability => capability.tools)).toEqual(expect.arrayContaining([
+      'mcp_ecommerce-ops_product_listing_optimizer',
+      'mcp_ecommerce-ops_campaign_roi_analyzer',
+      'mcp_content-ops_short_video_script',
+      'generate_video',
+      'mcp_playwright_browser_snapshot',
+    ]));
+    expect(plan.capabilities.flatMap(capability => capability.tools).join('\n')).not.toMatch(/work_takeover_task_prepare_/);
   });
 
-  it('creates and verifies a parameterized ecommerce growth package', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_ecommerce_params_'));
-    try {
-      const message = '客户微信：接管抖店账号，主推商品：空气炸锅，预算500元，目标今天完成短视频脚本、图文提示词、发布草稿和微信客服回复。';
-      const task = makeTaskFromIntake(message);
-      const files = createEcommerceGrowthFiles(message, { outputDirectory: dir });
-      const updatedTask: WorkTakeoverTask = {
-        ...task,
-        result: `已生成电商交付包：${files.folder}`,
-        artifacts: [
-          ...task.artifacts,
-          {
-            id: 'artifact_pkg',
-            type: 'file',
-            label: '电商/短视频接管交付包',
-            path: files.folder,
-            content: `商品：${files.brief.productName}；平台：${files.brief.platform}`,
-            status: 'prepared',
-            createdAt: task.createdAt,
-            updatedAt: task.updatedAt,
-          },
-          {
-            id: 'artifact_matrix',
-            type: 'document',
-            label: '内容矩阵',
-            path: files.contentMatrixCsv,
-            status: 'prepared',
-            createdAt: task.createdAt,
-            updatedAt: task.updatedAt,
-          },
-          {
-            id: 'artifact_script',
-            type: 'video',
-            label: '短视频脚本',
-            path: files.videoScriptHtml,
-            status: 'prepared',
-            createdAt: task.createdAt,
-            updatedAt: task.updatedAt,
-          },
-        ],
-      };
+  it('does not treat a local scripted package as an ecommerce outcome', () => {
+    const message = '客户微信：接管抖店账号，主推商品：空气炸锅，预算500元，目标今天完成短视频脚本、图文提示词、发布草稿和微信客服回复，先别正式发布。';
+    const task: WorkTakeoverTask = {
+      ...makeTaskFromIntake(message),
+      result: '本地任务包和模板草稿已经生成。',
+    };
 
-      expect(files.verificationResult.passed).toBe(true);
-      expect(fs.existsSync(files.contentMatrixCsv)).toBe(true);
-      expect(fs.readFileSync(files.taskJson, 'utf8')).toContain('空气炸锅');
+    const scripted = verifyWorkTakeoverResult(task, {
+      draftRequired: true,
+      requireExternalOutcome: true,
+      outcomeEvidence: [{
+        id: 'legacy-package',
+        name: 'legacy_scripted_ecommerce_package',
+        arguments: { productName: '空气炸锅' },
+        result: '{"artifactReady":true,"completionEligible":false}',
+      }],
+    });
+    expect(scripted.checks.find(check => check.id === 'business_outcome_evidence')?.passed).toBe(false);
+    expect(scripted.status).toBe('blocked');
 
-      const verification = verifyWorkTakeoverResult(updatedTask, {
-        expectedContentTerms: updatedTask.metadata.industryParameters.expectedContentTerms,
-        requiredArtifactLabels: ['内容矩阵', '短视频脚本'],
-        draftRequired: true,
-        requireScreenEvidence: false,
-      });
-
-      expect(verification.passed).toBe(true);
-      expect(verification.checks.find(check => check.id === 'artifact_content_quality')?.passed).toBe(true);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    const realTools = verifyWorkTakeoverResult(task, {
+      draftRequired: true,
+      requireExternalOutcome: true,
+      outcomeEvidence: [{
+        id: 'listing',
+        name: 'mcp_ecommerce-ops_product_listing_optimizer',
+        arguments: { productName: '空气炸锅', platform: '抖店', constraints: '预算500元，先别正式发布' },
+        result: '{"titleOptions":["空气炸锅 | 家庭快手餐"],"sellingPoints":["基于实际商品信息完善"]}',
+      }, {
+        id: 'script',
+        name: 'mcp_content-ops_short_video_script',
+        arguments: { topic: '空气炸锅真实使用场景', platform: '抖店' },
+        result: '{"hook":"下班后十分钟完成晚餐","shots":["商品与食材实拍"],"caption":"先保存，发布前复核库存"}',
+      }],
+    });
+    expect(realTools.checks.find(check => check.id === 'business_outcome_evidence')?.passed).toBe(true);
   });
 });

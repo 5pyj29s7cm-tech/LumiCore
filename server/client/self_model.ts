@@ -105,12 +105,6 @@ export interface ClientStateSnapshot {
     wallpaperMode?: boolean;
     widgetMode?: boolean;
     nexusOpen?: boolean;
-    customerTakeoverOpen?: boolean;
-    customerTakeoverStage?: string | null;
-    designDeliveryOpen?: boolean;
-    designDeliveryStage?: string | null;
-    ecommerceGrowthOpen?: boolean;
-    ecommerceGrowthStage?: string | null;
   };
   settings?: { activeSection?: string };
   voice?: { state?: string; muted?: boolean };
@@ -408,29 +402,29 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
-    id: 'system.customer_takeover_workflow',
-    label: 'Customer work takeover',
+    id: 'system.customer_operations',
+    label: 'Customer operations',
     kind: 'system',
-    actions: ['customer_takeover_workflow', 'customer_takeover_panel', 'close_customer_takeover_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press'],
-    notes: 'In this stage, when the user asks Lumi to take over or advance a customer, Lumi can run a bounded customer work takeover without tool permission popups: classify a WeChat lead, explain hard boundaries, create quote and contract draft materials in external office software, prepare or send ordinary requested WeChat replies when supervised, and show the large customer-result panel. The durable ability is to turn customer intent into artifacts, next actions, and a visible result, not to replay one fixed demo order.',
+    actions: ['work_takeover_task_from_wechat', 'work_takeover_task_orchestrate', 'work_takeover_task_run_suggested_tool', 'mcp_sales-customer-ops_lead_score', 'mcp_sales-customer-ops_sales_followup_draft', 'mcp_sales-customer-ops_objection_response_builder', 'wechat_read_recent_chat', 'wechat_send_message', 'create_docx', 'work_product_verify'],
+    notes: 'Customer work uses the current customer message, files, task state, sales tools, and real messaging surfaces. A quote, contract draft, opened WeChat window, clipboard draft, or local packet is preparation only. Customer progress is complete only when the requested document is verified, the task state is written back, or the target message/action has a real receipt.',
     requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
-    id: 'system.design_delivery_workflow',
-    label: 'Renovation design delivery takeover',
+    id: 'system.design_operations',
+    label: 'Design operations',
     kind: 'system',
-    actions: ['design_delivery_workflow', 'design_delivery_panel', 'close_design_delivery_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file'],
-    notes: 'In this stage, when the user asks Lumi to take over a renovation/design delivery task, Lumi can generate a local desktop delivery package and open/use external design tools without per-tool permission popups: proposal, budget/material list, customer-facing PPTX/PDF design deck with layout/material/budget visuals, explicit CAD DXF drafts, AutoCAD MCP/COM stroke-by-stroke entity playback with completion-marker verification, Revit/Dynamo handoff files, and a WeChat delivery draft. Lumi should open real external tools where available: WPS/Office for documents, AutoCAD MCP/COM for visible drawing, desktop CAD software for explicit file deliverables, Dynamo/Revit entry points or handoff files for BIM, and an already logged-in personal WeChat window before falling back to enterprise WeChat. A failed visible AutoCAD playback must remain blocked; generated files, LISP, scripts, batch commands, or an opened window cannot replace it. Production drawings still require confirmed site dimensions, structure, utilities, and user sign-off.',
+    actions: ['desktop_list_files', 'read_file', 'read_pdf', 'ocr_image_file', 'floorplan_extract_geometry', 'create_ppt', 'create_pdf', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'work_product_verify', 'wechat_send_file'],
+    notes: 'Design work starts from measured source files, drawings, constraints, and the requested deliverable list. Local concept drafts are not formal delivery. Each requested document must be verified as a file; visible AutoCAD work requires MCP/COM completion evidence; native BIM output requires an actual Revit/BIM adapter result; professional and client approvals remain explicit.',
     requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
   {
-    id: 'system.ecommerce_growth_workflow',
-    label: 'E-commerce growth takeover',
+    id: 'system.ecommerce_operations',
+    label: 'E-commerce operations',
     kind: 'system',
-    actions: ['ecommerce_growth_workflow', 'ecommerce_growth_panel', 'close_ecommerce_growth_panel', 'client_action', 'desktop_show_lumi_window', 'desktop_set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_cursor_glow_hide', 'desktop_mouse_click_at', 'desktop_active_window', 'desktop_capture_screen', 'desktop_list_files', 'desktop_list_apps', 'desktop_open', 'desktop_run_command', 'desktop_clipboard_write', 'desktop_keyboard_press'],
-    notes: 'In this stage, when the user asks Lumi to take over ecommerce, short-video content production, store account management, product publishing, or customer-service handoff, Lumi can generate a local desktop delivery package without per-tool permission popups: store audit, content matrix, short-video script, image generation prompts, video generation prompts, publish draft, customer-service/WeChat draft, operation report, and verification record. Lumi should use real external surfaces where available: browser pages for image/video/generative tools, WPS/Excel for content matrices, creator platforms and store backends for publishing/account work, and an already logged-in personal WeChat before falling back to enterprise WeChat. Restore already-running/logged-in app and browser sessions before opening fresh pages; reuse saved/authorized login profiles without extra permission prompts; stop at QR/OTP/CAPTCHA/passkey/account-switch/authorization/credential-storage boundaries. Foreground user-present ordinary comments, replies, messages, and non-commercial content posts can proceed when requested; ad spend, price/inventory changes, purchases, payments, first-time login/security verification, and legal/contractual final commits still require explicit confirmation or handoff. The durable ability is to convert a shop/product/platform brief into visible external-tool work and checked results, not to replay one fixed video script.',
+    actions: ['mcp_ecommerce-ops_product_listing_optimizer', 'mcp_ecommerce-ops_ecommerce_order_profit', 'mcp_ecommerce-ops_inventory_restock_plan', 'mcp_ecommerce-ops_platform_settlement_reconcile', 'mcp_ecommerce-ops_campaign_roi_analyzer', 'mcp_ecommerce-ops_after_sales_risk_report', 'web_login_run', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click', 'create_xlsx', 'create_docx', 'generate_image', 'generate_video', 'wechat_send_message', 'work_product_verify'],
+    notes: 'E-commerce work is grounded in supplied product facts, platform exports, authenticated page state, and real tool results. Local content drafts and preparation packets are not live store audits or platform execution. Publishing, store changes, generated media, ad spend, and customer outreach require the corresponding external result or receipt before Lumi can report completion.',
     requiresConfirmation: false,
     stateKeys: ['surfaces', 'windows', 'voice', 'tools', 'permissions'],
   },
@@ -438,8 +432,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.work_takeover_tasks',
     label: 'Work takeover task hub',
     kind: 'system',
-    actions: ['work_takeover_task_create', 'work_takeover_task_from_wechat', 'work_takeover_task_from_clipboard', 'work_takeover_task_list', 'work_takeover_task_get', 'work_takeover_task_update', 'work_takeover_task_continue', 'work_takeover_task_orchestrate', 'work_takeover_task_execute_step', 'work_takeover_task_advance', 'work_takeover_task_autorun', 'work_takeover_capability_reuse_probe', 'work_takeover_real_smoke_run', 'work_takeover_task_prepare_industry_package', 'work_takeover_task_verify_result', 'work_takeover_task_export_packet', 'work_takeover_task_run_suggested_tool'],
-    notes: 'Persistent task hub for current-stage work takeover. Lumi core stays thin: turn WeChat messages or user instructions into tracked tasks with industry parameters, orchestrate safe steps, choose an industry package adapter/skill, verify outputs, and stop at confirmation boundaries. Use work_takeover_capability_reuse_probe when the user asks whether Lumi is duplicating capabilities, whether the flow is stable, or wants a real task pressure test before adding more code: it audits each selected task capability through self_extension_plan, proves whether Lumi is reusing learned routes/adapters/tools/skills, advances a few safe local steps, prepares supported local packages, verifies output, and writes a concise diagnostic. Use work_takeover_real_smoke_run when the user says “接管这条微信先跑一遍”, wants a true closed-loop test, or needs proof that the flow is not a fixed script: it creates/continues the task, selects external-control routes such as Playwright browser, Windows UIA/screen perception, WeChat session reuse, or WPS/CAD/Revit handoff, advances bounded safe steps, prepares files through the industry adapter, verifies content/files/drafts/desktop evidence, exports a local packet, and writes a concise human report back. Use work_takeover_task_orchestrate to bridge a persisted task into a reusable execution plan without turning an industry demo into a fixed script. Use work_takeover_task_execute_step and work_takeover_task_advance to safely prepare and record one step at a time. Use work_takeover_task_autorun for the older bounded loop when route selection and full verification are not needed. Use work_takeover_task_prepare_industry_package when a persisted task needs real local industry deliverables; it routes to ecommerce/short-video/account, renovation/CAD/Revit, and future skill-backed packages. Use work_takeover_task_verify_result after visible desktop or external tool work to check active window/processes, screenshot evidence, local paths, artifact content terms, drafts, confirmation boundaries, and task-center state before claiming success. Use work_takeover_task_export_packet to materialize the task into local files. Use work_takeover_task_run_suggested_tool only when a specific plan-suggested tool and arguments are ready; the underlying tool keeps its own confirmation behavior.',
+    actions: ['work_takeover_task_create', 'work_takeover_task_from_wechat', 'work_takeover_task_from_clipboard', 'work_takeover_task_list', 'work_takeover_task_get', 'work_takeover_task_update', 'work_takeover_task_continue', 'work_takeover_task_orchestrate', 'work_takeover_task_execute_step', 'work_takeover_task_advance', 'work_takeover_task_autorun', 'work_takeover_capability_reuse_probe', 'work_takeover_task_verify_result', 'work_takeover_task_export_packet', 'work_takeover_task_run_suggested_tool'],
+    notes: 'Persistent task hub for work takeover. It stores source messages, facts, drafts, artifacts, boundaries, execution plans, and verified results. It coordinates real sales, messaging, ecommerce, browser, document, CAD, BIM, and media tools; it does not generate scripted industry completion packages.',
     requiresConfirmation: false,
     stateKeys: ['tools', 'permissions'],
   },
@@ -614,7 +608,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'external.cad',
     label: 'CAD drafting adapter',
     kind: 'external_app',
-    actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'design_delivery_workflow', 'desktop_list_apps', 'desktop_open'],
+    actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_list_apps', 'desktop_open'],
     notes: 'Lumi can extract CAD-ready geometry from plan images, generate explicit structured DXF deliverables, prepare an auditable entity operations list, and use the CAD MCP/COM bridge to draw those entities visibly in real AutoCAD. Visible AutoCAD completion requires transport=mcp_autocad_com, visiblePlayback=true, and a completion marker. There is no LISP, SCRIPT, batch-command, cursor-drawing, or finished-file fallback. Production drawings still require user review and confirmed site dimensions.',
     requiresConfirmation: false,
     stateKeys: ['permissions', 'tools'],
@@ -845,27 +839,6 @@ const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     closeAfterUse: true,
   },
   {
-    id: 'customer-takeover-panel',
-    label: 'Customer takeover panel',
-    actions: ['customer_takeover_panel', 'close_customer_takeover_panel'],
-    useWhen: 'Show or close the large customer takeover/result panel without launching a full workflow.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'design-delivery-panel',
-    label: 'Design delivery panel',
-    actions: ['design_delivery_panel', 'close_design_delivery_panel'],
-    useWhen: 'Show or close the large renovation/design delivery panel without launching a full workflow.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'ecommerce-growth-panel',
-    label: 'Ecommerce growth panel',
-    actions: ['ecommerce_growth_panel', 'close_ecommerce_growth_panel'],
-    useWhen: 'Show or close the large ecommerce/account/content growth panel without launching a full workflow.',
-    closeAfterUse: true,
-  },
-  {
     id: 'computer-adaptation',
     label: 'Computer adaptation center',
     actions: ['open_computer_adaptation'],
@@ -917,10 +890,6 @@ const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
   {
     id: 'wallpaper_for_immersive_work',
     rule: 'Use wallpaper mode only when the user explicitly requests it or during a visible user-present desktop workflow, then turn it off when done. The explicit current request is the authorization; do not ask a second tool-level confirmation.',
-  },
-  {
-    id: 'large_panel_for_result_takeover',
-    rule: 'For customer takeover and other result-oriented work takeover flows, use the large centered result panel as the primary visible work surface and hide the corner workflow panel while it is active.',
   },
   {
     id: 'close_temporary_surfaces',
@@ -1259,18 +1228,6 @@ export function normalizeClientActionTarget(value?: string): string {
     '订阅': 'subscription',
     '激活': 'subscription',
     '账单': 'subscription',
-    'customer_takeover_panel': 'customer-takeover-panel',
-    'customer-takeover': 'customer-takeover-panel',
-    'customer-takeover-panel': 'customer-takeover-panel',
-    '客户接管面板': 'customer-takeover-panel',
-    'design_delivery_panel': 'design-delivery-panel',
-    'design-delivery': 'design-delivery-panel',
-    'design-delivery-panel': 'design-delivery-panel',
-    '设计交付面板': 'design-delivery-panel',
-    'ecommerce_growth_panel': 'ecommerce-growth-panel',
-    'ecommerce-growth': 'ecommerce-growth-panel',
-    'ecommerce-growth-panel': 'ecommerce-growth-panel',
-    '电商增长面板': 'ecommerce-growth-panel',
     log: 'runtime-log',
     logs: 'runtime-log',
     runtime: 'runtime-log',
@@ -1304,15 +1261,6 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   if (state.surfaces?.musicLayerVisible || state.music?.layerVisible) openSurfaces.push('music-layer');
   if (state.surfaces?.wallpaperMode) openSurfaces.push('wallpaper');
   if (state.surfaces?.widgetMode) openSurfaces.push('widget');
-  if (state.surfaces?.customerTakeoverOpen || state.surfaces?.customerTakeoverStage) {
-    openSurfaces.push(`customer-takeover-panel${state.surfaces?.customerTakeoverStage ? `:${state.surfaces.customerTakeoverStage}` : ''}`);
-  }
-  if (state.surfaces?.designDeliveryOpen || state.surfaces?.designDeliveryStage) {
-    openSurfaces.push(`design-delivery-panel${state.surfaces?.designDeliveryStage ? `:${state.surfaces.designDeliveryStage}` : ''}`);
-  }
-  if (state.surfaces?.ecommerceGrowthOpen || state.surfaces?.ecommerceGrowthStage) {
-    openSurfaces.push(`ecommerce-growth-panel${state.surfaces?.ecommerceGrowthStage ? `:${state.surfaces.ecommerceGrowthStage}` : ''}`);
-  }
   const orgView = state.orgWorkspace?.activeView || 'none';
   if (state.activeTab === 'org' && orgView !== 'none') openSurfaces.push(`org:${orgView}`);
   for (const win of openWindows) {
@@ -1518,33 +1466,6 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
     case 'open_billing':
       setSurface('subscription', action === 'open_activation' ? 'activation' : action === 'open_billing' ? 'billing' : 'subscription');
       break;
-    case 'customer_takeover_panel':
-      setSurface('customer-takeover-panel', 'customer takeover panel');
-      break;
-    case 'close_customer_takeover_panel':
-      expectedState = ['surface:customer-takeover-panel:closed'];
-      verification = 'The customer takeover panel should be closed in client state.';
-      naturalCompletion = 'Customer takeover panel is closed.';
-      naturalPending = 'I asked to close the customer takeover panel, but I still need fresh state to confirm it.';
-      break;
-    case 'design_delivery_panel':
-      setSurface('design-delivery-panel', 'design delivery panel');
-      break;
-    case 'close_design_delivery_panel':
-      expectedState = ['surface:design-delivery-panel:closed'];
-      verification = 'The design delivery panel should be closed in client state.';
-      naturalCompletion = 'Design delivery panel is closed.';
-      naturalPending = 'I asked to close the design delivery panel, but I still need fresh state to confirm it.';
-      break;
-    case 'ecommerce_growth_panel':
-      setSurface('ecommerce-growth-panel', 'ecommerce growth panel');
-      break;
-    case 'close_ecommerce_growth_panel':
-      expectedState = ['surface:ecommerce-growth-panel:closed'];
-      verification = 'The ecommerce growth panel should be closed in client state.';
-      naturalCompletion = 'Ecommerce growth panel is closed.';
-      naturalPending = 'I asked to close the ecommerce growth panel, but I still need fresh state to confirm it.';
-      break;
     case 'set_wallpaper_mode':
       expectedState = [`surface:wallpaper:${enabled ? 'open' : 'closed'}`];
       verification = `Wallpaper mode should be ${enabled ? 'enabled' : 'disabled'} in client state.`;
@@ -1710,9 +1631,6 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   if (target === 'music-layer') return Boolean(state.surfaces?.musicLayerVisible || state.music?.layerVisible);
   if (target === 'wallpaper') return Boolean(state.surfaces?.wallpaperMode);
   if (target === 'widget') return Boolean(state.surfaces?.widgetMode);
-  if (target === 'customer-takeover-panel') return Boolean(state.surfaces?.customerTakeoverOpen || state.surfaces?.customerTakeoverStage);
-  if (target === 'design-delivery-panel') return Boolean(state.surfaces?.designDeliveryOpen || state.surfaces?.designDeliveryStage);
-  if (target === 'ecommerce-growth-panel') return Boolean(state.surfaces?.ecommerceGrowthOpen || state.surfaces?.ecommerceGrowthStage);
   return state.activeTab === target || openWindows.includes(target) || state.windows?.focused === target;
 }
 
@@ -1874,7 +1792,7 @@ export function formatClientSelfPrompt(
     `- Knowledge ingestion: domain=${state.knowledge?.domain || state.workDomain || 'personal'}, files=${state.knowledge?.totalFiles || 0}, indexed=${state.knowledge?.indexedFiles || 0}, partial=${state.knowledge?.partialFiles || 0}, pending=${state.knowledge?.pendingFiles || 0}, failed=${state.knowledge?.failedFiles || 0}, unsupported=${state.knowledge?.unsupportedFiles || 0}${state.knowledge?.orgArticles ? `, orgArticles=${state.knowledge.orgArticles.total || 0}, orgPublished=${state.knowledge.orgArticles.published || 0}, orgIndexed=${state.knowledge.orgArticles.indexed || 0}, orgMissingIndex=${state.knowledge.orgArticles.missingIndex || 0}, orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}${state.knowledge?.lastError ? `, error=${state.knowledge.lastError}` : ''}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}, customerPanel=${state.surfaces?.customerTakeoverStage || false}, designPanel=${state.surfaces?.designDeliveryStage || false}, ecommercePanel=${state.surfaces?.ecommerceGrowthStage || false}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
     `- Music: ${state.music?.isPlaying ? 'playing' : 'idle'}${state.music?.trackName ? `, track="${state.music.trackName}"` : ''}${state.music?.volume != null ? `, volume=${state.music.volume}` : ''}, layer=${Boolean(state.music?.layerVisible ?? state.surfaces?.musicLayerVisible)}`,
     `- Music taste profile: ${formatMusicProfileForPrompt(musicProfile)}`,
@@ -1942,9 +1860,9 @@ export function formatClientSelfPrompt(
     'When the user asks for a capability you do not have, do not simply fail or wait for a developer to hard-code another tool. First use self_extension_plan or capability_learning_list to inspect learned routes, adapters, tools, installed skills, and marketplace skills. If the plan says existing coverage can handle it, use that route. Use capability_gap_autofix only when coverage is absent or a brittle/manual path has real failure evidence, then report what was actually verified.',
     'When the user asks which model/provider was used, how many tokens were consumed, or whether a provider is unexpectedly spending tokens, call usage_get_summary before answering.',
     'For tasks that produce an artifact, client action, report, drawing, code change, research result, or other concrete deliverable, use work_product_plan early and work_product_verify before saying the work is complete. Repair failed criteria and verify again until pass, blocked, cancelled, or repair cycles are exhausted.',
-    'For customer, account, store, case-filing, video-publishing, market-watch, or design-delivery takeover tasks in this stage, treat the request as current-stage work takeover: open the appropriate result panel, operate external software visibly when useful, create concrete files/drafts, and allow user-requested foreground ordinary messages/comments/replies/non-commercial posts plus stock quote/watchlist/alert/research/paper-trading checks to proceed. Keep signatures, filings, payments, purchases, transfers, real brokerage orders/cancel-orders, price/inventory/ad-spend changes, and final legal/business commitments behind confirmation.',
+    'For customer, account, store, case-filing, video-publishing, market-watch, or design-delivery work, create or continue a task-center record, select the real domain tools, operate the relevant external application when required, and verify each requested outcome. Local drafts and planning records remain preparation. Keep signatures, filings, payments, purchases, transfers, real brokerage orders/cancel-orders, price/inventory/ad-spend changes, and final legal/business commitments behind confirmation.',
     'When the user asks whether Lumi is duplicating capabilities, whether a real task flow is stable, or says to pressure-test an existing takeover task before adding more code, use work_takeover_capability_reuse_probe first. It should audit the selected task capabilities through self_extension_plan, prove whether existing learned routes/adapters/tools/skills are reused, advance only safe local steps, verify output, and report duplication risk without generating new capability records.',
-    'When the user asks Lumi to handle, reply to, classify, or take over a WeChat/customer message and says things like “接管这条微信先跑一遍”, “真实闭环测试”, “先跑出结果”, or wants to say less, use work_takeover_real_smoke_run first. It should create or continue the task, choose external-control routes, advance safe steps, prepare supported industry packages, verify files/content/drafts/desktop evidence, export a local packet, and report only what is done, blocked, and awaiting confirmation. Use work_takeover_task_autorun for the older bounded loop when full route selection and verification are not needed. Use work_takeover_task_from_wechat/from_clipboard for manual creation, then continue/orchestrate/advance when they want more control. Run a specific suggested tool only when arguments and confirmation boundaries are clear.',
+    'When the user asks Lumi to handle, classify, or take over a WeChat/customer message, create or continue a work-takeover task, orchestrate the reusable capability route, and run the specific suggested tools needed for the requested outcome. work_takeover_task_autorun may advance bounded local preparation only. Exported task packets and local drafts are coordination artifacts, never proof that customer contact, store operations, publishing, AutoCAD/Revit work, or delivery completed. Use work_takeover_task_verify_result with real action evidence before reporting completion.',
     'When the user says continue that customer, next step, that WeChat task, the previous takeover task, or asks what work Lumi is managing, use work_takeover_task_advance to move the persisted task forward by one safe step before answering from memory or jumping into an industry workflow. Use work_takeover_task_run_suggested_tool for one explicit plan-suggested tool call, work_takeover_task_verify_result after visible/external work before claiming success, and work_takeover_task_export_packet when the task should leave the task center as files.',
     'For work takeover status reports, do not recite every tool call or generated sentence. Report only: what is done, what concrete result exists, what is blocked, and what needs the user to confirm next.',
     'Wallpaper and meeting capture require explicit current user intent, but that instruction itself is authorization and should not trigger a second tool popup. Never start meeting capture from unattended autonomous work. Sensor/OS permission prompts and high-consequence actions keep their hard boundaries.',

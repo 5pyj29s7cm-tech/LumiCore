@@ -128,6 +128,25 @@ describe('ecommerce operations skill logic', () => {
     expect(report.scaleCandidates).toEqual(['Campaign-A']);
   });
 
+  it('parses Chinese ecommerce metrics and full-width separators without inventing rows', () => {
+    const profit = analyzeOrderProfit({
+      orderText: 'SKU-A \u9500\u552e\u989d1200 \u6210\u672c500 \u8fd0\u8d3980 \u5e7f\u544a120 \u5e73\u53f0\u8d3960 \u9000\u6b3e0 \u6570\u91cf10',
+    });
+    const campaigns = analyzeCampaignRoi({
+      campaignText: '\u8ba1\u5212A \u5e7f\u544a\u8d39300 \u9500\u552e\u989d1500 \u8ba2\u535520 \u70b9\u51fb800 \u66dd\u514920000\uff1b\u8ba1\u5212B \u5e7f\u544a\u8d39200 \u9500\u552e\u989d300 \u8ba2\u53553',
+      grossMarginRate: 0.4,
+    });
+
+    expect(profit.rows[0]).toMatchObject({
+      sku: 'SKU-A',
+      revenue: 1200,
+      contributionProfit: 440,
+    });
+    expect(campaigns.rows).toHaveLength(2);
+    expect(campaigns.rows[0]).toMatchObject({ campaign: 'A', roas: 5, cpa: 15 });
+    expect(campaigns.rows[1]).toMatchObject({ campaign: 'B', status: 'trim_or_fix' });
+  });
+
   it('surfaces high-risk after-sales SKUs and causes', () => {
     const report = buildAfterSalesRiskReport({
       afterSalesText: 'SKU-A orders 200 refunds 24 refundAmount 1200 complaints 6 quality',

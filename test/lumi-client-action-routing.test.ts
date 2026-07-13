@@ -12,9 +12,6 @@ describe('Lumi client action routing', () => {
     expect(hasClientActionOnlyIntent('打开激活页面')).toBe(true);
     expect(hasClientActionOnlyIntent('进入桌面小组件模式')).toBe(true);
     expect(hasClientActionOnlyIntent('展开 Lumi 小组件')).toBe(true);
-    expect(hasClientActionOnlyIntent('打开客户接管面板')).toBe(true);
-    expect(hasClientActionOnlyIntent('打开设计交付面板')).toBe(true);
-    expect(hasClientActionOnlyIntent('打开电商增长面板')).toBe(true);
     expect(hasClientActionOnlyIntent('打开头像工作室')).toBe(true);
     expect(hasClientActionOnlyIntent('打开记忆头像')).toBe(true);
     expect(hasClientActionOnlyIntent('打开工作队列')).toBe(true);
@@ -27,9 +24,6 @@ describe('Lumi client action routing', () => {
     expect(hasClientActionOnlyIntent('关掉知识库')).toBe(true);
     expect(hasClientActionOnlyIntent('关闭运行日志')).toBe(true);
     expect(hasClientActionOnlyIntent('关闭桌面小组件')).toBe(true);
-    expect(hasClientActionOnlyIntent('关闭客户接管面板')).toBe(true);
-    expect(hasClientActionOnlyIntent('关闭设计交付面板')).toBe(true);
-    expect(hasClientActionOnlyIntent('关闭电商增长面板')).toBe(true);
     expect(hasClientActionOnlyIntent('close subscription page')).toBe(true);
   });
 

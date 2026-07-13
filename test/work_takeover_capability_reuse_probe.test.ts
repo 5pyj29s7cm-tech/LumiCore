@@ -34,9 +34,16 @@ describe('work takeover capability reuse probe', () => {
 
       const result = JSON.parse(raw);
       expect(result.createdTask).toBe(true);
-      expect(result.industryPackage.kind).toBe('ecommerce_growth');
+      expect(result).not.toHaveProperty('industryPackage');
       expect(result.packet.folderPath).toContain(outputDirectory);
       expect(fs.existsSync(result.packet.folderPath)).toBe(true);
+      expect(result.plan.capabilities.map((capability: any) => capability.id)).toContain('ecommerce.operations');
+      expect(result.plan.capabilities.flatMap((capability: any) => capability.tools)).toEqual(expect.arrayContaining([
+        'mcp_ecommerce-ops_campaign_roi_analyzer',
+        'mcp_content-ops_short_video_script',
+        'generate_video',
+      ]));
+      expect(result.plan.capabilities.flatMap((capability: any) => capability.tools)).not.toContain('work_takeover_task_prepare_industry_package');
       expect(result.capabilityReuseAudit.summary.generatedNewCapability).toBe(false);
       expect(result.capabilityReuseAudit.summary.reusedCapabilities).toBeGreaterThan(0);
       expect(result.capabilityReuseAudit.summary.needsCapabilityWork).toBe(0);

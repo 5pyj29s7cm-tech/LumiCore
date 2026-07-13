@@ -111,7 +111,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
 
 function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildActionContract>, text: string): boolean {
   if (!contract.applies) return false;
-  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'stock_monitor', 'desktop_operation'].includes(contract.kind)) {
+  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'desktop_operation'].includes(contract.kind)) {
     return true;
   }
   if (contract.kind === 'legal_document') {
@@ -513,8 +513,8 @@ function correctCurrentTurnContractDrift(
   if (!taskContract.applies || taskContract.kind !== 'desktop_operation') return null;
   const responseContract = buildActionContract(input.responseText);
   if (!responseContract.applies || responseContract.kind === taskContract.kind) return null;
-  if (hasCoreActionEvidence(responseContract, input.toolRecords || [])) return null;
-  if (!hasCoreActionEvidence(taskContract, input.toolRecords || [])) return null;
+  if (hasCoreActionEvidence(responseContract, input.toolRecords || [], input.responseText)) return null;
+  if (!hasCoreActionEvidence(taskContract, input.toolRecords || [], input.taskText)) return null;
 
   const grounded = formatGroundedDesktopEvidence(input);
   if (grounded) {
@@ -691,7 +691,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !legalExternalHandoffOnly && !hasCoreActionEvidence(actionContract, input.toolRecords || [])) {
+  if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !legalExternalHandoffOnly && !hasCoreActionEvidence(actionContract, input.toolRecords || [], actionText)) {
     return {
       text: formatCompactBlockedResponse(input, `Missing core evidence for ${actionContract.kind}.`),
       blocked: true,

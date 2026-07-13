@@ -35,12 +35,6 @@ const ACTIONS = Array.from(new Set([
   'end_meeting_mode',
   'open_meeting_notes',
   'open_organization_workspace',
-  'customer_takeover_panel',
-  'close_customer_takeover_panel',
-  'design_delivery_panel',
-  'close_design_delivery_panel',
-  'ecommerce_growth_panel',
-  'close_ecommerce_growth_panel',
   'refresh_client_state',
   'set_wallpaper_mode',
 ]));
@@ -180,17 +174,9 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
           type: 'string',
           description: 'Optional context text for routed client actions.',
         },
-        stage: {
-          type: 'string',
-          description: 'Optional stage for large workflow panels, e.g. intake, result, cad, publish.',
-        },
-        brief: {
-          type: 'object',
-          description: 'Optional structured brief for customer takeover or result panels.',
-        },
         payload: {
           type: 'object',
-          description: 'Optional structured payload for client-only panels.',
+          description: 'Optional structured payload for a registered client action.',
         },
         resetNotes: {
           type: 'boolean',
@@ -229,8 +215,6 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         target: args.target || '',
         mode: args.mode || '',
         task: args.task || '',
-        stage: args.stage || '',
-        brief: args.brief,
         payload: args.payload,
         resetNotes: Boolean(args.resetNotes),
         legalCaseTitle: args.legalCaseTitle || '',

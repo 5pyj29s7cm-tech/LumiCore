@@ -67,6 +67,8 @@ interface DraftGeometry {
 }
 
 export interface RenovationFolderWorkflowResult {
+  sourceInventoryOnly: true;
+  completionEligible: false;
   projectName: string;
   folderPath: string;
   outputDir?: string;
@@ -77,7 +79,7 @@ export interface RenovationFolderWorkflowResult {
   geometry: DraftGeometry;
   draftFiles: Array<{ name: string; path?: string; preview: string }>;
   cadFiles: Array<{ name: string; path?: string; preview?: string }>;
-  workflowState: 'awaiting_image_geometry_extraction' | 'drafting_base_ready' | 'needs_dimension_calibration';
+  workflowState: 'awaiting_image_geometry_extraction' | 'source_inventory_ready' | 'needs_source_geometry';
   primaryReferenceImage?: string;
   recommendedToolCalls: Array<{ tool: string; arguments?: Record<string, any>; useResultFrom?: string; reason: string }>;
   nextSteps: string[];
@@ -88,7 +90,7 @@ const TEXT_EXTS = new Set(['.txt', '.md', '.csv', '.json', '.log', '.rtf']);
 const DOC_EXTS = new Set(['.docx', '.xlsx', '.xls', '.pptx', '.pdf']);
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff']);
 const SUPPORTED_EXTS = new Set([...TEXT_EXTS, ...DOC_EXTS, ...IMAGE_EXTS]);
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'dist-server', '.codex-run', 'LumiCAD装修方案']);
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'dist-server', '.codex-run', 'LumiCAD装修方案', 'LumiCAD_Source_Inventory']);
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -350,7 +352,7 @@ function parseMetricLength(value: string): number | null {
   return n;
 }
 
-function inferOuterSize(signals: RenovationSignals, corpus: string): { widthMm: number; heightMm: number; calibrated: boolean; note: string } {
+function inferOuterSize(signals: RenovationSignals): { widthMm: number; heightMm: number; calibrated: boolean; note: string } {
   const pairText = signals.dimensions.find(item => /[x×*]/i.test(item));
   if (pairText) {
     const parts = pairText.split(/[x×*]/i);
@@ -366,55 +368,21 @@ function inferOuterSize(signals: RenovationSignals, corpus: string): { widthMm: 
     }
   }
 
-  const areaText = signals.areas[0];
-  const areaMatch = areaText?.match(/(\d+(?:\.\d+)?)/);
-  if (areaMatch) {
-    const area = Number(areaMatch[1]);
-    if (Number.isFinite(area) && area > 8) {
-      const width = Math.round(Math.sqrt(area * 1_000_000 * 1.35));
-      const height = Math.round((area * 1_000_000) / width);
-      return {
-        widthMm: Math.max(3500, width),
-        heightMm: Math.max(3500, height),
-        calibrated: false,
-        note: `按面积 ${areaText} 估算外框，需补一个实测开间或进深校准。`,
-      };
-    }
-  }
-
-  const twoRoom = /两室|2室|二室/.test(corpus);
-  const threeRoom = /三室|3室/.test(corpus);
-  if (threeRoom) return { widthMm: 10500, heightMm: 9000, calibrated: false, note: '按三室常见户型估算外框，需校准。' };
-  if (twoRoom) return { widthMm: 9000, heightMm: 7600, calibrated: false, note: '按两室常见户型估算外框，需校准。' };
-  return { widthMm: 7800, heightMm: 6200, calibrated: false, note: '未识别整体尺寸，生成概念外框，需校准。' };
+  return {
+    widthMm: 0,
+    heightMm: 0,
+    calibrated: false,
+    note: signals.areas[0]
+      ? `Only area ${signals.areas[0]} was found; it cannot establish the real outer proportions.`
+      : 'No confirmed overall width and depth were found.',
+  };
 }
 
-function roomList(signals: RenovationSignals): string[] {
-  const detected = signals.rooms.map(room => room.name);
-  if (detected.length > 0) return unique(detected, 10);
-  return ['玄关', '客厅', '餐厅', '厨房', '主卧', '次卧', '卫生间', '阳台'];
-}
-
-function buildGeometry(signals: RenovationSignals, corpus: string): DraftGeometry {
-  const outer = inferOuterSize(signals, corpus);
-  const rooms = roomList(signals);
-  const cols = Math.max(2, Math.ceil(Math.sqrt(rooms.length)));
-  const rows = Math.max(2, Math.ceil(rooms.length / cols));
-  const cellW = outer.widthMm / cols;
-  const cellH = outer.heightMm / rows;
-  const rects: RoomRect[] = rooms.map((name, index) => {
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    return {
-      name,
-      x: Math.round(col * cellW),
-      y: Math.round((rows - row - 1) * cellH),
-      width: Math.round(cellW),
-      height: Math.round(cellH),
-    };
-  });
+function buildGeometry(signals: RenovationSignals): DraftGeometry {
+  const outer = inferOuterSize(signals);
   const missing = [
     outer.calibrated ? '' : '至少一个实测总开间/进深或图纸比例尺',
+    'Real coordinates for rooms, walls, openings, and structure, or a floor-plan image that can be visually extracted',
     signals.dimensions.some(d => /墙厚/.test(d)) ? '' : '墙体厚度',
     signals.dimensions.some(d => /门洞|窗洞/.test(d)) ? '' : '门窗洞口宽度和位置',
     signals.constraints.includes('承重墙') ? '' : '承重墙/剪力墙/梁柱位置',
@@ -422,108 +390,11 @@ function buildGeometry(signals: RenovationSignals, corpus: string): DraftGeometr
   return {
     widthMm: outer.widthMm,
     heightMm: outer.heightMm,
-    rooms: rects,
+    rooms: [],
     calibrated: outer.calibrated,
     precisionNote: outer.note,
     missingPrecisionInputs: unique(missing, 8),
   };
-}
-
-function dxfLine(x1: number, y1: number, x2: number, y2: number, layer = 'WALL'): string {
-  return `0\nLINE\n8\n${layer}\n10\n${x1}\n20\n${y1}\n30\n0\n11\n${x2}\n21\n${y2}\n31\n0\n`;
-}
-
-function dxfText(x: number, y: number, value: string, height = 220, layer = 'TEXT'): string {
-  return `0\nTEXT\n8\n${layer}\n10\n${x}\n20\n${y}\n30\n0\n40\n${height}\n1\n${String(value).replace(/\r?\n/g, ' ')}\n`;
-}
-
-function dxfCircle(x: number, y: number, radius: number, layer = 'POINT'): string {
-  return `0\nCIRCLE\n8\n${layer}\n10\n${x}\n20\n${y}\n30\n0\n40\n${radius}\n`;
-}
-
-function dxfRect(x: number, y: number, width: number, height: number, layer = 'WALL'): string {
-  return dxfLine(x, y, x + width, y, layer)
-    + dxfLine(x + width, y, x + width, y + height, layer)
-    + dxfLine(x + width, y + height, x, y + height, layer)
-    + dxfLine(x, y + height, x, y, layer);
-}
-
-function dxfRoom(room: RoomRect, layer = 'ROOM'): string {
-  const labelX = Math.round(room.x + room.width * 0.12);
-  const labelY = Math.round(room.y + room.height * 0.52);
-  return dxfRect(room.x, room.y, room.width, room.height, layer)
-    + dxfText(labelX, labelY, room.name, Math.max(180, Math.min(room.width, room.height) * 0.08), 'TEXT');
-}
-
-function buildDxf(projectName: string, geometry: DraftGeometry, mode: 'base' | 'layout' | 'mep'): string {
-  let entities = dxfRect(0, 0, geometry.widthMm, geometry.heightMm, 'OUTLINE');
-  for (const room of geometry.rooms) entities += dxfRoom(room, mode === 'base' ? 'ROOM_EXISTING' : 'ROOM_LAYOUT');
-
-  if (mode === 'layout') {
-    for (const room of geometry.rooms) {
-      const margin = Math.min(room.width, room.height) * 0.14;
-      entities += dxfRect(
-        Math.round(room.x + margin),
-        Math.round(room.y + margin),
-        Math.round(room.width - margin * 2),
-        Math.round(room.height - margin * 2),
-        'FURNITURE',
-      );
-    }
-  }
-
-  if (mode === 'mep') {
-    for (const room of geometry.rooms) {
-      const x = Math.round(room.x + room.width * 0.18);
-      const y = Math.round(room.y + room.height * 0.18);
-      entities += dxfCircle(x, y, 80, 'SOCKET');
-      entities += dxfCircle(Math.round(room.x + room.width * 0.82), y, 80, 'SOCKET');
-      entities += dxfText(x + 120, y + 90, `${room.name} 插座/灯位待现场复核`, 140, 'MEP_TEXT');
-    }
-  }
-
-  entities += dxfText(0, geometry.heightMm + 500, `${projectName} - ${mode.toUpperCase()} - ${geometry.precisionNote}`, 220, 'TITLE');
-  return `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${entities}0\nENDSEC\n0\nEOF\n`;
-}
-
-function svgRect(x: number, y: number, width: number, height: number, label?: string): string {
-  return `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="none" stroke="#1f2937" stroke-width="2"/><text x="${x + 10}" y="${y + Math.max(24, height / 2)}" font-size="18" fill="#111827">${label || ''}</text>`;
-}
-
-function buildPreviewSvg(projectName: string, geometry: DraftGeometry): string {
-  const scale = Math.min(920 / geometry.widthMm, 620 / geometry.heightMm);
-  const width = Math.round(geometry.widthMm * scale) + 40;
-  const height = Math.round(geometry.heightMm * scale) + 80;
-  const rooms = geometry.rooms.map(room => svgRect(
-    Math.round(room.x * scale) + 20,
-    Math.round((geometry.heightMm - room.y - room.height) * scale) + 40,
-    Math.round(room.width * scale),
-    Math.round(room.height * scale),
-    room.name,
-  )).join('\n');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-<rect width="100%" height="100%" fill="#f8fafc"/>
-<text x="20" y="24" font-size="18" fill="#0f172a">${projectName} - DXF preview</text>
-${rooms}
-<text x="20" y="${height - 18}" font-size="13" fill="#64748b">${geometry.precisionNote}</text>
-</svg>`;
-}
-
-function materialRows(signals: RenovationSignals): string[][] {
-  const style = signals.styles[0] || '待定';
-  return [
-    ['类别', '建议材料/做法', '适用空间', '备注'],
-    ['地面', style.includes('原木') ? '木地板/木纹砖' : '耐磨地砖或复合地板', '客餐厅/卧室', '按预算和地暖条件复核'],
-    ['墙面', '乳胶漆/局部护墙板', '全屋', '颜色结合采光确认'],
-    ['顶面', '局部吊顶+无主灯或吸顶灯', '客餐厅/过道', '避开梁位和空调管线'],
-    ['厨房', '防滑地砖、墙砖、橱柜、台面', '厨房', '燃气和烟道位置不可随意改'],
-    ['卫浴', '防水、墙地砖、洁具、五金', '卫生间', '重点复核地漏坡度和干湿分离'],
-    ['收纳', '定制柜体/成品柜', signals.needs.includes('收纳') ? '玄关/卧室/阳台' : '按需求确认', '预留检修口和插座'],
-  ];
-}
-
-function csvEscape(value: string): string {
-  return `"${String(value || '').replace(/"/g, '""')}"`;
 }
 
 function makeMarkdown(
@@ -534,95 +405,77 @@ function makeMarkdown(
   signals: RenovationSignals,
   geometry: DraftGeometry,
 ) {
-  const projectName = args.projectName || safeName(path.basename(args.folderPath), '未命名装修项目');
-  const materials = files.map(file => `- ${file.name} (${file.chars} chars)`).join('\n') || '- 暂无可读文字材料';
-  const imageList = images.map(file => `- ${file.name} (${Math.round(file.size / 1024)} KB)`).join('\n') || '- 暂无图片/草稿图';
-  const skippedList = skipped.map(file => `- ${file.path}: ${file.reason}`).join('\n') || '- 无';
+  const projectName = args.projectName || safeName(path.basename(args.folderPath), 'Unnamed renovation project');
+  const materials = files.map(file => `- ${file.name} (${file.chars} chars)`).join('\n') || '- No readable text source';
+  const imageList = images.map(file => `- ${file.name} (${Math.round(file.size / 1024)} KB)`).join('\n') || '- No image or measured sketch';
+  const skippedList = skipped.map(file => `- ${file.path}: ${file.reason}`).join('\n') || '- None';
   const excerpt = files.map(file => `## ${file.name}\n${file.excerpt}`).join('\n\n').slice(0, 12000);
-  const rooms = geometry.rooms.map(room => `- ${room.name}: ${room.width} x ${room.height} mm (草图分区)`).join('\n');
-  const missing = geometry.missingPrecisionInputs.map(item => `- ${item}`).join('\n') || '- 暂无';
+  const missing = geometry.missingPrecisionInputs.map(item => `- ${item}`).join('\n') || '- None recorded';
 
-  const summary = `# ${projectName} 装修 CAD 文件夹摘要
+  const summary = `# ${projectName} source inventory
 
-## 输入材料
+## Readable text sources
 ${materials}
 
-## 草稿图/参考图
+## Image and drawing sources
 ${imageList}
 
-## 暂未读取材料
+## Skipped or unreadable sources
 ${skippedList}
 
-## 自动识别线索
-- 尺寸：${signals.dimensions.join('；') || '未识别'}
-- 面积：${signals.areas.join('；') || '未识别'}
-- 房间：${signals.rooms.map(room => `${room.name}(${room.count})`).join('；') || '未识别'}
-- 风格：${signals.styles.join('；') || '待定'}
-- 预算：${signals.budgets.join('；') || '待定'}
-- 约束：${signals.constraints.join('；') || '待现场确认'}
-- 需求：${signals.needs.join('；') || '待访谈确认'}
+## Extracted source signals
+- Dimensions: ${signals.dimensions.join('; ') || 'not found'}
+- Areas: ${signals.areas.join('; ') || 'not found'}
+- Rooms mentioned: ${signals.rooms.map(room => `${room.name}(${room.count})`).join('; ') || 'not found'}
+- Styles mentioned: ${signals.styles.join('; ') || 'not found'}
+- Budgets mentioned: ${signals.budgets.join('; ') || 'not found'}
+- Constraints mentioned: ${signals.constraints.join('; ') || 'not found'}
+- Needs mentioned: ${signals.needs.join('; ') || 'not found'}
 
-## CAD 精度状态
-- 外框：${geometry.widthMm} x ${geometry.heightMm} mm
-- 校准状态：${geometry.calibrated ? '已根据资料尺寸初步校准' : '概念草图，需补尺寸校准'}
-- 说明：${geometry.precisionNote}
+## Geometry readiness
+- Confirmed overall envelope: ${geometry.calibrated ? `${geometry.widthMm} x ${geometry.heightMm} mm` : 'not available'}
+- Status: ${geometry.precisionNote}
+- CAD files generated by this scan: none
 
-## 需补充的关键输入
+## Missing inputs before drafting
 ${missing}
 
-## 材料摘录
+## Source excerpts
 ${excerpt}
 `;
 
-  const cadPlan = `# ${projectName} CAD 建模计划
+  const cadPlan = `# ${projectName} verified CAD execution plan
 
-## 交付文件
-- 01_户型底图.dxf：按当前资料生成的户型/空间底图。
-- 02_平面布置方案.dxf：加入家具/功能块的布置草图。
-- 03_水电点位建议.dxf：灯位、插座点位和复核提示草图。
-- preview.svg：浏览器可看的预览图。
-
-## 分区草图
-${rooms}
-
-## 建模规则
-1. 当前 DXF 为可编辑草稿，不作为施工最终图。
-2. 没有比例尺或实测尺寸时，只做概念分区和方案推演。
-3. 承重墙、梁柱、烟道、燃气、下水、强弱电箱位置必须现场复核。
-4. 后续如安装 AutoCAD/LibreCAD/浩辰/中望，可直接打开 DXF 继续深化。
+1. Select the primary source drawing instead of inventing a default floor plan.
+2. Run floorplan_extract_geometry with every known calibration dimension.
+3. Review the returned walls, rooms, doors, windows, confidence, assumptions, and missing precision inputs.
+4. For visible AutoCAD work, pass the extracted geometry to cad_prepare_autocad_operations and then mcp_cad-drafting_autocad_playback_file.
+5. For an explicitly requested DXF file, pass the extracted geometry to cad_generate_dxf and verify the output path.
+6. Treat a failed extraction or playback as a blocker. Do not substitute a generated grid, default room list, script, preview, or task packet.
 `;
 
-  const proposal = `# ${projectName} 装修方案草稿
+  const requirements = `# ${projectName} extracted requirements
 
-## 设计定位
-- 风格方向：${signals.styles.join(' / ') || args.stylePreference || '现代耐看、易维护'}
-- 预算边界：${signals.budgets.join('；') || args.budget || '待确认'}
-- 核心需求：${signals.needs.join('；') || '收纳、采光、动线和易维护'}
+- Style terms from source: ${signals.styles.join(' / ') || 'not supplied'}
+- Budget terms from source: ${signals.budgets.join('; ') || 'not supplied'}
+- Functional needs from source: ${signals.needs.join('; ') || 'not supplied'}
+- Constraints from source: ${signals.constraints.join('; ') || 'not supplied'}
+- Rooms mentioned in source: ${signals.rooms.map(room => room.name).join('; ') || 'not supplied'}
 
-## 平面策略
-1. 玄关优先解决鞋柜、换鞋、临时置物和弱电/清洁工具收纳。
-2. 客餐厅保持主通道顺畅，家具尺度按通行净宽复核。
-3. 厨房优先确认烟道、燃气、上下水和冰箱位，再确定开放/半开放方案。
-4. 卫生间优先复核下水、地漏和门洞，能做干湿分离则优先。
-5. 卧室重点控制床、衣柜、过道和书桌/梳妆位的冲突。
-
-## 重点风险
-${geometry.missingPrecisionInputs.map(item => `- ${item}`).join('\n') || '- 当前未发现，但仍需现场复尺。'}
+This file records source facts only. It is not a design proposal, material schedule, budget, floor plan, or construction deliverable.
 `;
 
-  const checklist = `# ${projectName} 施工复核清单
+  const checklist = `# ${projectName} source verification checklist
 
-- 复尺：总开间、总进深、层高、梁底高度。
-- 结构：承重墙、剪力墙、梁、柱、不可拆改构件。
-- 门窗：洞口宽高、窗台高度、开启方向。
-- 厨卫：燃气、烟道、上下水、地漏、排风。
-- 机电：强弱电箱、空调孔、新风/地暖/中央空调条件。
-- 交付：DXF 图层、尺寸标注、材料表、预算和施工说明逐项复核。
+- Confirm total width, depth, floor height, scale, and at least one calibration dimension.
+- Confirm structural walls, shear walls, beams, columns, and non-removable elements.
+- Confirm door and window openings, sill heights, and swing directions.
+- Confirm gas, flue, water, drain, electrical, HVAC, and equipment locations.
+- Compare extracted geometry against the original source before AutoCAD playback or DXF export.
+- Require professional review before construction use.
 `;
 
-  const materialsCsv = materialRows(signals).map(row => row.map(csvEscape).join(',')).join('\n');
-
-  return { summary, cadPlan, proposal, checklist, materialsCsv };
+  return { summary, cadPlan, requirements, checklist };
 }
 
 export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflowArgs): Promise<RenovationFolderWorkflowResult> {
@@ -675,27 +528,20 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
     }
   }
 
-  const projectName = args.projectName || safeName(path.basename(folderPath), '未命名装修项目');
+  const projectName = args.projectName || safeName(path.basename(folderPath), 'Unnamed renovation project');
   const signals = extractRenovationSignals(corpus, args);
-  const geometry = buildGeometry(signals, corpus);
+  const geometry = buildGeometry(signals);
   const primaryReferenceImage = selectPrimaryReferenceImage(referenceImages);
   const markdown = makeMarkdown({ ...args, folderPath, projectName }, filesRead, referenceImages, filesSkipped, signals, geometry);
   const outputDir = args.outputDir
     ? path.resolve(expandHome(args.outputDir))
-    : path.join(folderPath, 'LumiCAD装修方案');
+    : path.join(folderPath, 'LumiCAD_Source_Inventory');
 
   const draftMap: Array<[string, string]> = [
-    ['00_资料摘要.md', markdown.summary],
-    ['01_CAD建模计划.md', markdown.cadPlan],
-    ['02_装修方案草稿.md', markdown.proposal],
-    ['03_施工复核清单.md', markdown.checklist],
-    ['04_材料清单.csv', markdown.materialsCsv],
-  ];
-  const cadMap: Array<[string, string]> = [
-    ['01_户型底图.dxf', buildDxf(projectName, geometry, 'base')],
-    ['02_平面布置方案.dxf', buildDxf(projectName, geometry, 'layout')],
-    ['03_水电点位建议.dxf', buildDxf(projectName, geometry, 'mep')],
-    ['preview.svg', buildPreviewSvg(projectName, geometry)],
+    ['00_source_inventory.md', markdown.summary],
+    ['01_verified_cad_execution_plan.md', markdown.cadPlan],
+    ['02_extracted_requirements.md', markdown.requirements],
+    ['03_source_verification_checklist.md', markdown.checklist],
   ];
 
   const draftFiles: RenovationFolderWorkflowResult['draftFiles'] = [];
@@ -708,17 +554,13 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
       fs.writeFileSync(target, content, 'utf-8');
       draftFiles.push({ name, path: target, preview: content.slice(0, 1200) });
     }
-    for (const [name, content] of cadMap) {
-      const target = path.join(outputDir, name);
-      fs.writeFileSync(target, content, 'utf-8');
-      cadFiles.push({ name, path: target, preview: content.slice(0, 800) });
-    }
   } else {
     for (const [name, content] of draftMap) draftFiles.push({ name, preview: content.slice(0, 1200) });
-    for (const [name, content] of cadMap) cadFiles.push({ name, preview: content.slice(0, 800) });
   }
 
   return {
+    sourceInventoryOnly: true,
+    completionEligible: false,
     projectName,
     folderPath,
     outputDir: writeFiles ? outputDir : undefined,
@@ -731,9 +573,9 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
     cadFiles,
     workflowState: primaryReferenceImage
       ? 'awaiting_image_geometry_extraction'
-      : geometry.calibrated
-      ? 'drafting_base_ready'
-      : 'needs_dimension_calibration',
+      : referenceImages.length || filesRead.length
+      ? 'source_inventory_ready'
+      : 'needs_source_geometry',
     primaryReferenceImage: primaryReferenceImage?.path,
     recommendedToolCalls: primaryReferenceImage
       ? [
@@ -766,17 +608,17 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
       : [],
     nextSteps: [
       referenceImages.length
-        ? 'For higher accuracy, run floorplan_extract_geometry on the main floor-plan image, then regenerate DXF with confirmed geometry.'
-        : 'Add a floor-plan image or measured sketch if available.',
+        ? 'Run floorplan_extract_geometry on the primary floor-plan image before any CAD generation.'
+        : 'Add a floor-plan image, measured sketch, or structured wall/door/window geometry before drafting.',
       geometry.calibrated
-        ? 'Open the DXF in AutoCAD/LibreCAD/ZWCAD/GstarCAD for layer and dimension review.'
-        : 'Ask the user for one confirmed overall width/depth before calling the DXF production-ready.',
+        ? 'Use the recognized overall dimensions only as calibration input; they do not define room or wall positions.'
+        : 'Ask for a confirmed overall width/depth or drawing scale before claiming dimensional precision.',
       'Have a designer/contractor verify structure, MEP, code, and site measurements before construction.',
     ],
     warnings: [
-      'DXF files are editable drafting bases, not final construction drawings.',
-      'DWG output requires a licensed CAD application or approved converter; this workflow intentionally emits DXF.',
-      primaryReferenceImage ? 'Reference images were catalogued but not visually traced inside this MCP step. Continue with floorplan_extract_geometry before treating the CAD as source-faithful.' : '',
+      'This folder scan never generates CAD, BIM, renders, budgets, material schedules, or client delivery packages.',
+      'A source inventory or execution plan is preparation only and cannot satisfy CAD completion evidence.',
+      primaryReferenceImage ? 'Reference images were catalogued but not visually traced inside this MCP step. Continue with floorplan_extract_geometry.' : '',
       filesSkipped.length ? `${filesSkipped.length} file(s) were skipped or only partially readable.` : '',
     ].filter(Boolean),
   };

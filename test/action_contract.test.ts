@@ -98,6 +98,144 @@ describe('Lumi action contract', () => {
     expect(legalRemoteIntake.preferredTools).toContain('legal_generate_citation_verification_report');
   });
 
+  it('classifies customer, ecommerce, and composite design work as evidence-gated operations', () => {
+    expect(buildActionContract('Analyze this customer lead and advance the sales follow-up.').kind).toBe('customer_operations');
+    expect(buildActionContract('Analyze this ecommerce campaign ROI and optimize the store listing.').kind).toBe('ecommerce_operations');
+    expect(buildActionContract('Create a full interior design package with a PPT, renders, and budget schedule.').kind).toBe('design_delivery');
+    expect(buildActionContract('Create a store publish draft but do not publish it.').kind).toBe('ecommerce_operations');
+    expect(buildActionContract('客户微信：接管抖店账号，分析广告并准备短视频脚本。').kind).toBe('ecommerce_operations');
+    expect(buildActionContract('根据客户发来的户型图完成装修设计交付。').kind).toBe('design_delivery');
+  });
+
+  it('does not accept local takeover packages as customer or ecommerce completion evidence', () => {
+    const customerText = 'Analyze this customer lead and score the sales opportunity.';
+    const customer = buildActionContract(customerText);
+    expect(hasCoreActionEvidence(customer, [{
+      id: 'customer-package',
+      name: 'legacy_scripted_customer_package',
+      arguments: {},
+      result: '{"artifactReady":true,"completionEligible":false}',
+    }], customerText)).toBe(false);
+    expect(hasCoreActionEvidence(customer, [{
+      id: 'lead-analysis',
+      name: 'mcp_sales-customer-ops_lead_score',
+      arguments: { leadText: 'Customer asked for a 30-seat annual plan and a quote.' },
+      result: '{"grade":"A","signals":["budget","timeline"],"nextAction":"prepare scoped proposal"}',
+    }], customerText)).toBe(true);
+
+    const followUpText = 'Analyze this customer lead and advance the sales follow-up.';
+    const followUp = buildActionContract(followUpText);
+    expect(hasCoreActionEvidence(followUp, [{
+      id: 'lead-only',
+      name: 'mcp_sales-customer-ops_lead_score',
+      arguments: { leadText: 'Customer requested a quote.' },
+      result: '{"grade":"hot","nextBestAction":"follow up"}',
+    }], followUpText)).toBe(false);
+    expect(hasCoreActionEvidence(followUp, [{
+      id: 'lead-analysis',
+      name: 'mcp_sales-customer-ops_lead_score',
+      arguments: { leadText: 'Customer requested a quote.' },
+      result: '{"grade":"hot","nextBestAction":"follow up"}',
+    }, {
+      id: 'sent-follow-up',
+      name: 'wechat_send_message',
+      arguments: { contact: 'Customer', message: 'Here is the requested next step.' },
+      result: '{"sent":true,"verificationStatus":"verified"}',
+    }], followUpText)).toBe(true);
+
+    const ecommerceText = 'Analyze this ecommerce campaign ROI.';
+    const ecommerce = buildActionContract(ecommerceText);
+    expect(hasCoreActionEvidence(ecommerce, [{
+      id: 'growth-package',
+      name: 'legacy_scripted_ecommerce_package',
+      arguments: {},
+      result: '{"artifactReady":true,"completionEligible":false}',
+    }], ecommerceText)).toBe(false);
+    expect(hasCoreActionEvidence(ecommerce, [{
+      id: 'roi',
+      name: 'mcp_ecommerce-ops_campaign_roi_analyzer',
+      arguments: { campaignText: 'Campaign A spend 300 revenue 1500 orders 20.' },
+      result: '{"roas":5,"contributionAfterAds":225,"recommendation":"scale within margin guardrail"}',
+    }], ecommerceText)).toBe(true);
+  });
+
+  it('requires every requested design output and source inspection', () => {
+    const text = 'Based on the attached PDF, create an interior design PPT and finished render.';
+    const contract = buildActionContract(text);
+    const draftOnly = [{
+      id: 'package',
+      name: 'legacy_scripted_design_package',
+      arguments: {},
+      result: '{"artifactReady":true,"completionEligible":false}',
+    }];
+    const completed = [{
+      id: 'read',
+      name: 'read_pdf',
+      arguments: { path: 'D:\\brief.pdf' },
+      result: 'Extracted room dimensions and design constraints.',
+    }, {
+      id: 'ppt',
+      name: 'create_ppt',
+      arguments: { title: 'Interior concept' },
+      result: 'created: D:\\output\\concept.pptx',
+    }, {
+      id: 'render',
+      name: 'generate_image',
+      arguments: { prompt: 'Interior render grounded in the supplied brief' },
+      result: '{"image_url":"https://example.test/render.png"}',
+    }, {
+      id: 'verify',
+      name: 'work_product_verify',
+      arguments: {},
+      result: '{"status":"pass","artifactChecks":[{"path":"D:\\\\output\\\\concept.pptx","exists":true}]}',
+    }];
+
+    expect(contract.kind).toBe('design_delivery');
+    expect(hasCoreActionEvidence(contract, draftOnly, text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, completed, text)).toBe(true);
+  });
+
+  it('does not accept an underspecified full-design package as complete', () => {
+    const text = 'Complete the full interior design delivery package.';
+    const contract = buildActionContract(text);
+    const oneDocument = [{
+      id: 'ppt',
+      name: 'create_ppt',
+      arguments: { title: 'Generic interior concept' },
+      result: 'created: D:\\output\\generic.pptx',
+    }, {
+      id: 'verify',
+      name: 'work_product_verify',
+      arguments: {},
+      result: '{"status":"pass","artifactChecks":[{"path":"D:\\\\output\\\\generic.pptx","exists":true}]}',
+    }];
+
+    expect(contract.kind).toBe('design_delivery');
+    expect(hasCoreActionEvidence(contract, oneDocument, text)).toBe(false);
+  });
+
+  it('requires a public commit plus post-submit page feedback', () => {
+    const text = 'Post this comment on the video website.';
+    const contract = buildActionContract(text);
+    expect(hasCoreActionEvidence(contract, [{
+      id: 'open',
+      name: 'mcp_playwright_browser_snapshot',
+      arguments: {},
+      result: 'Video page with comment box.',
+    }], text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [{
+      id: 'commit',
+      name: 'mcp_playwright_browser_click',
+      arguments: { element: 'Post comment button' },
+      result: 'Clicked the post comment button.',
+    }, {
+      id: 'receipt',
+      name: 'mcp_playwright_browser_snapshot',
+      arguments: {},
+      result: 'Comment is visible. Posted successfully.',
+    }], text)).toBe(true);
+  });
+
   it('requires stronger evidence when the user asks for visible AutoCAD execution', () => {
     const text = '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u6839\u636e\u91cc\u9762\u7684\u56fe\u7247\u751f\u6210 CAD \u56fe\u7eb8\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765';
 
@@ -123,6 +261,42 @@ describe('Lumi action contract', () => {
     expect(buildActionContract(text).preferredTools).toContain('cad_prepare_autocad_operations');
     expect(buildActionContract(text).preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
     expect(buildActionContract(text).preferredTools).not.toContain('cad_generate_dxf');
+  });
+
+  it('does not accept a folder inventory or default grid as source-grounded CAD', () => {
+    const text = 'Based on the attached floor plan image, create an editable CAD DXF file.';
+    const contract = buildActionContract(text);
+    const inventoryOnly = [{
+      id: 'inventory',
+      name: 'mcp_cad-drafting_cad_renovation_folder_workflow',
+      arguments: { folderPath: 'C:\\source' },
+      result: '{"workflowState":"awaiting_image_geometry_extraction","cadFiles":[]}',
+    }, {
+      id: 'verify-inventory',
+      name: 'work_product_verify',
+      arguments: {},
+      result: '{"status":"pass"}',
+    }];
+    const grounded = [{
+      id: 'geometry',
+      name: 'floorplan_extract_geometry',
+      arguments: { imagePath: 'C:\\source\\plan.png', knownDimensions: '9000 x 7600 mm' },
+      result: '{"geometryReady":true,"cadGenerateDxfArgs":{"width":9000,"height":7600,"sourcePath":"C:\\\\source\\\\plan.png","walls":[{"x1":0,"y1":0,"x2":9000,"y2":0}],"rooms":[{"name":"Living","x":0,"y":0,"width":4500,"height":3800}]}}',
+    }, {
+      id: 'dxf',
+      name: 'cad_generate_dxf',
+      arguments: { sourcePath: 'C:\\source\\plan.png', width: 9000, height: 7600, walls: [{ x1: 0, y1: 0, x2: 9000, y2: 0 }] },
+      result: '{"path":"C:\\\\output\\\\plan.dxf","bytes":2400}',
+    }, {
+      id: 'verify-dxf',
+      name: 'work_product_verify',
+      arguments: {},
+      result: '{"status":"pass","artifactChecks":[{"path":"C:\\\\output\\\\plan.dxf","exists":true}]}',
+    }];
+
+    expect(contract.kind).toBe('cad_drafting');
+    expect(hasCoreActionEvidence(contract, inventoryOnly, text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, grounded, text)).toBe(true);
   });
 
   it('requires MCP marker evidence and excludes script fallback for an explicit MCP-only run', () => {

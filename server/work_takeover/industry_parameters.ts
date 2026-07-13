@@ -37,6 +37,11 @@ export interface WorkTakeoverIndustryParameters {
   summaryLines: string[];
 }
 
+export function getTaskIndustryParameters(task: any): WorkTakeoverIndustryParameters | undefined {
+  const params = task?.metadata?.industryParameters;
+  return params && typeof params === 'object' ? params as WorkTakeoverIndustryParameters : undefined;
+}
+
 function compact(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }

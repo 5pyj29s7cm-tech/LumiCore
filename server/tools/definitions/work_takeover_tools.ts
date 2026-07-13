@@ -12,14 +12,7 @@ import {
 import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
 import { exportWorkTakeoverPacket } from '../../work_takeover/task_packet';
 import { verifyWorkTakeoverResult, type WorkTakeoverExpectedSurface } from '../../work_takeover/result_verifier';
-import { parseWorkTakeoverIndustryParameters } from '../../work_takeover/industry_parameters';
-import {
-  getTaskIndustryParameters,
-  isEcommerceGrowthCategory,
-  packageKindForCategory,
-  prepareWorkTakeoverIndustryPackage,
-  type WorkTakeoverIndustryPackageResult,
-} from '../../work_takeover/industry_packages';
+import { getTaskIndustryParameters, parseWorkTakeoverIndustryParameters } from '../../work_takeover/industry_parameters';
 import { runWorkTakeoverCapabilityReuseProbe } from '../../work_takeover/capability_reuse_probe';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
@@ -127,301 +120,6 @@ function recordPacket(userId: string, task: any, plan: any, packet: ReturnType<t
     },
     note: packet.summary,
   } as any) || task;
-}
-
-type WorkTakeoverControlRouteStatus = 'ready' | 'planned' | 'confirmation_required' | 'needs_adapter';
-
-interface WorkTakeoverRealSmokeControlRoute {
-  id: string;
-  label: string;
-  status: WorkTakeoverControlRouteStatus;
-  tools: string[];
-  reason: string;
-  confirmationRequired: string[];
-}
-
-function executionMode(value: unknown, fallback: WorkTakeoverExecutionMode): WorkTakeoverExecutionMode {
-  return ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(value || ''))
-    ? String(value) as WorkTakeoverExecutionMode
-    : fallback;
-}
-
-function realSmokeToolPool(plan: ReturnType<typeof planWorkTakeoverExecution>): string[] {
-  return uniqueStrings([
-    ...plan.capabilities.flatMap(capability => capability.tools),
-    ...plan.steps.flatMap(step => step.suggestedTools),
-  ]);
-}
-
-function hasTool(tools: string[], names: string[]): boolean {
-  return names.some(name => tools.includes(name));
-}
-
-function confirmationForCapabilities(
-  plan: ReturnType<typeof planWorkTakeoverExecution>,
-  capabilityIds: string[],
-  fallback: string[] = [],
-): string[] {
-  return uniqueStrings([
-    ...plan.capabilities
-      .filter(capability => capabilityIds.includes(capability.id))
-      .flatMap(capability => capability.confirmationRequired),
-    ...fallback,
-  ]);
-}
-
-function buildRealSmokeControlRoutes(
-  task: any,
-  plan: ReturnType<typeof planWorkTakeoverExecution>,
-  options: { includeDesktopEvidence: boolean },
-): WorkTakeoverRealSmokeControlRoute[] {
-  const tools = realSmokeToolPool(plan);
-  const routes: WorkTakeoverRealSmokeControlRoute[] = [];
-  const ecommerceLike = isEcommerceGrowthCategory(task.category);
-  const messageLike = /微信|WeChat|weixin|消息|回复|客服|客户/i.test([
-    task.title,
-    task.summary,
-    task.sourceMessage,
-    ...(Array.isArray(task.nextActions) ? task.nextActions : []),
-  ].map(compact).filter(Boolean).join(' '));
-
-  if (ecommerceLike || hasTool(tools, ['mcp_playwright_browser_snapshot', 'browser_open_task', 'web_login_run'])) {
-    routes.push({
-      id: 'playwright_browser',
-      label: '浏览器/平台账号路线',
-      status: hasTool(tools, ['mcp_playwright_browser_snapshot', 'browser_open_task']) ? 'ready' : 'planned',
-      tools: [
-        'external_control_candidates',
-        'browser_open_task',
-        'mcp_playwright_browser_snapshot',
-        'mcp_playwright_browser_navigate',
-        'mcp_playwright_browser_fill_form',
-        'mcp_playwright_browser_click',
-        'web_login_profile_list',
-        'web_login_run',
-      ],
-      reason: '用于复用已登录浏览器会话、打开平台后台、读取页面状态和准备发布/店铺/账号操作。',
-      confirmationRequired: confirmationForCapabilities(plan, ['browser.account_platform_work', 'account.session_reuse'], [
-        '首次登录、扫码、验证码、切换账号、授权、发布、投放和提交表单前需要确认',
-      ]),
-    });
-  }
-
-  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file'])) {
-    routes.push({
-      id: 'external_design_apps',
-      label: 'WPS/CAD/Revit 可见交付路线',
-      status: task.category === 'design_delivery' ? 'confirmation_required' : 'planned',
-      tools: [
-        'work_takeover_task_prepare_industry_package',
-        'desktop_open',
-        'desktop_ui_snapshot',
-        'desktop_ui_focus',
-        'desktop_ui_click',
-        'desktop_ui_type',
-        'cad_generate_dxf',
-        'cad_prepare_autocad_operations',
-        'mcp_cad-drafting_autocad_playback_file',
-      ],
-      reason: 'Hands local proposal packages, PPT/PDF, explicit CAD file deliverables, verified AutoCAD MCP/COM stroke-by-stroke drawing, and Revit/Dynamo handoff data to external software. Visible AutoCAD execution has no script or generated-drawing fallback.',
-      confirmationRequired: confirmationForCapabilities(plan, ['cad_bim.design_handoff', 'presentation.client_deck'], [
-        '打开外部 CAD/Revit 修改生产图纸、承诺尺寸/结构/水电/报价/施工结果前需要确认',
-      ]),
-    });
-  }
-
-  if (messageLike || hasTool(tools, ['wechat_prepare_reply', 'wechat_copy_reply_draft'])) {
-    routes.push({
-      id: 'wechat_session',
-      label: '个人微信/企业微信消息路线',
-      status: 'confirmation_required',
-      tools: [
-        'desktop_active_window',
-        'desktop_ui_snapshot',
-        'desktop_ui_focus',
-        'desktop_ui_click',
-        'desktop_ui_type',
-        'wechat_prepare_reply',
-        'wechat_copy_reply_draft',
-      ],
-      reason: '用于恢复已经运行的微信窗口、准备回复草稿，并在用户确认后再发送。',
-      confirmationRequired: confirmationForCapabilities(plan, ['messaging.reply_handoff', 'account.session_reuse'], [
-        '发送微信消息、切换账号、扫码或验证码前需要确认',
-      ]),
-    });
-  }
-
-  if (options.includeDesktopEvidence || hasTool(tools, ['desktop_ui_snapshot', 'desktop_capture_screen', 'computer_use'])) {
-    routes.push({
-      id: 'windows_uia_and_screen',
-      label: 'Windows UIA/屏幕感知路线',
-      status: options.includeDesktopEvidence ? 'ready' : 'planned',
-      tools: [
-        'desktop_ui_snapshot',
-        'desktop_ui_focus',
-        'desktop_ui_click',
-        'desktop_ui_invoke',
-        'desktop_ui_type',
-        'desktop_active_window',
-        'desktop_running_processes',
-        'desktop_capture_screen',
-        'work_takeover_task_verify_result',
-      ],
-      reason: '用于识别当前窗口、任务栏会话、控件树和截图证据，执行后再验证是不是成功。',
-      confirmationRequired: confirmationForCapabilities(plan, ['result.visible_execution'], [
-        '任何写入外部软件、发送、发布、提交、付款或破坏性操作按对应工具确认',
-      ]),
-    });
-  }
-
-  if (!routes.length) {
-    routes.push({
-      id: 'local_task_packet',
-      label: '本地任务包闭环路线',
-      status: 'ready',
-      tools: ['work_takeover_task_orchestrate', 'work_takeover_task_advance', 'work_takeover_task_export_packet', 'work_takeover_task_verify_result'],
-      reason: '当前任务先以本地结构化、文件包、草稿和验证记录完成安全闭环。',
-      confirmationRequired: plan.confirmationRequired,
-    });
-  }
-
-  const seen = new Set<string>();
-  return routes.filter(route => {
-    if (seen.has(route.id)) return false;
-    seen.add(route.id);
-    return true;
-  });
-}
-
-async function collectRealSmokeDesktopEvidence(context: any, enabled: boolean): Promise<{
-  activeWindowRaw: string;
-  runningProcessesRaw: string;
-  screenRaw: string;
-}> {
-  const empty = { activeWindowRaw: '', runningProcessesRaw: '', screenRaw: '' };
-  if (!enabled || !context?.desktopRelay) return empty;
-  const evidence = { ...empty };
-  try {
-    evidence.activeWindowRaw = await context.desktopRelay('desktop_active_window', {});
-  } catch {}
-  try {
-    evidence.runningProcessesRaw = await context.desktopRelay('desktop_running_processes', { top: 80 });
-  } catch {}
-  try {
-    evidence.screenRaw = await context.desktopRelay('desktop_capture_screen', { quality: 35 });
-  } catch {}
-  return evidence;
-}
-
-function expectedRealSmokeSurfaces(task: any, includeDesktopEvidence: boolean): WorkTakeoverExpectedSurface[] {
-  if (!includeDesktopEvidence) return [];
-  const params = getTaskIndustryParameters(task);
-  const base = (params?.expectedSurfaces || [])
-    .map(surface => surface as WorkTakeoverExpectedSurface)
-    .filter(Boolean);
-  const byCategory: WorkTakeoverExpectedSurface[] =
-    task.category === 'design_delivery' ? ['office', 'cad', 'bim', 'wechat', 'file_explorer'] :
-    isEcommerceGrowthCategory(task.category) ? ['browser', 'store_platform', 'creator_platform', 'wechat', 'file_explorer'] :
-    task.category === 'legal_case' ? ['browser', 'office', 'wechat', 'file_explorer'] :
-    task.category === 'customer' ? ['wechat', 'office', 'browser', 'file_explorer'] :
-    ['file_explorer'];
-  return uniqueStrings([...base, ...byCategory]).map(surface => surface as WorkTakeoverExpectedSurface);
-}
-
-function realSmokeRequiredLabels(task: any): string[] {
-  const params = getTaskIndustryParameters(task);
-  return uniqueStrings([
-    ...(params?.requiredArtifactLabels || []),
-    packageKindForCategory(task.category) === 'design_delivery' ? '装修设计交付包' : undefined,
-    packageKindForCategory(task.category) === 'ecommerce_growth' ? '电商/短视频接管交付包' : undefined,
-    '工作接管任务包',
-  ]);
-}
-
-function realSmokeExpectedTerms(task: any): string[] {
-  const params = getTaskIndustryParameters(task);
-  return uniqueStrings([
-    ...(params?.expectedContentTerms || []),
-    task.contact,
-    task.category === 'design_delivery' ? '装修' : undefined,
-    isEcommerceGrowthCategory(task.category) ? '内容' : undefined,
-    isEcommerceGrowthCategory(task.category) ? '发布' : undefined,
-    /微信|WeChat|weixin|消息|回复|客服/i.test(`${task.title} ${task.summary} ${task.sourceMessage}`) ? '微信' : undefined,
-  ]).slice(0, 20);
-}
-
-function realSmokeHumanReport(input: {
-  task: any;
-  executions: any[];
-  stopReasons: string[];
-  packet?: ReturnType<typeof exportWorkTakeoverPacket>;
-  industryPackage?: WorkTakeoverIndustryPackageResult;
-  verification: ReturnType<typeof verifyWorkTakeoverResult>;
-  controlRoutes: WorkTakeoverRealSmokeControlRoute[];
-}): {
-  humanSummary: string;
-  done: string[];
-  blockers: string[];
-  nextConfirmations: string[];
-  preferredRoutes: string[];
-} {
-  const packageLabel = input.industryPackage?.kind === 'design_delivery'
-    ? '生成装修设计交付包'
-    : input.industryPackage?.kind === 'ecommerce_growth'
-    ? '生成电商/短视频交付包'
-    : '';
-  const done = uniqueStrings([
-    input.executions.length ? `推进 ${input.executions.length} 个安全步骤` : '完成任务结构化',
-    packageLabel,
-    input.packet ? '导出本地任务包' : undefined,
-    input.verification.passed ? '结果验证通过' : '完成结果验证并标出待复核项',
-  ]);
-  const blockers = uniqueStrings([
-    ...(Array.isArray(input.task.blockedBy) ? input.task.blockedBy : []),
-    ...input.verification.blockers,
-  ]).slice(0, 6);
-  const nextConfirmations = uniqueStrings(input.task.confirmationRequired || []).slice(0, 6);
-  const preferredRoutes = input.controlRoutes.map(route => `${route.label}(${route.status})`);
-  const humanSummary = [
-    `我已经把这条任务跑完一遍安全闭环：${done.join('、')}。`,
-    preferredRoutes.length ? `接下来会优先走：${preferredRoutes.slice(0, 3).join('、')}。` : '',
-    blockers.length ? `现在卡住/待复核的是：${blockers.slice(0, 3).join('；')}。` : '',
-    nextConfirmations.length ? `下一步需要你确认：${nextConfirmations.slice(0, 4).join('；')}。` : '下一步没有对外确认项，可以继续让 Lumi 深化结果。',
-  ].map(compact).filter(Boolean).join('\n');
-  return { humanSummary, done, blockers, nextConfirmations, preferredRoutes };
-}
-
-function renderRealSmokeRecord(input: {
-  report: ReturnType<typeof realSmokeHumanReport>;
-  executions: any[];
-  stopReasons: string[];
-  controlRoutes: WorkTakeoverRealSmokeControlRoute[];
-  verification: ReturnType<typeof verifyWorkTakeoverResult>;
-  packet?: ReturnType<typeof exportWorkTakeoverPacket>;
-  industryPackage?: WorkTakeoverIndustryPackageResult;
-}): string {
-  return [
-    input.report.humanSummary,
-    '',
-    '## 已完成',
-    input.report.done.map(item => `- ${item}`).join('\n') || '- 暂无',
-    '',
-    '## 安全推进步骤',
-    input.executions.map(item => `- ${item.step?.title || item.step?.id}：${item.status}，${item.summary}`).join('\n') || '- 未推进具体步骤',
-    '',
-    '## 外部控制路线',
-    input.controlRoutes.map(route => `- ${route.label}：${route.status}；${route.reason}`).join('\n'),
-    '',
-    '## 停止原因',
-    input.stopReasons.map(item => `- ${item}`).join('\n') || '- max_steps_reached',
-    '',
-    '## 验证结果',
-    `- ${input.verification.summary}`,
-    ...input.verification.checks.map(item => `- ${item.passed ? '通过' : '待复核'}：${item.label} - ${item.detail}`),
-    '',
-    input.industryPackage ? `行业包：${input.industryPackage.kind}，${input.industryPackage.reused ? '复用已有结果' : '新生成'}` : '',
-    input.packet ? `任务包：${input.packet.folderPath}` : '',
-  ].map(line => typeof line === 'string' ? line : '').join('\n').trim();
 }
 
 export function registerWorkTakeoverTools(registry: ToolRegistry): void {
@@ -945,6 +643,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         },
         minMatchedContentTerms: { type: 'number', description: 'Minimum expectedContentTerms/category terms that must be found. Defaults to 2 when terms exist.' },
         minFileBytes: { type: 'number', description: 'Minimum bytes for local artifact files to avoid accepting empty shells. Defaults to 16.' },
+        requireExternalOutcome: { type: 'boolean', description: 'Require recorded evidence of the requested customer/platform/CAD/BIM/publishing action. Defaults to true for customer, store, account, video_publish, and design_delivery tasks unless the source request explicitly asks for drafts/preparation only.' },
         record: { type: 'boolean', description: 'Whether to write verification back to the task. Defaults to true.' },
       },
       required: [],
@@ -978,6 +677,12 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const filePaths = asStringArray(args.filePaths) || [];
       const requiredArtifactLabels = asStringArray(args.requiredArtifactLabels) || params?.requiredArtifactLabels || [];
       const expectedContentTerms = asStringArray(args.expectedContentTerms) || params?.expectedContentTerms || [];
+      const taskIntentText = `${task.title} ${task.summary} ${task.sourceMessage}`;
+      const preparationOnly = /(?:\u8349\u7a3f|\u51c6\u5907|\u9884\u6848|\u4e0d\u53d1\u9001|\u4e0d\u53d1\u5e03|\u6682\u4e0d\u64cd\u4f5c|draft|preparation|do\s+not\s+(?:send|publish|operate))/iu.test(taskIntentText);
+      const externalCategory = ['customer', 'store', 'account', 'video_publish', 'design_delivery'].includes(task.category);
+      const requireExternalOutcome = typeof args.requireExternalOutcome === 'boolean'
+        ? args.requireExternalOutcome
+        : externalCategory && !preparationOnly;
       const verification = verifyWorkTakeoverResult(task, {
         activeWindowRaw,
         runningProcessesRaw,
@@ -991,6 +696,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         expectedContentTerms,
         minMatchedContentTerms: args.minMatchedContentTerms,
         minFileBytes: args.minFileBytes,
+        requireExternalOutcome,
       });
 
       let updatedTask = task;
@@ -1047,129 +753,8 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
   });
 
   registry.register({
-    name: 'work_takeover_task_prepare_industry_package',
-    description: 'Prepare the real local industry package for the current work takeover task through the industry-package adapter layer. Lumi core only routes the task; ecommerce, short-video, account, renovation/CAD/Revit, and future legal/customer packages are selected by task category and implemented outside the core task loop. This writes local files and task records only; sending, publishing, login, payment, filing, signing, and external commitments remain confirmation-gated.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Optional work takeover task id. If omitted, uses the highest-priority active task with a supported industry package.' },
-        kind: { type: 'string', description: 'Optional package kind: auto, ecommerce_growth, or design_delivery. Defaults to auto from task category.' },
-        outputDirectory: { type: 'string', description: 'Optional folder where the package should be created. Defaults to the Desktop.' },
-        regenerate: { type: 'boolean', description: 'Regenerate even when a package is already recorded. Defaults to false.' },
-      },
-      required: [],
-    },
-    handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 20 })
-          .find(item => Boolean(packageKindForCategory(item.category))) || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found or unsupported: ${args.id}` : 'No active task with a supported industry package found.');
-
-      const kind = ['ecommerce_growth', 'design_delivery', 'auto'].includes(String(args.kind || 'auto'))
-        ? String(args.kind || 'auto') as any
-        : 'auto';
-      const prepared = prepareWorkTakeoverIndustryPackage(userId, task, {
-        kind,
-        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
-        regenerate: args.regenerate === true,
-      });
-
-      return JSON.stringify({
-        task: prepared.task,
-        kind: prepared.kind,
-        files: prepared.files,
-        reused: prepared.reused,
-        note: prepared.note,
-      }, null, 2);
-    },
-    permission: 'user',
-    securityLevel: 'safe',
-  });
-
-  registry.register({
-    name: 'work_takeover_task_prepare_ecommerce_growth',
-    description: 'For store/account/video_publish takeover tasks, generate a real local ecommerce/short-video/account-growth delivery package from the task parameters and message: store audit, content matrix, short-video script, image/video prompts, publish draft, customer-service/WeChat draft, operation report, tool console, and verification record. This writes local files only; it does not publish, spend budget, change store data, log in, or send messages.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Optional store/account/video_publish task id. If omitted, uses the highest-priority active matching task.' },
-        outputDirectory: { type: 'string', description: 'Optional folder where the ecommerce growth package should be created. Defaults to the Desktop.' },
-        regenerate: { type: 'boolean', description: 'Regenerate even when an ecommerce growth package is already recorded. Defaults to false.' },
-      },
-      required: [],
-    },
-    handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 10 })
-          .find(item => isEcommerceGrowthCategory(item.category)) || null;
-      if (!task) throw new Error(args.id ? `Ecommerce growth task not found: ${args.id}` : 'No active store/account/video_publish task found.');
-      if (!isEcommerceGrowthCategory(task.category)) {
-        throw new Error(`Task ${task.id} is ${task.category}, not store/account/video_publish.`);
-      }
-
-      const prepared = prepareWorkTakeoverIndustryPackage(userId, task, {
-        kind: 'ecommerce_growth',
-        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
-        regenerate: args.regenerate === true,
-      });
-
-      return JSON.stringify({
-        task: prepared.task,
-        files: prepared.files,
-        reused: prepared.reused,
-        note: prepared.note,
-      }, null, 2);
-    },
-    permission: 'user',
-    securityLevel: 'safe',
-  });
-
-  registry.register({
-    name: 'work_takeover_task_prepare_design_delivery',
-    description: 'For a design_delivery takeover task, generate the real local renovation/design delivery package from the task message and record PPT/PDF, budget, CAD DXF, Revit/Dynamo handoff data, WeChat draft, and verification results back to the task center. This writes local files only; it does not open external apps or send messages.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Optional design delivery task id. If omitted, uses the highest-priority active design_delivery task.' },
-        outputDirectory: { type: 'string', description: 'Optional folder where the design delivery package should be created. Defaults to the Desktop.' },
-        regenerate: { type: 'boolean', description: 'Regenerate even when a design delivery package is already recorded. Defaults to false.' },
-      },
-      required: [],
-    },
-    handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', category: 'design_delivery', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Design delivery task not found: ${args.id}` : 'No active design_delivery task found.');
-      if (task.category !== 'design_delivery') {
-        throw new Error(`Task ${task.id} is ${task.category}, not design_delivery.`);
-      }
-
-      const prepared = prepareWorkTakeoverIndustryPackage(userId, task, {
-        kind: 'design_delivery',
-        outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
-        regenerate: args.regenerate === true,
-      });
-
-      return JSON.stringify({
-        task: prepared.task,
-        files: prepared.files,
-        reused: prepared.reused,
-        note: prepared.note,
-      }, null, 2);
-    },
-    permission: 'user',
-    securityLevel: 'safe',
-  });
-
-  registry.register({
     name: 'work_takeover_task_autorun',
-    description: 'Run a bounded real-loop smoke test for work takeover. It can create a task from a provided WeChat/customer message or continue an existing active task, orchestrate it, safely advance up to maxSteps, prepare real local design_delivery and ecommerce/short-video/account-growth packages for matching tasks, stop on blockers or confirmation boundaries, export a local task packet by default, and write the full summary back to the task. It never sends, publishes, submits, pays, signs, or operates external apps by itself.',
+    description: 'Run a bounded local coordination loop for work takeover. It can create or continue a task, orchestrate safe planning steps, stop on blockers or confirmation boundaries, export a task packet, and record progress. Concrete customer, ecommerce, design, CAD, BIM, publishing, and messaging outcomes must be executed separately through their real domain tools and verified.',
     parameters: {
       type: 'object',
       properties: {
@@ -1184,10 +769,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         maxSteps: { type: 'number', description: 'Maximum safe preparation steps to advance. Defaults to 3, max 6.' },
         mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work.' },
         stopOnConfirmation: { type: 'boolean', description: 'Stop after a step that reaches confirmation boundary. Defaults to true.' },
-        prepareDesignDeliveryPackage: { type: 'boolean', description: 'For design_delivery tasks, generate the real local renovation/design package and record verification. Defaults to true.' },
-        regenerateDesignDeliveryPackage: { type: 'boolean', description: 'Regenerate the design package even if one is already recorded. Defaults to false.' },
-        prepareEcommerceGrowthPackage: { type: 'boolean', description: 'For store/account/video_publish tasks, generate the real local ecommerce/short-video growth package and record verification. Defaults to true.' },
-        regenerateEcommerceGrowthPackage: { type: 'boolean', description: 'Regenerate the ecommerce growth package even if one is already recorded. Defaults to false.' },
         exportPacket: { type: 'boolean', description: 'Export a local task packet at the end. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional folder for exported packet. Defaults to the Desktop.' },
         record: { type: 'boolean', description: 'Whether to write autorun results back to the task. Defaults to true.' },
@@ -1274,32 +855,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       plan = planWorkTakeoverExecution(currentTask, { mode });
       progress = getWorkTakeoverExecutionProgress(currentTask, plan);
       let packet: ReturnType<typeof exportWorkTakeoverPacket> | undefined;
-      let designDeliveryPackage: WorkTakeoverIndustryPackageResult | undefined;
-      let ecommerceGrowthPackage: WorkTakeoverIndustryPackageResult | undefined;
-      if (args.prepareDesignDeliveryPackage !== false && currentTask.category === 'design_delivery') {
-        designDeliveryPackage = prepareWorkTakeoverIndustryPackage(userId, currentTask, {
-          kind: 'design_delivery',
-          outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
-          regenerate: args.regenerateDesignDeliveryPackage === true,
-        });
-        currentTask = designDeliveryPackage.task;
-        stopReasons.push(designDeliveryPackage.reused ? 'design_delivery_package_reused' : 'design_delivery_package_prepared');
-        plan = planWorkTakeoverExecution(currentTask, { mode });
-        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-      }
-
-      if (args.prepareEcommerceGrowthPackage !== false && isEcommerceGrowthCategory(currentTask.category)) {
-        ecommerceGrowthPackage = prepareWorkTakeoverIndustryPackage(userId, currentTask, {
-          kind: 'ecommerce_growth',
-          outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
-          regenerate: args.regenerateEcommerceGrowthPackage === true,
-        });
-        currentTask = ecommerceGrowthPackage.task;
-        stopReasons.push(ecommerceGrowthPackage.reused ? 'ecommerce_growth_package_reused' : 'ecommerce_growth_package_prepared');
-        plan = planWorkTakeoverExecution(currentTask, { mode });
-        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-      }
-
       if (args.exportPacket !== false) {
         packet = exportWorkTakeoverPacket(currentTask, {
           outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
@@ -1351,18 +906,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         remainingStepIds: progress.remainingStepIds,
         confirmationRequired: currentTask.confirmationRequired || [],
         blockers: currentTask.blockedBy || [],
-        designDeliveryPackage: designDeliveryPackage ? {
-          reused: designDeliveryPackage.reused,
-          folder: designDeliveryPackage.files.folder,
-          verificationPassed: designDeliveryPackage.files.verificationResult.passed,
-        } : undefined,
-        ecommerceGrowthPackage: ecommerceGrowthPackage ? {
-          reused: ecommerceGrowthPackage.reused,
-          folder: ecommerceGrowthPackage.files.folder,
-          verificationPassed: ecommerceGrowthPackage.files.verificationResult.passed,
-          productName: ecommerceGrowthPackage.files.brief.productName,
-          platform: ecommerceGrowthPackage.files.brief.platform,
-        } : undefined,
         packetPath: packet?.folderPath,
       };
 
@@ -1383,7 +926,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'work_takeover_capability_reuse_probe',
-    description: 'Run a safe capability-reuse pressure test for a real work takeover task. It creates or continues a task from a customer/WeChat message, builds the normal execution plan, audits every selected capability with self_extension_plan to verify Lumi is reusing learned routes/adapters/tools/skills instead of growing duplicate code, optionally advances a few safe local steps, prepares supported local industry packages, exports a task packet, verifies the result, and writes a concise diagnostic back to the task center. It never sends messages, publishes, pays, submits, logs into accounts, switches accounts, or controls external apps.',
+    description: 'Run a safe capability-reuse pressure test for a work takeover task. It creates or continues a task, builds the normal execution plan, audits every selected capability with self_extension_plan, optionally advances safe local coordination steps, exports a task packet, verifies that coordination output, and writes a concise diagnostic back to the task center. It never substitutes generated demo packages for domain execution.',
     parameters: {
       type: 'object',
       properties: {
@@ -1399,8 +942,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work. Defaults to prepare_work.' },
         runSafeLoop: { type: 'boolean', description: 'Advance bounded safe local steps. Defaults true.' },
         stopOnConfirmation: { type: 'boolean', description: 'Stop after a step reaches a confirmation boundary. Defaults true.' },
-        prepareIndustryPackage: { type: 'boolean', description: 'Generate or reuse the matching local industry package when the category has an adapter. Defaults true.' },
-        regenerateIndustryPackage: { type: 'boolean', description: 'Regenerate the industry package even if one is already recorded. Defaults false.' },
         exportPacket: { type: 'boolean', description: 'Export a local task packet at the end. Defaults true.' },
         outputDirectory: { type: 'string', description: 'Optional folder for exported package/packet. Defaults to the Desktop.' },
         record: { type: 'boolean', description: 'Whether to write the probe result back to the task. Defaults true.' },
@@ -1425,8 +966,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         mode: args.mode ? String(args.mode) as WorkTakeoverExecutionMode : undefined,
         runSafeLoop: args.runSafeLoop !== false,
         stopOnConfirmation: args.stopOnConfirmation !== false,
-        prepareIndustryPackage: args.prepareIndustryPackage !== false,
-        regenerateIndustryPackage: args.regenerateIndustryPackage === true,
         exportPacket: args.exportPacket !== false,
         outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
         record: args.record !== false,
@@ -1434,247 +973,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         desktopRelay: context?.desktopRelay,
       });
       return JSON.stringify(result, null, 2);
-    },
-    permission: 'user',
-    securityLevel: 'safe',
-  });
-
-  registry.register({
-    name: 'work_takeover_real_smoke_run',
-    description: 'Run a verifiable real closed-loop takeover smoke test from a WeChat/customer message, clipboard text, or existing task. It creates/continues the task, builds a reusable execution plan, selects external-control routes such as Playwright browser, Windows UIA/screen perception, WeChat session reuse, WPS/CAD/Revit handoff, advances a bounded number of safe steps, prepares a matching local industry package when available, exports a local task packet, verifies files/content/drafts/desktop evidence, and writes a concise human report back to the task center. It does not send, publish, submit, pay, sign, switch accounts, bypass login, or make final commitments.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Optional existing work takeover task id. If omitted, message/clipboard/active task is used.' },
-        message: { type: 'string', description: 'Optional WeChat/customer message text to create a new task before the real smoke run.' },
-        fromClipboard: { type: 'boolean', description: 'Read message text from desktop clipboard when message is omitted. Requires desktop client relay.' },
-        contact: { type: 'string', description: 'Optional contact/customer name.' },
-        source: { type: 'string', description: 'manual, clipboard, selected_text, wechat, voice, chat.' },
-        takeoverMode: { type: 'string', description: 'Optional forced task category or auto.' },
-        userRules: { type: 'string', description: 'Optional user rules/boundaries to apply.' },
-        title: { type: 'string', description: 'Optional task title if creating from message.' },
-        maxSteps: { type: 'number', description: 'Maximum safe preparation steps to advance. Defaults to 3, max 6.' },
-        mode: { type: 'string', description: 'plan_only, prepare_work, or visible_external_work. Defaults to visible_external_work.' },
-        stopOnConfirmation: { type: 'boolean', description: 'Stop after a step reaches a confirmation boundary. Defaults to true.' },
-        prepareIndustryPackage: { type: 'boolean', description: 'Generate the matching local industry package when the category has an adapter. Defaults to true.' },
-        regenerateIndustryPackage: { type: 'boolean', description: 'Regenerate the industry package even if one is already recorded. Defaults to false.' },
-        exportPacket: { type: 'boolean', description: 'Export a local task packet at the end. Defaults to true.' },
-        includeDesktopVerification: { type: 'boolean', description: 'Collect active window, processes, and screenshot evidence when desktop relay is available. Defaults to true when available.' },
-        requireScreenEvidence: { type: 'boolean', description: 'When desktop verification is enabled, require screenshot evidence. Defaults to true.' },
-        minMatchedContentTerms: { type: 'number', description: 'Minimum expected/category content terms that must be found. Defaults to verifier behavior.' },
-        minFileBytes: { type: 'number', description: 'Minimum bytes for local artifact files to avoid accepting empty shells. Defaults to verifier behavior.' },
-        outputDirectory: { type: 'string', description: 'Optional folder for exported package/packet. Defaults to the Desktop.' },
-        record: { type: 'boolean', description: 'Whether to write the real smoke result back to the task. Defaults to true.' },
-      },
-      required: [],
-    },
-    handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const mode = executionMode(args.mode, 'visible_external_work');
-      const shouldRecord = args.record !== false;
-      const stopOnConfirmation = args.stopOnConfirmation !== false;
-      const maxSteps = Math.max(1, Math.min(Number(args.maxSteps) || 3, 6));
-      const outputDirectory = args.outputDirectory ? String(args.outputDirectory) : undefined;
-
-      let task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : null;
-      let intake: ReturnType<typeof analyzeWechatIntake> | undefined;
-      let createdTask = false;
-      let message = compact(args.message);
-
-      if (!task && args.fromClipboard === true) {
-        if (!context?.desktopRelay) throw new Error('Clipboard real smoke run requires the Lumi desktop client relay.');
-        message = compact(await context.desktopRelay('desktop_clipboard_read', {}) || '');
-        if (!message) throw new Error('Clipboard is empty. Copy the WeChat/customer message first.');
-      }
-
-      if (!task && message) {
-        intake = analyzeWechatIntake({
-          message,
-          contact: args.contact ? String(args.contact) : undefined,
-          source: args.source ? String(args.source) : (args.fromClipboard ? 'clipboard' : 'manual'),
-          takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
-          userRules: args.userRules ? String(args.userRules) : undefined,
-        });
-        task = createWorkTakeoverTaskFromWechatIntake(userId, intake, {
-          domain,
-          orgId,
-          sourceMessage: message,
-          title: args.title ? String(args.title) : undefined,
-        });
-        createdTask = true;
-      }
-
-      if (!task) {
-        task = listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      }
-      if (!task) throw new Error('No work takeover task found. Provide id, message, fromClipboard, or create a task first.');
-
-      const includeDesktopEvidence = args.includeDesktopVerification !== false && Boolean(context?.desktopRelay);
-      let currentTask: any = task;
-      let plan = planWorkTakeoverExecution(currentTask, { mode });
-      let controlRoutes = buildRealSmokeControlRoutes(currentTask, plan, { includeDesktopEvidence });
-      let progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-      const executions: any[] = [];
-      const stopReasons: string[] = [];
-
-      for (let i = 0; i < maxSteps; i++) {
-        plan = planWorkTakeoverExecution(currentTask, { mode });
-        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-        if (progress.complete) {
-          stopReasons.push('safe_steps_complete');
-          break;
-        }
-
-        const execution = executeWorkTakeoverPlanStep(currentTask, plan, {
-          stepId: progress.nextStep?.id,
-        });
-        executions.push(execution);
-
-        if (shouldRecord) {
-          currentTask = recordStepExecution(userId, currentTask, plan, execution);
-        }
-
-        if (execution.status === 'blocked') {
-          stopReasons.push('blocked');
-          break;
-        }
-        if (stopOnConfirmation && execution.status === 'waiting_confirmation') {
-          stopReasons.push('waiting_confirmation');
-          break;
-        }
-      }
-
-      plan = planWorkTakeoverExecution(currentTask, { mode });
-      progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-
-      let industryPackage: WorkTakeoverIndustryPackageResult | undefined;
-      const packageKind = packageKindForCategory(currentTask.category);
-      if (args.prepareIndustryPackage !== false && packageKind) {
-        industryPackage = prepareWorkTakeoverIndustryPackage(userId, currentTask, {
-          kind: packageKind,
-          outputDirectory,
-          regenerate: args.regenerateIndustryPackage === true,
-        });
-        currentTask = industryPackage.task;
-        stopReasons.push(industryPackage.reused
-          ? `${industryPackage.kind}_package_reused`
-          : `${industryPackage.kind}_package_prepared`);
-        plan = planWorkTakeoverExecution(currentTask, { mode });
-        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-      }
-
-      let packet: ReturnType<typeof exportWorkTakeoverPacket> | undefined;
-      if (args.exportPacket !== false) {
-        packet = exportWorkTakeoverPacket(currentTask, { outputDirectory, plan });
-        if (shouldRecord) {
-          currentTask = recordPacket(userId, currentTask, plan, packet);
-          plan = planWorkTakeoverExecution(currentTask, { mode });
-          progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-        }
-      }
-
-      controlRoutes = buildRealSmokeControlRoutes(currentTask, plan, { includeDesktopEvidence });
-      const desktopEvidence = await collectRealSmokeDesktopEvidence(context, includeDesktopEvidence);
-      const params = getTaskIndustryParameters(currentTask);
-      const verification = verifyWorkTakeoverResult(currentTask, {
-        ...desktopEvidence,
-        expectedSurfaces: expectedRealSmokeSurfaces(currentTask, includeDesktopEvidence),
-        filePaths: uniqueStrings([
-          packet?.folderPath,
-          industryPackage?.files?.folder,
-        ]),
-        draftRequired: /微信|WeChat|weixin|消息|回复|客服|客户/i.test(`${currentTask.title} ${currentTask.summary} ${currentTask.sourceMessage}`),
-        requireActiveWindow: includeDesktopEvidence,
-        requireScreenEvidence: includeDesktopEvidence && args.requireScreenEvidence !== false,
-        requiredArtifactLabels: realSmokeRequiredLabels(currentTask),
-        expectedContentTerms: uniqueStrings([
-          ...(params?.expectedContentTerms || []),
-          ...realSmokeExpectedTerms(currentTask),
-        ]),
-        minMatchedContentTerms: args.minMatchedContentTerms,
-        minFileBytes: args.minFileBytes,
-      });
-      const report = realSmokeHumanReport({
-        task: currentTask,
-        executions,
-        stopReasons: stopReasons.length ? stopReasons : ['max_steps_reached'],
-        packet,
-        industryPackage,
-        verification,
-        controlRoutes,
-      });
-
-      if (shouldRecord) {
-        const status: WorkTakeoverStatus = verification.status === 'blocked'
-          ? 'blocked'
-          : verification.status === 'needs_review' || report.nextConfirmations.length > 0
-          ? 'waiting_confirmation'
-          : currentTask.status === 'queued'
-          ? 'in_progress'
-          : currentTask.status;
-        currentTask = updateWorkTakeoverTask(userId, currentTask.id, {
-          status,
-          result: report.humanSummary,
-          blockedBy: verification.status === 'blocked'
-            ? uniqueStrings([...currentTask.blockedBy, ...verification.blockers])
-            : undefined,
-          artifact: {
-            type: 'checklist',
-            label: '真实闭环小测试记录',
-            content: renderRealSmokeRecord({
-              report,
-              executions,
-              stopReasons: stopReasons.length ? stopReasons : ['max_steps_reached'],
-              controlRoutes,
-              verification,
-              packet,
-              industryPackage,
-            }),
-            status: verification.passed ? 'prepared' : 'needs_review',
-          },
-          metadata: {
-            workTakeoverVerification: verification,
-            workTakeoverRealSmokeRun: {
-              createdTask,
-              intake,
-              mode,
-              maxSteps,
-              executions,
-              progress,
-              stopReasons: stopReasons.length ? stopReasons : ['max_steps_reached'],
-              controlRoutes,
-              packet,
-              industryPackage: industryPackage ? {
-                kind: industryPackage.kind,
-                reused: industryPackage.reused,
-                files: industryPackage.files,
-                note: industryPackage.note,
-              } : undefined,
-              verification,
-              report,
-              updatedAt: new Date().toISOString(),
-            },
-          },
-          note: report.humanSummary,
-        } as any) || currentTask;
-      }
-
-      return JSON.stringify({
-        intake,
-        createdTask,
-        task: currentTask,
-        plan,
-        progress,
-        controlRoutes,
-        executions,
-        industryPackage,
-        packet,
-        verification,
-        report,
-        note: 'Real smoke run finished. The concise report is in report.humanSummary; external side effects remain confirmation-gated.',
-      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',

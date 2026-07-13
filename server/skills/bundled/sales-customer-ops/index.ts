@@ -13,7 +13,7 @@ function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-const server = new McpServer({ name: 'sales-customer-ops', version: '1.0.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'sales-customer-ops', version: '1.2.0' }, { capabilities: { tools: {} } });
 
 server.registerTool('lead_score', {
   description: 'Score a sales lead from notes and identify signals, grade, and next best action.',

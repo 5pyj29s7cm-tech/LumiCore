@@ -17,11 +17,6 @@ import {
   type WorkTakeoverTask,
 } from './tasks';
 import { exportWorkTakeoverPacket, type WorkTakeoverPacket } from './task_packet';
-import {
-  packageKindForCategory,
-  prepareWorkTakeoverIndustryPackage,
-  type WorkTakeoverIndustryPackageResult,
-} from './industry_packages';
 import { verifyWorkTakeoverResult, type WorkTakeoverResultVerification } from './result_verifier';
 import { buildSelfExtensionPlan, type SelfExtensionPlan } from '../self_extension/pipeline';
 import type { ToolDefinition } from '../tools/types';
@@ -42,8 +37,6 @@ export interface WorkTakeoverCapabilityReuseProbeOptions {
   mode?: WorkTakeoverExecutionMode;
   runSafeLoop?: boolean;
   stopOnConfirmation?: boolean;
-  prepareIndustryPackage?: boolean;
-  regenerateIndustryPackage?: boolean;
   exportPacket?: boolean;
   outputDirectory?: string;
   record?: boolean;
@@ -104,7 +97,6 @@ export interface WorkTakeoverCapabilityReuseProbeResult {
     summary: CapabilityReuseAuditSummary;
   };
   executions: WorkTakeoverStepExecutionResult[];
-  industryPackage?: WorkTakeoverIndustryPackageResult;
   packet?: WorkTakeoverPacket;
   verification: WorkTakeoverResultVerification;
   report: CapabilityReuseProbeReport;
@@ -317,15 +309,10 @@ function expectedContentTerms(task: WorkTakeoverTask): string[] {
   ]);
 }
 
-function requiredArtifactLabels(task: WorkTakeoverTask): string[] {
-  const params = task.metadata?.industryParameters;
-  const packageKind = packageKindForCategory(task.category);
-  return uniqueStrings([
-    ...(Array.isArray(params?.requiredArtifactLabels) ? params.requiredArtifactLabels : []),
-    packageKind === 'design_delivery' ? '装修设计交付包' : undefined,
-    packageKind === 'ecommerce_growth' ? '电商/短视频接管交付包' : undefined,
-    '工作接管任务包',
-  ]);
+function requiredProbeArtifactLabels(): string[] {
+  // A capability probe validates coordination only. Domain deliverables must be
+  // produced and verified by their real tools, outside this safe local loop.
+  return ['工作接管任务包'];
 }
 
 function buildHumanReport(input: {
@@ -334,13 +321,11 @@ function buildHumanReport(input: {
   verification: WorkTakeoverResultVerification;
   task: WorkTakeoverTask;
   packet?: WorkTakeoverPacket;
-  industryPackage?: WorkTakeoverIndustryPackageResult;
 }): CapabilityReuseProbeReport {
   const done = uniqueStrings([
     `审计 ${input.audit.summary.totalCapabilities} 个任务能力`,
     `复用 ${input.audit.summary.reusedCapabilities} 个已有能力路线`,
     input.executions.length ? `安全推进 ${input.executions.length} 步` : '完成计划级压测',
-    input.industryPackage ? (input.industryPackage.reused ? '复用已有行业交付包' : '生成本地行业交付包') : undefined,
     input.packet ? '导出本地任务包' : undefined,
     input.verification.passed ? '结果验证通过' : '完成结果验证并标出待复核项',
   ]);
@@ -469,17 +454,6 @@ export async function runWorkTakeoverCapabilityReuseProbe(
     }
   }
 
-  let industryPackage: WorkTakeoverIndustryPackageResult | undefined;
-  const packageKind = packageKindForCategory(currentTask.category);
-  if (shouldRecord && options.prepareIndustryPackage !== false && packageKind) {
-    industryPackage = prepareWorkTakeoverIndustryPackage(userId, currentTask, {
-      outputDirectory: options.outputDirectory,
-      regenerate: options.regenerateIndustryPackage === true,
-      kind: packageKind,
-    });
-    currentTask = industryPackage.task;
-  }
-
   plan = planWorkTakeoverExecution(currentTask, { mode });
   progress = getWorkTakeoverExecutionProgress(currentTask, plan);
 
@@ -493,12 +467,16 @@ export async function runWorkTakeoverCapabilityReuseProbe(
 
   const capabilityReuseAudit = buildCapabilityReuseAudit(userId, currentTask, plan, options.tools || []);
   const verification = verifyWorkTakeoverResult(currentTask, {
-    filePaths: uniqueStrings([packet?.folderPath, industryPackage?.files?.folder]),
-    requiredArtifactLabels: requiredArtifactLabels(currentTask),
+    filePaths: uniqueStrings([
+      packet?.folderPath,
+      ...(packet?.files.map(file => file.path) || []),
+    ]),
+    requiredArtifactLabels: requiredProbeArtifactLabels(),
     expectedContentTerms: expectedContentTerms(currentTask),
     draftRequired: /微信|WeChat|weixin|消息|回复|客服|客户/i.test(`${currentTask.title} ${currentTask.summary} ${currentTask.sourceMessage}`),
     requireScreenEvidence: false,
     requireActiveWindow: false,
+    requireExternalOutcome: false,
   });
   const report = buildHumanReport({
     audit: capabilityReuseAudit,
@@ -506,7 +484,6 @@ export async function runWorkTakeoverCapabilityReuseProbe(
     verification,
     task: currentTask,
     packet,
-    industryPackage,
   });
 
   if (shouldRecord) {
@@ -541,12 +518,6 @@ export async function runWorkTakeoverCapabilityReuseProbe(
           mode,
           executions,
           capabilityReuseAudit,
-          industryPackage: industryPackage ? {
-            kind: industryPackage.kind,
-            reused: industryPackage.reused,
-            files: industryPackage.files,
-            note: industryPackage.note,
-          } : undefined,
           packet,
           verification,
           report,
@@ -565,7 +536,6 @@ export async function runWorkTakeoverCapabilityReuseProbe(
     progress,
     capabilityReuseAudit,
     executions,
-    industryPackage,
     packet,
     verification,
     report,
