@@ -40,6 +40,28 @@ describe('Lumi action contract', () => {
     expect(contract.preferredTools).not.toContain('wechat_send_message');
   });
 
+  it('does not let injected attachment prose reclassify a CAD task as messaging', () => {
+    const text = [
+      '把这幅图画成cad图',
+      '## Current Turn Attachments',
+      'The user attached these files to the current message. Treat them as part of the user request.',
+      'Local path: C:\\Users\\me\\LumiOS\\data\\knowledge\\plan.jpg',
+    ].join('\n\n');
+    const contract = buildActionContract(text);
+
+    expect(contract.kind).toBe('cad_drafting');
+    expect(requiresVisibleAutoCadExecution(text)).toBe(true);
+    expect(contract.preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(contract.preferredTools).not.toContain('cad_generate_dxf');
+    expect(contract.preferredTools).not.toContain('wechat_send_message');
+  });
+
+  it('treats message as a send action only when it has a directed recipient', () => {
+    expect(buildActionContract('Message Alice that I will arrive at three.').kind).toBe('messaging_send');
+    expect(buildActionContract('The current message has an image attachment.').kind).not.toBe('messaging_send');
+    expect(buildActionContract("Reply with exactly 'OK' and nothing else.").kind).not.toBe('messaging_send');
+  });
+
   it('treats directed person-to-person sends as real messaging work', () => {
     const contract = buildActionContract('\u7ed9\u5f20\u4e09\u53d1\u4e0b\u5348\u4e09\u70b9\u5f00\u4f1a');
 
@@ -256,7 +278,7 @@ describe('Lumi action contract', () => {
       id: 'mcp-run',
       name: 'mcp_cad-drafting_autocad_playback_file',
       arguments: { operationsPath: 'C:\\Users\\me\\Desktop\\plan_operations.json' },
-      result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true}',
+      result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true,"geometryVerified":true,"entityCountMatches":true,"operationCount":46,"expectedEntityCount":46,"entitiesAdded":46,"operationSetId":"verified-operation-set"}',
     }])).toBe(true);
     expect(buildActionContract(text).preferredTools).toContain('cad_prepare_autocad_operations');
     expect(buildActionContract(text).preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
@@ -281,12 +303,12 @@ describe('Lumi action contract', () => {
       id: 'geometry',
       name: 'floorplan_extract_geometry',
       arguments: { imagePath: 'C:\\source\\plan.png', knownDimensions: '9000 x 7600 mm' },
-      result: '{"geometryReady":true,"cadGenerateDxfArgs":{"width":9000,"height":7600,"sourcePath":"C:\\\\source\\\\plan.png","walls":[{"x1":0,"y1":0,"x2":9000,"y2":0}],"rooms":[{"name":"Living","x":0,"y":0,"width":4500,"height":3800}]}}',
+      result: '{"geometryReady":true,"geometryVerified":true,"geometryReceiptPath":"C:\\\\source\\\\plan.geometry-receipt.json","cadGenerateDxfArgs":{"width":9000,"height":7600,"sourcePath":"C:\\\\source\\\\plan.png","walls":[{"x1":0,"y1":0,"x2":9000,"y2":0}],"rooms":[{"name":"Living","x":0,"y":0,"width":4500,"height":3800}]}}',
     }, {
       id: 'dxf',
       name: 'cad_generate_dxf',
       arguments: { sourcePath: 'C:\\source\\plan.png', width: 9000, height: 7600, walls: [{ x1: 0, y1: 0, x2: 9000, y2: 0 }] },
-      result: '{"path":"C:\\\\output\\\\plan.dxf","bytes":2400}',
+      result: '{"path":"C:\\\\output\\\\plan.dxf","bytes":2400,"geometryVerified":true,"geometryValidation":{"passed":true},"geometryReceiptPath":"C:\\\\source\\\\plan.geometry-receipt.json"}',
     }, {
       id: 'verify-dxf',
       name: 'work_product_verify',
@@ -311,7 +333,7 @@ describe('Lumi action contract', () => {
       id: 'mcp',
       name: 'mcp_cad-drafting_autocad_playback_file',
       arguments: {},
-      result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true}',
+      result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true,"geometryVerified":true,"entityCountMatches":true,"operationCount":46,"expectedEntityCount":46,"entitiesAdded":46,"operationSetId":"verified-operation-set"}',
     }];
 
     expect(requiresAutoCadMcpPlayback(text)).toBe(true);

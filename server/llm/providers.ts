@@ -9,6 +9,8 @@ export type MessageContent =
   | null
   | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }>;
 
+export type LLMResponseFormat = 'json_object';
+
 export interface NormalizedMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: MessageContent;
@@ -176,6 +178,7 @@ export function formatDeepSeekRequest(params: {
   toolDeclarations: ToolDeclaration[];
   maxTokens?: number;
   userId?: string;
+  responseFormat?: LLMResponseFormat;
 }): {
   model: string;
   messages: Array<{ role: string; content: MessageContent; tool_calls?: any; tool_call_id?: string }>;
@@ -183,6 +186,7 @@ export function formatDeepSeekRequest(params: {
   tool_choice?: string;
   max_tokens?: number;
   user?: string;
+  response_format?: { type: 'json_object' };
 } {
   const openaiMessages = buildOpenAICompatibleMessages(params.messages);
 
@@ -194,6 +198,7 @@ export function formatDeepSeekRequest(params: {
     ...(hasTools ? { tools: params.toolDeclarations, tool_choice: 'auto' } : {}),
     ...(params.maxTokens ? { max_tokens: params.maxTokens } : {}),
     ...(params.userId ? { user: params.userId.replace(/[^a-zA-Z0-9_-]/g, '_') } : {}),
+    ...(params.responseFormat === 'json_object' ? { response_format: { type: 'json_object' as const } } : {}),
   };
 }
 
@@ -271,8 +276,14 @@ export function formatGeminiRequest(params: {
   messages: NormalizedMessage[];
   toolDeclarations: ToolDeclaration[];
   maxTokens?: number;
+  responseFormat?: LLMResponseFormat;
 }): {
-  modelConfig: { model: string; systemInstruction?: string; tools?: Array<{ functionDeclarations: any[] }> };
+  modelConfig: {
+    model: string;
+    systemInstruction?: string;
+    tools?: Array<{ functionDeclarations: any[] }>;
+    generationConfig?: { maxOutputTokens?: number; responseMimeType?: string };
+  };
   contents: Array<{ role: string; parts: any[] }>;
 } {
   // Extract system message for Gemini's separate systemInstruction param
@@ -356,6 +367,12 @@ export function formatGeminiRequest(params: {
       })),
     }];
   }
+  if (params.maxTokens || params.responseFormat === 'json_object') {
+    modelConfig.generationConfig = {
+      ...(params.maxTokens ? { maxOutputTokens: params.maxTokens } : {}),
+      ...(params.responseFormat === 'json_object' ? { responseMimeType: 'application/json' } : {}),
+    };
+  }
 
   return { modelConfig, contents };
 }
@@ -401,12 +418,14 @@ export function formatQwenRequest(params: {
   toolDeclarations: ToolDeclaration[];
   maxTokens?: number;
   userId?: string;
+  responseFormat?: LLMResponseFormat;
 }): {
   model: string;
   messages: Array<{ role: string; content: MessageContent; tool_calls?: any; tool_call_id?: string }>;
   tools?: ToolDeclaration[];
   tool_choice?: string;
   max_tokens?: number;
+  response_format?: { type: 'json_object' };
 } {
   const openaiMessages = buildOpenAICompatibleMessages(params.messages);
 
@@ -417,6 +436,7 @@ export function formatQwenRequest(params: {
     messages: openaiMessages,
     ...(hasTools ? { tools: params.toolDeclarations, tool_choice: 'auto' } : {}),
     ...(params.maxTokens ? { max_tokens: params.maxTokens } : {}),
+    ...(params.responseFormat === 'json_object' ? { response_format: { type: 'json_object' as const } } : {}),
     // DashScope does not support the OpenAI `user` parameter — omit it
   };
 }
@@ -509,7 +529,7 @@ export function parseAnthropicResponse(rawResponse: any): NormalizedLLMResponse 
 export async function makeLLMCall(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
-  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string },  getDeepSeek: () => any,
+  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; responseFormat?: LLMResponseFormat },  getDeepSeek: () => any,
   getGemini: () => any,
   getOpenAI?: () => any,
   getAnthropic?: () => any,
@@ -595,6 +615,7 @@ export async function makeLLMCall(
       messages,
       toolDeclarations,
       maxTokens: maxTokens,
+      responseFormat: config.responseFormat,
       ...(isLocal ? {} : { userId: config.userId }),
     });
     if (config.provider === 'xiaomi') {
@@ -618,6 +639,7 @@ export async function makeLLMCall(
       messages,
       toolDeclarations,
       maxTokens: maxTokens,
+      responseFormat: config.responseFormat,
     });
 
     const modelInstance = client.getGenerativeModel(modelConfig);
@@ -638,6 +660,7 @@ export async function makeLLMCall(
       toolDeclarations,
       maxTokens: maxTokens,
       userId: config.userId,
+      responseFormat: config.responseFormat,
     });
     if (isReasoningModel(config.model)) {
       if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;

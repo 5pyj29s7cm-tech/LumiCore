@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage } from '../tools/types';
-import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from './providers';
+import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback, type LLMResponseFormat } from './providers';
 import { recordTokenUsage } from './token_tracker';
 import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
@@ -16,6 +16,7 @@ export interface LLMConfig {
   userId?: string;
   domain?: string;
   orgId?: string;
+  responseFormat?: LLMResponseFormat;
 }
 
 export interface LLMResult {
@@ -772,7 +773,7 @@ export function parseScreenshotBase64(relayResult: string): { base64: string; mi
 export async function analyzeScreen(
   imageBase64: string,
   query: string,
-  config: { provider: string; model: string; userId?: string; maxTokens?: number },
+  config: { provider: string; model: string; userId?: string; maxTokens?: number; responseFormat?: LLMResponseFormat },
   getDeepSeek?: () => any,
   getGemini?: () => any,
   getOpenAI?: () => any,
@@ -819,7 +820,13 @@ export async function analyzeScreen(
 
   const result = await makeLLMCall(
     messages, [],
-    { provider: provider as any, model, maxTokens: config.maxTokens || 1000, userId: config.userId },
+    {
+      provider: provider as any,
+      model,
+      maxTokens: config.maxTokens || 1000,
+      userId: config.userId,
+      responseFormat: config.responseFormat,
+    },
     getDeepSeek || (() => null), getGemini || (() => null),
     getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk,
     getXiaomi, getKimi, getGlm, getRelay,

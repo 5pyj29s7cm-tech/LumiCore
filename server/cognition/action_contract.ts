@@ -54,6 +54,15 @@ function matches(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
 }
 
+const INJECTED_TASK_CONTEXT_RE = /(?:^|\r?\n)\s*##\s+(?:Current Turn Attachments|Recent action continuation context|Internal client-surface continuation context)\b/i;
+
+function extractPrimaryTaskText(input: string): string {
+  const raw = String(input || '');
+  const marker = INJECTED_TASK_CONTEXT_RE.exec(raw);
+  if (!marker || marker.index <= 0) return raw;
+  return raw.slice(0, marker.index).trim();
+}
+
 function isCustomerOperationsTurn(text: string): boolean {
   const customerSurface = /(?:\u5ba2\u6237|\u9500\u552e|\u7ebf\u7d22|\u552e\u540e|\u5ba2\u670d|\u5de5\u5355|\u5546\u673a|\u5ba2\u6237\u5173\u7cfb|\bCRM\b|customer|sales|lead|after[-\s]?sales|support\s+ticket)/iu.test(text);
   const operationalIntent = /(?:\u63a5\u7ba1|\u8ddf\u8fdb|\u63a8\u8fdb|\u5904\u7406|\u5206\u6790|\u8bc4\u5206|\u62a5\u4ef7|\u56de\u8bbf|\u6210\u4ea4|\u5f02\u8bae|\u5206\u7c7b|\u6d3e\u5355|\u7ef4\u62a4|\u8fd0\u8425|take\s*over|follow\s*up|advance|triage|qualif|score|quote|handle|operate|manage)/iu.test(text);
@@ -92,12 +101,18 @@ function hasNegatedMessagingSendIntent(text: string): boolean {
 export function requiresVisibleAutoCadExecution(input: string): boolean {
   const text = compact(input);
   if (!text) return false;
+  const explicitDxfArtifactOnly = /\bDXF\b/i.test(text)
+    && !/\bAutoCAD\b|\bacad(?:\.exe)?\b/i.test(text)
+    && /(?:\u6587\u4ef6|\u5bfc\u51fa|\u751f\u6210|\u521b\u5efa|\u53ef\u7f16\u8f91|file|export|generate|create|editable)/iu.test(text);
+  if (explicitDxfArtifactOnly) return false;
   const mentionsCadSurface =
-    /(?:\bAutoCAD\b|\bacad(?:\.exe)?\b|(?:CAD|cad)\s*(?:\u8f6f\u4ef6|\u7a97\u53e3|\u754c\u9762|\u91cc|\u4e2d|app)|(?:\u5728|\u7528).{0,16}(?:AutoCAD|CAD|cad))/iu.test(text);
+    /(?:\bAutoCAD\b|\bacad(?:\.exe)?\b|\bCAD\b|(?:CAD|cad)\s*(?:\u56fe|\u56fe\u7eb8|\u8f6f\u4ef6|\u7a97\u53e3|\u754c\u9762|\u91cc|\u4e2d|app)|(?:\u5728|\u7528).{0,16}(?:AutoCAD|CAD|cad))/iu.test(text);
   const wantsVisibleDrawing =
     /(?:\u5b9e\u9645|\u771f\u6b63|\u53ef\u89c1|\u5b9e\u64cd|\u64cd\u4f5c|\u6253\u5f00|\u542f\u52a8|\u8fdb\u5165).{0,32}(?:\u753b|\u7ed8\u5236|\u6267\u884c|\u8dd1)|(?:\u753b\u51fa\u6765|\u7ed8\u5236\u51fa\u6765|\u4e00\u7b14\u4e00\u7b14|\u53ef\u89c1\u7ed8\u56fe|\u5b9e\u64cd\u753b\u56fe)/u.test(text)
+    || /(?:\u753b|\u7ed8\u5236|\u51fa\u56fe|\u751f\u6210|\u521b\u5efa|\u8f6c\u6210|\u8fd8\u539f).{0,32}(?:AutoCAD|CAD|cad|\u56fe\u7eb8)|(?:AutoCAD|CAD|cad).{0,32}(?:\u753b|\u7ed8\u5236|\u51fa\u56fe|\u81ea\u52a8\u753b\u56fe)/iu.test(text)
     || /\b(?:actually|visible|visibly|real|run|execute|open|launch|stroke[-\s]?by[-\s]?stroke|step[-\s]?by[-\s]?step).{0,32}(?:draw|drawing|script|AutoCAD|CAD)\b/i.test(text)
-    || /\b(?:draw|draft|render)\b.{0,32}\b(?:in|inside|through|with)\s+(?:AutoCAD|CAD)\b/i.test(text);
+    || /\b(?:draw|draft|render|create|generate|convert)\b.{0,32}\b(?:in|inside|through|with|to|as)?\s*(?:AutoCAD|CAD)\b/i.test(text)
+    || /\b(?:AutoCAD|CAD)\b.{0,32}\b(?:draw|drawing|draft|render)\b/i.test(text);
   return mentionsCadSurface && wantsVisibleDrawing;
 }
 
@@ -132,7 +147,13 @@ export function hasVisibleAutoCadExecutionEvidence(
     return payload?.status === 'completed'
       && payload?.transport === 'mcp_autocad_com'
       && payload?.visiblePlayback === true
-      && payload?.completionMarkerExists === true;
+      && payload?.completionMarkerExists === true
+      && payload?.geometryVerified === true
+      && payload?.entityCountMatches === true
+      && Number(payload?.operationCount) > 0
+      && Number(payload?.operationCount) === Number(payload?.expectedEntityCount)
+      && Number(payload?.entitiesAdded) === Number(payload?.expectedEntityCount)
+      && Boolean(String(payload?.operationSetId || '').trim());
   });
 }
 
@@ -314,11 +335,19 @@ function buildDesignDeliveryContract(): LumiActionContract {
 }
 
 export function buildActionContract(input: string): LumiActionContract {
-  const text = compact(input);
+  const rawInput = String(input || '');
+  const primaryTaskText = extractPrimaryTaskText(rawInput);
+  if (primaryTaskText && primaryTaskText.trim() !== rawInput.trim()) {
+    const primaryContract = buildActionContract(primaryTaskText);
+    if (primaryContract.applies && primaryContract.kind !== 'none') return primaryContract;
+  }
+
+  const text = compact(rawInput);
   if (!text) return NONE_CONTRACT;
   const negatedMessagingSend = hasNegatedMessagingSendIntent(text);
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
-  const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u);
+  const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
+    || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
 
   if (isRemoteLegalMessageTurn(text)) {
     return buildLegalDocumentContract();
@@ -355,8 +384,8 @@ export function buildActionContract(input: string): LumiActionContract {
     (
       directedMessageSend ||
       (
-        matches(text, /wechat|weixin|\u5fae\u4fe1|\u6d88\u606f|\u8054\u7cfb\u4eba|\u7fa4|message|reply/i) &&
-        matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\bmessage\b/i)
+        matches(text, /wechat|weixin|\u5fae\u4fe1|\u6d88\u606f|\u8054\u7cfb\u4eba|\u7fa4|message|messaging\s+app|chat\s+app/i) &&
+        matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\breply\b/i)
       )
     ) &&
     !negatedMessagingSend &&
@@ -440,14 +469,14 @@ export function buildActionContract(input: string): LumiActionContract {
       coreAction: '\u751f\u6210\u6216\u64cd\u4f5c CAD \u56fe\u7eb8\uff0c\u786e\u8ba4\u6587\u4ef6\u4ea7\u7269\u6216\u53ef\u89c1\u8f6f\u4ef6\u7ed8\u5236\u7ed3\u679c',
       preparationIsNotCompletion: ['\u8ba1\u7b97\u65b9\u6848', '\u5199\u51fa\u811a\u672c', '\u6253\u5f00 CAD \u8f6f\u4ef6', '\u67e5\u770b\u6587\u4ef6\u5939', '\u53ea\u751f\u6210 DXF/\u65b9\u6848\u5305'],
       requiredEvidence: visibleAutoCad
-        ? ['created operations JSON path with nonzero size', 'mcp_cad-drafting_autocad_playback_file result with transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true']
+        ? ['source geometry receipt with geometryVerified=true', 'created operations JSON with a verified operationSetId', 'mcp_cad-drafting_autocad_playback_file completion marker with exact operationCount, expectedEntityCount, and entitiesAdded equality']
         : ['created CAD/DXF file path with nonzero size and successful file verification'],
       preferredTools: visibleAutoCad
         ? ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
         : ['floorplan_extract_geometry', 'cad_generate_dxf', 'desktop_path_info', 'work_product_verify'],
       verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen', 'desktop_active_window'],
       nextStep: visibleAutoCad
-        ? 'Extract structured geometry, prepare the operations JSON, then run AutoCAD MCP/COM playback and verify its completion marker. If playback fails, report the exact blocker.'
+        ? 'Run staged source extraction, require geometryReady=true, and pass only its server-owned receipt to CAD preparation. Then run AutoCAD MCP/COM playback and require both marker and entity-delta verification. If any stage fails, stop and report the exact blocker.'
         : 'Extract structured geometry, create the requested CAD file, and verify the file exists and is non-empty.',
       caution: 'A DXF/DWG file, operations JSON, opened AutoCAD window, desktop screenshot, or any script is not evidence that visible AutoCAD drawing completed.',
     });
@@ -671,18 +700,34 @@ function hasGroundedCadGeometryEvidence(records: ToolExecutionRecord[]): boolean
       const geometry = payload?.cadGenerateDxfArgs && typeof payload.cadGenerateDxfArgs === 'object'
         ? payload.cadGenerateDxfArgs
         : payload;
-      const width = Number(geometry?.width);
-      const height = Number(geometry?.height);
+      const width = Number(geometry?.width ?? payload?.geometryReview?.width);
+      const height = Number(geometry?.height ?? payload?.geometryReview?.height);
       const geometryCount = [geometry?.walls, geometry?.rooms, geometry?.doors, geometry?.windows]
-        .reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0);
-      return payload?.geometryReady !== false && width > 0 && height > 0 && geometryCount > 0
+        .reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0)
+        + Number(payload?.geometryReview?.counts?.outerBoundary || 0)
+        + Number(payload?.geometryReview?.counts?.walls || 0)
+        + Number(payload?.geometryReview?.counts?.rooms || 0)
+        + Number(payload?.geometryReview?.counts?.doors || 0)
+        + Number(payload?.geometryReview?.counts?.windows || 0);
+      return payload?.geometryReady === true
+        && payload?.geometryVerified === true
+        && Boolean(String(payload?.geometryReceiptPath || '').trim())
+        && width > 0 && height > 0 && geometryCount > 0
         && !/No configured vision model|not available|failed|blocked/i.test(String(record.result || ''));
     }
     if (!/^(?:cad_generate_dxf|cad_prepare_autocad_operations)$/i.test(record.name)) return false;
     const args = record.arguments || {};
+    const payload = parseRecordJson(record);
     const geometryCount = [args.walls, args.polylines, args.rooms, args.doors, args.windows]
-      .reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0);
-    return Boolean(String(args.sourcePath || '').trim()) && geometryCount > 0;
+      .reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0)
+      + (Array.isArray(args.outerBoundary) ? args.outerBoundary.length : 0)
+      + Number(payload?.outerBoundaryPointCount || 0)
+      + Number(payload?.operationCount || 0);
+    return Boolean(String(args.sourcePath || payload?.sourcePath || payload?.geometryReceiptPath || '').trim())
+      && geometryCount > 0
+      && payload?.geometryVerified === true
+      && payload?.geometryValidation?.passed === true
+      && Boolean(String(payload?.geometryReceiptPath || '').trim());
   });
 }
 

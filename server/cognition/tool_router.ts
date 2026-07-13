@@ -1,7 +1,7 @@
 import { ToolPolicy } from '../personality/types';
 import { ToolRegistry } from '../tools/registry';
 import { mcpManager } from '../mcp/client';
-import { requiresVisibleAutoCadExecution } from './action_contract';
+import { buildActionContract, requiresVisibleAutoCadExecution } from './action_contract';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -925,11 +925,17 @@ export function routeToolsForTurn(
   const selected = new Set<string>();
   const categories: string[] = [];
   const reasons: string[] = [];
+  const actionContract = buildActionContract(text);
 
   for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
 
   for (const route of ROUTES) {
     if (!routeMatches(route, text)) continue;
+    if (
+      route.category === 'messaging' &&
+      !hasNamedMessagingSurface(text) &&
+      !['messaging_read', 'messaging_send'].includes(actionContract.kind)
+    ) continue;
     if (route.category === 'messaging' && hasNegatedMessagingSendIntent(text) && !hasNamedMessagingSurface(text)) continue;
     if (route.category === 'messaging' && isDesktopAiCollaboration(text) && !hasNamedMessagingSurface(text)) continue;
     if (

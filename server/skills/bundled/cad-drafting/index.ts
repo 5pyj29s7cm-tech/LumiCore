@@ -8,7 +8,7 @@ function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-const server = new McpServer({ name: 'cad-drafting', version: '1.5.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'cad-drafting', version: '1.6.1' }, { capabilities: { tools: {} } });
 
 server.registerTool('cad_space_program', {
   description: 'Create a room/space program with estimated areas, adjacency notes, and drafting assumptions.',
@@ -55,7 +55,7 @@ server.registerTool('cad_drafting_checklist', {
 }));
 
 server.registerTool('autocad_playback_file', {
-  description: 'Control the real Windows AutoCAD application through its COM automation API and visibly create each validated line, circle, arc, or text operation one at a time. Reads a Lumi-generated operations JSON file, opens a separate drawing by default, refreshes AutoCAD after every operation, waits between strokes, and writes a completion marker only after the visible playback finishes. This is Lumi MCP automation for AutoCAD, not an Autodesk-official MCP server.',
+  description: 'Control real Windows AutoCAD through COM and visibly create each source-verified entity one at a time. The operation-set identity, progress state, and entity delta are verified. Interrupted runs resume the same document or stop instead of replaying duplicates. A completion marker is written only after every expected entity exists.',
   inputSchema: {
     operationsPath: z.string().describe('Path to the operations JSON produced by cad_prepare_autocad_operations.'),
     completionMarkerPath: z.string().describe('Marker file written only after every AutoCAD operation completes.'),

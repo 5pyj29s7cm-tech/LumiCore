@@ -609,7 +609,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'CAD drafting adapter',
     kind: 'external_app',
     actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_list_apps', 'desktop_open'],
-    notes: 'Lumi can extract CAD-ready geometry from plan images, generate explicit structured DXF deliverables, prepare an auditable entity operations list, and use the CAD MCP/COM bridge to draw those entities visibly in real AutoCAD. Visible AutoCAD completion requires transport=mcp_autocad_com, visiblePlayback=true, and a completion marker. There is no LISP, SCRIPT, batch-command, cursor-drawing, or finished-file fallback. Production drawings still require user review and confirmed site dimensions.',
+    notes: 'Lumi traces plan images in separate exterior, wall-topology, and opening passes, then requires deterministic and visual source comparison. Executable geometry stays in a server-owned receipt so coordinates are never reconstructed in chat. Visible AutoCAD completion requires the verified operation set, MCP/COM playback, its completion marker, and an exact entity-count delta. Interrupted runs resume the same document or stop; they never replay into a duplicate drawing. There is no LISP, SCRIPT, batch-command, cursor-drawing, or finished-file fallback.',
     requiresConfirmation: false,
     stateKeys: ['permissions', 'tools'],
   },

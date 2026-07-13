@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -13,6 +14,16 @@ import { analyzeScreen } from '../../llm/adapter';
 import { getUserPreferredVisionConfig, type VisionProvider } from '../../llm/vision_preferences';
 import { captureWindowsUiSnapshot } from '../../external_control/windows_uia';
 import { getMember, logAudit } from '../../org/db';
+import {
+  cadGeometryHash,
+  hydrateCadGeometryFromReceipt,
+  isImageCadSource,
+  normalizeCadBoundary,
+  validateCadGeometry,
+  verifyCadGeometryReceipt,
+  type CadGeometryReceipt,
+  type CadGeometryValidation,
+} from '../../cad/geometry_verification';
 import {
   sendLocalFileToPersonalWeChat,
   WeChatFileApiUnavailableError,
@@ -478,10 +489,16 @@ function buildDxf(args: Record<string, any>): string {
   const columns = Array.isArray(args.columns) ? args.columns : [];
   const polylines = Array.isArray(args.polylines) ? args.polylines : [];
   const wallThickness = asFiniteNumber(args.wallThickness, 0);
+  const outerBoundary = normalizeCadBoundary(args);
+  const sourceLineworkOwnsOutline = args?.sourceTopology?.traceMode === 'opencv_source_linework';
   const entities: string[] = [
     '0', 'SECTION', '2', 'ENTITIES',
-    ...buildRoundedRectEntities(width, height, radius),
   ];
+  if (outerBoundary.length >= 3 && !sourceLineworkOwnsOutline) {
+    entities.push(...dxfPolyline(outerBoundary, 'OUTLINE', true));
+  } else if (!isImageCadSource(args.sourcePath) && args.rectangularOutline !== false) {
+    entities.push(...buildRoundedRectEntities(width, height, radius));
+  }
 
   for (const polyline of polylines.slice(0, 240)) {
     const points = pointList(polyline?.points || polyline);
@@ -603,6 +620,8 @@ function buildCadPreviewSvg(args: Record<string, any>, title: string): string {
   const columns = Array.isArray(args.columns) ? args.columns : [];
   const polylines = Array.isArray(args.polylines) ? args.polylines : [];
   const wallThickness = asFiniteNumber(args.wallThickness, 0);
+  const outerBoundary = normalizeCadBoundary(args);
+  const sourceLineworkOwnsOutline = args?.sourceTopology?.traceMode === 'opencv_source_linework';
   const margin = Math.max(width, height) * 0.05;
   const titleBlockMargin = args.titleBlock === false ? 0 : Math.max(900, height * 0.12);
   const viewBox = `${-margin} ${-margin} ${width + margin * 2} ${height + margin * 2 + titleBlockMargin}`;
@@ -617,8 +636,12 @@ function buildCadPreviewSvg(args: Record<string, any>, title: string): string {
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="960" height="640">`,
     '<rect x="-100000" y="-100000" width="200000" height="200000" fill="#08111f"/>',
     svgText(0, -margin * 0.35, title, textSize, '#9fb7d8'),
-    `<rect x="0" y="0" width="${width}" height="${height}" rx="${radius}" ry="${radius}" fill="none" stroke="#38bdf8" stroke-width="${strokeWidth * 1.4}"/>`,
   ];
+  if (outerBoundary.length >= 3 && !sourceLineworkOwnsOutline) {
+    parts.push(`<polygon points="${pointAttr(outerBoundary)}" fill="none" stroke="#38bdf8" stroke-width="${strokeWidth * 1.4}"/>`);
+  } else if (!isImageCadSource(args.sourcePath) && args.rectangularOutline !== false) {
+    parts.push(`<rect x="0" y="0" width="${width}" height="${height}" rx="${radius}" ry="${radius}" fill="none" stroke="#38bdf8" stroke-width="${strokeWidth * 1.4}"/>`);
+  }
 
   for (const polyline of polylines.slice(0, 240)) {
     const points = pointList(polyline?.points || polyline);
@@ -882,6 +905,27 @@ function validateCadDraftArgs(args: Record<string, any>): Record<string, any> {
   };
 }
 
+function intentRequiresImageGrounding(context?: ToolContext): boolean {
+  return /(?:\battachment\b|\battached\b|\bsource\s+(?:image|drawing|floor\s*plan)\b|\u8fd9\u5e45\u56fe|\u8fd9\u5f20\u56fe|\u9644\u4ef6|\u539f\u56fe|\u6237\u578b\u56fe|\u56fe\u7247|\u7167\u7247)/iu.test(String(context?.actionIntent || ''));
+}
+
+function enforceCadGeometryGrounding(
+  draftArgs: Record<string, any>,
+  context?: ToolContext,
+): { validation: CadGeometryValidation; receipt: CadGeometryReceipt | null; geometryVerified: true } {
+  const sourcePath = String(draftArgs.sourcePath || '').trim();
+  if (intentRequiresImageGrounding(context) && !sourcePath) {
+    throw new Error('This task is grounded in an attached/source image. Pass sourcePath and the verified geometry receipt returned by floorplan_extract_geometry.');
+  }
+  const sourceGrounded = isImageCadSource(sourcePath);
+  const validation = validateCadGeometry(draftArgs, { sourceGrounded });
+  if (!validation.passed) {
+    throw new Error(`CAD geometry validation failed: ${validation.errors.join(' ')}`);
+  }
+  const receipt = sourceGrounded ? verifyCadGeometryReceipt(draftArgs) : null;
+  return { validation, receipt, geometryVerified: true };
+}
+
 function pushLineOp(ops: AutocadDrawOperation[], layer: string, x1: any, y1: any, x2: any, y2: any, label?: string) {
   const a = maybeNumber(x1);
   const b = maybeNumber(y1);
@@ -960,8 +1004,14 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
   const holes = Array.isArray(args.holes) ? args.holes : [];
   const wallThickness = asFiniteNumber(args.wallThickness, 0);
   const ops: AutocadDrawOperation[] = [];
+  const outerBoundary = normalizeCadBoundary(args);
+  const sourceLineworkOwnsOutline = args?.sourceTopology?.traceMode === 'opencv_source_linework';
 
-  pushRectOps(ops, 0, 0, width, height, 'OUTLINE', 'outline');
+  if (outerBoundary.length >= 3 && !sourceLineworkOwnsOutline) {
+    pushPolylineOps(ops, outerBoundary, 'OUTLINE', true, 'source outer boundary');
+  } else if (!isImageCadSource(args.sourcePath) && args.rectangularOutline !== false) {
+    pushRectOps(ops, 0, 0, width, height, 'OUTLINE', 'explicit rectangular outline');
+  }
 
   for (const polyline of polylines.slice(0, 240)) {
     const points = pointList(polyline?.points || polyline);
@@ -1801,7 +1851,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'cad_prepare_autocad_operations',
-    description: 'Prepare a validated, auditable AutoCAD operations JSON for the AutoCAD MCP/COM playback tool. This tool does not launch AutoCAD, create LISP/SCRIPT/PowerShell files, or generate a finished drawing as a fallback. After it succeeds, the required next step for visible AutoCAD work is mcp_cad-drafting_autocad_playback_file. If MCP playback fails, report the exact blocker instead of substituting another drawing path.',
+    description: 'Prepare a validated, auditable AutoCAD operations JSON for the AutoCAD MCP/COM playback tool. Image-grounded drawings require the exact geometryReceiptPath and geometry returned by floorplan_extract_geometry; partial or manually reconstructed vision output is rejected. This tool does not launch AutoCAD, create LISP/SCRIPT/PowerShell files, or generate a finished drawing as a fallback.',
     parameters: {
       type: 'object',
       properties: {
@@ -1818,6 +1868,15 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         missingForPrecision: { type: 'array', description: 'Inputs still needed before the drawing can be treated as dimensionally precise.', items: { type: 'string' } },
         precisionStatus: { type: 'string', description: 'Traceable precision state from geometry extraction.' },
         sourcePath: { type: 'string', description: 'Optional source image/drawing path used for traceability.' },
+        geometryReceiptPath: { type: 'string', description: 'Required for image-grounded CAD. Use the receipt path returned by successful floorplan_extract_geometry verification.' },
+        geometryHash: { type: 'string', description: 'Geometry hash returned with the verified extraction. It is checked against the receipt.' },
+        sourceTopology: { type: 'object', description: 'Source shape facts returned by extraction, including whether the exterior is rectangular.' },
+        outerBoundary: {
+          type: 'array',
+          description: 'Ordered source exterior polygon [{x,y}, ...]. Required for image-grounded CAD and must preserve every notch and projection.',
+          items: { type: 'object' },
+        },
+        rectangularOutline: { type: 'boolean', description: 'For manually specified CAD only. Set false to avoid an automatic rectangular envelope when no outerBoundary is supplied.' },
         northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
         titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional directory for the operations JSON, manifest, and completion marker.' },
@@ -1874,10 +1933,10 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           items: { type: 'object' },
         },
       },
-      required: ['width', 'height'],
     },
-    handler: async (args) => {
-      const draftArgs = validateCadDraftArgs(args);
+    handler: async (args, context) => {
+      const draftArgs = validateCadDraftArgs(hydrateCadGeometryFromReceipt(args));
+      const grounding = enforceCadGeometryGrounding(draftArgs, context);
       const title = safeFileName(String(draftArgs.title || 'lumi_autocad_operations'));
       const requestedDelay = Number(draftArgs.strokeDelayMs);
       const delay = Number.isFinite(requestedDelay)
@@ -1886,16 +1945,30 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const paths = resolveAutocadOperationPaths(draftArgs, title);
       const operations = collectAutocadDrawOperations(draftArgs);
       if (!operations.length) throw new Error('No drawable AutoCAD operations were generated. Provide width/height plus walls, rooms, doors, windows, or labels.');
+      const geometryHash = grounding.receipt?.geometryHash || cadGeometryHash(draftArgs);
+      const operationSetId = crypto
+        .createHash('sha256')
+        .update(JSON.stringify({ geometryHash, operations }))
+        .digest('hex');
+      const geometryVerificationRequired = isImageCadSource(draftArgs.sourcePath);
 
       fs.writeFileSync(paths.operationsPath, JSON.stringify({
-        version: 1,
+        version: 2,
         generatedAt: new Date().toISOString(),
         title,
         unit: draftArgs.unit || 'unit',
+        sourcePath: draftArgs.sourcePath || '',
+        geometryReceiptPath: draftArgs.geometryReceiptPath || '',
+        geometryHash,
+        geometryVerified: grounding.geometryVerified,
+        geometryVerificationRequired,
+        geometryValidation: grounding.validation,
+        operationSetId,
+        expectedEntityCount: operations.length,
         operations,
       }, null, 2), 'utf-8');
       const manifest = {
-        version: 1,
+        version: 2,
         generatedAt: new Date().toISOString(),
         title,
         sourcePath: draftArgs.sourcePath || '',
@@ -1907,6 +1980,13 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         assumptions: draftArgs.assumptions,
         missingForPrecision: draftArgs.missingForPrecision,
         precisionStatus: draftArgs.precisionStatus,
+        outerBoundaryPointCount: normalizeCadBoundary(draftArgs).length,
+        geometryReceiptPath: draftArgs.geometryReceiptPath || '',
+        geometryHash,
+        geometryVerified: grounding.geometryVerified,
+        geometryVerificationRequired,
+        geometryValidation: grounding.validation,
+        operationSetId,
         strokeDelayMs: delay,
         operationCount: operations.length,
         operationsPath: paths.operationsPath,
@@ -1936,6 +2016,13 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         assumptions: draftArgs.assumptions,
         missingForPrecision: draftArgs.missingForPrecision,
         precisionStatus: draftArgs.precisionStatus,
+        outerBoundaryPointCount: manifest.outerBoundaryPointCount,
+        geometryReceiptPath: manifest.geometryReceiptPath,
+        geometryHash,
+        geometryVerified: grounding.geometryVerified,
+        geometryVerificationRequired,
+        geometryValidation: grounding.validation,
+        operationSetId,
         strokeDelayMs: delay,
         operationCount: operations.length,
         typeCounts,
@@ -1946,7 +2033,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         requiredPlaybackTool: 'mcp_cad-drafting_autocad_playback_file',
         fallbackAllowed: false,
         preview: operations.slice(0, 20).map((op, index) => ({ index: index + 1, ...op })),
-        note: 'Prepared AutoCAD operations only. Visible drawing is incomplete until mcp_cad-drafting_autocad_playback_file reports MCP COM playback completion and the marker exists. No script or finished-file fallback is allowed.',
+        note: 'Prepared source-validated AutoCAD operations only. Visible drawing is incomplete until MCP/COM playback verifies both the completion marker and the exact entity-count delta. No script or finished-file fallback is allowed.',
       }, null, 2);
     },
     permission: 'user',
@@ -1955,7 +2042,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'cad_generate_dxf',
-    description: 'Generate a structured CAD DXF drafting handoff with outline, wall thickness, rooms, polylines, doors, windows, columns, furniture, dimension lines, labels, holes, preview SVG, and optional explicit output path. For image-based floor plans, call floorplan_extract_geometry or ocr_image_file first, then pass the extracted geometry here. Use this as a calibrated drafting base, not final engineering verification. If exact dimensions are missing, say so instead of claiming production accuracy.',
+    description: 'Generate an explicitly requested DXF deliverable. For image-grounded work, pass only the compact verified geometryReceiptPath handoff returned by floorplan_extract_geometry; the server loads exact geometry from the receipt. OCR text, partial coordinates, or manually reconstructed vision output are rejected.',
     parameters: {
       type: 'object',
       properties: {
@@ -1976,6 +2063,15 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         outputDirectory: { type: 'string', description: 'Optional directory to save the DXF, e.g. C:\\Users\\name\\Desktop. Use when the user asks to put the file somewhere visible.' },
         outputPath: { type: 'string', description: 'Optional exact DXF output path. Relative paths are resolved under outputDirectory or Lumi CAD data directory.' },
         sourcePath: { type: 'string', description: 'Optional source drawing/image path used for traceability.' },
+        geometryReceiptPath: { type: 'string', description: 'Required for image-grounded DXF. Use the verified receipt from floorplan_extract_geometry.' },
+        geometryHash: { type: 'string', description: 'Verified geometry hash returned by floorplan_extract_geometry.' },
+        sourceTopology: { type: 'object', description: 'Verified source topology metadata.' },
+        outerBoundary: {
+          type: 'array',
+          description: 'Ordered exterior polygon [{x,y}, ...]. Required when tracing an image with an irregular boundary.',
+          items: { type: 'object' },
+        },
+        rectangularOutline: { type: 'boolean', description: 'For manual geometry only. Controls automatic rectangular outline when outerBoundary is absent.' },
         walls: {
           type: 'array',
           description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
@@ -2028,10 +2124,10 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         },
         openPreview: { type: 'boolean', description: 'Open the generated DXF with the system default app. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
       },
-      required: ['width', 'height'],
     },
     handler: async (args, context) => {
-      const draftArgs = validateCadDraftArgs(args);
+      const draftArgs = validateCadDraftArgs(hydrateCadGeometryFromReceipt(args));
+      const grounding = enforceCadGeometryGrounding(draftArgs, context);
       const title = safeFileName(String(draftArgs.title || 'lumi_cad_draft'));
       const outPath = resolveCadOutputPath(draftArgs, title);
       fs.writeFileSync(outPath, buildDxf(draftArgs), 'utf-8');
@@ -2061,6 +2157,12 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         assumptions: draftArgs.assumptions,
         missingForPrecision: draftArgs.missingForPrecision,
         precisionStatus: draftArgs.precisionStatus,
+        geometryReceiptPath: draftArgs.geometryReceiptPath || undefined,
+        geometryHash: grounding.receipt?.geometryHash || cadGeometryHash(draftArgs),
+        geometryVerified: grounding.geometryVerified,
+        geometryVerificationRequired: isImageCadSource(draftArgs.sourcePath),
+        geometryValidation: grounding.validation,
+        outerBoundaryPointCount: normalizeCadBoundary(draftArgs).length,
         outputDirectory: path.dirname(outPath),
         exists: fs.existsSync(outPath),
         size: stat.size,

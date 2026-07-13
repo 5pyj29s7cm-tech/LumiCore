@@ -68,7 +68,7 @@ export function resolveWorkSurfaceRoute(text: string): WorkSurfaceRoute {
     ? [
         '## Work Surface Routing',
         '- This looks like a file/image/CAD/design/document task. Default to an artifact-first workflow: inspect inputs, extract/OCR/vision as needed, generate structured outputs and files, verify paths, then summarize results.',
-        '- For floor plans, renovation sketches, CAD reference images, or folders containing plan images: locate the source file, call floorplan_extract_geometry first when available, then call cad_generate_dxf with the extracted rooms/walls/doors/windows/dimensions. Use ocr_image_file only as a fallback or for non-floor-plan images.',
+        '- For floor plans and CAD reference images: call floorplan_extract_geometry and continue only when geometryReady=true. Pass its compact geometry-receipt handoff directly to the requested CAD tool; never transcribe coordinates from OCR or partial model output. Use ocr_image_file only for descriptive inspection, not executable CAD geometry.',
         '- If scale, dimensions, wall thickness, or room boundaries are inferred, mark the DXF as a calibrated draft/base drawing and ask for one confirmed dimension before claiming precision.',
         '- Do not use mouse/keyboard desktop control for this task unless the user explicitly asked to use the cursor, mouse, keyboard, a CAD desktop app, or to operate the computer directly.',
         '- If the user explicitly asks for visible AutoCAD drawing, derive geometry, call cad_prepare_autocad_operations, then call mcp_cad-drafting_autocad_playback_file. Do not substitute DXF/DWG generation, LISP/SCRIPT, raw mouse/keyboard, or vision computer_use if MCP playback fails.',

@@ -78,6 +78,34 @@ describe('MCP skill install resilience', () => {
     expect(callTool).toHaveBeenCalledWith({ name: 'draw', arguments: {} });
   });
 
+  it('passes the registry timeout budget through to long-running MCP calls', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const callTool = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: '{"status":"completed"}' }],
+    });
+    (manager as any).servers.set('cad-drafting', {
+      client: { callTool },
+      transport: {},
+      config: { enabled: true },
+    });
+
+    await expect(manager.callTool(
+      'mcp_cad-drafting_autocad_playback_file',
+      { operationsPath: 'C:\\CAD\\plan_operations.json' },
+      { timeoutMs: 30 * 60_000 },
+    )).resolves.toContain('completed');
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: 'autocad_playback_file',
+        arguments: { operationsPath: 'C:\\CAD\\plan_operations.json' },
+      },
+      undefined,
+      { timeout: 30 * 60_000, maxTotalTimeout: 30 * 60_000 },
+    );
+  });
+
   it('removes the npm skill workspace when dependency install fails', async () => {
     const execMock = makeExec((_command, _options, callback) => {
       callback(new Error('registry unavailable'), '', 'registry unavailable');
@@ -230,5 +258,47 @@ describe('MCP skill install resilience', () => {
     await expect(manager.installSkillValidated('broken', invalidSource)).rejects.toThrow(/index\.ts|runCommand/);
     expect(fs.existsSync(path.join(tempHome, 'lumi_skills', 'broken'))).toBe(false);
     expect(fs.readdirSync(path.join(tempHome, 'lumi_skills')).some(name => name.startsWith('.staging-broken-'))).toBe(false);
+  });
+
+  it('syncs newer managed bundled skills before MCP startup without downgrading them', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const originalSource = path.join(tempHome, 'original-bundle');
+    const bundledRoot = path.join(tempHome, 'bundled');
+    const upgradeSource = path.join(bundledRoot, 'cad-drafting');
+    fs.mkdirSync(originalSource, { recursive: true });
+    fs.writeFileSync(path.join(originalSource, 'index.ts'), 'export const build = "old";\n');
+    fs.writeFileSync(path.join(originalSource, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-cad-drafting',
+      version: '1.5.0',
+      lumi: { toolCount: 1 },
+    }));
+    manager.installSkill('cad-drafting', originalSource);
+
+    fs.mkdirSync(upgradeSource, { recursive: true });
+    fs.writeFileSync(path.join(upgradeSource, 'index.ts'), 'export const build = "new";\n');
+    fs.writeFileSync(path.join(upgradeSource, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-cad-drafting',
+      version: '1.6.0',
+      lumi: { toolCount: 1 },
+    }));
+
+    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([{
+      name: 'cad-drafting',
+      fromVersion: '1.5.0',
+      toVersion: '1.6.0',
+    }]);
+    const installedDir = path.join(tempHome, 'lumi_skills', 'cad-drafting');
+    expect(fs.readFileSync(path.join(installedDir, 'index.ts'), 'utf-8')).toContain('"new"');
+    expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).lumi.installedVersion).toBe('1.6.0');
+
+    fs.writeFileSync(path.join(upgradeSource, 'package.json'), JSON.stringify({
+      name: 'lumi-skill-cad-drafting',
+      version: '1.4.0',
+      lumi: { toolCount: 1 },
+    }));
+    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).version).toBe('1.6.0');
   });
 });

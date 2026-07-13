@@ -395,7 +395,7 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':
       if (requiresVisibleAutoCadExecution(text)) {
-        return 'Derive structured geometry from the source, call cad_prepare_autocad_operations, then call mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke drawing in the real AutoCAD application. This is the only visible AutoCAD actuation path: never substitute DXF/DWG generation, LISP, scripts, batch commands, desktop cursor drawing, or a merely opened AutoCAD window. Accept completion only when MCP reports transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true; otherwise report the exact blocker.';
+        return 'Run floorplan_extract_geometry and continue only when it returns geometryReady=true, geometryVerified=true, and a geometryReceiptPath; then call cad_prepare_autocad_operations with the receipt handoff directly. Never copy, shorten, or reconstruct coordinates in chat. Then call mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke drawing in real AutoCAD; never substitute DXF/DWG generation, LISP, scripts, batch commands, cursor drawing, or an opened window. Accept completion only when the verified operationSetId matches and operationCount=expectedEntityCount=entitiesAdded with entityCountMatches=true.';
       }
       return 'Prefer structured design/CAD tools over raw cursor work; use desktop CAD only when the user asks to operate visible software or a tool needs it.';
     case 'desktop_control':

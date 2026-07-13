@@ -644,6 +644,22 @@ describe('tool router', () => {
     expect(route.reasons).toContain('visible AutoCAD execution requires MCP/COM playback and excludes generated-file or script fallback');
   });
 
+  it('keeps attachment metadata out of messaging routes for a current CAD task', () => {
+    const route = routeToolsForTurn([
+      '把这幅图画成cad图',
+      '## Current Turn Attachments',
+      'The user attached these files to the current message. Treat them as part of the user request.',
+      'Local path: C:\\Users\\me\\LumiOS\\data\\knowledge\\plan.jpg',
+    ].join('\n\n'), DECLARATIONS);
+
+    expect(route.categories).toContain('cad_design');
+    expect(route.categories).not.toContain('messaging');
+    expect(route.toolNames).toContain('cad_prepare_autocad_operations');
+    expect(route.toolNames).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(route.toolNames).not.toContain('cad_generate_dxf');
+    expect(route.toolNames).not.toContain('wechat_send_message');
+  });
+
   it('routes local desktop CAD folders through source discovery before drafting', () => {
     const route = routeToolsForTurn(
       '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u8bf7\u5148\u8bfb\u53d6\u5e76\u6574\u7406\u91cc\u9762\u7684\u6587\u4ef6\u5185\u5bb9\uff0c\u7136\u540e\u6839\u636e\u91cc\u9762\u7684\u4fe1\u606f\u751f\u6210 CAD \u56fe\u7eb8\u65b9\u6848\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765',

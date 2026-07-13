@@ -593,8 +593,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'mcp_cad-drafting_cad_renovation_folder_workflow'],
       surfaces: ['source project folders', 'runtime logs', 'CAD handoff files', 'desktop CAD apps', 'AutoCAD MCP/COM stroke-by-stroke playback', 'verified client-facing documents'],
       requiresConfirmation: false,
-      safety: 'Explicit DXF drafts and visible CAD playback can run under the active desktop mode, but they are not production drawings until source dimensions, standards, structure, and MEP constraints are reviewed.',
-      notes: 'The stable path starts with real source inspection and separates every requested output. Explicit DXF files require file verification; visible AutoCAD work requires MCP/COM playback and its completion marker; native Revit/BIM output requires a confirmed adapter result. No generated file or handoff note can substitute for a failed external-app run.',
+      safety: 'Image-grounded CAD can execute only from a source-bound geometry receipt that passed deterministic checks and visual comparison. It is not a production drawing until source dimensions, standards, structure, and MEP constraints are professionally reviewed.',
+      notes: 'The stable path uses staged source tracing and a server-owned geometry receipt. Visible AutoCAD work requires MCP/COM playback, an operation-set match, and exact entity-count verification; interrupted runs resume or block without replaying duplicates. No generated file or handoff note can substitute for a failed external-app run.',
     },
     {
       id: 'cad_bim.local_toolchain',

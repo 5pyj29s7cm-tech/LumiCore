@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -5,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAutocadComPlaybackScript,
   readAutocadOperationPayload,
+  runAutocadComPlayback,
 } from '../server/skills/bundled/cad-drafting/autocad_control';
 
 describe('AutoCAD MCP control', () => {
@@ -13,13 +16,21 @@ describe('AutoCAD MCP control', () => {
     try {
       const operationsPath = path.join(dir, 'plan_operations.json');
       const markerPath = path.join(dir, 'plan_completed.txt');
+      const operations = [
+        { kind: 'line', layer: 'WALL', x1: 0, y1: 0, x2: 4000, y2: 0 },
+        { kind: 'text', layer: 'TEXT', x: 200, y: 200, text: 'Room', height: 180 },
+      ];
+      const geometryHash = crypto.createHash('sha256').update('verified manual geometry').digest('hex');
+      const operationSetId = crypto.createHash('sha256').update(JSON.stringify({ geometryHash, operations })).digest('hex');
       fs.writeFileSync(operationsPath, JSON.stringify({
-        version: 1,
+        version: 2,
         title: 'Visible MCP plan',
-        operations: [
-          { kind: 'line', layer: 'WALL', x1: 0, y1: 0, x2: 4000, y2: 0 },
-          { kind: 'text', layer: 'TEXT', x: 200, y: 200, text: 'Room', height: 180 },
-        ],
+        geometryHash,
+        geometryVerified: true,
+        geometryVerificationRequired: false,
+        operationSetId,
+        expectedEntityCount: operations.length,
+        operations,
       }), 'utf-8');
 
       const payload = readAutocadOperationPayload(operationsPath);
@@ -30,6 +41,7 @@ describe('AutoCAD MCP control', () => {
       });
 
       expect(payload.operations).toHaveLength(2);
+      expect(payload.operationSetId).toBe(operationSetId);
       expect(script).toContain("GetActiveObject('AutoCAD.Application')");
       expect(script).toContain("$ProgressPreference = 'SilentlyContinue'");
       expect(script).toContain("Registry::HKEY_CLASSES_ROOT\\AutoCAD.Application\\CLSID");
@@ -44,9 +56,25 @@ describe('AutoCAD MCP control', () => {
       expect(script).toContain('return ,([double[]]@($x, $y, 0.0))');
       expect(script).toContain('$model.AddText');
       expect(script).toContain('$doc.Regen(1)');
+      expect(script).toContain('$startingEntityCount = if ($resumeCompleted -gt 0)');
+      expect(script).toContain('UpdatePlaybackState $completed');
+      expect(script).toContain('for ($operationIndex = $completed;');
+      expect(script).toContain('refusing to duplicate the operation set');
+      expect(script).toContain('$entityCountMatches');
+      expect(script).toContain('created duplicate entities');
       expect(script).toContain('Start-Sleep -Milliseconds $delayMs');
       expect(script).toContain("transport = 'mcp_autocad_com'");
       expect(script).toContain(markerPath.replace(/'/g, "''"));
+      if (process.platform === 'win32') {
+        const parsed = spawnSync('powershell.exe', [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '$source = [Console]::In.ReadToEnd(); [void][ScriptBlock]::Create($source)',
+        ], { input: script, encoding: 'utf-8', windowsHide: true });
+        expect(parsed.status, parsed.stderr).toBe(0);
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -62,6 +90,56 @@ describe('AutoCAD MCP control', () => {
         operations: [{ kind: 'erase_everything', layer: '0' }],
       }), 'utf-8');
       expect(() => readAutocadOperationPayload(operationsPath)).toThrow(/invalid or unsupported/i);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a verified existing marker without replaying the same operation set', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_autocad_mcp_cached_'));
+    try {
+      const operationsPath = path.join(dir, 'plan_operations.json');
+      const markerPath = path.join(dir, 'plan_completed.json');
+      const operations = [{ kind: 'line', layer: 'WALL', x1: 0, y1: 0, x2: 4000, y2: 0 }];
+      const geometryHash = crypto.createHash('sha256').update('verified manual geometry').digest('hex');
+      const operationSetId = crypto.createHash('sha256').update(JSON.stringify({ geometryHash, operations })).digest('hex');
+      fs.writeFileSync(operationsPath, JSON.stringify({
+        version: 2,
+        title: 'Cached plan',
+        geometryHash,
+        geometryVerified: true,
+        geometryVerificationRequired: false,
+        operationSetId,
+        expectedEntityCount: operations.length,
+        operations,
+      }), 'utf-8');
+      fs.writeFileSync(markerPath, JSON.stringify({
+        status: 'completed',
+        transport: 'mcp_autocad_com',
+        visiblePlayback: true,
+        completionMarkerExists: true,
+        geometryVerified: true,
+        geometryVerificationRequired: false,
+        geometryHash,
+        operationSetId,
+        operationCount: 1,
+        expectedEntityCount: 1,
+        entitiesAdded: 1,
+        entityCountMatches: true,
+      }), 'utf-8');
+
+      const result = await runAutocadComPlayback({
+        operationsPath,
+        completionMarkerPath: markerPath,
+        lockPath: path.join(dir, 'playback.lock'),
+      });
+
+      expect(result).toMatchObject({
+        status: 'completed',
+        operationSetId,
+        alreadyCompleted: true,
+        entityCountMatches: true,
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

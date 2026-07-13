@@ -15,7 +15,8 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^(wechat_|desktop_ai_)/i.test(name)) return 3 * 60_000;
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
   if (/^desktop_/i.test(name)) return 90_000;
-  if (/^(ocr_|floorplan_extract_geometry|cad_generate_dxf)$/i.test(name)) return 90_000;
+  if (/^floorplan_extract_geometry$/i.test(name)) return 10 * 60_000;
+  if (/^(ocr_|cad_generate_dxf)$/i.test(name)) return 90_000;
   return 30_000;
 }
 

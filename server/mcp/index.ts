@@ -1,7 +1,7 @@
 export { mcpManager, SKILLS_DIR, normalizeSkillInstallName } from './client';
 export type { MCPServerConfig, MCPToolDef, SkillPackage } from './client';
 
-import { toolRegistry } from '../tools/registry';
+import { getToolExecutionTimeoutMs, toolRegistry } from '../tools/registry';
 import { mcpManager, MCPToolDef, MCPServerConfig } from './client';
 import type { ToolDefinition, ToolContext } from '../tools/types';
 
@@ -12,6 +12,7 @@ import type { ToolDefinition, ToolContext } from '../tools/types';
 export async function registerMCPTools(io?: any): Promise<string[]> {
   if (io) mcpManager.setSocketIO(io);
 
+  mcpManager.syncBundledSkillUpgrades();
   const mcpTools = await mcpManager.connectAll();
   const registered: string[] = [];
 
@@ -33,7 +34,9 @@ function registerTool(tool: MCPToolDef): void {
     securityLevel: 'confirm',
     parameters: mcpSchemaToParams(tool.inputSchema),
     handler: async (params: Record<string, any>, _ctx: ToolContext) => {
-      return mcpManager.callTool(tool.name, params);
+      return mcpManager.callTool(tool.name, params, {
+        timeoutMs: getToolExecutionTimeoutMs(tool.name),
+      });
     },
   };
   toolRegistry.register(def);

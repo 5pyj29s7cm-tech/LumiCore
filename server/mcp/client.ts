@@ -38,6 +38,10 @@ export interface MCPToolDef {
   inputSchema: Record<string, any>;
 }
 
+export interface MCPCallOptions {
+  timeoutMs?: number;
+}
+
 export interface SkillPackage {
   name: string;          // directory name / skill id
   description: string;
@@ -110,6 +114,19 @@ const DEFAULT_CONFIG_FILE: MCPConfigFile = {
   },
   remoteDevices: {},
 };
+
+export function comparePackageVersions(left: string, right: string): number {
+  const parts = (value: string) => String(value || '0.0.0')
+    .split(/[.+-]/, 3)
+    .map(part => Number.parseInt(part, 10) || 0);
+  const a = parts(left);
+  const b = parts(right);
+  for (let index = 0; index < Math.max(a.length, b.length, 3); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference !== 0) return difference > 0 ? 1 : -1;
+  }
+  return 0;
+}
 
 function expandPortablePath(value: string): string {
   if (value === '~') return os.homedir();
@@ -320,6 +337,36 @@ export class MCPClientManager {
       });
     }
     return skills;
+  }
+
+  syncBundledSkillUpgrades(
+    bundledRoot = path.join(process.cwd(), 'server', 'skills', 'bundled'),
+  ): Array<{ name: string; fromVersion: string; toVersion: string }> {
+    this.ensureSkillsDir();
+    if (!fs.existsSync(bundledRoot) || !fs.statSync(bundledRoot).isDirectory()) return [];
+    const upgrades: Array<{ name: string; fromVersion: string; toVersion: string }> = [];
+    for (const entry of fs.readdirSync(bundledRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const name = normalizeSkillInstallName(entry.name);
+      const sourceDir = path.join(bundledRoot, entry.name);
+      const installedDir = path.join(SKILLS_DIR, name);
+      if (!fs.existsSync(installedDir) || !fs.statSync(installedDir).isDirectory()) continue;
+      const sourcePkg = this.readPkg(sourceDir);
+      const installedPkg = this.readPkg(installedDir);
+      const sourceVersion = String(sourcePkg.version || '0.0.0');
+      const installedVersion = String(installedPkg.lumi?.installedVersion || installedPkg.version || '0.0.0');
+      const samePackage = Boolean(sourcePkg.name) && sourcePkg.name === installedPkg.name;
+      const managedInstall = Boolean(installedPkg.lumi?.installedVersion);
+      if (!samePackage || !managedInstall || comparePackageVersions(sourceVersion, installedVersion) <= 0) continue;
+      try {
+        this.installSkill(name, sourceDir, true);
+        upgrades.push({ name, fromVersion: installedVersion, toVersion: sourceVersion });
+        console.log(`[MCP] Synced bundled skill "${name}" ${installedVersion} -> ${sourceVersion}`);
+      } catch (error: any) {
+        console.warn(`[MCP] Bundled skill sync failed for "${name}": ${error?.message || String(error)}`);
+      }
+    }
+    return upgrades;
   }
 
   /** Install a skill from a source directory into ~/lumi_skills/ */
@@ -1183,7 +1230,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     }));
   }
 
-  async callTool(fullName: string, args: Record<string, any>): Promise<string> {
+  async callTool(fullName: string, args: Record<string, any>, options: MCPCallOptions = {}): Promise<string> {
     const match = fullName.match(/^mcp_(.+?)_(.+)$/);
     if (!match) throw new Error(`Invalid MCP tool name: ${fullName}`);
 
@@ -1191,7 +1238,14 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     const server = this.servers.get(serverName);
     if (!server) throw new Error(`MCP server "${serverName}" not connected`);
 
-    const result = await server.client.callTool({ name: toolName, arguments: args });
+    const request = { name: toolName, arguments: args };
+    const timeoutMs = Number(options.timeoutMs);
+    const result = Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? await server.client.callTool(request, undefined, {
+          timeout: timeoutMs,
+          maxTotalTimeout: timeoutMs,
+        })
+      : await server.client.callTool(request);
 
     const contents = (result as any).content || [];
     const text = contents

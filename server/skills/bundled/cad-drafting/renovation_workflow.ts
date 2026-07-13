@@ -448,10 +448,10 @@ ${excerpt}
 
 1. Select the primary source drawing instead of inventing a default floor plan.
 2. Run floorplan_extract_geometry with every known calibration dimension.
-3. Review the returned walls, rooms, doors, windows, confidence, assumptions, and missing precision inputs.
-4. For visible AutoCAD work, pass the extracted geometry to cad_prepare_autocad_operations and then mcp_cad-drafting_autocad_playback_file.
-5. For an explicitly requested DXF file, pass the extracted geometry to cad_generate_dxf and verify the output path.
-6. Treat a failed extraction or playback as a blocker. Do not substitute a generated grid, default room list, script, preview, or task packet.
+3. Continue only when staged extraction and source comparison return geometryReady=true and geometryVerified=true.
+4. For visible AutoCAD work, pass the returned receipt handoff unchanged to cad_prepare_autocad_operations and then mcp_cad-drafting_autocad_playback_file.
+5. For an explicitly requested DXF file, pass the same receipt handoff to cad_generate_dxf and verify the output path.
+6. Treat failed extraction, source comparison, entity-count verification, or playback as a blocker. Never reconstruct coordinates in chat or substitute a generated grid, default room list, script, preview, or task packet.
 `;
 
   const requirements = `# ${projectName} extracted requirements

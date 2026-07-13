@@ -372,10 +372,18 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
   const executableSource = String(parsed?.autocadExecutableSource || parsed?.manifest?.autocadExecutableSource || '').trim();
   const operationCount = Number(parsed?.operationCount || parsed?.manifest?.operationCount || 0);
   const strokeDelayMs = Number(parsed?.strokeDelayMs || parsed?.manifest?.strokeDelayMs || 0);
+  const expectedEntityCount = Number(parsed?.expectedEntityCount || 0);
+  const entitiesAdded = Number(parsed?.entitiesAdded || 0);
   const completed = parsed?.status === 'completed'
     && parsed?.completionMarkerExists === true
     && parsed?.transport === 'mcp_autocad_com'
-    && parsed?.visiblePlayback === true;
+    && parsed?.visiblePlayback === true
+    && parsed?.geometryVerified === true
+    && parsed?.entityCountMatches === true
+    && operationCount > 0
+    && operationCount === expectedEntityCount
+    && entitiesAdded === expectedEntityCount
+    && Boolean(String(parsed?.operationSetId || '').trim());
 
   if (completed) {
     const lines = zh
@@ -385,6 +393,8 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
           operationsPath ? `${CN_CAD_MESSAGES.drawingOperations}${operationsPath}` : '',
           executable ? `AutoCAD：${executable}${executableSource ? `（来源：${executableSource}）` : ''}` : '',
           operationCount > 0 ? `已执行 ${operationCount} 个绘图操作。` : '',
+          parsed?.geometryVerified === true ? CN_CAD_MESSAGES.sourceGeometryVerified : '',
+          parsed?.entityCountMatches === true ? `${CN_CAD_MESSAGES.entityDeltaVerification}${entitiesAdded}/${expectedEntityCount}\u3002` : '',
         ]
       : [
           'The visible stroke-by-stroke playback completed in the real AutoCAD application through Lumi CAD MCP/COM and passed marker verification.',
@@ -393,6 +403,8 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
           executable ? `AutoCAD: ${executable}${executableSource ? ` (source: ${executableSource})` : ''}` : '',
           operationCount > 0 ? `${operationCount} drawing operations completed.` : '',
           strokeDelayMs > 0 ? `Visible stroke interval: ${strokeDelayMs} ms.` : '',
+          parsed?.geometryVerified === true ? 'Source geometry verification: passed.' : '',
+          parsed?.entityCountMatches === true ? `Entity delta verification: ${entitiesAdded}/${expectedEntityCount}.` : '',
         ];
     return {
       text: lines.filter(Boolean).join('\n'),
@@ -402,7 +414,13 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
   }
 
   if (!requiresVisibleAutoCadExecution(input.taskText)) return null;
-  const blocker = String(parsed?.note || 'AutoCAD completion marker was not observed.').trim();
+  const blocker = String(parsed?.note || (
+    parsed?.geometryVerified !== true
+      ? 'AutoCAD geometry did not pass source verification.'
+      : parsed?.entityCountMatches !== true
+        ? 'AutoCAD entity-count verification did not pass.'
+        : 'AutoCAD completion marker was not observed.'
+  )).trim();
   const text = zh
     ? [
         '这次 AutoCAD 实际绘图还没有完成。',

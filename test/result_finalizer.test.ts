@@ -308,7 +308,7 @@ describe('Lumi result finalizer', () => {
       toolRecords: [{
         name: 'mcp_cad-drafting_autocad_playback_file',
         arguments: { operationsPath: 'C:\\CAD\\plan_operations.json' },
-        result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true,"completionMarkerPath":"C:\\\\CAD\\\\plan_completed.txt","operationsPath":"C:\\\\CAD\\\\plan_operations.json","operationCount":46,"strokeDelayMs":450}',
+        result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true,"completionMarkerPath":"C:\\\\CAD\\\\plan_completed.txt","operationsPath":"C:\\\\CAD\\\\plan_operations.json","geometryVerified":true,"entityCountMatches":true,"operationCount":46,"expectedEntityCount":46,"entitiesAdded":46,"operationSetId":"verified-operation-set","strokeDelayMs":450}',
       }],
       source: 'chat',
     });
@@ -318,6 +318,47 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('stroke-by-stroke playback');
     expect(result.text).toContain('plan_operations.json');
     expect(result.text).toContain('450 ms');
+  });
+
+  it('uses a successful AutoCAD MCP retry after an earlier timeout on an attached CAD task', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = [
+      '把这幅图画成cad图',
+      '## Current Turn Attachments',
+      'The user attached these files to the current message. Treat them as part of the user request.',
+      'Local path: C:\\Users\\me\\LumiOS\\data\\knowledge\\plan.jpg',
+    ].join('\n\n');
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '这次还没完成。任务类型：前台消息发送。',
+      source: 'chat',
+      toolRecords: [{
+        id: 'first-attempt',
+        name: 'mcp_cad-drafting_autocad_playback_file',
+        arguments: {
+          operationsPath: 'C:\\CAD\\plan_operations.json',
+          completionMarkerPath: 'C:\\CAD\\plan_completed.txt',
+          strokeDelayMs: 450,
+        },
+        result: '',
+        error: 'MCP error -32001: Request timed out',
+      }, {
+        id: 'retry',
+        name: 'mcp_cad-drafting_autocad_playback_file',
+        arguments: {
+          operationsPath: 'C:\\CAD\\plan_operations.json',
+          completionMarkerPath: 'C:\\CAD\\plan_completed.txt',
+          strokeDelayMs: 200,
+        },
+        result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true,"completionMarkerPath":"C:\\\\CAD\\\\plan_completed.txt","operationsPath":"C:\\\\CAD\\\\plan_operations.json","geometryVerified":true,"entityCountMatches":true,"operationCount":185,"expectedEntityCount":185,"entitiesAdded":185,"operationSetId":"verified-operation-set","strokeDelayMs":200}',
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('185');
+    expect(result.text).toContain('AutoCAD');
+    expect(result.text).not.toContain('微信');
+    expect(result.text).not.toContain('timed out');
   });
 
   it('does not accept a generated drawing file for an explicit AutoCAD MCP-only task', async () => {
