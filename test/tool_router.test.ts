@@ -43,6 +43,7 @@ const DECLARATIONS = [
   'desktop_list_apps',
   'desktop_open',
   'desktop_active_window',
+  'desktop_running_processes',
   'desktop_ui_snapshot',
   'desktop_ui_focus',
   'desktop_ui_click',
@@ -52,6 +53,7 @@ const DECLARATIONS = [
   'desktop_ai_list_targets',
   'desktop_ai_discovery_plan',
   'desktop_ai_register_target',
+  'desktop_ai_roundtable',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
   'ocr_screen',
@@ -121,6 +123,7 @@ const DECLARATIONS = [
   'floorplan_extract_geometry',
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
+  'mcp_cad-drafting_autocad_playback_file',
   'cad_run_autocad_draw_script',
   'generate_image',
   'git_status',
@@ -531,6 +534,26 @@ describe('tool router', () => {
     expect(route.toolNames.slice(0, 4)).not.toContain('wechat_send_message');
   });
 
+  it('keeps negated messaging language in a desktop AI inspection out of messaging and legal routes', () => {
+    const route = routeToolsForTurn(
+      'Read-only live acceptance test. Inspect running desktop AI applications and report detected evidence only. Do not open apps, click, type, or send messages.',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).not.toContain('messaging');
+    expect(route.categories).not.toContain('legal');
+    expect(route.categories).not.toContain('code_git');
+    expect(route.categories).not.toContain('documents');
+    expect(route.toolNames.slice(0, 6)).toContain('desktop_ai_list_targets');
+    expect(route.toolNames.slice(0, 6)).not.toContain('wechat_send_message');
+    expect(route.toolNames).not.toContain('code_execution');
+    expect(route.toolNames).not.toContain('create_docx');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_running_processes',
+      'desktop_list_apps',
+    ]));
+  });
+
   it('filters unavailable MCP tools when a health gate is provided', () => {
     const route = routeToolsForTurn(
       'Lumi 帮我给 600519 做一个交易计划，算仓位和止损，再记录到模拟盘',
@@ -586,12 +609,38 @@ describe('tool router', () => {
       'mcp_cad-drafting_cad_space_program',
       'cad_generate_dxf',
       'cad_generate_autocad_draw_script',
+      'mcp_cad-drafting_autocad_playback_file',
       'cad_run_autocad_draw_script',
       'read_file',
       'extract_document_text',
       'ocr_image_file',
     ]));
     expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
+  });
+
+  it('does not expose document extraction for a direct generated AutoCAD script run', () => {
+    const route = routeToolsForTurn(
+      'Run and verify the existing AutoCAD drawing with C:\\cad\\plan.scr and C:\\cad\\plan.lsp.',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('cad_design');
+    expect(route.toolNames).toContain('cad_run_autocad_draw_script');
+    expect(route.toolNames).not.toContain('extract_document_text');
+    expect(route.toolNames).not.toContain('read_pdf');
+  });
+
+  it('does not expose the LISP runner when AutoCAD MCP-only playback is required', () => {
+    const route = routeToolsForTurn(
+      'Draw visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only and do not use LISP, scripts, cad_run_autocad_draw_script, or fallback.',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('cad_design');
+    expect(route.toolNames).toContain('cad_generate_autocad_draw_script');
+    expect(route.toolNames).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(route.toolNames).not.toContain('cad_run_autocad_draw_script');
+    expect(route.reasons).toContain('explicit AutoCAD MCP-only playback excludes LISP/script fallback');
   });
 
   it('routes local desktop CAD folders through source discovery before drafting', () => {
@@ -601,17 +650,21 @@ describe('tool router', () => {
     );
 
     expect(route.categories).toContain('cad_design');
-    expect(route.toolNames.slice(0, 9)).toEqual(expect.arrayContaining([
+    expect(route.toolNames.slice(0, 10)).toEqual(expect.arrayContaining([
       'desktop_path_info',
       'desktop_list_files',
+      'desktop_list_apps',
       'floorplan_extract_geometry',
       'mcp_cad-drafting_cad_renovation_folder_workflow',
       'cad_generate_dxf',
       'cad_generate_autocad_draw_script',
+      'mcp_cad-drafting_autocad_playback_file',
       'cad_run_autocad_draw_script',
     ]));
     expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
+    expect(route.toolNames.indexOf('desktop_list_apps')).toBeLessThan(route.toolNames.indexOf('cad_run_autocad_draw_script'));
     expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
+    expect(route.toolNames.indexOf('mcp_cad-drafting_autocad_playback_file')).toBeLessThan(route.toolNames.indexOf('cad_run_autocad_draw_script'));
     expect(route.toolNames.indexOf('cad_run_autocad_draw_script')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_cad_renovation_folder_workflow'));
   });
 

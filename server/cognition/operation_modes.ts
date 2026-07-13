@@ -30,6 +30,7 @@ const HIGH_PERMISSION_OVERRIDES: NonNullable<ToolPolicy['securityOverrides']> = 
   create_xlsx: 'safe',
   cad_generate_autocad_draw_script: 'safe',
   cad_run_autocad_draw_script: 'safe',
+  'mcp_cad-drafting_autocad_playback_file': 'safe',
 };
 
 export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> = {

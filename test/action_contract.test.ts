@@ -5,6 +5,7 @@ import {
   hasCoreActionEvidence,
   hasAuthenticatedWebResultEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresAutoCadMcpPlayback,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
 } from '../server/cognition/action_contract';
@@ -28,6 +29,15 @@ describe('Lumi action contract', () => {
       arguments: {},
       result: '{"sent":true}',
     }])).toBe(true);
+  });
+
+  it('does not turn a negated message boundary into a send contract', () => {
+    const contract = buildActionContract(
+      'Inspect running desktop AI applications and report detected evidence. Do not open apps, click, type, or send messages.',
+    );
+
+    expect(contract.kind).toBe('desktop_operation');
+    expect(contract.preferredTools).not.toContain('wechat_send_message');
   });
 
   it('treats directed person-to-person sends as real messaging work', () => {
@@ -104,6 +114,50 @@ describe('Lumi action contract', () => {
       arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
       result: '{"status":"completed","completionMarkerExists":true}',
     }])).toBe(true);
+    expect(hasVisibleAutoCadExecutionEvidence([{
+      id: 'mcp-run',
+      name: 'mcp_cad-drafting_autocad_playback_file',
+      arguments: { operationsPath: 'C:\\Users\\me\\Desktop\\plan_operations.json' },
+      result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true}',
+    }])).toBe(true);
+    expect(buildActionContract(text).preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
+  });
+
+  it('requires MCP marker evidence and excludes script fallback for an explicit MCP-only run', () => {
+    const text = 'Draw this visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only; do not use LISP, scripts, or fallback.';
+    const fallback = [{
+      id: 'fallback',
+      name: 'cad_run_autocad_draw_script',
+      arguments: {},
+      result: '{"status":"completed","completionMarkerExists":true}',
+    }];
+    const mcp = [{
+      id: 'mcp',
+      name: 'mcp_cad-drafting_autocad_playback_file',
+      arguments: {},
+      result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true}',
+    }];
+
+    expect(requiresAutoCadMcpPlayback(text)).toBe(true);
+    expect(buildActionContract(text).preferredTools).not.toContain('cad_run_autocad_draw_script');
+    expect(hasVisibleAutoCadExecutionEvidence(fallback, text)).toBe(false);
+    expect(hasVisibleAutoCadExecutionEvidence(mcp, text)).toBe(true);
+  });
+
+  it('keeps CAD primary when a browser preview is explicitly rejected', () => {
+    const contract = buildActionContract(
+      'Draw this in AutoCAD. Do not use a browser preview or DXF-only delivery.',
+    );
+
+    expect(contract.kind).toBe('cad_drafting');
+  });
+
+  it('treats AutoCAD installation inspection as desktop observation', () => {
+    const contract = buildActionContract(
+      'Inspect the installed AutoCAD launch target and do not open anything.',
+    );
+
+    expect(contract.kind).toBe('desktop_operation');
   });
 
   it('requires authenticated result evidence for login-then-search browser work', () => {

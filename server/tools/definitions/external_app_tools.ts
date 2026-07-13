@@ -11,7 +11,7 @@ import { isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate'
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import { analyzeScreen } from '../../llm/adapter';
 import { getUserPreferredVisionConfig, type VisionProvider } from '../../llm/vision_preferences';
-import { captureWindowsUiSnapshot } from '../../external_control/windows_uia';
+import { captureWindowsUiSnapshot, runWindowsUiAction } from '../../external_control/windows_uia';
 import { getMember, logAudit } from '../../org/db';
 import {
   sendLocalFileToPersonalWeChat,
@@ -1152,6 +1152,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
   powershellPath: string;
   markerPath: string;
   manifestPath: string;
+  operationsPath: string;
 } {
   const outputPath = String(args.outputPath || '').trim();
   const outputDirectory = String(args.outputDirectory || '').trim();
@@ -1162,7 +1163,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
     ? (path.isAbsolute(outputPath) ? expandHomePath(outputPath) : path.resolve(directory, outputPath))
     : path.join(directory, `${title}_autocad_draw_${Date.now()}`);
   const basePath = rawBase.replace(/\.(lsp|scr|ps1|dxf)$/i, '');
-  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`, `${basePath}_completed.txt`, `${basePath}_manifest.json`]) {
+  for (const filePath of [`${basePath}.lsp`, `${basePath}.scr`, `${basePath}.ps1`, `${basePath}_completed.txt`, `${basePath}_manifest.json`, `${basePath}_operations.json`]) {
     assertWritableCadPath(filePath);
   }
   fs.mkdirSync(path.dirname(basePath), { recursive: true });
@@ -1173,6 +1174,7 @@ function resolveAutocadScriptPaths(args: Record<string, any>, title: string): {
     powershellPath: `${basePath}_run_autocad.ps1`,
     markerPath: `${basePath}_completed.txt`,
     manifestPath: `${basePath}_manifest.json`,
+    operationsPath: `${basePath}_operations.json`,
   };
 }
 
@@ -1253,12 +1255,16 @@ function buildAutocadScript(lispPath: string): string {
   ].join('\n');
 }
 
+function powershellString(value: string): string {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
 function buildAutocadRunPowerShell(scriptPath: string, preferredExecutable?: string): string {
   const exe = String(preferredExecutable || 'acad.exe').trim() || 'acad.exe';
-  return [
+  const script = [
     '$ErrorActionPreference = "Stop"',
-    `$scriptPath = ${JSON.stringify(scriptPath)}`,
-    `$preferredAcad = ${JSON.stringify(exe)}`,
+    `$scriptPath = ${powershellString(scriptPath)}`,
+    `$preferredAcad = ${powershellString(exe)}`,
     '$candidates = @()',
     'if ($preferredAcad) { $candidates += $preferredAcad }',
     '$cmd = Get-Command acad.exe -ErrorAction SilentlyContinue',
@@ -1268,17 +1274,58 @@ function buildAutocadRunPowerShell(scriptPath: string, preferredExecutable?: str
     '  "${env:ProgramFiles(x86)}\\Autodesk\\AutoCAD*\\acad.exe"',
     ')',
     '$acad = $null',
+    '$acadPrefixArgs = @()',
     'foreach ($candidate in $candidates) {',
     '  foreach ($path in (Resolve-Path $candidate -ErrorAction SilentlyContinue)) {',
-    '    if (Test-Path $path.Path) { $acad = $path.Path; break }',
+    '    if (-not (Test-Path $path.Path)) { continue }',
+    '    if ([System.IO.Path]::GetExtension($path.Path) -ieq ".lnk") {',
+    '      $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($path.Path)',
+    '      if ($shortcut.TargetPath -and (Test-Path $shortcut.TargetPath)) {',
+    '        $acad = $shortcut.TargetPath',
+    '        if ($shortcut.Arguments) { $acadPrefixArgs += $shortcut.Arguments }',
+    '        break',
+    '      }',
+    '    } else {',
+    '      $acad = $path.Path',
+    '      break',
+    '    }',
     '  }',
     '  if ($acad) { break }',
     '}',
     'if (-not $acad) { throw "AutoCAD acad.exe was not found. Pass autocadExecutable or install AutoCAD." }',
-    'Start-Process -FilePath $acad -ArgumentList @("/b", $scriptPath)',
+    '$acadArgs = @($acadPrefixArgs) + @("/b", $scriptPath)',
+    'Start-Process -FilePath $acad -ArgumentList $acadArgs',
     'Write-Output "started=$acad script=$scriptPath"',
     '',
   ].join('\n');
+  // Windows PowerShell 5 treats BOM-less .ps1 files as the active ANSI code page.
+  // Preserve non-ASCII shortcut/install paths by emitting an explicit UTF-8 BOM.
+  return `\uFEFF${script}`;
+}
+
+async function resolveAutocadExecutableHint(
+  preferredExecutable: unknown,
+  context?: ToolContext,
+): Promise<{ value?: string; source: 'argument' | 'desktop_app_index' | 'fallback' }> {
+  const explicit = String(preferredExecutable || '').trim();
+  const genericExecutable = /^(?:acad|acad\.exe)$/i.test(explicit);
+  if (explicit && !genericExecutable) return { value: explicit, source: 'argument' };
+  if (!context?.desktopRelay) {
+    return explicit ? { value: explicit, source: 'fallback' } : { source: 'fallback' };
+  }
+
+  try {
+    const raw = await context.desktopRelay('desktop_list_apps', { query: 'autocad', limit: 20 });
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const candidate = parsed
+        .filter(item => item && typeof item === 'object' && String(item.path || '').trim())
+        .sort((left, right) => Number(right.score || 0) - Number(left.score || 0))[0];
+      if (candidate) return { value: String(candidate.path).trim(), source: 'desktop_app_index' };
+    }
+  } catch {}
+
+  return explicit ? { value: explicit, source: 'fallback' } : { source: 'fallback' };
 }
 
 function autocadRunnerPathForScript(scriptPath: string): string {
@@ -1304,13 +1351,128 @@ function readAutocadManifest(scriptPath: string): Record<string, any> | null {
   }
 }
 
-async function waitForFile(filePath: string, waitSeconds: number): Promise<boolean> {
-  const deadline = Date.now() + Math.max(0, Math.min(waitSeconds, 300)) * 1000;
-  while (Date.now() <= deadline) {
-    if (fs.existsSync(filePath)) return true;
-    await new Promise(resolve => setTimeout(resolve, 750));
+interface AutocadCompletionWaitResult {
+  markerCompleted: boolean;
+  activeWindowRaw: string;
+  startupDialogDetected: boolean;
+  startupDialogActions: string[];
+  startupDialogBlocker?: string;
+}
+
+function isPotentialAutocadSecurityWindow(activeWindowRaw: string): boolean {
+  const activeWindow = parseDesktopJson(activeWindowRaw);
+  const processName = String(activeWindow.process_name || activeWindow.processName || '').toLowerCase();
+  const title = String(activeWindow.title || '');
+  return (processName === 'acad.exe' || /autocad|acad/i.test(`${processName} ${title}`))
+    && /security|unsigned|untrusted|\u5b89\u5168|\u672a\u7b7e\u540d|\u4e0d\u53d7\u4fe1\u4efb/i.test(title);
+}
+
+function isAutocadUnsignedLispDialog(
+  activeWindowRaw: string,
+  snapshotRaw: string,
+  expectedLispPath?: string,
+): boolean {
+  if (!isPotentialAutocadSecurityWindow(activeWindowRaw)) return false;
+
+  const snapshot = String(snapshotRaw || '');
+  if (!/CommandButton_1002/i.test(snapshot) || !/\.lsp\b/i.test(snapshot)) return false;
+  const expectedName = expectedLispPath ? path.basename(expectedLispPath).toLowerCase() : '';
+  return !expectedName || snapshot.toLowerCase().includes(expectedName);
+}
+
+async function invokeAutocadLoadOnce(
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  activeWindowRaw: string,
+): Promise<string> {
+  const activeWindow = parseDesktopJson(activeWindowRaw);
+  const args = {
+    root: 'active' as const,
+    automationId: 'CommandButton_1002',
+    processId: Number(activeWindow.pid || activeWindow.processId || 0) || undefined,
+    maxDepth: 4,
+    maxNodes: 100,
+    fallbackClick: true,
+    verify: true,
+    delayAfterMs: 350,
+  };
+
+  try {
+    const relayed = await desktopRelay('desktop_ui_invoke', args);
+    const parsed = parseDesktopJson(relayed);
+    if (parsed.status === 'ok') return `relay:${parsed.method || 'invoke'}`;
+  } catch {
+    // Older clients do not relay UI Automation. Local deployment can use the
+    // backend's Windows UIA bridge against the same foreground desktop.
   }
-  return fs.existsSync(filePath);
+
+  const local = await runWindowsUiAction({ ...args, action: 'invoke' });
+  if (local.status !== 'ok') {
+    throw new Error(`AutoCAD Load Once control was not invoked: ${local.status}`);
+  }
+  return `local:${local.method || 'invoke'}`;
+}
+
+async function waitForAutocadCompletion(
+  markerPath: string,
+  waitSeconds: number,
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  expectedLispPath?: string,
+): Promise<AutocadCompletionWaitResult> {
+  const deadline = Date.now() + Math.max(0, Math.min(waitSeconds, 300)) * 1000;
+  const startupDialogActions: string[] = [];
+  let activeWindowRaw = '';
+  let startupDialogDetected = false;
+  let startupDialogBlocker = '';
+  let nextWindowInspectionAt = Date.now();
+  let dialogAttempts = 0;
+
+  while (Date.now() <= deadline) {
+    if (fs.existsSync(markerPath)) {
+      return {
+        markerCompleted: true,
+        activeWindowRaw,
+        startupDialogDetected,
+        startupDialogActions,
+      };
+    }
+
+    if (Date.now() >= nextWindowInspectionAt) {
+      nextWindowInspectionAt = Date.now() + 2_000;
+      try {
+        activeWindowRaw = await desktopRelay('desktop_active_window', {});
+      } catch {}
+
+      if (activeWindowRaw && dialogAttempts < 2 && isPotentialAutocadSecurityWindow(activeWindowRaw)) {
+        let snapshotRaw = '';
+        try {
+          snapshotRaw = await captureDesktopUiEvidence(desktopRelay, 100);
+        } catch {}
+        if (isAutocadUnsignedLispDialog(activeWindowRaw, snapshotRaw, expectedLispPath)) {
+          startupDialogDetected = true;
+          dialogAttempts += 1;
+          try {
+            const action = await invokeAutocadLoadOnce(desktopRelay, activeWindowRaw);
+            startupDialogActions.push(`load_once:${action}`);
+            startupDialogBlocker = '';
+            nextWindowInspectionAt = Date.now() + 4_000;
+          } catch (error: any) {
+            startupDialogBlocker = error?.message || String(error);
+            startupDialogActions.push(`load_once_failed:${startupDialogBlocker}`);
+          }
+        }
+      }
+    }
+
+    await sleep(750);
+  }
+
+  return {
+    markerCompleted: fs.existsSync(markerPath),
+    activeWindowRaw,
+    startupDialogDetected,
+    startupDialogActions,
+    startupDialogBlocker: startupDialogBlocker || undefined,
+  };
 }
 
 export function registerExternalAppTools(registry: ToolRegistry): void {
@@ -1978,7 +2140,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional directory to save the .lsp, .scr, and runner .ps1 files.' },
         outputPath: { type: 'string', description: 'Optional exact output base path. Extensions .lsp/.scr/.ps1 are generated from it.' },
-        strokeDelayMs: { type: 'number', description: 'Delay in milliseconds after each visible operation. Defaults to 250, max 5000.' },
+        strokeDelayMs: { type: 'number', description: 'Delay in milliseconds after each visible operation. Defaults to 450 for clearly observable playback, max 5000. Set 0 only for non-visual diagnostics.' },
         autocadExecutable: { type: 'string', description: 'Optional AutoCAD executable path/name for the generated PowerShell runner. Defaults to acad.exe.' },
         launchAutoCAD: { type: 'boolean', description: 'Optionally launch AutoCAD with the generated .scr via desktop_run_command. Runs under the active desktop mode; destructive/system boundaries still apply.' },
         walls: {
@@ -2037,17 +2199,28 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     handler: async (args, context) => {
       const draftArgs = validateCadDraftArgs(args);
       const title = safeFileName(String(draftArgs.title || 'lumi_autocad_draw'));
-      const delay = Math.max(0, Math.min(Number(draftArgs.strokeDelayMs) || 250, 5000));
+      const requestedDelay = Number(draftArgs.strokeDelayMs);
+      const delay = Number.isFinite(requestedDelay) && requestedDelay >= 0
+        ? Math.max(0, Math.min(requestedDelay, 5000))
+        : 450;
       const paths = resolveAutocadScriptPaths(draftArgs, title);
       const operations = collectAutocadDrawOperations(draftArgs);
       if (!operations.length) throw new Error('No drawable AutoCAD operations were generated. Provide width/height plus walls, rooms, doors, windows, or labels.');
 
+      const autocadExecutable = await resolveAutocadExecutableHint(draftArgs.autocadExecutable, context);
       const lisp = buildAutocadLisp(draftArgs, operations, title, delay, paths.markerPath);
       const script = buildAutocadScript(paths.lispPath);
-      const runner = buildAutocadRunPowerShell(paths.scriptPath, draftArgs.autocadExecutable ? String(draftArgs.autocadExecutable) : undefined);
+      const runner = buildAutocadRunPowerShell(paths.scriptPath, autocadExecutable.value);
       fs.writeFileSync(paths.lispPath, lisp, 'utf-8');
       fs.writeFileSync(paths.scriptPath, script, 'utf-8');
       fs.writeFileSync(paths.powershellPath, runner, 'utf-8');
+      fs.writeFileSync(paths.operationsPath, JSON.stringify({
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        title,
+        unit: draftArgs.unit || 'unit',
+        operations,
+      }, null, 2), 'utf-8');
       const manifest = {
         version: 1,
         generatedAt: new Date().toISOString(),
@@ -2065,7 +2238,10 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         operationCount: operations.length,
         lispPath: paths.lispPath,
         scriptPath: paths.scriptPath,
+        operationsPath: paths.operationsPath,
         completionMarkerPath: paths.markerPath,
+        autocadExecutable: autocadExecutable.value || 'acad.exe',
+        autocadExecutableSource: autocadExecutable.source,
       };
       fs.writeFileSync(paths.manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
       try { fs.rmSync(paths.markerPath, { force: true }); } catch {}
@@ -2104,8 +2280,11 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         lispPath: paths.lispPath,
         scriptPath: paths.scriptPath,
         powershellRunnerPath: paths.powershellPath,
+        operationsPath: paths.operationsPath,
         completionMarkerPath: paths.markerPath,
         manifestPath: paths.manifestPath,
+        autocadExecutable: autocadExecutable.value || 'acad.exe',
+        autocadExecutableSource: autocadExecutable.source,
         launchCommand: `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.powershellPath}"`,
         launchAutoCAD: Boolean(draftArgs.launchAutoCAD),
         launchResult,
@@ -2153,15 +2332,36 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const waitSeconds = Number.isFinite(explicitWaitSeconds) && explicitWaitSeconds >= 0
         ? Math.min(explicitWaitSeconds, 300)
         : estimatedWaitSeconds;
+      const manifestExecutable = manifest?.autocadExecutableSource !== 'fallback'
+        ? manifest?.autocadExecutable
+        : undefined;
+      let autocadExecutable = await resolveAutocadExecutableHint(
+        args.autocadExecutable || manifestExecutable,
+        context,
+      );
+      if (
+        !args.autocadExecutable &&
+        manifestExecutable &&
+        autocadExecutable.value === manifestExecutable &&
+        ['argument', 'desktop_app_index'].includes(String(manifest?.autocadExecutableSource || ''))
+      ) {
+        autocadExecutable = {
+          value: autocadExecutable.value,
+          source: manifest?.autocadExecutableSource as 'argument' | 'desktop_app_index',
+        };
+      }
       if (args.recordRunner !== false) {
         assertWritableCadPath(runnerPath);
-        fs.writeFileSync(runnerPath, buildAutocadRunPowerShell(scriptPath, args.autocadExecutable ? String(args.autocadExecutable) : undefined), 'utf-8');
+        fs.writeFileSync(runnerPath, buildAutocadRunPowerShell(scriptPath, autocadExecutable.value), 'utf-8');
       }
 
       const launchCommand = `powershell -NoProfile -ExecutionPolicy Bypass -File "${runnerPath}"`;
       let launchResult: string | undefined;
       let activeWindowRaw = '';
       let runningProcessesRaw = '';
+      let startupDialogDetected = false;
+      let startupDialogActions: string[] = [];
+      let startupDialogBlocker: string | undefined;
       let markerCompleted = fs.existsSync(markerPath);
       const shouldLaunch = args.launch !== false;
 
@@ -2169,7 +2369,17 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         const desktopRelay = requireDesktopRelay(context);
         try { fs.rmSync(markerPath, { force: true }); } catch {}
         launchResult = await desktopRelay('desktop_run_command', { command: launchCommand });
-        markerCompleted = await waitForFile(markerPath, waitSeconds);
+        const completion = await waitForAutocadCompletion(
+          markerPath,
+          waitSeconds,
+          desktopRelay,
+          lispPath || String(manifest?.lispPath || ''),
+        );
+        markerCompleted = completion.markerCompleted;
+        activeWindowRaw = completion.activeWindowRaw;
+        startupDialogDetected = completion.startupDialogDetected;
+        startupDialogActions = completion.startupDialogActions;
+        startupDialogBlocker = completion.startupDialogBlocker;
         try {
           activeWindowRaw = await desktopRelay('desktop_active_window', {});
         } catch {}
@@ -2197,16 +2407,23 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         manifestFound: Boolean(manifest),
         manifest,
         powershellRunnerPath: runnerPath,
+        autocadExecutable: autocadExecutable.value || 'acad.exe',
+        autocadExecutableSource: autocadExecutable.source,
         launchCommand,
         launch: shouldLaunch,
         launchResult,
         waitSeconds,
         estimatedWaitSeconds,
         autocadObserved,
+        startupDialogDetected,
+        startupDialogActions,
+        startupDialogBlocker,
         activeWindowRaw: activeWindowRaw || undefined,
         runningProcessesRaw: runningProcessesRaw || undefined,
         note: markerCompleted
           ? 'AutoCAD draw script completed and wrote the marker file.'
+          : startupDialogBlocker
+          ? `AutoCAD is waiting at a verified unsigned-LISP security dialog, but Load Once could not be invoked: ${startupDialogBlocker}`
           : shouldLaunch
           ? 'AutoCAD script was launched or attempted. Completion marker was not observed yet; inspect AutoCAD/window state before claiming the drawing is complete.'
           : 'Runner is ready. Launch is disabled, so no AutoCAD execution was attempted.',

@@ -1,6 +1,11 @@
 import type { LumiExecutionDecision } from './execution_decision';
 import type { LumiTurnDispatch } from './turn_dispatch';
-import { buildActionContract, formatActionContractPrompt, requiresVisibleAutoCadExecution } from './action_contract';
+import {
+  buildActionContract,
+  formatActionContractPrompt,
+  requiresAutoCadMcpPlayback,
+  requiresVisibleAutoCadExecution,
+} from './action_contract';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn } from './legal_entry';
 
 export type LumiCapabilityLane =
@@ -94,11 +99,13 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
   design_cad: [
     'desktop_path_info',
     'desktop_list_files',
+    'desktop_list_apps',
     'floorplan_extract_geometry',
     'ocr_image_file',
     'mcp_cad-drafting_cad_renovation_folder_workflow',
     'cad_generate_dxf',
     'cad_generate_autocad_draw_script',
+    'mcp_cad-drafting_autocad_playback_file',
     'cad_run_autocad_draw_script',
   ],
   desktop_control: [
@@ -390,7 +397,10 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':
       if (requiresVisibleAutoCadExecution(text)) {
-        return 'Use the source files/images to derive structured geometry, then generate CAD/DXF and continue to AutoCAD visible drawing execution. A DXF, folder workflow, or design package alone is not completion evidence for this wording; call cad_generate_autocad_draw_script and cad_run_autocad_draw_script, then verify the AutoCAD run or state the exact blocker.';
+        if (requiresAutoCadMcpPlayback(text)) {
+          return 'Generate the validated operations JSON, then use mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke playback in the real AutoCAD application. Do not call cad_run_autocad_draw_script or use LISP/script fallback. Accept completion only when the MCP result reports transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true; otherwise report the exact blocker.';
+        }
+        return 'Use the source files/images to derive structured geometry, then generate CAD/DXF and continue to visible AutoCAD drawing execution. After cad_generate_autocad_draw_script creates operationsPath, prefer mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke AutoCAD playback; use cad_run_autocad_draw_script only as a compatibility fallback. A DXF, folder workflow, design package, generated script, or merely opened AutoCAD window is not completion evidence; require the playback completion marker or state the exact blocker.';
       }
       return 'Prefer structured design/CAD tools over raw cursor work; use desktop CAD only when the user asks to operate visible software or a tool needs it.';
     case 'desktop_control':

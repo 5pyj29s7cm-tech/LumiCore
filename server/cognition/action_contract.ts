@@ -51,6 +51,10 @@ function matches(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
 }
 
+function hasNegatedMessagingSendIntent(text: string): boolean {
+  return /(?:不要|别|无需|禁止).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
+}
+
 export function requiresVisibleAutoCadExecution(input: string): boolean {
   const text = compact(input);
   if (!text) return false;
@@ -63,6 +67,16 @@ export function requiresVisibleAutoCadExecution(input: string): boolean {
   return mentionsCadSurface && wantsVisibleDrawing;
 }
 
+export function requiresAutoCadMcpPlayback(input: string): boolean {
+  const text = compact(input);
+  if (!text) return false;
+  const mentionsMcp = /mcp_cad-drafting_autocad_playback_file|(?:AutoCAD|CAD)\s*MCP|MCP.{0,24}(?:AutoCAD|CAD)/i.test(text);
+  const requiresExclusivePath =
+    /(?:仅|只|只能|必须|务必|不要|别|禁止|不得|不能|不准).{0,48}(?:AutoCAD\s*MCP|CAD\s*MCP|mcp_cad-drafting_autocad_playback_file|LISP|脚本|回退|降级|cad_run_autocad_draw_script)/iu.test(text)
+    || /\b(?:only|must|required|exclusively)\b.{0,64}\b(?:AutoCAD|CAD|MCP)\b|\b(?:do\s+not|don't|dont|without|no)\b.{0,64}\b(?:LISP|script|fallback|cad_run_autocad_draw_script)\b/i.test(text);
+  return mentionsMcp && requiresExclusivePath;
+}
+
 function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | null {
   try {
     const parsed = JSON.parse(String(record.result || ''));
@@ -72,24 +86,34 @@ function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | nul
   }
 }
 
-export function hasVisibleAutoCadExecutionEvidence(records: ToolExecutionRecord[] = []): boolean {
+export function hasVisibleAutoCadExecutionEvidence(
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+): boolean {
   const successful = records.filter(record => !record.error && String(record.result || '').trim());
   if (successful.length === 0) return false;
+  const mcpOnly = requiresAutoCadMcpPlayback(taskText);
 
   const generatedVisibleScript = successful.some(record =>
     /^cad_generate_autocad_draw_script$/i.test(record.name) &&
-    /scriptPath|lispPath|completionMarkerPath|operationCount/i.test(String(record.result || ''))
+    /scriptPath|lispPath|operationsPath|completionMarkerPath|operationCount/i.test(String(record.result || ''))
   );
 
   const completedRun = successful.some(record => {
-    if (!/^cad_run_autocad_draw_script$/i.test(record.name)) return false;
+    if (!/^(?:cad_run_autocad_draw_script|mcp_cad-drafting_autocad_playback_file)$/i.test(record.name)) return false;
     const payload = parseRecordJson(record);
-    const result = String(record.result || '');
-    return payload?.status === 'completed'
-      || payload?.completionMarkerExists === true
-      || /"status"\s*:\s*"completed"|"completionMarkerExists"\s*:\s*true/i.test(result);
+    if (/^mcp_cad-drafting_autocad_playback_file$/i.test(record.name)) {
+      return payload?.status === 'completed'
+        && payload?.transport === 'mcp_autocad_com'
+        && payload?.visiblePlayback === true
+        && payload?.completionMarkerExists === true;
+    }
+    if (mcpOnly) return false;
+    return payload?.status === 'completed' && payload?.completionMarkerExists === true;
   });
   if (completedRun) return true;
+
+  if (mcpOnly) return false;
 
   const visibleCadSurface = successful.some(record => {
     if (!/^(desktop_capture_screen|desktop_active_window|desktop_ui_snapshot|desktop_running_processes)$/i.test(record.name)) return false;
@@ -162,6 +186,8 @@ function buildLegalDocumentContract(): LumiActionContract {
 export function buildActionContract(input: string): LumiActionContract {
   const text = compact(input);
   if (!text) return NONE_CONTRACT;
+  const negatedMessagingSend = hasNegatedMessagingSendIntent(text);
+  const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
   const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u);
 
   if (isRemoteLegalMessageTurn(text)) {
@@ -203,6 +229,7 @@ export function buildActionContract(input: string): LumiActionContract {
         matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\bmessage\b/i)
       )
     ) &&
+    !negatedMessagingSend &&
     !matches(text, /\u8349\u7a3f|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b/i)
   ) {
     return withDefaults({
@@ -242,7 +269,10 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  if (matches(text, /\u767b\u5f55|\u6d4f\u89c8\u5668|\u6253\u5f00\u7f51\u7ad9|\u81ea\u52a8\u767b\u5f55|browser|login|log\s*in|website|site/i)) {
+  if (
+    matches(text, /\u767b\u5f55|\u6d4f\u89c8\u5668|\u6253\u5f00\u7f51\u7ad9|\u81ea\u52a8\u767b\u5f55|browser|login|log\s*in|website|site/i) &&
+    !matches(text, /\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u753b\u56fe|\u753b\u56fe\u7eb8|\u56fe\u7eb8|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u88c5\u4fee|cad/i)
+  ) {
     return withDefaults({
       kind: 'browser_account',
       label: '\u6d4f\u89c8\u5668/\u8d26\u53f7\u64cd\u4f5c',
@@ -256,14 +286,22 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  if (matches(text, /\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u753b\u56fe|\u753b\u56fe\u7eb8|\u56fe\u7eb8|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u88c5\u4fee|cad/i)) {
+  if (
+    !appInventoryInspection &&
+    matches(text, /\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u753b\u56fe|\u753b\u56fe\u7eb8|\u56fe\u7eb8|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u88c5\u4fee|cad/i)
+  ) {
+    const mcpOnly = requiresAutoCadMcpPlayback(text);
     return withDefaults({
       kind: 'cad_drafting',
       label: 'CAD/\u56fe\u7eb8\u4f5c\u6218',
       coreAction: '\u751f\u6210\u6216\u64cd\u4f5c CAD \u56fe\u7eb8\uff0c\u786e\u8ba4\u6587\u4ef6\u4ea7\u7269\u6216\u53ef\u89c1\u8f6f\u4ef6\u7ed8\u5236\u7ed3\u679c',
       preparationIsNotCompletion: ['\u8ba1\u7b97\u65b9\u6848', '\u5199\u51fa\u811a\u672c', '\u6253\u5f00 CAD \u8f6f\u4ef6', '\u67e5\u770b\u6587\u4ef6\u5939', '\u53ea\u751f\u6210 DXF/\u65b9\u6848\u5305'],
-      requiredEvidence: ['created CAD/DXF/script file path with nonzero size', '\u82e5\u7528\u6237\u8981\u5728 AutoCAD/CAD \u91cc\u5b9e\u9645\u753b\uff1acad_run_autocad_draw_script completed/marker evidence or visible AutoCAD drawing evidence', '\u6216 CAD \u8f6f\u4ef6\u4e2d\u53ef\u89c1\u56fe\u5f62\u7684\u684c\u9762\u8bc1\u636e'],
-      preferredTools: ['floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script', 'desktop_path_info', 'desktop_capture_screen'],
+      requiredEvidence: mcpOnly
+        ? ['created operations JSON path with nonzero size', 'mcp_cad-drafting_autocad_playback_file result with transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true']
+        : ['created CAD/DXF/script/operations file path with nonzero size', '\u82e5\u7528\u6237\u8981\u5728 AutoCAD/CAD \u91cc\u5b9e\u9645\u753b\uff1amcp_cad-drafting_autocad_playback_file or cad_run_autocad_draw_script completed/marker evidence', '\u6216 CAD \u8f6f\u4ef6\u4e2d\u53ef\u89c1\u56fe\u5f62\u7684\u684c\u9762\u8bc1\u636e'],
+      preferredTools: mcpOnly
+        ? ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_generate_autocad_draw_script', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
+        : ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'mcp_cad-drafting_autocad_playback_file', 'cad_run_autocad_draw_script', 'desktop_path_info', 'desktop_capture_screen'],
       verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen', 'desktop_active_window'],
       nextStep: '\u5148\u8bfb\u53d6\u56fe\u7247/\u6587\u4ef6\u5f62\u6210\u7ed3\u6784\u5316\u51e0\u4f55\uff0c\u518d\u751f\u6210 CAD/DXF\uff1b\u82e5\u7528\u6237\u660e\u8bf4 AutoCAD \u5b9e\u753b\uff0c\u5fc5\u987b\u7ee7\u7eed\u5230 AutoCAD \u811a\u672c\u6267\u884c\u548c\u53ef\u89c1\u9a8c\u8bc1\u3002',
       caution: '\u4e0d\u80fd\u628a\u8bbe\u8ba1\u601d\u8def\u3001DXF/\u65b9\u6848\u5305\u3001\u811a\u672c\u8349\u7a3f\u6216\u6253\u5f00\u8f6f\u4ef6\u8bf4\u6210\u5df2\u5728 AutoCAD \u91cc\u753b\u5b8c\u3002',
@@ -315,7 +353,7 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  if (matches(text, /\u684c\u9762|\u6253\u5f00|\u805a\u7126|\u70b9\u51fb|\u8f93\u5165|\u5e94\u7528|\u8f6f\u4ef6|desktop|open|click|type|app|application/i)) {
+  if (appInventoryInspection || matches(text, /\u684c\u9762|\u6253\u5f00|\u805a\u7126|\u70b9\u51fb|\u8f93\u5165|\u5e94\u7528|\u8f6f\u4ef6|desktop|open|click|type|app|application/i)) {
     return withDefaults({
       kind: 'desktop_operation',
       label: '\u684c\u9762/\u672c\u673a\u8f6f\u4ef6\u64cd\u4f5c',

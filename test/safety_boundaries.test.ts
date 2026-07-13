@@ -338,6 +338,14 @@ describe('Action Constitution', () => {
     }, 'safe');
     expect(playback.level).toBe('safe');
     expect(playback.requiresUserConfirmation).toBe(false);
+
+    const mcpPlayback = evaluateActionConstitution('mcp_cad-drafting_autocad_playback_file', {
+      operationsPath: 'C:\\Users\\me\\Desktop\\plan_operations.json',
+      completionMarkerPath: 'C:\\Users\\me\\Desktop\\plan_completed.txt',
+      createNewDocument: true,
+    }, 'confirm');
+    expect(mcpPlayback.level).toBe('safe');
+    expect(mcpPlayback.requiresUserConfirmation).toBe(false);
   });
 
   it('limits trusted auto-approval to lower-risk actions', () => {

@@ -99,6 +99,10 @@ export function evaluateActionConstitution(
     return allow('external_app', 'Saved or preset web login/session reuse is allowed by the active desktop mode');
   }
 
+  if (isAutocadPlaybackAction(toolName, args)) {
+    return allow('desktop_control', 'Validated AutoCAD drawing playback is allowed by Assistant and Autonomy desktop execution policy');
+  }
+
   if (isExplicitMessagingFileTransfer(toolName, context)) {
     if (canRunSupervisedExternalCommit(context)) {
       return allow('messaging', 'User explicitly requested this bound WeChat/Feishu file transfer');
@@ -199,6 +203,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (isTrustedDesktopRunCommand(toolName, args)) return 'desktop_control';
   if (name === 'cad_generate_autocad_draw_script') return args.launchAutoCAD === true ? 'desktop_control' : 'local_write';
   if (name === 'cad_run_autocad_draw_script') return 'desktop_control';
+  if (name === 'mcp_cad-drafting_autocad_playback_file') return 'desktop_control';
   if (name.includes('run_command') || name.includes('terminal') || name.includes('shell') || name.includes('code_execution')) return 'system';
   if (name.includes('wechat') || name.includes('feishu') || name.includes('wecom') || name.includes('message')) return 'messaging';
   if (name === 'computer_use' || name.startsWith('desktop_') || name.includes('mouse') || name.includes('keyboard') || name.includes('screenshot')) return 'desktop_control';
@@ -258,6 +263,7 @@ function isTrustedDesktopRunCommand(toolName: string, args: Record<string, any> 
 function isAutocadPlaybackAction(toolName: string, args: Record<string, any> = {}): boolean {
   const name = toolName.toLowerCase();
   return name === 'cad_run_autocad_draw_script' ||
+    name === 'mcp_cad-drafting_autocad_playback_file' ||
     (name === 'cad_generate_autocad_draw_script' && args.launchAutoCAD === true);
 }
 

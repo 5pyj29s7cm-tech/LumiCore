@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { Server, Socket } from "socket.io";
 import { deviceRegistry } from "../devices";
+import { captureWindowsUiSnapshot, runWindowsUiAction } from "../external_control/windows_uia";
 
 type DesktopRelayPayload = {
   correlationId: string;
@@ -44,6 +45,31 @@ export type DesktopRelayOptions = {
 };
 
 const pendingDesktopRelays = new Map<string, PendingDesktopRelay>();
+const LOCAL_DESKTOP_UI_TOOLS = new Set([
+  'desktop_ui_snapshot',
+  'desktop_ui_focus',
+  'desktop_ui_click',
+  'desktop_ui_invoke',
+  'desktop_ui_type',
+]);
+
+async function runLocalDesktopUiTool(
+  toolName: string,
+  args: Record<string, any>,
+): Promise<string | null> {
+  if (process.platform !== 'win32') return null;
+  if (toolName === 'desktop_ui_snapshot') {
+    return JSON.stringify(await captureWindowsUiSnapshot(args), null, 2);
+  }
+  const action = {
+    desktop_ui_focus: 'focus',
+    desktop_ui_click: 'click',
+    desktop_ui_invoke: 'invoke',
+    desktop_ui_type: 'type',
+  }[toolName] as 'focus' | 'click' | 'invoke' | 'type' | undefined;
+  if (!action) return null;
+  return JSON.stringify(await runWindowsUiAction({ ...args, action }), null, 2);
+}
 
 function normalizeDesktopScope(domain?: string, orgId?: string) {
   const normalizedOrgId = String(orgId || '').trim();
@@ -112,6 +138,38 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
   const scope = normalizeDesktopScope(options.domain, options.orgId);
 
   return async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
+    if (process.platform === 'win32' && LOCAL_DESKTOP_UI_TOOLS.has(toolName)) {
+      const localUiCorrelationId = `desktop-${options.source}_${randomUUID()}`;
+      try {
+        const localUiResult = await runLocalDesktopUiTool(toolName, args);
+        if (localUiResult !== null) {
+          options.emitToolLifecycle?.({
+            correlationId: localUiCorrelationId,
+            name: toolName,
+            arguments: args,
+          });
+          options.emitToolLifecycle?.({
+            correlationId: localUiCorrelationId,
+            name: toolName,
+            arguments: args,
+            result: options.formatResultForLifecycle
+              ? options.formatResultForLifecycle(localUiResult)
+              : localUiResult,
+          });
+          return localUiResult;
+        }
+      } catch (error: any) {
+        const message = error?.message || String(error);
+        options.emitToolLifecycle?.({
+          correlationId: localUiCorrelationId,
+          name: toolName,
+          arguments: args,
+          error: message,
+        });
+        throw error;
+      }
+    }
+
     return new Promise((resolve, reject) => {
       const cid = `${options.source}_${randomUUID()}`;
       const uiCid = `desktop-${cid}`;

@@ -169,7 +169,10 @@ async function handleDesktopExec(socket: Socket, data: {
           return;
         }
         const result: { success: boolean; output: string } = await invoke('run_command', { command: cmd, cwd: cwd.trim() || null });
-        output = (result.success ? '' : '[FAILED] ') + result.output;
+        if (!result.success) {
+          throw new Error(result.output || `Command failed: ${cmd}`);
+        }
+        output = result.output;
         break;
       }
       case 'desktop_active_window': {

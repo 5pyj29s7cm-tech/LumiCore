@@ -58,6 +58,7 @@ const declarations = [
   'wechat_copy_reply_draft',
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
+  'mcp_cad-drafting_autocad_playback_file',
   'cad_run_autocad_draw_script',
   'mcp_cad-drafting_cad_space_program',
   'mcp_cad-drafting_cad_renovation_folder_workflow',
@@ -240,9 +241,11 @@ describe('Lumi runtime action pressure coverage', () => {
     ]));
 
     expect(cad.contract.kind).toBe('cad_drafting');
-    expect(cad.route?.toolNames.slice(0, 3)).toEqual([
+    expect(cad.route?.toolNames.slice(0, 5)).toEqual([
+      'desktop_list_apps',
       'cad_generate_dxf',
       'cad_generate_autocad_draw_script',
+      'mcp_cad-drafting_autocad_playback_file',
       'cad_run_autocad_draw_script',
     ]);
   });

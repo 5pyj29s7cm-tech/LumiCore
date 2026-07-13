@@ -435,8 +435,8 @@ export function registerTaskHandler(
           source: 'task',
           flow: turnFlow,
         });
+        orchestratedText = finalOrchestrated.text;
         if (finalOrchestrated.blocked) {
-          orchestratedText = finalOrchestrated.text;
           if (finalOrchestrated.notification) socket.emit("agent:notification", finalOrchestrated.notification);
         }
         // Orchestrator handled the task — emit result and skip normal LLM path
@@ -534,8 +534,8 @@ export function registerTaskHandler(
         source: 'task',
         flow: turnFlow,
       });
+      finalTaskText = finalTaskResponse.text;
       if (finalTaskResponse.blocked) {
-        finalTaskText = finalTaskResponse.text;
         if (finalTaskResponse.notification) socket.emit("agent:notification", finalTaskResponse.notification);
       }
       const holoTask = canOutputHolographic(sensory)

@@ -1,8 +1,50 @@
 import type { ToolExecutionRecord } from '../tools/types';
 
 export interface DesktopObservationToolCall {
-  name: 'desktop_active_window' | 'desktop_running_processes' | 'desktop_idle_time' | 'desktop_system_info';
+  name: 'desktop_active_window' | 'desktop_running_processes' | 'desktop_idle_time' | 'desktop_system_info' | 'desktop_list_apps';
   arguments: Record<string, any>;
+}
+
+const DESKTOP_AI_EVIDENCE_RE = /work\s*buddy|codex|chatgpt|claude|gemini|deep\s*seek|kimi|doubao|tongyi|qwen|wenxin|perplexity|cursor|copilot|lm\s*studio|ollama|cherry\s*studio|anythingllm/i;
+const DESKTOP_AI_APP_IDS = new Set([
+  'workbuddy',
+  'codex',
+  'chatgpt',
+  'claude',
+  'gemini',
+  'deepseek',
+  'kimi',
+  'doubao',
+  'tongyi',
+  'qwen',
+  'wenxin',
+  'perplexity',
+  'cursor',
+  'copilot',
+  'lmstudio',
+  'ollama',
+  'cherry-studio',
+  'anythingllm',
+]);
+const SPECIFIC_APP_QUERY_RE = /\b(?:AutoCAD|WeChat|Weixin|WeCom|Feishu|Lark|DingTalk|WorkBuddy|Codex|ChatGPT|Claude|Cursor|LM\s*Studio|Cherry\s*Studio|AnythingLLM|WPS|Word|Excel|PowerPoint|Chrome|Edge|Revit|Jianying|CapCut)\b/gi;
+
+function uniqueLabels(items: any[], label: (item: any) => string, key: (item: any) => string): string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const item of items) {
+    const itemKey = key(item).trim().toLowerCase();
+    const itemLabel = label(item).trim();
+    if (!itemKey || !itemLabel || seen.has(itemKey)) continue;
+    seen.add(itemKey);
+    labels.push(itemLabel);
+  }
+  return labels;
+}
+
+function isDesktopAiApp(item: any): boolean {
+  const appId = String(item?.app_id || '').trim().toLowerCase();
+  if (appId) return DESKTOP_AI_APP_IDS.has(appId);
+  return DESKTOP_AI_EVIDENCE_RE.test([item?.label, item?.path].filter(Boolean).join(' '));
 }
 
 function stripNegativeConstraints(value: string): string {
@@ -16,14 +58,16 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   if (!text) return [];
 
   const wantsActiveWindow = /\b(?:active|foreground|current)\s+window\b|\bwindow\s+title\b|(?:\u5f53\u524d|\u6d3b\u52a8|\u524d\u53f0)\u7a97\u53e3|\u7a97\u53e3\u6807\u9898/iu.test(text);
-  const wantsProcesses = /\b(?:running\s+process(?:es)?|process\s+(?:list|state|status)|runtime\s+state|desktop\s+(?:state|status))\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b(?:\u5217\u8868|\u72b6\u6001|\u4fe1\u606f)|\u684c\u9762\u8fd0\u884c\u72b6\u6001/iu.test(text);
+  const wantsProcesses = /\b(?:running\s+process(?:es)?|process\s+(?:list|state|status)|runtime\s+state|desktop\s+(?:state|status))\b|\b(?:running|active)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b(?:\u5217\u8868|\u72b6\u6001|\u4fe1\u606f)|\u684c\u9762\u8fd0\u884c\u72b6\u6001|(?:\u6b63\u5728\u8fd0\u884c|\u5df2\u8fd0\u884c).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528/iu.test(text);
   const wantsIdle = /\b(?:idle\s+time|away\s+time)\b|\u7a7a\u95f2\u65f6\u95f4|\u591a\u4e45\u6ca1\u64cd\u4f5c/iu.test(text);
   const wantsSystem = /\b(?:system\s+info|os\s+info|cpu|memory|disk)\b|\u7cfb\u7edf\u4fe1\u606f|CPU|\u5185\u5b58|\u78c1\u76d8/iu.test(text);
+  const wantsAppInventory = /\b(?:(?:installed|launchable|available|local(?:ly)?)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?|app(?:lication)?\s+(?:inventory|list))\b|\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u672c\u673a|\u672c\u5730).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|\u5e94\u7528(?:\u6e05\u5355|\u5217\u8868)|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
   const wantsDesktopState = /\bdesktop\s+(?:state|status|runtime)\b|\u684c\u9762\u8fd0\u884c\u72b6\u6001|\u684c\u9762\u72b6\u6001/iu.test(text);
-  if (!wantsActiveWindow && !wantsProcesses && !wantsIdle && !wantsSystem && !wantsDesktopState) return [];
+  if (!wantsActiveWindow && !wantsProcesses && !wantsIdle && !wantsSystem && !wantsAppInventory && !wantsDesktopState) return [];
 
   const positiveText = stripNegativeConstraints(text);
-  const hasPositiveMutation = /\b(?:open|launch|start|click|type|switch|close|send|post|write|change|modify|run)\b|(?:\u6253\u5f00|\u542f\u52a8|\u70b9\u51fb|\u8f93\u5165|\u5207\u6362|\u5173\u95ed|\u53d1\u9001|\u53d1\u5e03|\u5199\u5165|\u4fee\u6539|\u8fd0\u884c)(?!\u72b6\u6001)/iu.test(positiveText);
+  const mutationText = positiveText.replace(/\blaunch\s+target\b/giu, ' ');
+  const hasPositiveMutation = /\b(?:open|launch|start|click|type|switch|close|send|post|write|change|modify|run)\b|(?:\u6253\u5f00|\u542f\u52a8|\u70b9\u51fb|\u8f93\u5165|\u5207\u6362|\u5173\u95ed|\u53d1\u9001|\u53d1\u5e03|\u5199\u5165|\u4fee\u6539|\u8fd0\u884c)(?!\u72b6\u6001)/iu.test(mutationText);
   if (hasPositiveMutation) return [];
 
   const calls: DesktopObservationToolCall[] = [];
@@ -31,6 +75,14 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   if (wantsProcesses || wantsDesktopState) calls.push({ name: 'desktop_running_processes', arguments: { top: 20 } });
   if (wantsIdle || wantsDesktopState) calls.push({ name: 'desktop_idle_time', arguments: {} });
   if (wantsSystem) calls.push({ name: 'desktop_system_info', arguments: {} });
+  if (wantsAppInventory) {
+    const appNames = Array.from(new Set(Array.from(text.matchAll(SPECIFIC_APP_QUERY_RE), match => match[0])));
+    const query = appNames.length === 1 ? appNames[0] : '';
+    calls.push({
+      name: 'desktop_list_apps',
+      arguments: query ? { query, limit: 30 } : { limit: 200 },
+    });
+  }
   return calls;
 }
 
@@ -54,11 +106,19 @@ export function formatDesktopObservationResult(
   const processes = parseResult([...successful].reverse().find(record => /^(desktop_running_processes|get_running_processes)$/i.test(record.name)));
   const idle = parseResult([...successful].reverse().find(record => /^desktop_idle_time$/i.test(record.name)));
   const system = parseResult([...successful].reverse().find(record => /^(desktop_system_info|get_system_info)$/i.test(record.name)));
+  const apps = parseResult([...successful].reverse().find(record => /^desktop_list_apps$/i.test(record.name)));
   const failures = records.filter(record => record.error);
   const hasMutation = successful.some(record =>
     /^(desktop_open|desktop_show_lumi_window|desktop_run_command|desktop_clipboard_write|desktop_mouse_|desktop_keyboard_|client_action|computer_use)/i.test(record.name)
   );
   const zh = /[\u3400-\u9fff]/u.test(taskText || '');
+  const wantsDesktopAi = /(?:desktop\s+AI|AI\s+app|\u684c\u9762\s*AI|AI\s*\u5e94\u7528)/iu.test(taskText || '');
+  const processItems = Array.isArray(processes)
+    ? (wantsDesktopAi ? processes.filter(item => DESKTOP_AI_EVIDENCE_RE.test(String(item?.name || item?.window_title || ''))) : processes)
+    : [];
+  const appItems = Array.isArray(apps)
+    ? (wantsDesktopAi ? apps.filter(isDesktopAiApp) : apps)
+    : [];
 
   if (!zh) {
     const lines = ['The desktop-state check completed with fresh evidence from the connected desktop client.'];
@@ -68,8 +128,24 @@ export function formatDesktopObservationResult(
       lines.push(`Active window: ${active.title || 'unknown'}${processLabel}${sizeLabel}.`);
     }
     if (Array.isArray(processes)) {
-      const names = processes.slice(0, 5).map(item => String(item?.name || '')).filter(Boolean);
-      lines.push(`Runtime state: ${processes.length} process entries were read${names.length ? `; leading entries: ${names.join(', ')}` : ''}.`);
+      const names = uniqueLabels(
+        processItems,
+        item => String(item?.name || item?.window_title || ''),
+        item => String(item?.name || item?.window_title || ''),
+      ).slice(0, 12);
+      lines.push(wantsDesktopAi
+        ? `Running desktop AI evidence: ${names.length ? names.join(', ') : 'none detected'}.`
+        : `Runtime state: ${processes.length} process entries were read${names.length ? `; leading entries: ${names.slice(0, 5).join(', ')}` : ''}.`);
+    }
+    if (Array.isArray(apps)) {
+      const names = uniqueLabels(
+        appItems,
+        item => String(item?.label || item?.app_id || item?.path || ''),
+        item => String(item?.app_id || item?.label || item?.path || ''),
+      ).slice(0, 12);
+      lines.push(wantsDesktopAi
+        ? `Launchable desktop AI evidence: ${names.length ? names.join(', ') : 'none detected'}.`
+        : `Launchable local apps: ${apps.length} entries were read${names.length ? `; leading entries: ${names.slice(0, 8).join(', ')}` : ''}.`);
     }
     if (idle && Number.isFinite(Number(idle.idle_seconds))) lines.push(`Desktop idle time: about ${Math.round(Number(idle.idle_seconds))} seconds.`);
     if (system && typeof system === 'object') lines.push('System information was refreshed successfully.');
@@ -85,8 +161,24 @@ export function formatDesktopObservationResult(
     lines.push(`\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1a${active.title || '\u672a\u77e5'}${processLabel}${sizeLabel}\u3002`);
   }
   if (Array.isArray(processes)) {
-    const names = processes.slice(0, 5).map(item => String(item?.name || '')).filter(Boolean);
-    lines.push(`\u8fd0\u884c\u72b6\u6001\uff1a\u5df2\u8bfb\u53d6 ${processes.length} \u6761\u6d3b\u8dc3\u8fdb\u7a0b\u8bb0\u5f55${names.length ? `\uff0c\u524d\u51e0\u9879\u4e3a ${names.join('\u3001')}` : ''}\u3002`);
+    const names = uniqueLabels(
+      processItems,
+      item => String(item?.name || item?.window_title || ''),
+      item => String(item?.name || item?.window_title || ''),
+    ).slice(0, 12);
+    lines.push(wantsDesktopAi
+      ? `\u6b63\u5728\u8fd0\u884c\u7684\u684c\u9762 AI \u8bc1\u636e\uff1a${names.length ? names.join('\u3001') : '\u672a\u68c0\u6d4b\u5230'}\u3002`
+      : `\u8fd0\u884c\u72b6\u6001\uff1a\u5df2\u8bfb\u53d6 ${processes.length} \u6761\u6d3b\u8dc3\u8fdb\u7a0b\u8bb0\u5f55${names.length ? `\uff0c\u524d\u51e0\u9879\u4e3a ${names.slice(0, 5).join('\u3001')}` : ''}\u3002`);
+  }
+  if (Array.isArray(apps)) {
+    const names = uniqueLabels(
+      appItems,
+      item => String(item?.label || item?.app_id || item?.path || ''),
+      item => String(item?.app_id || item?.label || item?.path || ''),
+    ).slice(0, 12);
+    lines.push(wantsDesktopAi
+      ? `\u53ef\u542f\u52a8\u7684\u684c\u9762 AI \u8bc1\u636e\uff1a${names.length ? names.join('\u3001') : '\u672a\u68c0\u6d4b\u5230'}\u3002`
+      : `\u53ef\u542f\u52a8\u7684\u672c\u673a\u5e94\u7528\uff1a\u5df2\u8bfb\u53d6 ${apps.length} \u6761${names.length ? `\uff0c\u524d\u51e0\u9879\u4e3a ${names.slice(0, 8).join('\u3001')}` : ''}\u3002`);
   }
   if (idle && Number.isFinite(Number(idle.idle_seconds))) lines.push(`\u684c\u9762\u7a7a\u95f2\u65f6\u95f4\uff1a\u7ea6 ${Math.round(Number(idle.idle_seconds))} \u79d2\u3002`);
   if (system && typeof system === 'object') lines.push('\u7cfb\u7edf\u4fe1\u606f\u5df2\u5b8c\u6210\u5237\u65b0\u3002');

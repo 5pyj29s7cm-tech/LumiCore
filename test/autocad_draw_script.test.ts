@@ -52,6 +52,7 @@ describe('AutoCAD visible draw script', () => {
       expect(fs.existsSync(result.scriptPath)).toBe(true);
       expect(fs.existsSync(result.powershellRunnerPath)).toBe(true);
       expect(fs.existsSync(result.manifestPath)).toBe(true);
+      expect(fs.existsSync(result.operationsPath)).toBe(true);
       expect(result.completionMarkerPath).toContain('_completed.txt');
       expect(result).toMatchObject({ inferredScale: true, confidence: 0.72, precisionStatus: 'inferred_requires_review' });
 
@@ -61,7 +62,12 @@ describe('AutoCAD visible draw script', () => {
         strokeDelayMs: 120,
         inferredScale: true,
         missingForPrecision: ['Confirm the overall depth.'],
+        operationsPath: result.operationsPath,
       });
+
+      const operations = JSON.parse(fs.readFileSync(result.operationsPath, 'utf-8'));
+      expect(operations).toMatchObject({ title: result.title, unit: 'mm' });
+      expect(operations.operations).toHaveLength(result.operationCount);
 
       const lisp = fs.readFileSync(result.lispPath, 'utf-8');
       const script = fs.readFileSync(result.scriptPath, 'utf-8');
@@ -107,5 +113,126 @@ describe('AutoCAD visible draw script', () => {
       userConfirmed: true,
       allowLocalFileWrites: true,
     })).rejects.toThrow(/width and height must be positive finite values/i);
+  });
+
+  it('discovers a custom AutoCAD install through the desktop app index and resolves its shortcut', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_autocad_discovery_'));
+    const shortcutPath = 'C:\\Users\\Public\\Desktop\\AutoCAD 2026 - 简体中文.lnk';
+    try {
+      const registry = new ToolRegistry();
+      registerExternalAppTools(registry);
+      const desktopRelay = async (name: string) => {
+        if (name === 'desktop_list_apps') {
+          return JSON.stringify([{ app_id: 'autocad', label: 'AutoCAD', path: shortcutPath, score: 130 }]);
+        }
+        return 'ok';
+      };
+
+      const raw = await registry.execute('cad_generate_autocad_draw_script', {
+        title: 'custom-install-test',
+        width: 4000,
+        height: 3000,
+        autocadExecutable: 'acad.exe',
+        outputDirectory: dir,
+        strokeDelayMs: 0,
+      }, { desktopRelay, allowLocalFileWrites: true } as any);
+      const result = JSON.parse(raw);
+      const runner = fs.readFileSync(result.powershellRunnerPath, 'utf-8');
+
+      expect(result.autocadExecutable).toBe(shortcutPath);
+      expect(result.autocadExecutableSource).toBe('desktop_app_index');
+      expect(runner).toContain(shortcutPath);
+      expect(runner.charCodeAt(0)).toBe(0xfeff);
+      expect(runner).toContain('CreateShortcut');
+      expect(runner).toContain('$shortcut.Arguments');
+
+      const runRaw = await registry.execute('cad_run_autocad_draw_script', {
+        scriptPath: result.scriptPath,
+        completionMarkerPath: result.completionMarkerPath,
+        launch: false,
+      }, { desktopRelay, allowLocalFileWrites: true } as any);
+      const runResult = JSON.parse(runRaw);
+      expect(runResult).toMatchObject({
+        status: 'ready_to_launch',
+        autocadExecutable: shortcutPath,
+        autocadExecutableSource: 'desktop_app_index',
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads only the current generated LISP when AutoCAD shows its unsigned-file dialog', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_autocad_security_'));
+    try {
+      const registry = new ToolRegistry();
+      registerExternalAppTools(registry);
+      let markerPath = '';
+      const relayCalls: Array<{ name: string; args: Record<string, any> }> = [];
+      const desktopRelay = async (name: string, args: Record<string, any>) => {
+        relayCalls.push({ name, args });
+        if (name === 'desktop_run_command') return 'started=C:\\AutoCAD\\acad.exe';
+        if (name === 'desktop_active_window') {
+          return JSON.stringify({
+            title: 'Security - Unsigned Executable File',
+            process_name: 'acad.exe',
+            pid: 4242,
+          });
+        }
+        if (name === 'desktop_ui_snapshot') {
+          return JSON.stringify({
+            tree: {
+              name: 'Security - Unsigned Executable File',
+              children: [
+                { name: path.basename(markerPath.replace(/_completed\.txt$/i, '.lsp')) },
+                { name: 'Load Once', automationId: 'CommandButton_1002' },
+              ],
+            },
+          });
+        }
+        if (name === 'desktop_ui_invoke') {
+          fs.writeFileSync(markerPath, 'completed=1\n', 'utf-8');
+          return JSON.stringify({ status: 'ok', method: 'InvokePattern' });
+        }
+        if (name === 'desktop_running_processes') {
+          return JSON.stringify([{ pid: 4242, name: 'acad.exe' }]);
+        }
+        return 'ok';
+      };
+
+      const generatedRaw = await registry.execute('cad_generate_autocad_draw_script', {
+        title: 'security-dialog-test',
+        width: 4000,
+        height: 3000,
+        autocadExecutable: 'C:\\AutoCAD\\acad.exe',
+        outputDirectory: dir,
+        strokeDelayMs: 0,
+      }, { desktopRelay, allowLocalFileWrites: true } as any);
+      const generated = JSON.parse(generatedRaw);
+      markerPath = generated.completionMarkerPath;
+
+      const runRaw = await registry.execute('cad_run_autocad_draw_script', {
+        scriptPath: generated.scriptPath,
+        lispPath: generated.lispPath,
+        completionMarkerPath: markerPath,
+        launch: true,
+        waitSeconds: 3,
+        requireCompletionMarker: true,
+      }, { desktopRelay, allowLocalFileWrites: true } as any);
+      const result = JSON.parse(runRaw);
+
+      expect(result).toMatchObject({
+        status: 'completed',
+        completionMarkerExists: true,
+        startupDialogDetected: true,
+      });
+      expect(result.startupDialogActions).toContain('load_once:relay:InvokePattern');
+      expect(relayCalls).toContainEqual({
+        name: 'desktop_ui_invoke',
+        args: expect.objectContaining({ automationId: 'CommandButton_1002', processId: 4242 }),
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

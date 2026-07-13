@@ -320,7 +320,7 @@ const ARTIFACT_PATH_RE =
   /[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|scr|lsp|ps1|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi;
 
 const ARTIFACT_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|cad_generate_autocad_draw_script|cad_run_autocad_draw_script|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|cad_generate_autocad_draw_script|cad_run_autocad_draw_script|mcp_cad-drafting_autocad_playback_file|transcribe_audio_to_text_file|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
 
 function normalizeArtifactPath(raw: string): string {
   return path.normalize(String(raw || '').trim().replace(/[)\].,;，。；]+$/g, ''));
@@ -422,7 +422,7 @@ function buildReadyWorkProductSummary(messages: NormalizedMessage[], executionLo
   const wantsDesktop = /\bdesktop\b|桌面/i.test(task);
   const wantsArtifact = wantsCad || wantsPpt || /\b(file|save|export|output)\b|(?:文件|保存|导出|输出|生成|创建)/i.test(task);
   if (!wantsArtifact) return null;
-  if (wantsCad && requiresVisibleAutoCadExecution(task) && !hasVisibleAutoCadExecutionEvidence(executionLog)) {
+  if (wantsCad && requiresVisibleAutoCadExecution(task) && !hasVisibleAutoCadExecutionEvidence(executionLog, task)) {
     return null;
   }
 
@@ -539,6 +539,7 @@ export async function runWithTools(
       };
     }
     const toolDeclarations = filterToolDeclarationsForPolicy(toolRegistry.getToolDeclarations(), context);
+    const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
 
     const llmStart = Date.now();
     const modelMessages = compactMessagesForModel(conversationHistory);
@@ -648,6 +649,16 @@ export async function runWithTools(
     for (const tc of normalizedToolCalls) {
       let result: string;
       let error: string | undefined;
+
+      if (!exposedToolNames.has(tc.name)) {
+        conversationHistory.push({
+          role: 'tool',
+          content: 'This tool is not exposed for the current task. Use only the tools declared for this turn.',
+          toolCallId: tc.id,
+          name: tc.name,
+        });
+        continue;
+      }
 
       try {
         context?.onToolStart?.({ id: tc.id, name: tc.name, arguments: tc.arguments });

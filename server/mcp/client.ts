@@ -1194,10 +1194,14 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     const result = await server.client.callTool({ name: toolName, arguments: args });
 
     const contents = (result as any).content || [];
-    return contents
+    const text = contents
       .filter((c: any) => c.type === 'text')
       .map((c: any) => c.text)
       .join('\n');
+    if ((result as any).isError === true) {
+      throw new Error(text.trim() || `MCP tool "${fullName}" failed without an error message.`);
+    }
+    return text;
   }
 
   async disconnectAll(): Promise<void> {

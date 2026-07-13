@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { runRenovationFolderWorkflow } from './renovation_workflow';
+import { runAutocadComPlayback } from './autocad_control';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -26,7 +27,7 @@ function rect(x: number, y: number, w: number, h: number): string {
   return line(x, y, x + w, y) + line(x + w, y, x + w, y + h) + line(x + w, y + h, x, y + h) + line(x, y + h, x, y);
 }
 
-const server = new McpServer({ name: 'cad-drafting', version: '1.2.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'cad-drafting', version: '1.3.1' }, { capabilities: { tools: {} } });
 
 server.registerTool('cad_space_program', {
   description: 'Create a room/space program with estimated areas, adjacency notes, and drafting assumptions.',
@@ -106,6 +107,23 @@ server.registerTool('cad_drafting_checklist', {
     'Code, structure, MEP, and site constraints are flagged for professional review.',
   ],
 }));
+
+server.registerTool('autocad_playback_file', {
+  description: 'Control the real Windows AutoCAD application through its COM automation API and visibly create each validated line, circle, arc, or text operation one at a time. Reads a Lumi-generated operations JSON file, opens a separate drawing by default, refreshes AutoCAD after every operation, waits between strokes, and writes a completion marker only after the visible playback finishes. This is Lumi MCP automation for AutoCAD, not an Autodesk-official MCP server.',
+  inputSchema: {
+    operationsPath: z.string().describe('Path to the operations JSON produced by cad_generate_autocad_draw_script.'),
+    completionMarkerPath: z.string().describe('Marker file written only after every AutoCAD operation completes.'),
+    strokeDelayMs: z.number().int().min(100).max(5000).optional().describe('Visible delay after every drawing operation. Defaults to 450ms.'),
+    createNewDocument: z.boolean().optional().describe('Open a separate blank AutoCAD document before playback. Defaults true to avoid modifying an existing drawing.'),
+    savePath: z.string().optional().describe('Optional DWG path to save after playback. Omit to leave the drawing open for review without saving.'),
+  },
+}, async (args: any) => ok(await runAutocadComPlayback({
+  operationsPath: String(args.operationsPath || ''),
+  completionMarkerPath: String(args.completionMarkerPath || ''),
+  strokeDelayMs: args.strokeDelayMs,
+  createNewDocument: args.createNewDocument !== false,
+  savePath: args.savePath ? String(args.savePath) : undefined,
+})));
 
 server.registerTool('cad_renovation_folder_workflow', {
   description: 'Read a local renovation/floor-plan folder and generate editable DXF drafting bases, a layout draft, MEP point suggestions, proposal notes, material data, and design-delivery handoff content. Pair with the client design_delivery_workflow when Lumi should also create a customer-facing PPT/PDF package, open CAD/Revit handoff files, and prepare WeChat delivery drafts.',

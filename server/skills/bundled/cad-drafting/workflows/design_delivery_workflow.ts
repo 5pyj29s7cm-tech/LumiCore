@@ -136,6 +136,9 @@ const DESIGN_DELIVERY_PATTERNS = [
   /(?:renovation|interior\s*design|design\s*delivery|cad|dxf|revit|bim).{0,24}(?:take\s*over|handoff|delivery|generate|demo)/i,
 ];
 
+const EXPLICIT_DESIGN_DELIVERY_SCOPE_RE = /(?:装修设计交付|设计交付|装修交付|家装交付|工装交付|完整交付包|全套设计|全案设计|接管.{0,12}(?:装修|家装|工装|室内设计)|(?:方案|预算).{0,24}(?:CAD|DXF|Revit|BIM)|(?:CAD|DXF).{0,24}(?:Revit|BIM|预算|完整交付)|design\s*delivery|renovation\s*delivery|interior\s*design\s*(?:package|handoff|delivery)|full\s+(?:renovation|interior\s*design)\s+package|take\s*over.{0,24}(?:renovation|interior\s*design)|(?:cad|dxf).{0,24}(?:revit|bim|budget|delivery\s*package))/iu;
+const EXPLICIT_REUSABLE_CAD_TOOL_RE = /(?:cad_generate_autocad_draw_script|cad_run_autocad_draw_script|cad_generate_dxf|floorplan_extract_geometry)/i;
+
 const DEFAULT_DESIGN_PROJECT_BRIEF: DesignProjectBrief = buildDesignProjectBrief({
   sourceText: '',
   areaSqm: 120,
@@ -420,9 +423,12 @@ function isLocalSourceCadExecutionRequest(text: string): boolean {
 }
 
 export function isDesignDeliveryRequest(text: string): boolean {
-  const normalized = normalizeIntentText(text || '');
+  const raw = String(text || '');
+  const normalized = normalizeIntentText(raw);
   if (!normalized) return false;
-  if (isLocalSourceCadExecutionRequest(text)) return false;
+  if (EXPLICIT_REUSABLE_CAD_TOOL_RE.test(raw)) return false;
+  if (isLocalSourceCadExecutionRequest(raw)) return false;
+  if (!EXPLICIT_DESIGN_DELIVERY_SCOPE_RE.test(raw)) return false;
   return DESIGN_DELIVERY_PATTERNS.some(pattern => pattern.test(normalized));
 }
 

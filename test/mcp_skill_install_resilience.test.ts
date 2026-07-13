@@ -60,6 +60,24 @@ afterEach(() => {
 });
 
 describe('MCP skill install resilience', () => {
+  it('throws MCP protocol error results instead of returning them as successful tool text', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const callTool = vi.fn().mockResolvedValue({
+      isError: true,
+      content: [{ type: 'text', text: 'AutoCAD operation 1 failed.' }],
+    });
+    (manager as any).servers.set('broken', {
+      client: { callTool },
+      transport: {},
+      config: { enabled: true },
+    });
+
+    await expect(manager.callTool('mcp_broken_draw', {})).rejects.toThrow('AutoCAD operation 1 failed.');
+    expect(callTool).toHaveBeenCalledWith({ name: 'draw', arguments: {} });
+  });
+
   it('removes the npm skill workspace when dependency install fails', async () => {
     const execMock = makeExec((_command, _options, callback) => {
       callback(new Error('registry unavailable'), '', 'registry unavailable');

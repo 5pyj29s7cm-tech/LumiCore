@@ -25,6 +25,7 @@ const declarations = [
   'desktop_ai_list_targets',
   'desktop_ai_discovery_plan',
   'desktop_ai_register_target',
+  'desktop_ai_roundtable',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
   'desktop_mouse_click_at',
@@ -71,6 +72,7 @@ const declarations = [
   'floorplan_extract_geometry',
   'cad_generate_dxf',
   'cad_generate_autocad_draw_script',
+  'mcp_cad-drafting_autocad_playback_file',
   'cad_run_autocad_draw_script',
   'mcp_cad-drafting_cad_renovation_folder_workflow',
   'ocr_screen',
@@ -259,18 +261,69 @@ describe('Lumi capability selection', () => {
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(selection.lane).toBe('design_cad');
-    expect(selection.promptOverlay).toContain('A DXF, folder workflow, or design package alone is not completion evidence');
-    expect(selection.preferredTools.slice(0, 8)).toEqual(expect.arrayContaining([
+    expect(selection.promptOverlay).toContain('prefer mcp_cad-drafting_autocad_playback_file');
+    expect(selection.preferredTools.slice(0, 10)).toEqual(expect.arrayContaining([
       'desktop_path_info',
       'desktop_list_files',
+      'desktop_list_apps',
       'floorplan_extract_geometry',
       'cad_generate_dxf',
       'cad_generate_autocad_draw_script',
+      'mcp_cad-drafting_autocad_playback_file',
       'cad_run_autocad_draw_script',
     ]));
     expect(execution.toolRoute?.toolNames.indexOf('desktop_list_files')).toBeLessThan(
       execution.toolRoute?.toolNames.indexOf('cad_generate_dxf') ?? Number.MAX_SAFE_INTEGER,
     );
+    expect(execution.toolRoute?.toolNames.indexOf('desktop_list_apps')).toBeLessThan(
+      execution.toolRoute?.toolNames.indexOf('cad_run_autocad_draw_script') ?? Number.MAX_SAFE_INTEGER,
+    );
+    expect(execution.toolRoute?.toolNames.indexOf('mcp_cad-drafting_autocad_playback_file')).toBeLessThan(
+      execution.toolRoute?.toolNames.indexOf('cad_run_autocad_draw_script') ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it('keeps explicit AutoCAD playback acceptance work out of the design delivery demo', async () => {
+    const { dispatch, selection } = await selectCapability({
+      userId: 'capability_selection_autocad_acceptance_user',
+      text: "Live AutoCAD acceptance test. Use cad_generate_autocad_draw_script with a 4000 by 3000 room, then cad_run_autocad_draw_script with launch=true and requireCompletionMarker=true.",
+      operationMode: 'assistant',
+    });
+
+    expect(dispatch.flow.specialWorkflow).toBeNull();
+    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
+    expect(selection.lane).toBe('design_cad');
+    expect(selection.preferredTools).toEqual(expect.arrayContaining([
+      'cad_generate_autocad_draw_script',
+      'cad_run_autocad_draw_script',
+    ]));
+  });
+
+  it('keeps explicit AutoCAD MCP-only playback out of the script fallback lane', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_autocad_mcp_only_user',
+      text: 'Draw visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only; do not use LISP, scripts, cad_run_autocad_draw_script, or fallback.',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('design_cad');
+    expect(selection.preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(selection.preferredTools).not.toContain('cad_run_autocad_draw_script');
+    expect(selection.promptOverlay).toContain('Do not call cad_run_autocad_draw_script');
+    expect(execution.toolRoute?.toolNames).not.toContain('cad_run_autocad_draw_script');
+  });
+
+  it('keeps desktop AI roundtables in the foreground desktop session', async () => {
+    const { dispatch, selection } = await selectCapability({
+      userId: 'capability_selection_desktop_ai_roundtable_user',
+      text: 'Use desktop_ai_roundtable with ChatGPT and Claude, collect their visible answers, then summarize them.',
+      operationMode: 'assistant',
+    });
+
+    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
+    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
+    expect(selection.lane).toBe('desktop_control');
+    expect(selection.preferredTools).toContain('desktop_ai_roundtable');
   });
 
   it('selects artifact work for reports and local files', async () => {

@@ -183,6 +183,50 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('wechat_read_recent_chat');
   });
 
+  it('grounds desktop AI roundtable summaries in submission and answer status', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const toolResult = {
+      ok: false,
+      targets: [{ id: 'chatgpt', label: 'ChatGPT' }, { id: 'claude', label: 'Claude' }],
+      targetSelection: {
+        mode: 'explicit',
+        runningTargetIds: [],
+        installedTargetIds: [],
+        note: 'Targets were explicitly selected by the caller.',
+      },
+      ask: {
+        submittedCount: 2,
+        results: [
+          { target: 'chatgpt', label: 'ChatGPT', status: 'submitted_unverified' },
+          { target: 'claude', label: 'Claude', status: 'submitted_unverified' },
+        ],
+      },
+      answers: [
+        { target: 'chatgpt', label: 'ChatGPT', status: 'pending', answerText: null },
+        { target: 'claude', label: 'Claude', status: 'pending', answerText: null },
+      ],
+    };
+
+    const result = finalizeLumiResponse({
+      taskText: 'Use desktop_ai_roundtable with ChatGPT and Claude, collect their visible answers, then summarize them.',
+      responseText: 'ChatGPT and Claude are not installed or running.',
+      toolRecords: [{
+        name: 'desktop_ai_roundtable',
+        arguments: { targets: ['chatgpt', 'claude'] },
+        result: JSON.stringify(toolResult),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('structured tool evidence');
+    expect(result.text).toContain('ChatGPT: question pasted and submitted');
+    expect(result.text).toContain('Claude: question pasted and submitted');
+    expect(result.text).toContain('2 target(s) are submitted and pending');
+    expect(result.text).toContain('This is not app unavailable');
+    expect(result.text).not.toContain('not installed or running');
+  });
+
   it('does not treat a CAD folder workflow as visible AutoCAD completion evidence', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -216,13 +260,54 @@ describe('Lumi result finalizer', () => {
       }, {
         name: 'cad_run_autocad_draw_script',
         arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
-        result: '{"status":"completed","completionMarkerExists":true}',
+        result: '{"status":"completed","completionMarkerExists":true,"completionMarkerPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan_completed.txt","autocadExecutable":"D:\\\\AutoCAD\\\\acad.exe","autocadExecutableSource":"desktop_app_index"}',
       }],
       source: 'chat',
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toBe('AutoCAD drawing completed.');
+    expect(result.reason).toContain('CAD completion marker');
+    expect(result.text).toContain('已在真实 AutoCAD 中完成');
+    expect(result.text).toContain('plan_completed.txt');
+  });
+
+  it('grounds visible AutoCAD MCP playback in its operation file and marker', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: 'Draw this visibly in AutoCAD stroke by stroke.',
+      responseText: 'Done.',
+      toolRecords: [{
+        name: 'mcp_cad-drafting_autocad_playback_file',
+        arguments: { operationsPath: 'C:\\CAD\\plan_operations.json' },
+        result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true,"completionMarkerPath":"C:\\\\CAD\\\\plan_completed.txt","operationsPath":"C:\\\\CAD\\\\plan_operations.json","operationCount":46,"strokeDelayMs":450}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('MCP visible-playback');
+    expect(result.text).toContain('stroke-by-stroke playback');
+    expect(result.text).toContain('plan_operations.json');
+    expect(result.text).toContain('450 ms');
+  });
+
+  it('does not accept a completed LISP fallback for an explicit AutoCAD MCP-only task', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: 'Draw visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only; do not use LISP, scripts, or fallback.',
+      responseText: 'The AutoCAD drawing is complete.',
+      toolRecords: [{
+        name: 'cad_run_autocad_draw_script',
+        arguments: {},
+        result: '{"status":"completed","completionMarkerExists":true,"completionMarkerPath":"C:\\\\CAD\\\\fallback.txt"}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
   });
 
   it('blocks login-then-search claims without authenticated result evidence', async () => {
@@ -412,15 +497,19 @@ describe('Lumi result finalizer', () => {
 
   it('keeps socket entrypoints on the shared finalizer path', () => {
     const root = process.cwd();
-    const socketSources = [
-      readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
-    ];
+    const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const taskSource = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+    const socketSources = [chatSource, voiceSource, taskSource];
 
     for (const source of socketSources) {
       expect(source).toContain('finalizeLumiResponse');
       expect(source).not.toContain('guardCompletionClaims');
     }
+    expect(chatSource).toContain('responseText = finalResponse.text;');
+    expect(chatSource).toContain('finalText = finalizedBackground.text;');
+    expect(voiceSource).toContain('responseText = finalResponse.text;');
+    expect(taskSource).toContain('orchestratedText = finalOrchestrated.text;');
+    expect(taskSource).toContain('finalTaskText = finalTaskResponse.text;');
   });
 });

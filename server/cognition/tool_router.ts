@@ -1,7 +1,7 @@
 import { ToolPolicy } from '../personality/types';
 import { ToolRegistry } from '../tools/registry';
 import { mcpManager } from '../mcp/client';
-import { requiresVisibleAutoCadExecution } from './action_contract';
+import { requiresAutoCadMcpPlayback, requiresVisibleAutoCadExecution } from './action_contract';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -143,6 +143,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'edit_image',
     'cad_generate_dxf',
     'cad_generate_autocad_draw_script',
+    'mcp_cad-drafting_autocad_playback_file',
     'cad_run_autocad_draw_script',
     'floorplan_extract_geometry',
     'ocr_image_file',
@@ -204,6 +205,12 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'desktop_ai_roundtable',
     'desktop_ai_ask',
     'desktop_ai_collect_answer',
+    'desktop_running_processes',
+    'desktop_list_apps',
+    'desktop_open',
+    'desktop_active_window',
+    'desktop_capture_screen',
+    'ocr_screen',
     'external_control_candidates',
     'external_control_configure_candidate',
     'desktop_ui_snapshot',
@@ -294,7 +301,7 @@ const ROUTES: RouteDefinition[] = [
     reason: 'legal casework or legal research request',
     patterns: [
       /法律|律师|律所|案件|案号|案由|类案|法条|法源|现行有效|法律版本|司法解释版本|法院|裁判文书|人民法院案例库|法信|法蝉|企查查|天眼查|北大法宝|法睿|通义法睿|法律数据库|权威库|国家企业信用|委托书|代理词|证据目录|起诉状|要素式诉状|答辩状|质证|文书包|正式文书|交付包|引用核验|核验报告|校验报告|来源登记|浏览器工作区|网页登录工作区|立案|网上立案|立案网|法院在线服务|外部检索|法律意见书|合同审查|合同模板|标书|投标书|财产线索|被执行人|股权穿透|诉讼|仲裁|争议焦点|庭审笔录|庭审提纲|三段论|大前提|小前提|涵摄|法律会议|律师会议|办案会议|案件会议|会议纪要.*案件|沟通记录.*案件|法律分析|应对策略|焦点提炼|案件文件夹|材料文件夹|文件夹.*代理词|文书链接|发送链接|下载文书|提取文书|提取正文|链接.*下载|链接.*提取|材料入库|导入知识库|知识库导入|入案|自动入案|远程消息.*案件|Lumi bot.*案件|机器人.*案件|外部数据源|数据源接入|开庭通知|法院通知|送达通知|短信链接|通知链接|送达链接/u,
-      /\b(legal|lawyer|lawsuit|court|judgment|casework|contract\s+review|power\s+of\s+attorney|complaint|defense|pleading|evidence|filing|bid|tender|qichacha|tianyancha|pkulaw|pku\s*law|beida\s*fabo|farui|tongyi\s*farui|legal\s+database|authority\s+database|external\s+authority|alpha|fachan|notice\s+link|court\s+notice|document\s+link|extract\s+document|delivery\s+package|citation\s+verification|source\s+register|browser\s+workspace)\b/i,
+      /\b(legal|lawyer|lawsuit|court|judgment|casework|contract\s+review|power\s+of\s+attorney|complaint|defense|pleading|filing|bid|tender|qichacha|tianyancha|pkulaw|pku\s*law|beida\s*fabo|farui|tongyi\s*farui|legal\s+database|authority\s+database|external\s+authority|alpha|fachan|notice\s+link|court\s+notice|document\s+link|extract\s+document|delivery\s+package|citation\s+verification|source\s+register|browser\s+workspace)\b/i,
     ],
     exact: ['mcp_legal-casework_legal_case_folder_workflow'],
     prefixes: ['mcp_legal-casework_'],
@@ -318,6 +325,7 @@ const ROUTES: RouteDefinition[] = [
       /CAD|DXF|DWG|图纸|平面图|户型|施工图|装修|室内|水电|草稿图|布置方案|装修方案|设计|视觉|品牌|海报|图片|画图|生成图|抠图|改图/u,
       /\b(cad|dxf|dwg|floor\s*plan|drawing|design|brand|poster|image|render)\b/i,
     ],
+    exact: ['desktop_list_apps'],
     prefixes: ['mcp_cad-drafting_', 'mcp_picture-drawing-assistant_', 'mcp_pikachu-drawing_'],
     groups: ['design', 'files', 'documents'],
   },
@@ -392,8 +400,10 @@ const ROUTES: RouteDefinition[] = [
     category: 'code_git',
     reason: 'coding, testing, git, commit, or deployment request',
     patterns: [
-      /代码|修复|实现|测试|构建|提交|推送|部署|仓库|git|commit|push|lint|build/u,
-      /\b(code|fix|implement|test|lint|build|commit|push|deploy|repo|git)\b/i,
+      /代码|修复|实现|构建|提交|推送|部署|仓库|git|commit|push|lint|build/u,
+      /(?:单元|集成|回归|端到端|自动化)测试|测试(?:代码|程序|接口|API|构建)/u,
+      /\b(code|fix|implement|lint|build|commit|push|deploy|repo|git)\b/i,
+      /\b(?:unit|integration|regression|end-to-end|e2e|automated)\s+tests?\b|\btests?(?:ing)?\b.{0,24}\b(?:code|program|software|api|build|repository|repo)\b/i,
     ],
     prefixes: ['mcp_code-sandbox_', 'mcp_deployment-config-generator_', 'mcp_project-deployment-setup_'],
     groups: ['code'],
@@ -510,7 +520,16 @@ function addNamePattern(out: Set<string>, names: string[], pattern: RegExp): voi
 
 function isDirectMessagingSend(text: string): boolean {
   return /(?:\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u5e2e\u6211\u53d1|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\b(?:send|message)\b|(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}))/iu.test(text)
+    && !hasNegatedMessagingSendIntent(text)
     && !/(?:\u8349\u7a3f|\u7f16\u8f91\u4e00\u4e0b|\u5148\u5199|\u4e0d\u8981\u53d1|\bdraft\b)/iu.test(text);
+}
+
+function hasNegatedMessagingSendIntent(text: string): boolean {
+  return /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u7981\u6b62).{0,32}(?:\u53d1\u9001|\u53d1\u6d88\u606f|\u56de\u590d|\u53d1\u51fa)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
+}
+
+function hasNamedMessagingSurface(text: string): boolean {
+  return /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u4f01\u5fae|\u98de\u4e66|\u9489\u9489|\bwechat\b|\bweixin\b|\bwecom\b|\bfeishu\b|\blark\b|\bdingtalk\b)/iu.test(text);
 }
 
 function isMessagingRead(text: string): boolean {
@@ -538,8 +557,20 @@ function isLocalCadSourceRequest(text: string): boolean {
   return hasLocalSource && hasSourceReading && hasCadTarget;
 }
 
+function isDirectAutocadScriptRun(text: string): boolean {
+  const raw = String(text || '');
+  const hasGeneratedScript = /\.scr\b/i.test(raw) && /\.lsp\b/i.test(raw);
+  const hasAutocadTarget = /\b(?:autocad|acad|cad_run_autocad_draw_script)\b/i.test(raw);
+  const hasRunIntent = /\b(?:run|execute|launch|playback|acceptance|verify)\b/i.test(raw)
+    || /(?:\u8fd0\u884c|\u6267\u884c|\u542f\u52a8|\u56de\u653e|\u9a8c\u6536|\u6821\u9a8c)/u.test(raw);
+  return hasGeneratedScript && hasAutocadTarget && hasRunIntent;
+}
+
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
+  if (isDirectAutocadScriptRun(text)) {
+    priorities.push('cad_run_autocad_draw_script');
+  }
   if (isDesktopAiCollaboration(text)) {
     const wantsCollectedComparison = /(?:\u603b\u7ed3|\u6c47\u603b|\u5bf9\u6bd4|\u90fd\u62ff\u56de\u6765|\u6240\u6709\u56de\u7b54|summari[sz]e|compare|collect\s+all|all\s+answers)/iu.test(text);
     priorities.push(
@@ -649,10 +680,12 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         ? [
             'desktop_path_info',
             'desktop_list_files',
+            'desktop_list_apps',
             'floorplan_extract_geometry',
             'ocr_image_file',
             'cad_generate_dxf',
             'cad_generate_autocad_draw_script',
+            'mcp_cad-drafting_autocad_playback_file',
             'cad_run_autocad_draw_script',
             'mcp_cad-drafting_cad_renovation_folder_workflow',
             'desktop_capture_screen',
@@ -660,19 +693,23 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
         : [
             'desktop_path_info',
             'desktop_list_files',
+            'desktop_list_apps',
             'floorplan_extract_geometry',
             'ocr_image_file',
             'mcp_cad-drafting_cad_renovation_folder_workflow',
             'cad_generate_dxf',
             'cad_generate_autocad_draw_script',
+            'mcp_cad-drafting_autocad_playback_file',
             'cad_run_autocad_draw_script',
             'desktop_capture_screen',
           ];
       priorities.push(...localCadSourceTools);
     } else {
       priorities.push(
+        'desktop_list_apps',
         'cad_generate_dxf',
         'cad_generate_autocad_draw_script',
+        'mcp_cad-drafting_autocad_playback_file',
         'cad_run_autocad_draw_script',
         'mcp_cad-drafting_cad_space_program',
         'mcp_cad-drafting_cad_renovation_folder_workflow',
@@ -836,6 +873,14 @@ export function routeToolsForTurn(
 
   for (const route of ROUTES) {
     if (!routeMatches(route, text)) continue;
+    if (route.category === 'messaging' && hasNegatedMessagingSendIntent(text) && !hasNamedMessagingSurface(text)) continue;
+    if (route.category === 'messaging' && isDesktopAiCollaboration(text) && !hasNamedMessagingSurface(text)) continue;
+    if (
+      route.category === 'documents' &&
+      isDesktopAiCollaboration(text) &&
+      !/(?:文件|文档|表格|幻灯片|导出|保存|PPT|PDF|DOCX|XLSX|document|file|spreadsheet|presentation|export|save)/iu.test(text)
+    ) continue;
+    if (route.category === 'documents' && isDirectAutocadScriptRun(text)) continue;
     categories.push(route.category);
     reasons.push(route.reason);
 
@@ -856,6 +901,19 @@ export function routeToolsForTurn(
       categories.push('lexical_match');
       reasons.push('tool names/descriptions matched the user wording');
     }
+  }
+
+  if (isDirectAutocadScriptRun(text)) {
+    for (const name of TOOL_GROUPS.documents) selected.delete(name);
+    addIfAvailable(selected, available, 'cad_run_autocad_draw_script');
+    reasons.push('existing AutoCAD script execution bypasses general document extraction');
+  }
+
+  if (requiresAutoCadMcpPlayback(text)) {
+    selected.delete('cad_run_autocad_draw_script');
+    addIfAvailable(selected, available, 'cad_generate_autocad_draw_script');
+    addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
+    reasons.push('explicit AutoCAD MCP-only playback excludes LISP/script fallback');
   }
 
   const orderedBeforeHealthGate = applyRoutePriority(

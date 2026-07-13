@@ -576,14 +576,15 @@ fn run_command(command: String, cwd: Option<String>) -> CommandResult {
 
     let output = if cfg!(target_os = "windows") {
         let mut cmd = Command::new("cmd");
-        cmd.args(["/C", &command]);
-        if let Some(path) = cwd_path.as_ref() {
-            cmd.current_dir(path);
-        }
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
+            cmd.args(["/D", "/S", "/C"]);
+            cmd.raw_arg(&command);
             cmd.creation_flags(0x08000000u32);
+        }
+        if let Some(path) = cwd_path.as_ref() {
+            cmd.current_dir(path);
         }
         cmd.output()
     } else {
@@ -846,6 +847,82 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
                 r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe",
                 r"%ProgramFiles%\Microsoft VS Code\Code.exe",
                 r"%ProgramFiles(x86)%\Microsoft VS Code\Code.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "workbuddy",
+            label: "WorkBuddy",
+            aliases: vec!["workbuddy", "work buddy"],
+            executable_names: vec!["WorkBuddy.exe", "WorkBuddy.lnk"],
+            fixed_paths: vec![],
+        },
+        WindowsAppDefinition {
+            app_id: "codex",
+            label: "Codex",
+            aliases: vec!["codex", "openai codex"],
+            executable_names: vec!["Codex.exe", "Codex.lnk"],
+            fixed_paths: vec![],
+        },
+        WindowsAppDefinition {
+            app_id: "chatgpt",
+            label: "ChatGPT",
+            aliases: vec!["chatgpt", "openai chatgpt"],
+            executable_names: vec!["ChatGPT.exe", "ChatGPT.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Programs\ChatGPT\ChatGPT.exe",
+                r"%ProgramFiles%\ChatGPT\ChatGPT.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "claude",
+            label: "Claude",
+            aliases: vec!["claude", "anthropic claude"],
+            executable_names: vec!["Claude.exe", "Claude.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\AnthropicClaude\Claude.exe",
+                r"%LOCALAPPDATA%\Programs\Claude\Claude.exe",
+                r"%ProgramFiles%\Claude\Claude.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "cursor",
+            label: "Cursor",
+            aliases: vec!["cursor", "cursor ai", "cursor editor"],
+            executable_names: vec!["Cursor.exe", "Cursor.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Programs\cursor\Cursor.exe",
+                r"%ProgramFiles%\Cursor\Cursor.exe",
+                r"D:\cursor\Cursor.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "lmstudio",
+            label: "LM Studio",
+            aliases: vec!["lmstudio", "lm studio"],
+            executable_names: vec!["LM Studio.exe", "LM Studio.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Programs\LM Studio\LM Studio.exe",
+                r"%ProgramFiles%\LM Studio\LM Studio.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "cherry-studio",
+            label: "Cherry Studio",
+            aliases: vec!["cherry studio", "cherrystudio", "cherry ai"],
+            executable_names: vec!["Cherry Studio.exe", "CherryStudio.exe", "Cherry Studio.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Programs\CherryStudio\CherryStudio.exe",
+                r"%ProgramFiles%\Cherry Studio\Cherry Studio.exe",
+            ],
+        },
+        WindowsAppDefinition {
+            app_id: "anythingllm",
+            label: "AnythingLLM",
+            aliases: vec!["anythingllm", "anything llm"],
+            executable_names: vec!["AnythingLLM.exe", "AnythingLLM.lnk"],
+            fixed_paths: vec![
+                r"%LOCALAPPDATA%\Programs\AnythingLLM\AnythingLLM.exe",
+                r"%ProgramFiles%\AnythingLLM\AnythingLLM.exe",
             ],
         },
         WindowsAppDefinition {
@@ -1268,6 +1345,47 @@ fn shortcut_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<Windows
                 }
             }
         }
+        if !candidates.is_empty() {
+            break;
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn shortcut_candidates_for_definitions(defs: &[WindowsAppDefinition]) -> Vec<WindowsLaunchCandidate> {
+    let mut candidates = Vec::new();
+    for (root, source, score) in windows_app_search_roots() {
+        if !root.exists() {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        let mut visited = 0usize;
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 7 || visited > 1600 {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                visited += 1;
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push((path, depth + 1));
+                    continue;
+                }
+                if !launchable_extension(&path) {
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if let Some(def) = defs.iter().find(|def| filename_matches_app_definition(file_name, def)) {
+                    candidates.push(candidate_from_path(def, path, source, score));
+                }
+            }
+        }
     }
     candidates
 }
@@ -1300,7 +1418,9 @@ fn candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLaunchCan
     let mut candidates = Vec::new();
     candidates.extend(history_candidates_for_definition(def));
     candidates.extend(fixed_candidates_for_definition(def));
-    candidates.extend(shortcut_candidates_for_definition(def));
+    if candidates.is_empty() {
+        candidates.extend(shortcut_candidates_for_definition(def));
+    }
     dedupe_windows_candidates(candidates)
 }
 
@@ -1329,17 +1449,17 @@ fn native_app_entry_from_candidate(candidate: WindowsLaunchCandidate) -> NativeA
 #[cfg(target_os = "windows")]
 fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppEntry> {
     let definitions = windows_app_definitions();
-    let matched: Vec<WindowsAppDefinition> = match query.map(str::trim).filter(|q| !q.is_empty()) {
-        Some(q) => definitions
-            .into_iter()
-            .filter(|def| app_query_matches_definition(q, def))
-            .collect(),
-        None => definitions,
-    };
-
     let mut candidates = Vec::new();
-    for def in matched {
-        candidates.extend(candidates_for_definition(&def));
+    if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+        for def in definitions.iter().filter(|def| app_query_matches_definition(q, def)) {
+            candidates.extend(candidates_for_definition(def));
+        }
+    } else {
+        for def in &definitions {
+            candidates.extend(history_candidates_for_definition(def));
+            candidates.extend(fixed_candidates_for_definition(def));
+        }
+        candidates.extend(shortcut_candidates_for_definitions(&definitions));
     }
     dedupe_windows_candidates(candidates)
         .into_iter()
@@ -1523,10 +1643,14 @@ fn try_launch_windows_app_alias(target: &str) -> Option<CommandResult> {
 }
 
 #[tauri::command]
-fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<NativeAppEntry> {
+async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<NativeAppEntry> {
     #[cfg(target_os = "windows")]
     {
-        return list_windows_native_apps(query.as_deref(), limit.unwrap_or(80));
+        return tauri::async_runtime::spawn_blocking(move || {
+            list_windows_native_apps(query.as_deref(), limit.unwrap_or(80))
+        })
+        .await
+        .unwrap_or_default();
     }
 
     #[cfg(not(target_os = "windows"))]

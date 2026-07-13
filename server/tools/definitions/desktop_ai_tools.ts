@@ -36,7 +36,26 @@ interface DesktopAiTargetRun {
   openResult?: string;
   activeWindow?: unknown;
   actions: string[];
+  inputMethod?: 'screen_vision' | 'window_ratio';
+  inputEvidence?: DesktopAiInputEvidence;
   note: string;
+}
+
+interface DesktopAiTargetSelection {
+  mode: 'explicit' | 'detected';
+  runningTargetIds: string[];
+  installedTargetIds: string[];
+  note: string;
+}
+
+interface DesktopAiInputEvidence {
+  valid: boolean;
+  ready: boolean;
+  x: number | null;
+  y: number | null;
+  confidence: number;
+  surfaceKind: string;
+  reason: string;
 }
 
 const TARGETS: DesktopAiTarget[] = [
@@ -348,7 +367,7 @@ function runtimeTargetsFromContext(args: Record<string, any>, context?: ToolCont
 function resolveTargets(value: unknown, customTargets: DesktopAiTarget[] = []): DesktopAiTarget[] {
   const catalog = allTargets(customTargets);
   const requested = listArg(value);
-  if (requested.length === 0) return catalog.filter(target => ['workbuddy', 'codex'].includes(target.id));
+  if (requested.length === 0) return [];
   const resolved: DesktopAiTarget[] = [];
   for (const item of requested) {
     const key = targetText(item);
@@ -376,15 +395,109 @@ function windowText(value: unknown): string {
     item.name,
     item.processName,
     item.process_name,
+    item.app_id,
+    item.label,
     item.app,
     item.exe,
     item.path,
+    Array.isArray(item.aliases) ? item.aliases.join(' ') : item.aliases,
   ].filter(Boolean).join(' ');
+}
+
+function parseArray(raw: string): unknown[] | null {
+  const parsed = parseJson(raw);
+  return Array.isArray(parsed) ? parsed : null;
+}
+
+function uniqueTargets(targets: DesktopAiTarget[]): DesktopAiTarget[] {
+  const seen = new Set<string>();
+  return targets.filter(target => {
+    if (seen.has(target.id)) return false;
+    seen.add(target.id);
+    return true;
+  });
+}
+
+function targetsMatchingEvidence(catalog: DesktopAiTarget[], evidence: unknown[]): DesktopAiTarget[] {
+  return catalog.filter(target => evidence.some(item => target.match.test(windowText(item))));
+}
+
+async function resolveExecutionTargets(
+  value: unknown,
+  customTargets: DesktopAiTarget[],
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+): Promise<{ targets: DesktopAiTarget[]; selection: DesktopAiTargetSelection }> {
+  const requested = listArg(value);
+  if (requested.length > 0) {
+    const targets = resolveTargets(requested, customTargets);
+    return {
+      targets,
+      selection: {
+        mode: 'explicit',
+        runningTargetIds: [],
+        installedTargetIds: [],
+        note: 'Targets were explicitly selected by the caller.',
+      },
+    };
+  }
+
+  const catalog = allTargets(customTargets);
+  const [runningRaw, installedRaw] = await Promise.all([
+    desktopRelay('desktop_running_processes', { top: 240 }).catch(() => ''),
+    desktopRelay('desktop_list_apps', { limit: 200 }).catch(() => ''),
+  ]);
+  const runningEvidence = parseArray(runningRaw) || [];
+  const installedEvidence = parseArray(installedRaw) || [];
+  const runningTargets = targetsMatchingEvidence(catalog, runningEvidence);
+  const installedTargets = targetsMatchingEvidence(catalog, installedEvidence);
+  const detectedTargets = uniqueTargets([...runningTargets, ...installedTargets]).slice(0, 2);
+
+  return {
+    targets: detectedTargets,
+    selection: {
+      mode: 'detected',
+      runningTargetIds: runningTargets.map(target => target.id),
+      installedTargetIds: installedTargets.map(target => target.id),
+      note: detectedTargets.length > 0
+        ? 'Default targets were selected from currently running processes and launchable local apps.'
+        : 'No running or launchable desktop AI target was detected. Name targets explicitly or register a local target first.',
+    },
+  };
 }
 
 function activeWindowMatches(raw: string, target: DesktopAiTarget): { ok: boolean; parsed: unknown } {
   const parsed = parseJson(raw);
   return { ok: target.match.test(windowText(parsed)), parsed };
+}
+
+function isBrowserForeground(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Record<string, any>;
+  const processName = String(item.process_name || item.processName || item.exe || '').trim();
+  return /(?:chrome|msedge|firefox|brave|opera|vivaldi|quark|arc)(?:\.exe)?$/i.test(processName);
+}
+
+function isSmallTransientBrowserWindow(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || !isBrowserForeground(value)) return false;
+  const item = value as Record<string, any>;
+  const width = finiteNumber(item.width, item.bounds?.width, item.rect?.width);
+  const height = finiteNumber(item.height, item.bounds?.height, item.rect?.height);
+  return width !== null && height !== null && width < 700 && height < 600;
+}
+
+async function moveForegroundToPrimaryCaptureScreen(
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  target: DesktopAiTarget,
+  activeWindow: unknown,
+): Promise<unknown> {
+  if (!activeWindow || typeof activeWindow !== 'object') return activeWindow;
+  const item = activeWindow as Record<string, any>;
+  const x = finiteNumber(item.x, item.left, item.bounds?.x, item.rect?.x);
+  if (x === null || x >= -40) return activeWindow;
+  await desktopRelay('desktop_keyboard_press', { key: 'win+shift+right' }).catch(() => '');
+  await sleep(700);
+  const moved = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
+  return moved.ok ? moved.parsed : activeWindow;
 }
 
 function finiteNumber(...values: unknown[]): number | null {
@@ -413,6 +526,61 @@ function promptInputPoint(activeWindow: unknown): { x: number; y: number } | nul
   };
 }
 
+function pointInsideActiveWindow(point: { x: number; y: number }, activeWindow: unknown): boolean {
+  if (!activeWindow || typeof activeWindow !== 'object') return false;
+  const info = activeWindow as Record<string, any>;
+  const bounds = info.bounds || info.rect || info.windowBounds || {};
+  const x = finiteNumber(info.x, info.left, bounds.x, bounds.left);
+  const y = finiteNumber(info.y, info.top, bounds.y, bounds.top);
+  const right = finiteNumber(info.right, bounds.right);
+  const bottom = finiteNumber(info.bottom, bounds.bottom);
+  const width = finiteNumber(info.width, bounds.width, x !== null && right !== null ? right - x : null);
+  const height = finiteNumber(info.height, bounds.height, y !== null && bottom !== null ? bottom - y : null);
+  if (x === null || y === null || width === null || height === null) return false;
+  return point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height;
+}
+
+export function parseDesktopAiInputEvidence(value: unknown): DesktopAiInputEvidence {
+  const raw = String(value || '').trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) {
+    return {
+      valid: false,
+      ready: false,
+      x: null,
+      y: null,
+      confidence: 0,
+      surfaceKind: 'unknown',
+      reason: raw.slice(0, 300) || 'No structured input-location evidence.',
+    };
+  }
+  try {
+    const parsed = JSON.parse(match[0]);
+    const x = finiteNumber(parsed.inputX, parsed.x);
+    const y = finiteNumber(parsed.inputY, parsed.y);
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence || 0)));
+    return {
+      valid: true,
+      ready: parsed.readyToAsk === true && x !== null && y !== null && confidence >= 0.6,
+      x,
+      y,
+      confidence,
+      surfaceKind: String(parsed.surfaceKind || 'unknown').trim().slice(0, 80),
+      reason: String(parsed.reason || '').trim().slice(0, 500),
+    };
+  } catch {
+    return {
+      valid: false,
+      ready: false,
+      x: null,
+      y: null,
+      confidence: 0,
+      surfaceKind: 'unknown',
+      reason: raw.slice(0, 300) || 'Invalid input-location evidence.',
+    };
+  }
+}
+
 export function parseDesktopAiAnswerEvidence(value: unknown): {
   ready: boolean;
   answerText: string;
@@ -435,6 +603,16 @@ export function parseDesktopAiAnswerEvidence(value: unknown): {
   } catch {
     return { ready: false, answerText: '', confidence: 0, reason: raw.slice(0, 300) || 'Invalid answer evidence.' };
   }
+}
+
+export function detectDesktopAiAnswerBlocker(reason: unknown): string | null {
+  const text = String(reason || '').trim();
+  if (!text) return null;
+  if (/(?:login|log\s*in|sign\s*in|sign-in|register|account required|welcome back|登录|注册|账号)/iu.test(text)) return 'login_required';
+  if (/(?:captcha|verification code|one-time code|otp|2fa|passkey|qr code|验证码|二次验证|扫码|人脸|指纹)/iu.test(text)) return 'verification_required';
+  if (/(?:rate limit|too many requests|quota|usage limit|频率限制|请求过多|配额|次数上限)/iu.test(text)) return 'rate_limited';
+  if (/(?:page (?:is )?(?:blank|failed|unavailable)|failed to load|network error|service unavailable|页面空白|加载失败|网络错误|服务不可用)/iu.test(text)) return 'page_unavailable';
+  return null;
 }
 
 function resolveVisionProvider(context?: ToolContext): VisionProvider | null {
@@ -465,6 +643,100 @@ function fallbackVisionModel(provider: VisionProvider): string {
   }
 }
 
+async function locateDesktopAiInput(
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  target: DesktopAiTarget,
+  activeWindow: unknown,
+  context?: ToolContext,
+): Promise<{ point: { x: number; y: number } | null; evidence: DesktopAiInputEvidence | null }> {
+  const provider = resolveVisionProvider(context);
+  const g = context?.llmGetters;
+  if (!provider || !g) return { point: null, evidence: null };
+
+  try {
+    const captureRaw = await desktopRelay('desktop_capture_screen', { quality: 78 });
+    if (!String(captureRaw || '').trim()) return { point: null, evidence: null };
+    const visionPref = getUserPreferredVision(context?.userId || 'anonymous');
+    const model = visionPref.model || fallbackVisionModel(provider);
+    const expectedSurface = target.surface === 'developer_tool'
+      ? 'the main task or instruction composer for this developer tool'
+      : 'the main general chat composer for asking a new question';
+    const query = [
+      `Inspect the foreground ${target.label} window and locate ${expectedSurface}.`,
+      'Reject account menus, search boxes, comment fields, request-changes fields, approval controls, and unrelated embedded tools.',
+      'If the named app is open on the wrong sub-surface, login/setup is blocking it, a menu obscures the composer, or no clear prompt composer is visible, set readyToAsk=false.',
+      'Coordinates must be absolute pixels in the full screenshot and must point near the center of the actual text-entry area.',
+      'Return only JSON: {"readyToAsk":boolean,"inputX":number|null,"inputY":number|null,"confidence":number,"surfaceKind":"general_chat|developer_task|wrong_surface|login|blocked|unknown","reason":"short visible evidence"}.',
+    ].join('\n');
+    const rawEvidence = await analyzeScreen(
+      captureRaw,
+      query,
+      { provider, model, userId: context?.userId || 'anonymous' },
+      g.getDeepSeek,
+      g.getGemini,
+      g.getOpenAI,
+      g.getAnthropic,
+      g.getQwen,
+      g.getOllama,
+      g.getLmStudio,
+      g.getArk,
+      g.getXiaomi,
+      g.getKimi,
+      g.getGlm,
+      g.getRelay,
+    );
+    const evidence = parseDesktopAiInputEvidence(rawEvidence);
+    if (!evidence.ready || evidence.x === null || evidence.y === null) return { point: null, evidence };
+    const point = { x: Math.round(evidence.x), y: Math.round(evidence.y) };
+    if (!pointInsideActiveWindow(point, activeWindow)) {
+      return {
+        point: null,
+        evidence: {
+          ...evidence,
+          ready: false,
+          reason: `Vision input point was outside the verified foreground window. ${evidence.reason}`.trim(),
+        },
+      };
+    }
+    return { point, evidence };
+  } catch {
+    return { point: null, evidence: null };
+  }
+}
+
+async function recoverBrowserAiSurface(
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  target: DesktopAiTarget,
+  context?: ToolContext,
+): Promise<{
+  focus: { ok: boolean; openTarget?: string; openResult?: string; activeWindow?: unknown; note: string };
+  location: { point: { x: number; y: number } | null; evidence: DesktopAiInputEvidence | null };
+} | null> {
+  if (target.surface !== 'browser_app') return null;
+  const browserTargets = target.openTargets.filter(openTarget => /^https?:\/\//i.test(openTarget));
+  for (const openTarget of browserTargets) {
+    const openResult = await desktopRelay('desktop_open', { target: openTarget });
+    await sleep(1400);
+    let active = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
+    if (!active.ok) {
+      await sleep(1000);
+      active = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
+    }
+    if (!active.ok) continue;
+    const focus = {
+      ok: true,
+      openTarget,
+      openResult,
+      activeWindow: active.parsed,
+      note: 'Opened the target general chat surface after the foreground app was on an unsuitable sub-surface.',
+    };
+    const location = await locateDesktopAiInput(desktopRelay, target, active.parsed, context);
+    if (location.point) return { focus, location };
+    if (location.evidence?.valid) return { focus, location };
+  }
+  return null;
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(ms, 30_000))));
 }
@@ -475,7 +747,7 @@ async function focusTarget(
   openIfNeeded: boolean,
 ): Promise<{ ok: boolean; openTarget?: string; openResult?: string; activeWindow?: unknown; note: string }> {
   const before = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
-  if (before.ok) {
+  if (before.ok && (target.surface !== 'browser_app' || isBrowserForeground(before.parsed))) {
     return { ok: true, activeWindow: before.parsed, note: 'Target is already foreground.' };
   }
 
@@ -486,20 +758,31 @@ async function focusTarget(
   let lastOpenTarget = '';
   let lastOpenResult = '';
   let lastActive: unknown = before.parsed;
-  for (const openTarget of target.openTargets) {
+  const browserUrls = target.openTargets.filter(openTarget => /^https?:\/\//i.test(openTarget));
+  const openTargets = target.surface === 'browser_app' && browserUrls.length > 0
+    ? browserUrls
+    : target.openTargets;
+  for (const openTarget of openTargets) {
     lastOpenTarget = openTarget;
     lastOpenResult = await desktopRelay('desktop_open', { target: openTarget });
-    await sleep(900);
-    const active = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
-    lastActive = active.parsed;
-    if (active.ok) {
-      return {
-        ok: true,
-        openTarget,
-        openResult: lastOpenResult,
-        activeWindow: active.parsed,
-        note: 'Target opened or focused.',
-      };
+    const attempts = /^https?:\/\//i.test(openTarget) ? 8 : 2;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await sleep(attempt === 0 ? 1100 : 650);
+      const active = activeWindowMatches(await desktopRelay('desktop_active_window', {}), target);
+      lastActive = active.parsed;
+      if (active.ok && (target.surface !== 'browser_app' || isBrowserForeground(active.parsed))) {
+        const activeWindow = await moveForegroundToPrimaryCaptureScreen(desktopRelay, target, active.parsed);
+        return {
+          ok: true,
+          openTarget,
+          openResult: lastOpenResult,
+          activeWindow,
+          note: 'Target opened or focused.',
+        };
+      }
+      if (isSmallTransientBrowserWindow(active.parsed)) {
+        await desktopRelay('desktop_keyboard_press', { key: 'escape' }).catch(() => '');
+      }
     }
   }
   return {
@@ -514,11 +797,16 @@ async function focusTarget(
 async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
   if (!question) return 'Error: question is required.';
-  const customTargets = runtimeTargetsFromContext(args, context);
-  const targets = resolveTargets(args.targets || args.target, customTargets);
-  if (targets.length === 0) return 'Error: no supported desktop AI targets matched. Try targets=["workbuddy","codex"].';
-
   const desktopRelay = requireDesktopRelay(context);
+  const customTargets = runtimeTargetsFromContext(args, context);
+  const { targets, selection } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
+  if (targets.length === 0) return JSON.stringify({
+    ok: false,
+    error: 'No available desktop AI targets matched.',
+    targetSelection: selection,
+    next: 'Name one or more targets explicitly, start an installed desktop AI app, or register a local target.',
+  }, null, 2);
+
   const openIfNeeded = args.openIfNeeded !== false;
   const send = args.send !== false;
   const useVirtualCursor = args.useVirtualCursor !== false;
@@ -528,7 +816,7 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
 
   for (const target of targets) {
     const actions: string[] = [];
-    const focus = await focusTarget(desktopRelay, target, openIfNeeded);
+    let focus = await focusTarget(desktopRelay, target, openIfNeeded);
     if (!focus.ok) {
       results.push({
         target: target.id,
@@ -543,7 +831,31 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
       continue;
     }
 
-    const inputPoint = promptInputPoint(focus.activeWindow);
+    let location = await locateDesktopAiInput(desktopRelay, target, focus.activeWindow, context);
+    if (location.evidence?.valid && !location.point && openIfNeeded) {
+      const recovered = await recoverBrowserAiSurface(desktopRelay, target, context);
+      if (recovered) {
+        focus = recovered.focus;
+        location = recovered.location;
+      }
+    }
+    if (location.evidence?.valid && !location.point) {
+      results.push({
+        target: target.id,
+        label: target.label,
+        status: 'blocked',
+        openTarget: focus.openTarget,
+        openResult: focus.openResult,
+        activeWindow: focus.activeWindow,
+        actions,
+        inputEvidence: location.evidence,
+        note: `The target window is visible, but no safe main prompt composer was verified: ${location.evidence.reason || location.evidence.surfaceKind}.`,
+      });
+      continue;
+    }
+
+    const inputPoint = location.point || promptInputPoint(focus.activeWindow);
+    const inputMethod = location.point ? 'screen_vision' : 'window_ratio';
     if (useVirtualCursor && inputPoint) {
       actions.push('desktop_cursor_glow_show');
       await desktopRelay('desktop_cursor_glow_show', { source: 'desktop_ai_ask', timeoutMs: 12000 }).catch(() => '');
@@ -577,6 +889,8 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
       openResult: focus.openResult,
       activeWindow: finalActive.parsed,
       actions,
+      inputMethod,
+      inputEvidence: location.evidence || undefined,
       note: finalActive.ok
         ? (send
             ? 'Question was pasted and the submit shortcut was pressed while the target remained foreground. Submission is not marked verified until answer evidence is collected.'
@@ -594,6 +908,7 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
     verifiedSentCount: 0,
     preparedCount: results.filter(result => result.status === 'prepared').length,
     blockedCount: results.filter(result => result.status === 'blocked').length,
+    targetSelection: selection,
     results,
     next: send
       ? 'Submission actions are unverified until visible answers are collected. Run desktop_ai_collect_answer for each target, or use desktop_ai_roundtable to collect all answers and synthesize them.'
@@ -602,12 +917,12 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
 }
 
 async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolContext): Promise<string> {
-  const customTargets = runtimeTargetsFromContext(args, context);
-  const targets = resolveTargets(args.targets || args.target, customTargets);
-  const target = targets[0];
-  if (!target) return 'Error: target is required. Try target="workbuddy" or target="codex".';
-
   const desktopRelay = requireDesktopRelay(context);
+  const customTargets = runtimeTargetsFromContext(args, context);
+  const { targets } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
+  const target = targets[0];
+  if (!target) return 'Error: no available target was detected. Pass an explicit target id or start/register a desktop AI app.';
+
   const openIfNeeded = args.openIfNeeded !== false;
   const waitMs = Math.max(0, Math.min(Number(args.waitMs) || 0, 60_000));
   if (waitMs > 0) await sleep(waitMs);
@@ -677,19 +992,23 @@ async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolC
     g.getRelay,
   );
   const evidence = parseDesktopAiAnswerEvidence(rawAnswerEvidence);
+  const blocker = evidence.ready ? null : detectDesktopAiAnswerBlocker(evidence.reason);
 
   return JSON.stringify({
     target: target.id,
     label: target.label,
-    status: evidence.ready ? 'collected' : 'pending',
+    status: evidence.ready ? 'collected' : blocker ? 'blocked' : 'pending',
     activeWindow: focus.activeWindow,
     provider,
     model,
     answerText: evidence.ready ? evidence.answerText : null,
     confidence: evidence.confidence,
     evidenceReason: evidence.reason,
+    blocker,
     note: evidence.ready
       ? 'A visible answer was extracted from the desktop screen. It may still be partial if the response extends off-screen.'
+      : blocker
+        ? `The answer could not be collected because the target surface is blocked (${blocker}). Complete the account/page handoff and retry instead of treating this as a pending answer.`
       : 'No completed visible answer was verified yet. Wait and collect again instead of inventing an answer.',
   }, null, 2);
 }
@@ -697,9 +1016,15 @@ async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolC
 async function desktopAiRoundtable(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
   if (!question) return 'Error: question is required.';
+  const desktopRelay = requireDesktopRelay(context);
   const customTargets = runtimeTargetsFromContext(args, context);
-  const targets = resolveTargets(args.targets || args.target, customTargets);
-  if (targets.length === 0) return 'Error: no supported desktop AI targets matched.';
+  const { targets, selection } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
+  if (targets.length === 0) return JSON.stringify({
+    ok: false,
+    error: 'No available desktop AI targets matched.',
+    targetSelection: selection,
+    next: 'Name one or more targets explicitly, start an installed desktop AI app, or register a local target.',
+  }, null, 2);
 
   const ask = JSON.parse(await desktopAiAsk({
     ...args,
@@ -759,6 +1084,7 @@ async function desktopAiRoundtable(args: Record<string, any>, context?: ToolCont
     ok: collectedAnswers.length > 0,
     question,
     targets: targets.map(target => ({ id: target.id, label: target.label })),
+    targetSelection: selection,
     ask,
     answers,
     collectedCount: collectedAnswers.length,
@@ -900,7 +1226,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'Question or task to send to the desktop AI targets.' },
-        targets: { type: 'array', items: { type: 'string' }, description: 'Desktop AI target ids or names. Supported built-ins include workbuddy, codex, chatgpt, claude, gemini, deepseek, kimi, doubao, tongyi, wenxin, perplexity, cursor, copilot, lmstudio, ollama, cherry-studio, anythingllm. Defaults to WorkBuddy and Codex.' },
+        targets: { type: 'array', items: { type: 'string' }, description: 'Desktop AI target ids or names. Supported built-ins include workbuddy, codex, chatgpt, claude, gemini, deepseek, kimi, doubao, tongyi, wenxin, perplexity, cursor, copilot, lmstudio, ollama, cherry-studio, anythingllm. When omitted, Lumi selects up to two targets detected in running processes or the local app index.' },
         customTargets: {
           type: 'array',
           items: { type: 'object' },
@@ -926,7 +1252,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'Question or task to send to every selected AI target.' },
-        targets: { type: 'array', items: { type: 'string' }, description: 'Target ids or names. Defaults to WorkBuddy and Codex.' },
+        targets: { type: 'array', items: { type: 'string' }, description: 'Target ids or names. When omitted, Lumi selects up to two targets detected in running processes or the local app index.' },
         customTargets: { type: 'array', items: { type: 'object' }, description: 'Optional one-off custom desktop AI targets.' },
         submitShortcut: { type: 'string', description: 'Submit shortcut, default enter.' },
         openIfNeeded: { type: 'boolean', description: 'Open/focus targets when needed. Defaults true.' },

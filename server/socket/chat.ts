@@ -2180,7 +2180,7 @@ export function registerChatHandler(
                   flow: turnFlow,
                 });
                 const backgroundBlocked = finalizedBackground.blocked;
-                if (backgroundBlocked) finalText = finalizedBackground.text;
+                finalText = finalizedBackground.text;
 
                 const taskPreview = text.slice(0, 80);
                 const completionText = backgroundBlocked
@@ -2659,9 +2659,9 @@ export function registerChatHandler(
         source: 'chat',
         flow: turnFlow,
       });
+      responseText = finalResponse.text;
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
-        responseText = finalResponse.text;
         if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
       }
 

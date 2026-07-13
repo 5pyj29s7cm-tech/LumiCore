@@ -7,6 +7,7 @@ import {
   hasAuthenticatedWebResultEvidence,
   hasCoreActionEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresAutoCadMcpPlayback,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
   summarizeActionContractBlocker,
@@ -348,6 +349,176 @@ function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string 
   return formatDesktopObservationResult(input.toolRecords || [], input.taskText);
 }
 
+function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
+  if (taskActionContract(input).kind !== 'cad_drafting') return null;
+  const mcpOnly = requiresAutoCadMcpPlayback(input.taskText);
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    !item.error
+    && /^(?:cad_run_autocad_draw_script|mcp_cad-drafting_autocad_playback_file)$/i.test(String(item.name || ''))
+    && (!mcpOnly || /^mcp_cad-drafting_autocad_playback_file$/i.test(String(item.name || '')))
+    && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(record.result || ''));
+  } catch {
+    return null;
+  }
+
+  const zh = isChineseText(input.taskText);
+  const markerPath = String(parsed?.completionMarkerPath || '').trim();
+  const scriptPath = String(parsed?.scriptPath || '').trim();
+  const operationsPath = String(parsed?.operationsPath || parsed?.manifest?.operationsPath || '').trim();
+  const executable = String(parsed?.autocadExecutable || parsed?.manifest?.autocadExecutable || '').trim();
+  const executableSource = String(parsed?.autocadExecutableSource || parsed?.manifest?.autocadExecutableSource || '').trim();
+  const operationCount = Number(parsed?.operationCount || parsed?.manifest?.operationCount || 0);
+  const strokeDelayMs = Number(parsed?.strokeDelayMs || parsed?.manifest?.strokeDelayMs || 0);
+  const mcpPlayback = /^mcp_cad-drafting_autocad_playback_file$/i.test(String(record.name || ''))
+    || parsed?.transport === 'mcp_autocad_com';
+  const completed = parsed?.status === 'completed'
+    && parsed?.completionMarkerExists === true
+    && (!mcpOnly || (
+      mcpPlayback
+      && parsed?.transport === 'mcp_autocad_com'
+      && parsed?.visiblePlayback === true
+    ));
+
+  if (completed) {
+    const lines = zh
+      ? [
+          '已在真实 AutoCAD 中完成绘图脚本回放并通过验收。',
+          markerPath ? `完成标记：${markerPath}` : '',
+          scriptPath ? `绘图脚本：${scriptPath}` : '',
+          executable ? `AutoCAD：${executable}${executableSource ? `（来源：${executableSource}）` : ''}` : '',
+          operationCount > 0 ? `已执行 ${operationCount} 个绘图操作。` : '',
+        ]
+      : [
+          mcpPlayback
+            ? 'The visible stroke-by-stroke playback completed in the real AutoCAD application through Lumi CAD MCP and passed marker verification.'
+            : 'The drawing script completed in the real AutoCAD application and passed marker verification.',
+          markerPath ? `Completion marker: ${markerPath}` : '',
+          operationsPath ? `Drawing operations: ${operationsPath}` : '',
+          scriptPath ? `Drawing script: ${scriptPath}` : '',
+          executable ? `AutoCAD: ${executable}${executableSource ? ` (source: ${executableSource})` : ''}` : '',
+          operationCount > 0 ? `${operationCount} drawing operations completed.` : '',
+          mcpPlayback && strokeDelayMs > 0 ? `Visible stroke interval: ${strokeDelayMs} ms.` : '',
+        ];
+    return {
+      text: lines.filter(Boolean).join('\n'),
+      blocked: false,
+      reason: mcpPlayback
+        ? 'Grounded AutoCAD MCP visible-playback summary from the CAD completion marker.'
+        : 'Grounded AutoCAD completion summary from the CAD completion marker.',
+    };
+  }
+
+  if (!requiresVisibleAutoCadExecution(input.taskText)) return null;
+  const blocker = String(parsed?.note || 'AutoCAD completion marker was not observed.').trim();
+  const text = zh
+    ? [
+        '这次 AutoCAD 实际绘图还没有完成。',
+        `阻塞点：${blocker}`,
+        markerPath ? `待验收标记：${markerPath}` : '',
+      ].filter(Boolean).join('\n')
+    : [
+        'The real AutoCAD drawing run is not complete yet.',
+        `Blocker: ${blocker}`,
+        markerPath ? `Expected completion marker: ${markerPath}` : '',
+      ].filter(Boolean).join('\n');
+  return {
+    text,
+    blocked: true,
+    reason: blocker,
+    notification: {
+      type: 'work_product_guard',
+      level: 'warning',
+      message: blocker,
+    },
+  };
+}
+
+function formatDesktopAiRoundtableResult(input: LumiResultFinalizerInput): string | null {
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    !item.error && /^desktop_ai_roundtable$/i.test(String(item.name || '')) && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(record.result || ''));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed?.targets) || !parsed?.ask || !Array.isArray(parsed?.answers)) return null;
+
+  const zh = isChineseText(input.taskText);
+  const askByTarget = new Map((parsed.ask.results || []).map((item: any) => [String(item?.target || ''), item]));
+  const answerByTarget = new Map((parsed.answers || []).map((item: any) => [String(item?.target || ''), item]));
+  const lines: string[] = [zh ? '桌面 AI 协同实执行结果：' : 'Desktop AI collaboration result:'];
+  const collectedAnswers: string[] = [];
+  let pendingSubmittedCount = 0;
+  let blockedCount = 0;
+
+  for (const target of parsed.targets) {
+    const id = String(target?.id || target?.target || 'unknown');
+    const label = String(target?.label || id);
+    const ask = askByTarget.get(id) as any;
+    const answer = answerByTarget.get(id) as any;
+    const askStatus = String(ask?.status || '');
+    const answerStatus = String(answer?.status || '');
+    const answerText = String(answer?.answerText || '').trim();
+
+    if (answerStatus === 'collected' && answerText) {
+      collectedAnswers.push(answerText);
+      lines.push(zh
+        ? `- ${label}：已收集并验证可见回答：${answerText.slice(0, 1600)}`
+        : `- ${label}: visible answer collected and verified: ${answerText.slice(0, 1600)}`);
+      continue;
+    }
+
+    if (answerStatus === 'pending' && askStatus === 'submitted_unverified') {
+      pendingSubmittedCount += 1;
+      lines.push(zh
+        ? `- ${label}：问题已粘贴并提交，但尚未读到完整的可见回答。`
+        : `- ${label}: question pasted and submitted; a completed visible answer is still pending.`);
+      continue;
+    }
+
+    if (answerStatus === 'needs_vision_setup') {
+      lines.push(zh
+        ? `- ${label}：问题已提交，但缺少可用的视觉读取模型，无法验收回答。`
+        : `- ${label}: question submitted, but no vision reader was available to verify the answer.`);
+      continue;
+    }
+
+    blockedCount += 1;
+    const reason = String(answer?.note || answer?.blocker || ask?.note || ask?.inputEvidence?.reason || 'target execution was blocked').trim();
+    lines.push(zh ? `- ${label}：未提交，阻塞点：${reason}` : `- ${label}: not submitted; blocker: ${reason}`);
+  }
+
+  if (collectedAnswers.length === parsed.targets.length && parsed.targets.length > 0) {
+    const uniqueAnswers = new Set(collectedAnswers.map(answer => answer.trim().toLowerCase()));
+    lines.push(zh
+      ? `结论：已完成 ${collectedAnswers.length} 个目标的可见回答验收；${uniqueAnswers.size === 1 ? '各方回答一致。' : '各方回答存在差异，已在上方分别列出。'}`
+      : `Conclusion: verified visible answers were collected from all ${collectedAnswers.length} targets; ${uniqueAnswers.size === 1 ? 'the answers agree.' : 'the answers differ and are listed separately above.'}`);
+  } else if (collectedAnswers.length > 0) {
+    lines.push(zh
+      ? `结论：部分完成，已收集 ${collectedAnswers.length} 个回答，其余目标仍在等待或受阻。`
+      : `Conclusion: partial completion; ${collectedAnswers.length} answer(s) were collected and the remaining targets are pending or blocked.`);
+  } else if (pendingSubmittedCount > 0) {
+    lines.push(zh
+      ? `结论：${pendingSubmittedCount} 个目标已提交并待回答，${blockedCount} 个目标受账号或页面状态阻塞；这不是“应用未安装”。`
+      : `Conclusion: ${pendingSubmittedCount} target(s) are submitted and pending; ${blockedCount} target(s) are blocked by account or page state. This is not app unavailable.`);
+  } else {
+    lines.push(zh
+      ? `结论：未完成提交，${blockedCount} 个目标受阻。`
+      : `Conclusion: no submission completed; ${blockedCount} target(s) were blocked.`);
+  }
+  return lines.join('\n');
+}
+
 function correctCurrentTurnContractDrift(
   input: LumiResultFinalizerInput,
   taskContract: ReturnType<typeof buildActionContract>,
@@ -371,6 +542,16 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
 
   const actionContract = taskActionContract(input);
+  const groundedCadRun = formatGroundedCadRunResult(input);
+  if (groundedCadRun) return groundedCadRun;
+  const groundedDesktopAi = formatDesktopAiRoundtableResult(input);
+  if (groundedDesktopAi) {
+    return {
+      text: groundedDesktopAi,
+      blocked: false,
+      reason: 'Grounded desktop AI collaboration summary from structured tool evidence.',
+    };
+  }
   const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
   if (groundedDriftCorrection) {
     return {
@@ -379,7 +560,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       reason: 'Corrected current-turn action-contract drift using fresh desktop evidence.',
     };
   }
-  const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|completed|success|sent|opened|read|viewed|created|generated)/iu
+  const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|complete|completed|success|sent|opened|read|viewed|created|generated)/iu
     .test(input.responseText || '');
   const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
     .test(input.responseText || '');
@@ -441,7 +622,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     actionContract.kind === 'cad_drafting' &&
     claimsActionDone &&
     requiresVisibleAutoCadExecution(actionText) &&
-    !hasVisibleAutoCadExecutionEvidence(input.toolRecords || [])
+    !hasVisibleAutoCadExecutionEvidence(input.toolRecords || [], actionText)
   ) {
     return {
       text: formatCompactBlockedResponse(input, 'Missing visible AutoCAD execution evidence.'),

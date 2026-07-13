@@ -1487,9 +1487,9 @@ async function processVoiceInput(
       source: 'voice',
       flow: turnFlow,
     });
+    responseText = finalResponse.text;
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
-      responseText = finalResponse.text;
       sentenceBuffer = '';
       if (finalResponse.notification) socket.emit("agent:notification", finalResponse.notification);
     }
