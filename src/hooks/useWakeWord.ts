@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
 import { apiFetch } from '@/services/apiClient';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import { translate } from '@/i18n/runtime';
 
 interface UseWakeWordOptions {
   /** Socket.IO connection for server-side Qwen ASR wake word detection */
@@ -45,8 +46,8 @@ interface UseWakeWordReturn {
 }
 
 const PICOVOICE_ACCESS_KEY_STORAGE = 'lumi_picovoice_key';
-const WAKE_SERVICE_MISSING_MESSAGE = '语音唤醒需要先在设置 > 语音服务配置豆包语音或 DashScope。';
-const WAKE_SERVICE_UNAVAILABLE_MESSAGE = '语音唤醒服务当前不可用，请检查语音服务 Key、账号状态或切换服务后再开启。';
+const wakeServiceMissingMessage = () => translate('wakeServiceMissing');
+const wakeServiceUnavailableMessage = () => translate('wakeServiceUnavailable');
 
 function isWakeProviderUnavailableMessage(message: string): boolean {
   return /required for wake word detection|not configured|no DashScope key|access denied|not in good standing|unauthori[sz]ed|invalid api key|forbidden|401|403/i.test(message || '');
@@ -158,7 +159,7 @@ export function useWakeWord({
     if (wakeConfigUnavailableRef.current) {
       setIsListening(false);
       setIsSupported(false);
-      setError(WAKE_SERVICE_MISSING_MESSAGE);
+      setError(wakeServiceMissingMessage());
       return;
     }
 
@@ -167,7 +168,7 @@ export function useWakeWord({
       wakeConfigUnavailableRef.current = true;
       setIsListening(false);
       setIsSupported(false);
-      setError(WAKE_SERVICE_MISSING_MESSAGE);
+      setError(wakeServiceMissingMessage());
       return;
     }
 
@@ -240,8 +241,8 @@ export function useWakeWord({
           setIsListening(false);
           setIsSupported(false);
           setError(/required for wake word detection|not configured|no DashScope key/i.test(message)
-            ? WAKE_SERVICE_MISSING_MESSAGE
-            : WAKE_SERVICE_UNAVAILABLE_MESSAGE);
+            ? wakeServiceMissingMessage()
+            : wakeServiceUnavailableMessage());
           cleanupAudio();
           try { s.emit('wake:stop'); } catch {}
           removeWakeHandlers();
@@ -273,8 +274,8 @@ export function useWakeWord({
         setIsListening(false);
         setIsSupported(false);
         setError(/required for wake word detection|not configured|no DashScope key/i.test(msg)
-          ? WAKE_SERVICE_MISSING_MESSAGE
-          : WAKE_SERVICE_UNAVAILABLE_MESSAGE);
+          ? wakeServiceMissingMessage()
+          : wakeServiceUnavailableMessage());
       } else {
         setError(msg);
       }

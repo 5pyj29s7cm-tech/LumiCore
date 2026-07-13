@@ -43,6 +43,7 @@ import {
   SENSOR_PERMISSIONS_CHANGED,
   type SensorPermissionState,
 } from '@/services/sensorPermissionService';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.VoiceForge })));
 
@@ -50,25 +51,25 @@ function buildSidebarGroups(t: any, isZh: boolean) {
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   return [
     {
-      label: t.sidebarCore || ui('核心', 'Core'),
+      label: t.sidebarCore || uiMessage('settings.core.38f8d0ecb8'),
       items: [
-        { id: 'general', label: t.sidebarGeneral || ui('通用', 'General'), icon: <Globe size={16} /> },
+        { id: 'general', label: t.sidebarGeneral || uiMessage('settings.general.40e00570d2'), icon: <Globe size={16} /> },
       ],
     },
     {
-      label: t.sidebarAiNeural || ui('AI 与人格', 'AI & Neural'),
+      label: t.sidebarAiNeural || uiMessage('settings.ai-neural.253e6de004'),
       items: [
-        { id: 'neural', label: t.neuralEngine || ui('智能体框架', 'Neural Engine'), icon: <BrainCircuit size={16} /> },
-        { id: 'llm-providers', label: t.llmProviders || ui('LLM 服务商', 'LLM Providers'), icon: <BrainCircuit size={16} /> },
-        { id: 'vision-models', label: t.visionModelSettings || ui('视觉模型', 'Vision Model'), icon: <Camera size={16} /> },
-        { id: 'voice-services', label: t.voiceServices || ui('语音服务', 'Voice Services'), icon: <Mic size={16} /> },
+        { id: 'neural', label: t.neuralEngine || uiMessage('settings.neural-engine.dd539ca320'), icon: <BrainCircuit size={16} /> },
+        { id: 'llm-providers', label: t.llmProviders || uiMessage('settings.llm-providers.8d18bc9417'), icon: <BrainCircuit size={16} /> },
+        { id: 'vision-models', label: t.visionModelSettings || uiMessage('settings.vision-model.df2108ba57'), icon: <Camera size={16} /> },
+        { id: 'voice-services', label: t.voiceServices || uiMessage('settings.voice-services.abc302ed3a'), icon: <Mic size={16} /> },
       ],
     },
     {
-      label: t.sidebarSystem || ui('系统', 'System'),
+      label: t.sidebarSystem || uiMessage('settings.system.bd68977ed1'),
       items: [
-        { id: 'security', label: t.privacySecurity || ui('隐私与安全', 'Security'), icon: <Shield size={16} /> },
-        { id: 'hardware', label: t.settingsHardware || ui('硬件权限', 'Hardware'), icon: <Camera size={16} /> },
+        { id: 'security', label: t.privacySecurity || uiMessage('settings.security.7c0dadaf08'), icon: <Shield size={16} /> },
+        { id: 'hardware', label: t.settingsHardware || uiMessage('settings.hardware.8177f0148a'), icon: <Camera size={16} /> },
         { id: 'mcp', label: t.settingsMCP || 'MCP', icon: <Cpu size={16} /> },
       ],
     },
@@ -106,7 +107,7 @@ export function Settings({
         if (!cancelled) setProviderStatus(data.providers || {});
       } catch (err: any) {
         if (!cancelled) {
-          toast.error(err?.message || t.failedToLoadProviderStatus || ui('服务商状态加载失败', 'Failed to load provider status'));
+          toast.error(err?.message || t.failedToLoadProviderStatus || uiMessage('settings.failed-to-load-provider-status.6411dc3232'));
         }
       }
     };
@@ -136,33 +137,33 @@ export function Settings({
       case 'general':
         return (
           <div className="space-y-8">
-            <SettingsSection title={t.language || ui('语言', 'Language')} icon={<Globe size={18} className="text-blue-400" />}>
+            <SettingsSection title={t.language || uiMessage('settings.language.1200fa47a6')} icon={<Globe size={18} className="text-blue-400" />}>
               <div className="p-8 bg-white/5 rounded-[2.5rem] border border-white/5 space-y-6">
                 <div>
                   <label className="text-xs font-black uppercase tracking-widest text-white/50 block mb-4">{t.selectLanguage}</label>
                   <div className="grid grid-cols-2 gap-4">
                     <button onClick={() => setLang('en')}
                       className={`p-6 rounded-2xl border text-sm font-bold transition-all flex items-center justify-center gap-3 ${lang === 'en' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 border-white/5 text-white/40 hover:bg-white/10'}`}>
-                      {t.englishUS || ui('英文（美国）', 'English (US)')}
+                      {t.englishUS || uiMessage('settings.english-us.265bc3cad7')}
                     </button>
                     <button onClick={() => setLang('zh')}
                       className={`p-6 rounded-2xl border text-sm font-bold transition-all flex items-center justify-center gap-3 ${lang === 'zh' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 border-white/5 text-white/40 hover:bg-white/10'}`}>
-                      中文 (简体)
+                       {t.chinese}
                     </button>
                   </div>
                 </div>
               </div>
             </SettingsSection>
 
-            <SettingsSection title={t.appearanceThemes || ui('外观与主题', 'Appearance & Themes')} icon={<Sparkle size={18} className="text-celestial-saturn" />}>
+            <SettingsSection title={t.appearanceThemes || uiMessage('settings.appearance-themes.c5b9eacfd0')} icon={<Sparkle size={18} className="text-celestial-saturn" />}>
               <div className="p-8 bg-white/5 rounded-[2.5rem] border border-white/5 space-y-8">
                 <div>
-                  <label className="text-xs font-black uppercase tracking-widest text-white/50 block mb-4">{ui('全局明暗外观', 'Global Appearance')}</label>
+                  <label className="text-xs font-black uppercase tracking-widest text-white/50 block mb-4">{uiMessage('settings.global-appearance.360529c0a2')}</label>
                   <div className="grid grid-cols-3 gap-3">
                     {([
-                      { id: 'light', label: ui('白天', 'Day'), hint: ui('主界面更亮', 'Bright shell'), icon: <Sun size={16} /> },
-                      { id: 'dark', label: ui('夜间', 'Night'), hint: ui('经典暗色', 'Classic dark'), icon: <Moon size={16} /> },
-                      { id: 'system', label: ui('跟随系统', 'System'), hint: resolvedAppearanceMode === 'light' ? ui('当前白天', 'Now day') : ui('当前夜间', 'Now night'), icon: <Globe size={16} /> },
+                      { id: 'light', label: uiMessage('settings.day.2a9362ad0e'), hint: uiMessage('settings.bright-shell.8a26ab726b'), icon: <Sun size={16} /> },
+                      { id: 'dark', label: uiMessage('settings.night.da11ed8a8e'), hint: uiMessage('settings.classic-dark.3c4a1d5444'), icon: <Moon size={16} /> },
+                      { id: 'system', label: uiMessage('settings.system.b9dd0f7e7a'), hint: resolvedAppearanceMode === 'light' ? uiMessage('settings.now-day.a98d215d70') : uiMessage('settings.now-night.99973ce72a'), icon: <Globe size={16} /> },
                     ] as Array<{ id: AppearanceMode; label: string; hint: string; icon: React.ReactNode }>).map(option => {
                       const active = appearanceMode === option.id;
                       return (
@@ -188,7 +189,7 @@ export function Settings({
                     })}
                   </div>
                   <p className="mt-3 text-[12px] leading-relaxed text-white/40">
-                    {ui('这是全局外壳主题。知识库、音乐沉浸层、会议覆盖层等需要暗场对比的页面会保留自己的深色工作台。', 'This controls the global shell. Knowledge base, immersive music, meeting overlays, and other contrast-heavy surfaces can keep their own dark workspace.')}
+                    {uiMessage('settings.this-controls-the-global-shell.fd3236415f')}
                   </p>
                 </div>
               </div>
@@ -198,7 +199,7 @@ export function Settings({
       case 'neural':
         return (
           <div className="space-y-8">
-            <SettingsSection title={t.agentFramework || ui('智能体框架（Lumi 协议）', 'Agent Framework (Lumi Protocol)')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
+            <SettingsSection title={t.agentFramework || uiMessage('settings.agent-framework-lumi-protocol.2d0970720d')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
               <div className="space-y-6">
                 <AutonomousSettingsPanel t={t} operationMode={operationMode} />
               </div>
@@ -220,35 +221,35 @@ export function Settings({
       case 'security':
         return (
           <div className="space-y-8">
-            <SettingsSection title={t.privacySecurity || ui('隐私与安全', 'Privacy & Security')} icon={<Shield size={18} className="text-celestial-mars" />}>
-              <SettingsItem label={t.localEncryption || ui('本地加密', 'Local Encryption')} desc={t.localEncryptionDesc || ui('加密存储在本地磁盘上的所有智能体数据。', 'Encrypt all Agent data stored on your local disk.')} storageKey="lumi_sec_local_encryption" t={t} />
-              <SettingsItem label={t.anonymousMode || ui('匿名模式', 'Anonymous Mode')} desc={t.anonymousModeDesc || ui('在协作网络中隐藏你的节点 ID。', 'Hide your node ID from the collaborative network.')} storageKey="lumi_sec_anonymous_mode" t={t} />
-              <SettingsItem label={t.biometricLock || ui('生物识别锁', 'Biometric Lock')} desc={t.biometricLockDesc || ui('生成智能体时要求指纹或人脸验证。', 'Require fingerprint or face ID for Agent generation.')} storageKey="lumi_sec_biometric_lock" t={t} />
+            <SettingsSection title={t.privacySecurity || uiMessage('settings.privacy-security.901389923c')} icon={<Shield size={18} className="text-celestial-mars" />}>
+              <SettingsItem label={t.localEncryption || uiMessage('settings.local-encryption.48aca1952b')} desc={t.localEncryptionDesc || uiMessage('settings.encrypt-all-agent-data-stored.d88a575c31')} storageKey="lumi_sec_local_encryption" t={t} />
+              <SettingsItem label={t.anonymousMode || uiMessage('settings.anonymous-mode.2caa1cc9a5')} desc={t.anonymousModeDesc || uiMessage('settings.hide-your-node-id-from.1679578b38')} storageKey="lumi_sec_anonymous_mode" t={t} />
+              <SettingsItem label={t.biometricLock || uiMessage('settings.biometric-lock.6e177df8a6')} desc={t.biometricLockDesc || uiMessage('settings.require-fingerprint-or-face-id.a9f1459524')} storageKey="lumi_sec_biometric_lock" t={t} />
             </SettingsSection>
             {isElectron && (
-              <SettingsSection title={t.desktopNodeRuntime || ui('桌面节点运行时', 'Desktop Node Runtime')} icon={<Database size={18} className="text-celestial-jupiter" />}>
+              <SettingsSection title={t.desktopNodeRuntime || uiMessage('settings.desktop-node-runtime.839c1b5918')} icon={<Database size={18} className="text-celestial-jupiter" />}>
                 <div className="p-4 bg-celestial-jupiter/10 rounded-2xl border border-celestial-jupiter/20 space-y-2 mb-4">
-                  <div className="flex justify-between items-center text-sm"><span className="text-white/60">{t.platform || ui('平台', 'Platform')}:</span><span className="font-mono text-celestial-jupiter uppercase">{platform}</span></div>
-                  <div className="flex justify-between items-center text-sm"><span className="text-white/60">{t.nodeStatus || ui('节点状态', 'Node Status')}:</span><div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /><span className="font-bold text-green-500 underline decoration-green-500/20 underline-offset-4">{t.nodeActive || ui('运行中', 'ACTIVE')}</span></div></div>
+                  <div className="flex justify-between items-center text-sm"><span className="text-white/60">{t.platform || uiMessage('settings.platform.3ffff3f363')}:</span><span className="font-mono text-celestial-jupiter uppercase">{platform}</span></div>
+                  <div className="flex justify-between items-center text-sm"><span className="text-white/60">{t.nodeStatus || uiMessage('settings.node-status.d26319b9df')}:</span><div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" /><span className="font-bold text-green-500 underline decoration-green-500/20 underline-offset-4">{t.nodeActive || uiMessage('settings.active.6f9fc6b162')}</span></div></div>
                 </div>
-                <SettingsItem label={t.hardwareAcceleration || ui('硬件加速', 'Hardware Acceleration')} desc={t.hardwareAccelerationDesc || ui('使用 GPU 加速核心推理。', 'Use GPU for neural core inference.')} storageKey="lumi_sec_hw_accel" t={t} />
-                <SettingsItem label={t.systemTrayMode || ui('系统托盘模式', 'System Tray Mode')} desc={t.systemTrayModeDesc || ui('让 Lumi 在后台保持运行。', 'Keep Lumi running in the background.')} storageKey="lumi_sec_system_tray" t={t} />
+                <SettingsItem label={t.hardwareAcceleration || uiMessage('settings.hardware-acceleration.508a40b8c7')} desc={t.hardwareAccelerationDesc || uiMessage('settings.use-gpu-for-neural-core.de372afa5c')} storageKey="lumi_sec_hw_accel" t={t} />
+                <SettingsItem label={t.systemTrayMode || uiMessage('settings.system-tray-mode.43259974b8')} desc={t.systemTrayModeDesc || uiMessage('settings.keep-lumi-running-in-the.30e5d2cd98')} storageKey="lumi_sec_system_tray" t={t} />
               </SettingsSection>
             )}
 
-            <SettingsSection title="生物特征录入" icon={<Shield size={18} className="text-amber-400" />}>
+            <SettingsSection title={t.biometricEnrollment} icon={<Shield size={18} className="text-amber-400" />}>
               <div className="p-6 bg-white/5 rounded-[2.5rem] border border-white/5">
                 {workDomain === 'personal' ? (
                   <BiometricsEnrollPanel />
                 ) : (
                   <div className="space-y-3 text-sm text-white/65">
-                    <p>{ui('声纹和人脸属于当前成员的个人域与本机设备，不写入组织工作域。', 'Voiceprints and face data belong to the current member\'s personal workspace and device, not the organization workspace.')}</p>
+                    <p>{uiMessage('settings.voiceprints-and-face-data-belong.f078b91611')}</p>
                     <button
                       type="button"
                       onClick={() => { void switchDomain('personal'); }}
                       className="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs font-bold text-amber-200 transition-colors hover:bg-amber-400/15"
                     >
-                      {ui('切换到个人域管理', 'Switch to Personal Workspace')}
+                      {uiMessage('settings.switch-to-personal-workspace.b53fff066e')}
                     </button>
                   </div>
                 )}
@@ -270,7 +271,7 @@ export function Settings({
       {/* Sidebar — fixed height, scrollable */}
       <div className="w-44 flex-shrink-0 border-r border-white/[0.08] bg-white/[0.025] flex flex-col min-h-0 md:w-56">
         <div className="px-3 pt-4 pb-3 md:px-4 md:pt-5">
-          <h2 className="text-xs font-black uppercase tracking-widest text-white/60">{t.settings || ui('设置', 'Settings')}</h2>
+          <h2 className="text-xs font-black uppercase tracking-widest text-white/60">{t.settings || uiMessage('settings.settings.8d4d0d8541')}</h2>
         </div>
         <div className="flex-1 px-1.5 pb-3 space-y-0.5 overflow-y-auto custom-scrollbar min-h-0 md:px-2">
           {buildSidebarGroups(t, isZh).map(group => {
@@ -318,7 +319,7 @@ export function Settings({
             className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold text-red-400/60 transition-all hover:bg-red-500/10 hover:text-red-300"
           >
             <LogOut size={14} />
-            {t?.signOut || ui('退出登录', 'Sign Out')}
+            {t?.signOut || uiMessage('settings.sign-out.db1b9e9fea')}
           </button>
         </div>
       </div>
@@ -410,13 +411,13 @@ function HardwareSettings({ t }: { t: any }) {
       if (type === 'mic') setMicStatus(result.state);
       if (type === 'camera') setCamStatus(result.state);
       if (!result.ok) {
-        throw new Error(result.error || ui('璇峰湪绯荤粺鏉冮檺涓墦寮€璁块棶', 'Please enable access in system permissions.'));
+        throw new Error(result.error || uiMessage('settings.please-enable-access-in-system.3fa8966e6c'));
       }
 
-      toast.success(type === 'mic' ? (t.micAccessSynced || ui('麦克风权限已同步。', 'Microphone access synchronized.')) : (t.camAccessSynced || ui('摄像头权限已同步。', 'Camera access synchronized.')));
+      toast.success(type === 'mic' ? (t.micAccessSynced || uiMessage('settings.microphone-access-synchronized.cf6ea6edc8')) : (t.camAccessSynced || uiMessage('settings.camera-access-synchronized.8effc04251')));
       return true;
     } catch (err: any) {
-      toast.error(`${t.sensorLinkFailed || ui('传感器连接失败', 'Sensor link failed')}: ${err.message}`);
+      toast.error(`${t.sensorLinkFailed || uiMessage('settings.sensor-link-failed.ccc93e4061')}: ${err.message}`);
       return false;
     } finally {
       setIsRequesting(false);
@@ -431,8 +432,8 @@ function HardwareSettings({ t }: { t: any }) {
 
     if (!enabled) {
       toast.success(type === 'mic'
-        ? (t.audioReceptorsDisabled || ui('音频输入已停用。', 'Audio input disabled.'))
-        : (t.visualCortexDisabled || ui('视觉感知已停用。', 'Visual perception disabled.')));
+        ? (t.audioReceptorsDisabled || uiMessage('settings.audio-input-disabled.7a401ffe0b'))
+        : (t.visualCortexDisabled || uiMessage('settings.visual-perception-disabled.d15e5b5cc6')));
       return;
     }
 
@@ -446,16 +447,16 @@ function HardwareSettings({ t }: { t: any }) {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <SettingsSection title={t.hardwareSensorNetwork || ui('硬件传感器网络', 'Hardware Sensor Network')} icon={<Camera size={18} className="text-celestial-saturn" />}>
+      <SettingsSection title={t.hardwareSensorNetwork || uiMessage('settings.hardware-sensor-network.5ac24401d0')} icon={<Camera size={18} className="text-celestial-saturn" />}>
         <p className="text-sm text-white/40 mb-8 max-w-xl">
-          {t.hardwareSensorNetworkDesc || ui('LumiAI 需要访问物理传感器来进行现实上下文感知和生物识别验证。所有数据都会在你的本地节点处理。', 'LumiAI requires access to your physical sensors for real-world contextual awareness and biometric verification. All data is processed locally on your node.')}
+          {t.hardwareSensorNetworkDesc || uiMessage('settings.lumiai-requires-access-to-your.2c2519e903')}
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <HardwareCapCard
             icon={<Mic size={24} />}
-            label={t.audioReceptors || ui('音频输入', 'Audio Receptors')}
-            desc={t.audioReceptorsDesc || ui('启用语音识别和声音克隆相关能力。', 'Enable neural speech recognition and voice cloning.')}
+            label={t.audioReceptors || uiMessage('settings.audio-receptors.2d53651196')}
+            desc={t.audioReceptorsDesc || uiMessage('settings.enable-neural-speech-recognition-and.37c49ca0c6')}
             status={micStatus}
             enabled={micEnabled}
             onToggle={(enabled) => void handleSensorToggle('mic', enabled)}
@@ -464,8 +465,8 @@ function HardwareSettings({ t }: { t: any }) {
           />
           <HardwareCapCard
             icon={<Camera size={24} />}
-            label={t.visualCortex || ui('视觉感知', 'Visual Cortex')}
-            desc={t.visualCortexDesc || ui('启用多模态视觉和手势控制。', 'Enable multimodal vision and gesture control.')}
+            label={t.visualCortex || uiMessage('settings.visual-cortex.215cdec3f7')}
+            desc={t.visualCortexDesc || uiMessage('settings.enable-multimodal-vision-and-gesture.2861691bfc')}
             status={camStatus}
             enabled={camEnabled}
             onToggle={(enabled) => void handleSensorToggle('camera', enabled)}
@@ -477,10 +478,10 @@ function HardwareSettings({ t }: { t: any }) {
         <div className="mt-12 p-6 glass-dark rounded-[2rem] border border-white/5 space-y-4">
            <div className="flex items-center gap-3">
               <Shield className="text-celestial-saturn" size={20} />
-              <h4 className="text-sm font-bold uppercase tracking-tight text-white">{t.privacyAssurance || ui('隐私保证', 'Privacy Assurance')}</h4>
+              <h4 className="text-sm font-bold uppercase tracking-tight text-white">{t.privacyAssurance || uiMessage('settings.privacy-assurance.2ce5c06cdb')}</h4>
            </div>
            <p className="text-xs text-white/55 leading-relaxed italic">
-             {t.privacyAssuranceText || ui('协议默认强制本地处理。没有你的明确确认，视觉和听觉数据流不会离开你的本地主权节点。', 'Our protocol strictly enforces local-only processing. Your visual and auditory data streams are never transmitted outside your sovereign mesh node without direct user-signed override.')}
+             {t.privacyAssuranceText || uiMessage('settings.our-protocol-strictly-enforces-local.872b7c5677')}
            </p>
         </div>
       </SettingsSection>
@@ -522,22 +523,22 @@ function HardwareCapCard({ icon, label, desc, status, enabled, onToggle, disable
            {isLinked ? (
              <div className="flex items-center gap-1.5 text-celestial-saturn text-xs font-black uppercase tracking-widest">
                <CheckCircle size={12} />
-                {t.linked || ui('已连接', 'Linked')}
+                {t.linked || uiMessage('settings.linked.6892680d46')}
              </div>
            ) : isBlocked ? (
              <div className="flex items-center gap-1.5 text-red-500 text-xs font-black uppercase tracking-widest">
                <AlertCircle size={12} />
-                {t.blocked || ui('已阻止', 'Blocked')}
+                {t.blocked || uiMessage('settings.blocked.f5f31a9aa5')}
              </div>
            ) : isUnavailable ? (
              <div className="flex items-center gap-1.5 text-white/35 text-xs font-black uppercase tracking-widest">
                <AlertCircle size={12} />
-               {t.unavailable || ui('不可用', 'Unavailable')}
+               {t.unavailable || uiMessage('settings.unavailable.a19c84a34b')}
              </div>
            ) : !enabled ? (
-              <div className="text-xs font-black uppercase tracking-widest text-white/45">{t.disabled || ui('已停用', 'Disabled')}</div>
+              <div className="text-xs font-black uppercase tracking-widest text-white/45">{t.disabled || uiMessage('settings.disabled.2caae825fe')}</div>
            ) : (
-              <div className="text-xs font-black uppercase tracking-widest text-white/45">{t.awaitingAccess || ui('等待授权', 'Awaiting Access')}</div>
+              <div className="text-xs font-black uppercase tracking-widest text-white/45">{t.awaitingAccess || uiMessage('settings.awaiting-access.75952ad010')}</div>
            )}
         </div>
 
@@ -548,7 +549,7 @@ function HardwareCapCard({ icon, label, desc, status, enabled, onToggle, disable
               disabled={disabled}
               className="bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black uppercase tracking-widest px-4 h-9 rounded-xl"
             >
-              {status === 'denied' ? (t.retryLink || ui('重新连接', 'Retry Link')) : (t.authorize || ui('授权', 'Authorize'))}
+              {status === 'denied' ? (t.retryLink || uiMessage('settings.retry-link.394f83238c')) : (t.authorize || uiMessage('settings.authorize.9ed688f227'))}
             </Button>
           )}
           <button
@@ -556,7 +557,7 @@ function HardwareCapCard({ icon, label, desc, status, enabled, onToggle, disable
             onClick={() => onToggle(!enabled)}
             disabled={disabled || isUnavailable}
             aria-pressed={enabled}
-            aria-label={enabled ? ui(`停用${label}`, `Disable ${label}`) : ui(`启用${label}`, `Enable ${label}`)}
+            aria-label={enabled ? formatUiMessage('settings.disable-value0.aaf58c1a29', { value0: label }) : formatUiMessage('settings.enable-value0.71e0c154da', { value0: label })}
             className={`relative h-9 w-16 rounded-full border transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
               enabled
                 ? 'border-celestial-saturn/40 bg-celestial-saturn/25 shadow-[0_0_18px_rgba(255,204,0,0.18)]'
@@ -660,8 +661,8 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
       setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
-    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || ui('密钥移除失败', 'Failed to remove key')));
+      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
+    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove-key.065616ae8b')));
   };
 
   const handleSaveKey = () => {
@@ -674,8 +675,8 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
       setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || ui('密钥保存失败', 'Failed to save key')));
+      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
+    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key.58568a4911')));
   };
 
   const syncToServer = (models: Record<string, string>) => {
@@ -707,10 +708,10 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
     try {
       const result = await runLLMConnectionTest(providerId, model.trim());
       setTestState('ok');
-      setTestMessage(ui(`实调成功 · ${result.latencyMs} ms`, `Live call passed · ${result.latencyMs} ms`));
+      setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
     } catch (error: any) {
       setTestState('error');
-      setTestMessage(error?.message || ui('实调失败', 'Live call failed'));
+      setTestMessage(error?.message || uiMessage('settings.live-call-failed.cd19d46055'));
     }
   };
 
@@ -719,7 +720,7 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || ui('已配置', 'CONFIGURED')}</span>}
+        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="flex gap-3">
@@ -730,13 +731,13 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
             value={keyValue}
             onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
-            placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || ui('密钥已保存在服务器', 'Key saved on server')) : placeholder}
+            placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server.1ca0422100')) : placeholder}
             className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-celestial-saturn/50 transition-colors disabled:opacity-50"
           />
           <div className="absolute right-2 top-2 flex gap-1">
             <button type="button" onClick={() => setShowKey(!showKey)}
               className="h-10 px-2 bg-white/5 hover:bg-white/10 text-xs font-bold uppercase border border-white/5 rounded-lg">
-              {showKey ? (t?.hide || ui('隐藏', 'Hide')) : (t?.show || ui('显示', 'Show'))}
+              {showKey ? (t?.hide || uiMessage('settings.hide.d2e660d104')) : (t?.show || uiMessage('settings.show.520bd3e959'))}
             </button>
           </div>
         </div>
@@ -745,25 +746,25 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
           disabled={disabled || !keyValue.trim()}
           className="h-[56px] px-4 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-celestial-saturn/90 transition-all"
         >
-          {t?.save || ui('保存', 'Save')}
+          {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleRemoveKey}
           disabled={disabled || (!keyValue && !serverConfigured)}
           className="h-[56px] px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
         >
-          {t?.remove || ui('移除', 'Remove')}
+          {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
           className="h-[56px] px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
         >
-          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : ui('实调', 'Test')}
+          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
       <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
+        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
@@ -776,7 +777,7 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
           {models.map(m => <option key={m} value={m} />)}
         </datalist>
         {aiConfig.provider === providerId && (
-          <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold whitespace-nowrap">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>
+          <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold whitespace-nowrap">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>
         )}
       </div>
       {testMessage && (
@@ -828,8 +829,8 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || ui('密钥保存失败', 'Failed to save key')));
+      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
+    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key.58568a4911')));
   };
 
   const handleRemoveKey = () => {
@@ -842,8 +843,8 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
       setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
-    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || ui('密钥移除失败', 'Failed to remove key')));
+      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
+    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove-key.065616ae8b')));
   };
 
   const handleModelChange = (m: string) => {
@@ -874,10 +875,10 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
     try {
       const result = await runVisionConnectionTest(providerId, model.trim());
       setTestState('ok');
-      setTestMessage(ui(`视觉实调成功 · ${result.latencyMs} ms`, `Vision call passed · ${result.latencyMs} ms`));
+      setTestMessage(formatUiMessage('settings.vision-call-passed-value0-ms.c80d92a068', { value0: result.latencyMs }));
     } catch (error: any) {
       setTestState('error');
-      setTestMessage(error?.message || ui('视觉实调失败', 'Vision call failed'));
+      setTestMessage(error?.message || uiMessage('settings.vision-call-failed.adf12eb156'));
     }
   };
 
@@ -886,7 +887,7 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || ui('已配置', 'CONFIGURED')}</span>}
+        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="flex gap-3">
@@ -897,13 +898,13 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
             value={keyValue}
             onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
-            placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || ui('密钥已保存在服务器', 'Key saved on server')) : placeholder}
+            placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server.1ca0422100')) : placeholder}
             className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-cyan-300/50 transition-colors disabled:opacity-50"
           />
           <div className="absolute right-2 top-2 flex gap-1">
             <button type="button" onClick={() => setShowKey(!showKey)}
               className="h-10 px-2 bg-white/5 hover:bg-white/10 text-xs font-bold uppercase border border-white/5 rounded-lg">
-              {showKey ? (t?.hide || ui('隐藏', 'Hide')) : (t?.show || ui('显示', 'Show'))}
+              {showKey ? (t?.hide || uiMessage('settings.hide.d2e660d104')) : (t?.show || uiMessage('settings.show.520bd3e959'))}
             </button>
           </div>
         </div>
@@ -912,25 +913,25 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
           disabled={disabled || !keyValue.trim()}
           className="h-[56px] px-4 bg-cyan-300 text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cyan-200 transition-all"
         >
-          {t?.save || ui('保存', 'Save')}
+          {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleRemoveKey}
           disabled={disabled || (!keyValue && !serverConfigured)}
           className="h-[56px] px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
         >
-          {t?.remove || ui('移除', 'Remove')}
+          {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
           className="h-[56px] px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
         >
-          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : ui('实调', 'Test')}
+          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
       <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
+        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
@@ -943,7 +944,7 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
           {models.map(m => <option key={m} value={m} />)}
         </datalist>
         {visionConfig.provider === providerId && (
-          <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold whitespace-nowrap">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>
+          <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold whitespace-nowrap">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>
         )}
       </div>
       {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
@@ -1062,10 +1063,10 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
     try {
       const result = await runVisionConnectionTest(providerId, model.trim());
       setTestState('ok');
-      setTestMessage(ui(`视觉实调成功 · ${result.latencyMs} ms`, `Vision call passed · ${result.latencyMs} ms`));
+      setTestMessage(formatUiMessage('settings.vision-call-passed-value0-ms.c80d92a068', { value0: result.latencyMs }));
     } catch (caught: any) {
       setTestState('error');
-      setTestMessage(caught?.message || ui('视觉实调失败', 'Vision call failed'));
+      setTestMessage(caught?.message || uiMessage('settings.vision-call-failed.adf12eb156'));
     }
   };
 
@@ -1074,8 +1075,8 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{ui('已连接', 'CONNECTED')}</span>}
-        {visionConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>}
+        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.connected.4f18b17c87')}</span>}
+        {visionConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="flex gap-3">
@@ -1092,11 +1093,11 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
           disabled={checking || !baseUrl.trim()}
           className="h-[56px] px-5 bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500 transition-all"
         >
-          {checking ? <Loader2 size={16} className="animate-spin" /> : ui('检测', 'Detect')}
+          {checking ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.detect.333c762fe5')}
         </Button>
       </div>
       <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
+        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
@@ -1113,18 +1114,18 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
           disabled={!model.trim()}
           className="h-9 px-3 bg-cyan-300 text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-cyan-200 transition-all"
         >
-          {ui('设为视觉', 'Use')}
+          {uiMessage('settings.use.998b2bc522')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={!detected || !model.trim() || testState === 'testing'}
           className="h-9 px-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20 transition-all"
         >
-          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : ui('实调', 'Test')}
+          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
       <p className="text-[12px] text-white/45 leading-relaxed">
-        {ui('本地视觉只在你的电脑上处理截图和图片。模型需要支持图像输入，否则视觉任务会失败并明确报错。', 'Local vision processes screenshots and images on your machine. The selected model must support image input, otherwise vision tasks will fail explicitly.')}
+        {uiMessage('settings.local-vision-processes-screenshots-and.94552138f2')}
       </p>
       {detected && models.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -1188,8 +1189,8 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
       setTestMessage('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || ui('保存失败', 'Failed to save')));
+      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
+    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save.465b88f9c0')));
   };
 
   const handleRemove = () => {
@@ -1202,8 +1203,8 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
       setConnectionDirty(false);
       setTestState('idle');
       setTestMessage('');
-      toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
-    }).catch(err => toast.error(err.message || ui('移除失败', 'Failed to remove')));
+      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
+    }).catch(err => toast.error(err.message || uiMessage('settings.failed-to-remove.5c5d9c7827')));
   };
 
   const handleUse = () => {
@@ -1217,10 +1218,10 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
     try {
       const result = await runVisionConnectionTest('relay', model.trim());
       setTestState('ok');
-      setTestMessage(ui(`视觉实调成功 · ${result.latencyMs} ms`, `Vision call passed · ${result.latencyMs} ms`));
+      setTestMessage(formatUiMessage('settings.vision-call-passed-value0-ms.c80d92a068', { value0: result.latencyMs }));
     } catch (caught: any) {
       setTestState('error');
-      setTestMessage(caught?.message || ui('视觉实调失败', 'Vision call failed'));
+      setTestMessage(caught?.message || uiMessage('settings.vision-call-failed.adf12eb156'));
     }
   };
 
@@ -1229,8 +1230,8 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg"><Globe size={18} className="text-cyan-400" /></div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">OpenAI-Compatible Vision</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{ui('已配置', 'CONFIGURED')}</span>}
-        {visionConfig.provider === 'relay' && <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>}
+        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {visionConfig.provider === 'relay' && <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="grid grid-cols-1 gap-3">
@@ -1252,7 +1253,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
         />
       </div>
       <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
+        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
@@ -1270,32 +1271,32 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
           disabled={!apiKey.trim() || !baseUrl.trim()}
           className="h-[44px] px-5 bg-cyan-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-cyan-500 transition-all"
         >
-          {t?.save || ui('保存', 'Save')}
+          {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleUse}
           disabled={!model.trim()}
           className="h-[44px] px-5 bg-cyan-300 text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-cyan-200 transition-all"
         >
-          {ui('设为视觉', 'Use as Vision')}
+          {uiMessage('settings.use-as-vision.adf03f9489')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={!serverConfigured || connectionDirty || !model.trim() || testState === 'testing'}
           className="h-[44px] px-5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20 transition-all"
         >
-          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : ui('实调', 'Test')}
+          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
         <Button
           onClick={handleRemove}
           disabled={!serverConfigured && !apiKey}
           className="h-[44px] px-4 bg-red-500/10 border border-red-500/20 text-red-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-red-500/20 transition-all"
         >
-          {t?.remove || ui('移除', 'Remove')}
+          {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
       </div>
       <p className="text-[12px] text-white/45 leading-relaxed">
-        {ui('用于 vLLM、SGLang、Xinference 或其他兼容 OpenAI Chat Completions 的本地视觉服务。', 'Use this for vLLM, SGLang, Xinference, or any local OpenAI-compatible vision endpoint.')}
+        {uiMessage('settings.use-this-for-vllm-sglang.6ba52812bd')}
       </p>
       {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
     </div>
@@ -1386,15 +1387,15 @@ function VisionModelPage({ t }: { t: any }) {
   const { visionConfig, updateVisionConfig } = useApp();
   return (
     <div className="space-y-8">
-      <SettingsSection title={t.visionModelSettings || ui('视觉模型', 'Vision Model')} icon={<Camera size={18} className="text-cyan-300" />}>
+      <SettingsSection title={t.visionModelSettings || uiMessage('settings.vision-model.df2108ba57')} icon={<Camera size={18} className="text-cyan-300" />}>
         <div className="mb-6 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.04] p-4 space-y-2">
-          <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryVisionModel || ui('屏幕理解与视觉控制模型', 'Screen Understanding & Vision Control')}</label>
+          <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryVisionModel || uiMessage('settings.screen-understanding-vision-control.a9be431876')}</label>
           <div className="relative">
             <select value={visionConfig.provider} onChange={(e) => updateVisionConfig({ provider: e.target.value })}
               className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm font-bold appearance-none cursor-pointer focus:border-cyan-300/50 outline-none">
               <option value="openai">OpenAI Vision</option>
               <option value="gemini">Google Gemini Vision</option>
-              <option value="ark">Doubao / 豆包 Vision (Ark)</option>
+               <option value="ark">Doubao Vision (Ark)</option>
               <option value="qwen">Qwen-VL (DashScope)</option>
               <option value="ollama">Ollama Local Vision</option>
               <option value="lmstudio">LM Studio Local Vision</option>
@@ -1403,14 +1404,14 @@ function VisionModelPage({ t }: { t: any }) {
             <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/45" />
           </div>
           <p className="text-[12px] text-white/45 px-1">
-            {ui('视觉模型只用于看屏幕、OCR、电脑控制等视觉任务；不会改变主推理大脑，也不会改变语音服务。', 'Vision is used only for screen reading, OCR, and desktop control. It does not change the main reasoning brain or voice services.')}
+            {uiMessage('settings.vision-is-used-only-for.9a9cf081fd')}
             <span className="ml-2 text-white/40 font-mono">{visionConfig.provider}/{visionConfig.model}</span>
           </p>
         </div>
         <div className="grid grid-cols-1 gap-6">
           <VisionProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI Vision" providerId="openai" models={['gpt-4o', 'gpt-4o-mini']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
-          <VisionProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="Google Gemini Vision" providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={ui('输入 Gemini API Key...', 'Enter Gemini API key...')} serverKey="GEMINI_API_KEY" t={t} />
-          <VisionProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao / 豆包 Vision (Ark)" providerId="ark" models={['doubao-1-5-vision-pro-32k']} placeholder={ui('输入 Ark API Key...', 'Enter Ark API key...')} serverKey="ARK_API_KEY" t={t} />
+          <VisionProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="Google Gemini Vision" providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={uiMessage('settings.enter-gemini-api-key.4295b94e77')} serverKey="GEMINI_API_KEY" t={t} />
+           <VisionProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao Vision (Ark)" providerId="ark" models={['doubao-1-5-vision-pro-32k']} placeholder={uiMessage('settings.enter-ark-api-key.9f82bf67e1')} serverKey="ARK_API_KEY" t={t} />
           <VisionProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen-VL / DashScope" providerId="qwen" models={['qwen-vl-max']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
           <VisionLocalProviderRow
             icon={<Cpu size={18} className="text-emerald-400" />}
@@ -1461,9 +1462,9 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
     .filter(([, status]) => status.configured !== false && status.lastProbe?.ok === false);
   return (
     <div className="space-y-8">
-      <SettingsSection title={t.llmProviders || ui('LLM 服务商', 'LLM Providers')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
+      <SettingsSection title={t.llmProviders || uiMessage('settings.llm-providers.8d18bc9417')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
         <div className="mb-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-2">
-          <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryReasoningBrain || ui('主推理大脑', 'Primary Reasoning Brain')}</label>
+          <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryReasoningBrain || uiMessage('settings.primary-reasoning-brain.5bdd279d51')}</label>
           <div className="relative">
             <select value={aiConfig.provider} onChange={(e) => updateAIConfig({ provider: e.target.value })}
               className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm font-bold appearance-none cursor-pointer focus:border-celestial-saturn/50 outline-none">
@@ -1472,28 +1473,28 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
               <option value="gemini">Google Gemini</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic Claude</option>
-              <option value="ark">Doubao / 豆包 (Ark)</option>
-              <option value="xiaomi">Xiaomi / 小米</option>
-              <option value="kimi">Kimi / 月之暗面</option>
-              <option value="glm">GLM / 智谱</option>
-              <option value="relay">中转站 (API Relay)</option>
+               <option value="ark">Doubao (Ark)</option>
+               <option value="xiaomi">Xiaomi MiMo</option>
+               <option value="kimi">Kimi (Moonshot)</option>
+               <option value="glm">GLM (Zhipu AI)</option>
+               <option value="relay">{t.apiRelayLabel}</option>
               <option value="ollama">Ollama (Local)</option>
               <option value="lmstudio">LM Studio (Local)</option>
             </select>
             <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/45" />
           </div>
-          <p className="text-[12px] text-white/45 px-1">{t?.activeModel || ui('当前模型', 'Active model')}: <span className="text-white/40 font-mono">{aiConfig.model}</span> - {t?.changePerProvider || ui('可在下方服务商卡片中调整模型。', 'Adjust the model in the provider cards below.')}</p>
+          <p className="text-[12px] text-white/45 px-1">{t?.activeModel || uiMessage('settings.active-model.774fc20779')}: <span className="text-white/40 font-mono">{aiConfig.model}</span> - {t?.changePerProvider || uiMessage('settings.adjust-the-model-in-the.80ce4e76ad')}</p>
         </div>
         <p className="text-sm text-white/40 max-w-xl mb-6">
-          {t.apiMatrixLLMDesc || ui('为每个 LLM 服务商配置 API Key 和偏好模型。', 'Configure API keys and preferred models for each LLM provider.')}
+          {t.apiMatrixLLMDesc || uiMessage('settings.configure-api-keys-and-preferred.158e3e0be6')}
         </p>
         {failedProbes.length > 0 && (
           <div className="mb-6 flex flex-wrap items-center gap-2 border-y border-red-400/15 py-3 text-xs text-red-200/80">
             <AlertTriangle size={14} />
-            <span>{ui('最近实测不可用：', 'Last probe unavailable:')}</span>
+            <span>{uiMessage('settings.last-probe-unavailable.96559b4185')}</span>
             {failedProbes.map(([provider, status]) => (
               <span key={provider} className="font-mono">
-                {provider} ({status.lastProbe?.errorCategory || ui('连接失败', 'failed')})
+                {provider} ({status.lastProbe?.errorCategory || uiMessage('settings.failed.4b20f2d3b4')})
               </span>
             ))}
           </div>
@@ -1501,11 +1502,11 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
         <div className="grid grid-cols-1 gap-6">
           <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="DeepSeek" providerId="deepseek" models={['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner']} placeholder="sk-..." serverKey="DEEPSEEK_API_KEY" t={t} />
           <LLMProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen / DashScope (Alibaba Cloud)" providerId="qwen" models={['qwen-plus', 'qwen-max', 'qwen-turbo']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
-          <LLMProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao / 豆包 (Ark)" providerId="ark" models={['doubao-seed-2-0-lite-260215', 'doubao-1-5-pro-32k', 'doubao-1-5-lite-32k', 'doubao-1-5-vision-pro-32k']} placeholder={ui('输入 Ark API Key...', 'Enter Ark API key...')} serverKey="ARK_API_KEY" t={t} />
-          <LLMProviderRow icon={<Cpu size={18} className="text-orange-400" />} label="Xiaomi MiMo / 小米" providerId="xiaomi" models={['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-pro']} placeholder={ui('输入 MiMo API Key...', 'Enter MiMo API key...')} serverKey="XIAOMI_API_KEY" t={t} />
-          <LLMProviderRow icon={<Sparkle size={18} className="text-rose-400" />} label="Kimi / 月之暗面 (Moonshot)" providerId="kimi" models={['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']} placeholder="sk-..." serverKey="KIMI_API_KEY" t={t} />
-          <LLMProviderRow icon={<Sparkle size={18} className="text-cyan-400" />} label="GLM / 智谱 (Zhipu AI)" providerId="glm" models={['glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4-plus']} placeholder={ui('输入 GLM API Key...', 'Enter GLM API key...')} serverKey="GLM_API_KEY" t={t} />
-          <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label={`Google Gemini${providerStatus.gemini?.available ? ` (${providerStatus.gemini.model})` : ''}`} providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={providerStatus.gemini?.available ? (t.connectedViaEnv || ui('已通过环境变量连接', 'Connected via environment')) : (t.noKeyConfigured || ui('未配置密钥', 'No key configured'))} serverKey="GEMINI_API_KEY" t={t} />
+           <LLMProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao (Ark)" providerId="ark" models={['doubao-seed-2-0-lite-260215', 'doubao-1-5-pro-32k', 'doubao-1-5-lite-32k', 'doubao-1-5-vision-pro-32k']} placeholder={uiMessage('settings.enter-ark-api-key.9f82bf67e1')} serverKey="ARK_API_KEY" t={t} />
+           <LLMProviderRow icon={<Cpu size={18} className="text-orange-400" />} label="Xiaomi MiMo" providerId="xiaomi" models={['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-pro']} placeholder={uiMessage('settings.enter-mimo-api-key.58533112c9')} serverKey="XIAOMI_API_KEY" t={t} />
+           <LLMProviderRow icon={<Sparkle size={18} className="text-rose-400" />} label="Kimi (Moonshot)" providerId="kimi" models={['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']} placeholder="sk-..." serverKey="KIMI_API_KEY" t={t} />
+           <LLMProviderRow icon={<Sparkle size={18} className="text-cyan-400" />} label="GLM (Zhipu AI)" providerId="glm" models={['glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4-plus']} placeholder={uiMessage('settings.enter-glm-api-key.d9e86fca17')} serverKey="GLM_API_KEY" t={t} />
+          <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label={`Google Gemini${providerStatus.gemini?.available ? ` (${providerStatus.gemini.model})` : ''}`} providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={providerStatus.gemini?.available ? (t.connectedViaEnv || uiMessage('settings.connected-via-environment.2dcffe5622')) : (t.noKeyConfigured || uiMessage('settings.no-key-configured.633defef78'))} serverKey="GEMINI_API_KEY" t={t} />
           <LLMProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI" providerId="openai" models={['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
           <LLMProviderRow icon={<Sparkle size={18} className="text-purple-400" />} label="Anthropic Claude" providerId="anthropic" models={['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5']} placeholder="sk-ant-..." serverKey="ANTHROPIC_API_KEY" t={t} />
           <OllamaProviderRow t={t} />
@@ -1625,7 +1626,7 @@ function LocalLLMProviderRow({
     } catch (caught: any) {
       setDetected(false);
       setModels([]);
-      setError(caught?.message || ui('本地模型检测失败', 'Local model detection failed'));
+      setError(caught?.message || uiMessage('settings.local-model-detection-failed.639dea570a'));
     } finally {
       setChecking(false);
     }
@@ -1643,10 +1644,10 @@ function LocalLLMProviderRow({
     try {
       const result = await runLLMConnectionTest(providerId, model.trim());
       setTestState('ok');
-      setTestMessage(ui(`实调成功 · ${result.latencyMs} ms`, `Live call passed · ${result.latencyMs} ms`));
+      setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
     } catch (caught: any) {
       setTestState('error');
-      setTestMessage(caught?.message || ui('实调失败', 'Live call failed'));
+      setTestMessage(caught?.message || uiMessage('settings.live-call-failed.cd19d46055'));
     }
   };
 
@@ -1659,8 +1660,8 @@ function LocalLLMProviderRow({
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg"><Cpu size={18} className={accentClasses.icon} /></div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{ui('已探测', 'DETECTED')}</span>}
-        {aiConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold">{t?.activeBadge || ui('当前', 'ACTIVE')}</span>}
+        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.detected.6d745414bb')}</span>}
+        {aiConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="flex gap-3">
@@ -1677,11 +1678,11 @@ function LocalLLMProviderRow({
           disabled={checking || !baseUrl.trim()}
           className={`h-[56px] px-5 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 transition-all ${accentClasses.button}`}
         >
-          {checking ? <Loader2 size={16} className="animate-spin" /> : ui('检测', 'Detect')}
+          {checking ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.detect.333c762fe5')}
         </Button>
       </div>
       <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || ui('模型', 'Model')}</label>
+        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
@@ -1694,10 +1695,10 @@ function LocalLLMProviderRow({
           {[...new Set([model, ...generationModels].filter(Boolean))].map(modelName => <option key={modelName} value={modelName} />)}
         </datalist>
         <Button onClick={handleUse} disabled={!detected || !model.trim()} className="h-9 px-3 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-celestial-saturn/90">
-          {ui('设为主模型', 'Use')}
+          {uiMessage('settings.use.1ec0c92474')}
         </Button>
         <Button onClick={handleTest} disabled={!detected || !model.trim() || testState === 'testing'} className="h-9 px-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20">
-          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : ui('实调', 'Test')}
+          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
       {detected && generationModels.length > 0 && (
@@ -1728,50 +1729,50 @@ function VoiceServicesPage({ t }: { t: any }) {
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   return (
     <div className="space-y-8">
-      <SettingsSection title={t.audioOutput || ui('音频与语音输出', 'Audio & Voice Output')} icon={<Music size={18} className="text-celestial-saturn" />}>
+      <SettingsSection title={t.audioOutput || uiMessage('settings.audio-voice-output.e1f3dc4c32')} icon={<Music size={18} className="text-celestial-saturn" />}>
         <div className="space-y-4 mb-6">
           <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-xs font-bold text-white/80">{t.ttsEngine || ui('TTS 引擎', 'TTS Engine')}</span>
+              <span className="text-xs font-bold text-white/80">{t.ttsEngine || uiMessage('settings.tts-engine.a69f1a5e70')}</span>
             </div>
-            <p className="text-xs text-white/40">{t.ttsEngineDesc || ui('本地 TTS：Local CosyVoice / GPT-SoVITS；云端：DashScope CosyVoice / Doubao。', 'Local TTS: Local CosyVoice / GPT-SoVITS; cloud: DashScope CosyVoice / Doubao.')}</p>
+            <p className="text-xs text-white/40">{t.ttsEngineDesc || uiMessage('settings.local-tts-local-cosyvoice-gpt.ec3eae7527')}</p>
           </div>
           <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-2">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-xs font-bold text-white/80">{t.sttEngine || ui('STT 引擎', 'STT Engine')}</span>
+              <span className="text-xs font-bold text-white/80">{t.sttEngine || uiMessage('settings.stt-engine.3e8df8d9d4')}</span>
             </div>
-            <p className="text-xs text-white/40">{t.sttEngineDesc || ui('本地 Whisper、OpenAI Whisper、豆包和 Qwen ASR 可用。', 'Local Whisper, OpenAI Whisper, Doubao, and Qwen ASR are available.')}</p>
+            <p className="text-xs text-white/40">{t.sttEngineDesc || uiMessage('settings.local-whisper-openai-whisper-doubao.ff3da59708')}</p>
           </div>
           <VoiceProviderSwitch t={t} />
         </div>
         <p className="text-sm text-white/40 max-w-xl mb-6">
-          {t.voiceServicesDesc || ui('语音识别（ASR）和语音合成（TTS）。本地 TTS 不需要 API key；云端 TTS 需要对应服务密钥。', 'Speech recognition (ASR) and speech synthesis (TTS). Local TTS does not need an API key; cloud TTS uses the matching service key.')}
+          {t.voiceServicesDesc || uiMessage('settings.speech-recognition-asr-and-speech.4d604985a1')}
         </p>
         <div className="grid grid-cols-1 gap-6">
-          <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || ui('格式：AppID:AccessToken。可在 console.volcengine.com/speech 的应用管理中获取。', 'Format: AppID:AccessToken. Get both from console.volcengine.com/speech → App Management')} t={t} />
-          <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || ui('用于 Qwen ASR 和 DashScope CosyVoice 云端 TTS。可在 dashscope.aliyun.com 获取密钥。', 'Powers Qwen ASR and DashScope CosyVoice cloud TTS. Get your key at dashscope.aliyun.com')} t={t} />
+          <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || uiMessage('settings.format-appid-accesstoken-get-both.c1d78f1a86')} t={t} />
+          <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || uiMessage('settings.powers-qwen-asr-and-dashscope.519f4cb3da')} t={t} />
         </div>
         <div className="mt-6 p-4 bg-white/5 rounded-xl border border-white/10">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-bold text-white/80">{t.proactiveVoiceGreeting || '允许Lumi主动语音问候'}</p>
-              <p className="text-xs text-white/55 mt-0.5">{t.proactiveVoiceGreetingDesc || '开启后，Lumi会在检测到异常或长时间不活动时主动开口说话'}</p>
+               <p className="text-xs font-bold text-white/80">{t.proactiveVoiceGreeting}</p>
+               <p className="text-xs text-white/55 mt-0.5">{t.proactiveVoiceGreetingDesc}</p>
             </div>
             <ProactiveVoiceToggle />
           </div>
           <div className="flex items-center justify-between mt-3">
             <div>
-              <p className="text-xs font-bold text-white/80">{t.wakeWordLabel || '唤醒词检测 (Wake Word)'}</p>
-              <p className="text-xs text-white/55 mt-0.5">{t.wakeWordDesc || '持续监听"Lumi"唤醒词。开启后麦克风持续上传音频做ASR识别，会产生费用。'}</p>
+               <p className="text-xs font-bold text-white/80">{t.wakeWordLabel}</p>
+               <p className="text-xs text-white/55 mt-0.5">{t.wakeWordDesc}</p>
             </div>
             <WakeWordToggle />
           </div>
           <div className="flex items-center justify-between mt-3">
             <div>
-              <p className="text-xs font-bold text-white/80">{t.alwaysOnVoiceLabel || '持续语音通道 (Always-On Voice)'}</p>
-              <p className="text-xs text-white/55 mt-0.5">{t.alwaysOnVoiceDesc || '开启后麦克风不会自动断开，Lumi始终在听。'}</p>
+               <p className="text-xs font-bold text-white/80">{t.alwaysOnVoiceLabel}</p>
+               <p className="text-xs text-white/55 mt-0.5">{t.alwaysOnVoiceDesc}</p>
             </div>
             <AlwaysOnVoiceToggle />
           </div>
@@ -1804,12 +1805,12 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       setValue('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
+      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
     };
     if (serverKey) {
       saveServerKeys({ [serverKey]: '' })
         .then(removeLocal)
-        .catch(err => toast.error(err.message || t?.failedToRemoveKey || ui('密钥移除失败', 'Failed to remove key')));
+        .catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove-key.065616ae8b')));
       return;
     }
     removeLocal();
@@ -1822,12 +1823,12 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       setServerConfigured(!!serverKey || serverConfigured);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
+      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
     };
     if (serverKey) {
       saveServerKeys({ [serverKey]: value.trim() })
         .then(saveLocal)
-        .catch(err => toast.error(err.message || t?.failedToSaveKey || ui('密钥保存到服务器失败', 'Failed to save key to server')));
+        .catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key-to.be32a67a8a')));
       return;
     }
     saveLocal();
@@ -1838,7 +1839,7 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || ui('已配置', 'CONFIGURED')}</span>}
+        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="flex gap-2">
@@ -1849,7 +1850,7 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
             value={value}
             onChange={e => setValue(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSave()}
-            placeholder={serverConfigured && !value ? (t?.keySavedOnServer || ui('密钥已保存在服务器（输入可替换）', 'Key saved on server (type to replace)')) : placeholder}
+            placeholder={serverConfigured && !value ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server-type.3b51321a15')) : placeholder}
             className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-celestial-saturn/50 transition-colors disabled:opacity-50"
           />
           <button
@@ -1858,7 +1859,7 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
             disabled={disabled || (!value && !serverConfigured)}
             className="absolute right-2 top-2 h-10 px-3 bg-red-500/10 border border-red-500/20 rounded-lg text-[12px] font-bold uppercase tracking-tight text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
           >
-            {t?.remove || ui('移除', 'Remove')}
+            {t?.remove || uiMessage('settings.remove.78190c6054')}
           </button>
         </div>
         <Button
@@ -1866,7 +1867,7 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
           disabled={disabled || !value.trim()}
           className="h-[56px] px-6 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-celestial-saturn/90 transition-all"
         >
-          {t?.save || ui('保存', 'Save')}
+          {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
       </div>
       {hint && <p className="text-[12px] text-white/45 leading-relaxed">{hint}</p>}
@@ -1906,8 +1907,8 @@ function RelayProviderRow({ t }: { t?: any }) {
       setServerUrlOk(true);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || ui('API Key 已保存', 'API key saved'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || ui('保存失败', 'Failed to save')));
+      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
+    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save.465b88f9c0')));
   };
 
   const handleRemove = () => {
@@ -1920,16 +1921,16 @@ function RelayProviderRow({ t }: { t?: any }) {
       setBaseUrl('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || ui('API Key 已移除', 'API key removed'));
-    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || ui('移除失败', 'Failed to remove')));
+      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
+    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove.5c5d9c7827')));
   };
 
   return (
     <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg"><Globe size={18} className="text-cyan-400" /></div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">中转站 (API Relay)</label>
-        {(serverKeyOk || serverUrlOk) && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{ui('已配置', 'CONFIGURED')}</span>}
+         <label className="text-xs font-black uppercase tracking-widest text-white/50">{t?.apiRelayLabel || 'API Relay'}</label>
+        {(serverKeyOk || serverUrlOk) && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
         {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
       </div>
       <div className="space-y-3">
@@ -1960,17 +1961,17 @@ function RelayProviderRow({ t }: { t?: any }) {
           disabled={!apiKey.trim() || !baseUrl.trim()}
           className="h-[48px] px-6 bg-cyan-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cyan-500 transition-all"
         >
-          {t?.save || ui('保存', 'Save')}
+          {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleRemove}
           disabled={!apiKey && !serverKeyOk && !serverUrlOk}
           className="h-[48px] px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
         >
-          {t?.remove || ui('移除', 'Remove')}
+          {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
       </div>
-      <p className="text-[12px] text-white/45 leading-relaxed">{ui('兼容 OpenAI 的 API 中转服务。请输入代理/中转服务的 Base URL 和 API Key。', 'OpenAI-compatible API relay. Enter the base URL and API key of your proxy/relay service.')}</p>
+      <p className="text-[12px] text-white/45 leading-relaxed">{uiMessage('settings.openai-compatible-api-relay-enter.b0d5520635')}</p>
     </div>
   );
 }
@@ -2051,7 +2052,7 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
       } catch (err: any) {
         if (!cancelled) {
           setNativeRuntime(null);
-          setNativeRuntimeError(err?.message || ui('原生常驻运行控制仅在桌面客户端可用。', 'Native runtime controls are only available in the desktop client.'));
+          setNativeRuntimeError(err?.message || uiMessage('settings.native-runtime-controls-are-only.242e691b46'));
         }
       }
     };
@@ -2081,9 +2082,9 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
         await invoke('set_close_to_background', { enabled });
       }
       await refreshNativeRuntime();
-      toast.success(enabled ? ui('已开启', 'Enabled') : ui('已关闭', 'Disabled'));
+      toast.success(enabled ? uiMessage('settings.enabled.4508d98328') : uiMessage('settings.disabled.68b069bc6a'));
     } catch (err: any) {
-      toast.error(err?.message || ui('原生运行设置更新失败', 'Failed to update native runtime setting'));
+      toast.error(err?.message || uiMessage('settings.failed-to-update-native-runtime.6cdad0027d'));
     }
   };
 
@@ -2092,7 +2093,7 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke(action === 'hide' ? 'hide_to_background' : 'quit_app');
     } catch (err: any) {
-      toast.error(err?.message || ui('运行时操作失败', 'Runtime action failed'));
+      toast.error(err?.message || uiMessage('settings.runtime-action-failed.2d63d1e37a'));
     }
   };
 
@@ -2105,10 +2106,10 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
   };
 
   const modeLabel =
-    operationMode === 'autonomous' ? ui('自主', 'Autonomy') :
-    operationMode === 'assistant' ? ui('助手', 'Assistant') :
-    operationMode === 'chat' ? ui('聊天', 'Chat') :
-    ui('会议', 'Meeting');
+    operationMode === 'autonomous' ? uiMessage('settings.autonomy.6aea974e38') :
+    operationMode === 'assistant' ? uiMessage('settings.assistant.90c4ae600c') :
+    operationMode === 'chat' ? uiMessage('settings.chat.1594b2f45c') :
+    uiMessage('settings.meeting.e16a90b510');
   const gateLevel = gateConfig.autonomyLevel || (gateConfig.autoProcessEnabled ? 'semi' : 'reactive');
   const ToggleRow = ({
     label,
@@ -2142,75 +2143,75 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
       {/* Desktop Mode Authority */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <div>
-          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('桌面三档', 'Desktop Modes')}</div>
-          <p className="text-xs text-white/40 mt-1">{ui('权限跟随桌面主界面的三档：聊天、助手、自主。会议是独立记录模式，不单独改变自主权限。', 'Permissions follow the three desktop modes: Chat, Assistant, and Autonomy. Meeting is a separate capture mode and does not create another autonomy level.')}</p>
+          <div className="text-xs font-black uppercase tracking-widest text-white/60">{uiMessage('settings.desktop-modes.569d70b466')}</div>
+          <p className="text-xs text-white/40 mt-1">{uiMessage('settings.permissions-follow-the-three-desktop.5c6e6a2ca1')}</p>
         </div>
         <div className="rounded-xl bg-black/18 px-3 py-3 text-[11px] leading-relaxed text-white/42">
-          {ui('当前桌面档位', 'Current desktop mode')}: <span className="font-bold text-white/72">{modeLabel}</span>
+          {uiMessage('settings.current-desktop-mode.0535fb2a2e')}: <span className="font-bold text-white/72">{modeLabel}</span>
           <span className="mx-2 text-white/18">/</span>
-          {ui('后端权限档', 'Backend autonomy')}: <span className="font-bold text-white/72">{gateLevel}</span>
+          {uiMessage('settings.backend-autonomy.cf04ab2476')}: <span className="font-bold text-white/72">{gateLevel}</span>
         </div>
       </div>
 
       {/* Resident Runtime */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <div>
-          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('原生常驻运行', 'Native Resident Runtime')}</div>
-          <p className="text-xs text-white/40 mt-1">{ui('控制桌面客户端是否随系统启动，以及关闭窗口后是否继续留在后台。', 'Controls whether the desktop client starts with the system and stays alive after closing the window.')}</p>
+          <div className="text-xs font-black uppercase tracking-widest text-white/60">{uiMessage('settings.native-resident-runtime.a56bca847b')}</div>
+          <p className="text-xs text-white/40 mt-1">{uiMessage('settings.controls-whether-the-desktop-client.0b21f43460')}</p>
         </div>
         <div className="rounded-xl border border-white/8 bg-black/18 p-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <div className="text-xs font-bold text-white/72">{ui('原生常驻运行', 'Native resident runtime')}</div>
+              <div className="text-xs font-bold text-white/72">{uiMessage('settings.native-resident-runtime.f3f4af60e9')}</div>
               <div className="mt-1 text-[11px] leading-relaxed text-white/36">
-                {ui('控制已安装的桌面客户端是否随 Windows 启动，以及关闭窗口后是否继续保持后台运行。', 'Controls whether the installed desktop client starts with Windows and stays alive when the window is closed.')}
+                {uiMessage('settings.controls-whether-the-installed-desktop.aa6963a96d')}
               </div>
             </div>
             <button
-              onClick={() => refreshNativeRuntime().catch((err: any) => toast.error(err?.message || ui('运行时状态刷新失败', 'Runtime refresh failed')))}
+              onClick={() => refreshNativeRuntime().catch((err: any) => toast.error(err?.message || uiMessage('settings.runtime-refresh-failed.c51da4aaaa')))}
               className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-black uppercase tracking-widest text-white/45 hover:bg-white/[0.08] hover:text-white"
             >
-              {ui('刷新', 'Refresh')}
+              {uiMessage('settings.refresh.cba212b169')}
             </button>
           </div>
           {nativeRuntime ? (
             <div className="space-y-2">
               <ToggleRow
-                label={ui('开机登录后启动', 'Launch at login')}
-                desc={nativeRuntime.autostart_supported ? ui('为当前 Windows 用户安装项以 --background 模式启动 Lumi。', 'Starts Lumi with --background for current Windows user installs.') : ui('当前平台暂不支持登录后启动。', 'Launch at login is not supported on this platform yet.')}
+                label={uiMessage('settings.launch-at-login.2485b7c036')}
+                desc={nativeRuntime.autostart_supported ? uiMessage('settings.starts-lumi-with-background-for.a33dc15a9d') : uiMessage('settings.launch-at-login-is-not.1796e70780')}
                 checked={nativeRuntime.autostart_enabled}
                 onClick={() => nativeRuntime.autostart_supported && updateNativeRuntime('autostart', !nativeRuntime.autostart_enabled)}
               />
               <ToggleRow
-                label={ui('关闭按钮转入后台', 'Close button hides to background')}
-                desc={ui('顶部关闭按钮和 Alt+F4 会隐藏 Lumi，而不是停止后端。需要完全退出时使用托盘退出。', 'The top close button and Alt+F4 hide Lumi instead of stopping the backend. Use tray Quit to fully exit.')}
+                label={uiMessage('settings.close-button-hides-to-background.788eb15250')}
+                desc={uiMessage('settings.the-top-close-button-and.2777d97f38')}
                 checked={nativeRuntime.close_to_background}
                 onClick={() => updateNativeRuntime('closeToBackground', !nativeRuntime.close_to_background)}
               />
               <div className="grid grid-cols-2 gap-2 text-[11px] text-white/42">
-                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{ui('平台', 'Platform')}: {nativeRuntime.platform}</div>
-                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{ui('快捷键', 'Shortcut')}: {nativeRuntime.global_shortcut}</div>
-                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{ui('后端', 'Backend')}: {nativeRuntime.backend_node_running ? ui('运行中', 'Running') : ui('开发模式 / 未拉起', 'Dev / not spawned')}</div>
-                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{ui('重启次数', 'Restarts')}: {nativeRuntime.node_restarts}</div>
+                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{uiMessage('settings.platform.3ffff3f363')}: {nativeRuntime.platform}</div>
+                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{uiMessage('settings.shortcut.51a35f7d60')}: {nativeRuntime.global_shortcut}</div>
+                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{uiMessage('settings.backend.9c17db77f8')}: {nativeRuntime.backend_node_running ? uiMessage('settings.running.4ac4390de9') : uiMessage('settings.dev-not-spawned.42b82413a9')}</div>
+                <div className="rounded-lg bg-white/[0.03] px-3 py-2">{uiMessage('settings.restarts.04fb20829b')}: {nativeRuntime.node_restarts}</div>
               </div>
               <div className="flex flex-wrap gap-2 pt-1">
                 <button
                   onClick={() => invokeRuntimeAction('hide')}
                   className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white/50 hover:bg-white/[0.08] hover:text-white"
                 >
-                  {ui('隐藏到后台', 'Hide Now')}
+                  {uiMessage('settings.hide-now.f08e6a7f7b')}
                 </button>
                 <button
                   onClick={() => invokeRuntimeAction('quit')}
                   className="rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-200/70 hover:bg-red-400/15 hover:text-red-100"
                 >
-                  {ui('退出 Lumi', 'Quit Lumi')}
+                  {uiMessage('settings.quit-lumi.df32c5974e')}
                 </button>
               </div>
             </div>
           ) : (
             <div className="rounded-lg bg-white/[0.03] px-3 py-2 text-xs text-white/38">
-              {nativeRuntimeError || ui('正在加载原生运行状态...', 'Native runtime status is loading...')}
+              {nativeRuntimeError || uiMessage('settings.native-runtime-status-is-loading.4a6aed02cd')}
             </div>
           )}
         </div>
@@ -2219,7 +2220,7 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
       {/* Scheduler Tasks */}
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <button onClick={() => setTasksExpanded(!tasksExpanded)} className="w-full flex items-center justify-between">
-          <div className="text-xs font-black uppercase tracking-widest text-white/60">{ui('后台任务', 'Background Tasks')}</div>
+          <div className="text-xs font-black uppercase tracking-widest text-white/60">{uiMessage('settings.background-tasks.015be0a9ad')}</div>
           <ChevronDown size={14} className={`text-white/40 transition-transform ${tasksExpanded ? 'rotate-180' : ''}`} />
         </button>
 
@@ -2229,7 +2230,7 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
               <div key={task.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-white/[0.02]">
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-bold text-white/60 truncate">{task.id}</div>
-                  <div className="text-[11px] text-white/30">{task.cron} {task.lastRun ? ui(`· 上次：${new Date(task.lastRun).toLocaleTimeString()}`, `· Last: ${new Date(task.lastRun).toLocaleTimeString()}`) : ''}</div>
+                  <div className="text-[11px] text-white/30">{task.cron} {task.lastRun ? formatUiMessage('settings.last-value0.ad05dbfaea', { value0: new Date(task.lastRun).toLocaleTimeString() }) : ''}</div>
                 </div>
                 <button
                   onClick={() => toggleTask(task.id)}
@@ -2277,7 +2278,7 @@ function SettingsItem({ label, desc, active = false, storageKey, onChange, t }: 
       localStorage.setItem(storageKey, String(next));
     }
     onChange?.(next);
-    toast.info(`${label}: ${next ? (t?.enabled || ui('已开启', 'Enabled')) : (t?.disabled || ui('已关闭', 'Disabled'))}`);
+    toast.info(`${label}: ${next ? (t?.enabled || uiMessage('settings.enabled.4508d98328')) : (t?.disabled || uiMessage('settings.disabled.68b069bc6a'))}`);
   };
 
   return (

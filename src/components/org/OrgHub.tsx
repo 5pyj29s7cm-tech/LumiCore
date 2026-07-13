@@ -18,6 +18,7 @@ import {
   clearPendingOrganizationWorkspaceRoute,
   takePendingOrganizationWorkspaceRoute,
 } from '../../lib/orgWorkspaceNavigation';
+import { uiMessage } from '../../i18n/uiMessages';
 
 const AuditLogViewer = lazy(() => import('./AuditLogViewer').then(m => ({ default: m.AuditLogViewer })));
 const AgentTemplateWorkspace = lazy(() => import('./AgentTemplateWorkspace').then(m => ({ default: m.AgentTemplateWorkspace })));
@@ -72,16 +73,16 @@ export function OrgHub() {
     { id: 'dashboard', label: t.orgDashboard, icon: <Home size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
     { id: 'kb', label: t.orgKB, icon: <BookOpen size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
     { id: 'chat', label: t.orgChat, icon: <MessageSquare size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
-    { id: 'messaging', label: t.messaging || ui('消息接入', 'Messaging'), icon: <MessagesSquare size={16} />, roles: ['owner', 'admin', 'member'] },
+    { id: 'messaging', label: t.messaging || uiMessage('org-hub.messaging.ec30100616'), icon: <MessagesSquare size={16} />, roles: ['owner', 'admin', 'member'] },
     { id: 'templates', label: t.orgTemplates, icon: <Package size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
-    { id: 'review', label: ui('智能体模板', 'Agent Templates'), icon: <ClipboardCheck size={16} />, roles: ['owner', 'admin'], showInNav: false },
+    { id: 'review', label: uiMessage('org-hub.agent-templates.9cc4c8c9d0'), icon: <ClipboardCheck size={16} />, roles: ['owner', 'admin'], showInNav: false },
     { id: 'members', label: t.orgMembers, icon: <Users size={16} />, roles: ['owner', 'admin'], showInNav: false },
     { id: 'audit', label: t.orgAudit, icon: <ScrollText size={16} />, roles: ['owner', 'admin'] },
-    { id: 'legal', label: t.legalHub || ui('律所', 'Legal'), icon: <Scale size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'spatial-design', label: ui('空间建筑设计', 'Spatial & Architecture'), icon: <Building2 size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'brand-design', label: ui('品牌创意设计', 'Brand & Creative'), icon: <Palette size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'legal', label: t.legalHub || uiMessage('org-hub.legal.95d17f5100'), icon: <Scale size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'spatial-design', label: uiMessage('org-hub.spatial-architecture.ad5a608bfc'), icon: <Building2 size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
+    { id: 'brand-design', label: uiMessage('org-hub.brand-creative.2ae19b7f69'), icon: <Palette size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
     { id: 'settings', label: t.orgSettings, icon: <Settings size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },
-    { id: 'branch', label: ui('分支连接', 'Branch Connection'), icon: <GitBranch size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
+    { id: 'branch', label: uiMessage('org-hub.branch-connection.9cecc72547'), icon: <GitBranch size={16} />, roles: ['owner', 'admin', 'member', 'viewer'], showInNav: false },
   ], [t, isZh]);
 
   const roleLabel: Record<string, { label: string; icon: React.ReactNode; color: string }> = useMemo(() => ({
@@ -152,8 +153,8 @@ export function OrgHub() {
     const target = workDomain === 'personal' ? 'work' : 'personal';
     const result = await switchDomain(target);
     setSwitchBusy(false);
-    if (result.success) toast.success(result.message || (target === 'work' ? ui('已进入工作域', 'Entered work domain') : ui('已进入个人域', 'Entered personal domain')));
-    else toast.error(result.message || ui('工作域切换失败', 'Failed to switch domain'));
+    if (result.success) toast.success(result.message || (target === 'work' ? uiMessage('org-hub.entered-work-domain.ba7297a3e8') : uiMessage('org-hub.entered-personal-domain.c96fa12de2')));
+    else toast.error(result.message || uiMessage('org-hub.failed-to-switch-domain.297b767379'));
   };
 
   const displayedDomain = workDomain === 'work' ? t.orgWorkDomain : t.orgPersonalDomain;
@@ -200,8 +201,8 @@ export function OrgHub() {
           <button
             onClick={handleDomainToggle}
             disabled={switchBusy}
-            aria-label={switchBusy ? (t.switching || ui('切换中...', 'Switching...')) : displayedDomain}
-            title={switchBusy ? (t.switching || ui('切换中...', 'Switching...')) : displayedDomain}
+            aria-label={switchBusy ? (t.switching || uiMessage('org-hub.switching.c197a0b742')) : displayedDomain}
+            title={switchBusy ? (t.switching || uiMessage('org-hub.switching.c197a0b742')) : displayedDomain}
             className={`lumi-button h-9 w-full justify-center px-2 sm:justify-start sm:px-3 ${
               workDomain === 'work'
                 ? 'border-blue-400/25 bg-blue-500/10 text-blue-300'
@@ -209,7 +210,7 @@ export function OrgHub() {
             }`}
           >
             {switchBusy ? <Loader2 size={12} className="animate-spin" /> : workDomain === 'work' ? <Briefcase size={12} /> : <User size={12} />}
-            <span className="hidden sm:inline">{switchBusy ? (t.switching || ui('切换中...', 'Switching...')) : displayedDomain}</span>
+            <span className="hidden sm:inline">{switchBusy ? (t.switching || uiMessage('org-hub.switching.c197a0b742')) : displayedDomain}</span>
           </button>
         </div>
 
@@ -235,8 +236,8 @@ export function OrgHub() {
               <button
                 type="button"
                 onClick={() => setOrgModulesOpen(prev => !prev)}
-                aria-label={ui('组织模块', 'Organization Modules')}
-                title={ui('组织模块', 'Organization Modules')}
+                aria-label={uiMessage('org-hub.organization-modules.75dd9b5603')}
+                title={uiMessage('org-hub.organization-modules.75dd9b5603')}
                 className={`flex w-full items-center justify-center gap-2 rounded-xl border px-2 py-2 text-sm transition-colors sm:justify-start sm:px-3 ${
                   isModuleView
                     ? 'border-blue-400/20 bg-blue-500/10 text-blue-200'
@@ -244,7 +245,7 @@ export function OrgHub() {
                 }`}
               >
                 <Layers size={16} className="shrink-0" />
-                <span className="hidden min-w-0 flex-1 truncate text-left sm:block">{ui('组织模块', 'Organization Modules')}</span>
+                <span className="hidden min-w-0 flex-1 truncate text-left sm:block">{uiMessage('org-hub.organization-modules.75dd9b5603')}</span>
                 <span className="hidden sm:block">{orgModulesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
               </button>
               {orgModulesOpen && (

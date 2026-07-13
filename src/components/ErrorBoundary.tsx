@@ -1,14 +1,13 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
-import { translations } from '@/lib/translations';
+import { getLocale, getMessages } from '@/i18n/runtime';
 
 function getT() {
   try {
-    const lang = localStorage.getItem('lumi-lang') || 'zh';
-    return (translations as any)[lang] || (translations as any).zh;
+    return getMessages(getLocale());
   } catch {
-    return (translations as any).zh;
+    return getMessages('en');
   }
 }
 

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useApp } from '../../contexts/AppContext';
 import { useSocket } from '../../hooks/useSocket';
 import { useT } from '../../lib/useT';
+import { uiMessage } from '../../i18n/uiMessages';
 
 type ChatAttachment = {
   id: string;
@@ -113,7 +114,7 @@ export function CentralLumiChat() {
   const greeting = useCallback((): Message => ({
     id: 'org-lumi-greeting',
     role: 'assistant',
-    content: ui('你好，我是你们公司的 Lumi。我可以协助查询制度、文化、知识库和组织信息。你想了解什么？', "Hello! I'm your company's Lumi. I can help with policies, culture, knowledge base, and more. What would you like to know?"),
+    content: uiMessage('central-lumi-chat.hello-i-m-your-company.add6a8645c'),
     timestamp: Date.now(),
     source: 'system',
   }), [ui]);
@@ -165,11 +166,11 @@ export function CentralLumiChat() {
   }, [orgConnection?.orgId]);
 
   const llmPolicyLabel = llmPolicy
-    ? ui('组织模型策略', 'Organization model policy')
-    : ui('模型策略', 'Model policy');
+    ? uiMessage('central-lumi-chat.organization-model-policy.ab6d214235')
+    : uiMessage('central-lumi-chat.model-policy.b8080eef2c');
   const llmPolicyModel = llmPolicy
     ? `${llmPolicy.provider || '-'} / ${llmPolicy.model || '-'}`
-    : ui('加载中', 'Loading');
+    : uiMessage('central-lumi-chat.loading.7bfbe693d1');
   const openOrgSettings = () => {
     window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'settings' } }));
   };
@@ -377,7 +378,7 @@ export function CentralLumiChat() {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
         role: 'assistant',
-        content: data.message || ui('工作域 Lumi 暂时无法回答这个问题。', "Lumi can't answer in the organization workspace right now."),
+        content: data.message || uiMessage('central-lumi-chat.lumi-can-t-answer-in.4cc9225c23'),
         timestamp: Date.now(),
         source: 'error',
       }]);
@@ -407,7 +408,7 @@ export function CentralLumiChat() {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
         role: 'assistant',
-        content: ui('组织聊天通道还没有连接好，请稍后再试。', 'The organization chat channel is not connected yet. Please try again shortly.'),
+        content: uiMessage('central-lumi-chat.the-organization-chat-channel-is.340dac9249'),
         timestamp: Date.now(),
         source: 'error',
       }]);
@@ -417,7 +418,7 @@ export function CentralLumiChat() {
       setMessages(prev => [...prev, {
         id: makeMessageId('org-error'),
         role: 'assistant',
-        content: ui('请先连接或切换到组织工作域。', 'Please connect or switch to an organization work domain first.'),
+        content: uiMessage('central-lumi-chat.please-connect-or-switch-to.6356c27681'),
         timestamp: Date.now(),
         source: 'error',
       }]);
@@ -445,10 +446,7 @@ export function CentralLumiChat() {
       if (activeRequestIdRef.current !== requestId) return;
       timeoutRef.current = null;
       setLoading(false);
-      setRequestNotice(ui(
-        '工作域 Lumi 处理时间比平时久，我会继续等后端的真实回复，不会在聊天里生成兜底回答。',
-        'Lumi is taking longer than usual in the organization workspace. I will keep waiting for the backend response instead of writing a fallback answer.',
-      ));
+      setRequestNotice(uiMessage('central-lumi-chat.lumi-is-taking-longer-than.0277a413ba'));
     }, 60000);
 
     setMessages(prev => [...prev, userMsg]);
@@ -478,7 +476,7 @@ export function CentralLumiChat() {
         </div>
         <div>
           <h2 className="text-lg font-bold text-white">{t.orgChat}</h2>
-          <p className="text-white/55 text-xs">{ui('同一个 Lumi · 当前使用组织权限和知识', 'Same Lumi · organization permissions and knowledge active')}</p>
+          <p className="text-white/55 text-xs">{uiMessage('central-lumi-chat.same-lumi-organization-permissions-and.681e347d91')}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/60" title={llmPolicyModel}>
@@ -490,8 +488,8 @@ export function CentralLumiChat() {
             type="button"
             onClick={openOrgSettings}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/50 transition hover:bg-white/10 hover:text-white"
-            title={ui('组织设置', 'Organization settings')}
-            aria-label={ui('打开组织设置', 'Open organization settings')}
+            title={uiMessage('central-lumi-chat.organization-settings.7e8f1a750a')}
+            aria-label={uiMessage('central-lumi-chat.open-organization-settings.b0ca996b30')}
           >
             <Settings size={15} />
           </button>
@@ -633,7 +631,7 @@ export function CentralLumiChat() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSend()}
-            placeholder={ui('询问公司制度、知识库...', 'Ask about company policies, knowledge base...')}
+            placeholder={uiMessage('central-lumi-chat.ask-about-company-policies-knowledge.95b8a73f10')}
             className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-sm placeholder:text-white/45 focus:outline-none focus:border-blue-500/40"
           />
           <button

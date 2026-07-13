@@ -7,6 +7,8 @@ import { appConfirm } from '@/lib/appConfirm';
 import { NodeDetailPanel } from './NodeDetailPanel';
 import { MemoryTreeScene, layoutTree3D } from './MemoryTree';
 import type { TreeNode3D, BranchCurve3D, MemoryNode as MemNode, FileEntry } from './MemoryTree';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { CN_BROKEN_TEXT_MARKERS } from '../i18n/regions/cn/recognition';
 
 interface MemoryTree { node: MemNode; children: MemoryTree[]; }
 
@@ -38,17 +40,7 @@ const BROKEN_FILENAME_MARKERS = [
   '\u00c3',
   '\u00c2',
   '\ufffd',
-  '\u951f',
-  '\u93c2',
-  '\u6d93',
-  '\u7f01',
-  '\u7015',
-  '\u6fc2',
-  '\u5a34',
-  '\u6d7c',
-  '\u5fe1',
-  '\u9439',
-  '\u9359',
+  ...CN_BROKEN_TEXT_MARKERS,
 ];
 
 function looksBrokenFilename(value: string): boolean {
@@ -308,7 +300,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
   const handleIngestAll = async () => {
     const targets = ingestableFiles;
     if (targets.length === 0) {
-      toast.info(t.kbNothingToIngest || (isZh ? '没有需要吸收的文件' : 'No files need absorption'));
+      toast.info(t.kbNothingToIngest || (uiMessage('knowledge-base.no-files-need-absorption.959ba34929', (isZh) ? 'zh' : 'en')));
       return;
     }
 
@@ -341,9 +333,9 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
       await fetchAll();
       notifyKnowledgeUpdated(targets.map(file => ({ id: file.id, name: file.name, displayName: file.displayName })));
       if (failed > 0) {
-        toast.warning(isZh ? `已吸收 ${absorbed} 个，${failed} 个需要检查` : `${absorbed} absorbed, ${failed} need review`);
+        toast.warning(formatUiMessage('knowledge-base.value0-absorbed-value1-need-review.a1f2a8c2b4', { value0: absorbed, value1: failed }, (isZh) ? 'zh' : 'en'));
       } else {
-        toast.success(`${t.kbIngested || (isZh ? '已吸收' : 'Absorbed')}: ${absorbed}`);
+        toast.success(`${t.kbIngested || (uiMessage('knowledge-base.absorbed.524e3e7736', (isZh) ? 'zh' : 'en'))}: ${absorbed}`);
       }
     } finally {
       setBulkIngesting(false);
@@ -424,9 +416,9 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
       const res = await fetch(scopedFileUrl('/api/files/open-folder'), { credentials: 'include' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'Open knowledge folder failed');
-      toast.success(isZh ? `已打开知识库文件夹：${data.path}` : `Opened knowledge folder: ${data.path}`);
+      toast.success(formatUiMessage('knowledge-base.opened-knowledge-folder-value0.3731b41015', { value0: data.path }, (isZh) ? 'zh' : 'en'));
     } catch (err: any) {
-      toast.error(err?.message || (isZh ? '打开知识库文件夹失败' : 'Open knowledge folder failed'));
+      toast.error(err?.message || (uiMessage('knowledge-base.open-knowledge-folder-failed.2988dd36f8', (isZh) ? 'zh' : 'en')));
     }
   };
 
@@ -440,7 +432,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
         body: JSON.stringify({ vaultId, maxFiles: 500 }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || (isZh ? 'Obsidian 同步失败' : 'Obsidian sync failed'));
+      if (!res.ok) throw new Error(data?.error || (uiMessage('knowledge-base.obsidian-sync-failed.e8f4e30681', (isZh) ? 'zh' : 'en')));
 
       const synced = Number(data.synced || 0);
       const skipped = Number(data.skipped || 0);
@@ -454,14 +446,12 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
       await fetchAll();
       await fetchObsidianStatus();
 
-      const message = isZh
-        ? `Obsidian 同步完成：${synced} 更新，${skipped} 跳过${failed ? `，${failed} 失败` : ''}`
-        : `Obsidian sync complete: ${synced} updated, ${skipped} skipped${failed ? `, ${failed} failed` : ''}`;
+      const message = formatUiMessage('knowledge-base.obsidian-sync-complete-value0-updated.8f3a5865cb', { value0: synced, value1: skipped, value2: { en: failed ? `, ${failed} failed` : '', zh: failed ? `，${failed} 失败` : '' } }, (isZh) ? 'zh' : 'en');
       if (failed > 0) toast.warning(message);
       else toast.success(message);
       return true;
     } catch (err: any) {
-      toast.error(err?.message || (isZh ? 'Obsidian 同步失败' : 'Obsidian sync failed'));
+      toast.error(err?.message || (uiMessage('knowledge-base.obsidian-sync-failed.e8f4e30681', (isZh) ? 'zh' : 'en')));
       return false;
     } finally {
       setObsidianSyncing(false);
@@ -471,7 +461,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
   const handleObsidianConnect = useCallback(async () => {
     const vaultPath = obsidianPath.trim();
     if (!vaultPath) {
-      toast.info(isZh ? '请输入 Obsidian vault 文件夹路径' : 'Enter an Obsidian vault folder path');
+      toast.info(uiMessage('knowledge-base.enter-an-obsidian-vault-folder.838b353be5', (isZh) ? 'zh' : 'en'));
       return;
     }
     setObsidianSyncing(true);
@@ -484,14 +474,14 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
         body: JSON.stringify({ vaultPath, maxFiles: 500 }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || (isZh ? '连接 Obsidian 失败' : 'Failed to connect Obsidian'));
+      if (!res.ok) throw new Error(data?.error || (uiMessage('knowledge-base.failed-to-connect-obsidian.93c27e8310', (isZh) ? 'zh' : 'en')));
       connectedVaultId = data?.vault?.id || '';
       setObsidianPath('');
-      if (data.warning) toast.warning(isZh ? '已按 Markdown 文件夹接入' : data.warning);
-      else toast.success(isZh ? 'Obsidian 已连接，开始同步' : 'Obsidian connected. Syncing now.');
+      if (data.warning) toast.warning(isZh ? t.obsidianMarkdownConnected : data.warning);
+      else toast.success(uiMessage('knowledge-base.obsidian-connected-syncing-now.29e8968ce9', (isZh) ? 'zh' : 'en'));
       await fetchObsidianStatus();
     } catch (err: any) {
-      toast.error(err?.message || (isZh ? '连接 Obsidian 失败' : 'Failed to connect Obsidian'));
+      toast.error(err?.message || (uiMessage('knowledge-base.failed-to-connect-obsidian.93c27e8310', (isZh) ? 'zh' : 'en')));
     } finally {
       setObsidianSyncing(false);
     }
@@ -500,11 +490,9 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
 
   const handleObsidianDisconnect = useCallback(async (vault: ObsidianVault) => {
     const ok = await appConfirm({
-      title: isZh ? '断开 Obsidian' : 'Disconnect Obsidian',
-      message: isZh
-        ? `只移除「${vault.name}」的连接设置，不删除已经进入知识库的笔记。`
-        : `This removes the connection for "${vault.name}" without deleting notes already in the knowledge base.`,
-      confirmText: isZh ? '断开' : 'Disconnect',
+      title: uiMessage('knowledge-base.disconnect-obsidian.c61334f08a', (isZh) ? 'zh' : 'en'),
+      message: formatUiMessage('knowledge-base.this-removes-the-connection-for.afd2eb3dd6', { value0: vault.name }, (isZh) ? 'zh' : 'en'),
+      confirmText: uiMessage('knowledge-base.disconnect.4fdb1669e6', (isZh) ? 'zh' : 'en'),
       cancelText: t.cancel || 'Cancel',
       tone: 'danger',
     });
@@ -515,11 +503,11 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || (isZh ? '断开失败' : 'Disconnect failed'));
-      toast.success(isZh ? 'Obsidian 连接已断开' : 'Obsidian disconnected');
+      if (!res.ok) throw new Error(data?.error || (uiMessage('knowledge-base.disconnect-failed.17c673b887', (isZh) ? 'zh' : 'en')));
+      toast.success(uiMessage('knowledge-base.obsidian-disconnected.d7f9e3c17b', (isZh) ? 'zh' : 'en'));
       await fetchObsidianStatus();
     } catch (err: any) {
-      toast.error(err?.message || (isZh ? '断开失败' : 'Disconnect failed'));
+      toast.error(err?.message || (uiMessage('knowledge-base.disconnect-failed.17c673b887', (isZh) ? 'zh' : 'en')));
     }
   }, [fetchObsidianStatus, isZh, scopedFileUrl, t.cancel]);
 
@@ -598,17 +586,17 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
               </div>
               {pendingFileCount > 0 && (
                 <div className="border-b border-amber-400/10 bg-amber-400/[0.055] px-4 py-2 text-[11px] font-bold leading-5 text-amber-100/68">
-                  {pendingFileCount} {t.kbPendingIngest || (isZh ? '个文件等待 Lumi 吸收' : 'file(s) waiting to be absorbed by Lumi')}
+                  {pendingFileCount} {t.kbPendingIngest || (uiMessage('knowledge-base.file-s-waiting-to-be.72c858685e', (isZh) ? 'zh' : 'en'))}
                 </div>
               )}
               {partialFileCount > 0 && (
                 <div className="border-b border-blue-400/10 bg-blue-400/[0.055] px-4 py-2 text-[11px] font-bold leading-5 text-blue-100/68">
-                  {isZh ? `${partialFileCount} 个文件只完成了部分吸收。配置视觉模型后可重新读取图片内容。` : `${partialFileCount} partially absorbed file(s). Configure a vision model for full image reading.`}
+                  {formatUiMessage('knowledge-base.value0-partially-absorbed-file-s.edac928d34', { value0: partialFileCount }, (isZh) ? 'zh' : 'en')}
                 </div>
               )}
               {needsAttentionFileCount > 0 && (
                 <div className="border-b border-red-400/10 bg-red-400/[0.055] px-4 py-2 text-[11px] font-bold leading-5 text-red-100/70">
-                  {isZh ? `${needsAttentionFileCount} 个文件需要检查后 Lumi 才能使用。` : `${needsAttentionFileCount} file(s) need review before Lumi can use them.`}
+                  {formatUiMessage('knowledge-base.value0-file-s-need-review.153783066b', { value0: needsAttentionFileCount }, (isZh) ? 'zh' : 'en')}
                 </div>
               )}
               <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
@@ -625,14 +613,14 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                     const audioTranscript = f.extractionMethod === 'audio-transcript';
                     const needsReview = failed || unsupported;
                     const statusLabel = unsupported
-                      ? (isZh ? '不支持' : 'unsupported')
+                      ? (uiMessage('knowledge-base.unsupported.9701270725', (isZh) ? 'zh' : 'en'))
                       : failed
-                      ? (audioTranscript ? (isZh ? '转写失败' : 'transcribe failed') : (isZh ? '需检查' : 'needs review'))
+                      ? (audioTranscript ? (uiMessage('knowledge-base.transcribe-failed.52d9f86ff4', (isZh) ? 'zh' : 'en')) : (uiMessage('knowledge-base.needs-review.17cbe2789f', (isZh) ? 'zh' : 'en')))
                       : partial
-                        ? (isZh ? '部分吸收' : 'partial')
+                        ? (uiMessage('knowledge-base.partial.3b5874104b', (isZh) ? 'zh' : 'en'))
                         : absorbed
-                          ? (t.kbIngested || (isZh ? '已吸收' : 'absorbed'))
-                          : (t.kbReadyToIngest || (isZh ? '待吸收' : 'pending'));
+                          ? (t.kbIngested || (uiMessage('knowledge-base.absorbed.591f4b1184', (isZh) ? 'zh' : 'en')))
+                          : (t.kbReadyToIngest || (uiMessage('knowledge-base.pending.2a0c37279f', (isZh) ? 'zh' : 'en')));
                     return (
                     <div
                       key={f.id}
@@ -683,12 +671,12 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                           className="shrink-0 rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-amber-100 transition-colors hover:bg-amber-400/16 disabled:pointer-events-none disabled:opacity-60"
                         >
                           {ingesting
-                            ? (t.loading || (isZh ? '读取中' : 'Loading'))
+                            ? (t.loading || (uiMessage('knowledge-base.loading.4874ccc6e7', (isZh) ? 'zh' : 'en')))
                             : audioTranscript && failed
-                              ? (isZh ? '重试转写' : 'Retry')
+                              ? (uiMessage('knowledge-base.retry.9db2a8180b', (isZh) ? 'zh' : 'en'))
                               : partial
-                                ? (isZh ? '重读' : 'Re-read')
-                                : (t.kbIngest || (isZh ? '吸收' : 'Absorb'))}
+                                ? (uiMessage('knowledge-base.re-read.5074afc504', (isZh) ? 'zh' : 'en'))
+                                : (t.kbIngest || (uiMessage('knowledge-base.absorb.7c2e41285d', (isZh) ? 'zh' : 'en')))}
                         </button>
                       )}
                       <ChevronRight size={12} className="text-white/20 shrink-0 group-hover:text-white/40 transition-colors" />
@@ -776,25 +764,25 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploading}
-                    title={t.kbImport || (isZh ? '导入资料' : 'Import files')}
-                    aria-label={t.kbImport || (isZh ? '导入资料' : 'Import files')}
+                    title={t.kbImport || (uiMessage('knowledge-base.import-files.dbcb99aedf', (isZh) ? 'zh' : 'en'))}
+                    aria-label={t.kbImport || (uiMessage('knowledge-base.import-files.dbcb99aedf', (isZh) ? 'zh' : 'en'))}
                     className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl px-2.5 text-[11px] font-bold text-emerald-100/72 transition-all hover:bg-emerald-300/10 hover:text-emerald-100 disabled:pointer-events-none disabled:opacity-60 xl:px-3"
                   >
                     <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-emerald-300/12 text-emerald-100/80 transition-colors group-hover:bg-emerald-300/18">
                       {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                     </span>
-                    <span className="hidden xl:inline">{t.kbImport || (isZh ? '导入' : 'Import')}</span>
+                    <span className="hidden xl:inline">{t.kbImport || (uiMessage('knowledge-base.import.1a200b31b1', (isZh) ? 'zh' : 'en'))}</span>
                   </button>
                   <button
                     onClick={() => void handleOpenKnowledgeFolder()}
                     className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl px-2.5 text-[11px] font-bold text-white/62 transition-all hover:bg-white/[0.07] hover:text-white/88 xl:px-3"
-                    title={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
-                    aria-label={isZh ? '打开本地知识库文件夹' : 'Open local knowledge folder'}
+                    title={uiMessage('knowledge-base.open-local-knowledge-folder.a2bec6274e', (isZh) ? 'zh' : 'en')}
+                    aria-label={uiMessage('knowledge-base.open-local-knowledge-folder.a2bec6274e', (isZh) ? 'zh' : 'en')}
                   >
                     <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-white/[0.06] text-white/68 transition-colors group-hover:bg-white/[0.1] group-hover:text-white/88">
                       <FolderOpen size={13} />
                     </span>
-                    <span className="hidden xl:inline">{isZh ? '文件夹' : 'Folder'}</span>
+                    <span className="hidden xl:inline">{uiMessage('knowledge-base.folder.b0d14417ff', (isZh) ? 'zh' : 'en')}</span>
                   </button>
                   <button
                     onClick={() => setObsidianOpen(value => !value)}
@@ -803,8 +791,8 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                         ? 'bg-indigo-300/12 text-indigo-50/86 shadow-[inset_0_0_0_1px_rgba(165,180,252,0.18)] hover:bg-indigo-300/16'
                         : 'text-white/62 hover:bg-white/[0.07] hover:text-white/88'
                     }`}
-                    title={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
-                    aria-label={isZh ? '连接 Obsidian vault' : 'Connect Obsidian vault'}
+                    title={uiMessage('knowledge-base.connect-obsidian-vault.07949d5768', (isZh) ? 'zh' : 'en')}
+                    aria-label={uiMessage('knowledge-base.connect-obsidian-vault.07949d5768', (isZh) ? 'zh' : 'en')}
                   >
                     <span className={`flex h-5 w-5 items-center justify-center rounded-lg transition-colors ${
                       obsidianOpen || obsidianVaults.length > 0
@@ -819,15 +807,15 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                     <button
                       onClick={() => void handleIngestAll()}
                       disabled={bulkIngesting}
-                      title={`${t.kbIngestAll || (isZh ? '全部吸收' : 'Absorb all')} (${ingestableFiles.length})`}
-                      aria-label={`${t.kbIngestAll || (isZh ? '全部吸收' : 'Absorb all')} (${ingestableFiles.length})`}
+                      title={`${t.kbIngestAll || (uiMessage('knowledge-base.absorb-all.c6a483611c', (isZh) ? 'zh' : 'en'))} (${ingestableFiles.length})`}
+                      aria-label={`${t.kbIngestAll || (uiMessage('knowledge-base.absorb-all.c6a483611c', (isZh) ? 'zh' : 'en'))} (${ingestableFiles.length})`}
                       className="group flex h-9 min-w-9 items-center justify-center gap-2 rounded-xl bg-amber-300/10 px-2.5 text-[11px] font-bold text-amber-100/84 shadow-[inset_0_0_0_1px_rgba(252,211,77,0.13)] transition-all hover:bg-amber-300/15 hover:text-amber-50 disabled:pointer-events-none disabled:opacity-60 xl:px-3"
                     >
                       <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-amber-300/15 text-amber-100 transition-colors group-hover:bg-amber-300/22">
                         {bulkIngesting ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
                       </span>
                       <span className="hidden xl:inline">
-                        {bulkIngesting ? (t.loading || (isZh ? '读取中' : 'Loading')) : `${t.kbIngestAll || (isZh ? '吸收' : 'Absorb')} ${ingestableFiles.length}`}
+                        {bulkIngesting ? (t.loading || (uiMessage('knowledge-base.loading.4874ccc6e7', (isZh) ? 'zh' : 'en'))) : `${t.kbIngestAll || (uiMessage('knowledge-base.absorb.7c2e41285d', (isZh) ? 'zh' : 'en'))} ${ingestableFiles.length}`}
                       </span>
                     </button>
                   )}
@@ -869,7 +857,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                     <span>Obsidian</span>
                   </div>
                   <p className="mt-1 text-[11px] leading-5 text-white/45">
-                    {isZh ? '把本机 vault 中的 Markdown、标签和双链同步进 Lumi 知识库。' : 'Sync local vault Markdown, tags, and links into Lumi knowledge.'}
+                    {uiMessage('knowledge-base.sync-local-vault-markdown-tags.af2710e156', (isZh) ? 'zh' : 'en')}
                   </p>
                 </div>
                 <button
@@ -877,8 +865,8 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   onClick={() => void fetchObsidianStatus()}
                   disabled={obsidianSyncing}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/55 transition-colors hover:text-white disabled:pointer-events-none disabled:opacity-50"
-                  title={isZh ? '刷新连接状态' : 'Refresh status'}
-                  aria-label={isZh ? '刷新连接状态' : 'Refresh status'}
+                  title={uiMessage('knowledge-base.refresh-status.251b4754a3', (isZh) ? 'zh' : 'en')}
+                  aria-label={uiMessage('knowledge-base.refresh-status.251b4754a3', (isZh) ? 'zh' : 'en')}
                 >
                   <RefreshCw size={13} className={obsidianSyncing ? 'animate-spin' : ''} />
                 </button>
@@ -891,7 +879,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   onKeyDown={event => {
                     if (event.key === 'Enter') void handleObsidianConnect();
                   }}
-                  placeholder={isZh ? 'Vault 文件夹路径，例如 D:\\Notes' : 'Vault folder path, e.g. D:\\Notes'}
+                  placeholder={uiMessage('knowledge-base.vault-folder-path-e-g.5a7a017974', (isZh) ? 'zh' : 'en')}
                   className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-xs text-white/75 outline-none placeholder:text-white/28 focus:border-indigo-300/35"
                 />
                 <button
@@ -901,18 +889,18 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                   className="flex shrink-0 items-center gap-1.5 rounded-xl border border-indigo-300/25 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100/80 transition-colors hover:bg-indigo-300/16 disabled:pointer-events-none disabled:opacity-55"
                 >
                   {obsidianSyncing ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-                  {isZh ? '连接' : 'Connect'}
+                  {uiMessage('knowledge-base.connect.b3b35de2b3', (isZh) ? 'zh' : 'en')}
                 </button>
               </div>
 
               <div className="mt-4 space-y-2">
                 {obsidianVaults.length === 0 ? (
                   <div className="rounded-xl border border-white/[0.06] bg-white/[0.035] px-3 py-4 text-center text-xs text-white/38">
-                    {isZh ? '还没有连接 Obsidian vault' : 'No Obsidian vault connected yet'}
+                    {uiMessage('knowledge-base.no-obsidian-vault-connected-yet.125b265b01', (isZh) ? 'zh' : 'en')}
                   </div>
                 ) : (
                   obsidianVaults.map(vault => {
-                    const lastSync = vault.lastSyncAt ? new Date(vault.lastSyncAt).toLocaleString() : (isZh ? '未同步' : 'Not synced');
+                    const lastSync = vault.lastSyncAt ? new Date(vault.lastSyncAt).toLocaleString() : (uiMessage('knowledge-base.not-synced.74d82b0bf1', (isZh) ? 'zh' : 'en'));
                     const noteCount = Number(vault.noteCount || vault.lastSyncResult?.noteCount || 0);
                     return (
                       <div key={vault.id} className="rounded-xl border border-white/[0.07] bg-white/[0.04] p-3">
@@ -922,7 +910,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                               <span className="truncate text-xs font-bold text-white/78">{vault.name}</span>
                               {!vault.exists && (
                                 <span className="shrink-0 rounded-full border border-red-300/20 bg-red-300/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-red-100/75">
-                                  {isZh ? '失联' : 'missing'}
+                                  {uiMessage('knowledge-base.missing.1551891723', (isZh) ? 'zh' : 'en')}
                                 </span>
                               )}
                               {vault.exists && !vault.isObsidianVault && (
@@ -933,7 +921,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                             </div>
                             <p className="mt-1 truncate text-[11px] text-white/36">{vault.path}</p>
                             <p className="mt-2 text-[11px] text-white/42">
-                              {isZh ? `${noteCount} 条笔记 · 上次同步 ${lastSync}` : `${noteCount} notes · Last sync ${lastSync}`}
+                              {formatUiMessage('knowledge-base.value0-notes-last-sync-value1.7ae09a37dc', { value0: noteCount, value1: lastSync }, (isZh) ? 'zh' : 'en')}
                             </p>
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
@@ -942,8 +930,8 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                               onClick={() => void syncObsidianVault(vault.id)}
                               disabled={obsidianSyncing || vault.exists === false}
                               className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-300/18 bg-emerald-300/10 text-emerald-100/72 transition-colors hover:bg-emerald-300/16 disabled:pointer-events-none disabled:opacity-45"
-                              title={isZh ? '同步这个 vault' : 'Sync this vault'}
-                              aria-label={isZh ? '同步这个 vault' : 'Sync this vault'}
+                              title={uiMessage('knowledge-base.sync-this-vault.88fee4dc09', (isZh) ? 'zh' : 'en')}
+                              aria-label={uiMessage('knowledge-base.sync-this-vault.88fee4dc09', (isZh) ? 'zh' : 'en')}
                             >
                               <RefreshCw size={13} className={obsidianSyncing ? 'animate-spin' : ''} />
                             </button>
@@ -952,8 +940,8 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
                               onClick={() => void handleObsidianDisconnect(vault)}
                               disabled={obsidianSyncing}
                               className="flex h-8 w-8 items-center justify-center rounded-xl border border-red-300/14 bg-red-300/8 text-red-100/58 transition-colors hover:bg-red-300/14 hover:text-red-100 disabled:pointer-events-none disabled:opacity-45"
-                              title={isZh ? '断开连接' : 'Disconnect'}
-                              aria-label={isZh ? '断开连接' : 'Disconnect'}
+                              title={uiMessage('knowledge-base.disconnect.e11e7dc3dc', (isZh) ? 'zh' : 'en')}
+                              aria-label={uiMessage('knowledge-base.disconnect.e11e7dc3dc', (isZh) ? 'zh' : 'en')}
                             >
                               <Trash2 size={13} />
                             </button>

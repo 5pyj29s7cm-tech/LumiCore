@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 interface DashboardStats {
   memberCount: number;
@@ -70,7 +71,7 @@ export function BranchDashboard() {
     try {
       const statusRes = await fetch('/api/org/status', { credentials: 'include' });
       const status = await statusRes.json().catch(() => ({}));
-      if (!statusRes.ok) throw new Error(status.error || ui('组织状态加载失败', 'Failed to load organization status'));
+      if (!statusRes.ok) throw new Error(status.error || uiMessage('branch-dashboard.failed-to-load-organization-status.d4517ef501'));
 
       let orgId = orgConnection?.orgId || status.orgId || '';
       if (!orgId) {
@@ -89,7 +90,7 @@ export function BranchDashboard() {
         .filter((agent: any) => agent?.installedTemplateId && agent.status !== 'terminated')
         .map((agent: any) => ({
           id: String(agent.id),
-          name: String(agent.name || ui('未命名助手', 'Untitled assistant')),
+          name: String(agent.name || uiMessage('branch-dashboard.untitled-assistant.16370b0265')),
           category: String(agent.category || 'general'),
           isFrozen: Boolean(agent.isFrozen),
           installedTemplateVersion: Number(agent.installedTemplateVersion) || undefined,
@@ -97,7 +98,7 @@ export function BranchDashboard() {
         }));
 
       if (partialErrors.length > 0) {
-        setError(ui('部分组织数据加载失败，请刷新重试。', 'Some organization data failed to load. Try refreshing.'));
+        setError(uiMessage('branch-dashboard.some-organization-data-failed-to.1601df32ce'));
       }
       setInstalledAgents(installedTemplateAgents);
 
@@ -110,7 +111,7 @@ export function BranchDashboard() {
         lastSync: new Date().toISOString(),
       });
     } catch (err: any) {
-      setError(err?.message || ui('组织工作台加载失败', 'Failed to load organization workspace'));
+      setError(err?.message || uiMessage('branch-dashboard.failed-to-load-organization-workspace.b1ad2b265e'));
       setStats(prev => ({ ...prev, syncStatus: 'offline' }));
       setInstalledAgents([]);
     } finally {
@@ -130,25 +131,25 @@ export function BranchDashboard() {
 
   const cards = useMemo(() => [
     {
-      label: t.orgMembers || ui('成员', 'Members'),
+      label: t.orgMembers || uiMessage('branch-dashboard.members.437a10e110'),
       value: stats.memberCount,
       icon: <Users size={18} />,
       tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-400/20',
     },
     {
-      label: t.orgKB || ui('组织知识库', 'Knowledge Base'),
+      label: t.orgKB || uiMessage('branch-dashboard.knowledge-base.e30b5fc119'),
       value: stats.kbArticleCount,
       icon: <BookOpen size={18} />,
       tone: 'text-blue-300 bg-blue-500/10 border-blue-400/20',
     },
     {
-      label: t.orgTemplates || ui('智能体模板', 'Agent Templates'),
+      label: t.orgTemplates || uiMessage('branch-dashboard.agent-templates.9cc4c8c9d0'),
       value: stats.templateCount,
       icon: <Package size={18} />,
       tone: 'text-violet-300 bg-violet-500/10 border-violet-400/20',
     },
     {
-      label: ui('团队助手', 'Team Agents'),
+      label: uiMessage('branch-dashboard.team-agents.4363c79c8f'),
       value: stats.installedAgentCount,
       icon: <Bot size={18} />,
       tone: 'text-cyan-300 bg-cyan-500/10 border-cyan-400/20',
@@ -178,19 +179,16 @@ export function BranchDashboard() {
                   <Building2 size={22} />
                 </span>
                 <div>
-                  <h1 className="text-xl font-semibold text-white">{ui('组织工作台', 'Organization Workspace')}</h1>
+                  <h1 className="text-xl font-semibold text-white">{uiMessage('branch-dashboard.organization-workspace.dbc27e701a')}</h1>
                   <p className="text-sm text-white/55">
-                    {orgConnection?.orgName || ui('本地组织域', 'Local organization domain')}
+                    {orgConnection?.orgName || uiMessage('branch-dashboard.local-organization-domain.707a7949c6')}
                     {' · '}
-                    {workDomain === 'work' ? ui('当前在工作域', 'Work domain active') : ui('当前在个人域', 'Personal domain active')}
+                    {workDomain === 'work' ? uiMessage('branch-dashboard.work-domain-active.a7d1aced7d') : uiMessage('branch-dashboard.personal-domain-active.3b73f4f5a4')}
                   </p>
                 </div>
               </div>
               <p className="max-w-2xl text-sm leading-6 text-white/60">
-                {ui(
-                  '集中查看组织成员、知识库、可安装的团队子 agent 和工作状态。这里保留所有组织能力，只把入口和反馈整理得更清楚。',
-                  'Review members, knowledge, installable team sub-agents, and workspace health in one place. All organization capabilities remain available with clearer entry points and feedback.',
-                )}
+                {uiMessage('branch-dashboard.review-members-knowledge-installable-team.e395488c6e')}
               </p>
             </div>
 
@@ -202,14 +200,14 @@ export function BranchDashboard() {
               }`}>
                 {stats.syncStatus === 'connected' ? <Wifi size={14} /> : <WifiOff size={14} />}
                 {stats.syncStatus === 'connected'
-                  ? (t.orgConnectionOnline || ui('已连接', 'Connected'))
-                  : (t.orgConnectionOffline || ui('未连接', 'Offline'))}
+                  ? (t.orgConnectionOnline || uiMessage('branch-dashboard.connected.77956f6a16'))
+                  : (t.orgConnectionOffline || uiMessage('branch-dashboard.offline.921b60f32a'))}
               </span>
               <button
                 onClick={loadStats}
                 disabled={loading}
                 className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
-                aria-label={ui('刷新', 'Refresh')}
+                aria-label={uiMessage('branch-dashboard.refresh.cba212b169')}
               >
                 <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
               </button>
@@ -249,10 +247,10 @@ export function BranchDashboard() {
             <div>
               <h2 className="flex items-center gap-2 text-sm font-semibold text-cyan-100">
                 <Bot size={17} />
-                {ui('已安装到 Lumi 团队的工作助手', 'Work assistants installed to Lumi Team')}
+                {uiMessage('branch-dashboard.work-assistants-installed-to-lumi.83ef29b794')}
               </h2>
               <p className="mt-1 text-xs leading-5 text-cyan-100/55">
-                {ui('从组织智能体模板市场安装的子 agent 会显示在这里；它们属于 Lumi 团队，可被聊天、语音和多步任务调度。', 'Sub-agents installed from the organization agent template market appear here; they belong to Lumi Team and can be routed from chat, voice, and multi-step work.')}
+                {uiMessage('branch-dashboard.sub-agents-installed-from-the.3c8615f16a')}
               </p>
             </div>
             <button
@@ -260,7 +258,7 @@ export function BranchDashboard() {
               className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/20"
             >
               <ArrowRight size={14} />
-              {ui('打开 Lumi 团队', 'Open Lumi Team')}
+              {uiMessage('branch-dashboard.open-lumi-team.e4e08bcaa7')}
             </button>
           </div>
 
@@ -274,8 +272,8 @@ export function BranchDashboard() {
               className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-4 text-left transition hover:border-cyan-300/25 hover:bg-white/[0.07]"
             >
               <span>
-                <span className="block text-sm font-medium text-white">{ui('还没有安装组织子 agent', 'No organization sub-agent installed yet')}</span>
-                <span className="mt-1 block text-xs text-white/50">{ui('去智能体模板市场安装一个，比如合同审查师、类案分析师或诉讼策略师。', 'Install one from the agent template market, such as Contract Review, Case Analysis, or Litigation Strategy.')}</span>
+                <span className="block text-sm font-medium text-white">{uiMessage('branch-dashboard.no-organization-sub-agent-installed.21910a6eef')}</span>
+                <span className="mt-1 block text-xs text-white/50">{uiMessage('branch-dashboard.install-one-from-the-agent.ee355dd175')}</span>
               </span>
               <ArrowRight size={15} className="text-cyan-200/70" />
             </button>
@@ -292,7 +290,7 @@ export function BranchDashboard() {
                       <Bot size={16} />
                     </span>
                     <span className={`rounded-full px-2 py-1 text-[11px] ${agent.isFrozen ? 'bg-white/5 text-white/40' : 'bg-emerald-500/10 text-emerald-200'}`}>
-                      {agent.isFrozen ? ui('已暂停', 'Paused') : ui('可调度', 'Ready')}
+                      {agent.isFrozen ? uiMessage('branch-dashboard.paused.cf54b602eb') : uiMessage('branch-dashboard.ready.761a3caa34')}
                     </span>
                   </div>
                   <h3 className="truncate text-sm font-medium text-white">{agent.name}</h3>
@@ -312,26 +310,26 @@ export function BranchDashboard() {
         <section className="grid gap-3 md:grid-cols-2">
           <QuickAction
             icon={<BookOpen size={18} />}
-            label={ui('进入组织知识库', 'Open Knowledge Base')}
-            desc={ui('查看、检索和编辑组织资料，工作域上传的文件会同步到这里。', 'Browse, search, and edit organization knowledge. Work-domain uploads sync here.')}
+            label={uiMessage('branch-dashboard.open-knowledge-base.c51d425f5e')}
+            desc={uiMessage('branch-dashboard.browse-search-and-edit-organization.ab59b8dfae')}
             onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb' } }))}
           />
           <QuickAction
             icon={<Package size={18} />}
-            label={ui('智能体模板市场', 'Agent Template Marketplace')}
-            desc={ui('审核、发布组织模板，并把需要的子 agent 安装到 Lumi 团队。', 'Review and publish organization templates, then install needed sub-agents into Lumi Team.')}
+            label={uiMessage('branch-dashboard.agent-template-marketplace.f417d328f7')}
+            desc={uiMessage('branch-dashboard.review-and-publish-organization-templates.542d6a1cc5')}
             onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'templates' } }))}
           />
           <QuickAction
             icon={<Activity size={18} />}
-            label={ui('工作域 Lumi', 'Lumi (Work Workspace)')}
-            desc={ui('向组织知识、制度、项目和团队资料发起查询。', 'Ask organization-level questions about knowledge, policies, projects, and teams.')}
+            label={uiMessage('branch-dashboard.lumi-work-workspace.1bd0a7273b')}
+            desc={uiMessage('branch-dashboard.ask-organization-level-questions-about.be4a518a8e')}
             onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
           />
           <QuickAction
             icon={<ShieldCheck size={18} />}
-            label={ui('成员与权限', 'Members and Access')}
-            desc={ui('查看成员、角色和组织访问状态。', 'Review members, roles, and organization access state.')}
+            label={uiMessage('branch-dashboard.members-and-access.6ff72d328b')}
+            desc={uiMessage('branch-dashboard.review-members-roles-and-organization.73e7aea535')}
             onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'members' } }))}
           />
         </section>
@@ -339,7 +337,7 @@ export function BranchDashboard() {
         {stats.lastSync && (
           <div className="flex items-center gap-2 text-xs text-white/45">
             <Clock size={13} />
-            <span>{ui(`最近刷新：${new Date(stats.lastSync).toLocaleString('zh-CN')}`, `Last refreshed: ${new Date(stats.lastSync).toLocaleString()}`)}</span>
+            <span>{formatUiMessage('branch-dashboard.last-refreshed-value0.0140c57047', { value0: { en: new Date(stats.lastSync).toLocaleString(), zh: new Date(stats.lastSync).toLocaleString('zh-CN') } })}</span>
           </div>
         )}
       </div>

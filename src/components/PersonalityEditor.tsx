@@ -3,6 +3,7 @@ import { User, ChevronDown, ChevronRight, Activity, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { PersonalityEvolution } from './PersonalityEvolution';
 import { ContactsPanel } from './ContactsPanel';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 interface PersonalityConfig {
   id: string;
@@ -86,7 +87,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
           setConfig(data[0]);
         }
       })
-      .catch(() => toast.error(t?.failedToLoadPersonalities || ui('Lumi 配置加载失败', 'Failed to load Lumi config')))
+      .catch(() => toast.error(t?.failedToLoadPersonalities || uiMessage('personality-editor.failed-to-load-lumi-config.715c426961')))
       .finally(() => setLoading(false));
   }, []);
 
@@ -97,9 +98,9 @@ export function PersonalityEditor({ t }: { t?: any }) {
           <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn">
             <User size={20} />
           </span>
-          <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || ui('Lumi 人格核心配置', 'Lumi Core Config')}</h3>
+          <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
         </div>
-        <p className="lumi-panel p-5 text-sm text-white/40">{t?.loadingPersonalities || ui('加载中...', 'Loading...')}</p>
+        <p className="lumi-panel p-5 text-sm text-white/40">{t?.loadingPersonalities || uiMessage('personality-editor.loading.586f5af819')}</p>
       </div>
     );
   }
@@ -111,9 +112,9 @@ export function PersonalityEditor({ t }: { t?: any }) {
           <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn">
             <User size={20} />
           </span>
-          <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || ui('Lumi 人格核心配置', 'Lumi Core Config')}</h3>
+          <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
         </div>
-        <p className="lumi-panel p-5 text-sm text-white/40">{t?.noPersonalitiesDefined || ui('未找到配置。', 'No configuration found.')}</p>
+        <p className="lumi-panel p-5 text-sm text-white/40">{t?.noPersonalitiesDefined || uiMessage('personality-editor.no-configuration-found.7f74a3d38a')}</p>
       </div>
     );
   }
@@ -123,8 +124,8 @@ export function PersonalityEditor({ t }: { t?: any }) {
       {/* Tab bar */}
       <div className="lumi-panel flex items-center gap-1 p-1">
         {[
-          { id: 'personality' as const, label: t?.lumiCore || ui('人格核心', 'Personality'), icon: <User size={14} /> },
-          { id: 'contacts' as const, label: t?.contacts || ui('联系人', 'Contacts'), icon: <Users size={14} /> },
+          { id: 'personality' as const, label: t?.lumiCore || uiMessage('personality-editor.personality.4be4c6883c'), icon: <User size={14} /> },
+          { id: 'contacts' as const, label: t?.contacts || uiMessage('personality-editor.contacts.cafbf1d042'), icon: <Users size={14} /> },
         ].map(item => (
           <button
             key={item.id}
@@ -147,56 +148,56 @@ export function PersonalityEditor({ t }: { t?: any }) {
         <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn">
           <User size={20} />
         </span>
-        <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || ui('Lumi 人格核心配置', 'Lumi Core Config')}</h3>
+        <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
         <span className="text-xs font-mono text-white/45 bg-white/5 px-2 py-0.5 rounded-full">v{config.version}</span>
       </div>
 
       <p className="text-sm text-white/40 max-w-xl">
-        {t?.lumiCoreDesc || ui('Lumi 的人格核心会从互动中通过 Hebbian 学习自然成长。这个视图展示当前配置；变化会自动发生，不需要手动硬改。', 'Lumi\'s core personality evolves organically through Hebbian learning from interactions. This view shows the current configuration — changes happen automatically, not through manual editing.')}
+        {t?.lumiCoreDesc || uiMessage('personality-editor.lumi-s-core-personality-evolves.acdafbbf05')}
       </p>
 
       <div className="space-y-4">
         {/* Identity */}
-        <Section title={t?.identitySection || ui('身份', 'Identity')} section="identity" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.identitySection || uiMessage('personality-editor.identity.1cadaacdf5')} section="identity" expanded={expandedSections} onToggle={toggleSection}>
           <ReadonlyField label={t?.idLabel || 'ID'} value={config.id} mono />
-          <ReadonlyField label={t?.nameLabel || ui('名称', 'Name')} value={config.name} />
-          <ReadonlyField label={t?.versionLabel || ui('版本', 'Version')} value={config.version} />
+          <ReadonlyField label={t?.nameLabel || uiMessage('personality-editor.name.dd4dc4c5a9')} value={config.name} />
+          <ReadonlyField label={t?.versionLabel || uiMessage('personality-editor.version.7e42933b4f')} value={config.version} />
           <div className="space-y-1">
-            <label className="text-xs font-black uppercase text-white/55">{t?.coreMotivationLabel || ui('核心动机', 'Core Motivation')}</label>
+            <label className="text-xs font-black uppercase text-white/55">{t?.coreMotivationLabel || uiMessage('personality-editor.core-motivation.d1f6e12adf')}</label>
             <p className="text-sm text-white/60 bg-white/5 rounded-xl p-3">{config.coreMotivation}</p>
           </div>
-          <ReadonlyField label={ui('演化状态', 'Evolution')} value={config.evolutionFrozenAt ? ui(`自 ${new Date(config.evolutionFrozenAt).toLocaleString()} 起冻结`, `Frozen since ${new Date(config.evolutionFrozenAt).toLocaleString()}`) : ui('活跃', 'Active')} />
+          <ReadonlyField label={uiMessage('personality-editor.evolution.41ec4227e8')} value={config.evolutionFrozenAt ? formatUiMessage('personality-editor.frozen-since-value0.f2b8ec3578', { value0: new Date(config.evolutionFrozenAt).toLocaleString() }) : uiMessage('personality-editor.active.9d9aa763fa')} />
         </Section>
 
         {/* Growth State */}
-        <Section title={ui('本地成长状态', 'Local Growth State')} section="growth" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={uiMessage('personality-editor.local-growth-state.f74855c1e2')} section="growth" expanded={expandedSections} onToggle={toggleSection}>
           {config.growthState ? (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-4">
-                <ReadonlyField label={ui('成长版本', 'Growth Version')} value={String(config.growthState.version)} />
-                <ReadonlyField label={ui('最近更新', 'Last Updated')} value={new Date(config.growthState.lastUpdatedAt).toLocaleString()} />
+                <ReadonlyField label={uiMessage('personality-editor.growth-version.6ebc4cb338')} value={String(config.growthState.version)} />
+                <ReadonlyField label={uiMessage('personality-editor.last-updated.42ffb29852')} value={new Date(config.growthState.lastUpdatedAt).toLocaleString()} />
               </div>
               {config.growthState.ownerProfile && (
                 <div className="grid grid-cols-2 gap-4">
-                  <ReadonlyField label={ui('观察到的语气', 'Observed Tone')} value={config.growthState.ownerProfile.dominantTone} />
-                  <ReadonlyField label={ui('画像记忆数', 'Profile Memories')} value={String(config.growthState.ownerProfile.memoryCount)} />
+                  <ReadonlyField label={uiMessage('personality-editor.observed-tone.3a7e68b82c')} value={config.growthState.ownerProfile.dominantTone} />
+                  <ReadonlyField label={uiMessage('personality-editor.profile-memories.522a2727a9')} value={String(config.growthState.ownerProfile.memoryCount)} />
                 </div>
               )}
-              <ReadonlyField label={ui('用户兴趣', 'Owner Interests')} value={(config.growthState.ownerInterests || []).join(', ') || ui('无', 'none')} />
-              <ReadonlyField label={ui('用户表达习惯', 'Owner Expressions')} value={(config.growthState.ownerExpressions || []).join(', ') || ui('无', 'none')} />
-              <ReadonlyField label={ui('沟通模式', 'Communication Patterns')} value={(config.growthState.communicationPatterns || []).join('; ') || ui('无', 'none')} />
+              <ReadonlyField label={uiMessage('personality-editor.owner-interests.a496298f87')} value={(config.growthState.ownerInterests || []).join(', ') || uiMessage('personality-editor.none.a8d7c6c030')} />
+              <ReadonlyField label={uiMessage('personality-editor.owner-expressions.b3caccbe86')} value={(config.growthState.ownerExpressions || []).join(', ') || uiMessage('personality-editor.none.a8d7c6c030')} />
+              <ReadonlyField label={uiMessage('personality-editor.communication-patterns.6a1c892a7d')} value={(config.growthState.communicationPatterns || []).join('; ') || uiMessage('personality-editor.none.a8d7c6c030')} />
             </div>
           ) : (
-            <p className="text-white/45 text-xs">{ui('还没有本地成长状态。Lumi 会从已确认的互动模式中逐步建立。', 'No local growth state yet. Lumi will build this from confirmed interaction patterns.')}</p>
+            <p className="text-white/45 text-xs">{uiMessage('personality-editor.no-local-growth-state-yet.ff4cde88a2')}</p>
           )}
         </Section>
 
         {/* Evolution Vector */}
-        <Section title={t?.evolutionVector || ui('演化向量', 'Evolution Vector')} section="evolution" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.evolutionVector || uiMessage('personality-editor.evolution-vector.f374c2f5a8')} section="evolution" expanded={expandedSections} onToggle={toggleSection}>
           {config.personalityVector ? (
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-black uppercase text-white/55 block mb-2">{ui('认知风格', 'Cognitive Style')}</label>
+                <label className="text-xs font-black uppercase text-white/55 block mb-2">{uiMessage('personality-editor.cognitive-style.8540467dab')}</label>
                 <div className="grid grid-cols-4 gap-2">
                   {Object.entries(config.personalityVector.cognitiveStyle).map(([k, v]) => (
                     <div key={k} className="text-center p-3 bg-white/5 rounded-xl">
@@ -207,7 +208,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
                 </div>
               </div>
               <div>
-                <label className="text-xs font-black uppercase text-white/55 block mb-2">{ui('社交风格', 'Social Style')}</label>
+                <label className="text-xs font-black uppercase text-white/55 block mb-2">{uiMessage('personality-editor.social-style.b41db90dc0')}</label>
                 <div className="grid grid-cols-4 gap-2">
                   {Object.entries(config.personalityVector.socialStyle).map(([k, v]) => (
                     <div key={k} className="text-center p-3 bg-white/5 rounded-xl">
@@ -219,32 +220,32 @@ export function PersonalityEditor({ t }: { t?: any }) {
               </div>
               {config.evolutionConfig && (
                 <div className="text-xs text-white/45 space-y-1">
-                  <div>{ui('可塑性', 'Plasticity')}: {config.evolutionConfig.plasticity} | {ui('冷却', 'Cooldown')}: {Math.round(config.evolutionConfig.cooldownMs / 86400000)}d | {ui('每步最大变异', 'Max mutations/step')}: {config.evolutionConfig.maxMutationsPerStep}</div>
-                  {config.lastEvolvedAt && <div>{ui('最近演化', 'Last evolved')}: {new Date(config.lastEvolvedAt).toLocaleDateString()}</div>}
+                  <div>{uiMessage('personality-editor.plasticity.e3133824c0')}: {config.evolutionConfig.plasticity} | {uiMessage('personality-editor.cooldown.6fa612d542')}: {Math.round(config.evolutionConfig.cooldownMs / 86400000)}d | {uiMessage('personality-editor.max-mutations-step.96c2aa4764')}: {config.evolutionConfig.maxMutationsPerStep}</div>
+                  {config.lastEvolvedAt && <div>{uiMessage('personality-editor.last-evolved.2d67cd3dca')}: {new Date(config.lastEvolvedAt).toLocaleDateString()}</div>}
                 </div>
               )}
             </div>
           ) : (
-            <p className="text-white/55 text-xs">{t?.evolutionNotInit || ui('演化向量尚未初始化，会在首次互动时生成种子。', 'Evolution vector not yet initialized. It will be seeded on first interaction.')}</p>
+            <p className="text-white/55 text-xs">{t?.evolutionNotInit || uiMessage('personality-editor.evolution-vector-not-yet-initialized.182b68c0c0')}</p>
           )}
         </Section>
 
         {/* Expression */}
-        <Section title={t?.expressionStyleSection || ui('表达风格', 'Expression Style')} section="expression" expanded={expandedSections} onToggle={toggleSection}>
-          <ReadonlyField label={t?.personaField || ui('人格表现', 'Persona')} value={config.expressionStyle.persona} />
+        <Section title={t?.expressionStyleSection || uiMessage('personality-editor.expression-style.ceeea2ddc5')} section="expression" expanded={expandedSections} onToggle={toggleSection}>
+          <ReadonlyField label={t?.personaField || uiMessage('personality-editor.persona.963e5b3100')} value={config.expressionStyle.persona} />
           <div className="grid grid-cols-2 gap-4">
-            <ReadonlyField label={t?.toneField || ui('语气', 'Tone')} value={config.expressionStyle.tone} />
-            <ReadonlyField label={t?.verbosityField || ui('详略程度', 'Verbosity')} value={config.expressionStyle.verbosity} />
+            <ReadonlyField label={t?.toneField || uiMessage('personality-editor.tone.7ee6d53e70')} value={config.expressionStyle.tone} />
+            <ReadonlyField label={t?.verbosityField || uiMessage('personality-editor.verbosity.8aaeddf240')} value={config.expressionStyle.verbosity} />
           </div>
-          <ReadonlyField label={t?.languagesField || ui('语言', 'Languages')} value={config.expressionStyle.languages.join(', ')} />
+          <ReadonlyField label={t?.languagesField || uiMessage('personality-editor.languages.984eac9c23')} value={config.expressionStyle.languages.join(', ')} />
           {config.expressionStyle.vocabularyHints && config.expressionStyle.vocabularyHints.length > 0 && (
-            <ReadonlyField label={t?.vocabularyHints || ui('词汇提示', 'Vocabulary Hints')} value={config.expressionStyle.vocabularyHints.join(', ')} />
+            <ReadonlyField label={t?.vocabularyHints || uiMessage('personality-editor.vocabulary-hints.9828119f9d')} value={config.expressionStyle.vocabularyHints.join(', ')} />
           )}
-          <ReadonlyField label={t?.ttsVoice || ui('TTS 声音', 'TTS Voice')} value={config.ttsVoiceId || t?.defaultVoice || ui('默认', 'default')} />
+          <ReadonlyField label={t?.ttsVoice || uiMessage('personality-editor.tts-voice.1c88f19158')} value={config.ttsVoiceId || t?.defaultVoice || uiMessage('personality-editor.default.a08f992da4')} />
         </Section>
 
         {/* Boundaries */}
-        <Section title={t?.behavioralBoundariesSection || ui('行为边界', 'Behavioral Boundaries')} section="boundaries" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.behavioralBoundariesSection || uiMessage('personality-editor.behavioral-boundaries.d2dd23c7c5')} section="boundaries" expanded={expandedSections} onToggle={toggleSection}>
           {config.behavioralBoundaries.map((b, i) => (
             <div key={i} className="flex items-center gap-2 p-3 bg-white/5 rounded-xl">
               <Activity size={12} className="text-celestial-saturn/50 shrink-0" />
@@ -252,26 +253,26 @@ export function PersonalityEditor({ t }: { t?: any }) {
             </div>
           ))}
           {config.behavioralBoundaries.length === 0 && (
-            <p className="text-white/45 text-xs">{t?.noBoundariesDefined || ui('尚未定义边界。', 'No boundaries defined.')}</p>
+            <p className="text-white/45 text-xs">{t?.noBoundariesDefined || uiMessage('personality-editor.no-boundaries-defined.0b96af5bb1')}</p>
           )}
         </Section>
 
         {/* Tool Policy */}
-        <Section title={t?.toolPolicySection || ui('工具策略', 'Tool Policy')} section="tools" expanded={expandedSections} onToggle={toggleSection}>
-          <ReadonlyField label={t?.allowedToolsField || ui('允许工具', 'Allowed Tools')} value={(config.toolPolicy.allowedTools || ['*']).join(', ')} />
-          <ReadonlyField label={t?.requireConfirmationField || ui('需要确认', 'Require Confirmation')} value={(config.toolPolicy.requireConfirmation || []).join(', ') || ui('无', 'none')} />
-          <ReadonlyField label={t?.forbiddenToolsField || ui('禁用工具', 'Forbidden Tools')} value={(config.toolPolicy.forbiddenTools || []).join(', ') || ui('无', 'none')} />
-          <ReadonlyField label={t?.maxIterationsField || ui('最大迭代次数', 'Max Iterations')} value={String(config.toolPolicy.maxIterations)} />
+        <Section title={t?.toolPolicySection || uiMessage('personality-editor.tool-policy.73aa8685b2')} section="tools" expanded={expandedSections} onToggle={toggleSection}>
+          <ReadonlyField label={t?.allowedToolsField || uiMessage('personality-editor.allowed-tools.6cf7d8b7ae')} value={(config.toolPolicy.allowedTools || ['*']).join(', ')} />
+          <ReadonlyField label={t?.requireConfirmationField || uiMessage('personality-editor.require-confirmation.035cf9d53a')} value={(config.toolPolicy.requireConfirmation || []).join(', ') || uiMessage('personality-editor.none.a8d7c6c030')} />
+          <ReadonlyField label={t?.forbiddenToolsField || uiMessage('personality-editor.forbidden-tools.f256e255a7')} value={(config.toolPolicy.forbiddenTools || []).join(', ') || uiMessage('personality-editor.none.a8d7c6c030')} />
+          <ReadonlyField label={t?.maxIterationsField || uiMessage('personality-editor.max-iterations.3eb27b6f0f')} value={String(config.toolPolicy.maxIterations)} />
         </Section>
 
         {/* Memory Policy */}
-        <Section title={t?.memoryPolicySection || ui('记忆策略', 'Memory Policy')} section="memory" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.memoryPolicySection || uiMessage('personality-editor.memory-policy.576953859c')} section="memory" expanded={expandedSections} onToggle={toggleSection}>
           <div className="grid grid-cols-2 gap-4">
-            <ReadonlyField label={t?.retrieveLimitField || ui('检索上限', 'Retrieve Limit')} value={String(config.memoryPolicy.retrieveLimit)} />
-            <ReadonlyField label={t?.minConfidenceField || ui('最低置信度', 'Min Confidence')} value={String(config.memoryPolicy.minConfidence)} />
+            <ReadonlyField label={t?.retrieveLimitField || uiMessage('personality-editor.retrieve-limit.a2051724cb')} value={String(config.memoryPolicy.retrieveLimit)} />
+            <ReadonlyField label={t?.minConfidenceField || uiMessage('personality-editor.min-confidence.260018369d')} value={String(config.memoryPolicy.minConfidence)} />
           </div>
-          <ReadonlyField label={t?.includeTypesField || ui('包含类型', 'Include Types')} value={config.memoryPolicy.includeTypes.join(', ')} />
-          <ReadonlyField label={t?.autoExtractLabel || ui('自动提取', 'Auto-extract')} value={config.memoryPolicy.autoExtract ? ui('是', 'Yes') : ui('否', 'No')} />
+          <ReadonlyField label={t?.includeTypesField || uiMessage('personality-editor.include-types.36245f2666')} value={config.memoryPolicy.includeTypes.join(', ')} />
+          <ReadonlyField label={t?.autoExtractLabel || uiMessage('personality-editor.auto-extract.d901fcd74d')} value={config.memoryPolicy.autoExtract ? uiMessage('personality-editor.yes.4e00e01840') : uiMessage('personality-editor.no.739dd5875e')} />
         </Section>
 
       </div>

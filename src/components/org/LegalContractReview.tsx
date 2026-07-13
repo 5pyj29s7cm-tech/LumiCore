@@ -5,14 +5,14 @@ import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import type { LegalCaseFile } from '../../lib/legalCaseStore';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
+import { uiMessage } from '../../i18n/uiMessages';
+import {
+  chinaLegalCopy,
+  parseChinaContractRisks,
+  type ChinaContractRisk,
+} from '../../i18n/regions/cn/legal';
 
-interface RiskItem {
-  level: 'high' | 'medium' | 'low';
-  clause: string;
-  reason: string;
-  suggestion: string;
-  statuteRef: string;
-}
+type RiskItem = ChinaContractRisk;
 
 export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | null }) {
   const t = useT();
@@ -46,17 +46,17 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
       Array.from(files).forEach(file => formData.append('files', file));
       const res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('文件上传解析失败', 'File upload parsing failed'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-contract-review.file-upload-parsing-failed.2381d47571'));
       const text = (data.files || [])
         .map((file: any) => String(file.content || file.preview || '').trim())
         .filter(Boolean)
         .join('\n\n');
-      if (!text) throw new Error(ui('没有提取到可审查的文本', 'No reviewable text extracted'));
+      if (!text) throw new Error(uiMessage('legal-contract-review.no-reviewable-text-extracted.a5b8b434b8'));
       setContract(prev => [prev, text].filter(Boolean).join('\n\n'));
-      toast.success(ui('文件已解析并填入合同文本', 'File parsed into contract text'));
+      toast.success(uiMessage('legal-contract-review.file-parsed-into-contract-text.c0159991c0'));
     } catch (err: any) {
-      const message = err?.message || ui('文件上传解析失败', 'File upload parsing failed');
-      setResult(`${ui('错误', 'Error')}: ${message}`);
+      const message = err?.message || uiMessage('legal-contract-review.file-upload-parsing-failed.2381d47571');
+      setResult(`${uiMessage('legal-contract-review.error.1d47687da7')}: ${message}`);
       toast.error(message);
     } finally {
       setUploading(false);
@@ -80,16 +80,16 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
           orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
           caseId: caseFile?.id,
           caseName: caseFile ? (caseFile.title || caseFile.party || caseFile.caseNumber || undefined) : undefined,
-          caseType: caseFile?.cause || '合同审查',
+          caseType: caseFile?.cause || chinaLegalCopy('zh').contractReviewCaseType,
           court: caseFile?.court,
           persistCase: Boolean(caseFile),
         }),
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('合同审查失败', 'Contract review failed'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-contract-review.contract-review-failed.05af7a7d1f'));
       const text = data.text || data.response || data.reply || data.message || '';
-      const parsedRisks = parseRisks(text);
+      const parsedRisks = parseChinaContractRisks(text);
       setResult(text);
       setRisks(parsedRisks);
       setSelectedRisk(parsedRisks[0] || null);
@@ -99,7 +99,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
         }));
       }
     } catch (e: any) {
-      setResult(`${ui('错误', 'Error')}: ${e.message}`);
+      setResult(`${uiMessage('legal-contract-review.error.1d47687da7')}: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -114,9 +114,9 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
               <Shield size={22} />
             </span>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-white">{t.legalContractReviewTitle || ui('合同审查', 'Contract Review')}</h2>
+              <h2 className="text-xl font-semibold text-white">{t.legalContractReviewTitle || uiMessage('legal-contract-review.contract-review.d4cc309459')}</h2>
               <p className="mt-1 text-sm leading-6 text-white/50">
-                {t.legalContractReviewDesc || ui('审查合同条款风险、法律依据和修改建议，结果供律师复核。', 'Review clause risks, legal basis, and suggested edits for lawyer review.')}
+                {t.legalContractReviewDesc || uiMessage('legal-contract-review.review-clause-risks-legal-basis.84a59ad01a')}
               </p>
             </div>
           </div>
@@ -125,7 +125,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
         <LegalCaseContextBar
           caseFile={caseFile}
           state={loading ? 'running' : result ? 'result' : 'input'}
-          detail={ui('案件内已有合同会自动带入；审查结果由法律工具链关联当前案件', 'Existing case contracts are prefilled; the legal toolchain links review results to this case')}
+          detail={uiMessage('legal-contract-review.existing-case-contracts-are-prefilled.7b8235f485')}
         />
 
         <section className="grid min-h-[560px] gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -133,7 +133,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h3 className="inline-flex items-center gap-2 text-sm font-medium text-white">
                 <FileText size={16} className="text-blue-300" />
-                {ui('合同文本', 'Contract Text')}
+                {uiMessage('legal-contract-review.contract-text.c30d0eba56')}
               </h3>
               <button
                 onClick={() => fileRef.current?.click()}
@@ -141,25 +141,25 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
               >
                 {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                {ui('上传文件', 'Upload')}
+                {uiMessage('legal-contract-review.upload.b6fb916ac9')}
               </button>
               <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md" onChange={handleFileUpload} className="hidden" />
             </div>
             <textarea
               value={contract}
               onChange={event => setContract(event.target.value)}
-              placeholder={t.legalContractReviewPlaceholder || ui('粘贴合同全文，或上传 PDF/DOCX/TXT 文件...', 'Paste contract text, or upload PDF/DOCX/TXT files...')}
+              placeholder={t.legalContractReviewPlaceholder || uiMessage('legal-contract-review.paste-contract-text-or-upload.3dbd66ea5b')}
               className="min-h-[420px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 font-mono text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-blue-400/35"
             />
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-white/40">{ui('单次会截取前 10000 字进入审查，长合同建议分段处理。', 'The first 10,000 characters are reviewed per run; split long contracts when needed.')}</p>
+              <p className="text-xs text-white/40">{uiMessage('legal-contract-review.the-first-10-000-characters.9326837798')}</p>
               <button
                 onClick={review}
                 disabled={loading || !contract.trim()}
                 className="inline-flex items-center gap-2 rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2.5 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />}
-                {t.legalContractReviewReview || ui('开始审查', 'Review')}
+                {t.legalContractReviewReview || uiMessage('legal-contract-review.review.e3dfc24f76')}
               </button>
             </div>
           </div>
@@ -168,12 +168,12 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
             <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
               <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-white">
                 <AlertTriangle size={16} className="text-amber-300" />
-                {t.legalContractReviewRisks || ui('风险条款', 'Risk Items')} ({risks.length})
+                {t.legalContractReviewRisks || uiMessage('legal-contract-review.risk-items.8ca8515682')} ({risks.length})
               </h3>
               {risks.length === 0 ? (
                 <div className="flex h-36 flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                   <AlertCircle size={26} className="text-white/20" />
-                  <span>{ui('审查后风险清单会显示在这里。', 'Risk items appear here after review.')}</span>
+                  <span>{uiMessage('legal-contract-review.risk-items-appear-here-after.28ad75a4ab')}</span>
                 </div>
               ) : (
                 <div className="max-h-72 space-y-2 overflow-y-auto custom-scrollbar">
@@ -204,24 +204,24 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
                 <div className="space-y-3">
                   <RiskBadge level={selectedRisk.level} ui={ui} />
                   <div>
-                    <p className="mb-1 text-xs text-white/40">{ui('条款/问题', 'Clause / Issue')}</p>
+                    <p className="mb-1 text-xs text-white/40">{uiMessage('legal-contract-review.clause-issue.1a1690d0c3')}</p>
                     <p className="text-sm leading-6 text-white/80">{selectedRisk.clause}</p>
                   </div>
                   {selectedRisk.reason && (
                     <div>
-                      <p className="mb-1 text-xs text-white/40">{ui('原因', 'Reason')}</p>
+                      <p className="mb-1 text-xs text-white/40">{uiMessage('legal-contract-review.reason.08ee62c029')}</p>
                       <p className="text-sm leading-6 text-white/65">{selectedRisk.reason}</p>
                     </div>
                   )}
                   {selectedRisk.statuteRef && (
                     <div>
-                      <p className="mb-1 text-xs text-white/40">{ui('法律依据', 'Legal Basis')}</p>
+                      <p className="mb-1 text-xs text-white/40">{uiMessage('legal-contract-review.legal-basis.3712aebaaf')}</p>
                       <p className="text-sm leading-6 text-white/65">{selectedRisk.statuteRef}</p>
                     </div>
                   )}
                   {selectedRisk.suggestion && (
                     <div>
-                      <p className="mb-1 text-xs text-white/40">{ui('修改建议', 'Suggestion')}</p>
+                      <p className="mb-1 text-xs text-white/40">{uiMessage('legal-contract-review.suggestion.9b6c2da3ca')}</p>
                       <p className="text-sm leading-6 text-emerald-200/80">{selectedRisk.suggestion}</p>
                     </div>
                   )}
@@ -233,7 +233,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
               ) : (
                 <div className="flex h-full min-h-56 flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                   <FileText size={30} className="text-white/20" />
-                  <span>{ui('审查结果会显示在这里。', 'Review results will appear here.')}</span>
+                  <span>{uiMessage('legal-contract-review.review-results-will-appear-here.df0e833747')}</span>
                 </div>
               )}
             </section>
@@ -260,75 +260,20 @@ function riskLevelMeta(level: RiskItem['level'], ui: (zh: string, en: string) =>
       icon: <AlertTriangle size={14} className="text-red-300" />,
       textClass: 'text-red-200',
       panelClass: 'border-red-400/20 bg-red-500/10',
-      label: ui('高风险', 'High Risk'),
+      label: uiMessage('legal-contract-review.high-risk.63340f60da'),
     },
     medium: {
       icon: <HelpCircle size={14} className="text-amber-300" />,
       textClass: 'text-amber-200',
       panelClass: 'border-amber-400/20 bg-amber-500/10',
-      label: ui('中风险', 'Medium Risk'),
+      label: uiMessage('legal-contract-review.medium-risk.a87f13c2ef'),
     },
     low: {
       icon: <Check size={14} className="text-emerald-300" />,
       textClass: 'text-emerald-200',
       panelClass: 'border-emerald-400/20 bg-emerald-500/10',
-      label: ui('低风险', 'Low Risk'),
+      label: uiMessage('legal-contract-review.low-risk.682385645d'),
     },
   };
   return map[level];
-}
-
-function parseRisks(text: string): RiskItem[] {
-  const risks: RiskItem[] = [];
-  const blocks = text
-    .split(/\n(?=\s*(?:[-*]\s*)?(?:\d+[.、)]\s*)?(?:\[?(?:高风险|中风险|低风险|High Risk|Medium Risk|Low Risk)|风险等级|风险条款|⚠️))/i)
-    .map(item => item.trim())
-    .filter(Boolean);
-
-  for (const block of blocks) {
-    const level = inferRiskLevel(block);
-    const clause = extractField(block, ['条款', '问题', 'Clause'])
-      || block.split('\n')[0].replace(/^\s*(?:[-*]\s*)?(?:\d+[.、)]\s*)?/, '').replace(/^⚠️\s*/, '').slice(0, 120);
-    if (clause.length < 6) continue;
-    risks.push({
-      level,
-      clause,
-      reason: extractField(block, ['理由', '原因', '法律依据', 'Reason']) || '',
-      suggestion: extractField(block, ['建议', '修改建议', 'Suggestion']) || '',
-      statuteRef: extractField(block, ['法条', '依据', 'Law']) || '',
-    });
-  }
-
-  if (risks.length === 0) {
-    const lines = text
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => /风险|违约|无效|解除|赔偿|管辖|仲裁|责任|瑕疵|Risk/i.test(line))
-      .slice(0, 20);
-    for (const line of lines) {
-      risks.push({
-        level: inferRiskLevel(line),
-        clause: line.replace(/^\s*(?:[-*]\s*)?(?:\d+[.、)]\s*)?/, '').replace(/^⚠️\s*/, '').slice(0, 120),
-        reason: '',
-        suggestion: '',
-        statuteRef: '',
-      });
-    }
-  }
-
-  return risks.slice(0, 20);
-}
-
-function inferRiskLevel(text: string): RiskItem['level'] {
-  if (/高风险|重大|无效|违法|解除|赔偿|High/i.test(text)) return 'high';
-  if (/低风险|轻微|提示|Low/i.test(text)) return 'low';
-  return 'medium';
-}
-
-function extractField(block: string, labels: string[]): string {
-  for (const label of labels) {
-    const match = block.match(new RegExp(`${label}\\s*[:：]\\s*(.+)`, 'i'));
-    if (match?.[1]) return match[1].trim();
-  }
-  return '';
 }

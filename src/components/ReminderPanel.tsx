@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bell, Clock, CheckCircle2, Trash2, Plus, Calendar, AlertCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { uiMessage } from '../i18n/uiMessages';
 
 interface Reminder {
   id: string;
@@ -29,10 +30,10 @@ export function ReminderPanel({ t }: { t?: any }) {
       setError('');
       const res = await fetch('/api/reminders', { credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('提醒加载失败', 'Failed to load reminders'));
+      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-load-reminders.0092eaf0c9'));
       setReminders(Array.isArray(data) ? data : []);
     } catch (err: any) {
-      const message = err?.message || ui('提醒加载失败', 'Failed to load reminders');
+      const message = err?.message || uiMessage('reminder-panel.failed-to-load-reminders.0092eaf0c9');
       setError(message);
       toast.error(message);
     } finally {
@@ -53,13 +54,13 @@ export function ReminderPanel({ t }: { t?: any }) {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('提醒创建失败', 'Failed to create reminder'));
+      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-create-reminder.880d5a66e2'));
       setNewContent('');
       setNewDueAt('');
-      toast.success(ui('提醒已创建', 'Reminder created'));
+      toast.success(uiMessage('reminder-panel.reminder-created.784ae064fc'));
       fetchReminders();
     } catch (err: any) {
-      toast.error(err?.message || ui('提醒创建失败', 'Failed to create reminder'));
+      toast.error(err?.message || uiMessage('reminder-panel.failed-to-create-reminder.880d5a66e2'));
     } finally {
       setAdding(false);
     }
@@ -69,11 +70,11 @@ export function ReminderPanel({ t }: { t?: any }) {
     try {
       const res = await fetch(`/api/reminders/${id}`, { method: 'DELETE', credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('提醒删除失败', 'Failed to delete reminder'));
+      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-delete-reminder.0167264b7f'));
       setReminders(prev => prev.filter(r => r.id !== id));
-      toast.success(ui('已删除', 'Deleted'));
+      toast.success(uiMessage('reminder-panel.deleted.e8250ae78f'));
     } catch (err: any) {
-      toast.error(err?.message || ui('提醒删除失败', 'Failed to delete reminder'));
+      toast.error(err?.message || uiMessage('reminder-panel.failed-to-delete-reminder.0167264b7f'));
     }
   };
 
@@ -86,10 +87,10 @@ export function ReminderPanel({ t }: { t?: any }) {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('提醒更新失败', 'Failed to update reminder'));
+      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-update-reminder.73f8821573'));
       fetchReminders();
     } catch (err: any) {
-      toast.error(err?.message || ui('提醒更新失败', 'Failed to update reminder'));
+      toast.error(err?.message || uiMessage('reminder-panel.failed-to-update-reminder.73f8821573'));
     }
   };
 
@@ -115,13 +116,13 @@ export function ReminderPanel({ t }: { t?: any }) {
       <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <div className="flex items-center gap-2">
           <Bell size={14} className="text-amber-400" />
-          <span className="text-xs font-black uppercase tracking-wider text-white/50">{ui('新建提醒', 'New Reminder')}</span>
+          <span className="text-xs font-black uppercase tracking-wider text-white/50">{uiMessage('reminder-panel.new-reminder.a3acd643ad')}</span>
         </div>
         <input
           value={newContent}
           onChange={e => setNewContent(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
-          placeholder={ui('提醒内容...', 'Reminder content...')}
+          placeholder={uiMessage('reminder-panel.reminder-content.6535ac6e1b')}
           className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white/70 placeholder:text-white/40 focus:outline-none focus:border-amber-500/20"
         />
         <div className="flex items-center gap-2">
@@ -138,7 +139,7 @@ export function ReminderPanel({ t }: { t?: any }) {
             className="flex items-center gap-1.5 px-4 py-2 bg-amber-500/15 border border-amber-500/25 rounded-xl text-xs font-bold text-amber-400 hover:bg-amber-500/25 disabled:opacity-30 transition-all"
           >
             {adding ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-            {ui('添加', 'Add')}
+            {uiMessage('reminder-panel.add.cd6f2f52ff')}
           </button>
         </div>
       </div>
@@ -148,11 +149,11 @@ export function ReminderPanel({ t }: { t?: any }) {
         <div className="flex items-center gap-2">
           <Clock size={14} className="text-celestial-saturn" />
           <span className="text-xs font-black uppercase tracking-wider text-white/55">
-            {ui('待处理', 'Pending')} ({pending.length})
+            {uiMessage('reminder-panel.pending.ff1f5b13d3')} ({pending.length})
           </span>
         </div>
         {pending.length === 0 ? (
-          <p className="text-xs text-white/40 py-4 text-center">{ui('暂无待处理提醒', 'No pending reminders')}</p>
+          <p className="text-xs text-white/40 py-4 text-center">{uiMessage('reminder-panel.no-pending-reminders.b06a20dfd7')}</p>
         ) : (
           pending.map(r => (
             <ReminderCard key={r.id} reminder={r} onDelete={handleDelete} onMarkFired={handleMarkFired} isZh={isZh} />
@@ -166,7 +167,7 @@ export function ReminderPanel({ t }: { t?: any }) {
           <div className="flex items-center gap-2">
             <CheckCircle2 size={14} className="text-emerald-400" />
             <span className="text-xs font-black uppercase tracking-wider text-white/45">
-              {ui('已完成', 'Done')} ({fired.length})
+              {uiMessage('reminder-panel.done.c5272e0498')} ({fired.length})
             </span>
           </div>
           {fired.slice(0, 10).map(r => (
@@ -218,7 +219,7 @@ function ReminderCard({
               {new Date(reminder.dueAt!).toLocaleString(isZh ? 'zh-CN' : undefined, {
                 month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
               })}
-              {isOverdue && (isZh ? ' (已过期)' : ' (overdue)')}
+              {isOverdue && (uiMessage('reminder-panel.overdue.51d8770a0a', (isZh) ? 'zh' : 'en'))}
             </span>
           )}
         </div>
@@ -228,7 +229,7 @@ function ReminderCard({
           <button
             onClick={() => onMarkFired(reminder.id)}
             className="p-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/10 transition-colors"
-            title={isZh ? '标记完成' : 'Mark complete'}
+            title={uiMessage('reminder-panel.mark-complete.0115f22552', (isZh) ? 'zh' : 'en')}
           >
             <CheckCircle2 size={12} className="text-emerald-400" />
           </button>
@@ -236,7 +237,7 @@ function ReminderCard({
         <button
           onClick={() => onDelete(reminder.id)}
           className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/10 transition-colors"
-          title={isZh ? '删除' : 'Delete'}
+          title={uiMessage('reminder-panel.delete.5b875326d1', (isZh) ? 'zh' : 'en')}
         >
           <Trash2 size={12} className="text-red-400" />
         </button>

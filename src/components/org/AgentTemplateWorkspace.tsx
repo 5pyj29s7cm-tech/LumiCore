@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import { TemplateMarketplace } from './TemplateMarketplace';
 import { TemplateReviewQueue } from './TemplateReviewQueue';
+import { uiMessage } from '../../i18n/uiMessages';
 
 type TemplateWorkspaceTab = 'marketplace' | 'review';
 
@@ -32,7 +33,7 @@ export function AgentTemplateWorkspace({ initialTab = 'marketplace' }: { initial
           }`}
         >
           <Package size={15} />
-          {ui('模板市场', 'Marketplace')}
+          {uiMessage('agent-template-workspace.marketplace.448b7d9c5d')}
         </button>
         {canReview && (
           <button
@@ -45,7 +46,7 @@ export function AgentTemplateWorkspace({ initialTab = 'marketplace' }: { initial
             }`}
           >
             <ClipboardCheck size={15} />
-            {ui('模板审核', 'Review Queue')}
+            {uiMessage('agent-template-workspace.review-queue.576f13eaa1')}
           </button>
         )}
       </div>

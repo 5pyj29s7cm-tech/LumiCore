@@ -3,6 +3,7 @@ import path from 'path';
 import { randomBytes, randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import { getMember, getOrgById } from '../org/db';
+import { parseCnMessagingBindingCommand } from '../regions/packs/cn/messaging';
 
 export type MessagingPlatformId = 'feishu' | 'wechat' | 'wecom';
 export type MessagingBindingDomain = 'personal' | 'work';
@@ -84,19 +85,18 @@ export function parseMessagingBindingCommand(text: string): MessagingBindingComm
   const normalized = String(text || '').trim();
   if (!normalized) return null;
 
-  const codeMatch = normalized.match(
-    /^(?:绑定|bind)\s*(?:Lumi|露米)?\s*([A-Z0-9_-]{4,16})\s*[。.!！]?$/i,
-  );
+  const codeMatch = normalized.match(/^bind\s*(?:Lumi)?\s*([A-Z0-9_-]{4,16})\s*[.!]?$/i);
   if (codeMatch) return { kind: 'bind', code: codeMatch[1].toUpperCase() };
 
-  if (/^(?:我)?\s*(?:(?:已经|已|现在|是否|有没有)\s*)?绑定(?:成功|完成|好了|好)?(?:了|吗|了吗|没有)?\s*[?？。.!！]*$/i.test(normalized)) {
+  if (/^(?:(?:i(?:'m| am)?|am i)\s+)?(?:already\s+)?bound(?:\s+(?:successfully|now|yet))?\s*[?.!]*$/i.test(normalized)
+    || /^binding\s+(?:succeeded|successful|complete|completed|status)\s*[?.!]*$/i.test(normalized)) {
     return { kind: 'status' };
   }
 
-  if (/^(?:绑定|bind)\s*(?:lumi(?:\s|$)|露米(?:\s|$))/i.test(normalized)) {
+  if (/^bind\s+lumi(?:\s|$)/i.test(normalized)) {
     return { kind: 'invalid' };
   }
-  return null;
+  return parseCnMessagingBindingCommand(normalized);
 }
 
 function pruneExpiredCodes(store: StoreShape) {

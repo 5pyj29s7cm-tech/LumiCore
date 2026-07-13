@@ -14,6 +14,7 @@ import {
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import { appConfirm } from '../../lib/appConfirm';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 interface Member {
   id: string;
@@ -47,15 +48,15 @@ export function OrgMembers() {
       if (!orgIdVal) {
         const orgsRes = await fetch('/api/org/org', { credentials: 'include' });
         const orgs = await orgsRes.json().catch(() => []);
-        if (!orgsRes.ok) throw new Error((orgs as any).error || ui(`组织列表加载失败（${orgsRes.status}）`, `Failed to load organizations (${orgsRes.status})`));
-        if (!Array.isArray(orgs) || orgs.length === 0) throw new Error(ui('未找到组织', 'No organization found'));
+        if (!orgsRes.ok) throw new Error((orgs as any).error || formatUiMessage('org-members.failed-to-load-organizations-value0.0c01e9694d', { value0: orgsRes.status }));
+        if (!Array.isArray(orgs) || orgs.length === 0) throw new Error(uiMessage('org-members.no-organization-found.90a2ad4211'));
         orgIdVal = orgs[0].id || orgs[0].orgId;
       }
       setOrgId(orgIdVal);
 
       const membersRes = await fetch(`/api/org/org/${orgIdVal}/members`, { credentials: 'include' });
       const data = await membersRes.json().catch(() => []);
-      if (!membersRes.ok) throw new Error(data.error || ui(`成员加载失败（${membersRes.status}）`, `Failed to load members (${membersRes.status})`));
+      if (!membersRes.ok) throw new Error(data.error || formatUiMessage('org-members.failed-to-load-members-value0.b0a921d6d9', { value0: membersRes.status }));
       setMembers(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -81,9 +82,9 @@ export function OrgMembers() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`添加成员失败（${res.status}）`, `Invite failed (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('org-members.invite-failed-value0.12879bcdc7', { value0: res.status }));
       setInviteUserId('');
-      setFeedback({ type: 'success', text: ui('成员已添加到组织', 'Member added to the organization') });
+      setFeedback({ type: 'success', text: uiMessage('org-members.member-added-to-the-organization.ccd3f9eeaa') });
       void loadOrgAndMembers();
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -94,10 +95,10 @@ export function OrgMembers() {
 
   const handleRemove = async (userId: string) => {
     const ok = await appConfirm({
-      title: ui('移除成员', 'Remove Member'),
-      message: ui('确定要从组织中移除此成员吗？', 'Remove this member from the organization?'),
-      confirmText: ui('移除', 'Remove'),
-      cancelText: ui('取消', 'Cancel'),
+      title: uiMessage('org-members.remove-member.5f05c07737'),
+      message: uiMessage('org-members.remove-this-member-from-the.b3b187baff'),
+      confirmText: uiMessage('org-members.remove.78190c6054'),
+      cancelText: uiMessage('org-members.cancel.998b9c48fb'),
       tone: 'danger',
     });
     if (!ok) return;
@@ -109,8 +110,8 @@ export function OrgMembers() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`移除失败（${res.status}）`, `Remove failed (${res.status})`));
-      setFeedback({ type: 'success', text: ui('成员已移除', 'Member removed') });
+      if (!res.ok) throw new Error(data.error || formatUiMessage('org-members.remove-failed-value0.04090c47d2', { value0: res.status }));
+      setFeedback({ type: 'success', text: uiMessage('org-members.member-removed.a9f8d73d52') });
       void loadOrgAndMembers();
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -121,10 +122,10 @@ export function OrgMembers() {
 
   const roleMeta = (role: string) => {
     const labels: Record<string, string> = {
-      owner: t.orgRoleOwner || ui('所有者', 'Owner'),
-      admin: t.orgRoleAdmin || ui('管理员', 'Admin'),
-      member: t.orgRoleMember || ui('成员', 'Member'),
-      viewer: t.orgRoleViewer || ui('查看者', 'Viewer'),
+      owner: t.orgRoleOwner || uiMessage('org-members.owner.6fa387e604'),
+      admin: t.orgRoleAdmin || uiMessage('org-members.admin.c54e557ee8'),
+      member: t.orgRoleMember || uiMessage('org-members.member.9b8c32d899'),
+      viewer: t.orgRoleViewer || uiMessage('org-members.viewer.8a8ac26d10'),
     };
     const styles: Record<string, string> = {
       owner: 'border-amber-400/20 bg-amber-500/10 text-amber-200',
@@ -151,9 +152,9 @@ export function OrgMembers() {
                 <Users size={22} />
               </span>
               <div>
-                <h2 className="text-xl font-semibold text-white">{t.orgMembers || ui('组织成员', 'Organization Members')}</h2>
+                <h2 className="text-xl font-semibold text-white">{t.orgMembers || uiMessage('org-members.organization-members.b6aff59b6a')}</h2>
                 <p className="mt-1 text-sm text-white/50">
-                  {ui(`${activeCount} 位活跃成员 / 共 ${members.length} 位`, `${activeCount} active / ${members.length} total`)}
+                  {formatUiMessage('org-members.value0-active-value1-total.b0f70dba9b', { value0: activeCount, value1: members.length })}
                 </p>
               </div>
             </div>
@@ -162,7 +163,7 @@ export function OrgMembers() {
               disabled={loading}
               className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 disabled:opacity-50"
             >
-              {ui('刷新', 'Refresh')}
+              {uiMessage('org-members.refresh.cba212b169')}
             </button>
           </div>
         </section>
@@ -172,24 +173,24 @@ export function OrgMembers() {
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
           <div className="grid gap-3 md:grid-cols-[1fr_160px_auto]">
             <label className="block">
-              <span className="mb-1 block text-xs text-white/50">{ui('按用户 ID 添加成员', 'Add Member by User ID')}</span>
+              <span className="mb-1 block text-xs text-white/50">{uiMessage('org-members.add-member-by-user-id.4aa55086eb')}</span>
               <input
                 value={inviteUserId}
                 onChange={event => setInviteUserId(event.target.value)}
-                placeholder={ui('输入用户 ID...', 'Enter user ID...')}
+                placeholder={uiMessage('org-members.enter-user-id.2b54a142a9')}
                 className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-400/35"
               />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs text-white/50">{ui('角色', 'Role')}</span>
+              <span className="mb-1 block text-xs text-white/50">{uiMessage('org-members.role.b9e0249a04')}</span>
               <select
                 value={inviteRole}
                 onChange={event => setInviteRole(event.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/75 outline-none"
               >
-                <option value="member">{t.orgRoleMember || ui('成员', 'Member')}</option>
-                <option value="admin">{t.orgRoleAdmin || ui('管理员', 'Admin')}</option>
-                <option value="viewer">{t.orgRoleViewer || ui('查看者', 'Viewer')}</option>
+                <option value="member">{t.orgRoleMember || uiMessage('org-members.member.9b8c32d899')}</option>
+                <option value="admin">{t.orgRoleAdmin || uiMessage('org-members.admin.c54e557ee8')}</option>
+                <option value="viewer">{t.orgRoleViewer || uiMessage('org-members.viewer.8a8ac26d10')}</option>
               </select>
             </label>
             <button
@@ -198,7 +199,7 @@ export function OrgMembers() {
               className="self-end inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/15 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-50"
             >
               {inviting ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
-              {ui('添加', 'Add')}
+              {uiMessage('org-members.add.cd6f2f52ff')}
             </button>
           </div>
         </section>
@@ -211,7 +212,7 @@ export function OrgMembers() {
           ) : members.length === 0 ? (
             <div className="flex h-64 flex-col items-center justify-center gap-2 text-center text-sm text-white/45">
               <Users size={32} className="text-white/20" />
-              <span>{ui('暂无成员。可以通过用户 ID 添加成员。', 'No members yet. Add members by user ID.')}</span>
+              <span>{uiMessage('org-members.no-members-yet-add-members.e1e3de9dd0')}</span>
             </div>
           ) : (
             <div className="divide-y divide-white/8">
@@ -232,8 +233,8 @@ export function OrgMembers() {
                         <p className="truncate text-sm font-medium text-white">{member.userId}</p>
                         <p className="mt-1 text-xs text-white/45">
                           {member.joinedAt
-                            ? ui(`加入于 ${new Date(member.joinedAt).toLocaleDateString('zh-CN')}`, `Joined ${new Date(member.joinedAt).toLocaleDateString()}`)
-                            : ui('待加入', 'Pending')}
+                            ? formatUiMessage('org-members.joined-value0.b3ec28ea5a', { value0: { en: new Date(member.joinedAt).toLocaleDateString(), zh: new Date(member.joinedAt).toLocaleDateString('zh-CN') } })
+                            : uiMessage('org-members.pending.c88e40b7d2')}
                           {member.status !== 'active' && <span className="ml-2 text-amber-300">{member.status}</span>}
                         </p>
                       </div>
@@ -247,7 +248,7 @@ export function OrgMembers() {
                         <button
                           onClick={() => handleRemove(member.userId)}
                           className="rounded-lg border border-red-400/15 bg-red-500/5 p-2 text-red-200/70 transition hover:bg-red-500/15 hover:text-red-200"
-                          title={ui('移除成员', 'Remove member')}
+                          title={uiMessage('org-members.remove-member.9443c64435')}
                         >
                           <UserMinus size={14} />
                         </button>

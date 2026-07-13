@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { apiFetch } from '@/services/apiClient';
 import { useApp } from '../contexts/AppContext';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 type ExternalCatalogSkill = {
   id: string;
@@ -189,7 +190,7 @@ export function TeamHub({ t }: { t?: any }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.error || data.message || 'Failed to add external agent');
-      toast.success(data.message || ui(`"${skill.name}" 已加入 Team`, `"${skill.name}" added to Team`));
+      toast.success(data.message || formatUiMessage('team-hub.value0-added-to-team.567d8fa826', { value0: skill.name }));
       window.dispatchEvent(new CustomEvent('lumi:agents-changed', { detail: { agentId: data.agentId, name: skill.name } }));
       await Promise.all([fetchAgents(), fetchExternalCatalog()]);
       if (data.agentId) setSelectedAgentId(data.agentId);
@@ -215,10 +216,10 @@ export function TeamHub({ t }: { t?: any }) {
         setAgents(prev => prev.map(a => a.id === agent.id ? data.agent : a));
         setSelectedAgentId(current => current === agent.id ? data.agent.id : current);
       }
-      if (data.ok) toast.success(ui('外部 agent 连接正常', 'External agent is reachable'));
-      else toast.error(data.result?.output || ui('外部 agent 测试失败', 'External agent test failed'));
+      if (data.ok) toast.success(uiMessage('team-hub.external-agent-is-reachable.aa7e195265'));
+      else toast.error(data.result?.output || uiMessage('team-hub.external-agent-test-failed.2d3cd373d7'));
     } catch (err: any) {
-      toast.error(err.message || ui('外部 agent 测试失败', 'External agent test failed'));
+      toast.error(err.message || uiMessage('team-hub.external-agent-test-failed.2d3cd373d7'));
     } finally {
       setTestingIds(prev => prev.filter(id => id !== agent.id));
     }
@@ -257,11 +258,11 @@ export function TeamHub({ t }: { t?: any }) {
 
   const handleSubmitAgentTemplate = async (agent: any) => {
     if (agent.runtime === 'external') {
-      toast.error(ui('外部 CLI 桥接 agent 不直接提交为组织模板，请先做成内部 agent 配置。', 'External CLI bridge agents cannot be submitted as organization templates directly.'));
+      toast.error(uiMessage('team-hub.external-cli-bridge-agents-cannot.b07b4faae1'));
       return;
     }
     if (agent.installedTemplateId) {
-      toast.info(ui('这个 agent 已经来自组织模板，不需要重复提交。', 'This agent already came from an organization template.'));
+      toast.info(uiMessage('team-hub.this-agent-already-came-from.63f320ac8d'));
       return;
     }
 
@@ -270,7 +271,7 @@ export function TeamHub({ t }: { t?: any }) {
       if (workDomain !== 'work') {
         const switched = await switchDomain('work');
         if (!switched.success) {
-          throw new Error(switched.message || ui('请先加入组织或切换到工作域，再提交审核。', 'Join an organization or switch to Work before submitting.'));
+          throw new Error(switched.message || uiMessage('team-hub.join-an-organization-or-switch.56279ec1ac'));
         }
       }
 
@@ -279,7 +280,7 @@ export function TeamHub({ t }: { t?: any }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: agent.name || ui('未命名团队智能体', 'Untitled team agent'),
+          name: agent.name || uiMessage('team-hub.untitled-team-agent.a4df9163a3'),
           description,
           category: agent.category || 'general',
           icon: 'Bot',
@@ -287,28 +288,25 @@ export function TeamHub({ t }: { t?: any }) {
         }),
       });
       const template = await templateRes.json().catch(() => ({}));
-      if (!templateRes.ok) throw new Error(template.error || ui(`智能体模板创建失败（${templateRes.status}）`, `Agent template create failed (${templateRes.status})`));
+      if (!templateRes.ok) throw new Error(template.error || formatUiMessage('team-hub.agent-template-create-failed-value0.6d43c4ab3f', { value0: templateRes.status }));
       const templateId = template.id || template.template?.id;
-      if (!templateId) throw new Error(ui('智能体模板创建成功，但没有返回模板 ID。', 'Agent template created without a template ID.'));
+      if (!templateId) throw new Error(uiMessage('team-hub.agent-template-created-without-a.b0a951d51a'));
 
       const submitRes = await apiFetch(`/api/org/templates/${templateId}/submit`, { method: 'POST' });
       const submitted = await submitRes.json().catch(() => ({}));
-      if (!submitRes.ok) throw new Error(submitted.error || ui(`提交审核失败（${submitRes.status}）`, `Submit for review failed (${submitRes.status})`));
+      if (!submitRes.ok) throw new Error(submitted.error || formatUiMessage('team-hub.submit-for-review-failed-value0.79b49272b5', { value0: submitRes.status }));
 
-      toast.success(ui('已提交到组织智能体审核队列', 'Submitted to organization agent review'));
+      toast.success(uiMessage('team-hub.submitted-to-organization-agent-review.f0be14bd75'));
       window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'review' } }));
     } catch (err: any) {
-      toast.error(err.message || ui('提交审核失败', 'Submit for review failed'));
+      toast.error(err.message || uiMessage('team-hub.submit-for-review-failed.7396eb5d0b'));
     } finally {
       setSubmittingTemplateIds(prev => prev.filter(id => id !== agent.id));
     }
   };
 
   const handleDelete = async (id: string, name?: string) => {
-    const ok = window.confirm(ui(
-      `确认移除「${name || id}」？它的记忆、会话记录也会一起删除。`,
-      `Remove "${name || id}"? Its memories and conversations will also be deleted.`,
-    ));
+    const ok = window.confirm(formatUiMessage('team-hub.remove-value0-its-memories-and.1bea61810d', { value0: name || id }));
     if (!ok) return;
     try {
       const res = await apiFetch(`/api/agents/${id}`, { method: 'DELETE' });
@@ -352,19 +350,19 @@ export function TeamHub({ t }: { t?: any }) {
   const selectedAgent = selectedAgentId ? agents.find(agent => agent.id === selectedAgentId) || null : null;
 
   const healthMeta = (agent: any) => {
-    if (agent.healthStatus === 'online') return { icon: <CheckCircle2 size={13} />, label: ui('可用', 'Online'), className: 'border-emerald-400/15 bg-emerald-500/10 text-emerald-300' };
-    if (agent.healthStatus === 'error') return { icon: <AlertTriangle size={13} />, label: ui('异常', 'Error'), className: 'border-red-400/15 bg-red-500/10 text-red-200' };
-    return { icon: <Clock3 size={13} />, label: ui('未测试', 'Untested'), className: 'border-white/10 bg-white/[0.04] text-white/45' };
+    if (agent.healthStatus === 'online') return { icon: <CheckCircle2 size={13} />, label: uiMessage('team-hub.online.1609b04bba'), className: 'border-emerald-400/15 bg-emerald-500/10 text-emerald-300' };
+    if (agent.healthStatus === 'error') return { icon: <AlertTriangle size={13} />, label: uiMessage('team-hub.error.bc020bb15c'), className: 'border-red-400/15 bg-red-500/10 text-red-200' };
+    return { icon: <Clock3 size={13} />, label: uiMessage('team-hub.untested.de3b914270'), className: 'border-white/10 bg-white/[0.04] text-white/45' };
   };
 
   const catalogStatusMeta = (skill: ExternalCatalogSkill) => {
     if (skill.installed && skill.externalHealthStatus === 'online') {
-      return { icon: <CheckCircle2 size={13} />, label: ui('可调用', 'Callable'), className: 'border-emerald-400/15 bg-emerald-500/10 text-emerald-300' };
+      return { icon: <CheckCircle2 size={13} />, label: uiMessage('team-hub.callable.b5f5a3c5c6'), className: 'border-emerald-400/15 bg-emerald-500/10 text-emerald-300' };
     }
     if (skill.installed) {
-      return { icon: <Clock3 size={13} />, label: ui('已在 Team', 'In Team'), className: 'border-amber-400/15 bg-amber-500/10 text-amber-200' };
+      return { icon: <Clock3 size={13} />, label: uiMessage('team-hub.in-team.e4e63f3860'), className: 'border-amber-400/15 bg-amber-500/10 text-amber-200' };
     }
-    return { icon: <ExternalLink size={13} />, label: ui('可加入', 'Available'), className: 'border-cyan-300/15 bg-cyan-500/10 text-cyan-200' };
+    return { icon: <ExternalLink size={13} />, label: uiMessage('team-hub.available.9bcfc20ee2'), className: 'border-cyan-300/15 bg-cyan-500/10 text-cyan-200' };
   };
 
   const formatTime = (value?: string) => {
@@ -402,7 +400,7 @@ export function TeamHub({ t }: { t?: any }) {
 
   const agentDescription = (agent: any) => {
     const config = parseConfig(agent);
-    return config.description || agent.description || agent.data?.description || ui('暂无介绍。可以通过技能标签和类别判断它适合处理的任务。', 'No description yet. Use its category and skill tags to judge what work fits.');
+    return config.description || agent.description || agent.data?.description || uiMessage('team-hub.no-description-yet-use-its.35280e309e');
   };
 
   const listFrom = (value: unknown): string[] => {
@@ -415,10 +413,10 @@ export function TeamHub({ t }: { t?: any }) {
   };
 
   const dispatchState = (agent: any) => {
-    if (agent.isFrozen) return ui('已暂停，不参与调度', 'Paused, not scheduled');
-    if (agent.runtime === 'external' && agent.healthStatus !== 'online') return ui('等待连接测试通过', 'Waiting for a passing health test');
-    if (agent.status === 'terminated') return ui('已终止', 'Terminated');
-    return ui('可参与调度', 'Ready for orchestration');
+    if (agent.isFrozen) return uiMessage('team-hub.paused-not-scheduled.40da1d72b0');
+    if (agent.runtime === 'external' && agent.healthStatus !== 'online') return uiMessage('team-hub.waiting-for-a-passing-health.2a0c610a58');
+    if (agent.status === 'terminated') return uiMessage('team-hub.terminated.d79c6596b0');
+    return uiMessage('team-hub.ready-for-orchestration.62e429c481');
   };
 
   return (
@@ -433,17 +431,17 @@ export function TeamHub({ t }: { t?: any }) {
             {t?.teamHub || 'Agent Team'}
           </h2>
           <p className="text-sm text-white/40 max-w-xl mt-1">
-            {ui('Lumi 的工作团队。内部 agent 可直接调度，外部 agent 通过本机 CLI 连接，先测试健康状态再交给 orchestrator。', "Lumi's working team. Internal agents are dispatched directly; external agents connect through local CLI commands and should pass a health test before orchestration.")}
+            {uiMessage('team-hub.lumi-s-working-team-internal.6cac06c430')}
           </p>
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-white/35">
             <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1">
-              {ui(`内部 ${internalAgents.length}`, `${internalAgents.length} internal`)}
+              {formatUiMessage('team-hub.value0-internal.1e93b9ecac', { value0: internalAgents.length })}
             </span>
             <span className="rounded-full border border-cyan-300/15 bg-cyan-500/10 px-2 py-1 text-cyan-200/60">
-              {ui(`外部就绪 ${readyExternalCount}/${externalAgents.length}`, `${readyExternalCount}/${externalAgents.length} external ready`)}
+              {formatUiMessage('team-hub.value0-value1-external-ready.ec380f1d2a', { value0: readyExternalCount, value1: externalAgents.length })}
             </span>
             <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1">
-              {ui(`可加入 ${installableExternalCount}`, `${installableExternalCount} available`)}
+              {formatUiMessage('team-hub.value0-available.33e2a566a4', { value0: installableExternalCount })}
             </span>
           </div>
         </div>
@@ -452,7 +450,7 @@ export function TeamHub({ t }: { t?: any }) {
           className="lumi-button-primary shrink-0 border-cyan-400/25 bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25"
         >
           <ExternalLink size={12} />
-          {t?.connectExternal || ui('连接外部 Agent', 'Connect External Agent')}
+          {t?.connectExternal || uiMessage('team-hub.connect-external-agent.439852dff9')}
         </button>
       </div>
 
@@ -465,17 +463,17 @@ export function TeamHub({ t }: { t?: any }) {
                   <Info size={15} />
                 </span>
                 <div>
-                  <p className="text-sm font-bold text-cyan-100/80">{ui('外部 Agent 是本机 CLI 桥接', 'External agents are local CLI bridges')}</p>
+                  <p className="text-sm font-bold text-cyan-100/80">{uiMessage('team-hub.external-agents-are-local-cli.2ab80da501')}</p>
                   <p className="mt-1 text-xs leading-relaxed text-cyan-100/45">
-                    {ui('这里保存的是命令模板，不是账号绑定。Lumi 会把子任务替换进 {task}，测试通过后才会让它参与团队调度。', 'This stores a command template, not an account binding. Lumi substitutes subtasks into {task}; only agents with a passing health test join orchestration.')}
+                    {uiMessage('team-hub.this-stores-a-command-template.3abe334065')}
                   </p>
                 </div>
               </div>
               <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                 {[
-                  { icon: <Terminal size={14} />, title: ui('命令模板', 'Command'), detail: ui('必须包含一次 {task}', 'Must include one {task}') },
-                  { icon: <ShieldCheck size={14} />, title: ui('安全边界', 'Safety'), detail: ui('拒绝危险 shell 串联', 'Blocks risky shell chaining') },
-                  { icon: <Activity size={14} />, title: ui('调度条件', 'Routing'), detail: ui('健康测试通过才启用', 'Enabled after health test') },
+                  { icon: <Terminal size={14} />, title: uiMessage('team-hub.command.656ca4b174'), detail: uiMessage('team-hub.must-include-one-task.ff2cc618d3') },
+                  { icon: <ShieldCheck size={14} />, title: uiMessage('team-hub.safety.bf82e1cf92'), detail: uiMessage('team-hub.blocks-risky-shell-chaining.3bd802d965') },
+                  { icon: <Activity size={14} />, title: uiMessage('team-hub.routing.26e94d02e2'), detail: uiMessage('team-hub.enabled-after-health-test.c007896b6d') },
                 ].map(item => (
                   <div key={item.title} className="rounded-xl border border-cyan-300/10 bg-black/20 px-3 py-2">
                     <div className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-cyan-200/65">
@@ -496,7 +494,7 @@ export function TeamHub({ t }: { t?: any }) {
                   ))}
                 </select>
                 <input value={connectSkillTags} onChange={e => setConnectSkillTags(e.target.value)}
-                  placeholder={t?.agentSkillTags || ui('能力标签，用逗号分隔，如 analysis, code', 'Skill tags, comma separated, e.g. analysis, code')} className="lumi-field py-2 text-xs" />
+                  placeholder={t?.agentSkillTags || uiMessage('team-hub.skill-tags-comma-separated-e.6bec6918fc')} className="lumi-field py-2 text-xs" />
                 <input value={connectCommand} onChange={e => setConnectCommand(e.target.value)}
                   placeholder={t?.agentCommandHint || 'openclaw send --task "{task}"'} className="lumi-field py-2 font-mono text-xs" />
               </div>
@@ -538,7 +536,7 @@ export function TeamHub({ t }: { t?: any }) {
           {(loadingExternalCatalog || externalCatalog.length > 0) && (
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xs font-black uppercase tracking-widest text-white/50">{ui('外部 Agent 大厅', 'External Agent Hall')}</h3>
+                <h3 className="text-xs font-black uppercase tracking-widest text-white/50">{uiMessage('team-hub.external-agent-hall.b5876069c4')}</h3>
                 <button
                   onClick={() => void fetchExternalCatalog()}
                   className="lumi-icon-button h-8 w-8"
@@ -550,7 +548,7 @@ export function TeamHub({ t }: { t?: any }) {
               {loadingExternalCatalog ? (
                 <div className="lumi-panel p-8 text-center">
                   <Loader2 size={22} className="mx-auto mb-3 animate-spin text-cyan-200/50" />
-                  <p className="text-xs text-white/35">{ui('正在读取外部 Agent...', 'Loading external agents...')}</p>
+                  <p className="text-xs text-white/35">{uiMessage('team-hub.loading-external-agents.7f52f6edef')}</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -571,7 +569,7 @@ export function TeamHub({ t }: { t?: any }) {
                             </span>
                             <div className="min-w-0">
                               <h4 className="truncate text-sm font-bold text-white/90">{skill.name}</h4>
-                              <p className="text-[11px] uppercase text-cyan-200/45">{skill.category || 'external'} · {skill.toolCount || 1} {ui('工具', 'tools')}</p>
+                              <p className="text-[11px] uppercase text-cyan-200/45">{skill.category || 'external'} · {skill.toolCount || 1} {uiMessage('team-hub.tools.72365cb955')}</p>
                             </div>
                           </div>
                           <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-bold ${meta.className}`}>
@@ -604,7 +602,7 @@ export function TeamHub({ t }: { t?: any }) {
                             } disabled:opacity-45`}
                           >
                             {isAdding ? <RefreshCw size={12} className="animate-spin" /> : skill.installed ? <CheckCircle2 size={12} /> : <ExternalLink size={12} />}
-                            {skill.installed ? ui('已在 Team', 'In Team') : ui('加入 Team', 'Add to Team')}
+                            {skill.installed ? uiMessage('team-hub.in-team.e4e63f3860') : uiMessage('team-hub.add-to-team.43275073fd')}
                           </button>
                         </div>
                       </motion.div>
@@ -681,7 +679,7 @@ export function TeamHub({ t }: { t?: any }) {
                       )}
                       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-3">
                         <span className="text-[11px] font-bold text-white/28">
-                          {agent.installedTemplateId ? ui('来自组织模板', 'From org template') : ui('可提交为组织模板', 'Can submit as org template')}
+                          {agent.installedTemplateId ? uiMessage('team-hub.from-org-template.3b28cdb23d') : uiMessage('team-hub.can-submit-as-org-template.e0b8d2cfe1')}
                         </span>
                         {!agent.installedTemplateId && (
                           <button
@@ -690,7 +688,7 @@ export function TeamHub({ t }: { t?: any }) {
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-violet-300/15 bg-violet-500/10 px-3 text-xs font-bold text-violet-100/80 transition hover:bg-violet-500/18 disabled:opacity-45"
                           >
                             {submittingTemplateIds.includes(agent.id) ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                            {ui('提交审核', 'Submit')}
+                            {uiMessage('team-hub.submit.94276c7246')}
                           </button>
                         )}
                       </div>
@@ -746,7 +744,7 @@ export function TeamHub({ t }: { t?: any }) {
                             onClick={(event) => { event.stopPropagation(); void handleTestConnection(agent); }}
                             disabled={testingIds.includes(agent.id)}
                             className="rounded-lg p-1.5 text-cyan-300/65 transition-all hover:bg-cyan-500/10 hover:text-cyan-100 disabled:opacity-30"
-                            title={ui('测试连接', 'Test connection')}
+                            title={uiMessage('team-hub.test-connection.00a680a7b0')}
                           >
                             <RefreshCw size={14} className={testingIds.includes(agent.id) ? 'animate-spin' : ''} />
                           </button>
@@ -790,8 +788,8 @@ export function TeamHub({ t }: { t?: any }) {
                       {agent.healthStatus !== 'online' && (
                         <div className="rounded-lg border border-amber-300/10 bg-amber-500/5 px-3 py-2 text-xs text-amber-100/55">
                           {agent.healthStatus === 'error'
-                            ? ui('上次测试失败。修复命令并重新测试前，不会参与调度。', 'Last test failed. It will not be scheduled until the command is fixed and tested again.')
-                            : ui('尚未测试。测试通过后才会参与任务调度。', 'Untested. It will only join orchestration after a successful health test.')}
+                            ? uiMessage('team-hub.last-test-failed-it-will.14b0efea8f')
+                            : uiMessage('team-hub.untested-it-will-only-join.ece61acb24')}
                         </div>
                       )}
                       {agent.externalCommand && (
@@ -804,7 +802,7 @@ export function TeamHub({ t }: { t?: any }) {
                           {agent.lastRunOutput}
                         </div>
                       )}
-                      <div className="text-[11px] font-bold text-cyan-100/30">{ui('点击查看连接详情与介绍', 'Click for connection details and profile')}</div>
+                      <div className="text-[11px] font-bold text-cyan-100/30">{uiMessage('team-hub.click-for-connection-details-and.b83ea11e11')}</div>
                     </motion.div>
                   ))}
                 </AnimatePresence>
@@ -850,11 +848,11 @@ export function TeamHub({ t }: { t?: any }) {
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate text-lg font-black text-white/90">{selectedAgent.name}</h3>
                             <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
-                              {isExternal ? ui('外部', 'External') : ui('内部', 'Internal')}
+                              {isExternal ? uiMessage('team-hub.external.b2b5a43d91') : uiMessage('team-hub.internal.e5735e906c')}
                             </span>
                             {selectedAgent.installedTemplateId && (
                               <span className="rounded-full border border-emerald-300/15 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-200/70">
-                                {ui('组织安装', 'Org installed')}
+                                {uiMessage('team-hub.org-installed.784a991b4e')}
                               </span>
                             )}
                             <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold ${meta.className}`}>
@@ -868,7 +866,7 @@ export function TeamHub({ t }: { t?: any }) {
                       <button
                         onClick={() => setSelectedAgentId(null)}
                         className="lumi-icon-button h-8 w-8 rounded-lg"
-                        title={ui('关闭', 'Close')}
+                        title={uiMessage('team-hub.close.6cf4a7773a')}
                       >
                         <X size={15} />
                       </button>
@@ -878,7 +876,7 @@ export function TeamHub({ t }: { t?: any }) {
                       <section className="space-y-2">
                         <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-white/50">
                           <Info size={14} />
-                          {ui('介绍', 'Profile')}
+                          {uiMessage('team-hub.profile.672df170f1')}
                         </div>
                         <p className="rounded-xl border border-white/[0.06] bg-white/[0.025] px-3 py-3 text-sm leading-relaxed text-white/62">
                           {agentDescription(selectedAgent)}
@@ -887,15 +885,15 @@ export function TeamHub({ t }: { t?: any }) {
 
                       <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
                         <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] p-3">
-                          <div className="text-[10px] font-black uppercase tracking-widest text-white/35">{ui('运行方式', 'Runtime')}</div>
+                          <div className="text-[10px] font-black uppercase tracking-widest text-white/35">{uiMessage('team-hub.runtime.0f23bdf4d4')}</div>
                           <div className="mt-1 text-sm font-bold text-white/70">{isExternal ? 'CLI Bridge' : 'Lumi Worker'}</div>
                         </div>
                         <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] p-3">
-                          <div className="text-[10px] font-black uppercase tracking-widest text-white/35">{ui('记忆范围', 'Memory')}</div>
+                          <div className="text-[10px] font-black uppercase tracking-widest text-white/35">{uiMessage('team-hub.memory.4190d134d8')}</div>
                           <div className="mt-1 text-sm font-bold text-white/70">{selectedAgent.memoryScope || 'shared'}</div>
                         </div>
                         <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] p-3">
-                          <div className="text-[10px] font-black uppercase tracking-widest text-white/35">{ui('自主等级', 'Autonomy')}</div>
+                          <div className="text-[10px] font-black uppercase tracking-widest text-white/35">{uiMessage('team-hub.autonomy.0e19234b02')}</div>
                           <div className="mt-1 text-sm font-bold text-white/70">{selectedAgent.autonomyLevel || 'reactive'}</div>
                         </div>
                       </section>
@@ -903,13 +901,13 @@ export function TeamHub({ t }: { t?: any }) {
                       <section className="space-y-2">
                         <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-white/50">
                           <Tags size={14} />
-                          {ui('能力标签', 'Capabilities')}
+                          {uiMessage('team-hub.capabilities.4e049df422')}
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           {tags.length > 0 ? tags.map((tag: string) => (
                             <span key={tag} className="rounded-full border border-cyan-300/12 bg-cyan-500/10 px-2 py-1 text-[11px] font-bold uppercase text-cyan-200/65">{tag}</span>
                           )) : (
-                            <span className="text-xs text-white/35">{ui('暂无能力标签', 'No skill tags yet')}</span>
+                            <span className="text-xs text-white/35">{uiMessage('team-hub.no-skill-tags-yet.d07cb2dfbb')}</span>
                           )}
                           {knowledgeDomains.map((domain: string) => (
                             <span key={domain} className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[11px] font-bold uppercase text-white/45">{domain}</span>
@@ -921,20 +919,20 @@ export function TeamHub({ t }: { t?: any }) {
                         <section className="space-y-2">
                           <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-white/50">
                             <Terminal size={14} />
-                            {ui('外部连接', 'External Connection')}
+                            {uiMessage('team-hub.external-connection.6d0b83e6b0')}
                           </div>
                           <div className="rounded-xl border border-cyan-300/10 bg-cyan-500/[0.04] p-3">
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                               <div>
-                                <div className="text-[10px] font-black uppercase tracking-widest text-cyan-100/35">{ui('连接类型', 'Connection Type')}</div>
-                                <div className="mt-1 text-sm text-cyan-100/70">{ui('本机命令模板', 'Local command template')}</div>
+                                <div className="text-[10px] font-black uppercase tracking-widest text-cyan-100/35">{uiMessage('team-hub.connection-type.1b570a5d14')}</div>
+                                <div className="mt-1 text-sm text-cyan-100/70">{uiMessage('team-hub.local-command-template.4371c51ef6')}</div>
                               </div>
                               <div>
-                                <div className="text-[10px] font-black uppercase tracking-widest text-cyan-100/35">{ui('工作目录', 'Working Directory')}</div>
-                                <div className="mt-1 truncate text-sm text-cyan-100/70">{runtimeConfig.cwd || ui('默认服务目录', 'Default server directory')}</div>
+                                <div className="text-[10px] font-black uppercase tracking-widest text-cyan-100/35">{uiMessage('team-hub.working-directory.d970c13702')}</div>
+                                <div className="mt-1 truncate text-sm text-cyan-100/70">{runtimeConfig.cwd || uiMessage('team-hub.default-server-directory.2df5b5411e')}</div>
                               </div>
                             </div>
-                            <pre className="custom-scrollbar mt-3 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/45 p-3 text-xs text-white/45">{selectedAgent.externalCommand || ui('未配置命令', 'No command configured')}</pre>
+                            <pre className="custom-scrollbar mt-3 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/45 p-3 text-xs text-white/45">{selectedAgent.externalCommand || uiMessage('team-hub.no-command-configured.a1507e0314')}</pre>
                           </div>
                         </section>
                       )}
@@ -942,13 +940,13 @@ export function TeamHub({ t }: { t?: any }) {
                       <section className="space-y-2">
                         <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-white/50">
                           <Activity size={14} />
-                          {ui('最近运行', 'Recent Run')}
+                          {uiMessage('team-hub.recent-run.77421480f4')}
                         </div>
                         <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] p-3">
                           <div className="flex flex-wrap gap-3 text-xs text-white/40">
-                            <span>{ui('状态', 'Status')}: {selectedAgent.lastRunStatus || '-'}</span>
-                            <span>{ui('耗时', 'Duration')}: {selectedAgent.lastRunDurationMs != null ? `${selectedAgent.lastRunDurationMs}ms` : '-'}</span>
-                            <span>{ui('检查', 'Checked')}: {formatTime(selectedAgent.lastHealthCheckAt) || '-'}</span>
+                            <span>{uiMessage('team-hub.status.b8f1474d96')}: {selectedAgent.lastRunStatus || '-'}</span>
+                            <span>{uiMessage('team-hub.duration.3cef05d945')}: {selectedAgent.lastRunDurationMs != null ? `${selectedAgent.lastRunDurationMs}ms` : '-'}</span>
+                            <span>{uiMessage('team-hub.checked.f55cce9399')}: {formatTime(selectedAgent.lastHealthCheckAt) || '-'}</span>
                           </div>
                           {selectedAgent.lastRunOutput && (
                             <div className="custom-scrollbar mt-3 max-h-32 overflow-auto rounded-lg bg-black/30 p-3 text-xs leading-relaxed text-white/48">
@@ -966,7 +964,7 @@ export function TeamHub({ t }: { t?: any }) {
                             className="lumi-button h-9 px-3 text-xs"
                           >
                             <RefreshCw size={13} className={testingIds.includes(selectedAgent.id) ? 'animate-spin' : ''} />
-                            {ui('测试连接', 'Test Connection')}
+                            {uiMessage('team-hub.test-connection.673175b37c')}
                           </button>
                         )}
                         {!isExternal && !selectedAgent.installedTemplateId && (
@@ -976,7 +974,7 @@ export function TeamHub({ t }: { t?: any }) {
                             className="lumi-button h-9 border-violet-400/15 bg-violet-500/10 px-3 text-xs text-violet-100/80 hover:bg-violet-500/15 disabled:opacity-45"
                           >
                             {submittingTemplateIds.includes(selectedAgent.id) ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-                            {ui('提交到组织审核', 'Submit to Org Review')}
+                            {uiMessage('team-hub.submit-to-org-review.6332d068c7')}
                           </button>
                         )}
                         <button
@@ -984,14 +982,14 @@ export function TeamHub({ t }: { t?: any }) {
                           className="lumi-button h-9 px-3 text-xs"
                         >
                           {selectedAgent.isFrozen ? <Power size={13} /> : <PowerOff size={13} />}
-                          {selectedAgent.isFrozen ? ui('启用', 'Activate') : ui('暂停', 'Pause')}
+                          {selectedAgent.isFrozen ? uiMessage('team-hub.activate.9833a04a2c') : uiMessage('team-hub.pause.c65f066ccd')}
                         </button>
                         <button
                           onClick={() => void handleDelete(selectedAgent.id, selectedAgent.name)}
                           className="lumi-button h-9 border-red-400/15 bg-red-500/10 px-3 text-xs text-red-200/70 hover:bg-red-500/15"
                         >
                           <Trash2 size={13} />
-                          {ui('移除', 'Remove')}
+                          {uiMessage('team-hub.remove.78190c6054')}
                         </button>
                       </div>
                     </div>

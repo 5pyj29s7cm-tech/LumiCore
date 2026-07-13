@@ -6,16 +6,13 @@ import { useApp } from '../../contexts/AppContext';
 import { runLegalTool } from '../../lib/legalToolClient';
 import type { LegalCaseFile, LegalCaseMaterial } from '../../lib/legalCaseStore';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
+import { uiMessage } from '../../i18n/uiMessages';
+import {
+  parseChinaCaseSearchResults,
+  type ChinaCaseSearchResult,
+} from '../../i18n/regions/cn/legal';
 
-interface CaseResult {
-  articleId: string;
-  title: string;
-  caseNumber?: string;
-  court?: string;
-  chunk: string;
-  score: number;
-  date?: string;
-}
+type CaseResult = ChinaCaseSearchResult;
 
 function caseSearchSeed(caseFile?: LegalCaseFile | null): string {
   if (!caseFile) return '';
@@ -66,10 +63,10 @@ export function LegalCaseSearch({
         caseType: caseFile?.cause || undefined,
         persistCase: Boolean(caseFile),
       });
-      const parsed = parseCaseResults(text);
-      setResults(parsed.length > 0 ? parsed : [{ articleId: 'raw', title: t.legalCaseSearchResults || ui('检索结果', 'Search Results'), chunk: text, score: 0 }]);
+      const parsed = parseChinaCaseSearchResults(text);
+      setResults(parsed.length > 0 ? parsed : [{ articleId: 'raw', title: t.legalCaseSearchResults || uiMessage('legal-case-search.search-results.4e08a3c3ba'), chunk: text, score: 0 }]);
     } catch (e: any) {
-      setResults([{ articleId: 'error', title: ui('检索失败', 'Error'), chunk: e.message, score: 0 }]);
+      setResults([{ articleId: 'error', title: uiMessage('legal-case-search.error.67aaab3281'), chunk: e.message, score: 0 }]);
     } finally {
       setLoading(false);
     }
@@ -78,17 +75,17 @@ export function LegalCaseSearch({
   const active = selected || results[0] || null;
   const archive = () => {
     if (!active || active.articleId === 'error' || !onAddMaterial) return;
-    const caseTitle = caseFile?.title || caseFile?.party || caseFile?.caseNumber || ui('案件', 'Case');
+    const caseTitle = caseFile?.title || caseFile?.party || caseFile?.caseNumber || uiMessage('legal-case-search.case.8a53cf13fb');
     const content = [
       active.title,
-      active.caseNumber ? `${ui('案号', 'Case number')}: ${active.caseNumber}` : '',
-      active.court ? `${ui('法院', 'Court')}: ${active.court}` : '',
-      active.score > 0 ? `${ui('相似度', 'Similarity')}: ${(active.score * 100).toFixed(1)}%` : '',
+      active.caseNumber ? `${uiMessage('legal-case-search.case-number.1adfaa625a')}: ${active.caseNumber}` : '',
+      active.court ? `${uiMessage('legal-case-search.court.4dc052bdf6')}: ${active.court}` : '',
+      active.score > 0 ? `${uiMessage('legal-case-search.similarity.612732130c')}: ${(active.score * 100).toFixed(1)}%` : '',
       '',
       active.chunk,
     ].filter(Boolean).join('\n');
-    onAddMaterial('note', `${caseTitle} ${ui('类案检索记录', 'similar case research')}`, content, 'tool');
-    toast.success(ui('类案结果已归档到当前案件', 'Similar-case result archived to the current case'));
+    onAddMaterial('note', `${caseTitle} ${uiMessage('legal-case-search.similar-case-research.82308874a9')}`, content, 'tool');
+    toast.success(uiMessage('legal-case-search.similar-case-result-archived-to.9ac661af08'));
   };
 
   return (
@@ -100,9 +97,9 @@ export function LegalCaseSearch({
               <Scale size={22} />
             </span>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-white">{t.legalCaseSearchTitle || ui('类案检索', 'Similar Case Search')}</h2>
+              <h2 className="text-xl font-semibold text-white">{t.legalCaseSearchTitle || uiMessage('legal-case-search.similar-case-search.8cb8f83711')}</h2>
               <p className="mt-1 text-sm leading-6 text-white/50">
-                {t.legalCaseSearchDesc || ui('基于事实、案由或争议焦点检索组织裁判文书库，辅助律师形成判断。', 'Search the organization judgment library by facts, cause, or issues to support lawyer review.')}
+                {t.legalCaseSearchDesc || uiMessage('legal-case-search.search-the-organization-judgment-library.9b70217519')}
               </p>
             </div>
           </div>
@@ -119,7 +116,7 @@ export function LegalCaseSearch({
                 value={query}
                 onChange={event => setQuery(event.target.value)}
                 onKeyDown={event => { if (event.key === 'Enter') search(); }}
-                placeholder={t.legalCaseSearchPlaceholder || ui('输入案由、事实经过、争议焦点...', 'Enter cause, facts, or disputed issues...')}
+                placeholder={t.legalCaseSearchPlaceholder || uiMessage('legal-case-search.enter-cause-facts-or-disputed.7ba11bf8e1')}
                 className="w-full rounded-lg border border-white/10 bg-black/20 py-2.5 pl-9 pr-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-amber-400/35"
               />
             </div>
@@ -129,7 +126,7 @@ export function LegalCaseSearch({
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-400/20 bg-amber-500/15 px-4 py-2.5 text-sm font-medium text-amber-100 transition hover:bg-amber-500/25 disabled:opacity-50"
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-              {t.legalCaseSearchSearch || ui('检索', 'Search')}
+              {t.legalCaseSearchSearch || uiMessage('legal-case-search.search.3992189fae')}
             </button>
           </div>
         </section>
@@ -141,9 +138,9 @@ export function LegalCaseSearch({
                 <Loader2 size={24} className="animate-spin" />
               </div>
             ) : searched && results.length === 0 ? (
-              <EmptyState text={t.legalCaseSearchNoResults || ui('没有找到类案', 'No cases found')} />
+              <EmptyState text={t.legalCaseSearchNoResults || uiMessage('legal-case-search.no-cases-found.fb27bfd04d')} />
             ) : !searched ? (
-              <EmptyState text={ui('输入案件事实后开始检索。', 'Enter case facts to start searching.')} />
+              <EmptyState text={uiMessage('legal-case-search.enter-case-facts-to-start.a0300d09e3')} />
             ) : (
               <div className="space-y-2">
                 {results.map((result, index) => {
@@ -168,7 +165,7 @@ export function LegalCaseSearch({
                       <div className="mt-3 flex flex-wrap gap-2 text-xs text-white/45">
                         {result.caseNumber && <span className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2 py-1"><Hash size={10} />{result.caseNumber}</span>}
                         {result.court && <span className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2 py-1"><MapPin size={10} />{result.court}</span>}
-                        {result.score > 0 && <span className="rounded-md bg-amber-500/10 px-2 py-1 text-amber-200">{t.legalScore || ui('相似度', 'Score')}: {(result.score * 100).toFixed(1)}%</span>}
+                        {result.score > 0 && <span className="rounded-md bg-amber-500/10 px-2 py-1 text-amber-200">{t.legalScore || uiMessage('legal-case-search.score.ec7c5b9118')}: {(result.score * 100).toFixed(1)}%</span>}
                       </div>
                     </button>
                   );
@@ -192,7 +189,7 @@ export function LegalCaseSearch({
                   {onAddMaterial && active.articleId !== 'error' && (
                     <button onClick={archive} className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
                       <FolderOpen size={14} />
-                      {ui('归档到案件', 'Archive to Case')}
+                      {uiMessage('legal-case-search.archive-to-case.6dc41a223d')}
                     </button>
                   )}
                 </div>
@@ -202,11 +199,11 @@ export function LegalCaseSearch({
                     : 'border-white/10 bg-black/15 text-white/72'
                 }`}>
                   {active.articleId === 'error' && <AlertCircle size={16} className="mb-2 text-red-200" />}
-                  {active.chunk || ui('暂无摘要内容。', 'No summary available.')}
+                  {active.chunk || uiMessage('legal-case-search.no-summary-available.82a6e46bf8')}
                 </div>
               </article>
             ) : (
-              <EmptyState text={ui('选择左侧类案查看摘要和相似度。', 'Select a case to view details and similarity.')} />
+              <EmptyState text={uiMessage('legal-case-search.select-a-case-to-view.99215b4ad0')} />
             )}
           </div>
         </section>
@@ -222,35 +219,4 @@ function EmptyState({ text }: { text: string }) {
       <span>{text}</span>
     </div>
   );
-}
-
-function parseCaseResults(text: string): CaseResult[] {
-  const lines = text.split('\n');
-  const parsed: CaseResult[] = [];
-  let current: Partial<CaseResult> = {};
-
-  for (const line of lines) {
-    const titleMatch = line.match(/^\d+\.\s*\*\*(.+?)\*\*\s*(?:\[相似度[:：]?\s*([\d.]+)\])?/);
-    if (titleMatch) {
-      if (current.title) parsed.push(current as CaseResult);
-      current = {
-        title: titleMatch[1].trim(),
-        score: titleMatch[2] ? parseFloat(titleMatch[2]) : 0,
-        articleId: '',
-        chunk: '',
-      };
-      continue;
-    }
-    if (line.includes('案号:') || line.includes('案号：')) {
-      current.caseNumber = line.split(/案号[:：]/)[1]?.split('|')[0]?.trim() || '';
-    } else if (line.includes('法院:') || line.includes('法院：')) {
-      current.court = line.split(/法院[:：]/)[1]?.split('|')[0]?.trim() || '';
-    } else if (line.includes('摘要:') || line.includes('摘要：')) {
-      current.chunk = line.split(/摘要[:：]/)[1]?.trim() || '';
-    } else if (current.title && line.trim()) {
-      current.chunk = [current.chunk, line.trim()].filter(Boolean).join('\n');
-    }
-  }
-  if (current.title) parsed.push(current as CaseResult);
-  return parsed;
 }

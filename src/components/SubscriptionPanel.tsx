@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { toast } from 'sonner';
+import { uiMessage } from '../i18n/uiMessages';
 
 interface PlanInfo {
   id: string;
@@ -119,7 +120,7 @@ export function SubscriptionPanel({ t }: { t: any }) {
         fetch('/api/subscription/activation-requests', { credentials: 'include' }),
       ]);
 
-      if (!statusRes.ok) throw new Error(ui('订阅状态加载失败', 'Failed to load subscription status'));
+      if (!statusRes.ok) throw new Error(uiMessage('subscription-panel.failed-to-load-subscription-status.b34a73b90e'));
       const statusData = await statusRes.json();
       const plansData = plansRes.ok ? await plansRes.json() : null;
       const releaseData = releaseRes.ok ? await releaseRes.json() : null;
@@ -130,7 +131,7 @@ export function SubscriptionPanel({ t }: { t: any }) {
       setReleaseInfo(releaseData || null);
       setRequests(requestsData?.requests || []);
     } catch (e: any) {
-      setError(e?.message || ui('网络异常', 'Network error'));
+      setError(e?.message || uiMessage('subscription-panel.network-error.92e4a239d2'));
     } finally {
       setLoading(false);
     }
@@ -154,7 +155,7 @@ export function SubscriptionPanel({ t }: { t: any }) {
   const submitActivationRequest = async () => {
     if (!selectedPlan) return;
     if (!contact.trim()) {
-      toast.error(ui('请填写联系方式', 'Enter a contact method'));
+      toast.error(uiMessage('subscription-panel.enter-a-contact-method.33a04c5074'));
       return;
     }
     setSubmitting(true);
@@ -170,13 +171,13 @@ export function SubscriptionPanel({ t }: { t: any }) {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || ui('提交失败', 'Request failed'));
-      toast.success(ui('激活申请已提交', 'Activation request submitted'));
+      if (!res.ok) throw new Error(data?.error || uiMessage('subscription-panel.request-failed.975ba56a43'));
+      toast.success(uiMessage('subscription-panel.activation-request-submitted.a30c160e59'));
       setNote('');
       await loadData();
       setTab('status');
     } catch (e: any) {
-      toast.error(e?.message || ui('提交失败', 'Request failed'));
+      toast.error(e?.message || uiMessage('subscription-panel.request-failed.975ba56a43'));
     } finally {
       setSubmitting(false);
     }
@@ -185,7 +186,7 @@ export function SubscriptionPanel({ t }: { t: any }) {
   if (!user) {
     return (
       <div className="h-full flex items-center justify-center">
-        <p className="text-sm text-white/45">{ui('登录后查看订阅与激活状态。', 'Log in to view subscription and activation status.')}</p>
+        <p className="text-sm text-white/45">{uiMessage('subscription-panel.log-in-to-view-subscription.63fac4aec4')}</p>
       </div>
     );
   }
@@ -203,7 +204,7 @@ export function SubscriptionPanel({ t }: { t: any }) {
       <div className="h-full flex flex-col items-center justify-center gap-3">
         <p className="text-sm text-red-400">{error}</p>
         <button onClick={() => void loadData()} className="text-xs text-white/45 underline hover:text-white/70">
-          {ui('重试', 'Retry')}
+          {uiMessage('subscription-panel.retry.563171cfe4')}
         </button>
       </div>
     );
@@ -214,7 +215,7 @@ export function SubscriptionPanel({ t }: { t: any }) {
       <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/5 bg-zinc-950/90 px-6 py-4 backdrop-blur-xl">
         <Crown size={18} className="text-celestial-saturn" />
         <div>
-          <h2 className="text-sm font-bold text-white/90">{ui('订阅与激活', 'Subscription & Activation')}</h2>
+          <h2 className="text-sm font-bold text-white/90">{uiMessage('subscription-panel.subscription-activation.adf311cc1e')}</h2>
           <p className="text-xs text-white/40">
             {releaseInfo ? `${releaseInfo.appName} v${releaseInfo.version} · ${releaseInfo.channel}` : 'Lumi OS'}
           </p>
@@ -222,9 +223,9 @@ export function SubscriptionPanel({ t }: { t: any }) {
         <div className="flex-1" />
         <div className="flex gap-1 rounded-lg bg-white/5 p-0.5">
           {([
-            ['status', ui('状态', 'Status')],
-            ['plans', ui('套餐', 'Plans')],
-            ['activate', ui('激活', 'Activate')],
+            ['status', uiMessage('subscription-panel.status.b8f1474d96')],
+            ['plans', uiMessage('subscription-panel.plans.cd279ecf3f')],
+            ['activate', uiMessage('subscription-panel.activate.95003fa938')],
           ] as const).map(([id, label]) => (
             <button
               key={id}
@@ -266,8 +267,8 @@ export function SubscriptionPanel({ t }: { t: any }) {
                 />
               </div>
               <div className="flex justify-between text-xs text-white/45">
-                <span>{pct}% {ui('已使用', 'used')}</span>
-                <span>{fmtTokens(currentUsage?.remaining || 0)} {ui('剩余', 'remaining')}</span>
+                <span>{pct}% {uiMessage('subscription-panel.used.cc42f7b540')}</span>
+                <span>{fmtTokens(currentUsage?.remaining || 0)} {uiMessage('subscription-panel.remaining.113ea03291')}</span>
               </div>
             </div>
           </div>
@@ -276,10 +277,10 @@ export function SubscriptionPanel({ t }: { t: any }) {
             <div className="rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 p-4 text-sm text-celestial-saturn">
               <div className="flex items-center gap-2 font-bold">
                 <CheckCircle2 size={16} />
-                {ui('已有待处理激活申请', 'Activation request pending')}
+                {uiMessage('subscription-panel.activation-request-pending.2039f4ccaf')}
               </div>
               <p className="mt-1 text-xs text-white/50">
-                {ui('目标套餐', 'Target plan')}: {pendingRequest.planId} · {new Date(pendingRequest.createdAt).toLocaleString()}
+                {uiMessage('subscription-panel.target-plan.8b8ea2ef87')}: {pendingRequest.planId} · {new Date(pendingRequest.createdAt).toLocaleString()}
               </p>
             </div>
           )}
@@ -287,11 +288,11 @@ export function SubscriptionPanel({ t }: { t: any }) {
           {releaseInfo && (
             <div className="grid gap-3 md:grid-cols-2">
               <a href={releaseInfo.websiteUrl} target="_blank" rel="noreferrer" className="rounded-xl border border-white/10 bg-white/5 p-4 transition-colors hover:bg-white/10">
-                <div className="flex items-center gap-2 text-sm font-bold"><ExternalLink size={15} /> {ui('官网', 'Website')}</div>
+                <div className="flex items-center gap-2 text-sm font-bold"><ExternalLink size={15} /> {uiMessage('subscription-panel.website.8e805238ba')}</div>
                 <p className="mt-1 truncate text-xs text-white/45">{releaseInfo.websiteUrl}</p>
               </a>
               <a href={`mailto:${releaseInfo.supportEmail}`} className="rounded-xl border border-white/10 bg-white/5 p-4 transition-colors hover:bg-white/10">
-                <div className="flex items-center gap-2 text-sm font-bold"><Mail size={15} /> {ui('支持', 'Support')}</div>
+                <div className="flex items-center gap-2 text-sm font-bold"><Mail size={15} /> {uiMessage('subscription-panel.support.a708e57f24')}</div>
                 <p className="mt-1 truncate text-xs text-white/45">{releaseInfo.supportEmail}</p>
               </a>
             </div>
@@ -305,9 +306,9 @@ export function SubscriptionPanel({ t }: { t: any }) {
             const isCurrent = plan.id === currentPlan?.id;
             const features = [
               `${fmtTokens(plan.monthlyTokens)} tokens/mo`,
-              `${plan.agentCount || 1} ${ui('个 Agent', 'agents')}`,
-              plan.voiceCloneIncluded ? ui('声音克隆', 'Voice cloning') : ui('基础语音', 'Basic voice'),
-              plan.priority ? ui('优先队列', 'Priority queue') : ui('标准队列', 'Standard queue'),
+              `${plan.agentCount || 1} ${uiMessage('subscription-panel.agents.364731ee22')}`,
+              plan.voiceCloneIncluded ? uiMessage('subscription-panel.voice-cloning.af508583e9') : uiMessage('subscription-panel.basic-voice.6b48b379cd'),
+              plan.priority ? uiMessage('subscription-panel.priority-queue.91844d6271') : uiMessage('subscription-panel.standard-queue.c2134618a8'),
             ];
             return (
               <div
@@ -337,13 +338,13 @@ export function SubscriptionPanel({ t }: { t: any }) {
                 </div>
                 <div className="mt-4">
                   {isCurrent ? (
-                    <span className="text-xs font-bold uppercase tracking-widest text-celestial-saturn">{ui('当前套餐', 'Current plan')}</span>
+                    <span className="text-xs font-bold uppercase tracking-widest text-celestial-saturn">{uiMessage('subscription-panel.current-plan.79019776da')}</span>
                   ) : (
                     <button
                       onClick={() => { setSelectedPlanId(plan.id); setTab('activate'); }}
                       className="text-xs font-bold uppercase tracking-widest text-white/55 transition-colors hover:text-white"
                     >
-                      {ui('申请激活', 'Request activation')}
+                      {uiMessage('subscription-panel.request-activation.22a6ce6562')}
                     </button>
                   )}
                 </div>
@@ -359,16 +360,16 @@ export function SubscriptionPanel({ t }: { t: any }) {
             <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
               <div className="mb-3 flex items-center gap-2 text-sm font-bold">
                 <ShieldCheck size={16} className="text-celestial-saturn" />
-                {ui('官网上线前采用人工激活', 'Manual activation before website launch')}
+                {uiMessage('subscription-panel.manual-activation-before-website-launch.f6283fecf1')}
               </div>
               <p className="text-xs leading-relaxed text-white/50">
-                {releaseInfo?.note || ui('Free 可以继续使用基础能力。付费套餐通过人工确认后开通，更高配额和声音克隆等能力会随套餐开放。', 'Free remains usable. Paid plans are activated manually until online checkout is ready.')}
+                {releaseInfo?.note || uiMessage('subscription-panel.free-remains-usable-paid-plans.7582919e6a')}
               </p>
             </div>
 
             {releaseInfo && (
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                <h4 className="mb-3 text-xs font-black uppercase tracking-widest text-white/50">{ui('付费版开放能力', 'Paid boundary')}</h4>
+                <h4 className="mb-3 text-xs font-black uppercase tracking-widest text-white/50">{uiMessage('subscription-panel.paid-boundary.eb2c6c0d0f')}</h4>
                 <div className="space-y-2">
                   {releaseInfo.paidBoundary.map((item) => (
                     <div key={item} className="flex items-center gap-2 text-xs text-white/60">
@@ -382,10 +383,10 @@ export function SubscriptionPanel({ t }: { t: any }) {
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-            <h3 className="mb-4 text-sm font-bold">{ui('提交激活申请', 'Submit activation request')}</h3>
+            <h3 className="mb-4 text-sm font-bold">{uiMessage('subscription-panel.submit-activation-request.2953a3a2f4')}</h3>
             <div className="space-y-4">
               <label className="block">
-                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{ui('目标套餐', 'Target plan')}</span>
+                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{uiMessage('subscription-panel.target-plan.8b8ea2ef87')}</span>
                 <select
                   value={selectedPlan?.id || selectedPlanId}
                   onChange={(event) => setSelectedPlanId(event.target.value)}
@@ -398,21 +399,21 @@ export function SubscriptionPanel({ t }: { t: any }) {
               </label>
 
               <label className="block">
-                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{ui('联系方式', 'Contact')}</span>
+                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{uiMessage('subscription-panel.contact.7c7e7a1bc6')}</span>
                 <input
                   value={contact}
                   onChange={(event) => setContact(event.target.value)}
-                  placeholder={ui('微信 / 邮箱 / 手机号', 'WeChat / email / phone')}
+                  placeholder={uiMessage('subscription-panel.wechat-email-phone.dc8732b23e')}
                   className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/25 focus:border-celestial-saturn/50"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{ui('备注', 'Note')}</span>
+                <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-white/45">{uiMessage('subscription-panel.note.a907cbf17f')}</span>
                 <textarea
                   value={note}
                   onChange={(event) => setNote(event.target.value)}
-                  placeholder={ui('例如：想开通 Pro，用于声音克隆和形象设计室。', 'Example: I want Pro for voice cloning and avatar studio.')}
+                  placeholder={uiMessage('subscription-panel.example-i-want-pro-for.4dfc27dd3b')}
                   className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/25 focus:border-celestial-saturn/50"
                 />
               </label>
@@ -423,12 +424,12 @@ export function SubscriptionPanel({ t }: { t: any }) {
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-celestial-saturn px-4 py-3 text-sm font-black text-black transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                {ui('提交申请', 'Submit request')}
+                {uiMessage('subscription-panel.submit-request.6d2a2e58bb')}
               </button>
 
               {releaseInfo && (
                 <p className="text-center text-xs text-white/35">
-                  {ui('也可以直接联系', 'Or contact')} {releaseInfo.salesContact} · {releaseInfo.supportEmail}
+                  {uiMessage('subscription-panel.or-contact.ccb8e41498')} {releaseInfo.salesContact} · {releaseInfo.supportEmail}
                 </p>
               )}
             </div>

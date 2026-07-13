@@ -1,7 +1,9 @@
 import { motion, useReducedMotion } from 'motion/react';
+import { useT } from '../lib/useT';
 
 export function StartupSequence({ ready = false }: { ready?: boolean }) {
   const reduceMotion = useReducedMotion();
+  const t = useT();
 
   return (
     <div
@@ -44,7 +46,7 @@ export function StartupSequence({ ready = false }: { ready?: boolean }) {
 
         <h1 className="mt-7 text-[44px] font-semibold leading-none tracking-normal text-white">LUMI</h1>
         <p className="mt-4 text-sm font-medium text-white/55">
-          {ready ? '本地核心已就绪' : '正在连接本地核心'}
+          {ready ? t.startupCoreReady : t.startupCoreConnecting}
         </p>
 
         <div className="mt-7 flex h-1 w-40 overflow-hidden rounded-full bg-white/10" aria-hidden="true">

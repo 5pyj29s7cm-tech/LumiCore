@@ -11,6 +11,7 @@ import {
   type ChatProgressLine,
   type ChatProgressTone,
 } from '@/lib/chatProgress';
+import { uiMessage } from '../i18n/uiMessages';
 
 export interface ChatMessage {
   id: string;
@@ -128,10 +129,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const hasDesktop = installedSkillNames.some((n: string) => ['desktop', 'commander'].some(k => n.includes(k)));
 
   const quickSuggestions = [
-    { label: ui('随便聊聊', 'Just Chat'), prompt: ui('你好 Lumi，今天有什么有趣的发现吗？', 'Hi Lumi, any interesting discoveries today?'), show: true },
-    { label: ui('生成图片', 'Generate Image'), prompt: ui('帮我生成一张星空下的赛博朋克城市图片', 'Generate an image of a cyberpunk city under a starry sky'), show: hasCreativeSkill },
-    { label: ui('总结网页', 'Summarize Webpage'), prompt: ui('帮我抓取这篇文章的内容并总结要点', 'Fetch this article and summarize the key points'), show: hasFetcher },
-    { label: ui('桌面整理', 'Organize Desktop'), prompt: ui('帮我把桌面上的文件按日期整理一下', 'Organize the desktop files by date'), show: hasDesktop },
+    { label: uiMessage('chat-panel.just-chat.7c27608f4f'), prompt: uiMessage('chat-panel.hi-lumi-any-interesting-discoveries.7f551f39b3'), show: true },
+    { label: uiMessage('chat-panel.generate-image.25416907c7'), prompt: uiMessage('chat-panel.generate-an-image-of-a.c9d2d59ffd'), show: hasCreativeSkill },
+    { label: uiMessage('chat-panel.summarize-webpage.4899896f2f'), prompt: uiMessage('chat-panel.fetch-this-article-and-summarize.56b2a4e0a2'), show: hasFetcher },
+    { label: uiMessage('chat-panel.organize-desktop.7b61137114'), prompt: uiMessage('chat-panel.organize-the-desktop-files-by.6e88097cfe'), show: hasDesktop },
   ];
   const visibleSuggestions = quickSuggestions.filter(s => s.show).slice(0, 4);
 
@@ -211,7 +212,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     const onStatus = (data: { status: string }) => {
       if (data.status === 'thinking') {
         setIsTyping(true);
-        pushChatProgress(isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', 'thinking');
+        pushChatProgress(uiMessage('chat-panel.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
       }
       else if (data.status === 'idle' || data.status === 'error') {
         setIsTyping(false);
@@ -220,7 +221,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
         const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
         finishChatProgress(
           data.status === 'error'
-            ? (isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.')
+            ? (uiMessage('chat-panel.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'))
             : completion.text,
           data.status === 'error' ? 'error' : completion.tone
         );
@@ -232,7 +233,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       setIsStreaming(false);
       setStreamingText('');
       finishChatProgress(
-        isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.',
+        uiMessage('chat-panel.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
         'error'
       );
       const message = data.message || (t?.requestFailed || 'Request failed');
@@ -314,7 +315,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(text);
     clearChatProgress();
-    pushChatProgress(isZh ? '我先看一下你的要求。' : 'I am checking your request first.', 'thinking');
+    pushChatProgress(uiMessage('chat-panel.i-am-checking-your-request.05a5e81231', (isZh) ? 'zh' : 'en'), 'thinking');
 
     setMessages(prev => [...prev, {
       id: crypto.randomUUID().slice(0, 9),
@@ -610,12 +611,12 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                     ) : (
                       <Check size={11} className="text-emerald-300" />
                     )}
-                    {isZh ? 'Lumi 正在处理' : 'Lumi is working'}
+                    {uiMessage('chat-panel.lumi-is-working.98a841ddde', (isZh) ? 'zh' : 'en')}
                   </div>
                   <div className="mt-1 space-y-1">
                     {(chatProgressLines.length > 0
                       ? chatProgressLines.slice(-3)
-                      : [{ id: 'chat-progress-fallback', text: isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', tone: 'thinking', time: Date.now() }]
+                      : [{ id: 'chat-progress-fallback', text: uiMessage('chat-panel.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), tone: 'thinking', time: Date.now() }]
                     ).map((line, index, list) => (
                       <div
                         key={line.id}

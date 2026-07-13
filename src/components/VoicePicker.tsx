@@ -4,13 +4,7 @@ import { Search, Play, Star, ChevronDown, Volume2, Loader2 } from 'lucide-react'
 import { toast } from 'sonner';
 import { listVoices, synthesizeSpeech } from '@/services/voiceService';
 import { useApp } from '@/contexts/AppContext';
-
-const SAMPLE_TEXTS: Record<string, string> = {
-  zh: '你好，这是我的声音样本。',
-  en: 'Hello, this is my voice sample.',
-  ja: 'こんにちは、これは私の声のサンプルです。',
-  ko: '안녕하세요, 이것은 제 음성 샘플입니다.',
-};
+import { voiceSampleText } from '../i18n/locales/voiceSamples';
 
 export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: any; direction?: 'up' | 'down'; refreshTrigger?: number }) {
   const {
@@ -76,7 +70,7 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
     try {
       setPlayingId(voice.voiceId);
       const lang = voice.language || 'zh';
-      const sampleText = SAMPLE_TEXTS[lang] || SAMPLE_TEXTS.en;
+      const sampleText = voiceSampleText(lang);
       const buffer = await synthesizeSpeech(sampleText, voice.voiceId, voice.provider, voice.model);
       const blob = new Blob([buffer], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);

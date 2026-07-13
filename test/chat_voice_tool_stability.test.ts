@@ -106,7 +106,8 @@ describe('chat and voice tool-call stability', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const messaging = readFileSync(path.join(root, 'server/messaging/routes.ts'), 'utf8');
+    const messagingEntry = readFileSync(path.join(root, 'server/messaging/routes.ts'), 'utf8');
+    const messaging = readFileSync(path.join(root, 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
 
     for (const source of [chat, voice]) {
       expect(source).toContain('retrieveChunks');
@@ -120,6 +121,7 @@ describe('chat and voice tool-call stability', () => {
     expect(messaging).toContain('searchOrgKnowledge(msg.boundOrgId');
     expect(messaging).toContain('OrgKB.createArticle(msg.boundOrgId!');
     expect(messaging).toContain('getMember(binding.orgId, binding.lumiUserId)');
+    expect(messagingEntry).toContain("../regions/packs/cn/messaging_routes");
   });
 
   it('keeps ordinary tools silent and records hard boundaries for one-time text confirmation', () => {

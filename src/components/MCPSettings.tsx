@@ -4,6 +4,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { socketService } from '@/services/socketService';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 interface MCPServer {
   name: string;
@@ -307,11 +308,11 @@ export function MCPSettings({ t }: { t?: any }) {
                 const status = h?.status || (server.connected ? 'connected' : 'disconnected');
                 const crashes = h?.consecutiveCrashes || 0;
                 const statusLabel =
-                  status === 'connected' ? (t?.mcpConnected || (isZh ? '已连接' : 'Connected'))
-                  : status === 'restarting' ? (t?.mcpRestarting || (isZh ? `重启中${crashes > 0 ? ` (第${crashes}次)` : ''}` : `Restarting${crashes > 0 ? ` (${crashes})` : ''}`))
-                  : status === 'crashed' ? (t?.mcpCrashed || (isZh ? `已崩溃 (${crashes}次)` : `Crashed (${crashes})`))
-                  : status === 'failed' ? (t?.mcpFailed || (isZh ? `已放弃 (${crashes}次失败)` : `Failed (${crashes} attempts)`))
-                  : t?.mcpDisconnected || (isZh ? '未连接' : 'Disconnected');
+                  status === 'connected' ? (t?.mcpConnected || (uiMessage('mcpsettings.connected.77956f6a16', (isZh) ? 'zh' : 'en')))
+                  : status === 'restarting' ? (t?.mcpRestarting || (formatUiMessage('mcpsettings.restarting-value0.9df23d736e', { value0: { en: crashes > 0 ? ` (${crashes})` : '', zh: crashes > 0 ? ` (第${crashes}次)` : '' } }, (isZh) ? 'zh' : 'en')))
+                  : status === 'crashed' ? (t?.mcpCrashed || (formatUiMessage('mcpsettings.crashed-value0.9f395a7f76', { value0: crashes }, (isZh) ? 'zh' : 'en')))
+                  : status === 'failed' ? (t?.mcpFailed || (formatUiMessage('mcpsettings.failed-value0-attempts.1ed6701254', { value0: crashes }, (isZh) ? 'zh' : 'en')))
+                  : t?.mcpDisconnected || (uiMessage('mcpsettings.disconnected.0065488a05', (isZh) ? 'zh' : 'en'));
                 const dotColor =
                   status === 'connected' ? 'bg-green-500'
                   : status === 'restarting' ? 'bg-amber-400'

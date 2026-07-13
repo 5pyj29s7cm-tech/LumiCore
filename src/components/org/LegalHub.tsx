@@ -28,6 +28,12 @@ import {
   type LegalCaseMaterial,
   type LegalCaseStage,
 } from '../../lib/legalCaseStore';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import {
+  buildChinaLegalCaseProfile,
+  CHINA_LEGAL_TOOL_COPY,
+  inferChinaLegalDocumentType,
+} from '../../i18n/regions/cn/legal';
 
 type LegalView = 'workspace' | 'packet' | 'external-research' | 'data-sources' | 'bid' | 'case-search' | 'asset-trace' | 'contract-review' | 'strategy' | 'verify' | 'import' | 'knowledge-sync';
 
@@ -171,95 +177,95 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: s
   const items: LegalCaseReadinessItem[] = [
     {
       key: 'intake',
-      label: ui('会谈/材料', 'Intake'),
-      detail: hasIntake ? ui('已入案', 'Archived') : ui('待导入', 'Missing'),
+      label: uiMessage('legal-hub.intake.795643fe2e'),
+      detail: hasIntake ? uiMessage('legal-hub.archived.1638832a14') : uiMessage('legal-hub.missing.3a25cf328c'),
       status: hasIntake ? 'done' : 'missing',
-      nextStep: ui('导入会谈、起诉状、证据或本地案件文件夹', 'Import meeting notes, pleadings, evidence, or a local case folder'),
+      nextStep: uiMessage('legal-hub.import-meeting-notes-pleadings-evidence.76c0fc3d9c'),
       done: hasIntake,
       view: 'import',
     },
     {
       key: 'identity',
-      label: ui('身份主体', 'Identity'),
-      detail: hasIdentity ? ui('已核验', 'Checked') : caseFile.party ? ui('待核验', 'Needs check') : ui('待补充', 'Missing'),
+      label: uiMessage('legal-hub.identity.1a371622a1'),
+      detail: hasIdentity ? uiMessage('legal-hub.checked.9642f15399') : caseFile.party ? uiMessage('legal-hub.needs-check.bc00456c9a') : uiMessage('legal-hub.missing.2623bb38bf'),
       status: hasIdentity ? 'done' : caseFile.party ? 'ready' : 'missing',
-      nextStep: ui('补齐主体资格、授权委托和送达信息', 'Add identity, authority, and service information'),
+      nextStep: uiMessage('legal-hub.add-identity-authority-and-service.8e402725fd'),
       done: hasIdentity,
       view: 'workspace',
     },
     {
       key: 'facts',
-      label: ui('事实时间线', 'Facts'),
-      detail: hasFacts ? ui('已整理', 'Prepared') : hasIntake ? ui('可整理', 'Ready') : ui('待补充', 'Missing'),
+      label: uiMessage('legal-hub.facts.5d7a5e1f8e'),
+      detail: hasFacts ? uiMessage('legal-hub.prepared.9c28beac05') : hasIntake ? uiMessage('legal-hub.ready.2ade9ebc78') : uiMessage('legal-hub.missing.2623bb38bf'),
       status: hasFacts ? 'done' : hasIntake ? 'ready' : 'missing',
-      nextStep: ui('按时间线拆解主体、行为、金额、通知和结果', 'Build a timeline of parties, conduct, amounts, notices, and results'),
+      nextStep: uiMessage('legal-hub.build-a-timeline-of-parties.17d8b862d0'),
       done: hasFacts,
       view: 'workspace',
     },
     {
       key: 'reasoning',
-      label: ui('三段论底稿', 'Reasoning Matrix'),
-      detail: hasReasoning ? ui('已形成', 'Ready') : ui('底层必经', 'Required'),
+      label: uiMessage('legal-hub.reasoning-matrix.83dc0f2ce5'),
+      detail: hasReasoning ? uiMessage('legal-hub.ready.3280ebf66e') : uiMessage('legal-hub.required.de4a95adb4'),
       status: hasReasoning ? 'done' : hasFacts || hasEvidence ? 'ready' : 'missing',
-      nextStep: ui('生成法律依据、事实证据、适用结论矩阵', 'Generate the authority, evidence, and application matrix'),
+      nextStep: uiMessage('legal-hub.generate-the-authority-evidence-and.46ae098910'),
       done: hasReasoning,
       view: 'strategy',
     },
     {
       key: 'evidence',
-      label: ui('证据三性', 'Evidence Review'),
-      detail: hasEvidence ? ui('已整理', 'Prepared') : ui('待整理', 'Missing'),
+      label: uiMessage('legal-hub.evidence-review.904c0f7be0'),
+      detail: hasEvidence ? uiMessage('legal-hub.prepared.9c28beac05') : uiMessage('legal-hub.missing.293c592854'),
       status: hasEvidence ? 'done' : hasIntake ? 'ready' : 'missing',
-      nextStep: ui('逐项绑定证明目的、原件状态、页码和质证风险', 'Map proof purpose, original status, pages, and challenge risks'),
+      nextStep: uiMessage('legal-hub.map-proof-purpose-original-status.0f3a872b6e'),
       done: hasEvidence,
       view: 'packet',
     },
     {
       key: 'law',
-      label: ui('现行法源', 'Current Law'),
-      detail: hasLawBlocked ? ui('阻断', 'Blocked') : hasLawPassed ? ui('已通过', 'Passed') : ui('待核验', 'Missing'),
+      label: uiMessage('legal-hub.current-law.85754e3378'),
+      detail: hasLawBlocked ? uiMessage('legal-hub.blocked.3044b5e296') : hasLawPassed ? uiMessage('legal-hub.passed.24c823b3b1') : uiMessage('legal-hub.missing.ba39d5a9c2'),
       status: hasLawBlocked ? 'blocked' : hasLawPassed ? 'done' : hasReasoning || hasWorkProduct ? 'ready' : 'missing',
       nextStep: hasLawBlocked
-        ? ui('先替换或核验阻断法条', 'Replace or verify blocking authorities first')
-        : ui('核验所有法条、司法解释和引用来源', 'Verify all statutes, interpretations, and citations'),
+        ? uiMessage('legal-hub.replace-or-verify-blocking-authorities.d6248457ac')
+        : uiMessage('legal-hub.verify-all-statutes-interpretations-and.4348622a41'),
       done: hasLawPassed,
       view: 'verify',
     },
     {
       key: 'sources',
-      label: ui('法源类案', 'Sources'),
-      detail: hasSources ? ui('有登记', 'Logged') : ui('待检索', 'Missing'),
+      label: uiMessage('legal-hub.sources.fbb50fb2b2'),
+      detail: hasSources ? uiMessage('legal-hub.logged.2bd1b41ec1') : uiMessage('legal-hub.missing.b1cd9e1420'),
       status: hasSources ? 'done' : hasFacts || hasReasoning ? 'ready' : 'missing',
-      nextStep: ui('按最高院、高院、中院、基层法院顺序登记类案', 'Log authorities from Supreme, High, Intermediate, then Basic courts'),
+      nextStep: uiMessage('legal-hub.log-authorities-from-supreme-high.adfac8a04d'),
       done: hasSources,
       view: 'external-research',
     },
     {
       key: 'work-product',
-      label: ui('文书策略', 'Drafts'),
-      detail: hasWorkProduct ? ui('有底稿', 'Drafted') : ui('待生成', 'Missing'),
+      label: uiMessage('legal-hub.drafts.1b1bddcf17'),
+      detail: hasWorkProduct ? uiMessage('legal-hub.drafted.ded8cf6f43') : uiMessage('legal-hub.missing.ee4d2a7e05'),
       status: hasWorkProduct ? 'done' : hasEvidence && hasReasoning ? 'ready' : 'missing',
-      nextStep: ui('生成起诉/答辩/质证/代理词/法律意见书', 'Generate complaint, answer, cross-exam notes, argument, or opinion'),
+      nextStep: uiMessage('legal-hub.generate-complaint-answer-cross-exam.f2aab3a8b7'),
       done: hasWorkProduct,
       view: 'packet',
     },
     {
       key: 'filing',
-      label: ui('立案协作', 'Filing'),
-      detail: hasFiling ? ui('有交接单', 'Handoff ready') : hasWorkProduct ? ui('待人工', 'Manual') : ui('未到阶段', 'Not ready'),
+      label: uiMessage('legal-hub.filing.b85688fcb5'),
+      detail: hasFiling ? uiMessage('legal-hub.handoff-ready.bf79982539') : hasWorkProduct ? uiMessage('legal-hub.manual.24f17bdf15') : uiMessage('legal-hub.not-ready.b358df0cab'),
       status: hasFiling ? 'done' : hasWorkProduct ? 'manual' : 'missing',
-      nextStep: ui('生成法院平台字段映射和上传清单', 'Prepare court-platform fields and upload checklist'),
+      nextStep: uiMessage('legal-hub.prepare-court-platform-fields-and.29f878ee91'),
       done: hasFiling,
       view: 'packet',
     },
     {
       key: 'delivery',
-      label: ui('交付核验', 'Delivery Gate'),
-      detail: hasLawBlocked ? ui('被阻断', 'Blocked') : hasDeliveryGate ? ui('有记录', 'Recorded') : ui('未核验', 'Missing'),
+      label: uiMessage('legal-hub.delivery-gate.94b193e100'),
+      detail: hasLawBlocked ? uiMessage('legal-hub.blocked.e5862a2c38') : hasDeliveryGate ? uiMessage('legal-hub.recorded.5dd3865391') : uiMessage('legal-hub.missing.b4ee8a4d72'),
       status: hasLawBlocked ? 'blocked' : hasDeliveryGate ? 'done' : hasLawPassed && hasWorkProduct ? 'ready' : 'missing',
       nextStep: hasLawBlocked
-        ? ui('修正法源后再生成正式交付包', 'Fix authorities before formal delivery')
-        : ui('运行正式交付 gate 并生成来源登记', 'Run the formal delivery gate and source register'),
+        ? uiMessage('legal-hub.fix-authorities-before-formal-delivery.b2e1639fb7')
+        : uiMessage('legal-hub.run-the-formal-delivery-gate.3a08dedc0f'),
       done: hasDeliveryGate && !hasLawBlocked,
       view: 'verify',
     },
@@ -294,18 +300,6 @@ function legalCaseToolArgs(caseFile?: LegalCaseFile | null, orgId?: string): Rec
   };
 }
 
-function inferLegalDocumentType(title: string, type?: LegalCaseMaterial['type']): string {
-  if (/起诉状/.test(title)) return '起诉状';
-  if (/答辩状/.test(title)) return '答辩状';
-  if (/质证/.test(title)) return '质证意见';
-  if (/代理词/.test(title)) return '代理词';
-  if (/法律意见/.test(title)) return '法律意见书';
-  if (/合同/.test(title) || type === 'contract') return '合同文本';
-  if (/标书|投标/.test(title)) return '投标书';
-  if (/证据目录/.test(title) || type === 'evidence') return '证据目录';
-  return '法律工作底稿';
-}
-
 export function LegalHub() {
   const [view, setView] = useState<LegalView>('workspace');
   const [cases, setCases] = useState<LegalCaseFile[]>(() => readLegalCaseFiles());
@@ -336,12 +330,12 @@ export function LegalHub() {
     try {
       const res = await fetch('/api/org/legal/cases', { credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('组织案件加载失败', 'Failed to load organization cases'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-load-organization-cases.9523d68ad5'));
       const loaded = Array.isArray(data.cases) ? data.cases : [];
       setCases(loaded);
       setActiveCaseIdState(prev => (prev && loaded.some((item: LegalCaseFile) => item.id === prev)) ? prev : (loaded[0]?.id || ''));
     } catch (err: any) {
-      toast.error(err?.message || ui('组织案件加载失败', 'Failed to load organization cases'));
+      toast.error(err?.message || uiMessage('legal-hub.failed-to-load-organization-cases.9523d68ad5'));
     } finally {
       setOrgCasesLoading(false);
     }
@@ -386,10 +380,10 @@ export function LegalHub() {
   }, [orgConnection?.orgId, refreshCases, useOrgCases]);
 
   const navItems: NavItem[] = useMemo(() => [
-    { id: 'workspace', label: ui('案件工作台', 'Case Workspace'), icon: <FolderOpen size={16} /> },
-    { id: 'packet', label: ui('文书包', 'Packet'), icon: <ClipboardList size={16} /> },
-    { id: 'external-research', label: ui('外部检索', 'Research'), icon: <Search size={16} /> },
-    { id: 'data-sources', label: ui('数据源', 'Data Sources'), icon: <Database size={16} /> },
+    { id: 'workspace', label: uiMessage('legal-hub.case-workspace.9f165fc920'), icon: <FolderOpen size={16} /> },
+    { id: 'packet', label: uiMessage('legal-hub.packet.1758eaea66'), icon: <ClipboardList size={16} /> },
+    { id: 'external-research', label: uiMessage('legal-hub.research.fd18b45d25'), icon: <Search size={16} /> },
+    { id: 'data-sources', label: uiMessage('legal-hub.data-sources.5ed118a719'), icon: <Database size={16} /> },
     { id: 'bid', label: t.legalBidWorkbench, icon: <FileText size={16} /> },
     { id: 'case-search', label: t.legalCaseSearch, icon: <Search size={16} /> },
     { id: 'asset-trace', label: t.legalAssetTrace, icon: <Crosshair size={16} /> },
@@ -397,7 +391,7 @@ export function LegalHub() {
     { id: 'strategy', label: t.legalCaseStrategy, icon: <Brain size={16} /> },
     { id: 'verify', label: t.legalVerifyCitation, icon: <CheckCircle size={16} /> },
     { id: 'import', label: t.legalImportJudgment, icon: <Upload size={16} /> },
-    { id: 'knowledge-sync', label: ui('同步知识库', 'Sync to KB'), icon: <Archive size={16} /> },
+    { id: 'knowledge-sync', label: uiMessage('legal-hub.sync-to-kb.f5314698c5'), icon: <Archive size={16} /> },
   ], [t, ui]);
 
   const workflowNavItems = useMemo(() => {
@@ -432,7 +426,7 @@ export function LegalHub() {
     const nextCase = {
       ...createEmptyLegalCase(),
       ...input,
-      title: input.title.trim() || input.party.trim() || input.caseNumber.trim() || ui('未命名案件', 'Untitled case'),
+      title: input.title.trim() || input.party.trim() || input.caseNumber.trim() || uiMessage('legal-hub.untitled-case.796e2578d9'),
     };
     setCaseMutation('create');
     try {
@@ -444,16 +438,16 @@ export function LegalHub() {
           body: JSON.stringify(nextCase),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || ui('案件创建失败', 'Failed to create case'));
+        if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-create-case.d77857142e'));
         saveCases([data, ...cases], data.id);
       } else {
         saveCases([nextCase, ...cases], nextCase.id);
       }
       setCreateDialogOpen(false);
       setView('workspace');
-      toast.success(ui('已创建案件档案', 'Case file created'));
+      toast.success(uiMessage('legal-hub.case-file-created.24082b4003'));
     } catch (err: any) {
-      toast.error(err?.message || ui('案件创建失败', 'Failed to create case'));
+      toast.error(err?.message || uiMessage('legal-hub.failed-to-create-case.d77857142e'));
     } finally {
       setCaseMutation('');
     }
@@ -469,7 +463,7 @@ export function LegalHub() {
           credentials: 'include',
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || ui('案件删除失败', 'Failed to delete case'));
+        if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-delete-case.34167edea4'));
       }
 
       const next = cases.filter(item => item.id !== deleteTarget.id);
@@ -478,9 +472,9 @@ export function LegalHub() {
       saveCases(next, nextActiveId);
       setDeleteTarget(null);
       setView('workspace');
-      toast.success(ui('案件已删除', 'Case deleted'));
+      toast.success(uiMessage('legal-hub.case-deleted.6afeed7983'));
     } catch (err: any) {
-      toast.error(err?.message || ui('案件删除失败', 'Failed to delete case'));
+      toast.error(err?.message || uiMessage('legal-hub.failed-to-delete-case.34167edea4'));
     } finally {
       setCaseMutation('');
     }
@@ -498,15 +492,15 @@ export function LegalHub() {
       }).then(async res => {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || ui('案件保存失败', 'Failed to save case'));
+          throw new Error(data.error || uiMessage('legal-hub.failed-to-save-case.90f7d722b2'));
         }
-      }).catch((err: any) => toast.error(err?.message || ui('案件保存失败', 'Failed to save case')));
+      }).catch((err: any) => toast.error(err?.message || uiMessage('legal-hub.failed-to-save-case.90f7d722b2')));
     }
   };
 
   const addMaterial = (type: LegalCaseMaterial['type'], title: string, content?: string, source: LegalCaseMaterial['source'] = 'manual') => {
     if (!activeCase) {
-      toast.info(ui('请先创建案件档案', 'Create a case file first'));
+      toast.info(uiMessage('legal-hub.create-a-case-file-first.a26c342dec'));
       return;
     }
     const material: LegalCaseMaterial = {
@@ -531,14 +525,14 @@ export function LegalHub() {
       }).then(async res => {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || ui('材料归档失败', 'Failed to archive material'));
+          throw new Error(data.error || uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
         }
       }).catch((err: any) => {
         setCases(prev => prev.map(item => item.id === activeCase.id ? {
           ...item,
           materials: (item.materials || []).filter(existing => existing.id !== material.id),
         } : item));
-        toast.error(err?.message || ui('材料归档失败', 'Failed to archive material'));
+        toast.error(err?.message || uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
       });
     } else {
       updateCase(activeCase.id, { materials: [material, ...(activeCase.materials || [])] });
@@ -554,19 +548,19 @@ export function LegalHub() {
         body: JSON.stringify({ content, dueAt: dueAt ? `${dueAt}T09:00:00` : null }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('提醒创建失败', 'Failed to create reminder'));
-      toast.success(ui('已加入提醒', 'Reminder added'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-create-reminder.880d5a66e2'));
+      toast.success(uiMessage('legal-hub.reminder-added.5dba21bd39'));
     } catch (err: any) {
-      toast.error(err?.message || ui('提醒创建失败', 'Failed to create reminder'));
+      toast.error(err?.message || uiMessage('legal-hub.failed-to-create-reminder.880d5a66e2'));
     }
   };
 
   const createCasePlan = async () => {
     if (!activeCase) {
-      toast.info(ui('请先创建案件档案', 'Create a case file first'));
+      toast.info(uiMessage('legal-hub.create-a-case-file-first.a26c342dec'));
       return;
     }
-    const title = `${ui('案件推进', 'Case plan')}: ${activeCase.title || activeCase.party || activeCase.caseNumber || activeCase.id}`;
+    const title = `${uiMessage('legal-hub.case-plan.66f8396b22')}: ${activeCase.title || activeCase.party || activeCase.caseNumber || activeCase.id}`;
     try {
       const res = await fetch('/api/plans', {
         method: 'POST',
@@ -579,24 +573,24 @@ export function LegalHub() {
           source: 'user',
           priority: activeCase.stage === 'trial' || activeCase.stage === 'judgment' ? 'high' : 'medium',
           steps: [
-            { title: ui('整理当事人陈述和证据材料', 'Organize party statements and evidence'), description: activeCase.notes || '' },
-            { title: ui('检索类案并形成争议焦点', 'Search similar cases and identify issues'), description: activeCase.cause || '' },
-            { title: ui('生成文书草稿并由律师复核', 'Draft documents for lawyer review'), description: activeCase.caseNumber || '' },
+            { title: uiMessage('legal-hub.organize-party-statements-and-evidence.dd4cfb3b29'), description: activeCase.notes || '' },
+            { title: uiMessage('legal-hub.search-similar-cases-and-identify.bc6a84e94c'), description: activeCase.cause || '' },
+            { title: uiMessage('legal-hub.draft-documents-for-lawyer-review.8ad498dd83'), description: activeCase.caseNumber || '' },
           ],
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('案件计划创建失败', 'Failed to create case plan'));
-      toast.success(ui('案件计划已创建', 'Case plan created'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-create-case-plan.c0b35de7a9'));
+      toast.success(uiMessage('legal-hub.case-plan-created.2289f19321'));
       window.dispatchEvent(new CustomEvent('lumi:client-action', { detail: { action: 'open_plans' } }));
     } catch (err: any) {
-      toast.error(err?.message || ui('案件计划创建失败', 'Failed to create case plan'));
+      toast.error(err?.message || uiMessage('legal-hub.failed-to-create-case-plan.c0b35de7a9'));
     }
   };
 
   const startConsultation = () => {
     if (!activeCase) {
-      toast.info(ui('请先创建案件档案', 'Create a case file first'));
+      toast.info(uiMessage('legal-hub.create-a-case-file-first.a26c342dec'));
       return;
     }
     setLegalConsultationCaseId(activeCase.id);
@@ -606,11 +600,11 @@ export function LegalHub() {
         confirmed: true,
         resetNotes: true,
         legalCaseId: activeCase.id,
-        legalCaseTitle: activeCase.title || activeCase.party || activeCase.caseNumber || ui('未命名案件', 'Untitled case'),
-        respond: () => toast.success(ui('已进入会谈记录模式，结束后会自动归档到当前案件', 'Consultation capture started; the report will archive to this case')),
+        legalCaseTitle: activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9'),
+        respond: () => toast.success(uiMessage('legal-hub.consultation-capture-started-the-report.bfd4c10bbd')),
         reject: (message: string) => {
           clearLegalConsultationCaseId();
-          toast.error(message || ui('无法启动会谈记录', 'Failed to start consultation capture'));
+          toast.error(message || uiMessage('legal-hub.failed-to-start-consultation-capture.99681efb6d'));
         },
       },
     }));
@@ -675,11 +669,11 @@ export function LegalHub() {
             <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-amber-300/15 bg-amber-400/10 text-amber-300">
               <Scale size={16} />
             </span>
-            <span className="min-w-0 truncate">{t.legalHub || ui('律所', 'Law Firm')}</span>
+            <span className="min-w-0 truncate">{t.legalHub || uiMessage('legal-hub.law-firm.a283f14451')}</span>
           </h3>
           {activeCase && (
             <p className="mt-2 line-clamp-2 text-xs text-white/45">
-              {activeCase.title || activeCase.party || activeCase.caseNumber || ui('未命名案件', 'Untitled case')}
+              {activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9')}
             </p>
           )}
         </div>
@@ -709,7 +703,7 @@ export function LegalHub() {
             <>
               <div className="my-2 border-t border-white/[0.08]" />
               <div className="px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
-                {ui('专项工具', 'Special Tools')}
+                {uiMessage('legal-hub.special-tools.77554fcb98')}
               </div>
               {specialToolNavItems.map(item => (
                 <button
@@ -731,7 +725,7 @@ export function LegalHub() {
             <>
               <div className="my-2 border-t border-white/[0.08]" />
               <div className="px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
-                {ui('配置', 'Settings')}
+                {uiMessage('legal-hub.settings.57cc04dce6')}
               </div>
               {utilityNavItems.map(item => (
                 <button
@@ -756,7 +750,7 @@ export function LegalHub() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-amber-200/70">
-                <span>{isWorkflowView ? ui('案件流水线', 'Case Workflow') : isSpecialToolView ? ui('律所专项工具', 'Legal Special Tool') : ui('律所配置', 'Legal Settings')}</span>
+                <span>{isWorkflowView ? uiMessage('legal-hub.case-workflow.f359a263f7') : isSpecialToolView ? uiMessage('legal-hub.legal-special-tool.53e70e4ac3') : uiMessage('legal-hub.legal-settings.0b819765e7')}</span>
                 {isWorkflowView && (
                   <>
                     <span className="text-white/25">/</span>
@@ -769,7 +763,7 @@ export function LegalHub() {
                 <span className="text-white/25">&rarr;</span>
                 <span className="truncate">{currentStep?.label}</span>
                 <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-white/40">
-                  {(activeCase?.materials || []).length} {ui('份材料', 'materials')}
+                  {(activeCase?.materials || []).length} {uiMessage('legal-hub.materials.e065db1968')}
                 </span>
               </div>
             </div>
@@ -779,7 +773,7 @@ export function LegalHub() {
                 onClick={() => setView(nextStep.id)}
                 className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 text-xs font-bold text-amber-100 transition hover:bg-amber-500/18"
               >
-                <span>{ui('下一步', 'Next')}</span>
+                <span>{uiMessage('legal-hub.next.b527069e7f')}</span>
                 <span className="max-w-[160px] truncate">{nextStep.label}</span>
                 <ArrowRight size={14} />
               </button>
@@ -789,7 +783,7 @@ export function LegalHub() {
                 onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
                 className="inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 text-xs font-bold text-cyan-100 transition hover:bg-cyan-500/18"
               >
-                <span>{ui('去工作域 Lumi 引用', 'Ask Lumi in Work Workspace')}</span>
+                <span>{uiMessage('legal-hub.ask-lumi-in-work-workspace.6fe76d2092')}</span>
                 <ArrowRight size={14} />
               </button>
             )}
@@ -857,17 +851,17 @@ function LegalCaseCreateDialog({
   };
 
   const stages: Array<{ value: LegalCaseStage; label: string }> = [
-    { value: 'consultation', label: ui('咨询', 'Consultation') },
-    { value: 'filing', label: ui('立案', 'Filing') },
-    { value: 'trial', label: ui('庭审', 'Trial') },
-    { value: 'judgment', label: ui('判决', 'Judgment') },
-    { value: 'enforcement', label: ui('执行', 'Enforcement') },
-    { value: 'closed', label: ui('结案', 'Closed') },
+    { value: 'consultation', label: uiMessage('legal-hub.consultation.7a3d850bb4') },
+    { value: 'filing', label: uiMessage('legal-hub.filing.84e2c4dc09') },
+    { value: 'trial', label: uiMessage('legal-hub.trial.26f80dc45f') },
+    { value: 'judgment', label: uiMessage('legal-hub.judgment.407839a173') },
+    { value: 'enforcement', label: uiMessage('legal-hub.enforcement.10a7440dfb') },
+    { value: 'closed', label: uiMessage('legal-hub.closed.8d3c2a38e3') },
   ];
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <button type="button" className="absolute inset-0" onClick={onClose} aria-label={ui('关闭新建案件', 'Close new case')} />
+      <button type="button" className="absolute inset-0" onClick={onClose} aria-label={uiMessage('legal-hub.close-new-case.cc85fb0c91')} />
       <form
         role="dialog"
         aria-modal="true"
@@ -877,46 +871,46 @@ function LegalCaseCreateDialog({
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 id="legal-create-case-title" className="text-lg font-bold text-white">{ui('新建案件', 'New Case')}</h2>
-            <p className="mt-1 text-sm text-white/45">{ui('先填写基本档案，创建后再进入办案闭环。', 'Create the case profile first, then continue into the case workflow.')}</p>
+            <h2 id="legal-create-case-title" className="text-lg font-bold text-white">{uiMessage('legal-hub.new-case.8aa99242cb')}</h2>
+            <p className="mt-1 text-sm text-white/45">{uiMessage('legal-hub.create-the-case-profile-first.1f798cd917')}</p>
           </div>
-          <button type="button" onClick={onClose} disabled={busy} className="lumi-icon-button h-9 w-9" title={ui('关闭', 'Close')}>
+          <button type="button" onClick={onClose} disabled={busy} className="lumi-icon-button h-9 w-9" title={uiMessage('legal-hub.close.6cf4a7773a')}>
             <X size={16} />
           </button>
         </div>
 
         <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
           <label className="space-y-1.5 md:col-span-2">
-            <span className="text-xs text-white/48">{ui('案件名称', 'Case name')} *</span>
+            <span className="text-xs text-white/48">{uiMessage('legal-hub.case-name.55c6d2512f')} *</span>
             <input
               autoFocus
               required
               value={draft.title}
               onChange={event => updateDraft('title', event.target.value)}
               className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50"
-              placeholder={ui('例如：甲公司与乙公司买卖合同纠纷', 'Example: Alpha v. Beta sales contract dispute')}
+              placeholder={uiMessage('legal-hub.example-alpha-v-beta-sales.b1bd15cfe1')}
             />
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{ui('当事人', 'Party')}</span>
+            <span className="text-xs text-white/48">{uiMessage('legal-hub.party.9f6b14598d')}</span>
             <input value={draft.party} onChange={event => updateDraft('party', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{ui('案号', 'Case number')}</span>
+            <span className="text-xs text-white/48">{uiMessage('legal-hub.case-number.1adfaa625a')}</span>
             <input value={draft.caseNumber} onChange={event => updateDraft('caseNumber', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{ui('案由', 'Cause')}</span>
+            <span className="text-xs text-white/48">{uiMessage('legal-hub.cause.8d47df5928')}</span>
             <input value={draft.cause} onChange={event => updateDraft('cause', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{ui('当前阶段', 'Current stage')}</span>
+            <span className="text-xs text-white/48">{uiMessage('legal-hub.current-stage.44a8df1018')}</span>
             <select value={draft.stage} onChange={event => updateDraft('stage', event.target.value as LegalCaseStage)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50">
               {stages.map(stage => <option key={stage.value} value={stage.value}>{stage.label}</option>)}
             </select>
           </label>
           <label className="space-y-1.5 md:col-span-2">
-            <span className="text-xs text-white/48">{ui('案情摘要', 'Case summary')}</span>
+            <span className="text-xs text-white/48">{uiMessage('legal-hub.case-summary.da1171fae6')}</span>
             <textarea
               value={draft.notes}
               onChange={event => updateDraft('notes', event.target.value)}
@@ -927,10 +921,10 @@ function LegalCaseCreateDialog({
         </div>
 
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onClose} disabled={busy} className="lumi-button h-10 px-4 text-sm">{ui('取消', 'Cancel')}</button>
+          <button type="button" onClick={onClose} disabled={busy} className="lumi-button h-10 px-4 text-sm">{uiMessage('legal-hub.cancel.998b9c48fb')}</button>
           <button type="submit" disabled={busy || !draft.title.trim()} className="lumi-button-primary h-10 border-amber-400/25 bg-amber-500/15 px-4 text-sm text-amber-100 hover:bg-amber-500/25">
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-            {busy ? ui('创建中...', 'Creating...') : ui('创建案件', 'Create case')}
+            {busy ? uiMessage('legal-hub.creating.ba147d5f24') : uiMessage('legal-hub.create-case.ed15df1c91')}
           </button>
         </div>
       </form>
@@ -953,24 +947,24 @@ function LegalCaseDeleteDialog({
 }) {
   return (
     <div className="fixed inset-0 z-[310] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <button type="button" className="absolute inset-0" onClick={onClose} aria-label={ui('关闭删除确认', 'Close delete confirmation')} />
+      <button type="button" className="absolute inset-0" onClick={onClose} aria-label={uiMessage('legal-hub.close-delete-confirmation.ccd3d3d67d')} />
       <div role="dialog" aria-modal="true" aria-labelledby="legal-delete-case-title" className="relative z-10 w-full max-w-md rounded-lg border border-rose-400/18 bg-[#11151b] p-5 shadow-2xl">
         <div className="flex items-start gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-rose-400/20 bg-rose-500/10 text-rose-200">
             <Trash2 size={18} />
           </span>
           <div className="min-w-0">
-            <h2 id="legal-delete-case-title" className="text-lg font-bold text-white">{ui('删除案件', 'Delete Case')}</h2>
+            <h2 id="legal-delete-case-title" className="text-lg font-bold text-white">{uiMessage('legal-hub.delete-case.ba2912671e')}</h2>
             <p className="mt-2 text-sm leading-6 text-white/55">
-              {ui(`将删除“${legalCaseTitle(caseFile)}”及其 ${caseFile.materials?.length || 0} 条归档材料记录。原始本地文件不会被删除。`, `This removes “${legalCaseTitle(caseFile)}” and ${caseFile.materials?.length || 0} archived material records. Original local files are not deleted.`)}
+              {formatUiMessage('legal-hub.this-removes-value0-and-value1.366643037e', { value0: legalCaseTitle(caseFile), value1: caseFile.materials?.length || 0 })}
             </p>
           </div>
         </div>
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onClose} disabled={busy} className="lumi-button h-10 px-4 text-sm">{ui('取消', 'Cancel')}</button>
+          <button type="button" onClick={onClose} disabled={busy} className="lumi-button h-10 px-4 text-sm">{uiMessage('legal-hub.cancel.998b9c48fb')}</button>
           <button type="button" onClick={() => void onConfirm()} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-400/25 bg-rose-500/12 px-4 text-sm font-bold text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-50">
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
-            {busy ? ui('删除中...', 'Deleting...') : ui('确认删除', 'Delete')}
+            {busy ? uiMessage('legal-hub.deleting.052026caec') : uiMessage('legal-hub.delete.d95c2d03f8')}
           </button>
         </div>
       </div>
@@ -1028,12 +1022,12 @@ function LegalCaseWorkspace({
   const [caseFilter, setCaseFilter] = useState('');
 
   const stageLabels: Record<LegalCaseStage, string> = {
-    consultation: ui('咨询', 'Consultation'),
-    filing: ui('立案', 'Filing'),
-    trial: ui('庭审', 'Trial'),
-    judgment: ui('判决', 'Judgment'),
-    enforcement: ui('执行', 'Enforcement'),
-    closed: ui('结案', 'Closed'),
+    consultation: uiMessage('legal-hub.consultation.7a3d850bb4'),
+    filing: uiMessage('legal-hub.filing.84e2c4dc09'),
+    trial: uiMessage('legal-hub.trial.26f80dc45f'),
+    judgment: uiMessage('legal-hub.judgment.407839a173'),
+    enforcement: uiMessage('legal-hub.enforcement.10a7440dfb'),
+    closed: uiMessage('legal-hub.closed.8d3c2a38e3'),
   };
 
   const update = (patch: Partial<LegalCaseFile>) => {
@@ -1057,12 +1051,12 @@ function LegalCaseWorkspace({
 
   const calculateAppealDeadline = () => {
     if (!activeCase?.judgmentDate) {
-      toast.info(ui('先填写判决书日期', 'Enter the judgment date first'));
+      toast.info(uiMessage('legal-hub.enter-the-judgment-date-first.b19faa56d5'));
       return;
     }
     const deadline = addDays(activeCase.judgmentDate, 15);
     update({ appealDeadline: deadline });
-    toast.success(ui('已按常见民事判决 15 日规则计算上诉期限，请律师复核', 'Appeal deadline calculated with the default 15-day civil judgment rule; lawyer review required'));
+    toast.success(uiMessage('legal-hub.appeal-deadline-calculated-with-the.46cc282758'));
   };
 
   const createDateReminder = (kind: 'hearing' | 'appeal' | 'enforcement') => {
@@ -1072,14 +1066,14 @@ function LegalCaseWorkspace({
       kind === 'appeal' ? activeCase.appealDeadline :
       activeCase.enforcementDeadline;
     if (!date) {
-      toast.info(ui('请先填写日期', 'Enter the date first'));
+      toast.info(uiMessage('legal-hub.enter-the-date-first.1349d04548'));
       return;
     }
     const label =
-      kind === 'hearing' ? ui('开庭提醒', 'Hearing reminder') :
-      kind === 'appeal' ? ui('上诉期限提醒', 'Appeal deadline reminder') :
-      ui('执行期限提醒', 'Enforcement reminder');
-    const caseName = activeCase.title || activeCase.party || activeCase.caseNumber || ui('未命名案件', 'Untitled case');
+      kind === 'hearing' ? uiMessage('legal-hub.hearing-reminder.59c173ecb2') :
+      kind === 'appeal' ? uiMessage('legal-hub.appeal-deadline-reminder.e731769a1e') :
+      uiMessage('legal-hub.enforcement-reminder.6b6c485b5d');
+    const caseName = activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9');
     void onCreateReminder(`${label}: ${caseName}`, date);
   };
 
@@ -1095,17 +1089,17 @@ function LegalCaseWorkspace({
     if (caseNumber && !activeCase.caseNumber) patch.caseNumber = caseNumber;
     if (court && !activeCase.court) patch.court = court;
     if (hearingDate) patch.hearingDate = hearingDate;
-    patch.notes = [activeCase.notes, ui('开庭通知原文：', 'Hearing notice:'), noticeText].filter(Boolean).join('\n');
+    patch.notes = [activeCase.notes, uiMessage('legal-hub.hearing-notice.ce5d4e47fe'), noticeText].filter(Boolean).join('\n');
     onUpdateCase(activeCase.id, patch);
-    onAddMaterial('note', ui('开庭通知/短信', 'Hearing notice/SMS'), noticeText, 'notice');
-    setNoticeStatus(ui('已提取通知信息，请复核案号、法院和日期。', 'Notice extracted. Review case number, court, and date.'));
+    onAddMaterial('note', uiMessage('legal-hub.hearing-notice-sms.10239017c5'), noticeText, 'notice');
+    setNoticeStatus(uiMessage('legal-hub.notice-extracted-review-case-number.77a3bafd0a'));
   };
 
   const processNoticeLink = async () => {
     if (!activeCase || !noticeText.trim() || noticeLoading) return;
     if (!/https?:\/\/\S+/i.test(noticeText)) {
       extractNotice();
-      setNoticeStatus(ui('已提取通知信息，未发现可下载链接。', 'Notice extracted; no downloadable link found.'));
+      setNoticeStatus(uiMessage('legal-hub.notice-extracted-no-downloadable-link.44ba9b77e8'));
       return;
     }
     setNoticeLoading(true);
@@ -1116,16 +1110,16 @@ function LegalCaseWorkspace({
         ...legalCaseToolArgs(activeCase, orgId),
         message: noticeText,
         noticeText,
-        title: '短信/法院通知链接材料',
+        title: CHINA_LEGAL_TOOL_COPY.noticeLinkMaterial,
         confirmedForKb: false,
         includeExtractedText: true,
         extractedTextLimit: 8000,
       });
-      if (!report.trim()) throw new Error(ui('短信链接处理结果为空', 'Notice link result is empty'));
-      onAddMaterial('note', ui('短信/通知链接处理结果', 'Notice link processing result'), report, 'tool');
-      setNoticeStatus(ui('短信/通知链接已处理并归档；如遇登录或验证码，请按报告中的授权浏览器步骤继续。', 'Notice link processed and archived; follow the browser handoff if login or verification is required.'));
+      if (!report.trim()) throw new Error(uiMessage('legal-hub.notice-link-result-is-empty.8480219467'));
+      onAddMaterial('note', uiMessage('legal-hub.notice-link-processing-result.ba3682e3c6'), report, 'tool');
+      setNoticeStatus(uiMessage('legal-hub.notice-link-processed-and-archived.ca52301c48'));
     } catch (err: any) {
-      setNoticeStatus(err?.message || ui('短信链接处理失败', 'Notice link processing failed'));
+      setNoticeStatus(err?.message || uiMessage('legal-hub.notice-link-processing-failed.b6c4f793c8'));
     } finally {
       setNoticeLoading(false);
     }
@@ -1135,31 +1129,21 @@ function LegalCaseWorkspace({
     if (!activeCase || documentLoading) return;
     setDocumentLoading('engagement');
     setDocumentStatus('');
-    const caseProfile = [
-      activeCase.title && `案件名称：${activeCase.title}`,
-      activeCase.caseNumber && `案号：${activeCase.caseNumber}`,
-      activeCase.party && `当事人：${activeCase.party}`,
-      activeCase.cause && `案由：${activeCase.cause}`,
-      activeCase.court && `法院：${activeCase.court}`,
-      activeCase.judge && `承办法官：${activeCase.judge}`,
-      activeCase.stage && `阶段：${stageLabels[activeCase.stage] || activeCase.stage}`,
-      activeCase.notes && `事实摘要/待补材料：\n${activeCase.notes}`,
-      (activeCase.materials || []).length > 0 && `已归档材料：\n${(activeCase.materials || []).slice(0, 8).map(item => `- ${item.title}（${item.type}）`).join('\n')}`,
-    ].filter(Boolean).join('\n');
+    const caseProfile = buildChinaLegalCaseProfile(activeCase, stageLabels[activeCase.stage] || activeCase.stage);
 
     try {
       const draft = await runLegalTool('legal_generate_litigation_packet', {
         ...legalCaseToolArgs(activeCase, orgId),
-        role: activeCase.party ? '委托人/当事人' : '当事人',
-        facts: caseProfile || activeCase.notes || '当前案件档案信息较少，请生成通用委托书/代理手续草稿。',
-        claims: '生成律师委托/代理手续草稿，包含委托事项、授权范围、费用/风险提示占位、双方信息、签署栏和附件清单。',
+        role: activeCase.party ? CHINA_LEGAL_TOOL_COPY.clientOrParty : CHINA_LEGAL_TOOL_COPY.party,
+        facts: caseProfile || activeCase.notes || CHINA_LEGAL_TOOL_COPY.sparseEngagementFacts,
+        claims: CHINA_LEGAL_TOOL_COPY.engagementClaim,
         evidence: (activeCase.materials || []).slice(0, 8).map(item => `${item.title}（${item.type}）`).join('\n'),
       });
-      if (!draft.trim()) throw new Error(ui('委托书草稿为空', 'Engagement letter draft is empty'));
-      onAddMaterial('pleading', ui('委托书草稿', 'Engagement letter draft'), draft, 'tool');
-      setDocumentStatus(ui('委托书草稿已生成并归档到当前案件材料。', 'Engagement letter draft generated and archived to current case materials.'));
+      if (!draft.trim()) throw new Error(uiMessage('legal-hub.engagement-letter-draft-is-empty.4b8b7ac964'));
+      onAddMaterial('pleading', uiMessage('legal-hub.engagement-letter-draft.f24d4df695'), draft, 'tool');
+      setDocumentStatus(uiMessage('legal-hub.engagement-letter-draft-generated-and.736bcca40e'));
     } catch (err: any) {
-      setDocumentStatus(err?.message || ui('委托书草稿生成失败', 'Failed to draft engagement letter'));
+      setDocumentStatus(err?.message || uiMessage('legal-hub.failed-to-draft-engagement-letter.da1f0cf7bb'));
     } finally {
       setDocumentLoading('');
     }
@@ -1173,15 +1157,15 @@ function LegalCaseWorkspace({
       const profile = legalCaseDraftContext(activeCase);
       const draft = await runLegalTool('legal_case_reasoning_matrix', {
         ...legalCaseToolArgs(activeCase, orgId),
-        facts: profile || activeCase.notes || '当前案件材料较少，请先形成可复核的三段论分析框架，并列出待补事实、证据和法源。',
+        facts: profile || activeCase.notes || CHINA_LEGAL_TOOL_COPY.sparseReasoningFacts,
         materials: profile,
         writeFiles: true,
       });
-      if (!draft.trim()) throw new Error(ui('三段论底稿为空', 'Reasoning matrix is empty'));
-      onAddMaterial('note', ui('法律分析三段论底稿', 'Legal reasoning matrix'), draft, 'tool');
-      setDocumentStatus(ui('三段论底稿已生成并归档，后续文书会以它作为内部办案基础。', 'Reasoning matrix generated and archived as the internal basis for later work products.'));
+      if (!draft.trim()) throw new Error(uiMessage('legal-hub.reasoning-matrix-is-empty.11a8fdc054'));
+      onAddMaterial('note', uiMessage('legal-hub.legal-reasoning-matrix.6511ae764d'), draft, 'tool');
+      setDocumentStatus(uiMessage('legal-hub.reasoning-matrix-generated-and-archived.bab25bd4e7'));
     } catch (err: any) {
-      setDocumentStatus(err?.message || ui('三段论底稿生成失败', 'Reasoning matrix generation failed'));
+      setDocumentStatus(err?.message || uiMessage('legal-hub.reasoning-matrix-generation-failed.2f463a82fa'));
     } finally {
       setDocumentLoading('');
     }
@@ -1200,7 +1184,7 @@ function LegalCaseWorkspace({
         )
       ));
     if (!candidate?.content?.trim()) {
-      toast.info(ui('请先生成或选择一份文书/合同/证据目录底稿', 'Generate or select a draft document first'));
+      toast.info(uiMessage('legal-hub.generate-or-select-a-draft.301d3cf2b7'));
       onSetView('packet');
       return;
     }
@@ -1209,16 +1193,16 @@ function LegalCaseWorkspace({
     try {
       const report = await runLegalTool('legal_finalize_delivery_package', {
         ...legalCaseToolArgs(activeCase, orgId),
-        documentType: inferLegalDocumentType(candidate.title, candidate.type),
+        documentType: inferChinaLegalDocumentType(candidate.title, candidate.type),
         content: candidate.content.slice(0, 24000),
         includeDocx: true,
         includePdf: false,
       });
-      if (!report.trim()) throw new Error(ui('交付核验结果为空', 'Delivery gate result is empty'));
-      onAddMaterial('note', `${candidate.title} ${ui('正式交付核验记录', 'delivery gate record')}`, report, 'tool');
-      setDocumentStatus(ui('正式交付前核验已完成并归档；若报告显示阻断，需要先修正法源或材料。', 'Delivery gate completed and archived; fix sources or materials if the report blocks delivery.'));
+      if (!report.trim()) throw new Error(uiMessage('legal-hub.delivery-gate-result-is-empty.f8a71afa2b'));
+      onAddMaterial('note', `${candidate.title} ${uiMessage('legal-hub.delivery-gate-record.410a32f38e')}`, report, 'tool');
+      setDocumentStatus(uiMessage('legal-hub.delivery-gate-completed-and-archived.a3ad6b85db'));
     } catch (err: any) {
-      setDocumentStatus(err?.message || ui('交付核验失败', 'Delivery gate failed'));
+      setDocumentStatus(err?.message || uiMessage('legal-hub.delivery-gate-failed.733db09c91'));
     } finally {
       setDocumentLoading('');
     }
@@ -1231,23 +1215,23 @@ function LegalCaseWorkspace({
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-300">
             <Scale size={26} />
           </div>
-          <h2 className="text-xl font-bold text-white">{ui('先建立一个案件档案', 'Create a case file first')}</h2>
+          <h2 className="text-xl font-bold text-white">{uiMessage('legal-hub.create-a-case-file-first.05eb2b4304')}</h2>
           <p className="mt-2 text-sm leading-6 text-white/45">
-            {ui('律所能力围绕案件流转：会谈、材料、类案、文书、期限和庭审都归到同一个档案里。', 'Legal work flows around a case: consultations, materials, precedents, documents, deadlines, and trial notes stay in one file.')}
+            {uiMessage('legal-hub.legal-work-flows-around-a.07585ffb03')}
           </p>
           <button
             onClick={onCreateCase}
             className="lumi-button-primary mt-6 border-amber-400/25 bg-amber-500/15 px-5 py-3 text-amber-200 hover:bg-amber-500/25"
           >
             <Plus size={16} />
-            {ui('新建案件', 'New Case')}
+            {uiMessage('legal-hub.new-case.8aa99242cb')}
           </button>
         </div>
       </div>
     );
   }
 
-  const caseTitle = activeCase.title || activeCase.party || activeCase.caseNumber || ui('未命名案件', 'Untitled case');
+  const caseTitle = activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9');
   const selectedMaterial = (activeCase.materials || []).find(material => material.id === selectedMaterialId) || (activeCase.materials || [])[0] || null;
   const readinessItems = buildLegalCaseReadiness(activeCase, ui);
   const readinessDone = readinessItems.filter(item => item.done).length;
@@ -1263,20 +1247,20 @@ function LegalCaseWorkspace({
         <div>
           <div className="flex items-center gap-2 text-amber-300">
             <Scale size={17} />
-            <span className="text-xs font-black uppercase tracking-[0.16em]">{ui('案件工作台', 'Case Workspace')}</span>
+            <span className="text-xs font-black uppercase tracking-[0.16em]">{uiMessage('legal-hub.case-workspace.9f165fc920')}</span>
           </div>
           <h2 className="mt-1 text-2xl font-bold text-white">{caseTitle}</h2>
           <p className="mt-1 text-sm text-white/42">
-            {ui('辅助律师办案，不替代执业律师的最终判断。', 'Assists legal work; final judgment remains with licensed counsel.')}
+            {uiMessage('legal-hub.assists-legal-work-final-judgment.57ea0942e9')}
           </p>
         </div>
-        <LegalMeetingInlineButton className="ml-auto" label={ui('会议', 'Meeting')} onClick={onStartConsultation} />
+        <LegalMeetingInlineButton className="ml-auto" label={uiMessage('legal-hub.meeting.e16a90b510')} onClick={onStartConsultation} />
         <button
           onClick={onCreateCase}
           className="lumi-button h-10 px-4 text-sm"
         >
           <Plus size={15} />
-          {ui('新建案件', 'New Case')}
+          {uiMessage('legal-hub.new-case.8aa99242cb')}
         </button>
       </div>
 
@@ -1284,14 +1268,14 @@ function LegalCaseWorkspace({
         <div className="space-y-3">
           <div className="lumi-panel p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="text-xs font-bold uppercase tracking-[0.14em] text-white/40">{ui('案件列表', 'Cases')}</div>
+              <div className="text-xs font-bold uppercase tracking-[0.14em] text-white/40">{uiMessage('legal-hub.cases.f93a5c3a91')}</div>
               {orgBacked && (
                 <button
                   type="button"
                   onClick={onRefreshCases}
                   disabled={refreshing}
                   className="lumi-icon-button h-7 w-7 rounded-lg"
-                  title={ui('刷新组织案件', 'Refresh organization cases')}
+                  title={uiMessage('legal-hub.refresh-organization-cases.ff33e945a4')}
                 >
                   <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
                 </button>
@@ -1302,14 +1286,14 @@ function LegalCaseWorkspace({
               <input
                 value={caseFilter}
                 onChange={event => setCaseFilter(event.target.value)}
-                placeholder={ui('搜索案名、案号、当事人...', 'Search case, number, party...')}
+                placeholder={uiMessage('legal-hub.search-case-number-party.102dc53546')}
                 className="h-8 min-w-0 flex-1 bg-transparent text-xs text-white/70 outline-none placeholder:text-white/25"
               />
             </div>
             <div className="space-y-1.5">
               {filteredCases.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-white/30">
-                  {ui('没有匹配案件', 'No matching cases')}
+                  {uiMessage('legal-hub.no-matching-cases.1bc9817d75')}
                 </div>
               ) : filteredCases.map(item => (
                 <div
@@ -1325,16 +1309,16 @@ function LegalCaseWorkspace({
                     onClick={() => onSelectCase(item.id)}
                     className="min-w-0 flex-1 px-3 py-2 text-left"
                   >
-                    <span className="block truncate text-sm font-semibold">{item.title || item.party || item.caseNumber || ui('未命名案件', 'Untitled case')}</span>
-                    <span className="mt-0.5 block truncate text-xs text-white/32">{stageLabels[item.stage]} / {item.cause || ui('未填写案由', 'No cause')}</span>
+                    <span className="block truncate text-sm font-semibold">{item.title || item.party || item.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9')}</span>
+                    <span className="mt-0.5 block truncate text-xs text-white/32">{stageLabels[item.stage]} / {item.cause || uiMessage('legal-hub.no-cause.88636fe5c2')}</span>
                   </button>
                   {canDeleteCases && (
                     <button
                       type="button"
                       onClick={() => onDeleteCase(item)}
                       className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white/30 transition hover:bg-rose-500/12 hover:text-rose-200"
-                      aria-label={ui(`删除案件 ${item.title || item.caseNumber || ''}`, `Delete case ${item.title || item.caseNumber || ''}`)}
-                      title={ui('删除案件', 'Delete case')}
+                      aria-label={formatUiMessage('legal-hub.delete-case-value0.2812ed70f8', { value0: item.title || item.caseNumber || '' })}
+                      title={uiMessage('legal-hub.delete-case.d0c1c0a330')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -1348,7 +1332,7 @@ function LegalCaseWorkspace({
             <div className="flex items-start gap-2 text-amber-200">
               <AlertTriangle size={15} className="mt-0.5 shrink-0" />
               <p className="text-xs leading-5 text-amber-100/70">
-                {ui('期限计算按常见规则给出辅助提醒，涉外、刑事、行政、公告送达等情形必须人工复核。', 'Deadline calculations are assistant reminders for common matters; special cases require manual review.')}
+                {uiMessage('legal-hub.deadline-calculations-are-assistant-reminders.e596ac453b')}
               </p>
             </div>
           </div>
@@ -1358,17 +1342,17 @@ function LegalCaseWorkspace({
           <section className="lumi-panel p-4">
             <div className="mb-4 flex items-center gap-2 text-white/78">
               <FolderOpen size={16} className="text-amber-300" />
-              <h3 className="text-sm font-bold">{ui('案件档案', 'Case File')}</h3>
+              <h3 className="text-sm font-bold">{uiMessage('legal-hub.case-file.65a38706c2')}</h3>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <CaseField label={ui('案件名称', 'Case name')} value={activeCase.title} onChange={value => update({ title: value })} />
-              <CaseField label={ui('案号', 'Case number')} value={activeCase.caseNumber} onChange={value => update({ caseNumber: value })} />
-              <CaseField label={ui('当事人', 'Party')} value={activeCase.party} onChange={value => update({ party: value })} />
-              <CaseField label={ui('案由', 'Cause')} value={activeCase.cause} onChange={value => update({ cause: value })} />
-              <CaseField label={ui('法院', 'Court')} value={activeCase.court} onChange={value => update({ court: value })} />
-              <CaseField label={ui('承办法官', 'Judge')} value={activeCase.judge} onChange={value => update({ judge: value })} />
+              <CaseField label={uiMessage('legal-hub.case-name.55c6d2512f')} value={activeCase.title} onChange={value => update({ title: value })} />
+              <CaseField label={uiMessage('legal-hub.case-number.1adfaa625a')} value={activeCase.caseNumber} onChange={value => update({ caseNumber: value })} />
+              <CaseField label={uiMessage('legal-hub.party.9f6b14598d')} value={activeCase.party} onChange={value => update({ party: value })} />
+              <CaseField label={uiMessage('legal-hub.cause.8d47df5928')} value={activeCase.cause} onChange={value => update({ cause: value })} />
+              <CaseField label={uiMessage('legal-hub.court.4dc052bdf6')} value={activeCase.court} onChange={value => update({ court: value })} />
+              <CaseField label={uiMessage('legal-hub.judge.329c4c5855')} value={activeCase.judge} onChange={value => update({ judge: value })} />
               <label className="space-y-1.5">
-                <span className="text-xs text-white/42">{ui('阶段', 'Stage')}</span>
+                <span className="text-xs text-white/42">{uiMessage('legal-hub.stage.1f0cfbfea3')}</span>
                 <select
                   value={activeCase.stage}
                   onChange={event => update({ stage: event.target.value as LegalCaseStage })}
@@ -1381,29 +1365,29 @@ function LegalCaseWorkspace({
               </label>
             </div>
             <label className="mt-3 block space-y-1.5">
-              <span className="text-xs text-white/42">{ui('事实摘要 / 待补材料', 'Facts / missing materials')}</span>
+              <span className="text-xs text-white/42">{uiMessage('legal-hub.facts-missing-materials.af3bad57e8')}</span>
               <textarea
                 value={activeCase.notes}
                 onChange={event => update({ notes: event.target.value })}
                 rows={4}
                 className="lumi-field w-full resize-none rounded-lg text-sm leading-6 focus:border-amber-400/50"
-                placeholder={ui('记录当事人陈述、争议焦点、证据缺口、下一步动作...', 'Record statements, issues, evidence gaps, and next actions...')}
+                placeholder={uiMessage('legal-hub.record-statements-issues-evidence-gaps.f97abfc047')}
               />
             </label>
           </section>
 
           <section className="grid grid-cols-1 gap-3 lg:grid-cols-4">
-            <LegalMeetingActionButton title={ui('当事人会谈', 'Consultation')} desc={ui('开启会议转写并归档', 'Start transcription')} onClick={onStartConsultation} />
-            <LegalActionButton icon={<Search size={16} />} title={ui('类案分析', 'Case analysis')} desc={ui('按事实检索裁判思路', 'Search precedents')} onClick={() => onSetView('case-search')} />
-            <LegalActionButton icon={<Brain size={16} />} title={ui('诉讼策略', 'Strategy')} desc={ui('形成争议焦点和打法', 'Build litigation route')} onClick={() => onSetView('strategy')} />
-            <LegalActionButton icon={<ClipboardList size={16} />} title={ui('案件计划', 'Case plan')} desc={ui('生成推进步骤', 'Create workflow')} onClick={onCreatePlan} />
+            <LegalMeetingActionButton title={uiMessage('legal-hub.consultation.921ab7edb9')} desc={uiMessage('legal-hub.start-transcription.c0d64487e4')} onClick={onStartConsultation} />
+            <LegalActionButton icon={<Search size={16} />} title={uiMessage('legal-hub.case-analysis.4e8fce63e9')} desc={uiMessage('legal-hub.search-precedents.5d3dd9e729')} onClick={() => onSetView('case-search')} />
+            <LegalActionButton icon={<Brain size={16} />} title={uiMessage('legal-hub.strategy.25d1bf401d')} desc={uiMessage('legal-hub.build-litigation-route.7c821a3812')} onClick={() => onSetView('strategy')} />
+            <LegalActionButton icon={<ClipboardList size={16} />} title={uiMessage('legal-hub.case-plan.ed9eaee22d')} desc={uiMessage('legal-hub.create-workflow.9ccc04284c')} onClick={onCreatePlan} />
           </section>
 
           <section className="lumi-panel p-4">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-white/78">
                 <CheckCircle size={16} className="text-emerald-300" />
-                <h3 className="text-sm font-bold">{ui('办案闭环', 'Case Loop')}</h3>
+                <h3 className="text-sm font-bold">{uiMessage('legal-hub.case-loop.9317db1dd1')}</h3>
               </div>
               <span className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-white/45">
                 {readinessDone}/{readinessItems.length}
@@ -1415,7 +1399,7 @@ function LegalCaseWorkspace({
                 onClick={() => readinessNext.view && onSetView(readinessNext.view)}
                 className="mb-3 w-full rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-left text-xs text-white/58 transition-colors hover:border-amber-400/18 hover:bg-amber-500/[0.05]"
               >
-                <span className="font-semibold text-white/76">{ui('下一步', 'Next')}</span>
+                <span className="font-semibold text-white/76">{uiMessage('legal-hub.next.b527069e7f')}</span>
                 <span className="mx-2 text-white/22">/</span>
                 <span className={readinessNext.status === 'blocked' ? 'text-rose-200' : 'text-amber-100/80'}>{readinessNext.label}</span>
                 <span className="ml-2 text-white/45">{readinessNext.nextStep}</span>
@@ -1445,13 +1429,13 @@ function LegalCaseWorkspace({
                 disabled={documentLoading === 'reasoning'}
                 className="lumi-button h-9 px-3 text-xs"
               >
-                {documentLoading === 'reasoning' ? ui('生成中...', 'Generating...') : ui('生成三段论底稿', 'Reasoning matrix')}
+                {documentLoading === 'reasoning' ? uiMessage('legal-hub.generating.634308f29b') : uiMessage('legal-hub.reasoning-matrix.7e54736217')}
               </button>
               <button type="button" onClick={() => onSetView('external-research')} className="lumi-button h-9 px-3 text-xs">
-                {ui('法源/类案检索', 'Sources')}
+                {uiMessage('legal-hub.sources.2c0ee0fd12')}
               </button>
               <button type="button" onClick={() => onSetView('packet')} className="lumi-button h-9 px-3 text-xs">
-                {ui('文书包', 'Packet')}
+                {uiMessage('legal-hub.packet.1758eaea66')}
               </button>
               <button
                 type="button"
@@ -1459,7 +1443,7 @@ function LegalCaseWorkspace({
                 disabled={documentLoading === 'delivery'}
                 className="lumi-button h-9 px-3 text-xs"
               >
-                {documentLoading === 'delivery' ? ui('核验中...', 'Checking...') : ui('正式交付核验', 'Delivery gate')}
+                {documentLoading === 'delivery' ? uiMessage('legal-hub.checking.913563d226') : uiMessage('legal-hub.delivery-gate.de13676f0a')}
               </button>
             </div>
           </section>
@@ -1467,20 +1451,20 @@ function LegalCaseWorkspace({
           <section className="lumi-panel p-4">
             <div className="mb-4 flex items-center gap-2 text-white/78">
               <Calendar size={16} className="text-cyan-300" />
-              <h3 className="text-sm font-bold">{ui('期限与开庭', 'Deadlines and Hearings')}</h3>
+              <h3 className="text-sm font-bold">{uiMessage('legal-hub.deadlines-and-hearings.804d0a2db1')}</h3>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <DateField label={ui('开庭日期', 'Hearing date')} value={activeCase.hearingDate} onChange={value => update({ hearingDate: value })} onReminder={() => createDateReminder('hearing')} />
-              <DateField label={ui('判决书日期', 'Judgment date')} value={activeCase.judgmentDate} onChange={value => update({ judgmentDate: value })} />
-              <DateField label={ui('上诉期限', 'Appeal deadline')} value={activeCase.appealDeadline} onChange={value => update({ appealDeadline: value })} onReminder={() => createDateReminder('appeal')} />
+              <DateField label={uiMessage('legal-hub.hearing-date.e3930c19c4')} value={activeCase.hearingDate} onChange={value => update({ hearingDate: value })} onReminder={() => createDateReminder('hearing')} />
+              <DateField label={uiMessage('legal-hub.judgment-date.abf2b584c3')} value={activeCase.judgmentDate} onChange={value => update({ judgmentDate: value })} />
+              <DateField label={uiMessage('legal-hub.appeal-deadline.0e3e1ebb0f')} value={activeCase.appealDeadline} onChange={value => update({ appealDeadline: value })} onReminder={() => createDateReminder('appeal')} />
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={calculateAppealDeadline} className="lumi-button h-9 px-3 text-xs">
-                {ui('按判决日期计算上诉期限', 'Calculate appeal deadline')}
+                {uiMessage('legal-hub.calculate-appeal-deadline.7fb9a79f48')}
               </button>
-              <LegalMeetingInlineButton label={ui('打开会谈笔记', 'Open meeting notes')} onClick={onOpenMeetingNotes} />
+              <LegalMeetingInlineButton label={uiMessage('legal-hub.open-meeting-notes.8f232a1703')} onClick={onOpenMeetingNotes} />
               <button onClick={() => onSetView('import')} className="lumi-button h-9 px-3 text-xs">
-                {ui('导入裁判文书', 'Import judgment')}
+                {uiMessage('legal-hub.import-judgment.7b322fc577')}
               </button>
             </div>
           </section>
@@ -1489,14 +1473,14 @@ function LegalCaseWorkspace({
             <div className="lumi-panel p-4">
               <div className="mb-3 flex items-center gap-2 text-white/78">
                 <Gavel size={16} className="text-amber-300" />
-                <h3 className="text-sm font-bold">{ui('开庭短信/通知提取', 'Hearing Notice Extractor')}</h3>
+                <h3 className="text-sm font-bold">{uiMessage('legal-hub.hearing-notice-extractor.291c653bd1')}</h3>
               </div>
               <textarea
                 value={noticeText}
                 onChange={event => setNoticeText(event.target.value)}
                 rows={5}
                 className="lumi-field w-full resize-none rounded-lg text-sm leading-6 focus:border-amber-400/50"
-                placeholder={ui('粘贴短信或法院通知，自动提取案号、法院、开庭日期...', 'Paste SMS or court notice to extract case number, court, and hearing date...')}
+                placeholder={uiMessage('legal-hub.paste-sms-or-court-notice.e888cb415d')}
               />
               <div className="mt-3 flex items-center gap-3">
                 <button
@@ -1504,14 +1488,14 @@ function LegalCaseWorkspace({
                   disabled={!noticeText.trim() || noticeLoading}
                   className="lumi-button-primary h-9 border-amber-400/25 bg-amber-500/15 px-4 text-xs text-amber-200 hover:bg-amber-500/25"
                 >
-                  {ui('提取到案件', 'Extract')}
+                  {uiMessage('legal-hub.extract.c127c363a4')}
                 </button>
                 <button
                   onClick={processNoticeLink}
                   disabled={!noticeText.trim() || noticeLoading}
                   className="lumi-button h-9 px-3 text-xs"
                 >
-                  {noticeLoading ? ui('处理中...', 'Processing...') : ui('处理短信链接', 'Process link')}
+                  {noticeLoading ? uiMessage('legal-hub.processing.45c0c78af6') : uiMessage('legal-hub.process-link.7a43f618ce')}
                 </button>
                 {noticeStatus && <span className="text-xs text-emerald-300/70">{noticeStatus}</span>}
               </div>
@@ -1520,7 +1504,7 @@ function LegalCaseWorkspace({
             <div className="lumi-panel p-4">
               <div className="mb-3 flex items-center gap-2 text-white/78">
                 <FileText size={16} className="text-blue-300" />
-                <h3 className="text-sm font-bold">{ui('材料与文书', 'Materials and Documents')}</h3>
+                <h3 className="text-sm font-bold">{uiMessage('legal-hub.materials-and-documents.af06979d97')}</h3>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1528,20 +1512,20 @@ function LegalCaseWorkspace({
                   disabled={documentLoading === 'engagement'}
                   className="lumi-button h-9 px-3 text-xs"
                 >
-                  {documentLoading === 'engagement' ? ui('生成中...', 'Drafting...') : ui('生成委托书', 'Engagement letter')}
+                  {documentLoading === 'engagement' ? uiMessage('legal-hub.drafting.7a57e7e31f') : uiMessage('legal-hub.engagement-letter.260ac284a3')}
                 </button>
                 <LegalMeetingInlineButton
-                  label={ui('庭审笔录', 'Trial notes')}
+                  label={uiMessage('legal-hub.trial-notes.25b8c590da')}
                   onClick={() => {
-                    setDocumentStatus(ui('已启动庭审/会谈转写，结束后会把纪要归档到当前案件。', 'Trial/consultation transcription started; notes will archive to this case when finished.'));
+                    setDocumentStatus(uiMessage('legal-hub.trial-consultation-transcription-started-notes.d47206cbc8'));
                     onStartConsultation();
                   }}
                 />
                 <button onClick={() => onSetView('contract-review')} className="lumi-button h-9 px-3 text-xs">
-                  {ui('合同审查', 'Contract review')}
+                  {uiMessage('legal-hub.contract-review.798c7d6913')}
                 </button>
                 <button onClick={() => onSetView('asset-trace')} className="lumi-button h-9 px-3 text-xs">
-                  {ui('财产线索', 'Asset trace')}
+                  {uiMessage('legal-hub.asset-trace.24d93c8873')}
                 </button>
               </div>
               {documentStatus && (
@@ -1555,7 +1539,7 @@ function LegalCaseWorkspace({
               )}
               <div className="mt-4 space-y-2">
                 {(activeCase.materials || []).length === 0 ? (
-                  <p className="text-sm text-white/28">{ui('暂无归档材料。会谈、短信、文书草稿会出现在这里。', 'No materials yet. Consultations, notices, and drafts appear here.')}</p>
+                  <p className="text-sm text-white/28">{uiMessage('legal-hub.no-materials-yet-consultations-notices.9b7ef37152')}</p>
                 ) : (
                   activeCase.materials.slice(0, 8).map(material => (
                     <button
@@ -1576,7 +1560,7 @@ function LegalCaseWorkspace({
               </div>
               {selectedMaterial?.content && (
                 <div className="lumi-panel mt-4 rounded-xl bg-black/24 p-3">
-                  <div className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-white/35">{ui('材料内容', 'Material Content')}</div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-white/35">{uiMessage('legal-hub.material-content.a5b29f0203')}</div>
                   <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap text-xs leading-6 text-white/68 custom-scrollbar">{selectedMaterial.content}</pre>
                 </div>
               )}
@@ -1743,39 +1727,39 @@ function LegalPacketView({
 
   const archive = () => {
     if (!result || !onAddMaterial) return;
-    onAddMaterial('pleading', `${caseFile?.title || caseFile?.caseNumber || ui('案件', 'Case')} 半自动文书包`, result, 'tool');
+    onAddMaterial('pleading', `${caseFile?.title || caseFile?.caseNumber || uiMessage('legal-hub.case.8a53cf13fb')} 半自动文书包`, result, 'tool');
   };
 
   return (
     <LegalTwoPaneTool
       icon={<ClipboardList size={22} />}
       accent="amber"
-      title={ui('半自动诉讼文书包', 'Semi-Automated Litigation Packet')}
-      desc={ui('生成起诉/答辩/质证/委托/立案组卷工作底稿，提交和签发保留人工确认。', 'Draft complaint/defense/evidence/retainer/filing work papers with human confirmation gates.')}
+      title={uiMessage('legal-hub.semi-automated-litigation-packet.37b15d0cf5')}
+      desc={uiMessage('legal-hub.draft-complaint-defense-evidence-retainer.da01b9a635')}
       caseFile={caseFile}
       running={loading}
       left={(
         <>
           <div className="grid gap-3 md:grid-cols-2">
             <select value={role} onChange={event => setRole(event.target.value)} className="lumi-field h-10 rounded-lg">
-              <option value="plaintiff">{ui('原告', 'Plaintiff')}</option>
-              <option value="defendant">{ui('被告', 'Defendant')}</option>
-              <option value="applicant">{ui('申请人', 'Applicant')}</option>
-              <option value="respondent">{ui('被申请人', 'Respondent')}</option>
+              <option value="plaintiff">{uiMessage('legal-hub.plaintiff.607f2116c4')}</option>
+              <option value="defendant">{uiMessage('legal-hub.defendant.a3bd508da0')}</option>
+              <option value="applicant">{uiMessage('legal-hub.applicant.5be3a82eea')}</option>
+              <option value="respondent">{uiMessage('legal-hub.respondent.f726ebb1c2')}</option>
             </select>
-            <input value={claims} onChange={event => setClaims(event.target.value)} placeholder={ui('诉请、抗辩目标或办理目标', 'Claims, defenses, or objective')} className="lumi-field h-10 rounded-lg" />
+            <input value={claims} onChange={event => setClaims(event.target.value)} placeholder={uiMessage('legal-hub.claims-defenses-or-objective.00855c8c20')} className="lumi-field h-10 rounded-lg" />
           </div>
-          <textarea value={facts} onChange={event => setFacts(event.target.value)} placeholder={ui('案件事实、时间线、当事人信息...', 'Facts, timeline, parties...')} className="mt-3 min-h-[240px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35" />
-          <textarea value={evidence} onChange={event => setEvidence(event.target.value)} placeholder={ui('已有证据、对方材料、缺证点...', 'Evidence, opponent materials, gaps...')} className="mt-3 min-h-[140px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35" />
+          <textarea value={facts} onChange={event => setFacts(event.target.value)} placeholder={uiMessage('legal-hub.facts-timeline-parties.6783b7303c')} className="mt-3 min-h-[240px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35" />
+          <textarea value={evidence} onChange={event => setEvidence(event.target.value)} placeholder={uiMessage('legal-hub.evidence-opponent-materials-gaps.61eff6246d')} className="mt-3 min-h-[140px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35" />
           <button onClick={generate} disabled={loading || (!facts.trim() && !evidence.trim())} className="mt-3 inline-flex items-center justify-center gap-2 rounded-lg border border-amber-400/20 bg-amber-500/15 px-4 py-2.5 text-sm font-medium text-amber-100 transition hover:bg-amber-500/25 disabled:opacity-50">
             {loading ? <Loader2 size={16} className="animate-spin" /> : <ClipboardList size={16} />}
-            {loading ? ui('生成中...', 'Generating...') : ui('生成文书包', 'Generate Packet')}
+            {loading ? uiMessage('legal-hub.generating.634308f29b') : uiMessage('legal-hub.generate-packet.8494e1ff7c')}
           </button>
         </>
       )}
       result={result}
-      emptyText={ui('半自动文书包会显示在这里。', 'The packet will appear here.')}
-      archiveLabel={ui('归档到案件', 'Archive to Case')}
+      emptyText={uiMessage('legal-hub.the-packet-will-appear-here.52a02955fa')}
+      archiveLabel={uiMessage('legal-hub.archive-to-case.6dc41a223d')}
       onArchive={!orgId && result ? archive : undefined}
     />
   );
@@ -1828,31 +1812,31 @@ function LegalExternalResearchView({
 
   const archive = () => {
     if (!result || !onAddMaterial) return;
-    onAddMaterial('note', `${caseFile?.title || caseFile?.caseNumber || ui('案件', 'Case')} 外部检索行动单`, result, 'tool');
+    onAddMaterial('note', `${caseFile?.title || caseFile?.caseNumber || uiMessage('legal-hub.case.8a53cf13fb')} 外部检索行动单`, result, 'tool');
   };
 
   return (
     <LegalTwoPaneTool
       icon={<Search size={22} />}
       accent="cyan"
-      title={ui('半自动外部检索', 'Semi-Automated External Research')}
-      desc={ui('生成打开外部法律网站的检索词、网页登录预设和来源登记表；内容由律师在网页内确认。', 'Generate search terms, login presets, and source logs for external legal sites.')}
+      title={uiMessage('legal-hub.semi-automated-external-research.a9fe50cd06')}
+      desc={uiMessage('legal-hub.generate-search-terms-login-presets.497732dec9')}
       caseFile={caseFile}
       running={loading}
       left={(
         <>
-          <input value={issues} onChange={event => setIssues(event.target.value)} placeholder={ui('争议焦点，多个用逗号分隔', 'Issues, comma-separated')} className="lumi-field h-10 w-full rounded-lg" />
-          <input value={companies} onChange={event => setCompanies(event.target.value)} placeholder={ui('公司/被执行人名称，多个用逗号分隔', 'Companies/debtors, comma-separated')} className="lumi-field mt-3 h-10 w-full rounded-lg" />
-          <textarea value={facts} onChange={event => setFacts(event.target.value)} placeholder={ui('案件事实和检索背景...', 'Facts and research context...')} className="mt-3 min-h-[340px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-cyan-400/35" />
+          <input value={issues} onChange={event => setIssues(event.target.value)} placeholder={uiMessage('legal-hub.issues-comma-separated.f2f8ca4339')} className="lumi-field h-10 w-full rounded-lg" />
+          <input value={companies} onChange={event => setCompanies(event.target.value)} placeholder={uiMessage('legal-hub.companies-debtors-comma-separated.052f39a297')} className="lumi-field mt-3 h-10 w-full rounded-lg" />
+          <textarea value={facts} onChange={event => setFacts(event.target.value)} placeholder={uiMessage('legal-hub.facts-and-research-context.cd7839dce0')} className="mt-3 min-h-[340px] w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-cyan-400/35" />
           <button onClick={generate} disabled={loading || (!facts.trim() && !issues.trim() && !companies.trim())} className="mt-3 inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-500/15 px-4 py-2.5 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/25 disabled:opacity-50">
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-            {loading ? ui('生成中...', 'Generating...') : ui('生成检索行动单', 'Generate Plan')}
+            {loading ? uiMessage('legal-hub.generating.634308f29b') : uiMessage('legal-hub.generate-plan.6825d94075')}
           </button>
         </>
       )}
       result={result}
-      emptyText={ui('外部检索行动单会显示在这里。', 'External research plan will appear here.')}
-      archiveLabel={ui('归档到案件', 'Archive to Case')}
+      emptyText={uiMessage('legal-hub.external-research-plan-will-appear.701d667eed')}
+      archiveLabel={uiMessage('legal-hub.archive-to-case.6dc41a223d')}
       onArchive={!orgId && result ? archive : undefined}
     />
   );
@@ -1973,7 +1957,7 @@ function LegalStrategyView({
   const archive = () => {
     if (!result || !onAddMaterial) return;
     onAddMaterial('note', `${legalCaseTitle(caseFile)} 诉讼策略分析`, result, 'tool');
-    toast.success(ui('策略分析已归档到当前案件', 'Strategy analysis archived to the current case'));
+    toast.success(uiMessage('legal-hub.strategy-analysis-archived-to-the.7220b483ae'));
   };
 
   return (
@@ -1995,7 +1979,7 @@ function LegalStrategyView({
 
         <section className="grid min-h-[520px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <label className="mb-2 text-sm font-medium text-white">{ui('案件事实', 'Case facts')}</label>
+            <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.case-facts.a83dee9a30')}</label>
             <textarea
               value={facts}
               onChange={e => setFacts(e.target.value)}
@@ -2008,7 +1992,7 @@ function LegalStrategyView({
               className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-amber-400/20 bg-amber-500/15 px-4 py-2.5 text-sm font-medium text-amber-100 transition hover:bg-amber-500/25 disabled:opacity-50"
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Brain size={16} />}
-              {loading ? ui('分析中...', 'Analyzing...') : t.legalCaseStrategyAnalyze}
+              {loading ? uiMessage('legal-hub.analyzing.3b98929aff') : t.legalCaseStrategyAnalyze}
             </button>
           </div>
 
@@ -2019,7 +2003,7 @@ function LegalStrategyView({
                   <div className="flex justify-end">
                     <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
                       <FolderOpen size={14} />
-                      {ui('归档到案件', 'Archive to Case')}
+                      {uiMessage('legal-hub.archive-to-case.6dc41a223d')}
                     </button>
                   </div>
                 )}
@@ -2030,7 +2014,7 @@ function LegalStrategyView({
             ) : (
               <div className="flex h-full min-h-[420px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                 <Brain size={32} className="text-white/20" />
-                <span>{ui('策略分析结果会显示在这里。', 'Strategy analysis will appear here.')}</span>
+                <span>{uiMessage('legal-hub.strategy-analysis-will-appear-here.61c7ee7a79')}</span>
               </div>
             )}
           </div>
@@ -2074,7 +2058,7 @@ function LegalVerifyView({
         ...legalCaseToolArgs(caseFile, orgId),
         text,
       });
-      setResults([{ content: verification || ui('校验完成', 'Verification complete') }]);
+      setResults([{ content: verification || uiMessage('legal-hub.verification-complete.684377838d') }]);
     } catch (e: any) {
       setResults([{ error: e.message }]);
     } finally {
@@ -2085,7 +2069,7 @@ function LegalVerifyView({
   const archive = () => {
     if (!verificationText || !onAddMaterial) return;
     onAddMaterial('note', `${legalCaseTitle(caseFile)} 引用校验`, verificationText, 'tool');
-    toast.success(ui('引用校验已归档到当前案件', 'Citation verification archived to the current case'));
+    toast.success(uiMessage('legal-hub.citation-verification-archived-to-the.9d6dce0d48'));
   };
 
   return (
@@ -2107,7 +2091,7 @@ function LegalVerifyView({
 
         <section className="grid min-h-[500px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <label className="mb-2 text-sm font-medium text-white">{ui('待校验文本', 'Text to verify')}</label>
+            <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.text-to-verify.e83f5c99d9')}</label>
             <textarea
               value={text}
               onChange={e => setText(e.target.value)}
@@ -2120,7 +2104,7 @@ function LegalVerifyView({
               className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-emerald-400/20 bg-emerald-500/15 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-50"
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
-              {loading ? ui('校验中...', 'Verifying...') : t.legalVerifyCitationVerify}
+              {loading ? uiMessage('legal-hub.verifying.1c01a1f8ae') : t.legalVerifyCitationVerify}
             </button>
           </div>
 
@@ -2130,7 +2114,7 @@ function LegalVerifyView({
                 <div className="flex justify-end">
                   <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
                     <FolderOpen size={14} />
-                    {ui('归档到案件', 'Archive to Case')}
+                    {uiMessage('legal-hub.archive-to-case.6dc41a223d')}
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
@@ -2142,7 +2126,7 @@ function LegalVerifyView({
             ) : (
               <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                 <CheckCircle size={32} className="text-white/20" />
-                <span>{ui('引用校验结果会显示在这里。', 'Citation verification results will appear here.')}</span>
+                <span>{uiMessage('legal-hub.citation-verification-results-will-appear.7fa754234b')}</span>
               </div>
             )}
           </div>
@@ -2159,7 +2143,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const caseTitle = legalCaseTitle(caseFile);
-  const articleTitle = `${caseTitle} - ${ui('案件知识归档', 'Case Knowledge Archive')}`;
+  const articleTitle = `${caseTitle} - ${uiMessage('legal-hub.case-knowledge-archive.fb5aa7cf62')}`;
   const articleContent = useMemo(() => (
     caseFile ? buildLegalCaseKnowledgeMarkdown(caseFile) : ''
   ), [caseFile]);
@@ -2182,7 +2166,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('同步知识库失败', 'Failed to sync to knowledge base'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-sync-to-knowledge.c0a55da5a1'));
       const articleId = data.id || data.article?.id || data.articleId || '';
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
         detail: {
@@ -2191,10 +2175,10 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
         },
       }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-      setStatus(ui('已同步到组织知识库。工作域 Lumi 可以在组织知识中检索并引用这份案件归档。', 'Synced to the organization knowledge base. Lumi can retrieve and cite this case archive in the work workspace.'));
-      toast.success(ui('案件已同步到组织知识库', 'Case synced to organization knowledge base'));
+      setStatus(uiMessage('legal-hub.synced-to-the-organization-knowledge.f95c36e4c6'));
+      toast.success(uiMessage('legal-hub.case-synced-to-organization-knowledge.e5d9130fb8'));
     } catch (err: any) {
-      const message = err?.message || ui('同步知识库失败', 'Failed to sync to knowledge base');
+      const message = err?.message || uiMessage('legal-hub.failed-to-sync-to-knowledge.c0a55da5a1');
       setStatus(message);
       toast.error(message);
     } finally {
@@ -2207,9 +2191,9 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
       <div className="flex h-full items-center justify-center p-8 text-white">
         <div className="max-w-md text-center">
           <Archive size={36} className="mx-auto mb-3 text-white/25" />
-          <h2 className="text-xl font-semibold">{ui('先建立案件档案', 'Create a case first')}</h2>
+          <h2 className="text-xl font-semibold">{uiMessage('legal-hub.create-a-case-first.277e87bd38')}</h2>
           <p className="mt-2 text-sm leading-6 text-white/45">
-            {ui('案件归档需要当前案件、事实摘要和材料池。', 'Knowledge sync needs a current case, facts, and archived materials.')}
+            {uiMessage('legal-hub.knowledge-sync-needs-a-current.b4ab7aa09b')}
           </p>
         </div>
       </div>
@@ -2226,9 +2210,9 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
                 <Archive size={22} />
               </span>
               <div className="min-w-0">
-                <h2 className="truncate text-xl font-semibold text-white">{ui('同步到组织知识库', 'Sync to Organization Knowledge')}</h2>
+                <h2 className="truncate text-xl font-semibold text-white">{uiMessage('legal-hub.sync-to-organization-knowledge.06ec3e8e07')}</h2>
                 <p className="mt-1 text-sm leading-6 text-white/50">
-                  {ui('把当前案件、事实摘要、会谈纪要、裁判文书和工具产物汇总成组织知识，供工作域 Lumi 后续引用。', 'Package the current case, facts, consultation notes, judgments, and tool outputs into organization knowledge for Lumi in the work workspace.')}
+                  {uiMessage('legal-hub.package-the-current-case-facts.ac1c53077e')}
                 </p>
               </div>
             </div>
@@ -2238,7 +2222,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
               className="inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-45"
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Archive size={16} />}
-              {loading ? ui('同步中...', 'Syncing...') : ui('同步知识库', 'Sync to KB')}
+              {loading ? uiMessage('legal-hub.syncing.379d137ae4') : uiMessage('legal-hub.sync-to-kb.f5314698c5')}
             </button>
           </div>
           {status && (
@@ -2256,14 +2240,14 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
               onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb' } }))}
               className="lumi-button h-9 px-3 text-xs"
             >
-              {ui('打开组织知识库', 'Open Knowledge Base')}
+              {uiMessage('legal-hub.open-knowledge-base.fecb312d9e')}
             </button>
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'chat' } }))}
               className="lumi-button h-9 px-3 text-xs"
             >
-              {ui('去工作域 Lumi 引用', 'Ask Lumi in Work Workspace')}
+              {uiMessage('legal-hub.ask-lumi-in-work-workspace.6fe76d2092')}
             </button>
           </div>
         </section>
@@ -2272,18 +2256,18 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <h3 className="text-sm font-semibold text-white">{ui('归档摘要', 'Archive Summary')}</h3>
+            <h3 className="text-sm font-semibold text-white">{uiMessage('legal-hub.archive-summary.089620ba4e')}</h3>
             <div className="mt-3 space-y-2 text-sm text-white/62">
-              <div>{ui('案件', 'Case')}: {caseTitle}</div>
-              <div>{ui('案号', 'Case number')}: {caseFile.caseNumber || '-'}</div>
-              <div>{ui('案由', 'Cause')}: {caseFile.cause || '-'}</div>
-              <div>{ui('阶段', 'Stage')}: {caseFile.stage || '-'}</div>
-              <div>{ui('材料数', 'Materials')}: {(caseFile.materials || []).length}</div>
+              <div>{uiMessage('legal-hub.case.8a53cf13fb')}: {caseTitle}</div>
+              <div>{uiMessage('legal-hub.case-number.1adfaa625a')}: {caseFile.caseNumber || '-'}</div>
+              <div>{uiMessage('legal-hub.cause.8d47df5928')}: {caseFile.cause || '-'}</div>
+              <div>{uiMessage('legal-hub.stage.1f0cfbfea3')}: {caseFile.stage || '-'}</div>
+              <div>{uiMessage('legal-hub.materials.987ed9a5e2')}: {(caseFile.materials || []).length}</div>
             </div>
           </div>
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-white">{ui('将写入知识库的内容预览', 'Knowledge Preview')}</h3>
+              <h3 className="text-sm font-semibold text-white">{uiMessage('legal-hub.knowledge-preview.5f5d84067a')}</h3>
               <span className="text-xs text-white/35">{articleContent.length} chars</span>
             </div>
             <pre className="max-h-[560px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/25 p-4 text-xs leading-6 text-white/72 custom-scrollbar">
@@ -2322,9 +2306,9 @@ function LegalImportView({
         content,
       });
       if (caseFile && onAddMaterial) {
-        const title = inferLegalMaterialTitle(content, ui('裁判文书', 'Judgment document'));
+        const title = inferLegalMaterialTitle(content, uiMessage('legal-hub.judgment-document.3349b60486'));
         onAddMaterial('judgment', title, content, 'import');
-        setStatus(`${reply}\n\n${ui('已归档到当前案件材料。', 'Archived to the current case materials.')}`);
+        setStatus(`${reply}\n\n${uiMessage('legal-hub.archived-to-the-current-case.e823bb894a')}`);
       } else {
         setStatus(reply);
       }
@@ -2354,11 +2338,11 @@ function LegalImportView({
 
         <section className="grid min-h-[560px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <label className="mb-2 text-sm font-medium text-white">{ui('裁判文书正文', 'Judgment document content')}</label>
+            <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.judgment-document-content.a5f6676889')}</label>
             <textarea
               value={content}
               onChange={e => setContent(e.target.value)}
-              placeholder={ui('粘贴裁判文书正文，或在聊天窗口上传 PDF/DOCX 文件后让 Lumi 导入...', 'Paste judgment document content here, or upload PDF/DOCX files in chat and ask Lumi to import them...')}
+              placeholder={uiMessage('legal-hub.paste-judgment-document-content-here.2534452d81')}
               className="min-h-[420px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 font-mono text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-blue-400/35"
             />
             <button
@@ -2367,7 +2351,7 @@ function LegalImportView({
               className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2.5 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-              {loading ? ui('导入中...', 'Importing...') : t.legalImportJudgment}
+              {loading ? uiMessage('legal-hub.importing.ec01cb1a24') : t.legalImportJudgment}
             </button>
           </div>
 
@@ -2379,7 +2363,7 @@ function LegalImportView({
             ) : (
               <div className="flex h-full min-h-[460px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                 <Upload size={32} className="text-white/20" />
-                <span>{ui('导入结果和归档状态会显示在这里。', 'Import result and archive status will appear here.')}</span>
+                <span>{uiMessage('legal-hub.import-result-and-archive-status.ef57344682')}</span>
               </div>
             )}
           </div>

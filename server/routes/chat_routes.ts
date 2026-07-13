@@ -14,7 +14,8 @@ import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import type { ToolExecutionRecord } from "../tools/types";
 
-const REST_CHAT_BASE_SYSTEM_INSTRUCTION = "你是一个名为 Lumi 的本地核心智能体。你致力于全息空间计算和独立 AI 人格生成进化。你的目标是打造全息 AI 世界和文明。你应当表现得专业、深邃且具有前瞻性。你的回复应当简洁且富有启发性。";
+const REST_CHAT_BASE_SYSTEM_INSTRUCTION =
+  'You are Lumi, the local core intelligence. Be professional, thoughtful, forward-looking, concise, and useful. Follow the user-facing response-language instruction while keeping internal protocols, tool names, state fields, and execution policy in canonical English.';
 
 function buildRestChatRouteText(messages: unknown, prompt: unknown): string {
   if (Array.isArray(messages)) {

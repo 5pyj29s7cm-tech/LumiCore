@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useT } from '../../lib/useT';
 import { useSocket } from '../../hooks/useSocket';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 interface ReviewTemplate {
   id: string;
@@ -42,7 +43,7 @@ export function TemplateReviewQueue() {
     try {
       const res = await fetch('/api/org/templates?status=pending_review', { credentials: 'include' });
       const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error((data as any).error || ui(`智能体审核队列加载失败（${res.status}）`, `Failed to load agent review queue (${res.status})`));
+      if (!res.ok) throw new Error((data as any).error || formatUiMessage('template-review-queue.failed-to-load-agent-review.1e2f2f450e', { value0: res.status }));
       setQueue(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -74,7 +75,7 @@ export function TemplateReviewQueue() {
 
   const handleAction = async (templateId: string, action: 'approve' | 'reject') => {
     if (action === 'reject' && !comment.trim()) {
-      setFeedback({ type: 'error', text: ui('拒绝模板必须填写审核意见。', 'Rejecting a template requires a review comment.') });
+      setFeedback({ type: 'error', text: uiMessage('template-review-queue.rejecting-a-template-requires-a.ea89d43214') });
       return;
     }
 
@@ -99,7 +100,7 @@ export function TemplateReviewQueue() {
           credentials: 'include',
         });
         const publishData = await publishRes.json().catch(() => ({}));
-        if (!publishRes.ok) throw new Error(publishData.error || ui(`已通过审核，但发布失败（${publishRes.status}）`, `Approved, but publish failed (${publishRes.status})`));
+        if (!publishRes.ok) throw new Error(publishData.error || formatUiMessage('template-review-queue.approved-but-publish-failed-value0.3166eeb423', { value0: publishRes.status }));
       }
 
       setQueue(prev => prev.filter(item => item.id !== templateId));
@@ -108,8 +109,8 @@ export function TemplateReviewQueue() {
       setFeedback({
         type: 'success',
         text: action === 'approve'
-          ? (t.templateApprovedPublished || ui('智能体模板已通过并发布', 'Agent template approved and published'))
-          : (t.templateRejected || ui('智能体模板已拒绝', 'Agent template rejected')),
+          ? (t.templateApprovedPublished || uiMessage('template-review-queue.agent-template-approved-and-published.597832a716'))
+          : (t.templateRejected || uiMessage('template-review-queue.agent-template-rejected.8c277f6f2a')),
       });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -127,9 +128,9 @@ export function TemplateReviewQueue() {
               <ClipboardCheck size={22} />
             </span>
             <div>
-              <h2 className="text-xl font-semibold text-white">{t.templateReviewQueue || ui('智能体模板审核', 'Agent Template Review')}</h2>
+              <h2 className="text-xl font-semibold text-white">{t.templateReviewQueue || uiMessage('template-review-queue.agent-template-review.a44cbbcf0a')}</h2>
               <p className="mt-1 text-sm text-white/50">
-                {ui(`${queue.length} 个智能体模板等待审核`, `${queue.length} agent template(s) pending review`)}
+                {formatUiMessage('template-review-queue.value0-agent-template-s-pending.59c4d58dda', { value0: queue.length })}
               </p>
             </div>
           </div>
@@ -144,7 +145,7 @@ export function TemplateReviewQueue() {
         ) : queue.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] text-center text-sm text-white/45">
             <CheckCircle size={34} className="text-emerald-300/60" />
-            <span>{t.allTemplatesReviewed || ui('所有智能体模板都已审核完成', 'All agent templates have been reviewed.')}</span>
+            <span>{t.allTemplatesReviewed || uiMessage('template-review-queue.all-agent-templates-have-been.20ffa361fa')}</span>
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -176,7 +177,7 @@ export function TemplateReviewQueue() {
                         className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white"
                       >
                         <Eye size={14} />
-                        {t.review || ui('审核', 'Review')}
+                        {t.review || uiMessage('template-review-queue.review.3d8b9fb74e')}
                       </button>
                     )}
                   </div>
@@ -184,11 +185,11 @@ export function TemplateReviewQueue() {
                   {active && (
                     <div className="mt-4 rounded-lg border border-white/10 bg-black/15 p-3">
                       <label className="block">
-                        <span className="mb-1 block text-xs text-white/50">{t.reviewComment || ui('审核意见', 'Review comment')}</span>
+                        <span className="mb-1 block text-xs text-white/50">{t.reviewComment || uiMessage('template-review-queue.review-comment.024e24dedc')}</span>
                         <input
                           value={comment}
                           onChange={event => setComment(event.target.value)}
-                          placeholder={ui('通过可选填，拒绝必须填写原因...', 'Optional for approval, required for rejection...')}
+                          placeholder={uiMessage('template-review-queue.optional-for-approval-required-for.ea999311e2')}
                           className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 focus:border-amber-400/35"
                         />
                       </label>
@@ -197,7 +198,7 @@ export function TemplateReviewQueue() {
                           onClick={() => { setSelected(null); setComment(''); }}
                           className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60 transition hover:bg-white/10"
                         >
-                          {ui('取消', 'Cancel')}
+                          {uiMessage('template-review-queue.cancel.998b9c48fb')}
                         </button>
                         <button
                           onClick={() => handleAction(template.id, 'reject')}
@@ -205,7 +206,7 @@ export function TemplateReviewQueue() {
                           className="inline-flex items-center gap-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20 disabled:opacity-50"
                         >
                           <XCircle size={14} />
-                          {t.reject || ui('拒绝', 'Reject')}
+                          {t.reject || uiMessage('template-review-queue.reject.52e8be4e72')}
                         </button>
                         <button
                           onClick={() => handleAction(template.id, 'approve')}
@@ -213,7 +214,7 @@ export function TemplateReviewQueue() {
                           className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-50"
                         >
                           {actionLoading === template.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-                          {t.approveAndPublish || ui('通过并发布', 'Approve & Publish')}
+                          {t.approveAndPublish || uiMessage('template-review-queue.approve-publish.0528c0172e')}
                         </button>
                       </div>
                     </div>

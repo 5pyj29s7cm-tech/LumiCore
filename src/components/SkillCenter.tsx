@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
 import { apiFetch } from '@/services/apiClient';
+import { WORK_RECOMMENDATION_RULES } from '../i18n/locales/skillRecommendations';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 
@@ -128,60 +130,60 @@ function getSkillAvailability(
   const installedSkill = findInstalledSkillForMarket(skill, installedSkills);
   if (installedSkill?.broken) {
     return {
-      label: lang === 'zh' ? '需修复' : 'Needs repair',
-      detail: lang === 'zh' ? '本地技能包不完整，修复后才能调用。' : 'Local package is incomplete and needs repair before use.',
+      label: uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.local-package-is-incomplete-and.071c55d928', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'red',
       installedSkill,
     };
   }
   if (installedSkill?.startupError || (installedSkill?.enabled && !installedSkill.connected)) {
     return {
-      label: lang === 'zh' ? '待连接' : 'Needs connection',
-      detail: installedSkill.startupError || (lang === 'zh' ? '已安装但 MCP 进程尚未连接。' : 'Installed but its MCP server is not connected yet.'),
+      label: uiMessage('skill-center.needs-connection.a5cb6b78b7', (lang === 'zh') ? 'zh' : 'en'),
+      detail: installedSkill.startupError || (uiMessage('skill-center.installed-but-its-mcp-server.9f5145472b', (lang === 'zh') ? 'zh' : 'en')),
       tone: 'amber',
       installedSkill,
     };
   }
   if (installedSkill?.connected) {
     return {
-      label: lang === 'zh' ? '可调用' : 'Callable',
-      detail: lang === 'zh' ? '已连接到 Lumi，聊天、运行日志和工具调度可使用。' : 'Connected to Lumi and available to chat, run logs, and tool routing.',
+      label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.connected-to-lumi-and-available.410a87e979', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'green',
       installedSkill,
     };
   }
   if (installedSkill && !installedSkill.enabled) {
     return {
-      label: lang === 'zh' ? '已安装未启用' : 'Installed, disabled',
-      detail: lang === 'zh' ? '技能已在本机，但当前被关闭。' : 'The skill exists locally, but is currently disabled.',
+      label: uiMessage('skill-center.installed-disabled.46156ea2d0', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.the-skill-exists-locally-but.197bdb9ca7', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'white',
       installedSkill,
     };
   }
   if (skill.runtime === 'external') {
     return {
-      label: lang === 'zh' ? '外部代理' : 'External agent',
-      detail: lang === 'zh' ? '需要本机先安装对应 CLI，安装后会作为团队成员接入。' : 'Requires the matching CLI on this computer, then connects as a team agent.',
+      label: uiMessage('skill-center.external-agent.cacb5d8950', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.requires-the-matching-cli-on.4f5d160185', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'cyan',
     };
   }
   if (skill.requiresApiKey && skill.apiKeyEnv && !savedKeys[skill.apiKeyEnv]) {
     return {
-      label: lang === 'zh' ? '需 API Key' : 'Needs API key',
-      detail: lang === 'zh' ? `安装后需配置 ${skill.apiKeyEnv} 才能真实调用。` : `Configure ${skill.apiKeyEnv} after install before real calls can run.`,
+      label: uiMessage('skill-center.needs-api-key.2e4a04bc58', (lang === 'zh') ? 'zh' : 'en'),
+      detail: formatUiMessage('skill-center.configure-value0-after-install-before.18059ad8fc', { value0: skill.apiKeyEnv }, (lang === 'zh') ? 'zh' : 'en'),
       tone: 'amber',
     };
   }
   if (skill.requiresSetup) {
     return {
-      label: lang === 'zh' ? '需本机环境' : 'Needs setup',
-      detail: skill.setupNote || (lang === 'zh' ? '需要先完成本机依赖安装。' : 'Requires local dependencies before use.'),
+      label: uiMessage('skill-center.needs-setup.e1bc0e20e1', (lang === 'zh') ? 'zh' : 'en'),
+      detail: skill.setupNote || (uiMessage('skill-center.requires-local-dependencies-before-use.f9734c5f1c', (lang === 'zh') ? 'zh' : 'en')),
       tone: 'amber',
     };
   }
   return {
-    label: lang === 'zh' ? '安装后可用' : 'Ready after install',
-    detail: lang === 'zh' ? '官方内置技能，安装并连接后可直接调用。' : 'Official bundled skill. Install and connect it to call it.',
+    label: uiMessage('skill-center.ready-after-install.9ccfaed578', (lang === 'zh') ? 'zh' : 'en'),
+    detail: uiMessage('skill-center.official-bundled-skill-install-and.c28c0f16b6', (lang === 'zh') ? 'zh' : 'en'),
     tone: 'green',
   };
 }
@@ -195,32 +197,32 @@ function getDisplayAvailability(
   const installedSkill = findInstalledSkillForMarket(skill, installedSkills);
   if (installedSkill?.broken) {
     return {
-      label: lang === 'zh' ? '需修复' : 'Needs repair',
-      detail: lang === 'zh' ? '本地技能包不完整，修复后才能调用。' : 'Local package is incomplete and needs repair before use.',
+      label: uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.local-package-is-incomplete-and.071c55d928', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'red',
       installedSkill,
     };
   }
   if (installedSkill?.startupError || (installedSkill?.enabled && !installedSkill.connected)) {
     return {
-      label: lang === 'zh' ? '已安装未连接' : 'Installed, not connected',
-      detail: installedSkill.startupError || (lang === 'zh' ? '已安装，但本地服务还没有连上 Lumi。' : 'Installed, but its local service is not connected to Lumi yet.'),
+      label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
+      detail: installedSkill.startupError || (uiMessage('skill-center.installed-but-its-local-service.0372816817', (lang === 'zh') ? 'zh' : 'en')),
       tone: 'amber',
       installedSkill,
     };
   }
   if (installedSkill?.connected) {
     return {
-      label: lang === 'zh' ? '可调用' : 'Callable',
-      detail: lang === 'zh' ? '已连接到 Lumi，可以在聊天、调度和工具调用中使用。' : 'Connected to Lumi and available for chat, orchestration, and tool calls.',
+      label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.connected-to-lumi-and-available.e7eedbc8db', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'green',
       installedSkill,
     };
   }
   if (installedSkill && !installedSkill.enabled) {
     return {
-      label: lang === 'zh' ? '已安装未启用' : 'Installed, disabled',
-      detail: lang === 'zh' ? '技能已在本机，但当前被关闭。' : 'The skill exists locally, but is currently disabled.',
+      label: uiMessage('skill-center.installed-disabled.46156ea2d0', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.the-skill-exists-locally-but.197bdb9ca7', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'white',
       installedSkill,
     };
@@ -228,38 +230,38 @@ function getDisplayAvailability(
   if (skill.installed) {
     if (skill.runtime === 'external' && skill.externalHealthStatus === 'online') {
       return {
-        label: lang === 'zh' ? '可调用' : 'Callable',
-        detail: lang === 'zh' ? '已在 Team 且连接测试通过，Lumi 可以把任务调度给它。' : 'In Team with a passing connection test, so Lumi can schedule work to it.',
+        label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
+        detail: uiMessage('skill-center.in-team-with-a-passing.b0a37c89c7', (lang === 'zh') ? 'zh' : 'en'),
         tone: 'green',
       };
     }
     return {
-      label: lang === 'zh' ? '已安装未连接' : 'Installed, not connected',
+      label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
       detail: skill.runtime === 'external'
-        ? (lang === 'zh' ? '已加入 Team，需要在 Team 里通过连接测试后才会参与调度。' : 'Added to Team. Run a Team connection test before Lumi schedules it.')
-        : (lang === 'zh' ? '已安装，但当前连接状态还没变为可调用。' : 'Installed, but it has not reported a callable connection yet.'),
+        ? (uiMessage('skill-center.added-to-team-run-a.d549d0bba1', (lang === 'zh') ? 'zh' : 'en'))
+        : (uiMessage('skill-center.installed-but-it-has-not.61d5e176ff', (lang === 'zh') ? 'zh' : 'en')),
       tone: 'amber',
     };
   }
   if (skill.runtime === 'external') {
     return {
-      label: lang === 'zh' ? '外部 Agent' : 'External Agent',
-      detail: lang === 'zh' ? '安装会把它加入 Team，通过本机 CLI 桥接，连接测试通过后再参与调度。' : 'Install adds it to Team as a local CLI-backed agent, then a health test enables orchestration.',
+      label: uiMessage('skill-center.external-agent.21bea16d09', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.install-adds-it-to-team.7c572fcec9', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'cyan',
     };
   }
   if ((skill.requiresApiKey && skill.apiKeyEnv && !savedKeys[skill.apiKeyEnv]) || skill.requiresSetup) {
     return {
-      label: lang === 'zh' ? '需配置' : 'Needs configuration',
+      label: uiMessage('skill-center.needs-configuration.d8fbbeff8a', (lang === 'zh') ? 'zh' : 'en'),
       detail: skill.requiresApiKey && skill.apiKeyEnv
-        ? (lang === 'zh' ? `需要配置 ${skill.apiKeyEnv} 后才能真实调用。` : `Configure ${skill.apiKeyEnv} before real calls can run.`)
-        : (skill.setupNote || (lang === 'zh' ? '需要先完成本机依赖或账号配置。' : 'Requires local dependencies or account setup before use.')),
+        ? (formatUiMessage('skill-center.configure-value0-before-real-calls.041e3cf5db', { value0: skill.apiKeyEnv }, (lang === 'zh') ? 'zh' : 'en'))
+        : (skill.setupNote || (uiMessage('skill-center.requires-local-dependencies-or-account.87aec9deaa', (lang === 'zh') ? 'zh' : 'en'))),
       tone: 'amber',
     };
   }
   return {
-    label: lang === 'zh' ? '仅可安装' : 'Installable',
-    detail: lang === 'zh' ? '当前只是大厅里的可安装技能；安装并连接后 Lumi 才能调用。' : 'Available in the hall only; Lumi can call it after install and connection.',
+    label: uiMessage('skill-center.installable.04d1cd9917', (lang === 'zh') ? 'zh' : 'en'),
+    detail: uiMessage('skill-center.available-in-the-hall-only.f6dd8e70ac', (lang === 'zh') ? 'zh' : 'en'),
     tone: 'white',
   };
 }
@@ -267,31 +269,31 @@ function getDisplayAvailability(
 function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh'): SkillAvailability {
   if (skill.broken) {
     return {
-      label: lang === 'zh' ? '需修复' : 'Needs repair',
-      detail: lang === 'zh' ? '本地技能包不完整，修复后才能调用。' : 'Local package is incomplete and needs repair before use.',
+      label: uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.local-package-is-incomplete-and.071c55d928', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'red',
       installedSkill: skill,
     };
   }
   if (skill.startupError || (skill.enabled && !skill.connected)) {
     return {
-      label: lang === 'zh' ? '已安装未连接' : 'Installed, not connected',
-      detail: skill.startupError || (lang === 'zh' ? '本地服务还没有连上 Lumi。' : 'The local service is not connected to Lumi yet.'),
+      label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
+      detail: skill.startupError || (uiMessage('skill-center.the-local-service-is-not.9ec540d4f3', (lang === 'zh') ? 'zh' : 'en')),
       tone: 'amber',
       installedSkill: skill,
     };
   }
   if (skill.connected) {
     return {
-      label: lang === 'zh' ? '可调用' : 'Callable',
-      detail: lang === 'zh' ? '已连接到 Lumi，可以参与工具调用。' : 'Connected to Lumi and available for tool calls.',
+      label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage('skill-center.connected-to-lumi-and-available.e8472f7e6b', (lang === 'zh') ? 'zh' : 'en'),
       tone: 'green',
       installedSkill: skill,
     };
   }
   return {
-    label: lang === 'zh' ? '已安装未启用' : 'Installed, disabled',
-    detail: lang === 'zh' ? '技能已在本机，但当前被关闭。' : 'The skill exists locally, but is currently disabled.',
+    label: uiMessage('skill-center.installed-disabled.46156ea2d0', (lang === 'zh') ? 'zh' : 'en'),
+    detail: uiMessage('skill-center.the-skill-exists-locally-but.197bdb9ca7', (lang === 'zh') ? 'zh' : 'en'),
     tone: 'white',
     installedSkill: skill,
   };
@@ -302,8 +304,8 @@ function isExternalRuntimeSkill(skill?: Partial<MarketplaceSkill | ExternalResul
 }
 
 function getInstallActionText(skill: Partial<MarketplaceSkill | ExternalResult>, installed: boolean, lang: 'en' | 'zh', t: any): string {
-  if (installed) return isExternalRuntimeSkill(skill) ? (lang === 'zh' ? '已在 Team' : 'In Team') : (t.installedStatus || 'Installed');
-  return isExternalRuntimeSkill(skill) ? (lang === 'zh' ? '加入 Team' : 'Add to Team') : (t.installBtn || 'Install');
+  if (installed) return isExternalRuntimeSkill(skill) ? (uiMessage('skill-center.in-team.e4e63f3860', (lang === 'zh') ? 'zh' : 'en')) : (t.installedStatus || 'Installed');
+  return isExternalRuntimeSkill(skill) ? (uiMessage('skill-center.add-to-team.43275073fd', (lang === 'zh') ? 'zh' : 'en')) : (t.installBtn || 'Install');
 }
 
 function SkillStatusCallout({ availability, compact = false }: { availability: SkillAvailability; compact?: boolean }) {
@@ -391,32 +393,6 @@ const PROFESSION_RECOMMENDATION_MAP: Record<string, string[]> = {
   construction: ['skill-construction-tender-cost', 'skill-cad-drafting'],
   estimator: ['skill-construction-tender-cost', 'skill-finance-office'],
 };
-
-const WORK_RECOMMENDATION_RULES: Array<{ skillIds: string[]; zh: string; en: string; pattern: RegExp }> = [
-  { skillIds: ['skill-executive-ops'], zh: '经营/管理', en: 'management work', pattern: /企业负责人|老板|创始人|CEO|总经理|管理|经营|KPI|OKR|会议纪要|决策|现金跑道|runway|executive|founder|manager|decision/i },
-  { skillIds: ['skill-ecommerce-ops', 'skill-finance-office'], zh: '电商/平台经营', en: 'e-commerce work', pattern: /电商|店铺|SKU|库存|平台结算|淘宝|抖店|小红书|shopify|ecommerce|marketplace|listing|settlement/i },
-  { skillIds: ['skill-cross-border-trade', 'skill-ecommerce-ops', 'skill-translator'], zh: '外贸/跨境', en: 'foreign trade or cross-border commerce', pattern: /外贸|跨境|询盘|报价单|报关|清关|海关|关税|货代|提单|信用证|FOB|CIF|DDP|incoterm|customs|tariff|freight|forwarder|export|import|cross.?border|foreign trade/i },
-  { skillIds: ['skill-manufacturing-qa'], zh: '制造/工厂/质检', en: 'manufacturing or quality work', pattern: /制造|工厂|生产|产线|质检|品控|BOM|物料|供应商|交期|8D|不良|返工|报废|work order|production|factory|quality|supplier|defect|inspection/i },
-  { skillIds: ['skill-property-ops', 'skill-cad-drafting'], zh: '房产/物业/装修', en: 'property or renovation work', pattern: /房产|房源|中介|物业|租赁|看房|业主|租客|工单|装修|施工进度|预算|材料清单|real estate|property|leasing|tenant|landlord|renovation/i },
-  { skillIds: ['skill-insurance-advisor', 'skill-sales-customer-ops'], zh: '保险/顾问', en: 'insurance advisory work', pattern: /保险|保单|投保|续保|理赔|保障|重疾|寿险|车险|年金|客户画像|insurance|policy|claim|renewal|premium|coverage/i },
-  { skillIds: ['skill-content-ops', 'skill-design-studio-pack', 'skill-video-editor'], zh: '新媒体/内容运营', en: 'content or creator operations', pattern: /新媒体|内容运营|短视频|选题|脚本|账号复盘|评论分析|小红书|抖音|视频号|公众号|直播脚本|content|creator|tiktok|youtube|script|calendar/i },
-  { skillIds: ['skill-product-project-ops', 'skill-executive-ops'], zh: '产品/项目管理', en: 'product or project management', pattern: /产品经理|项目经理|PRD|需求池|需求文档|用户故事|验收标准|路线图|排期|里程碑|迭代|sprint|roadmap|backlog|user story|acceptance criteria|project manager|product manager/i },
-  { skillIds: ['skill-admin-assistant', 'skill-pdftools', 'skill-email-assistant'], zh: '行政/助理', en: 'administration or assistant work', pattern: /行政|助理|老板助理|总助|日程|会议安排|报销|采购申请|通知|资料归档|档案|admin|assistant|schedule|reimbursement|filing/i },
-  { skillIds: ['skill-procurement-supply-chain', 'skill-finance-office'], zh: '采购/供应链', en: 'procurement or supply chain work', pattern: /采购|供应链|供应商|询价|比价|采购计划|交期风险|库存预警|对账|采购合同|procurement|supply chain|vendor|supplier|purchase order|PO/i },
-  { skillIds: ['skill-data-bi', 'skill-finance-office'], zh: '数据分析/BI', en: 'data analysis or BI work', pattern: /数据分析|BI|报表|看板|指标口径|数据清洗|CSV|Excel|异常解释|周报|月报|dashboard|metric|analytics|anomaly|reporting/i },
-  { skillIds: ['skill-logistics-warehouse', 'skill-ecommerce-ops'], zh: '物流/仓储', en: 'logistics or warehouse work', pattern: /物流|仓储|仓库|入库|出库|拣货|盘点|配送|运费|库存差异|快递|carrier|warehouse|logistics|inbound|outbound|picking|freight/i },
-  { skillIds: ['skill-live-commerce', 'skill-content-ops', 'skill-ecommerce-ops'], zh: '直播运营/带货', en: 'live commerce work', pattern: /直播|主播|带货|直播间|货盘|场控|直播脚本|转化复盘|GMV|直播售后|live commerce|livestream|host script|rundown/i },
-  { skillIds: ['skill-construction-tender-cost', 'skill-cad-drafting', 'skill-legal-casework'], zh: '建筑/造价/招投标', en: 'construction tendering or cost work', pattern: /建筑|工程|造价|招投标|投标|清单|工程量|标书|施工节点|风险条款|BOQ|tender|bid|quantity survey|construction|cost estimate/i },
-  { skillIds: ['skill-finance-office'], zh: '财务/税务', en: 'finance or tax work', pattern: /财务|财税|税务|发票|现金流|预算|应收|应付|账龄|invoice|cashflow|tax|vat|receivable|payable/i },
-  { skillIds: ['skill-education-teacher'], zh: '教学/教培', en: 'teaching work', pattern: /老师|教师|教培|教学|教案|备课|作业|评分|学生|家长|teacher|lesson|student|rubric/i },
-  { skillIds: ['skill-medical-admin'], zh: '医疗文书/随访', en: 'medical documentation work', pattern: /医生|医疗|病历|问诊|随访|患者|检查报告|clinical|medical|patient|follow.?up/i },
-  { skillIds: ['skill-hr-recruiting'], zh: '招聘/人事', en: 'HR or recruiting work', pattern: /HR|人事|招聘|简历|面试|候选人|入职|recruit|resume|candidate|interview|onboarding/i },
-  { skillIds: ['skill-sales-customer-ops'], zh: '销售/客服', en: 'sales or support work', pattern: /销售|客服|客户|线索|跟进|异议|工单|续费|lead|sales|customer|support|objection/i },
-  { skillIds: ['skill-restaurant-store-ops'], zh: '餐饮/门店', en: 'restaurant or store work', pattern: /餐饮|门店|咖啡店|菜单|毛利|报损|排班|点评|促销|restaurant|cafe|store|menu|waste|shift/i },
-  { skillIds: ['skill-legal-casework'], zh: '法律/案件', en: 'legal work', pattern: /法律|律师|案件|合同|起诉|答辩|court|legal|lawsuit|contract/i },
-  { skillIds: ['skill-design-studio-pack'], zh: '设计/品牌', en: 'design work', pattern: /设计|品牌|logo|海报|视觉|UI|UX|design|brand|poster/i },
-  { skillIds: ['skill-cad-drafting'], zh: 'CAD/装修图纸', en: 'CAD or drafting work', pattern: /CAD|DXF|图纸|平面图|施工图|装修|floor plan|drafting/i },
-];
 
 export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang: 'en' | 'zh'; initialTab?: SkillCenterTab }) {
   const [activeTab, setActiveTab] = useState<SkillCenterTab>(initialTab);
@@ -612,7 +588,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
       const data = await res.json();
       if (data.success) {
         if (externalRuntime || data.agentId) {
-          toast.success(data.message || `"${skill.name}" ${lang === 'zh' ? '已加入 Team' : 'added to Team'}`);
+          toast.success(data.message || `"${skill.name}" ${uiMessage('skill-center.added-to-team.27578c1a67', (lang === 'zh') ? 'zh' : 'en')}`);
           window.dispatchEvent(new CustomEvent('lumi:agents-changed', { detail: { agentId: data.agentId, name: skill.name } }));
           window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'team', agentId: data.agentId } }));
         } else {
@@ -648,7 +624,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
       const res = await apiFetch(`/api/skills/${name}/repair`, { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.reason || data.error || 'Repair failed');
-      toast.success(lang === 'zh' ? `"${name}" 已修复` : `"${name}" repaired`);
+      toast.success(formatUiMessage('skill-center.value0-repaired.46dd6808b8', { value0: name }, (lang === 'zh') ? 'zh' : 'en'));
       if (socket) socket.emit('skill:updated', { name });
       if (detailSkill && 'name' in detailSkill && detailSkill.name === name) setDetailSkill(null);
       fetchInstalled(); fetchMarketplace();
@@ -666,7 +642,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Cleanup failed');
       const removed = Array.isArray(data.removed) ? data.removed.length : 0;
-      toast.success(lang === 'zh' ? `已清理 ${removed} 个坏技能` : `Cleaned ${removed} broken skills`);
+      toast.success(formatUiMessage('skill-center.cleaned-value0-broken-skills.8180ac8311', { value0: removed }, (lang === 'zh') ? 'zh' : 'en'));
       fetchInstalled(); fetchMarketplace();
     } catch (err: any) {
       toast.error(err.message || 'Cleanup failed');
@@ -826,9 +802,9 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
   });
 
   const tabs: { id: SkillCenterTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'featured', label: t.recommendedTab || (lang === 'zh' ? '\u63a8\u8350' : 'Recommended'), icon: <Sparkles size={14} /> },
+    { id: 'featured', label: t.recommendedTab || (uiMessage('skill-center.recommended.bf507c36c7', (lang === 'zh') ? 'zh' : 'en')), icon: <Sparkles size={14} /> },
     { id: 'marketplace', label: t.marketplaceTab || 'Marketplace', icon: <ShoppingBag size={14} /> },
-    { id: 'installed', label: t.skillManageTab || (lang === 'zh' ? '\u7ba1\u7406' : 'Manage'), icon: <Cpu size={14} /> },
+    { id: 'installed', label: t.skillManageTab || (uiMessage('skill-center.manage.1f04c52a55', (lang === 'zh') ? 'zh' : 'en')), icon: <Cpu size={14} /> },
     { id: 'mcp', label: t.mcp || 'MCP', icon: <Github size={14} /> },
     { id: 'generate', label: t.generateTab || 'Generate', icon: <Sparkles size={14} /> },
   ];
@@ -845,30 +821,20 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
     (skill.enabled && !skill.connected);
   const shouldOfferRepair = (skill: InstalledSkill) => hasSkillRuntimeIssue(skill);
   const recommendationCopy = {
-    title: lang === 'zh' ? '\u57fa\u4e8e\u4f60\u7684\u5de5\u4f5c\u63a8\u8350' : 'Recommended for your work',
-    subtitle: lang === 'zh'
-      ? 'Lumi \u4f1a\u53c2\u8003\u804c\u4e1a\u753b\u50cf\u3001\u6700\u8fd1\u804a\u5929\u548c\u5df2\u5b89\u88c5 Skill\uff1b\u7ee7\u7eed\u548c Lumi \u804a\u5de5\u4f5c\uff0c\u63a8\u8350\u4f1a\u8d8a\u6765\u8d8a\u51c6\u3002'
-      : 'Lumi uses the work profile, recent chats, and installed skills. Keep talking about work and this gets sharper.',
-    profile: lang === 'zh' ? '\u5de5\u4f5c\u753b\u50cf' : 'Work profile',
-    signals: lang === 'zh' ? '\u804a\u5929\u4fe1\u53f7' : 'Chat signals',
-    recommendations: lang === 'zh' ? '\u63a8\u8350\u5b89\u88c5' : 'Recommended installs',
-    installed: lang === 'zh' ? '\u5df2\u5177\u5907\u7684\u80fd\u529b' : 'Available capabilities',
-    installedHint: lang === 'zh'
-      ? '\u8fd9\u91cc\u53ea\u505a\u72b6\u6001\u6982\u89c8\uff1b\u542f\u505c\u3001\u4fee\u590d\u3001\u5378\u8f7d\u8bf7\u5230\u7ba1\u7406\u9875\u3002\u5df2\u5b89\u88c5\u7684 Skill \u901a\u5e38\u4f1a\u901a\u8fc7\u672c\u5730 MCP server \u66b4\u9732\u5de5\u5177\u7ed9 Lumi \u8c03\u7528\u3002'
-      : 'This is a status overview. Enable, repair, and uninstall from Manage. Installed skills usually expose tools to Lumi through a local MCP server.',
-    noSignals: lang === 'zh'
-      ? '\u6682\u65f6\u8fd8\u6ca1\u6709\u8db3\u591f\u7684\u804c\u4e1a\u6216\u5de5\u4f5c\u4fe1\u53f7\uff0c\u63a8\u8350\u4f1a\u5148\u4fdd\u6301\u4fdd\u5b88\u3002'
-      : 'Not enough work signals yet, so recommendations stay conservative.',
-    noRecommendations: lang === 'zh'
-      ? '\u8fd8\u6ca1\u6709\u660e\u786e\u63a8\u8350\u3002\u548c Lumi \u804a\u4e00\u804a\u4f60\u7684\u804c\u4e1a\u3001\u5e38\u505a\u7684\u4efb\u52a1\u6216\u5de5\u4f5c\u6d41\u7a0b\u540e\uff0c\u8fd9\u91cc\u4f1a\u81ea\u52a8\u53d8\u5f97\u6709\u7528\u3002'
-      : 'No strong recommendations yet. Talk with Lumi about your profession, recurring tasks, or workflows and this will populate automatically.',
-    noInstalled: lang === 'zh' ? '\u8fd8\u6ca1\u6709\u5df2\u5b89\u88c5\u7684 Skill\u3002' : 'No installed skills yet.',
-    refresh: lang === 'zh' ? '\u5237\u65b0\u63a8\u8350' : 'Refresh recommendations',
-    manage: lang === 'zh' ? '\u7ba1\u7406' : 'Manage',
-    managementTitle: lang === 'zh' ? 'Skill / MCP \u7ba1\u7406' : 'Skill / MCP Management',
-    managementHint: lang === 'zh'
-      ? '\u8fd9\u91cc\u5904\u7406\u672c\u5730 Skill \u5305\u7684\u542f\u7528\u3001\u505c\u7528\u3001\u4fee\u590d\u3001\u53d1\u5e03\u548c\u5378\u8f7d\u3002\u5927\u5385\u548c\u63a8\u8350\u9875\u53ea\u5c55\u793a\u72b6\u6001\u6216\u5b89\u88c5\u5165\u53e3\u3002'
-      : 'Enable, disable, repair, publish, and uninstall local Skill packages here. Hall and Recommended only show status or install entry points.',
+    title: uiMessage('skill-center.recommended-for-your-work.be5baee372', (lang === 'zh') ? 'zh' : 'en'),
+    subtitle: uiMessage('skill-center.lumi-uses-the-work-profile.f505fa1fb5', (lang === 'zh') ? 'zh' : 'en'),
+    profile: uiMessage('skill-center.work-profile.ed4798ec73', (lang === 'zh') ? 'zh' : 'en'),
+    signals: uiMessage('skill-center.chat-signals.9bf2c1816a', (lang === 'zh') ? 'zh' : 'en'),
+    recommendations: uiMessage('skill-center.recommended-installs.dbbecaa48a', (lang === 'zh') ? 'zh' : 'en'),
+    installed: uiMessage('skill-center.available-capabilities.a150ef4d38', (lang === 'zh') ? 'zh' : 'en'),
+    installedHint: uiMessage('skill-center.this-is-a-status-overview.ca69c2a0c5', (lang === 'zh') ? 'zh' : 'en'),
+    noSignals: uiMessage('skill-center.not-enough-work-signals-yet.c81ce5b488', (lang === 'zh') ? 'zh' : 'en'),
+    noRecommendations: uiMessage('skill-center.no-strong-recommendations-yet-talk.52c6b3ae62', (lang === 'zh') ? 'zh' : 'en'),
+    noInstalled: uiMessage('skill-center.no-installed-skills-yet.48c5eca957', (lang === 'zh') ? 'zh' : 'en'),
+    refresh: uiMessage('skill-center.refresh-recommendations.e25582e661', (lang === 'zh') ? 'zh' : 'en'),
+    manage: uiMessage('skill-center.manage.1f04c52a55', (lang === 'zh') ? 'zh' : 'en'),
+    managementTitle: uiMessage('skill-center.skill-mcp-management.7292e8b2ea', (lang === 'zh') ? 'zh' : 'en'),
+    managementHint: uiMessage('skill-center.enable-disable-repair-publish-and.fa74468d2b', (lang === 'zh') ? 'zh' : 'en'),
   };
   const hasRecommendationSignals = professionProfiles.length > 0 || matchedWorkSignals.length > 0 || workSignalText.trim().length > 0;
 
@@ -902,13 +868,13 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-400/15 bg-amber-500/10 px-4 py-3 text-xs text-amber-100/80">
           <span className="flex items-center gap-2">
             <AlertTriangle size={14} className="text-amber-300" />
-            {lang === 'zh' ? `技能大厅加载异常：${loadError}` : `Skill Center load issue: ${loadError}`}
+            {formatUiMessage('skill-center.skill-center-load-issue-value0.c32306f8d7', { value0: loadError }, (lang === 'zh') ? 'zh' : 'en')}
           </span>
           <button
             onClick={() => { setLoadError(''); fetchMarketplace(); fetchInstalled(); fetchCategories(); fetchRecommendationSignals(); }}
             className="rounded-lg bg-amber-300/10 px-3 py-1.5 font-semibold text-amber-200 hover:bg-amber-300/18"
           >
-            {lang === 'zh' ? '重试' : 'Retry'}
+            {uiMessage('skill-center.retry.563171cfe4', (lang === 'zh') ? 'zh' : 'en')}
           </button>
         </div>
       )}
@@ -1411,7 +1377,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                 <div className="flex min-w-0 items-center gap-3">
                   <AlertTriangle size={16} className="shrink-0 text-red-300" />
                   <p className="text-xs font-bold text-red-200">
-                    {lang === 'zh' ? `${brokenSkillCount} 个技能包不完整` : `${brokenSkillCount} incomplete skill package${brokenSkillCount > 1 ? 's' : ''}`}
+                    {formatUiMessage('skill-center.value0-incomplete-skill-package-value1.880bdf7b48', { value0: brokenSkillCount, value1: { en: brokenSkillCount > 1 ? 's' : '', zh: '' } }, (lang === 'zh') ? 'zh' : 'en')}
                   </p>
                 </div>
                 <button
@@ -1420,7 +1386,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                   className="flex shrink-0 items-center gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200 transition-colors hover:bg-red-500/20 disabled:opacity-40"
                 >
                   {cleaningBroken ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                  {lang === 'zh' ? '清理坏技能' : 'Clean Broken'}
+                  {uiMessage('skill-center.clean-broken.b337dc6228', (lang === 'zh') ? 'zh' : 'en')}
                 </button>
               </div>
             )}
@@ -1458,7 +1424,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                             <button onClick={(e) => { e.stopPropagation(); handleRepair(skill.name); }}
                               disabled={repairing === skill.name}
                               className="p-2 rounded-lg text-amber-300 transition-colors hover:bg-amber-500/10 disabled:opacity-40"
-                              title={lang === 'zh' ? '修复技能' : 'Repair'}
+                              title={uiMessage('skill-center.repair.3f5a830aaf', (lang === 'zh') ? 'zh' : 'en')}
                             >
                               <RefreshCw size={13} className={repairing === skill.name ? 'animate-spin' : ''} />
                             </button>
@@ -1500,17 +1466,17 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                         )}
                         {skill.broken && (
                           <span className="flex items-center gap-1 px-2 py-0.5 bg-red-500/10 rounded-full text-[12px] text-red-300 font-bold">
-                            <AlertTriangle size={11} />{lang === 'zh' ? '坏技能' : 'Broken'}
+                            <AlertTriangle size={11} />{uiMessage('skill-center.broken.565289cc16', (lang === 'zh') ? 'zh' : 'en')}
                           </span>
                         )}
                         {!skill.broken && skill.startupError && (
                           <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 rounded-full text-[12px] text-amber-300 font-bold">
-                            <AlertTriangle size={11} />{lang === 'zh' ? '需修复' : 'Needs repair'}
+                            <AlertTriangle size={11} />{uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en')}
                           </span>
                         )}
                         {!skill.broken && skill.enabled && !skill.connected && (
                           <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 rounded-full text-[12px] text-amber-300 font-bold">
-                            <AlertTriangle size={11} />{lang === 'zh' ? '未连接' : 'Not connected'}
+                            <AlertTriangle size={11} />{uiMessage('skill-center.not-connected.e55a06aa6b', (lang === 'zh') ? 'zh' : 'en')}
                           </span>
                         )}
                         {!skill.broken && skill.healthStatus && !skill.enabled && !['connected', 'disconnected', 'unknown'].includes(skill.healthStatus) && (
@@ -1688,7 +1654,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
             <p className="text-sm font-mono text-cyan-300/70 break-all">{mSkill.externalCommand}</p>
           )}
           <p className="text-[12px] text-cyan-400/60">
-            {lang === 'zh' ? '它会作为 Team 里的外部 Agent 运行，通过本机 CLI 连接，测试通过后再参与调度。' : 'This skill runs as a Team external agent through a local CLI and joins orchestration after a passing test.'}
+            {uiMessage('skill-center.this-skill-runs-as-a.86927e998c', (lang === 'zh') ? 'zh' : 'en')}
           </p>
         </div>
       )}
@@ -1762,17 +1728,17 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
           )}
           {detailSkill.broken && (
             <span className="flex items-center gap-1 px-2 py-0.5 bg-red-500/10 rounded-full text-xs text-red-300 font-bold">
-              <AlertTriangle size={11} />{lang === 'zh' ? '坏技能' : 'Broken'}
+              <AlertTriangle size={11} />{uiMessage('skill-center.broken.565289cc16', (lang === 'zh') ? 'zh' : 'en')}
             </span>
           )}
           {!detailSkill.broken && detailSkill.startupError && (
             <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 rounded-full text-xs text-amber-300 font-bold">
-              <AlertTriangle size={11} />{lang === 'zh' ? '需修复' : 'Needs repair'}
+              <AlertTriangle size={11} />{uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en')}
             </span>
           )}
           {!detailSkill.broken && detailSkill.enabled && !detailSkill.connected && (
             <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 rounded-full text-xs text-amber-300 font-bold">
-              <AlertTriangle size={11} />{lang === 'zh' ? '未连接' : 'Not connected'}
+              <AlertTriangle size={11} />{uiMessage('skill-center.not-connected.e55a06aa6b', (lang === 'zh') ? 'zh' : 'en')}
             </span>
           )}
           {!detailSkill.broken && detailSkill.healthStatus && !['connected', 'disconnected', 'unknown'].includes(detailSkill.healthStatus) && (
@@ -1790,9 +1756,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
 
       {!isMarketSkill && detailSkill?.broken && (
         <div className="rounded-2xl border border-red-500/10 bg-red-500/5 p-4 text-xs leading-relaxed text-red-100/75">
-          {lang === 'zh'
-            ? '这个技能包缺少可启动入口。Lumi 会先尝试从 npm、GitHub 或内置技能源重装；没有来源时需要清理后重新安装或重新生成。'
-            : 'This skill package has no runnable entry. Lumi will try npm, GitHub, or bundled reinstall sources first; otherwise clean it up and reinstall or regenerate it.'}
+          {uiMessage('skill-center.this-skill-package-has-no.f678ca8ea2', (lang === 'zh') ? 'zh' : 'en')}
         </div>
       )}
 
@@ -1824,7 +1788,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition-colors disabled:opacity-40"
               >
                 <RefreshCw size={13} className={repairing === detailSkill.name ? 'animate-spin' : ''} />
-                {lang === 'zh' ? '修复' : 'Repair'}
+                {uiMessage('skill-center.repair.c5b19788e4', (lang === 'zh') ? 'zh' : 'en')}
               </button>
             )}
             <button

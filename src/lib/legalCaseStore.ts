@@ -1,3 +1,6 @@
+import { getLocale } from '../i18n/runtime';
+import { chinaLegalCopy } from '../i18n/regions/cn/legal';
+
 export type LegalCaseStage = 'consultation' | 'filing' | 'trial' | 'judgment' | 'enforcement' | 'closed';
 
 export type LegalCaseMaterialType = 'consultation' | 'evidence' | 'pleading' | 'judgment' | 'contract' | 'note';
@@ -106,7 +109,7 @@ function normalizeCaseFile(value: any): LegalCaseFile | null {
     materials: Array.isArray(value.materials) ? value.materials.map((item: any) => ({
       id: String(item?.id || newId('mat')),
       type: (['consultation', 'evidence', 'pleading', 'judgment', 'contract', 'note'].includes(item?.type) ? item.type : 'note') as LegalCaseMaterialType,
-      title: String(item?.title || '材料'),
+      title: String(item?.title || chinaLegalCopy().material),
       createdAt: String(item?.createdAt || new Date().toISOString()),
       content: item?.content ? String(item.content) : undefined,
       source: item?.source,
@@ -207,7 +210,7 @@ export function addLegalCaseMaterial(
 
 export function getLegalCaseLabel(caseFile: LegalCaseFile | null): string {
   if (!caseFile) return '';
-  return caseFile.title || caseFile.party || caseFile.caseNumber || '未命名案件';
+  return caseFile.title || caseFile.party || caseFile.caseNumber || chinaLegalCopy().unnamedCase;
 }
 
 export function getActiveLegalCase(): LegalCaseFile | null {
@@ -238,34 +241,37 @@ export function archiveLegalMeetingToConsultationCase({
 
   const started = startedAt ? new Date(startedAt) : new Date(endedAt);
   const ended = new Date(endedAt);
+  const locale = getLocale();
+  const localeTag = locale === 'zh' ? 'zh-CN' : 'en-US';
+  const copy = chinaLegalCopy(locale);
   const transcript = notes
     .map(note => {
-      const time = note.time ? new Date(note.time).toLocaleTimeString() : '';
+      const time = note.time ? new Date(note.time).toLocaleTimeString(localeTag) : '';
       const text = String(note.text || '').trim();
       return text ? `- [${time}] ${text}` : '';
     })
     .filter(Boolean)
     .join('\n');
 
-  const title = `当事人会谈 ${started.toLocaleString()}`;
+  const title = `${copy.meeting.title} ${started.toLocaleString(localeTag)}`;
   const content = [
     `# ${title}`,
     '',
-    `案件：${getLegalCaseLabel(caseFile)}`,
-    `开始：${started.toLocaleString()}`,
-    `结束：${ended.toLocaleString()}`,
+    `${copy.meeting.case}: ${getLegalCaseLabel(caseFile)}`,
+    `${copy.meeting.started}: ${started.toLocaleString(localeTag)}`,
+    `${copy.meeting.ended}: ${ended.toLocaleString(localeTag)}`,
     '',
-    '## Lumi 会谈整理',
+    `## ${copy.meeting.summary}`,
     '',
-    report || '暂无整理结果。',
+    report || copy.meeting.noSummary,
     '',
-    '## 原始转写',
+    `## ${copy.meeting.transcript}`,
     '',
-    transcript || '暂无转写。',
+    transcript || copy.meeting.noTranscript,
     '',
-    '## 安全边界',
+    `## ${copy.meeting.boundary}`,
     '',
-    '本记录用于辅助律师分析，最终法律意见与对外文书由执业律师确认。',
+    copy.meeting.boundaryText,
   ].join('\n');
 
   const material = addLegalCaseMaterial(caseFile.id, {

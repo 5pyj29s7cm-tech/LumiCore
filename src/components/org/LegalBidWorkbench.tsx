@@ -2,13 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
-import type { LegalCaseFile } from '../../lib/legalCaseStore';
+import { getLegalCaseLabel, type LegalCaseFile } from '../../lib/legalCaseStore';
 import { runLegalTool } from '../../lib/legalToolClient';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
+import { uiMessage } from '../../i18n/uiMessages';
+import { chinaLegalCopy } from '../../i18n/regions/cn/legal';
 
 function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
-  if (!caseFile) return '未命名案件';
-  return caseFile.title || caseFile.party || caseFile.caseNumber || '未命名案件';
+  return getLegalCaseLabel(caseFile || null) || chinaLegalCopy().unnamedCase;
 }
 
 function bidCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
@@ -16,7 +17,7 @@ function bidCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<st
   return {
     caseId: caseFile.id,
     caseName: legalCaseTitle(caseFile),
-    caseType: caseFile.cause || '投标/招标文件响应',
+    caseType: caseFile.cause || chinaLegalCopy().bidCaseType,
     parties: caseFile.party || undefined,
     orgId,
     persistCase: true,
@@ -57,17 +58,17 @@ export function LegalBidWorkbench({
       Array.from(files).forEach(file => formData.append('files', file));
       const res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('文件上传解析失败', 'File upload parsing failed'));
+      if (!res.ok) throw new Error(data.error || uiMessage('legal-bid-workbench.file-upload-parsing-failed.2381d47571'));
       const text = (data.files || [])
         .map((file: any) => String(file.content || file.preview || '').trim())
         .filter(Boolean)
         .join('\n\n');
-      if (!text) throw new Error(ui('没有提取到可生成标书的文本', 'No bid requirements text extracted'));
+      if (!text) throw new Error(uiMessage('legal-bid-workbench.no-bid-requirements-text-extracted.dd17d7b94e'));
       setRequirements(prev => [prev, text].filter(Boolean).join('\n\n'));
-      toast.success(ui('文件已解析并填入招标要求', 'File parsed into bid requirements'));
+      toast.success(uiMessage('legal-bid-workbench.file-parsed-into-bid-requirements.6edc294741'));
     } catch (err: any) {
-      const message = err?.message || ui('文件上传解析失败', 'File upload parsing failed');
-      setResult(`${ui('错误', 'Error')}: ${message}`);
+      const message = err?.message || uiMessage('legal-bid-workbench.file-upload-parsing-failed.2381d47571');
+      setResult(`${uiMessage('legal-bid-workbench.error.1d47687da7')}: ${message}`);
       toast.error(message);
     } finally {
       setUploading(false);
@@ -87,7 +88,7 @@ export function LegalBidWorkbench({
       });
       setResult(text);
     } catch (e: any) {
-      setResult(`${ui('错误', 'Error')}: ${e.message}`);
+      setResult(`${uiMessage('legal-bid-workbench.error.1d47687da7')}: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -115,9 +116,9 @@ export function LegalBidWorkbench({
               <FileText size={22} />
             </span>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-white">{t.legalBidGenTitle || ui('标书生成', 'Bid Proposal Workbench')}</h2>
+              <h2 className="text-xl font-semibold text-white">{t.legalBidGenTitle || uiMessage('legal-bid-workbench.bid-proposal-workbench.354a284512')}</h2>
               <p className="mt-1 text-sm leading-6 text-white/50">
-                {t.legalBidGenDesc || ui('解析招标要求并生成可编辑的商务标、技术标框架。', 'Parse tender requirements and generate an editable commercial/technical proposal framework.')}
+                {t.legalBidGenDesc || uiMessage('legal-bid-workbench.parse-tender-requirements-and-generate.b2a47e1579')}
               </p>
             </div>
           </div>
@@ -126,7 +127,7 @@ export function LegalBidWorkbench({
         <LegalCaseContextBar
           caseFile={caseFile}
           state={loading ? 'running' : result ? 'result' : 'input'}
-          detail={ui('招标要求、生成结果和交付记录均关联当前案件/项目', 'Requirements, generated output, and delivery records stay linked to the current case or project')}
+          detail={uiMessage('legal-bid-workbench.requirements-generated-output-and-delivery.b9935641c5')}
         />
 
         <section className="grid min-h-[560px] gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -136,7 +137,7 @@ export function LegalBidWorkbench({
                 type="text"
                 value={projectName}
                 onChange={event => setProjectName(event.target.value)}
-                placeholder={ui('项目名称（可选）', 'Project name (optional)')}
+                placeholder={uiMessage('legal-bid-workbench.project-name-optional.2f665e9364')}
                 className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 focus:border-violet-400/35"
               />
               <button
@@ -145,39 +146,39 @@ export function LegalBidWorkbench({
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
               >
                 {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                {t.legalBidGenUpload || ui('上传文件', 'Upload')}
+                {t.legalBidGenUpload || uiMessage('legal-bid-workbench.upload.b6fb916ac9')}
               </button>
               <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md" onChange={handleFileUpload} className="hidden" />
             </div>
             <textarea
               value={requirements}
               onChange={event => setRequirements(event.target.value)}
-              placeholder={t.legalBidGenPlaceholder || ui('粘贴招标文件、评分标准、技术要求、合同条款...', 'Paste tender document, scoring rules, technical requirements, and contract terms...')}
+              placeholder={t.legalBidGenPlaceholder || uiMessage('legal-bid-workbench.paste-tender-document-scoring-rules.ad0cd16ad2')}
               className="min-h-[420px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-violet-400/35"
             />
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-white/40">{t.legalBidGenPaste || ui('可粘贴文本，也可上传 PDF/DOCX/TXT 文件。', 'Paste text or upload PDF/DOCX/TXT files.')}</p>
+              <p className="text-xs text-white/40">{t.legalBidGenPaste || uiMessage('legal-bid-workbench.paste-text-or-upload-pdf.10d193ba46')}</p>
               <button
                 onClick={generateBid}
                 disabled={loading || !requirements.trim()}
                 className="inline-flex items-center gap-2 rounded-lg border border-violet-400/20 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-100 transition hover:bg-violet-500/25 disabled:opacity-50"
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
-                {t.legalBidGenGenerate || ui('生成标书', 'Generate')}
+                {t.legalBidGenGenerate || uiMessage('legal-bid-workbench.generate.aeba8d9545')}
               </button>
             </div>
           </div>
 
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-medium text-white">{ui('输出', 'Output')}</h3>
+              <h3 className="text-sm font-medium text-white">{uiMessage('legal-bid-workbench.output.8520bb37e3')}</h3>
               {result && (
                 <button
                   onClick={exportBid}
                   className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white"
                 >
                   <Download size={14} />
-                  {t.legalBidGenExport || ui('导出', 'Export')}
+                  {t.legalBidGenExport || uiMessage('legal-bid-workbench.export.fe47a613e3')}
                 </button>
               )}
             </div>
@@ -187,7 +188,7 @@ export function LegalBidWorkbench({
               ) : (
                 <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                   <FileText size={32} className="text-white/20" />
-                  <span>{ui('生成的标书内容会显示在这里。', 'Generated bid proposal will appear here.')}</span>
+                  <span>{uiMessage('legal-bid-workbench.generated-bid-proposal-will-appear.00d0e12b42')}</span>
                 </div>
               )}
             </div>

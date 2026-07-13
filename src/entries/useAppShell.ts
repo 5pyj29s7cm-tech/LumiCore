@@ -1,15 +1,13 @@
 import { useState, useEffect } from 'react';
-import { setLang } from '../lib/useT';
-import { translations } from '../lib/translations';
+import { setLang, useLocale, useT } from '../lib/useT';
 import { useApp } from '../contexts/AppContext';
 
 export function useAppShell() {
   const { user, loading, logout, refreshUser } = useApp();
-  const [lang, setLangState] = useState<'en' | 'zh'>('zh');
+  const lang = useLocale();
+  const t = useT();
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-  const t = translations[lang];
 
-  useEffect(() => { setLang(lang); }, [lang]);
   useEffect(() => {
     const handler = () => setIsLoginModalOpen(true);
     window.addEventListener('lumi:open-login', handler);
@@ -17,7 +15,7 @@ export function useAppShell() {
   }, []);
 
   return {
-    user, loading, lang, setLang: setLangState, t,
+    user, loading, lang, setLang, t,
     handleLogin: () => setIsLoginModalOpen(true),
     handleLogout: async () => { await logout(); },
     isLoginModalOpen, setIsLoginModalOpen, refreshUser,

@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import { knowledgeCategoryLabels } from '../../i18n/locales/knowledgeCategories';
 
 interface Props {
   articleId?: string;
@@ -21,18 +23,7 @@ interface Props {
 type ArticleStatus = 'draft' | 'published' | 'archived';
 type EditorMode = 'write' | 'preview';
 
-const CATEGORY_OPTIONS = [
-  { value: 'general', zh: '通用', en: 'General' },
-  { value: 'policy', zh: '制度', en: 'Policy' },
-  { value: 'sop', zh: 'SOP', en: 'SOP' },
-  { value: 'product', zh: '产品', en: 'Product' },
-  { value: 'culture', zh: '文化', en: 'Culture' },
-  { value: 'hr', zh: 'HR', en: 'HR' },
-  { value: 'tech', zh: '技术', en: 'Technical' },
-  { value: 'legal_statute', zh: '法规', en: 'Statute' },
-  { value: 'legal_judgment', zh: '判例', en: 'Judgment' },
-  { value: 'legal_contract', zh: '合同', en: 'Contract' },
-];
+const CATEGORY_OPTIONS = ['general', 'policy', 'sop', 'product', 'culture', 'hr', 'tech', 'legal_statute', 'legal_judgment', 'legal_contract'] as const;
 
 function parseTags(tags: unknown): string {
   if (Array.isArray(tags)) return tags.map(tag => String(tag).trim()).filter(Boolean).join(', ');
@@ -53,6 +44,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
+  const categoryLabels = knowledgeCategoryLabels(isZh ? 'zh' : 'en');
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -84,7 +76,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
     fetch(`/api/org/kb/articles/${articleId}`, { credentials: 'include' })
       .then(async response => {
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || ui(`文章加载失败（${response.status}）`, `Failed to load article (${response.status})`));
+        if (!response.ok) throw new Error(data.error || formatUiMessage('knowledge-base-editor.failed-to-load-article-value0.3e0ca7ca0a', { value0: response.status }));
         return data;
       })
       .then(article => {
@@ -121,7 +113,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
 
   const handleSave = async () => {
     if (!title.trim() || !content.trim()) {
-      setError(t.articleRequiredFields || ui('标题和正文不能为空', 'Title and content are required'));
+      setError(t.articleRequiredFields || uiMessage('knowledge-base-editor.title-and-content-are-required.1d77215b5b'));
       return;
     }
 
@@ -148,9 +140,9 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`保存失败（${res.status}）`, `Save failed (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('knowledge-base-editor.save-failed-value0.5559bb34d3', { value0: res.status }));
 
-      const message = articleId ? ui('文章已更新', 'Article updated') : ui('文章已创建', 'Article created');
+      const message = articleId ? uiMessage('knowledge-base-editor.article-updated.5819b5763c') : uiMessage('knowledge-base-editor.article-created.2296ddaedd');
       setSuccess(message);
       toast.success(message);
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
@@ -177,7 +169,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
       <div className="flex h-full items-center justify-center p-6 text-white/55">
         <div className="flex items-center gap-2">
           <Loader2 size={22} className="animate-spin" />
-          <span className="text-sm">{ui('正在加载文章...', 'Loading article...')}</span>
+          <span className="text-sm">{uiMessage('knowledge-base-editor.loading-article.8737ceeadf')}</span>
         </div>
       </div>
     );
@@ -189,16 +181,16 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
             <FileText size={21} className="text-blue-300" />
-            {articleId ? (t.editArticle || ui('编辑文章', 'Edit Article')) : (t.newArticle || ui('新建文章', 'New Article'))}
+            {articleId ? (t.editArticle || uiMessage('knowledge-base-editor.edit-article.01a78fcb76')) : (t.newArticle || uiMessage('knowledge-base-editor.new-article.0cbe692130'))}
           </h2>
           <p className="mt-1 text-sm text-white/50">
-            {ui('用结构化元数据让资料更容易被检索、引用和维护。', 'Use structured metadata so knowledge is easier to retrieve, cite, and maintain.')}
+            {uiMessage('knowledge-base-editor.use-structured-metadata-so-knowledge.192e0c582d')}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={goBack} className="lumi-button">
             <ArrowLeft size={15} />
-            {t.backToKB || ui('返回知识库', 'Back to KB')}
+            {t.backToKB || uiMessage('knowledge-base-editor.back-to-kb.0b5bd55d07')}
           </button>
           <button
             onClick={handleSave}
@@ -206,7 +198,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             className="lumi-button-primary border-blue-400/25 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25"
           >
             {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            {articleId ? (t.updateArticle || ui('更新文章', 'Update Article')) : (t.createArticle || ui('创建文章', 'Create Article'))}
+            {articleId ? (t.updateArticle || uiMessage('knowledge-base-editor.update-article.59aaca729e')) : (t.createArticle || uiMessage('knowledge-base-editor.create-article.1a1ccbb8b7'))}
           </button>
         </div>
       </div>
@@ -230,7 +222,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             <input
               value={title}
               onChange={event => setTitle(event.target.value)}
-              placeholder={t.articleTitle || ui('文章标题...', 'Article title...')}
+              placeholder={t.articleTitle || uiMessage('knowledge-base-editor.article-title.1ea50f4916')}
               className="lumi-field min-w-0 rounded-lg focus:border-blue-500/40"
             />
             <select
@@ -239,7 +231,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
               className="lumi-field rounded-lg text-sm text-white/70"
             >
               {CATEGORY_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{isZh ? option.zh : option.en}</option>
+                <option key={option} value={option}>{categoryLabels[option]}</option>
               ))}
             </select>
             <select
@@ -247,9 +239,9 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
               onChange={event => setStatus(event.target.value as ArticleStatus)}
               className="lumi-field rounded-lg text-sm text-white/70"
             >
-              <option value="draft">{t.draftStatus || ui('草稿', 'Draft')}</option>
-              <option value="published">{t.publishedStatus || ui('已发布', 'Published')}</option>
-              <option value="archived">{ui('归档', 'Archived')}</option>
+              <option value="draft">{t.draftStatus || uiMessage('knowledge-base-editor.draft.ce895273c0')}</option>
+              <option value="published">{t.publishedStatus || uiMessage('knowledge-base-editor.published.e9a862a45d')}</option>
+              <option value="archived">{uiMessage('knowledge-base-editor.archived.fafdfe8103')}</option>
             </select>
           </div>
 
@@ -258,7 +250,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             <input
               value={tags}
               onChange={event => setTags(event.target.value)}
-              placeholder={t.tagsCommaSeparated || ui('标签，用逗号分隔', 'Tags, comma separated')}
+              placeholder={t.tagsCommaSeparated || uiMessage('knowledge-base-editor.tags-comma-separated.e09c0eadb6')}
               className="lumi-field min-w-[220px] flex-1 rounded-lg text-sm focus:border-blue-500/40"
             />
             <div className="flex rounded-lg border border-white/10 bg-black/20 p-1">
@@ -267,14 +259,14 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
                 onClick={() => setMode('write')}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${mode === 'write' ? 'bg-blue-500/20 text-blue-100' : 'text-white/45 hover:text-white/70'}`}
               >
-                {ui('编写', 'Write')}
+                {uiMessage('knowledge-base-editor.write.fff77046e9')}
               </button>
               <button
                 type="button"
                 onClick={() => setMode('preview')}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${mode === 'preview' ? 'bg-blue-500/20 text-blue-100' : 'text-white/45 hover:text-white/70'}`}
               >
-                {ui('预览', 'Preview')}
+                {uiMessage('knowledge-base-editor.preview.68dd3b5daf')}
               </button>
             </div>
           </div>
@@ -284,12 +276,12 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
               <textarea
                 value={content}
                 onChange={event => setContent(event.target.value)}
-                placeholder={t.writeArticleContent || ui('在这里编写文章内容，支持 Markdown。', 'Write your article content here. Markdown is supported.')}
+                placeholder={t.writeArticleContent || uiMessage('knowledge-base-editor.write-your-article-content-here.d0a41d63d6')}
                 className="lumi-field h-[460px] w-full resize-y rounded-lg font-mono text-sm leading-6 focus:border-blue-500/40"
               />
             ) : (
               <article className="custom-scrollbar h-[460px] overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/75 whitespace-pre-wrap">
-                {content.trim() || ui('暂无内容', 'No content yet')}
+                {content.trim() || uiMessage('knowledge-base-editor.no-content-yet.e1ece23432')}
               </article>
             )}
           </div>
@@ -299,25 +291,25 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
           <section className="lumi-panel rounded-lg p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-white/85">
               <Hash size={16} className="text-cyan-300" />
-              {ui('元数据', 'Metadata')}
+              {uiMessage('knowledge-base-editor.metadata.63f8e535e5')}
             </h3>
             <div className="mt-4 grid gap-2 text-xs">
-              <MetaLine label={ui('字符', 'Characters')} value={contentStats.chars} />
-              <MetaLine label={ui('行数', 'Lines')} value={contentStats.lines} />
-              <MetaLine label={ui('标签', 'Tags')} value={contentStats.tags} />
+              <MetaLine label={uiMessage('knowledge-base-editor.characters.e408251069')} value={contentStats.chars} />
+              <MetaLine label={uiMessage('knowledge-base-editor.lines.e439eb5cc8')} value={contentStats.lines} />
+              <MetaLine label={uiMessage('knowledge-base-editor.tags.33e9c4d112')} value={contentStats.tags} />
             </div>
           </section>
 
           <section className="lumi-panel rounded-lg p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-white/85">
               <BookOpen size={16} className="text-emerald-300" />
-              {ui('发布检查', 'Publish Check')}
+              {uiMessage('knowledge-base-editor.publish-check.b76f55a2a5')}
             </h3>
             <div className="mt-4 space-y-2">
-              <CheckLine ok={title.trim().length > 0} label={ui('标题已填写', 'Title present')} />
-              <CheckLine ok={content.trim().length > 0} label={ui('正文已填写', 'Content present')} />
-              <CheckLine ok={category.trim().length > 0} label={ui('分类已选择', 'Category selected')} />
-              <CheckLine ok={tagArr.length > 0} label={ui('至少一个标签', 'At least one tag')} />
+              <CheckLine ok={title.trim().length > 0} label={uiMessage('knowledge-base-editor.title-present.0bd1a78233')} />
+              <CheckLine ok={content.trim().length > 0} label={uiMessage('knowledge-base-editor.content-present.bd51bc55a9')} />
+              <CheckLine ok={category.trim().length > 0} label={uiMessage('knowledge-base-editor.category-selected.a8ceaa38d6')} />
+              <CheckLine ok={tagArr.length > 0} label={uiMessage('knowledge-base-editor.at-least-one-tag.e5b670d3d1')} />
             </div>
           </section>
         </aside>

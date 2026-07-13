@@ -24,6 +24,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import { knowledgeCategoryLabels } from '../../i18n/locales/knowledgeCategories';
 
 type ArticleStatus = 'draft' | 'published' | 'archived' | string;
 
@@ -86,18 +88,18 @@ interface KnowledgeStats {
 
 type SortMode = 'updated' | 'title' | 'health';
 
-const CATEGORY_META: Record<string, { zh: string; en: string; className: string }> = {
-  general: { zh: '通用', en: 'General', className: 'border-sky-400/20 bg-sky-400/10 text-sky-100' },
-  policy: { zh: '制度', en: 'Policy', className: 'border-blue-400/20 bg-blue-400/10 text-blue-100' },
-  sop: { zh: 'SOP', en: 'SOP', className: 'border-cyan-400/20 bg-cyan-400/10 text-cyan-100' },
-  product: { zh: '产品', en: 'Product', className: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100' },
-  culture: { zh: '文化', en: 'Culture', className: 'border-pink-400/20 bg-pink-400/10 text-pink-100' },
-  files: { zh: '资料', en: 'Files', className: 'border-indigo-400/20 bg-indigo-400/10 text-indigo-100' },
-  hr: { zh: 'HR', en: 'HR', className: 'border-violet-400/20 bg-violet-400/10 text-violet-100' },
-  tech: { zh: '技术', en: 'Technical', className: 'border-teal-400/20 bg-teal-400/10 text-teal-100' },
-  legal_statute: { zh: '法规', en: 'Statute', className: 'border-amber-400/20 bg-amber-400/10 text-amber-100' },
-  legal_judgment: { zh: '判例', en: 'Judgment', className: 'border-orange-400/20 bg-orange-400/10 text-orange-100' },
-  legal_contract: { zh: '合同', en: 'Contract', className: 'border-lime-400/20 bg-lime-400/10 text-lime-100' },
+const CATEGORY_META: Record<string, { className: string }> = {
+  general: { className: 'border-sky-400/20 bg-sky-400/10 text-sky-100' },
+  policy: { className: 'border-blue-400/20 bg-blue-400/10 text-blue-100' },
+  sop: { className: 'border-cyan-400/20 bg-cyan-400/10 text-cyan-100' },
+  product: { className: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100' },
+  culture: { className: 'border-pink-400/20 bg-pink-400/10 text-pink-100' },
+  files: { className: 'border-indigo-400/20 bg-indigo-400/10 text-indigo-100' },
+  hr: { className: 'border-violet-400/20 bg-violet-400/10 text-violet-100' },
+  tech: { className: 'border-teal-400/20 bg-teal-400/10 text-teal-100' },
+  legal_statute: { className: 'border-amber-400/20 bg-amber-400/10 text-amber-100' },
+  legal_judgment: { className: 'border-orange-400/20 bg-orange-400/10 text-orange-100' },
+  legal_contract: { className: 'border-lime-400/20 bg-lime-400/10 text-lime-100' },
 };
 
 function parseTags(tags: Article['tags'] | undefined): string[] {
@@ -126,14 +128,15 @@ function excerpt(value: string, max = 150): string {
 function categoryInfo(category: string | undefined, isZh: boolean) {
   const key = category || 'general';
   const meta = CATEGORY_META[key];
-  if (meta) return { label: isZh ? meta.zh : meta.en, className: meta.className };
+  const labels = knowledgeCategoryLabels(isZh ? 'zh' : 'en') as Record<string, string>;
+  if (meta) return { label: labels[key] || key, className: meta.className };
   return { label: key, className: 'border-white/10 bg-white/5 text-white/60' };
 }
 
 function statusInfo(status: ArticleStatus | undefined, isZh: boolean) {
-  if (status === 'draft') return { label: isZh ? '草稿' : 'Draft', className: 'border-amber-400/20 bg-amber-400/10 text-amber-100' };
-  if (status === 'archived') return { label: isZh ? '归档' : 'Archived', className: 'border-white/10 bg-white/5 text-white/50' };
-  return { label: isZh ? '已发布' : 'Published', className: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100' };
+  if (status === 'draft') return { label: uiMessage('knowledge-base-browser.draft.ce895273c0', (isZh) ? 'zh' : 'en'), className: 'border-amber-400/20 bg-amber-400/10 text-amber-100' };
+  if (status === 'archived') return { label: uiMessage('knowledge-base-browser.archived.fafdfe8103', (isZh) ? 'zh' : 'en'), className: 'border-white/10 bg-white/5 text-white/50' };
+  return { label: uiMessage('knowledge-base-browser.published.e9a862a45d', (isZh) ? 'zh' : 'en'), className: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100' };
 }
 
 function makeFallbackStats(articles: Article[]): KnowledgeStats {
@@ -194,7 +197,7 @@ export function KnowledgeBaseBrowser() {
         fetch('/api/org/kb/stats', { credentials: 'include' }),
       ]);
       const articleData = await articlesRes.json().catch(() => []);
-      if (!articlesRes.ok) throw new Error(articleData.error || ui(`文章加载失败（${articlesRes.status}）`, `Failed to load articles (${articlesRes.status})`));
+      if (!articlesRes.ok) throw new Error(articleData.error || formatUiMessage('knowledge-base-browser.failed-to-load-articles-value0.8ac0721d7b', { value0: articlesRes.status }));
       const list = Array.isArray(articleData) ? articleData : [];
       setArticles(list);
       setSelectedArticle(prev => {
@@ -248,7 +251,7 @@ export function KnowledgeBaseBrowser() {
           signal: controller.signal,
         });
         const data = await res.json().catch(() => []);
-        if (!res.ok) throw new Error(data.error || ui(`搜索失败（${res.status}）`, `Search failed (${res.status})`));
+        if (!res.ok) throw new Error(data.error || formatUiMessage('knowledge-base-browser.search-failed-value0.a25ae15d39', { value0: res.status }));
         setSearchResults(Array.isArray(data) ? data : []);
       } catch (err: any) {
         if (err?.name !== 'AbortError') {
@@ -340,7 +343,7 @@ export function KnowledgeBaseBrowser() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || ui(`导入失败（${res.status}）`, `Import failed (${res.status})`));
+        throw new Error(data.error || formatUiMessage('knowledge-base-browser.import-failed-value0.540b256d69', { value0: res.status }));
       }
 
       const uploadedFiles = Array.isArray(data.files) ? data.files as UploadedKnowledgeFile[] : [];
@@ -349,10 +352,7 @@ export function KnowledgeBaseBrowser() {
       const failedCount = uploadedFiles.filter(file => file.syncError).length;
       const totalCount = uploadedFiles.length || selectedFiles.length;
 
-      toast.success(ui(
-        `已导入 ${totalCount} 个文件${syncedCount ? `，同步 ${syncedCount} 篇知识` : ''}${partialCount ? `，部分吸收 ${partialCount} 个` : ''}${failedCount ? `，${failedCount} 个待处理` : ''}`,
-        `Imported ${totalCount} file(s)${syncedCount ? `, synced ${syncedCount} article(s)` : ''}${partialCount ? `, ${partialCount} partial` : ''}${failedCount ? `, ${failedCount} pending` : ''}`,
-      ));
+      toast.success(formatUiMessage('knowledge-base-browser.imported-value0-file-s-value1.8df0548713', { value0: totalCount, value1: { en: syncedCount ? `, synced ${syncedCount} article(s)` : '', zh: syncedCount ? `，同步 ${syncedCount} 篇知识` : '' }, value2: { en: partialCount ? `, ${partialCount} partial` : '', zh: partialCount ? `，部分吸收 ${partialCount} 个` : '' }, value3: { en: failedCount ? `, ${failedCount} pending` : '', zh: failedCount ? `，${failedCount} 个待处理` : '' } }));
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
         detail: {
           domain: 'work',
@@ -372,7 +372,7 @@ export function KnowledgeBaseBrowser() {
     } catch (err: any) {
       const message = err.message || String(err);
       setError(message);
-      toast.error(message || ui('导入失败', 'Import failed'));
+      toast.error(message || uiMessage('knowledge-base-browser.import-failed.f8f58fcf4e'));
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -387,11 +387,11 @@ export function KnowledgeBaseBrowser() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('索引失败', 'Indexing failed'));
-      toast.success(ui(`已更新索引：${data.indexedChunks || 0} 个分块`, `Index updated: ${data.indexedChunks || 0} chunks`));
+      if (!res.ok) throw new Error(data.error || uiMessage('knowledge-base-browser.indexing-failed.8819e77601'));
+      toast.success(formatUiMessage('knowledge-base-browser.index-updated-value0-chunks.ac4a50eeae', { value0: data.indexedChunks || 0 }));
       await loadKnowledgeBase();
     } catch (err: any) {
-      toast.error(err.message || ui('索引失败', 'Indexing failed'));
+      toast.error(err.message || uiMessage('knowledge-base-browser.indexing-failed.8819e77601'));
     } finally {
       setIndexingId(null);
     }
@@ -403,10 +403,10 @@ export function KnowledgeBaseBrowser() {
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
             <BookOpen size={21} className="text-blue-300" />
-            {t.orgKB || ui('组织知识库', 'Knowledge Base')}
+            {t.orgKB || uiMessage('knowledge-base-browser.knowledge-base.e30b5fc119')}
           </h2>
           <p className="mt-1 text-sm text-white/50">
-            {ui('集中管理制度、项目资料、上传文件和团队经验，供成员的工作域 Lumi 检索调用。', 'Manage policies, project files, uploads, and team knowledge for each member\'s Lumi in this work workspace.')}
+            {uiMessage('knowledge-base-browser.manage-policies-project-files-uploads.88f91087ec')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -421,7 +421,7 @@ export function KnowledgeBaseBrowser() {
             onClick={loadKnowledgeBase}
             disabled={loading}
             className="lumi-icon-button"
-            title={ui('刷新', 'Refresh')}
+            title={uiMessage('knowledge-base-browser.refresh.cba212b169')}
           >
             {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
           </button>
@@ -431,14 +431,14 @@ export function KnowledgeBaseBrowser() {
             className="lumi-button border-emerald-400/20 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
           >
             {uploading ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-            {ui('导入资料', 'Import Files')}
+            {uiMessage('knowledge-base-browser.import-files.962ad45f66')}
           </button>
           <button
             onClick={goNew}
             className="lumi-button-primary border-blue-400/25 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25"
           >
             <Plus size={15} />
-            {ui('新建文章', 'New Article')}
+            {uiMessage('knowledge-base-browser.new-article.0cbe692130')}
           </button>
         </div>
       </div>
@@ -451,10 +451,10 @@ export function KnowledgeBaseBrowser() {
       )}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={<FileText size={16} />} label={ui('文章', 'Articles')} value={effectiveStats.totalArticles} tone="text-blue-200" />
-        <Metric icon={<Database size={16} />} label={ui('索引分块', 'Indexed Chunks')} value={effectiveStats.totalChunks} tone="text-emerald-200" />
-        <Metric icon={<CheckCircle2 size={16} />} label={ui('已发布', 'Published')} value={effectiveStats.publishedArticles} tone="text-cyan-200" />
-        <Metric icon={<AlertCircle size={16} />} label={ui('待维护', 'Needs Care')} value={effectiveStats.missingIndexArticles + effectiveStats.staleArticles} tone="text-amber-200" />
+        <Metric icon={<FileText size={16} />} label={uiMessage('knowledge-base-browser.articles.3eff6c6fe4')} value={effectiveStats.totalArticles} tone="text-blue-200" />
+        <Metric icon={<Database size={16} />} label={uiMessage('knowledge-base-browser.indexed-chunks.20c488651e')} value={effectiveStats.totalChunks} tone="text-emerald-200" />
+        <Metric icon={<CheckCircle2 size={16} />} label={uiMessage('knowledge-base-browser.published.e9a862a45d')} value={effectiveStats.publishedArticles} tone="text-cyan-200" />
+        <Metric icon={<AlertCircle size={16} />} label={uiMessage('knowledge-base-browser.needs-care.bf16070a77')} value={effectiveStats.missingIndexArticles + effectiveStats.staleArticles} tone="text-amber-200" />
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[380px_minmax(0,1fr)_280px]">
@@ -465,7 +465,7 @@ export function KnowledgeBaseBrowser() {
               <input
                 value={searchQuery}
                 onChange={event => setSearchQuery(event.target.value)}
-                placeholder={ui('搜索标题、标签、正文...', 'Search title, tags, content...')}
+                placeholder={uiMessage('knowledge-base-browser.search-title-tags-content.9d49b42496')}
                 className="w-full rounded-lg border border-white/10 bg-black/20 py-2 pl-9 pr-9 text-sm text-white outline-none placeholder:text-white/35 focus:border-blue-400/35"
               />
               {searching && <Loader2 size={15} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-white/50" />}
@@ -476,7 +476,7 @@ export function KnowledgeBaseBrowser() {
                 onChange={event => setCategoryFilter(event.target.value)}
                 className="lumi-field h-9 rounded-lg py-0 text-xs"
               >
-                <option value="all">{ui('全部分类', 'All Categories')}</option>
+                <option value="all">{uiMessage('knowledge-base-browser.all-categories.d592b03960')}</option>
                 {categoryOptions.map(category => (
                   <option key={category} value={category}>{categoryInfo(category, isZh).label}</option>
                 ))}
@@ -486,19 +486,19 @@ export function KnowledgeBaseBrowser() {
                 onChange={event => setStatusFilter(event.target.value)}
                 className="lumi-field h-9 rounded-lg py-0 text-xs"
               >
-                <option value="all">{ui('全部状态', 'All Status')}</option>
-                <option value="published">{ui('已发布', 'Published')}</option>
-                <option value="draft">{ui('草稿', 'Draft')}</option>
-                <option value="archived">{ui('归档', 'Archived')}</option>
+                <option value="all">{uiMessage('knowledge-base-browser.all-status.3922f7a2c0')}</option>
+                <option value="published">{uiMessage('knowledge-base-browser.published.e9a862a45d')}</option>
+                <option value="draft">{uiMessage('knowledge-base-browser.draft.ce895273c0')}</option>
+                <option value="archived">{uiMessage('knowledge-base-browser.archived.fafdfe8103')}</option>
               </select>
               <select
                 value={sortMode}
                 onChange={event => setSortMode(event.target.value as SortMode)}
                 className="lumi-field h-9 rounded-lg py-0 text-xs"
               >
-                <option value="updated">{ui('最近更新', 'Recent')}</option>
-                <option value="health">{ui('维护优先', 'Care First')}</option>
-                <option value="title">{ui('标题排序', 'Title')}</option>
+                <option value="updated">{uiMessage('knowledge-base-browser.recent.27c0ea1525')}</option>
+                <option value="health">{uiMessage('knowledge-base-browser.care-first.ab4e47efd0')}</option>
+                <option value="title">{uiMessage('knowledge-base-browser.title.f1496a64c5')}</option>
               </select>
             </div>
           </div>
@@ -514,7 +514,7 @@ export function KnowledgeBaseBrowser() {
                 <div className="space-y-1 p-3">
                   <p className="flex items-center gap-1.5 text-xs text-blue-100/70">
                     <Zap size={12} />
-                    {ui('检索命中', 'Search Matches')}
+                    {uiMessage('knowledge-base-browser.search-matches.5ff7b59afd')}
                   </p>
                   {searchResults.slice(0, 3).map((result, index) => (
                     <button
@@ -528,7 +528,7 @@ export function KnowledgeBaseBrowser() {
                       <span className="flex items-center gap-2 truncate text-xs font-medium text-white/85">
                         {result.title}
                         <span className="shrink-0 rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] text-white/40">
-                          {result.source === 'semantic' ? ui('语义', 'Semantic') : ui('关键词', 'Keyword')}
+                          {result.source === 'semantic' ? uiMessage('knowledge-base-browser.semantic.f19e46ce3b') : uiMessage('knowledge-base-browser.keyword.6bf8348b9d')}
                         </span>
                       </span>
                       <span className="mt-1 line-clamp-2 block text-xs leading-5 text-white/45">{result.chunk}</span>
@@ -543,12 +543,12 @@ export function KnowledgeBaseBrowser() {
             {loading ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-white/50">
                 <Loader2 size={22} className="animate-spin" />
-                <span>{ui('正在加载文章...', 'Loading articles...')}</span>
+                <span>{uiMessage('knowledge-base-browser.loading-articles.358d91e7f0')}</span>
               </div>
             ) : visibleArticles.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-white/45">
                 <FileText size={30} className="text-white/20" />
-                <span>{ui('没有符合条件的组织资料', 'No matching organization knowledge')}</span>
+                <span>{uiMessage('knowledge-base-browser.no-matching-organization-knowledge.dd3c43fb51')}</span>
               </div>
             ) : (
               visibleArticles.map(article => {
@@ -605,7 +605,7 @@ export function KnowledgeBaseBrowser() {
                     {selectedHealth && (
                       <span className="inline-flex items-center gap-1">
                         <Database size={12} />
-                        {selectedHealth.chunks} {ui('分块', 'chunks')}
+                        {selectedHealth.chunks} {uiMessage('knowledge-base-browser.chunks.8e167ed251')}
                       </span>
                     )}
                   </div>
@@ -617,14 +617,14 @@ export function KnowledgeBaseBrowser() {
                     className="lumi-button"
                   >
                     {indexingId === selectedArticle.id ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                    {ui('重建索引', 'Reindex')}
+                    {uiMessage('knowledge-base-browser.reindex.2756e8114a')}
                   </button>
                   <button
                     onClick={() => goEdit(selectedArticle.id)}
                     className="lumi-button"
                   >
                     <Pencil size={14} />
-                    {ui('编辑', 'Edit')}
+                    {uiMessage('knowledge-base-browser.edit.e9740dbb21')}
                   </button>
                 </div>
               </div>
@@ -639,7 +639,7 @@ export function KnowledgeBaseBrowser() {
                   )) : (
                     <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white/35">
                       <Hash size={10} />
-                      {ui('无标签', 'No tags')}
+                      {uiMessage('knowledge-base-browser.no-tags.3c4acad4e1')}
                     </span>
                   )}
                 </div>
@@ -651,13 +651,13 @@ export function KnowledgeBaseBrowser() {
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-white/45">
               <BookOpen size={34} className="text-white/20" />
-              <p className="text-sm">{ui('选择一篇文章查看详情，或新建组织知识。', 'Select an article to view details, or create organization knowledge.')}</p>
+              <p className="text-sm">{uiMessage('knowledge-base-browser.select-an-article-to-view.e094f3f2a4')}</p>
               <button
                 onClick={goNew}
                 className="lumi-button-primary border-blue-400/25 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25"
               >
                 <Plus size={15} />
-                {ui('新建文章', 'New Article')}
+                {uiMessage('knowledge-base-browser.new-article.0cbe692130')}
               </button>
             </div>
           )}
@@ -667,11 +667,11 @@ export function KnowledgeBaseBrowser() {
           <section className="lumi-panel rounded-lg p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-white/85">
               <BarChart3 size={16} className="text-cyan-300" />
-              {ui('知识体系', 'Knowledge System')}
+              {uiMessage('knowledge-base-browser.knowledge-system.eac79ef2c3')}
             </h3>
             <div className="mt-4 space-y-3">
               {effectiveStats.categoryBreakdown.length === 0 ? (
-                <p className="text-xs text-white/35">{ui('暂无分类', 'No categories')}</p>
+                <p className="text-xs text-white/35">{uiMessage('knowledge-base-browser.no-categories.3294e1ec96')}</p>
               ) : effectiveStats.categoryBreakdown.slice(0, 8).map(item => {
                 const info = categoryInfo(item.category, isZh);
                 return (
@@ -690,24 +690,24 @@ export function KnowledgeBaseBrowser() {
           <section className="lumi-panel rounded-lg p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-white/85">
               <Filter size={16} className="text-emerald-300" />
-              {ui('状态分布', 'Status')}
+              {uiMessage('knowledge-base-browser.status.2f0fdc4436')}
             </h3>
             <div className="mt-4 grid gap-2">
-              <StatusLine icon={<CheckCircle2 size={13} />} label={ui('已发布', 'Published')} value={effectiveStats.publishedArticles} />
-              <StatusLine icon={<FileText size={13} />} label={ui('草稿', 'Draft')} value={effectiveStats.draftArticles} />
-              <StatusLine icon={<Archive size={13} />} label={ui('归档', 'Archived')} value={effectiveStats.archivedArticles} />
+              <StatusLine icon={<CheckCircle2 size={13} />} label={uiMessage('knowledge-base-browser.published.e9a862a45d')} value={effectiveStats.publishedArticles} />
+              <StatusLine icon={<FileText size={13} />} label={uiMessage('knowledge-base-browser.draft.ce895273c0')} value={effectiveStats.draftArticles} />
+              <StatusLine icon={<Archive size={13} />} label={uiMessage('knowledge-base-browser.archived.fafdfe8103')} value={effectiveStats.archivedArticles} />
             </div>
           </section>
 
           <section className="lumi-panel min-h-0 rounded-lg p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-white/85">
               <AlertCircle size={16} className="text-amber-300" />
-              {ui('维护队列', 'Care Queue')}
+              {uiMessage('knowledge-base-browser.care-queue.a3752a9278')}
             </h3>
             <div className="custom-scrollbar mt-4 max-h-[260px] space-y-2 overflow-y-auto pr-1">
               {maintenanceQueue.length === 0 ? (
                 <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100/75">
-                  {ui('索引状态良好', 'Index health is good')}
+                  {uiMessage('knowledge-base-browser.index-health-is-good.1695cfdce5')}
                 </div>
               ) : maintenanceQueue.map(article => {
                 const health = healthById.get(article.id);
@@ -719,7 +719,7 @@ export function KnowledgeBaseBrowser() {
                   >
                     <span className="line-clamp-1 text-xs font-medium text-white/75">{article.title}</span>
                     <span className="mt-1 block text-[11px] text-amber-100/60">
-                      {!health?.indexed ? ui('待索引', 'Needs index') : ui('索引过期', 'Stale index')}
+                      {!health?.indexed ? uiMessage('knowledge-base-browser.needs-index.e72b7ce03b') : uiMessage('knowledge-base-browser.stale-index.95c35630c6')}
                     </span>
                   </button>
                 );
@@ -751,7 +751,7 @@ function HealthBadge({ health, isZh }: { health?: KnowledgeStats['articleHealth'
     return (
       <span className="inline-flex items-center gap-1 rounded-md border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-xs text-amber-100">
         <AlertCircle size={10} />
-        {isZh ? '待索引' : 'Needs index'}
+        {uiMessage('knowledge-base-browser.needs-index.e72b7ce03b', (isZh) ? 'zh' : 'en')}
       </span>
     );
   }
@@ -759,14 +759,14 @@ function HealthBadge({ health, isZh }: { health?: KnowledgeStats['articleHealth'
     return (
       <span className="inline-flex items-center gap-1 rounded-md border border-orange-400/20 bg-orange-400/10 px-2 py-1 text-xs text-orange-100">
         <RefreshCw size={10} />
-        {isZh ? '需更新' : 'Stale'}
+        {uiMessage('knowledge-base-browser.stale.e88cb4b419', (isZh) ? 'zh' : 'en')}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 rounded-md border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-xs text-emerald-100">
       <CheckCircle2 size={10} />
-      {health.chunks} {isZh ? '分块' : 'chunks'}
+      {health.chunks} {uiMessage('knowledge-base-browser.chunks.8e167ed251', (isZh) ? 'zh' : 'en')}
     </span>
   );
 }

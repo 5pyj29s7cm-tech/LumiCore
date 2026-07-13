@@ -8,6 +8,7 @@ import { saveServerKeys } from '../services/settingsKeys';
 import { apiFetch } from '../services/apiClient';
 import { getDomainReconciliation } from '../lib/domainSession';
 import { mergeNotificationState, notificationClearStorageKey } from '../lib/notificationState';
+import { translate } from '../i18n/runtime';
 
 interface UserProfile {
   uid: string;
@@ -293,12 +294,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           window.dispatchEvent(new CustomEvent('lumi:domain-changed', {
             detail: { domain: 'personal', orgId: null, orgRole: null },
           }));
-          return { success: true, domain: 'personal', message: '已切换到个人域', connection: orgConnection };
+          return { success: true, domain: 'personal', message: translate('domainPersonalSwitched'), connection: orgConnection };
         }
         const data = await res.json().catch(() => ({}));
-        return { success: false, domain: 'personal', message: data.error || '切换个人域失败', connection: orgConnection };
+        return { success: false, domain: 'personal', message: data.error || translate('domainPersonalSwitchFailed'), connection: orgConnection };
       } catch (err: any) {
-        return { success: false, domain: 'personal', message: err.message || '切换个人域失败', connection: orgConnection };
+        return { success: false, domain: 'personal', message: err.message || translate('domainPersonalSwitchFailed'), connection: orgConnection };
       }
     }
     // Switch to work: use known org or auto-discover
@@ -317,11 +318,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
       } catch (err: any) {
-        return { success: false, domain: 'work', message: err.message || '组织列表读取失败', connection: orgConnection };
+        return { success: false, domain: 'work', message: err.message || translate('organizationListLoadFailed'), connection: orgConnection };
       }
     }
     if (!orgId) {
-      return { success: false, domain: 'work', message: '当前账号还没有可切换的组织', connection: orgConnection };
+      return { success: false, domain: 'work', message: translate('organizationSwitchUnavailable'), connection: orgConnection };
     }
     try {
       const res = await apiFetch('/api/auth/switch-org', {
@@ -345,12 +346,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           window.dispatchEvent(new CustomEvent('lumi:domain-changed', {
             detail: { domain: 'work', orgId: conn.orgId, orgRole: conn.orgRole, orgName: conn.orgName },
           }));
-          return { success: true, domain: 'work', message: '已切换到工作域', connection: conn };
+          return { success: true, domain: 'work', message: translate('domainWorkSwitched'), connection: conn };
         }
       }
-      return { success: false, domain: 'work', message: data.error || '切换工作域失败', connection: orgConnection };
+      return { success: false, domain: 'work', message: data.error || translate('domainWorkSwitchFailed'), connection: orgConnection };
     } catch (err: any) {
-      return { success: false, domain: 'work', message: err.message || '切换工作域失败', connection: orgConnection };
+      return { success: false, domain: 'work', message: err.message || translate('domainWorkSwitchFailed'), connection: orgConnection };
     }
   };
 

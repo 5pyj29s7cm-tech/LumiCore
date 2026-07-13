@@ -105,6 +105,8 @@ import {
   normalizeClientSettingsSection,
 } from '../../shared/client_surfaces';
 import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
@@ -180,18 +182,8 @@ function emptyKnowledgeRuntimeState(domain: 'personal' | 'work', orgId = ''): Cl
 }
 
 function proactiveActionLabel(action: string | undefined, lang: 'en' | 'zh'): string {
-  const labels: Record<string, { zh: string; en: string }> = {
-    analyze_code: { zh: '代码辅助', en: 'Code help' },
-    debug_error: { zh: '错误分析', en: 'Debug error' },
-    debug_trace: { zh: '堆栈定位', en: 'Trace debugging' },
-    open_path: { zh: '打开文件路径', en: 'Open path' },
-    summarize_url: { zh: '链接总结', en: 'Summarize URL' },
-    create_presentation: { zh: '制作演示文稿', en: 'Create presentation' },
-    write_document: { zh: '文档写作', en: 'Write document' },
-    analyze_spreadsheet: { zh: '表格分析', en: 'Spreadsheet analysis' },
-  };
-  const resolved = action ? labels[action] : undefined;
-  return resolved ? resolved[lang] : (action || (lang === 'zh' ? '继续处理' : 'Continue'));
+  const labels = desktopWorkflowCopy(lang).proactiveActions as Record<string, string>;
+  return (action ? labels[action] : '') || action || uiMessage('desktop-ui.continue.5206d89b73', lang);
 }
 
 function compactProactivePreview(value: unknown): string {
@@ -203,38 +195,28 @@ function compactProactivePreview(value: unknown): string {
 function formatProactiveChatPrefill(detail: ProactiveChatDetail, lang: 'en' | 'zh'): string {
   const message = String(detail.message || '').trim();
   const context = detail.proactiveContext || detail.context || {};
-  const lines = [message || (lang === 'zh' ? '我刚刚注意到一个上下文变化。' : 'I just noticed a context change.')];
+  const lines = [message || (uiMessage('desktop-ui.i-just-noticed-a-context.e82631aa13', (lang === 'zh') ? 'zh' : 'en'))];
 
   if (context.trigger === 'window_changed') {
-    const appLabel = context.appLabel || context.processName || (lang === 'zh' ? '当前应用' : 'the current app');
+    const appLabel = context.appLabel || context.processName || (uiMessage('desktop-ui.the-current-app.9ba27b3466', (lang === 'zh') ? 'zh' : 'en'));
     lines.push('');
-    lines.push(lang === 'zh'
-      ? `我刚刚是因为你切到了 ${appLabel} 才问的。`
-      : `I asked because you switched to ${appLabel}.`);
+    lines.push(formatUiMessage('desktop-ui.i-asked-because-you-switched.dca30b423a', { value0: appLabel }, (lang === 'zh') ? 'zh' : 'en'));
     if (context.windowTitle) {
-      lines.push(lang === 'zh'
-        ? `当前窗口：${context.windowTitle}`
-        : `Active window: ${context.windowTitle}`);
+      lines.push(formatUiMessage('desktop-ui.active-window-value0.39501f825f', { value0: context.windowTitle }, (lang === 'zh') ? 'zh' : 'en'));
     }
   } else if (context.trigger === 'clipboard_changed') {
     lines.push('');
-    lines.push(lang === 'zh'
-      ? '我刚刚是因为检测到剪贴板内容才问的。'
-      : 'I asked because I noticed new clipboard content.');
+    lines.push(uiMessage('desktop-ui.i-asked-because-i-noticed.e51083b4fa', (lang === 'zh') ? 'zh' : 'en'));
     const preview = compactProactivePreview(context.preview);
     if (preview) {
-      lines.push(lang === 'zh' ? `内容线索：${preview}` : `Context preview: ${preview}`);
+      lines.push(formatUiMessage('desktop-ui.context-preview-value0.ab9411a203', { value0: preview }, (lang === 'zh') ? 'zh' : 'en'));
     }
   }
 
   if (detail.action) {
-    lines.push(lang === 'zh'
-      ? `建议动作：${proactiveActionLabel(detail.action, lang)}`
-      : `Suggested action: ${proactiveActionLabel(detail.action, lang)}`);
+    lines.push(formatUiMessage('desktop-ui.suggested-action-value0.35f751e5d4', { value0: proactiveActionLabel(detail.action, lang) }, (lang === 'zh') ? 'zh' : 'en'));
   }
-  lines.push(lang === 'zh'
-    ? '你可以直接回复“嗯，帮我看”，我会接着这个上下文处理。'
-    : 'You can reply "yes, take a look" and I will continue from this context.');
+  lines.push(uiMessage('desktop-ui.you-can-reply-yes-take.44dc1e9be5', (lang === 'zh') ? 'zh' : 'en'));
   return lines.join('\n');
 }
 
@@ -304,24 +286,20 @@ type CustomerTakeoverBrief = {
   status: string;
 };
 
-const DEFAULT_CUSTOMER_TAKEOVER_BRIEF: CustomerTakeoverBrief = {
-  customer: '当前客户 / 当前线索',
-  quote: '报价口径待确认',
-  amount: '待确认',
-  period: '待确认',
-  risk: '价格、合同、交付周期和发送动作等待确认',
-  status: '推进中',
-};
+function createDefaultCustomerTakeoverBrief(): CustomerTakeoverBrief {
+  return { ...desktopWorkflowCopy().customerDefault };
+}
 
 function normalizeCustomerTakeoverBrief(input: any): CustomerTakeoverBrief {
   const source = input && typeof input === 'object' ? input : {};
+  const defaults = createDefaultCustomerTakeoverBrief();
   return {
-    customer: String(source.customer || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.customer),
-    quote: String(source.quote || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.quote),
-    amount: String(source.amount || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.amount),
-    period: String(source.period || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.period),
-    risk: String(source.risk || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.risk),
-    status: String(source.status || DEFAULT_CUSTOMER_TAKEOVER_BRIEF.status),
+    customer: String(source.customer || defaults.customer),
+    quote: String(source.quote || defaults.quote),
+    amount: String(source.amount || defaults.amount),
+    period: String(source.period || defaults.period),
+    risk: String(source.risk || defaults.risk),
+    status: String(source.status || defaults.status),
   };
 }
 
@@ -826,10 +804,10 @@ function DesktopWidgetPanel({
   const widgetPet = selectedPet || getDefaultPets()[0] || null;
   const widgetAccessories = selectedPet ? equippedAccessories : [];
   const statusLabel = isCallActive
-    ? (operationMode === 'meeting' ? (lang === 'zh' ? '会议记录中' : 'Meeting') : callState)
+    ? (operationMode === 'meeting' ? (uiMessage('desktop-ui.meeting.984f831252', (lang === 'zh') ? 'zh' : 'en')) : callState)
     : wakeEnabled && wakeListening
-      ? (lang === 'zh' ? '唤醒待命' : 'Wake ready')
-      : (lang === 'zh' ? '待命' : 'Ready');
+      ? (uiMessage('desktop-ui.wake-ready.0bf5093bf8', (lang === 'zh') ? 'zh' : 'en'))
+      : (uiMessage('desktop-ui.ready.0e6f84aaa2', (lang === 'zh') ? 'zh' : 'en'));
   const reactionAnimation = petReaction?.animation === 'jump' ? 'wave' : petReaction?.animation;
   const petAnimation = reactionAnimation ? reactionAnimation as any :
     callState === 'speaking' ? 'wave' :
@@ -857,9 +835,9 @@ function DesktopWidgetPanel({
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
+      if (!res.ok) throw new Error(data.error || (uiMessage('desktop-ui.upload-failed.89491ff4a3', (lang === 'zh') ? 'zh' : 'en')));
       const count = Array.isArray(data.files) ? data.files.length : files.length;
-      toast.success(lang === 'zh' ? `已投喂 ${count} 个资料` : `Fed ${count} file(s)`);
+      toast.success(formatUiMessage('desktop-ui.fed-value0-file-s.8357f1bc3f', { value0: count }, (lang === 'zh') ? 'zh' : 'en'));
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
         detail: {
           domain: workDomain,
@@ -868,7 +846,7 @@ function DesktopWidgetPanel({
       }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
     } catch (err: any) {
-      toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Upload failed'));
+      toast.error(err?.message || (uiMessage('desktop-ui.upload-failed.89491ff4a3', (lang === 'zh') ? 'zh' : 'en')));
     } finally {
       setUploading(false);
       setDragActive(false);
@@ -888,13 +866,11 @@ function DesktopWidgetPanel({
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || (lang === 'zh' ? '资料投喂失败' : 'Feed failed'));
+      if (!res.ok) throw new Error(data.error || (uiMessage('desktop-ui.feed-failed.1e27b5712f', (lang === 'zh') ? 'zh' : 'en')));
       const count = Array.isArray(data.files) ? data.files.length : importPaths.length;
       const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
       toast.success(
-        lang === 'zh'
-          ? `已投喂 ${count} 个资料${skipped ? `，跳过 ${skipped} 个` : ''}`
-          : `Fed ${count} file(s)${skipped ? `, skipped ${skipped}` : ''}`,
+        formatUiMessage('desktop-ui.fed-value0-file-s-value1.167b70a2bd', { value0: count, value1: { en: skipped ? `, skipped ${skipped}` : '', zh: skipped ? `，跳过 ${skipped} 个` : '' } }, (lang === 'zh') ? 'zh' : 'en'),
       );
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
         detail: {
@@ -904,7 +880,7 @@ function DesktopWidgetPanel({
       }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
     } catch (err: any) {
-      toast.error(err?.message || (lang === 'zh' ? '资料投喂失败' : 'Feed failed'));
+      toast.error(err?.message || (uiMessage('desktop-ui.feed-failed.1e27b5712f', (lang === 'zh') ? 'zh' : 'en')));
     } finally {
       setUploading(false);
       setDragActive(false);
@@ -1041,7 +1017,7 @@ function DesktopWidgetPanel({
             data-widget-action="true"
             onClick={onExpand}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-black/30 text-white/58 shadow-lg backdrop-blur-lg transition-colors hover:bg-white/12 hover:text-white"
-            title={lang === 'zh' ? '展开 Lumi' : 'Expand Lumi'}
+            title={uiMessage('desktop-ui.expand-lumi.b72aee2f04', (lang === 'zh') ? 'zh' : 'en')}
           >
             <Maximize2 size={14} />
           </button>
@@ -1049,7 +1025,7 @@ function DesktopWidgetPanel({
             data-widget-action="true"
             onClick={onOpenAvatarStudio}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-fuchsia-300/14 bg-fuchsia-300/9 text-fuchsia-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-fuchsia-300/18 hover:text-white"
-            title={lang === 'zh' ? '形象设计室' : 'Avatar Studio'}
+            title={uiMessage('desktop-ui.avatar-studio.ef5c66e7de', (lang === 'zh') ? 'zh' : 'en')}
           >
             <Brush size={14} />
           </button>
@@ -1057,7 +1033,7 @@ function DesktopWidgetPanel({
             data-widget-action="true"
             onClick={onOpenKnowledge}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-cyan-300/14 bg-cyan-300/9 text-cyan-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/18 hover:text-white"
-            title={lang === 'zh' ? '资料库' : 'Knowledge'}
+            title={uiMessage('desktop-ui.knowledge.610ef22cae', (lang === 'zh') ? 'zh' : 'en')}
           >
             <Folder size={14} />
           </button>
@@ -1065,7 +1041,7 @@ function DesktopWidgetPanel({
             data-widget-action="true"
             onClick={onHide}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-white/8 bg-black/30 text-white/52 shadow-lg backdrop-blur-lg transition-colors hover:bg-white/12 hover:text-white"
-            title={lang === 'zh' ? '隐藏到后台' : 'Hide to background'}
+            title={uiMessage('desktop-ui.hide-to-background.2db659458c', (lang === 'zh') ? 'zh' : 'en')}
           >
             <Minus size={14} />
           </button>
@@ -1074,7 +1050,7 @@ function DesktopWidgetPanel({
         <div
           data-tauri-drag-region
           className="absolute left-1/2 top-[47%] z-10 flex h-40 w-40 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full transition-transform hover:scale-[1.03] active:cursor-grabbing active:scale-95"
-          title={widgetPet?.name || (lang === 'zh' ? '拖动 Lumi' : 'Drag Lumi')}
+          title={widgetPet?.name || (uiMessage('desktop-ui.drag-lumi.37ae7800b2', (lang === 'zh') ? 'zh' : 'en'))}
         >
           <motion.div
             className="absolute inset-7 rounded-full bg-cyan-200/7 blur-xl"
@@ -1105,7 +1081,7 @@ function DesktopWidgetPanel({
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
             className="flex h-10 w-10 items-center justify-center rounded-full border border-cyan-300/18 bg-cyan-300/10 text-cyan-100 shadow-lg backdrop-blur-lg transition-colors hover:bg-cyan-300/20 disabled:opacity-60"
-            title={lang === 'zh' ? '投喂资料' : 'Feed files'}
+            title={uiMessage('desktop-ui.feed-files.f5edc50e24', (lang === 'zh') ? 'zh' : 'en')}
           >
             {uploading ? <RefreshCw size={17} className="animate-spin" /> : <Upload size={18} />}
           </button>
@@ -1117,7 +1093,7 @@ function DesktopWidgetPanel({
                 ? 'border-red-300/32 bg-red-500/20 text-red-100 hover:bg-red-500/28'
                 : 'border-celestial-saturn/28 bg-celestial-saturn/16 text-celestial-saturn hover:bg-celestial-saturn/24'
             }`}
-            title={isCallActive ? (lang === 'zh' ? '结束语音' : 'End voice') : (lang === 'zh' ? '语音交互' : 'Voice')}
+            title={isCallActive ? (uiMessage('desktop-ui.end-voice.d265560105', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.voice.fee5489af0', (lang === 'zh') ? 'zh' : 'en'))}
           >
             <Mic size={20} className={isCallActive ? 'animate-pulse' : ''} />
           </button>
@@ -1334,56 +1310,26 @@ function Spotlight({ isOpen, onClose, onSelect, apps, t }: { isOpen: boolean; on
 }
 
 function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage; onClose: () => void }) {
-  const stageMeta: Record<EcommerceGrowthStage, { eyebrow: string; title: string; desc: string }> = {
-    intake: {
-      eyebrow: 'ECOMMERCE INTAKE',
-      title: '电商接管任务已识别',
-      desc: 'Lumi 正在把店铺、商品、账号和内容制作需求拆成可交付结果：诊断、内容矩阵、外部工具提示词、发布草稿和客服承接。',
-    },
-    diagnosis: {
-      eyebrow: 'STORE DIAGNOSIS',
-      title: '店铺增长作战室已生成',
-      desc: '作战室和体检报告已经落到桌面交付包，展示目标人群、运营目标、确认边界和下一步动作。',
-    },
-    content: {
-      eyebrow: 'CONTENT FACTORY',
-      title: '短视频和图文资产已准备',
-      desc: '内容矩阵、60 秒短视频脚本、图文种草结构和素材建议已生成，可交给 WPS、Excel 或运营同事继续处理。',
-    },
-    tools: {
-      eyebrow: 'EXTERNAL TOOL CHAIN',
-      title: '外部工具调度已开始',
-      desc: '图片交给即梦或 Canva，视频交给可灵或剪映，发布进入创作平台和店铺后台，Lumi 负责拆任务、传提示词、回收结果。',
-    },
-    publish: {
-      eyebrow: 'PUBLISH BOUNDARY',
-      title: '发布草稿已准备，等待确认',
-      desc: '标题、正文、标签、置顶评论和客服话术已准备，但真实发布、投流扣费、价格库存修改和发送微信默认都停在确认前。',
-    },
-    result: {
-      eyebrow: 'RESULT READY',
-      title: '电商增长交付包完成',
-      desc: '店铺体检、内容矩阵、图文/视频提示词、发布页、客服话术、运营战报和验证记录已经形成可检查结果。',
-    },
-  };
+  const copy = desktopWorkflowCopy();
+  const stageMeta = copy.ecommerce.stageMeta;
 
   const stageOrder: EcommerceGrowthStage[] = ['intake', 'diagnosis', 'content', 'tools', 'publish', 'result'];
   const currentIndex = stageOrder.indexOf(stage);
   const meta = stageMeta[stage];
   const pipeline = [
-    { key: 'intake' as EcommerceGrowthStage, label: '任务识别', value: '店铺 / 商品 / 账号', icon: <MessageSquare size={16} /> },
-    { key: 'diagnosis' as EcommerceGrowthStage, label: '店铺体检', value: '作战室 + 诊断报告', icon: <Activity size={16} /> },
-    { key: 'content' as EcommerceGrowthStage, label: '内容生产', value: '矩阵 + 脚本 + 图文', icon: <FileText size={16} /> },
-    { key: 'tools' as EcommerceGrowthStage, label: '外部工具', value: '即梦 / 可灵 / 剪映', icon: <Globe size={16} /> },
-    { key: 'publish' as EcommerceGrowthStage, label: '发布承接', value: '草稿等待确认', icon: <Upload size={16} /> },
+    { key: 'intake' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[0][0], value: copy.ecommerce.pipeline[0][1], icon: <MessageSquare size={16} /> },
+    { key: 'diagnosis' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[1][0], value: copy.ecommerce.pipeline[1][1], icon: <Activity size={16} /> },
+    { key: 'content' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[2][0], value: copy.ecommerce.pipeline[2][1], icon: <FileText size={16} /> },
+    { key: 'tools' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[3][0], value: copy.ecommerce.pipeline[3][1], icon: <Globe size={16} /> },
+    { key: 'publish' as EcommerceGrowthStage, label: copy.ecommerce.pipeline[4][0], value: copy.ecommerce.pipeline[4][1], icon: <Upload size={16} /> },
   ];
   const resultItems = [
-    ['店铺诊断', currentIndex >= 1 ? '已生成' : '准备中'],
-    ['内容矩阵', currentIndex >= 2 ? '6 条选题' : '准备中'],
-    ['视频脚本', currentIndex >= 2 ? '60 秒分镜' : '准备中'],
-    ['图片提示词', currentIndex >= 3 ? '4 组提示词' : '准备中'],
-    ['发布草稿', currentIndex >= 4 ? '停在确认前' : '准备中'],
-    ['微信/客服', stage === 'result' ? '草稿已准备' : '默认不发送'],
+    [copy.ecommerce.resultLabels[0], currentIndex >= 1 ? copy.common.generated : copy.common.preparing],
+    [copy.ecommerce.resultLabels[1], currentIndex >= 2 ? copy.ecommerce.resultValues.topics : copy.common.preparing],
+    [copy.ecommerce.resultLabels[2], currentIndex >= 2 ? copy.ecommerce.resultValues.storyboard : copy.common.preparing],
+    [copy.ecommerce.resultLabels[3], currentIndex >= 3 ? copy.ecommerce.resultValues.promptSets : copy.common.preparing],
+    [copy.ecommerce.resultLabels[4], currentIndex >= 4 ? copy.ecommerce.resultValues.confirmation : copy.common.preparing],
+    [copy.ecommerce.resultLabels[5], stage === 'result' ? copy.ecommerce.resultValues.draftReady : copy.ecommerce.resultValues.notSent],
   ];
 
   return (
@@ -1438,10 +1384,10 @@ function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage;
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">GROWTH RESULT</div>
-                <div className="mt-1 text-lg font-black text-white">电商增长交付结果</div>
+                <div className="mt-1 text-lg font-black text-white">{copy.ecommerce.resultTitle}</div>
               </div>
               <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-emerald-200">
-                {stage === 'result' ? 'READY' : 'RUNNING'}
+                {stage === 'result' ? copy.common.ready : copy.common.running}
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -1453,7 +1399,7 @@ function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage;
               ))}
             </div>
             <div className="mt-3 rounded-lg border border-cyan-300/20 bg-cyan-300/[0.08] px-3 py-3 text-sm leading-relaxed text-white/65">
-              Lumi 已准备：店铺体检、短视频内容矩阵、图文种草包、图片/视频外部工具提示词、发布草稿、微信/客服接管话术和验证记录。真实发布、投流、改价改库存、发送消息仍等待确认。
+              {copy.ecommerce.resultSummary}
             </div>
           </div>
         </div>
@@ -1463,43 +1409,23 @@ function EcommerceGrowthPanel({ stage, onClose }: { stage: EcommerceGrowthStage;
 }
 
 function CustomerTakeoverPanel({ stage, brief, onClose }: { stage: CustomerTakeoverStage; brief: CustomerTakeoverBrief; onClose: () => void }) {
-  const stageMeta: Record<CustomerTakeoverStage, { eyebrow: string; title: string; desc: string }> = {
-    intake: {
-      eyebrow: 'CUSTOMER INTAKE',
-      title: '微信线索已识别',
-      desc: '客户正在询价，并要求正式报价。Lumi 将按用户规则进入客户推进流程。',
-    },
-    rules: {
-      eyebrow: 'WORK RULES',
-      title: '按授权边界接管',
-      desc: '常规沟通、报价材料、跟进动作自动执行；价格底线、合同风险、最终责任判断再上报。',
-    },
-    wechat: {
-      eyebrow: 'WECHAT DRAFT',
-      title: '客户回复草稿已准备',
-      desc: 'Lumi 已按用户风格生成微信回复，默认等待确认，不自动发送。',
-    },
-    result: {
-      eyebrow: 'RESULT READY',
-      title: '客户已推进到结果',
-      desc: '标准版方案、报价、合同草案和项目启动清单已经形成，后续进入定金和启动流程。',
-    },
-  };
+  const copy = desktopWorkflowCopy();
+  const stageMeta = copy.customer.stageMeta;
 
   const meta = stageMeta[stage];
   const pipeline = [
-    { label: '微信线索识别', value: '已完成', icon: <MessageSquare size={16} /> },
-    { label: '报价方案生成', value: brief.quote, icon: <FileText size={16} /> },
-    { label: '客户资料补充', value: '行业与风险点已读取', icon: <Globe size={16} /> },
-    { label: '微信回复草稿', value: '等待确认发送', icon: <Copy size={16} /> },
+    { label: copy.customer.pipeline[0][0], value: copy.customer.pipeline[0][1], icon: <MessageSquare size={16} /> },
+    { label: copy.customer.pipeline[1][0], value: brief.quote, icon: <FileText size={16} /> },
+    { label: copy.customer.pipeline[2][0], value: copy.customer.pipeline[2][1], icon: <Globe size={16} /> },
+    { label: copy.customer.pipeline[3][0], value: copy.customer.pipeline[3][1], icon: <Copy size={16} /> },
   ];
   const resultItems = [
-    ['客户', brief.customer],
-    ['状态', stage === 'result' ? brief.status : '推进中'],
-    ['金额', brief.amount],
-    ['合同草案', stage === 'result' ? '已生成' : '准备中'],
-    ['周期', brief.period],
-    ['风险点', brief.risk],
+    [copy.customer.resultLabels[0], brief.customer],
+    [copy.customer.resultLabels[1], stage === 'result' ? brief.status : copy.customerDefault.status],
+    [copy.customer.resultLabels[2], brief.amount],
+    [copy.customer.resultLabels[3], stage === 'result' ? copy.common.generated : copy.common.preparing],
+    [copy.customer.resultLabels[4], brief.period],
+    [copy.customer.resultLabels[5], brief.risk],
   ];
 
   return (
@@ -1554,7 +1480,7 @@ function CustomerTakeoverPanel({ stage, brief, onClose }: { stage: CustomerTakeo
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">CUSTOMER RESULT</div>
-                <div className="mt-1 text-lg font-black text-white">客户推进结果</div>
+                <div className="mt-1 text-lg font-black text-white">{copy.customer.resultTitle}</div>
               </div>
               <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-emerald-200">
                 {stage === 'result' ? 'READY' : 'RUNNING'}
@@ -1569,7 +1495,7 @@ function CustomerTakeoverPanel({ stage, brief, onClose }: { stage: CustomerTakeo
               ))}
             </div>
             <div className="mt-3 rounded-lg border border-celestial-saturn/20 bg-celestial-saturn/[0.08] px-3 py-3 text-sm leading-relaxed text-white/65">
-              Lumi 已生成：报价方案、合同草案、微信跟进草稿、项目启动清单。超出授权边界的发送和最终签约仍等待用户确认。
+              {copy.customer.resultSummary}
             </div>
           </div>
         </div>
@@ -1579,56 +1505,26 @@ function CustomerTakeoverPanel({ stage, brief, onClose }: { stage: CustomerTakeo
 }
 
 function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; onClose: () => void }) {
-  const stageMeta: Record<DesignDeliveryStage, { eyebrow: string; title: string; desc: string }> = {
-    intake: {
-      eyebrow: 'DESIGN INTAKE',
-      title: '装修需求已接管',
-      desc: 'Lumi 正在把微信或自然语言里的装修需求拆成户型、风格、预算、交付物、风险和下一步动作。',
-    },
-    concept: {
-      eyebrow: 'CONCEPT PACKAGE',
-      title: '方案、预算与汇报文件已生成',
-      desc: '设计方案、预算材料清单、PPTX 汇报版和 PDF 交付版已落到本地文件，可直接打开查看。',
-    },
-    cad: {
-      eyebrow: 'CAD HANDOFF',
-      title: 'CAD 初稿与预览已生成',
-      desc: 'Lumi 已创建 DXF 平面布置文件和 SVG 可视化预览，用于进入 CAD 软件继续深化。',
-    },
-    revit: {
-      eyebrow: 'REVIT HANDOFF',
-      title: 'Revit 交接数据已准备',
-      desc: 'Dynamo 建模脚本和空间表已经生成，可作为 Revit 侧创建墙体、房间、标签和材料计划的入口。',
-    },
-    handoff: {
-      eyebrow: 'WECHAT HANDOFF',
-      title: '客户交付话术已准备',
-      desc: 'Lumi 已把交付包摘要整理成微信草稿；默认只复制和填入，不自动发送，除非用户明确授权。',
-    },
-    result: {
-      eyebrow: 'DELIVERY READY',
-      title: '装修设计交付包完成',
-      desc: '这一单已经整理好了。方案、预算、CAD、预览图、Revit 交接数据和微信话术都齐了，可以继续推进客户确认。',
-    },
-  };
+  const copy = desktopWorkflowCopy();
+  const stageMeta = copy.design.stageMeta;
 
   const meta = stageMeta[stage];
   const stageOrder: DesignDeliveryStage[] = ['intake', 'concept', 'cad', 'revit', 'handoff', 'result'];
   const currentIndex = stageOrder.indexOf(stage);
   const pipeline = [
-    { key: 'intake' as DesignDeliveryStage, label: '需求识别', value: '客户目标 / 户型 / 预算', icon: <MessageSquare size={16} /> },
-    { key: 'concept' as DesignDeliveryStage, label: '方案汇报', value: 'RTF + PPTX + PDF', icon: <FileText size={16} /> },
-    { key: 'cad' as DesignDeliveryStage, label: 'CAD 初稿', value: 'DXF + SVG 预览', icon: <Brush size={16} /> },
-    { key: 'revit' as DesignDeliveryStage, label: 'Revit 交接', value: 'Dynamo + 空间表', icon: <Box size={16} /> },
-    { key: 'handoff' as DesignDeliveryStage, label: '微信交付', value: '草稿等待确认', icon: <Copy size={16} /> },
+    { key: 'intake' as DesignDeliveryStage, label: copy.design.pipeline[0][0], value: copy.design.pipeline[0][1], icon: <MessageSquare size={16} /> },
+    { key: 'concept' as DesignDeliveryStage, label: copy.design.pipeline[1][0], value: copy.design.pipeline[1][1], icon: <FileText size={16} /> },
+    { key: 'cad' as DesignDeliveryStage, label: copy.design.pipeline[2][0], value: copy.design.pipeline[2][1], icon: <Brush size={16} /> },
+    { key: 'revit' as DesignDeliveryStage, label: copy.design.pipeline[3][0], value: copy.design.pipeline[3][1], icon: <Box size={16} /> },
+    { key: 'handoff' as DesignDeliveryStage, label: copy.design.pipeline[4][0], value: copy.design.pipeline[4][1], icon: <Copy size={16} /> },
   ];
   const resultItems = [
-    ['项目', '120 平三居室'],
-    ['方案', stage === 'result' ? '已完成' : '生成中'],
-    ['汇报', currentIndex >= 1 ? 'PPTX + PDF' : '准备中'],
-    ['预算', '28 万控制线'],
-    ['CAD', currentIndex >= 2 ? 'DXF + 预览图' : '准备中'],
-    ['Revit', currentIndex >= 3 ? 'Dynamo 交接包' : '准备中'],
+    [copy.design.resultLabels[0], copy.design.resultValues.project],
+    [copy.design.resultLabels[1], stage === 'result' ? copy.common.completed : copy.common.generating],
+    [copy.design.resultLabels[2], currentIndex >= 1 ? 'PPTX + PDF' : copy.common.preparing],
+    [copy.design.resultLabels[3], copy.design.resultValues.budget],
+    [copy.design.resultLabels[4], currentIndex >= 2 ? copy.design.resultValues.cadReady : copy.common.preparing],
+    [copy.design.resultLabels[5], currentIndex >= 3 ? copy.design.resultValues.revitReady : copy.common.preparing],
   ];
 
   return (
@@ -1683,10 +1579,10 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">DESIGN DELIVERY</div>
-                <div className="mt-1 text-lg font-black text-white">本地交付结果</div>
+                <div className="mt-1 text-lg font-black text-white">{copy.design.resultTitle}</div>
               </div>
               <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-xs font-black uppercase tracking-widest text-cyan-200">
-                {stage === 'result' ? 'DONE' : 'RUNNING'}
+                {stage === 'result' ? copy.common.completed : copy.common.running}
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -1698,7 +1594,7 @@ function DesignDeliveryPanel({ stage, onClose }: { stage: DesignDeliveryStage; o
               ))}
             </div>
             <div className="mt-3 rounded-lg border border-emerald-300/18 bg-emerald-300/[0.07] px-3 py-3 text-sm leading-relaxed text-white/68">
-              Lumi 当前阶段会把结果落到外部电脑系统：WPS / 编辑器查看方案，PPTX 用于汇报，PDF 用于客户确认，CAD 接收 DXF，Revit 侧接收 Dynamo 脚本和空间表，微信只准备交付草稿。
+              {copy.design.resultSummary}
             </div>
           </div>
         </div>
@@ -1718,12 +1614,10 @@ function ExecutionWorkQueue({ t }: { t: any }) {
             <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn">
               <Calendar size={18} />
             </span>
-            {isZh ? 'Lumi 学习与吸收' : 'Lumi Learning & Absorption'}
+            {uiMessage('desktop-ui.lumi-learning-absorption.63919d4e18', (isZh) ? 'zh' : 'en')}
           </div>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-white/42">
-            {isZh
-              ? '这里是 Lumi 自己创建、执行和沉淀知识的学习流：她会从上下文、资料和记忆里持续吸收新东西。'
-              : 'This is Lumi’s own learning stream: she creates plans, executes them, and absorbs reusable knowledge from context, files, and memory.'}
+            {uiMessage('desktop-ui.this-is-lumi-s-own.657323f25a', (isZh) ? 'zh' : 'en')}
           </p>
         </div>
       </div>
@@ -1783,9 +1677,9 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
       || steps.find((step: any) => step.status === 'pending');
     const label = activeStep
       ? activeStep.status === 'in_progress'
-        ? (isZh ? '吸收中' : 'Absorbing')
+        ? (uiMessage('desktop-ui.absorbing.9a2002c5f8', (isZh) ? 'zh' : 'en'))
         : activeStep.title
-      : (isZh ? '等待下一轮执行' : 'Waiting for next run');
+      : (uiMessage('desktop-ui.waiting-for-next-run.d3f6c83394', (isZh) ? 'zh' : 'en'));
     return { steps, done, label };
   };
 
@@ -1805,13 +1699,13 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
         <div>
           <span className="text-[12px] font-black uppercase tracking-widest text-white/65 flex items-center gap-2">
             <Calendar size={12} className="text-celestial-saturn" />
-            {embedded ? (isZh ? 'Lumi 学习计划' : 'Lumi Learning Plans') : (isZh ? 'Lumi 学习流' : 'Lumi Learning')}
+            {embedded ? (uiMessage('desktop-ui.lumi-learning-plans.217854e552', (isZh) ? 'zh' : 'en')) : (uiMessage('desktop-ui.lumi-learning.e36f32b264', (isZh) ? 'zh' : 'en'))}
           </span>
           {!embedded && (
             <p className="mt-1 text-[11px] text-white/30">
               {activeCount > 0
-                ? (isZh ? `${activeCount} 个学习计划` : `${activeCount} learning plan${activeCount === 1 ? '' : 's'}`)
-                : (isZh ? '暂无学习计划' : 'No learning plans')}
+                ? (formatUiMessage('desktop-ui.value0-learning-plan-value1.cb87ad5f27', { value0: activeCount, value1: { en: activeCount === 1 ? '' : 's', zh: '' } }, (isZh) ? 'zh' : 'en'))
+                : (uiMessage('desktop-ui.no-learning-plans.0a25534ef8', (isZh) ? 'zh' : 'en'))}
             </p>
           )}
         </div>
@@ -1821,23 +1715,23 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
               onClick={(e) => { e.stopPropagation(); onOpenQueue(); }}
               className="lumi-button h-7 px-2 text-[10px]"
             >
-              {isZh ? '队列' : 'Queue'}
+              {uiMessage('desktop-ui.queue.9b6d779554', (isZh) ? 'zh' : 'en')}
             </button>
           )}
         </div>
       </div>
 
       {loading ? (
-        <div className="text-white/30 text-xs py-2">{isZh ? '加载中...' : 'Loading...'}</div>
+        <div className="text-white/30 text-xs py-2">{uiMessage('desktop-ui.loading.586f5af819', (isZh) ? 'zh' : 'en')}</div>
       ) : plans.length === 0 ? (
         <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3 text-xs text-white/30">
-          {isZh ? 'Lumi 还没有生成学习计划。进入自主模式并开启自动处理后，她会按最近上下文持续创建。' : 'Lumi has not generated learning plans yet. In autonomous mode with auto processing enabled, she will keep creating them from recent context.'}
+          {uiMessage('desktop-ui.lumi-has-not-generated-learning.6c804f7045', (isZh) ? 'zh' : 'en')}
         </div>
       ) : (
         <div className="space-y-2">
           {plans.map((plan: any) => {
             const { steps, done, label } = getStepInfo(plan);
-            const progress = steps.length > 0 ? `${done}/${steps.length}` : (isZh ? '待沉淀' : 'queued');
+            const progress = steps.length > 0 ? `${done}/${steps.length}` : (uiMessage('desktop-ui.queued.bb6e139347', (isZh) ? 'zh' : 'en'));
             const updatedAt = formatUpdatedAt(plan.updatedAt);
             return (
               <div key={plan.id} className="group rounded-xl border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
@@ -1859,7 +1753,7 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
                     onClick={(e) => { e.stopPropagation(); deletePlan(plan.id); }}
                     disabled={busyPlanIds.includes(plan.id)}
                     className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-white/15 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-200 group-hover:opacity-100 disabled:opacity-30"
-                    title={isZh ? '移除计划' : 'Remove plan'}
+                    title={uiMessage('desktop-ui.remove-plan.1f9be63399', (isZh) ? 'zh' : 'en')}
                   >
                     <Trash2 size={12} />
                   </button>
@@ -2015,7 +1909,7 @@ export function DesktopUI({
   const petPrefsSavingRef = useRef(false);
   const savePetPrefsToServer = useCallback(async (pet: PetConfig | null, accessories: string[]) => {
     if (!canCustomizeLumiAppearance) {
-      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
+      toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
       return false;
     }
     const storedPet = serializePetPreference(pet);
@@ -2039,7 +1933,7 @@ export function DesktopUI({
       else localStorage.removeItem(petStorageKeys.pet);
       return true;
     } catch (err: any) {
-      toast.error(err?.message || (lang === 'zh' ? '形象保存失败' : 'Appearance save failed'));
+      toast.error(err?.message || (uiMessage('desktop-ui.appearance-save-failed.384eab961c', (lang === 'zh') ? 'zh' : 'en')));
       return false;
     } finally {
       setTimeout(() => { petPrefsSavingRef.current = false; }, 500);
@@ -2077,7 +1971,7 @@ export function DesktopUI({
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [customerTakeoverStage, setCustomerTakeoverStage] = useState<CustomerTakeoverStage | null>(null);
-  const [customerTakeoverBrief, setCustomerTakeoverBrief] = useState<CustomerTakeoverBrief>(DEFAULT_CUSTOMER_TAKEOVER_BRIEF);
+  const [customerTakeoverBrief, setCustomerTakeoverBrief] = useState<CustomerTakeoverBrief>(createDefaultCustomerTakeoverBrief);
   const [designDeliveryStage, setDesignDeliveryStage] = useState<DesignDeliveryStage | null>(null);
   const [ecommerceGrowthStage, setEcommerceGrowthStage] = useState<EcommerceGrowthStage | null>(null);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
@@ -2264,7 +2158,7 @@ export function DesktopUI({
 
   const meetingSpeakerLabel = useCallback((note: Pick<MeetingNote, 'speakerLabel' | 'speakerMatched'>) => {
     if (note.speakerLabel) return note.speakerLabel;
-    return lang === 'zh' ? '未知说话人' : 'Unknown speaker';
+    return uiMessage('desktop-ui.unknown-speaker.6e99efa536', (lang === 'zh') ? 'zh' : 'en');
   }, [lang]);
 
   const meetingNoteHasSpeakerInfo = useCallback((note: MeetingNote) => (
@@ -2353,7 +2247,7 @@ export function DesktopUI({
     persistMeetingNotes(next);
     setMeetingReport('');
     localStorage.removeItem(meetingStorageKeys.report);
-    toast.success(lang === 'zh' ? '\u4f1a\u8bae\u5df2\u7528\u9ad8\u7cbe\u5ea6\u6a21\u578b\u91cd\u65b0\u8f6c\u5199' : 'Meeting transcript refined with the high-accuracy model');
+    toast.success(uiMessage('desktop-ui.meeting-transcript-refined-with-the.0e4e859506', (lang === 'zh') ? 'zh' : 'en'));
     return next;
   }, [lang, meetingStartedAt, meetingStorageKeys.report, persistMeetingNotes]);
 
@@ -2377,18 +2271,18 @@ export function DesktopUI({
       resolve(value);
     };
     const onStatus = (data?: { message?: string }) => {
-      toast.info(data?.message || (lang === 'zh' ? '\u6b63\u5728\u7528\u9ad8\u7cbe\u5ea6\u6a21\u578b\u91cd\u8f6c\u4f1a\u8bae\u5f55\u97f3...' : 'Refining the meeting recording with the high-accuracy model...'));
+      toast.info(data?.message || (uiMessage('desktop-ui.refining-the-meeting-recording-with.1e8a392145', (lang === 'zh') ? 'zh' : 'en')));
     };
     const onRefined = (data: { text?: string; provider?: string; model?: string; durationMs?: number; startedAt?: number; segments?: RefinedMeetingSegment[]; speakerCount?: number }) => {
       finish(applyRefinedMeetingTranscript(data));
     };
     const onError = (data: { message?: string }) => {
-      toast.error(data?.message || (lang === 'zh' ? '\u9ad8\u7cbe\u5ea6\u4f1a\u8bae\u8f6c\u5199\u5931\u8d25\uff0c\u4fdd\u7559\u5b9e\u65f6\u7b14\u8bb0' : 'High-accuracy meeting transcription failed; keeping realtime notes'));
+      toast.error(data?.message || (uiMessage('desktop-ui.high-accuracy-meeting-transcription-failed.06ae217f12', (lang === 'zh') ? 'zh' : 'en')));
       finish(null);
     };
     const onDomainChanged = () => finish(null);
     const timeout = window.setTimeout(() => {
-      toast.error(lang === 'zh' ? '\u9ad8\u7cbe\u5ea6\u4f1a\u8bae\u8f6c\u5199\u8d85\u65f6\uff0c\u4fdd\u7559\u5b9e\u65f6\u7b14\u8bb0' : 'High-accuracy meeting transcription timed out; keeping realtime notes');
+      toast.error(uiMessage('desktop-ui.high-accuracy-meeting-transcription-timed.4ade09a115', (lang === 'zh') ? 'zh' : 'en'));
       finish(null);
     }, 60 * 60 * 1000);
     socket.once('meeting:refined_transcript', onRefined);
@@ -2711,50 +2605,50 @@ export function DesktopUI({
       .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`);
     if (legalCaseTitle) {
       return [
-        lang === 'zh' ? '# Lumi 律所会谈纪要' : '# Lumi Legal Consultation Memo',
+        uiMessage('desktop-ui.lumi-legal-consultation-memo.10af7cc379', (lang === 'zh') ? 'zh' : 'en'),
         '',
-        `${lang === 'zh' ? '案件' : 'Case'}: ${legalCaseTitle}`,
-        `${lang === 'zh' ? '开始时间' : 'Started'}: ${started}`,
-        `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${notesForReport.length}`,
+        `${uiMessage('desktop-ui.case.8a53cf13fb', (lang === 'zh') ? 'zh' : 'en')}: ${legalCaseTitle}`,
+        `${uiMessage('desktop-ui.started.364ae4adf2', (lang === 'zh') ? 'zh' : 'en')}: ${started}`,
+        `${uiMessage('desktop-ui.transcript-items.8cb25feb7a', (lang === 'zh') ? 'zh' : 'en')}: ${notesForReport.length}`,
         '',
-        `## ${lang === 'zh' ? '会谈纪要' : 'Consultation Summary'}`,
+        `## ${uiMessage('desktop-ui.consultation-summary.5f868bd7fc', (lang === 'zh') ? 'zh' : 'en')}`,
         notesForReport.length > 0
-          ? (lang === 'zh' ? `本次会谈共收录 ${notesForReport.length} 条转写。LLM 分析暂不可用，以下为本地基础整理。` : `Captured ${notesForReport.length} transcript items. LLM analysis was unavailable; this is a local structured memo.`)
-          : (lang === 'zh' ? '本次会谈没有收录到可整理的转写。' : 'No transcript was captured for this consultation.'),
+          ? (formatUiMessage('desktop-ui.captured-value0-transcript-items-llm.bcf7f95e8c', { value0: notesForReport.length }, (lang === 'zh') ? 'zh' : 'en'))
+          : (uiMessage('desktop-ui.no-transcript-was-captured-for.97f574a507', (lang === 'zh') ? 'zh' : 'en')),
         '',
-        `## ${lang === 'zh' ? '事实摘要' : 'Fact Summary'}`,
+        `## ${uiMessage('desktop-ui.fact-summary.9a77b99032', (lang === 'zh') ? 'zh' : 'en')}`,
         ...(notesForReport.slice(-6).map(note => `- ${formatMeetingNoteForExport(note)}`)),
-        ...(notesForReport.length === 0 ? [`- ${lang === 'zh' ? '暂无事实摘要。' : 'No fact summary yet.'}`] : []),
+        ...(notesForReport.length === 0 ? [`- ${uiMessage('desktop-ui.no-fact-summary-yet.d293f70162', (lang === 'zh') ? 'zh' : 'en')}`] : []),
         '',
-        `## ${lang === 'zh' ? '争议焦点' : 'Issues'}`,
-        `- ${lang === 'zh' ? '请律师结合案由、证据和对方主张进一步确认。' : 'Counsel should confirm issues against claims, evidence, and procedural posture.'}`,
+        `## ${uiMessage('desktop-ui.issues.f9911a3802', (lang === 'zh') ? 'zh' : 'en')}`,
+        `- ${uiMessage('desktop-ui.counsel-should-confirm-issues-against.7df3dafccd', (lang === 'zh') ? 'zh' : 'en')}`,
         '',
-        `## ${lang === 'zh' ? '待补材料' : 'Missing Materials'}`,
-        ...(actionHints.length > 0 ? actionHints : [`- ${lang === 'zh' ? '暂未检测到明确待补材料。' : 'No clear missing materials detected.'}`]),
+        `## ${uiMessage('desktop-ui.missing-materials.ad6cf1dcaa', (lang === 'zh') ? 'zh' : 'en')}`,
+        ...(actionHints.length > 0 ? actionHints : [`- ${uiMessage('desktop-ui.no-clear-missing-materials-detected.b86e0b077d', (lang === 'zh') ? 'zh' : 'en')}`]),
         '',
-        `## ${lang === 'zh' ? '下一步建议' : 'Next Steps'}`,
-        `- ${lang === 'zh' ? '复核会谈转写，补充证据清单、责任人和期限。' : 'Review the transcript and add evidence list, owners, and deadlines.'}`,
+        `## ${uiMessage('desktop-ui.next-steps.cfcab769f5', (lang === 'zh') ? 'zh' : 'en')}`,
+        `- ${uiMessage('desktop-ui.review-the-transcript-and-add.1176eea1c1', (lang === 'zh') ? 'zh' : 'en')}`,
         '',
-        `## ${lang === 'zh' ? '安全边界' : 'Safety Boundary'}`,
-        `- ${lang === 'zh' ? '本纪要仅辅助律师分析，最终法律意见和对外文书由执业律师确认。' : 'This memo assists legal analysis only; final legal advice and filings require licensed counsel review.'}`,
+        `## ${uiMessage('desktop-ui.safety-boundary.0f86bb1e83', (lang === 'zh') ? 'zh' : 'en')}`,
+        `- ${uiMessage('desktop-ui.this-memo-assists-legal-analysis.678ef98abe', (lang === 'zh') ? 'zh' : 'en')}`,
       ].join('\n');
     }
     return [
-      lang === 'zh' ? '# Lumi 会议报告' : '# Lumi Meeting Report',
+      uiMessage('desktop-ui.lumi-meeting-report.8f1af8ddfd', (lang === 'zh') ? 'zh' : 'en'),
       '',
-      `${lang === 'zh' ? '开始时间' : 'Started'}: ${started}`,
-      `${lang === 'zh' ? '记录条数' : 'Transcript items'}: ${notesForReport.length}`,
+      `${uiMessage('desktop-ui.started.364ae4adf2', (lang === 'zh') ? 'zh' : 'en')}: ${started}`,
+      `${uiMessage('desktop-ui.transcript-items.8cb25feb7a', (lang === 'zh') ? 'zh' : 'en')}: ${notesForReport.length}`,
       '',
-      `## ${lang === 'zh' ? '会议摘要' : 'Summary'}`,
+      `## ${uiMessage('desktop-ui.summary.6a1255c05e', (lang === 'zh') ? 'zh' : 'en')}`,
       notesForReport.length > 0
-        ? (lang === 'zh' ? `本次会议共收录 ${notesForReport.length} 条转写。LLM 分析暂不可用，下面是基于转写的基础整理。` : `Captured ${notesForReport.length} transcript items. LLM analysis was unavailable, so this is a basic local report.`)
-        : (lang === 'zh' ? '本次会议没有可整理的转写内容。' : 'No transcript was captured for this meeting.'),
+        ? (formatUiMessage('desktop-ui.captured-value0-transcript-items-llm.2d05f10a79', { value0: notesForReport.length }, (lang === 'zh') ? 'zh' : 'en'))
+        : (uiMessage('desktop-ui.no-transcript-was-captured-for.2e5c4be8f2', (lang === 'zh') ? 'zh' : 'en')),
       '',
-      `## ${lang === 'zh' ? '待办/决策线索' : 'Action / Decision Signals'}`,
-      ...(actionHints.length > 0 ? actionHints : [`- ${lang === 'zh' ? '未检测到明确待办或决策线索。' : 'No clear action or decision signals detected.'}`]),
+      `## ${uiMessage('desktop-ui.action-decision-signals.c44c197db8', (lang === 'zh') ? 'zh' : 'en')}`,
+      ...(actionHints.length > 0 ? actionHints : [`- ${uiMessage('desktop-ui.no-clear-action-or-decision.0c5b66381b', (lang === 'zh') ? 'zh' : 'en')}`]),
       '',
-      `## ${lang === 'zh' ? '建议' : 'Suggestion'}`,
-      `- ${lang === 'zh' ? '建议人工复核转写，补充负责人、截止时间和最终决策。' : 'Review the transcript manually and add owners, deadlines, and final decisions.'}`,
+      `## ${uiMessage('desktop-ui.suggestion.2ed069fe41', (lang === 'zh') ? 'zh' : 'en')}`,
+      `- ${uiMessage('desktop-ui.review-the-transcript-manually-and.78769e1374', (lang === 'zh') ? 'zh' : 'en')}`,
     ].join('\n');
   }, [formatMeetingNoteForExport, formatMeetingTime, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt]);
 
@@ -2764,7 +2658,7 @@ export function DesktopUI({
       const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
       localStorage.setItem(meetingStorageKeys.report, fallback);
-      toast.info(lang === 'zh' ? '会议没有收录到转写，已生成空会议报告' : 'No transcript captured; generated an empty meeting report');
+      toast.info(uiMessage('desktop-ui.no-transcript-captured-generated-an.b6e7d4d221', (lang === 'zh') ? 'zh' : 'en'));
       return fallback;
     }
 
@@ -2817,13 +2711,13 @@ export function DesktopUI({
         setLegalMeetingCaseTitle('');
         window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed'));
       }
-      toast.success(lang === 'zh' ? 'Lumi 已整理会议报告' : 'Lumi generated the meeting report');
+      toast.success(uiMessage('desktop-ui.lumi-generated-the-meeting-report.ebfd03daff', (lang === 'zh') ? 'zh' : 'en'));
       return report;
     } catch (err: any) {
       const fallback = buildFallbackMeetingReport(notesForAnalysis);
       setMeetingReport(fallback);
       localStorage.setItem(meetingStorageKeys.report, fallback);
-      toast.error(err?.message || (lang === 'zh' ? '会议分析失败，已生成基础报告' : 'Meeting analysis failed; generated a basic report'));
+      toast.error(err?.message || (uiMessage('desktop-ui.meeting-analysis-failed-generated-a.2106efcb98', (lang === 'zh') ? 'zh' : 'en')));
       return fallback;
     } finally {
       setMeetingReportGenerating(false);
@@ -2840,23 +2734,24 @@ export function DesktopUI({
 
     if (workDomain === 'work' && orgConnection?.connected) {
       const started = meetingStartedAt ? new Date(meetingStartedAt) : new Date(endedAt);
+      const meetingCopy = desktopWorkflowCopy(lang).legalMeeting;
       const transcript = notesForArchive
         .map(note => `- [${formatMeetingTime(note.time)}] ${formatMeetingNoteForExport(note)}`)
         .join('\n');
       const content = [
-        `# 当事人会谈 ${started.toLocaleString()}`,
+        `# ${meetingCopy.title} ${started.toLocaleString()}`,
         '',
-        '## Lumi 会谈整理',
+        `## ${meetingCopy.lumiSummary}`,
         '',
         report,
         '',
-        '## 原始转写',
+        `## ${meetingCopy.rawTranscript}`,
         '',
         transcript,
         '',
-        '## 安全边界',
+        `## ${meetingCopy.safetyBoundary}`,
         '',
-        '本记录用于辅助律师分析，最终法律意见与对外文书由执业律师确认。',
+        meetingCopy.boundaryText,
       ].join('\n');
       try {
         const res = await fetch(`/api/org/legal/cases/${encodeURIComponent(consultationCaseId)}/materials`, {
@@ -2865,7 +2760,7 @@ export function DesktopUI({
           credentials: 'include',
           body: JSON.stringify({
             type: 'consultation',
-            title: `当事人会谈 ${started.toLocaleString()}`,
+            title: `${meetingCopy.title} ${started.toLocaleString()}`,
             content,
             source: 'meeting',
           }),
@@ -2876,10 +2771,10 @@ export function DesktopUI({
         clearLegalConsultationCaseId();
         setLegalMeetingCaseTitle('');
         window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed'));
-        toast.success(lang === 'zh' ? '会谈已归档到组织案件' : 'Consultation archived to organization case');
+        toast.success(uiMessage('desktop-ui.consultation-archived-to-organization-case.0f5a7a5269', (lang === 'zh') ? 'zh' : 'en'));
         return;
       } catch (err: any) {
-        toast.error(err?.message || (lang === 'zh' ? '会谈归档到组织案件失败' : 'Failed to archive consultation to organization case'));
+        toast.error(err?.message || (uiMessage('desktop-ui.failed-to-archive-consultation-to.7fac8fb2e5', (lang === 'zh') ? 'zh' : 'en')));
         return;
       }
     }
@@ -2891,12 +2786,12 @@ export function DesktopUI({
       endedAt,
     });
     if (!archived) {
-      toast.error(lang === 'zh' ? '会谈归档失败，请检查当前案件' : 'Failed to archive consultation to the case');
+      toast.error(uiMessage('desktop-ui.failed-to-archive-consultation-to.3a4ddc3b05', (lang === 'zh') ? 'zh' : 'en'));
       return;
     }
     lastLegalMeetingArchiveRef.current = archiveKey;
     setLegalMeetingCaseTitle('');
-    toast.success(lang === 'zh' ? `会谈已归档到案件：${getLegalCaseLabel(archived.caseFile)}` : `Consultation archived to case: ${getLegalCaseLabel(archived.caseFile)}`);
+    toast.success(formatUiMessage('desktop-ui.consultation-archived-to-case-value0.213430958c', { value0: getLegalCaseLabel(archived.caseFile) }, (lang === 'zh') ? 'zh' : 'en'));
   }, [formatMeetingNoteForExport, formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain]);
 
   const endMeetingAndReport = useCallback(async () => {
@@ -2929,7 +2824,7 @@ export function DesktopUI({
     meetingVoiceActiveRef.current = false;
     meetingStartAttemptRef.current = 0;
     if (callState !== 'idle') endCall();
-    toast.success(lang === 'zh' ? '会议记录已暂停' : 'Meeting capture paused');
+    toast.success(uiMessage('desktop-ui.meeting-capture-paused.01ffd43760', (lang === 'zh') ? 'zh' : 'en'));
   }, [callState, endCall, lang]);
 
   const resumeMeetingCapture = useCallback(() => {
@@ -2937,7 +2832,7 @@ export function DesktopUI({
     setMeetingPaused(false);
     if (operationMode !== 'meeting') setOperationMode('meeting');
     setMeetingNotesOpen(true);
-    toast.success(lang === 'zh' ? '会议记录继续' : 'Meeting capture resumed');
+    toast.success(uiMessage('desktop-ui.meeting-capture-resumed.1fe9ed28f8', (lang === 'zh') ? 'zh' : 'en'));
   }, [lang, operationMode, setOperationMode]);
 
   const toggleMeetingCapturePaused = useCallback(() => {
@@ -2950,20 +2845,20 @@ export function DesktopUI({
 
   const copyMeetingNotes = useCallback(async () => {
     if (meetingNotes.length === 0) {
-      toast.info(lang === 'zh' ? '暂无会议笔记' : 'No meeting notes yet');
+      toast.info(uiMessage('desktop-ui.no-meeting-notes-yet.8b36e2125c', (lang === 'zh') ? 'zh' : 'en'));
       return;
     }
     try {
       await navigator.clipboard.writeText(buildMeetingMarkdown());
-      toast.success(lang === 'zh' ? '会议笔记已复制' : 'Meeting notes copied');
+      toast.success(uiMessage('desktop-ui.meeting-notes-copied.57d4f4a1c3', (lang === 'zh') ? 'zh' : 'en'));
     } catch (err: any) {
-      toast.error(err?.message || (lang === 'zh' ? '复制失败' : 'Failed to copy notes'));
+      toast.error(err?.message || (uiMessage('desktop-ui.failed-to-copy-notes.1c8b4242e3', (lang === 'zh') ? 'zh' : 'en')));
     }
   }, [buildMeetingMarkdown, lang, meetingNotes.length]);
 
   const downloadMeetingNotes = useCallback(() => {
     if (meetingNotes.length === 0) {
-      toast.info(lang === 'zh' ? '暂无会议笔记' : 'No meeting notes yet');
+      toast.info(uiMessage('desktop-ui.no-meeting-notes-yet.8b36e2125c', (lang === 'zh') ? 'zh' : 'en'));
       return;
     }
     const blob = new Blob([buildMeetingMarkdown()], { type: 'text/markdown;charset=utf-8' });
@@ -2976,7 +2871,7 @@ export function DesktopUI({
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
-    toast.success(lang === 'zh' ? '会议笔记已导出' : 'Meeting notes exported');
+    toast.success(uiMessage('desktop-ui.meeting-notes-exported.27f3f8fb53', (lang === 'zh') ? 'zh' : 'en'));
   }, [buildMeetingMarkdown, lang, meetingNotes.length, meetingStartedAt]);
 
   const clearMeetingNotes = useCallback(() => {
@@ -2990,7 +2885,7 @@ export function DesktopUI({
     localStorage.setItem(meetingStorageKeys.startedAt, String(now));
     lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
     lastLegalMeetingArchiveRef.current = '';
-    toast.success(lang === 'zh' ? '会议笔记已清空' : 'Meeting notes cleared');
+    toast.success(uiMessage('desktop-ui.meeting-notes-cleared.935a6beea8', (lang === 'zh') ? 'zh' : 'en'));
   }, [lang, meetingStorageKeys]);
 
   const requestOperationModeChange = useCallback((nextMode: OperationMode) => {
@@ -3566,7 +3461,7 @@ export function DesktopUI({
           setEquippedAccessories(accessories);
           localStorage.setItem(petStorageKeys.accessories, JSON.stringify(accessories));
         }
-        toast.info(lang === 'zh' ? '桌面形象已从另一设备同步' : 'Desktop avatar synced from another device');
+        toast.info(uiMessage('desktop-ui.desktop-avatar-synced-from-another.6c2486fffe', (lang === 'zh') ? 'zh' : 'en'));
       }
     };
     const onAgentPromoted = (data: { agentName: string; skillName?: string }) => {
@@ -3590,8 +3485,8 @@ export function DesktopUI({
     const onWakeDetected = (data: { keyword: string }) => {
       addNotification({
         type: 'info',
-        title: lang === 'zh' ? '唤醒词检测' : 'Wake Word Detected',
-        message: lang === 'zh' ? `检测到唤醒词 "${data.keyword}"` : `Detected wake word "${data.keyword}"`,
+        title: uiMessage('desktop-ui.wake-word-detected.3b2cda12ab', (lang === 'zh') ? 'zh' : 'en'),
+        message: formatUiMessage('desktop-ui.detected-wake-word-value0.5617ff6dc9', { value0: data.keyword }, (lang === 'zh') ? 'zh' : 'en'),
       });
     };
     const onWakeError = (data: { message: string }) => {
@@ -3600,8 +3495,8 @@ export function DesktopUI({
     const onWakeStarted = () => {
       addNotification({
         type: 'info',
-        title: lang === 'zh' ? '语音唤醒' : 'Voice Wake',
-        message: lang === 'zh' ? '语音唤醒服务已启动' : 'Voice wake service started',
+        title: uiMessage('desktop-ui.voice-wake.a96c749ad3', (lang === 'zh') ? 'zh' : 'en'),
+        message: uiMessage('desktop-ui.voice-wake-service-started.c82b9ac02d', (lang === 'zh') ? 'zh' : 'en'),
       });
     };
 
@@ -3613,10 +3508,8 @@ export function DesktopUI({
       if (pct >= 0.9) {
         addNotification({
           type: 'warning',
-          title: lang === 'zh' ? 'Token 配额告警' : 'Token Quota Alert',
-          message: lang === 'zh'
-            ? `已使用 ${Math.round(pct * 100)}%（${data.used.toLocaleString()} / ${data.cap.toLocaleString()}）`
-            : `${Math.round(pct * 100)}% used (${data.used.toLocaleString()} / ${data.cap.toLocaleString()})`,
+          title: uiMessage('desktop-ui.token-quota-alert.a42936b017', (lang === 'zh') ? 'zh' : 'en'),
+          message: formatUiMessage('desktop-ui.value0-used-value1-value2.f3403a0250', { value0: Math.round(pct * 100), value1: data.used.toLocaleString(), value2: data.cap.toLocaleString() }, (lang === 'zh') ? 'zh' : 'en'),
         });
       }
     };
@@ -3737,7 +3630,7 @@ export function DesktopUI({
 
   const handleSelectPet = (pet: PetConfig) => {
     if (!canCustomizeLumiAppearance) {
-      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
+      toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
       return;
     }
     setSelectedPet(pet);
@@ -3953,9 +3846,7 @@ export function DesktopUI({
         const nativeMessage = nativeError?.message || String(nativeError || '');
         const fallbackMessage = fallbackErr?.message || String(fallbackErr || '');
         toast.error(
-          lang === 'zh'
-            ? `无法进入桌面小组件：${fallbackMessage || nativeMessage || '窗口控制失败'}`
-            : `Failed to enter widget mode: ${fallbackMessage || nativeMessage || 'window control failed'}`
+          formatUiMessage('desktop-ui.failed-to-enter-widget-mode.65fdcea9fd', { value0: fallbackMessage || nativeMessage || desktopWorkflowCopy(lang).common.windowControlFailed }, (lang === 'zh') ? 'zh' : 'en')
         );
       }
     }
@@ -3973,7 +3864,7 @@ export function DesktopUI({
         try {
           await restoreDesktopWidgetFallback();
         } catch (fallbackErr: any) {
-          toast.error(fallbackErr?.message || err?.message || (lang === 'zh' ? '无法展开 Lumi' : 'Failed to expand Lumi'));
+          toast.error(fallbackErr?.message || err?.message || (uiMessage('desktop-ui.failed-to-expand-lumi.3f04f30125', (lang === 'zh') ? 'zh' : 'en')));
         }
       }
     }
@@ -4204,7 +4095,7 @@ export function DesktopUI({
         }
         if (action === 'close_customer_takeover_panel' || action === 'demo_close_customer_takeover') {
           setCustomerTakeoverStage(null);
-          setCustomerTakeoverBrief(DEFAULT_CUSTOMER_TAKEOVER_BRIEF);
+          setCustomerTakeoverBrief(createDefaultCustomerTakeoverBrief());
           respond({ ok: true, action });
           return;
         }
@@ -4579,7 +4470,7 @@ export function DesktopUI({
     { id: 'mcp', label: t.mcp || 'MCP', icon: <Wrench size={24} />, color: 'from-purple-500 to-violet-600' },
     { id: 'sync', label: t.sync || 'Sync', icon: <RefreshCw size={24} />, color: 'from-blue-500 to-indigo-600' },
     { id: 'reminders', label: t.reminders || 'Reminders', icon: <Calendar size={24} />, color: 'from-amber-500 to-orange-600' },
-    { id: 'plans', label: t.learningPlans || (lang === 'zh' ? '学习计划' : 'Learning Plans'), icon: <Calendar size={24} />, color: 'from-celestial-saturn to-orange-600' },
+    { id: 'plans', label: t.learningPlans || (uiMessage('desktop-ui.learning-plans.5a08a014b3', (lang === 'zh') ? 'zh' : 'en')), icon: <Calendar size={24} />, color: 'from-celestial-saturn to-orange-600' },
     { id: 'tokens', label: t.tokens || 'Tokens', icon: <Circle size={24} />, color: 'from-celestial-mars to-celestial-saturn' },
     { id: 'profile', label: t.profile || 'Profile', icon: <UserIcon size={24} />, color: 'from-white/30 to-white/10' },
   ];
@@ -4629,34 +4520,34 @@ export function DesktopUI({
   const operationModeOptions = [
     {
       id: 'meeting' as const,
-      label: t.modeMeeting || (lang === 'zh' ? '会议' : 'Meeting'),
-      title: t.modeMeetingTitle || (lang === 'zh' ? '会议模式' : 'Meeting mode'),
-      description: t.modeMeetingDesc || (lang === 'zh' ? '自动开启语音转文字，收录会议笔记；结束后整理纪要、分析和报告。' : 'Starts speech-to-text, records meeting notes, then produces a summary, analysis, and report when ended.'),
-      hint: t.modeMeetingHint || (lang === 'zh' ? '会议记录' : 'Live notes'),
+      label: t.modeMeeting || (uiMessage('desktop-ui.meeting.e16a90b510', (lang === 'zh') ? 'zh' : 'en')),
+      title: t.modeMeetingTitle || (uiMessage('desktop-ui.meeting-mode.958510fb80', (lang === 'zh') ? 'zh' : 'en')),
+      description: t.modeMeetingDesc || (uiMessage('desktop-ui.starts-speech-to-text-records.eae4abc712', (lang === 'zh') ? 'zh' : 'en')),
+      hint: t.modeMeetingHint || (uiMessage('desktop-ui.live-notes.578276ba0a', (lang === 'zh') ? 'zh' : 'en')),
       icon: <FileText size={16} />,
     },
     {
       id: 'chat' as const,
-      label: t.modeChat || (lang === 'zh' ? '聊天' : 'Chat'),
-      title: t.modeChatTitle || (lang === 'zh' ? '聊天模式' : 'Chat mode'),
-      description: t.modeChatDesc || (lang === 'zh' ? '纯聊天，只回答、解释和讨论；不调用工具、不控制桌面、不打开外部软件。' : 'Pure conversation: answers and discussion only; no tools, desktop control, or external apps.'),
-      hint: t.modeChatHint || (lang === 'zh' ? '纯聊天' : 'Conversation only'),
+      label: t.modeChat || (uiMessage('desktop-ui.chat.1594b2f45c', (lang === 'zh') ? 'zh' : 'en')),
+      title: t.modeChatTitle || (uiMessage('desktop-ui.chat-mode.fc9f4d73b6', (lang === 'zh') ? 'zh' : 'en')),
+      description: t.modeChatDesc || (uiMessage('desktop-ui.pure-conversation-answers-and-discussion.10bb20f365', (lang === 'zh') ? 'zh' : 'en')),
+      hint: t.modeChatHint || (uiMessage('desktop-ui.conversation-only.33f7067683', (lang === 'zh') ? 'zh' : 'en')),
       icon: <MessageSquare size={16} />,
     },
     {
       id: 'assistant' as const,
-      label: t.modeAssistant || (lang === 'zh' ? '助手' : 'Assistant'),
-      title: t.modeAssistantTitle || (lang === 'zh' ? '助手模式' : 'Assistant mode'),
-      description: t.modeAssistantDesc || (lang === 'zh' ? '人在场的全权限助理：可用工具、浏览器、文件、桌面和外部软件执行普通任务，少弹权限确认。' : 'User-present full-permission helper: tools, browser, files, desktop, and external apps with minimal permission prompts.'),
-      hint: t.modeAssistantHint || (lang === 'zh' ? '现场全权限' : 'Foreground full access'),
+      label: t.modeAssistant || (uiMessage('desktop-ui.assistant.90c4ae600c', (lang === 'zh') ? 'zh' : 'en')),
+      title: t.modeAssistantTitle || (uiMessage('desktop-ui.assistant-mode.cc5acf7cf6', (lang === 'zh') ? 'zh' : 'en')),
+      description: t.modeAssistantDesc || (uiMessage('desktop-ui.user-present-full-permission-helper.fac834ab73', (lang === 'zh') ? 'zh' : 'en')),
+      hint: t.modeAssistantHint || (uiMessage('desktop-ui.foreground-full-access.a5a81a90e7', (lang === 'zh') ? 'zh' : 'en')),
       icon: <Sparkles size={16} />,
     },
     {
       id: 'autonomous' as const,
-      label: t.modeAutonomy || t.modeAutoExecute || (lang === 'zh' ? '自主' : 'Autonomy'),
-      title: t.modeAutonomyTitle || t.modeAutoExecuteTitle || (lang === 'zh' ? '自主模式' : 'Autonomy mode'),
-      description: t.modeAutonomyDesc || t.modeAutoExecuteDesc || (lang === 'zh' ? '和助理模式同权限，但可以 24 小时自主运行、监控、整理吸收、学习和推进超长任务。' : 'Same permissions as Assistant, plus 24h autonomous running, monitoring, absorption, learning, and ultra-long task continuation.'),
-      hint: t.modeAutonomyHint || t.modeAutoExecuteHint || (lang === 'zh' ? '24h 自主运行' : '24h autonomous work'),
+      label: t.modeAutonomy || t.modeAutoExecute || (uiMessage('desktop-ui.autonomy.6aea974e38', (lang === 'zh') ? 'zh' : 'en')),
+      title: t.modeAutonomyTitle || t.modeAutoExecuteTitle || (uiMessage('desktop-ui.autonomy-mode.f6d90bbb04', (lang === 'zh') ? 'zh' : 'en')),
+      description: t.modeAutonomyDesc || t.modeAutoExecuteDesc || (uiMessage('desktop-ui.same-permissions-as-assistant-plus.ba90411459', (lang === 'zh') ? 'zh' : 'en')),
+      hint: t.modeAutonomyHint || t.modeAutoExecuteHint || (uiMessage('desktop-ui.24h-autonomous-work.81b1d75d6b', (lang === 'zh') ? 'zh' : 'en')),
       icon: <Zap size={16} />,
     },
   ];
@@ -4678,7 +4569,7 @@ export function DesktopUI({
       backgroundWorkflowTasks.length > 0
     );
 
-  const tutorialLabel = t.showTutorial || (lang === 'zh' ? '教程' : 'Tutorial');
+  const tutorialLabel = t.showTutorial || (uiMessage('desktop-ui.tutorial.67f6f569ce', (lang === 'zh') ? 'zh' : 'en'));
 
   const handleShellContextMenu = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement | null;
@@ -4968,10 +4859,10 @@ export function DesktopUI({
                {/* Server connection status */}
                <span
                  className={`w-2 h-2 rounded-full ${socket?.connected ? 'bg-green-400 shadow-[0_0_6px] shadow-green-400/60' : 'bg-red-400 animate-pulse'}`}
-                  title={socket?.connected ? (lang === 'zh' ? '服务已连接' : 'Service connected') : (lang === 'zh' ? '服务未连接' : 'Service disconnected')}
+                  title={socket?.connected ? (uiMessage('desktop-ui.service-connected.23cf85600c', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.service-disconnected.0511526fe1', (lang === 'zh') ? 'zh' : 'en'))}
                />
                {/* Volume mute toggle */}
-                <button onClick={toggleMute} className="flex items-center gap-1 hover:text-white transition-colors" title={isMuted ? (lang === 'zh' ? '取消静音' : 'Unmute') : (lang === 'zh' ? '静音' : 'Mute')}>
+                <button onClick={toggleMute} className="flex items-center gap-1 hover:text-white transition-colors" title={isMuted ? (uiMessage('desktop-ui.unmute.acb9917a71', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.mute.060982be3f', (lang === 'zh') ? 'zh' : 'en'))}>
                  {isMuted ? <VolumeX size={14} className="text-red-400" /> : <Volume2 size={14} />}
                </button>
                {/* Battery — real via navigator.getBattery() */}
@@ -4983,10 +4874,10 @@ export function DesktopUI({
                      ? 'bg-celestial-saturn/20 text-celestial-saturn border-celestial-saturn/30'
                      : 'bg-white/5 border-white/5 text-white/55 hover:bg-white/10 hover:text-white'
                  }`}
-                  title={isWallpaperMode ? (lang === 'zh' ? '退出壁纸模式' : 'Exit wallpaper mode') : (lang === 'zh' ? '壁纸模式' : 'Wallpaper mode')}
+                  title={isWallpaperMode ? (uiMessage('desktop-ui.exit-wallpaper-mode.9b9dd6514d', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.wallpaper-mode.eb93c52005', (lang === 'zh') ? 'zh' : 'en'))}
                >
                  <Zap size={10} className={isWallpaperMode ? 'animate-pulse' : ''} />
-                 {isWallpaperMode ? 'Fusion' : (lang === 'zh' ? '壁纸' : 'Wallpaper')}
+                 {isWallpaperMode ? 'Fusion' : (uiMessage('desktop-ui.wallpaper.b2aa8da019', (lang === 'zh') ? 'zh' : 'en'))}
                </button>
             </div>
 
@@ -5006,28 +4897,28 @@ export function DesktopUI({
               <button
                 onClick={() => void enterDesktopWidgetMode()}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
-                title={lang === 'zh' ? '收起为桌面小组件' : 'Desktop widget'}
+                title={uiMessage('desktop-ui.desktop-widget.2a3b83969d', (lang === 'zh') ? 'zh' : 'en')}
               >
                 <Minimize2 size={14} />
               </button>
               <button
                 onClick={handleWindowMinimize}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
-                title={lang === 'zh' ? '最小化' : 'Minimize'}
+                title={uiMessage('desktop-ui.minimize.17dd85f90b', (lang === 'zh') ? 'zh' : 'en')}
               >
                 <Minus size={14} />
               </button>
               <button
                 onClick={handleWindowMaximize}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
-                title={lang === 'zh' ? '最大化' : 'Maximize'}
+                title={uiMessage('desktop-ui.maximize.17e771fac7', (lang === 'zh') ? 'zh' : 'en')}
               >
                 <Square size={12} />
               </button>
               <button
                 onClick={handleWindowClose}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-red-500/80 transition-colors"
-                title={lang === 'zh' ? '关闭' : 'Close'}
+                title={uiMessage('desktop-ui.close.6cf4a7773a', (lang === 'zh') ? 'zh' : 'en')}
               >
                 <X size={14} />
               </button>
@@ -5040,7 +4931,7 @@ export function DesktopUI({
             <>
               <motion.button
                 type="button"
-                aria-label={lang === 'zh' ? '关闭通知' : 'Close notifications'}
+                aria-label={uiMessage('desktop-ui.close-notifications.e2705e5af4', (lang === 'zh') ? 'zh' : 'en')}
                 className="fixed inset-x-0 bottom-0 top-10 z-[101] cursor-default pointer-events-auto bg-transparent"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -5206,7 +5097,7 @@ export function DesktopUI({
                 <button
                   onClick={() => toggleWindow('avatar-studio')}
                   className={`cursor-pointer transition-all ${callState !== 'idle' ? 'animate-pulse' : ''}`}
-                  title={lang === 'zh' ? `${selectedPet.name} - 点击打开形象设计室` : `${selectedPet.name} - open Avatar Studio`}
+                  title={formatUiMessage('desktop-ui.value0-open-avatar-studio.0ef4556aac', { value0: selectedPet.name }, (lang === 'zh') ? 'zh' : 'en')}
                 >
                   <PetAvatar
                     pet={selectedPet}
@@ -5248,15 +5139,15 @@ export function DesktopUI({
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!canCustomizeLumiAppearance) {
-                      toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
+                      toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
                       return;
                     }
                     setSelectedPet(null);
                     savePetPrefsToServer(null, equippedAccessories);
-                    toast.info(lang === 'zh' ? '已切换回粒子人脸' : 'Switched back to particle face');
+                    toast.info(uiMessage('desktop-ui.switched-back-to-particle-face.d909fcb03c', (lang === 'zh') ? 'zh' : 'en'));
                   }}
                   className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-white/10 border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/30 hover:border-red-500/40"
-                  title={lang === 'zh' ? '切换回粒子人脸' : 'Switch back to particle face'}
+                  title={uiMessage('desktop-ui.switch-back-to-particle-face.711fb73491', (lang === 'zh') ? 'zh' : 'en')}
                 >
                   <X size={10} className="text-white/60" />
                 </button>
@@ -5301,7 +5192,7 @@ export function DesktopUI({
               </div>
               {wakeEnabled && wakeWord.isListening && callState === 'idle' && (
                 <div className="mt-2 text-xs text-white/45 uppercase tracking-[0.25em] font-mono">
-                  {lang === 'zh' ? '正在监听 "Lumi"' : 'Listening for "Lumi"'}
+                  {uiMessage('desktop-ui.listening-for-lumi.9b7354ccfe', (lang === 'zh') ? 'zh' : 'en')}
                 </div>
               )}
               {wakeEnabled && wakeWord.error && (
@@ -5311,12 +5202,12 @@ export function DesktopUI({
               )}
               {wakeEnabled && !wakeWord.isListening && !wakeWord.error && callState === 'idle' && (
                 <div className="mt-2 text-xs text-yellow-400/40 font-mono">
-                  {lang === 'zh' ? '唤醒词初始化中...' : 'Wake word initializing...'}
+                  {uiMessage('desktop-ui.wake-word-initializing.a269c0c408', (lang === 'zh') ? 'zh' : 'en')}
                 </div>
               )}
               {!wakeEnabled && callState === 'idle' && (
                 <div className="mt-2 text-xs text-white/30 font-mono">
-                  {lang === 'zh' ? '唤醒词未开启' : 'Wake word off'}
+                  {uiMessage('desktop-ui.wake-word-off.d249204cdf', (lang === 'zh') ? 'zh' : 'en')}
                 </div>
               )}
               </>
@@ -5511,19 +5402,19 @@ export function DesktopUI({
                   <div className="flex items-center gap-2">
                     <span className={`h-2 w-2 rounded-full ${operationMode === 'meeting' && !meetingPaused && callState !== 'idle' ? 'bg-cyan-400 animate-pulse' : meetingPaused ? 'bg-amber-300' : 'bg-white/25'}`} />
                     <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white/80">
-                      {t.meetingMode || (lang === 'zh' ? '会议模式' : 'Meeting Mode')}
+                      {t.meetingMode || (uiMessage('desktop-ui.meeting-mode.59774a9431', (lang === 'zh') ? 'zh' : 'en'))}
                     </h3>
                   </div>
                   <p className="mt-1 text-[11px] leading-relaxed text-white/45">
                     {meetingPaused
-                      ? (lang === 'zh' ? '会议记录已暂停，已有笔记会保留' : 'Meeting capture paused; existing notes are preserved')
+                      ? (uiMessage('desktop-ui.meeting-capture-paused-existing-notes.9184207c36', (lang === 'zh') ? 'zh' : 'en'))
                       : operationMode === 'meeting'
-                      ? (lang === 'zh' ? '正在自动语音转文字并收录笔记' : 'Recording speech-to-text notes automatically')
-                      : (lang === 'zh' ? '会议笔记已暂停' : 'Meeting notes paused')}
+                      ? (uiMessage('desktop-ui.recording-speech-to-text-notes.d1c840bc80', (lang === 'zh') ? 'zh' : 'en'))
+                      : (uiMessage('desktop-ui.meeting-notes-paused.dbdda568f0', (lang === 'zh') ? 'zh' : 'en'))}
                   </p>
                   {legalMeetingCaseTitle && (
                     <p className="mt-1 text-[11px] leading-relaxed text-cyan-200/70">
-                      {lang === 'zh' ? `归档到案件：${legalMeetingCaseTitle}` : `Archiving to case: ${legalMeetingCaseTitle}`}
+                      {formatUiMessage('desktop-ui.archiving-to-case-value0.df7656835b', { value0: legalMeetingCaseTitle }, (lang === 'zh') ? 'zh' : 'en')}
                     </p>
                   )}
                 </div>
@@ -5531,46 +5422,46 @@ export function DesktopUI({
                   <button
                     onClick={copyMeetingNotes}
                     className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-                    title={lang === 'zh' ? '复制笔记' : 'Copy notes'}
+                    title={uiMessage('desktop-ui.copy-notes.61d380527a', (lang === 'zh') ? 'zh' : 'en')}
                   >
                     <Copy size={14} />
                   </button>
                   <button
                     onClick={downloadMeetingNotes}
                     className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/45 transition-colors hover:bg-white/10 hover:text-white"
-                    title={lang === 'zh' ? '导出 Markdown' : 'Export Markdown'}
+                    title={uiMessage('desktop-ui.export-markdown.7ef9dff097', (lang === 'zh') ? 'zh' : 'en')}
                   >
                     <Download size={14} />
                   </button>
                   <button
                     onClick={() => setMeetingNotesOpen(false)}
                     className="flex h-9 items-center justify-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 text-xs font-black uppercase tracking-[0.14em] text-cyan-100 transition-colors hover:bg-cyan-400/15"
-                    aria-label={lang === 'zh' ? '退出全屏，继续录制' : 'Exit fullscreen, keep recording'}
-                    title={lang === 'zh' ? '退出全屏，继续录制' : 'Exit fullscreen, keep recording'}
+                    aria-label={uiMessage('desktop-ui.exit-fullscreen-keep-recording.5b39c4c75a', (lang === 'zh') ? 'zh' : 'en')}
+                    title={uiMessage('desktop-ui.exit-fullscreen-keep-recording.5b39c4c75a', (lang === 'zh') ? 'zh' : 'en')}
                   >
                     <X size={15} />
-                    <span>{lang === 'zh' ? '退出全屏' : 'Exit'}</span>
+                    <span>{uiMessage('desktop-ui.exit.a32b11f87a', (lang === 'zh') ? 'zh' : 'en')}</span>
                   </button>
                 </div>
               </div>
 
               <div className="mt-5 grid shrink-0 grid-cols-2 gap-2 text-center md:grid-cols-4 md:gap-3">
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '状态' : 'State'}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('desktop-ui.state.91c2d4012c', (lang === 'zh') ? 'zh' : 'en')}</div>
                   <div className={`mt-1 text-xs font-bold ${meetingPaused ? 'text-amber-300' : 'text-cyan-300'}`}>
                     {meetingPaused ? 'Paused' : callState === 'idle' ? 'Idle' : callState}
                   </div>
                 </div>
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '条目' : 'Items'}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('desktop-ui.items.81a207be82', (lang === 'zh') ? 'zh' : 'en')}</div>
                   <div className="mt-1 text-xs font-bold text-white/75">{meetingNotes.length}</div>
                 </div>
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '说话人' : 'Speakers'}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('desktop-ui.speakers.28c4329526', (lang === 'zh') ? 'zh' : 'en')}</div>
                   <div className="mt-1 text-xs font-bold text-white/75">{meetingSpeakerCount || '-'}</div>
                 </div>
                 <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{lang === 'zh' ? '时长' : 'Time'}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('desktop-ui.time.8a72c3e2a2', (lang === 'zh') ? 'zh' : 'en')}</div>
                   <div className="mt-1 text-xs font-bold text-white/75">
                     {meetingStartedAt ? `${Math.max(0, Math.floor((time.getTime() - meetingStartedAt) / 60000))}m` : '0m'}
                   </div>
@@ -5580,20 +5471,20 @@ export function DesktopUI({
               <div className="mt-5 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 custom-scrollbar">
                 {meetingReportGenerating && (
                   <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-xs font-bold text-cyan-200">
-                    {lang === 'zh' ? 'Lumi 正在整理会议报告...' : 'Lumi is preparing the meeting report...'}
+                    {uiMessage('desktop-ui.lumi-is-preparing-the-meeting.b2bd78cdbc', (lang === 'zh') ? 'zh' : 'en')}
                   </div>
                 )}
                 {meetingReport && !meetingReportGenerating && (
                   <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3">
                     <div className="text-[10px] font-black uppercase tracking-widest text-cyan-300/80">
-                      {lang === 'zh' ? 'Lumi 会议报告' : 'Lumi Report'}
+                      {uiMessage('desktop-ui.lumi-report.3edec8f8b6', (lang === 'zh') ? 'zh' : 'en')}
                     </div>
                     <pre className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-white/75 font-sans">{meetingReport}</pre>
                   </div>
                 )}
                 {meetingNotes.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs leading-relaxed text-white/35">
-                    {lang === 'zh' ? '进入会议模式后，说话内容会自动出现在这里。' : 'Speech captured in meeting mode will appear here automatically.'}
+                    {uiMessage('desktop-ui.speech-captured-in-meeting-mode.4372ef7c18', (lang === 'zh') ? 'zh' : 'en')}
                   </div>
                 ) : (
                   meetingNotes.slice(-80).reverse().map(note => (
@@ -5632,7 +5523,7 @@ export function DesktopUI({
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   {meetingPaused ? <Play size={14} /> : <Pause size={14} />}
-                  <span>{meetingPaused ? (lang === 'zh' ? '继续记录' : 'Resume') : (lang === 'zh' ? '暂停记录' : 'Pause')}</span>
+                  <span>{meetingPaused ? (uiMessage('desktop-ui.resume.20a567499d', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.pause.e9b4be6e7c', (lang === 'zh') ? 'zh' : 'en'))}</span>
                 </button>
                 <button
                   onClick={() => void endMeetingAndReport()}
@@ -5640,14 +5531,14 @@ export function DesktopUI({
                   className="flex-1 rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-xs font-black uppercase tracking-widest text-cyan-200 transition-colors hover:bg-cyan-400/15"
                 >
                   {meetingReportGenerating
-                    ? (lang === 'zh' ? '整理中' : 'Preparing')
-                    : (lang === 'zh' ? '结束会议并整理' : 'End & Report')}
+                    ? (uiMessage('desktop-ui.preparing.47ac61c0ae', (lang === 'zh') ? 'zh' : 'en'))
+                    : (uiMessage('desktop-ui.end-report.86a5ea4d29', (lang === 'zh') ? 'zh' : 'en'))}
                 </button>
                 <button
                   onClick={clearMeetingNotes}
                   className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black uppercase tracking-widest text-white/40 transition-colors hover:bg-white/10 hover:text-white"
                 >
-                  {lang === 'zh' ? '清空' : 'Clear'}
+                  {uiMessage('desktop-ui.clear.684270d636', (lang === 'zh') ? 'zh' : 'en')}
                 </button>
               </div>
             </GlassCard>
@@ -5693,7 +5584,7 @@ export function DesktopUI({
                   <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs leading-relaxed text-white/45">
                     {pendingOperationMode === 'meeting'
                       ? (t.modeMeetingConfirmNote || 'Meeting mode starts microphone speech-to-text, records notes, and can generate a report when you end it.')
-                      : (t.modeAutoConfirmNote || (lang === 'zh' ? '自主模式可以使用工具、运行日志、团队、命令和桌面控制；进度会可见，敏感操作仍会确认。' : 'Autonomy can use tools, run logs, teams, commands, and desktop control with visible progress and confirmations for sensitive actions.'))}
+                      : (t.modeAutoConfirmNote || (uiMessage('desktop-ui.autonomy-can-use-tools-run.7fe5da7b61', (lang === 'zh') ? 'zh' : 'en')))}
                   </div>
                 </div>
               </div>
@@ -5736,7 +5627,7 @@ export function DesktopUI({
             brief={customerTakeoverBrief}
             onClose={() => {
               setCustomerTakeoverStage(null);
-              setCustomerTakeoverBrief(DEFAULT_CUSTOMER_TAKEOVER_BRIEF);
+              setCustomerTakeoverBrief(createDefaultCustomerTakeoverBrief());
             }}
           />
         )}
@@ -5773,10 +5664,10 @@ export function DesktopUI({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[11px] font-black uppercase tracking-[0.18em] text-cyan-200">
-                  {t.wallpaperWorkPromptTitle || (lang === 'zh' ? '进入原生桌面协作' : 'Native desktop handoff')}
+                  {t.wallpaperWorkPromptTitle || (uiMessage('desktop-ui.native-desktop-handoff.ce61ef3fc2', (lang === 'zh') ? 'zh' : 'en'))}
                 </div>
                 <div className="mt-0.5 truncate text-xs font-medium text-white/55">
-                  {t.wallpaperWorkPromptDesc || (lang === 'zh' ? 'Lumi 已开始工作，可以直接转入壁纸模式。' : 'Lumi has started working and can move into wallpaper mode.')}
+                  {t.wallpaperWorkPromptDesc || (uiMessage('desktop-ui.lumi-has-started-working-and.da348f5f67', (lang === 'zh') ? 'zh' : 'en'))}
                 </div>
               </div>
               <button
@@ -5784,7 +5675,7 @@ export function DesktopUI({
                 className="flex shrink-0 items-center gap-1.5 rounded-lg border border-cyan-300/25 bg-cyan-300/15 px-3 py-2 text-xs font-black uppercase tracking-widest text-cyan-100 transition-colors hover:bg-cyan-300/25"
               >
                 <Zap size={13} />
-                {t.enterWallpaper || (lang === 'zh' ? '进入壁纸' : 'Enter')}
+                {t.enterWallpaper || (uiMessage('desktop-ui.enter.744e33700e', (lang === 'zh') ? 'zh' : 'en'))}
               </button>
               <button
                 onClick={dismissWallpaperWorkPrompt}
@@ -5915,7 +5806,7 @@ export function DesktopUI({
                       equippedAccessories={equippedAccessories}
                       onChangeAccessories={(ids) => {
                         if (!canCustomizeLumiAppearance) {
-                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
+                          toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
                           return;
                         }
                         setEquippedAccessories(ids);
@@ -5923,12 +5814,12 @@ export function DesktopUI({
                       }}
                       onResetToSphere={() => {
                         if (!canCustomizeLumiAppearance) {
-                          toast.error(lang === 'zh' ? '只有组织所有者或管理员可以修改组织工作域形象' : 'Only an organization owner or administrator can change the organization workspace appearance');
+                          toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
                           return;
                         }
                         setSelectedPet(null);
                         savePetPrefsToServer(null, equippedAccessories);
-                        toast.info(lang === 'zh' ? '已切换回原始圆球' : 'Switched back to the default sphere');
+                        toast.info(uiMessage('desktop-ui.switched-back-to-the-default.97edb4815a', (lang === 'zh') ? 'zh' : 'en'));
                       }}
                     />
                   ) : windowId === 'sound' ? (
@@ -6138,7 +6029,7 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
       return;
     }
     try {
-      const previewBuffer = await synthesizeSpeech(text || '你好，这是我的声音。Hello, this is my voice.', voiceId, provider, model);
+      const previewBuffer = await synthesizeSpeech(text || desktopWorkflowCopy().common.voicePreview, voiceId, provider, model);
       const previewBlob = new Blob([previewBuffer], { type: 'audio/mp3' });
       const previewUrl = URL.createObjectURL(previewBlob);
       const previewAudio = new Audio(previewUrl);
@@ -6365,7 +6256,7 @@ function BatteryIndicator({ lang = 'zh' }: { lang?: 'en' | 'zh' }) {
   return (
     <div
       className="flex items-center gap-1"
-      title={lang === 'zh' ? `电池 ${level}%${charging ? ' (充电中)' : ''}` : `Battery ${level}%${charging ? ' (charging)' : ''}`}
+      title={formatUiMessage('desktop-ui.battery-value0-value1.18d968c4e5', { value0: level, value1: charging ? desktopWorkflowCopy(lang).common.chargingSuffix : '' }, (lang === 'zh') ? 'zh' : 'en')}
     >
       <Battery size={14} className={level <= 20 ? 'text-red-400' : level <= 50 ? 'text-yellow-400' : ''} />
       <span className="text-xs font-bold">{level}%</span>
@@ -6395,11 +6286,11 @@ function MeetingModeButton({
           ? 'border-cyan-400/30 bg-cyan-400/15 text-cyan-100 shadow-[0_12px_32px_rgba(34,211,238,0.12)]'
           : 'border-white/10 bg-white/[0.035] text-white/45 hover:bg-white/[0.075] hover:text-white/75'
       }`}
-      title={t?.modeMeetingTitle || (lang === 'zh' ? '会议模式' : 'Meeting mode')}
+      title={t?.modeMeetingTitle || (uiMessage('desktop-ui.meeting-mode.958510fb80', (lang === 'zh') ? 'zh' : 'en'))}
     >
       <span className={`h-2 w-2 rounded-full ${live ? 'bg-cyan-300 animate-pulse' : active ? 'bg-cyan-300' : 'bg-white/25'}`} />
       <FileText size={14} />
-      <span>{t?.modeMeeting || (lang === 'zh' ? '会议' : 'Meeting')}</span>
+      <span>{t?.modeMeeting || (uiMessage('desktop-ui.meeting.e16a90b510', (lang === 'zh') ? 'zh' : 'en'))}</span>
     </button>
   );
 }
@@ -6438,8 +6329,8 @@ function ThemeWidget({
       id: 'celestial',
       label: t?.celestial || 'Celestial',
       mode: 'chat' as OperationMode,
-      modeLabel: t?.modeChat || (lang === 'zh' ? '聊天' : 'Chat'),
-      accessLabel: lang === 'zh' ? '纯聊天' : 'Chat Only',
+      modeLabel: t?.modeChat || (uiMessage('desktop-ui.chat.1594b2f45c', (lang === 'zh') ? 'zh' : 'en')),
+      accessLabel: uiMessage('desktop-ui.chat-only.083f4dceca', (lang === 'zh') ? 'zh' : 'en'),
       icon: <Sparkles size={16} />,
       glow: 'from-celestial-saturn/35 to-cyan-300/20',
       orb: 'from-celestial-saturn to-cyan-200',
@@ -6449,8 +6340,8 @@ function ThemeWidget({
       id: 'nebula',
       label: t?.nebula || 'Nebula',
       mode: 'assistant' as OperationMode,
-      modeLabel: t?.modeAssistant || (lang === 'zh' ? '助手' : 'Assistant'),
-      accessLabel: lang === 'zh' ? '现场全权限' : 'Foreground Full Access',
+      modeLabel: t?.modeAssistant || (uiMessage('desktop-ui.assistant.90c4ae600c', (lang === 'zh') ? 'zh' : 'en')),
+      accessLabel: uiMessage('desktop-ui.foreground-full-access.05f024a485', (lang === 'zh') ? 'zh' : 'en'),
       icon: <Moon size={16} />,
       glow: 'from-indigo-500/35 to-fuchsia-400/20',
       orb: 'from-indigo-500 to-fuchsia-400',
@@ -6460,8 +6351,8 @@ function ThemeWidget({
       id: 'cyber',
       label: t?.cyber || 'Cyber',
       mode: 'autonomous' as OperationMode,
-      modeLabel: t?.modeAutonomy || t?.modeAutoExecute || (lang === 'zh' ? '自主' : 'Autonomy'),
-      accessLabel: lang === 'zh' ? '24h 自主运行' : '24h Autonomous',
+      modeLabel: t?.modeAutonomy || t?.modeAutoExecute || (uiMessage('desktop-ui.autonomy.6aea974e38', (lang === 'zh') ? 'zh' : 'en')),
+      accessLabel: uiMessage('desktop-ui.24h-autonomous.1cd235aa0d', (lang === 'zh') ? 'zh' : 'en'),
       icon: <Zap size={16} />,
       glow: 'from-emerald-400/30 to-teal-300/20',
       orb: 'from-emerald-400 to-teal-300',

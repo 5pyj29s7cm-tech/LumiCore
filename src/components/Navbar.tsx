@@ -194,7 +194,7 @@ export function Navbar({ user, onLogin, onLogout, activeTab, setActiveTab, lang,
           onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
           className="text-white/60 hover:text-white border border-white/10 rounded-full px-3"
         >
-          {lang === 'en' ? '中文' : 'EN'}
+          {lang === 'en' ? t.chinese : 'EN'}
         </Button>
 
         {user ? (

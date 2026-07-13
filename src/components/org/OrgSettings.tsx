@@ -16,6 +16,7 @@ import {
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import { appConfirm } from '../../lib/appConfirm';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 type Feedback = { type: 'success' | 'error'; text: string };
 
@@ -60,14 +61,14 @@ export function OrgSettings() {
       if (!orgId) {
         const orgsRes = await fetch('/api/org/org', { credentials: 'include' });
         const orgs = await orgsRes.json().catch(() => []);
-        if (!orgsRes.ok) throw new Error((orgs as any).error || ui(`组织列表加载失败（${orgsRes.status}）`, `Failed to load organizations (${orgsRes.status})`));
-        if (!Array.isArray(orgs) || orgs.length === 0) throw new Error(ui('未找到组织', 'No organization found'));
+        if (!orgsRes.ok) throw new Error((orgs as any).error || formatUiMessage('org-settings.failed-to-load-organizations-value0.0c01e9694d', { value0: orgsRes.status }));
+        if (!Array.isArray(orgs) || orgs.length === 0) throw new Error(uiMessage('org-settings.no-organization-found.90a2ad4211'));
         orgId = orgs[0].id || orgs[0].orgId;
       }
 
       const orgDetailRes = await fetch(`/api/org/org/${orgId}`, { credentials: 'include' });
       const orgData = await orgDetailRes.json().catch(() => ({}));
-      if (!orgDetailRes.ok) throw new Error(orgData.error || ui(`组织加载失败（${orgDetailRes.status}）`, `Failed to load organization (${orgDetailRes.status})`));
+      if (!orgDetailRes.ok) throw new Error(orgData.error || formatUiMessage('org-settings.failed-to-load-organization-value0.29c105c15a', { value0: orgDetailRes.status }));
       setOrg(orgData);
       setName(orgData.name || '');
     } catch (err: any) {
@@ -83,7 +84,7 @@ export function OrgSettings() {
     try {
       const res = await fetch('/api/preferences/org-llm', { credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`大模型策略加载失败（${res.status}）`, `Failed to load LLM policy (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('org-settings.failed-to-load-llm-policy.c3d8e1825b', { value0: res.status }));
       setLlmProvider(data.provider || 'deepseek');
       setLlmModels(data.models && typeof data.models === 'object' ? data.models : {});
     } catch (err: any) {
@@ -113,10 +114,10 @@ export function OrgSettings() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`保存失败（${res.status}）`, `Save failed (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('org-settings.save-failed-value0.5559bb34d3', { value0: res.status }));
       setOrg(data);
       setName(data.name || name.trim());
-      setFeedback({ type: 'success', text: t.orgSettingsSaved || ui('组织设置已保存', 'Organization settings saved') });
+      setFeedback({ type: 'success', text: t.orgSettingsSaved || uiMessage('org-settings.organization-settings-saved.ba1832e337') });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
     } finally {
@@ -147,10 +148,10 @@ export function OrgSettings() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`大模型策略保存失败（${res.status}）`, `Failed to save LLM policy (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('org-settings.failed-to-save-llm-policy.e64c571912', { value0: res.status }));
       setLlmProvider(data.provider || llmProvider);
       setLlmModels(data.models && typeof data.models === 'object' ? data.models : nextModels);
-      setFeedback({ type: 'success', text: ui('组织工作域模型策略已保存', 'Organization workspace model policy saved') });
+      setFeedback({ type: 'success', text: uiMessage('org-settings.organization-workspace-model-policy-saved.d0e536cc4b') });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
     } finally {
@@ -170,9 +171,9 @@ export function OrgSettings() {
         credentials: 'include',
       });
       const inv = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(inv.error || ui(`邀请码创建失败（${res.status}）`, `Invitation creation failed (${res.status})`));
+      if (!res.ok) throw new Error(inv.error || formatUiMessage('org-settings.invitation-creation-failed-value0.dd3265d5f7', { value0: res.status }));
       setInvitationCode(inv.code || '');
-      setFeedback({ type: 'success', text: t.invitationCreated || ui('邀请码已创建', 'Invitation code created') });
+      setFeedback({ type: 'success', text: t.invitationCreated || uiMessage('org-settings.invitation-code-created.b835c22578') });
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
     } finally {
@@ -190,10 +191,10 @@ export function OrgSettings() {
   const handleDelete = async () => {
     if (!org) return;
     const ok = await appConfirm({
-      title: ui('删除组织', 'Delete Organization'),
-      message: ui('这个操作不可恢复。删除后组织知识库、模板、成员数据都会被移除。确定继续吗？', 'This cannot be undone. Organization knowledge, templates, and member data will be removed. Continue?'),
-      confirmText: ui('删除', 'Delete'),
-      cancelText: ui('取消', 'Cancel'),
+      title: uiMessage('org-settings.delete-organization.4de5283414'),
+      message: uiMessage('org-settings.this-cannot-be-undone-organization.1d1562fe80'),
+      confirmText: uiMessage('org-settings.delete.5b875326d1'),
+      cancelText: uiMessage('org-settings.cancel.998b9c48fb'),
       tone: 'danger',
     });
     if (!ok) return;
@@ -202,8 +203,8 @@ export function OrgSettings() {
     try {
       const res = await fetch(`/api/org/org/${org.id}`, { method: 'DELETE', credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`删除失败（${res.status}）`, `Delete failed (${res.status})`));
-      setFeedback({ type: 'success', text: t.organizationDeleted || ui('组织已删除', 'Organization deleted') });
+      if (!res.ok) throw new Error(data.error || formatUiMessage('org-settings.delete-failed-value0.98201beb15', { value0: res.status }));
+      setFeedback({ type: 'success', text: t.organizationDeleted || uiMessage('org-settings.organization-deleted.7ecab76b97') });
       setOrg(null);
       void switchDomain('personal').finally(() => {
         window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'home' } }));
@@ -226,9 +227,9 @@ export function OrgSettings() {
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center text-white/55">
         {feedback && <FeedbackBanner feedback={feedback} />}
         <Building2 size={34} className="text-white/25" />
-        <div>{ui('未找到组织，请先创建或切换到工作域。', 'No organization found. Create one or switch to a work domain first.')}</div>
+        <div>{uiMessage('org-settings.no-organization-found-create-one.f354c5cd6b')}</div>
         <button onClick={loadOrg} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70 hover:bg-white/10">
-          {ui('重新加载', 'Reload')}
+          {uiMessage('org-settings.reload.27d9a83a34')}
         </button>
       </div>
     );
@@ -243,9 +244,9 @@ export function OrgSettings() {
               <Settings size={21} />
             </span>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-white">{t.orgSettings || ui('组织设置', 'Organization Settings')}</h2>
+              <h2 className="text-xl font-semibold text-white">{t.orgSettings || uiMessage('org-settings.organization-settings.bae66fc14f')}</h2>
               <p className="mt-1 text-sm text-white/50">
-                {ui('管理组织基本信息、成员加入方式和危险操作。', 'Manage organization profile, invitation flow, and destructive actions.')}
+                {uiMessage('org-settings.manage-organization-profile-invitation-flow.2cdc91f614')}
               </p>
             </div>
           </div>
@@ -256,11 +257,11 @@ export function OrgSettings() {
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
           <div className="mb-4 flex items-center gap-2">
             <Building2 size={17} className="text-blue-300" />
-            <h3 className="text-sm font-medium text-white">{ui('基础信息', 'General')}</h3>
+            <h3 className="text-sm font-medium text-white">{uiMessage('org-settings.general.0292983753')}</h3>
           </div>
           <div className="grid gap-4 md:grid-cols-[1fr_auto]">
             <label className="block">
-              <span className="mb-1 block text-xs text-white/50">{ui('组织名称', 'Organization Name')}</span>
+              <span className="mb-1 block text-xs text-white/50">{uiMessage('org-settings.organization-name.9e0fe3a749')}</span>
               <input
                 value={name}
                 onChange={event => setName(event.target.value)}
@@ -273,7 +274,7 @@ export function OrgSettings() {
               className="self-end inline-flex items-center justify-center gap-2 rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
             >
               {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-              {ui('保存修改', 'Save Changes')}
+              {uiMessage('org-settings.save-changes.9a5659da70')}
             </button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-white/45">
@@ -285,22 +286,22 @@ export function OrgSettings() {
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
           <div className="mb-4 flex items-center gap-2">
             <KeyRound size={17} className="text-emerald-300" />
-            <h3 className="text-sm font-medium text-white">{ui('邀请码', 'Invitation Codes')}</h3>
+            <h3 className="text-sm font-medium text-white">{uiMessage('org-settings.invitation-codes.7c3628d9d0')}</h3>
           </div>
           <p className="hidden">
-            {ui('生成一个成员加入码，发给需要加入组织的人。当前邀请码不限使用次数。', 'Generate a join code for new members. The current code has unlimited uses.')}
+            {uiMessage('org-settings.generate-a-join-code-for.ea01d67103')}
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <label>
-              <span className="mb-1 block text-xs text-white/50">{ui('默认角色', 'Default Role')}</span>
+              <span className="mb-1 block text-xs text-white/50">{uiMessage('org-settings.default-role.e66bc2de91')}</span>
               <select
                 value={invitationRole}
                 onChange={event => setInvitationRole(event.target.value)}
                 className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/75 outline-none"
               >
-                <option value="member">{t.orgRoleMember || ui('成员', 'Member')}</option>
-                <option value="admin">{t.orgRoleAdmin || ui('管理员', 'Admin')}</option>
-                <option value="viewer">{t.orgRoleViewer || ui('查看者', 'Viewer')}</option>
+                <option value="member">{t.orgRoleMember || uiMessage('org-settings.member.9b8c32d899')}</option>
+                <option value="admin">{t.orgRoleAdmin || uiMessage('org-settings.admin.c54e557ee8')}</option>
+                <option value="viewer">{t.orgRoleViewer || uiMessage('org-settings.viewer.8a8ac26d10')}</option>
               </select>
             </label>
             <button
@@ -309,7 +310,7 @@ export function OrgSettings() {
               className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/15 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-50"
             >
               {generating ? <Loader2 size={15} className="animate-spin" /> : <Link size={15} />}
-              {ui('生成邀请码', 'Generate Code')}
+              {uiMessage('org-settings.generate-code.4e158587b0')}
             </button>
           </div>
 
@@ -320,7 +321,7 @@ export function OrgSettings() {
               className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-4"
             >
               <div>
-                <p className="text-xs text-white/50">{ui('邀请码', 'Invitation Code')}</p>
+                <p className="text-xs text-white/50">{uiMessage('org-settings.invitation-code.3eee31f5dd')}</p>
                 <p className="mt-1 font-mono text-2xl font-semibold tracking-[0.18em] text-emerald-200">{invitationCode}</p>
               </div>
               <button
@@ -328,7 +329,7 @@ export function OrgSettings() {
                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70 transition hover:bg-white/10"
               >
                 {copied ? <CheckCircle size={15} className="text-emerald-300" /> : <Copy size={15} />}
-                {copied ? ui('已复制', 'Copied') : ui('复制', 'Copy')}
+                {copied ? uiMessage('org-settings.copied.b515fa181c') : uiMessage('org-settings.copy.d6e96519c4')}
               </button>
             </motion.div>
           )}
@@ -337,10 +338,10 @@ export function OrgSettings() {
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
           <div className="mb-4 flex items-center gap-2">
             <BrainCircuit size={17} className="text-blue-300" />
-            <h3 className="text-sm font-medium text-white">{ui('组织工作域模型策略', 'Organization Workspace Model Policy')}</h3>
+            <h3 className="text-sm font-medium text-white">{uiMessage('org-settings.organization-workspace-model-policy.bb0dc5be3f')}</h3>
           </div>
           <p className="mb-4 text-sm leading-6 text-white/50">
-            {ui('组织域聊天、语音和子 agent 编排统一叠加组织模型策略，不读取或改写任何成员的个人模型偏好。', 'Work-domain chat, voice, and agent orchestration apply the organization model policy without reading or changing any member\'s personal model preference.')}
+            {uiMessage('org-settings.work-domain-chat-voice-and.f2a8ead336')}
           </p>
 
           <div className="grid gap-4 md:grid-cols-[220px_1fr_auto]">
@@ -381,7 +382,7 @@ export function OrgSettings() {
               className="self-end inline-flex items-center justify-center gap-2 rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
             >
               {llmSaving || llmLoading ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-              {ui('保存策略', 'Save Policy')}
+              {uiMessage('org-settings.save-policy.c9b55ffae0')}
             </button>
           </div>
         </section>
@@ -389,16 +390,16 @@ export function OrgSettings() {
         <section className="rounded-lg border border-red-400/15 bg-red-500/5 p-5">
           <div className="mb-3 flex items-center gap-2 text-red-300">
             <Trash2 size={17} />
-            <h3 className="text-sm font-medium">{ui('危险操作', 'Danger Zone')}</h3>
+            <h3 className="text-sm font-medium">{uiMessage('org-settings.danger-zone.c15803c9ea')}</h3>
           </div>
           <p className="mb-4 text-sm leading-6 text-white/50">
-            {ui('删除组织不可恢复。只有明确确认后才会执行。', 'Deleting an organization is irreversible and requires explicit confirmation.')}
+            {uiMessage('org-settings.deleting-an-organization-is-irreversible.b55e4a55c4')}
           </p>
           <button
             onClick={handleDelete}
             className="rounded-lg border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20"
           >
-            {ui('删除组织', 'Delete Organization')}
+            {uiMessage('org-settings.delete-organization.4de5283414')}
           </button>
         </section>
       </div>

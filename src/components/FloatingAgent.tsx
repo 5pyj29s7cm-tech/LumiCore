@@ -13,7 +13,7 @@ import Markdown from 'react-markdown';
 export function FloatingAgent({ t }: { t: any }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
-    { role: 'assistant', content: t.manualIntro || '你好！我是 Lumi 使用说明书助手。有什么我可以帮您了解平台的吗？' }
+    { role: 'assistant', content: t.manualIntro || 'I am your Lumi user-manual assistant. What would you like to learn about the platform?' }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);

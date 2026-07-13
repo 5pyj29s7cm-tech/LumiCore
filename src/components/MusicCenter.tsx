@@ -4,6 +4,8 @@ import { toast } from 'sonner';
 import { useMusicPlayer } from '../hooks/useMusicPlayer';
 import { useSocket } from '../hooks/useSocket';
 import { apiFetch } from '../services/apiClient';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { translate } from '../i18n/runtime';
 
 interface MusicProfileCount {
   name: string;
@@ -52,8 +54,8 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
   const ui = (zh: string, en: string) => isZh ? zh : en;
 
   const defaultMusicPrompt = profile?.topArtists?.[0]?.name
-    ? `播放我喜欢的歌，优先从 ${profile.topArtists[0].name} 或我的网易云喜欢歌单里挑一首`
-    : '播放我喜欢的歌或每日推荐';
+    ? translate('musicArtistPrompt', { artist: profile.topArtists[0].name })
+    : translate('musicDefaultPrompt');
 
   const loadMusicProfile = async () => {
     try {
@@ -86,11 +88,11 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
         body: JSON.stringify({ maxSongs: 3000 }),
       });
       const data = await res.json();
-      if (!res.ok || !data.profile) throw new Error(data.error || ui('音乐画像生成失败', 'Failed to analyze music profile'));
+      if (!res.ok || !data.profile) throw new Error(data.error || uiMessage('music-center.failed-to-analyze-music-profile.511255de2a'));
       setProfile(data.profile);
-      toast.success(ui('音乐画像已更新', 'Music profile updated'));
+      toast.success(uiMessage('music-center.music-profile-updated.0bcc213805'));
     } catch (e: any) {
-      const message = e?.message || ui('音乐画像生成失败', 'Failed to analyze music profile');
+      const message = e?.message || uiMessage('music-center.failed-to-analyze-music-profile.511255de2a');
       setProfileError(message);
       toast.error(message);
     } finally {
@@ -109,17 +111,17 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
         body: JSON.stringify({ appId: appId.trim(), privateKey: privateKey.trim() }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || ui('保存凭据失败', 'Failed to save credentials'));
+      if (!res.ok || !data.success) throw new Error(data.error || uiMessage('music-center.failed-to-save-credentials.052141b85e'));
       const statusRes = await apiFetch('/api/ncm/configure/status');
       const status = await statusRes.json().catch(() => ({}));
       if (!statusRes.ok || !status.configured) {
-        throw new Error(status.error || ui('凭据未被后端确认保存', 'Credentials were not confirmed by the backend'));
+        throw new Error(status.error || uiMessage('music-center.credentials-were-not-confirmed-by.40325a40e9'));
       }
       setConfigured(true);
-      setCfgMsg(t?.musicCredentialsSaved || ui('凭据已保存', 'Credentials saved'));
-      toast.success(t?.musicCredentialsSaved || ui('凭据已保存', 'Credentials saved'));
+      setCfgMsg(t?.musicCredentialsSaved || uiMessage('music-center.credentials-saved.8f868b963e'));
+      toast.success(t?.musicCredentialsSaved || uiMessage('music-center.credentials-saved.8f868b963e'));
     } catch (e: any) {
-      const message = e.message || ui('请求失败', 'Request failed');
+      const message = e.message || uiMessage('music-center.request-failed.a3286c8e7a');
       setCfgMsg(message);
       toast.error(message);
     } finally {
@@ -136,10 +138,10 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
       if (res.ok && data.done) {
         setLoginDone(true);
         setQrImgSrc(null);
-        toast.success(t?.musicConnected || ui('网易云音乐已连接', 'NetEase Cloud connected'));
+        toast.success(t?.musicConnected || uiMessage('music-center.netease-cloud-connected.e05d9c29ac'));
         return;
       }
-      if (!res.ok || !data.qrUrl) throw new Error(data.error || ui('没有二维码登录地址', 'No QR URL'));
+      if (!res.ok || !data.qrUrl) throw new Error(data.error || uiMessage('music-center.no-qr-url.c02db6d78e'));
 
       setQrImgSrc(`https://quickchart.io/qr?text=${encodeURIComponent(data.qrUrl)}&size=220`);
 
@@ -151,13 +153,13 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
           setQrImgSrc(ss.qrUrl ? `https://quickchart.io/qr?text=${encodeURIComponent(ss.qrUrl)}&size=220` : null);
           if (ss.done) {
             clearInterval(interval);
-            toast.success(t?.musicConnected || ui('网易云音乐已连接', 'NetEase Cloud connected'));
+            toast.success(t?.musicConnected || uiMessage('music-center.netease-cloud-connected.e05d9c29ac'));
           }
         } catch {}
       }, 2000);
       pollRef.current = interval;
     } catch (e: any) {
-      toast.error(e.message || ui('登录失败', 'Login failed'));
+      toast.error(e.message || uiMessage('music-center.login-failed.c30ba34c8c'));
     } finally {
       setLoading(false);
     }
@@ -167,7 +169,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
     const prompt = text.trim();
     if (!prompt) return false;
     if (!socket?.connected) {
-      toast.error(t?.serverNotConnected || ui('服务器未连接', 'Server is not connected'));
+      toast.error(t?.serverNotConnected || uiMessage('music-center.server-is-not-connected.63fa23c918'));
       return false;
     }
     socket.emit('agent:chat', {
@@ -176,7 +178,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
       personalityId: 'lumi',
       source: 'music-center',
     });
-    toast.info(t?.musicRequestSent || ui('音乐请求已发送给 Lumi', 'Music request sent to Lumi'));
+    toast.info(t?.musicRequestSent || uiMessage('music-center.music-request-sent-to-lumi.05f78a50bd'));
     if (options?.clearPrompt) setMusicPrompt('');
     return true;
   };
@@ -201,7 +203,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
     if (player.visible) player.hide();
     else if (player.track) player.show();
     else {
-      toast.info(t?.musicLayerNeedsTrack || ui('先让 Lumi 播放一首歌，再打开氛围层。', 'Ask Lumi to play music first, then open the mood layer.'));
+      toast.info(t?.musicLayerNeedsTrack || uiMessage('music-center.ask-lumi-to-play-music.12cfd8c961'));
       promptInputRef.current?.focus();
     }
   };
@@ -222,17 +224,17 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${player.isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-white/25'}`} />
                 <h3 className="text-sm font-black text-white/85 uppercase tracking-wider">
-                  {t?.musicPlayer || ui('音乐播放器', 'Music Player')}
+                  {t?.musicPlayer || uiMessage('music-center.music-player.f8cdc1ac3a')}
                 </h3>
               </div>
               <p className="mt-1 text-xs text-white/40">
-                {player.track ? (t?.musicNowPlaying || ui('正在播放', 'Now playing')) : (t?.musicIdleHint || ui('让 Lumi 播放歌曲、歌单、心情音乐或每日推荐。', 'Ask Lumi to play a song, mood, playlist, or daily recommendation.'))}
+                {player.track ? (t?.musicNowPlaying || uiMessage('music-center.now-playing.ed6ab90e7d')) : (t?.musicIdleHint || uiMessage('music-center.ask-lumi-to-play-a.bdf7a253b2'))}
               </p>
             </div>
             <button
               onClick={onClose}
               className="lumi-icon-button h-8 w-8 border-transparent"
-              title={t?.close || ui('关闭', 'Close')}
+              title={t?.close || uiMessage('music-center.close.6cf4a7773a')}
             >
               <X size={16} />
             </button>
@@ -242,10 +244,10 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="text-base font-bold text-white/85 truncate">
-                  {player.track?.name || t?.musicNoTrack || ui('暂无播放曲目', 'No track loaded')}
+                  {player.track?.name || t?.musicNoTrack || uiMessage('music-center.no-track-loaded.7f78082b4a')}
                 </div>
                 <div className="text-xs text-white/40 truncate">
-                  {player.track?.artists?.join(' / ') || t?.musicControlHint || ui('语音、聊天和此面板共用同一个播放引擎。', 'Voice, chat, and this panel share the same playback engine.')}
+                  {player.track?.artists?.join(' / ') || t?.musicControlHint || uiMessage('music-center.voice-chat-and-this-panel.c510478c7d')}
                 </div>
               </div>
               <button
@@ -255,10 +257,10 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
                     ? 'bg-red-500/20 border-red-400/30 text-red-200'
                     : 'bg-white/[0.045] border-white/10 text-white/55 hover:text-white hover:bg-white/10'
                 }`}
-                title={player.visible ? (t?.hideMusicLayer || ui('隐藏氛围层', 'Hide mood layer')) : (t?.showMusicLayer || ui('显示氛围层', 'Show mood layer'))}
+                title={player.visible ? (t?.hideMusicLayer || uiMessage('music-center.hide-mood-layer.8fc19f1cf0')) : (t?.showMusicLayer || uiMessage('music-center.show-mood-layer.704fd0581f'))}
               >
                 <Maximize2 size={14} />
-                {player.visible ? (t?.moodLayerOn || ui('氛围层已开', 'Mood layer on')) : (t?.moodLayerOff || ui('氛围层', 'Mood layer'))}
+                {player.visible ? (t?.moodLayerOn || uiMessage('music-center.mood-layer-on.cb76eff7a5')) : (t?.moodLayerOff || uiMessage('music-center.mood-layer.21d81d989e'))}
               </button>
             </div>
 
@@ -319,7 +321,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
                 value={musicPrompt}
                 onChange={(e) => setMusicPrompt(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') askLumiToPlay(); }}
-                placeholder={t?.musicPromptPlaceholder || ui('播放周杰伦、每日推荐，或雨天专注音乐...', 'Play Jay Chou, daily recommendations, or rainy focus music...')}
+                placeholder={t?.musicPromptPlaceholder || uiMessage('music-center.play-jay-chou-daily-recommendations.094aa10a18')}
                 className="flex-1 bg-transparent outline-none text-xs text-white/80 placeholder:text-white/25"
               />
             </div>
@@ -328,7 +330,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               disabled={!musicPrompt.trim()}
               className="lumi-button h-10 border-red-400/25 bg-red-500/15 px-4 text-red-300 hover:bg-red-500/25"
             >
-              {t?.play || ui('播放', 'Play')}
+              {t?.play || uiMessage('music-center.play.2f621d7ab6')}
             </button>
           </div>
         </section>
@@ -339,13 +341,13 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               <div className="flex items-center gap-2">
                 <BarChart3 size={16} className="text-red-300" />
                 <h3 className="text-sm font-black text-white/85 uppercase tracking-wider">
-                  {ui('音乐画像', 'Music Profile')}
+                  {uiMessage('music-center.music-profile.e703f9b6fd')}
                 </h3>
               </div>
               <p className="mt-1 text-xs text-white/40">
                 {profile
-                  ? ui(`已分析 ${profile.analyzedTracks} / ${profile.totalTracks || profile.analyzedTracks} 首喜欢的歌`, `${profile.analyzedTracks} / ${profile.totalTracks || profile.analyzedTracks} liked songs analyzed`)
-                  : ui('基于网易云喜欢歌单生成', 'Based on NetEase liked songs')}
+                  ? formatUiMessage('music-center.value0-value1-liked-songs-analyzed.5420e128bd', { value0: profile.analyzedTracks, value1: profile.totalTracks || profile.analyzedTracks })
+                  : uiMessage('music-center.based-on-netease-liked-songs.5f94eb7458')}
               </p>
             </div>
             <button
@@ -354,7 +356,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               className="h-9 px-3 rounded-xl bg-red-500/15 border border-red-400/25 text-xs font-bold text-red-300 hover:bg-red-500/25 disabled:opacity-40 transition-colors flex items-center gap-2"
             >
               <RefreshCw size={14} className={profileBusy ? 'animate-spin' : ''} />
-              {profile ? ui('重新分析', 'Refresh') : ui('开始分析', 'Analyze')}
+              {profile ? uiMessage('music-center.refresh.ccda72393e') : uiMessage('music-center.analyze.20f8e3c435')}
             </button>
           </div>
 
@@ -379,7 +381,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3">
                   <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-white/35">
-                    <Heart size={12} /> {ui('高频歌手', 'Top Artists')}
+                    <Heart size={12} /> {uiMessage('music-center.top-artists.83acdd2eb9')}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {profile.topArtists.slice(0, 6).map(item => (
@@ -390,7 +392,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
                   </div>
                 </div>
                 <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-white/35">{ui('情绪底色', 'Mood')}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-white/35">{uiMessage('music-center.mood.d0d40d515b')}</div>
                   <div className="mt-3 space-y-2">
                     {profile.moodMix.slice(0, 4).map(item => (
                       <div key={item.name} className="flex items-center justify-between gap-3 text-[10px]">
@@ -401,7 +403,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
                   </div>
                 </div>
                 <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-white/35">{ui('风格/语种', 'Style')}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-white/35">{uiMessage('music-center.style.24e729d2ea')}</div>
                   <div className="mt-3 space-y-2">
                     {[...profile.styleMix.slice(0, 2), ...profile.languageMix.slice(0, 2)].map(item => (
                       <div key={`${item.name}-${item.count}`} className="flex items-center justify-between gap-3 text-[10px]">
@@ -415,7 +417,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
             </div>
           ) : (
             <div className="rounded-2xl bg-black/20 border border-white/5 p-4 text-xs text-white/40">
-              {ui('还没有生成音乐画像。', 'No music profile yet.')}
+              {uiMessage('music-center.no-music-profile-yet.df1b94f9d2')}
             </div>
           )}
         </section>
@@ -423,19 +425,19 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <section className="lumi-panel bg-white/[0.02] p-5 flex flex-col gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-white/35">{ui('API 凭据', 'API Credentials')}</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/35">{uiMessage('music-center.api-credentials.89e2cd1c47')}</span>
               {configured && <span className="text-[9px] text-emerald-400 font-mono bg-emerald-400/10 px-2 py-0.5 rounded-full">OK</span>}
             </div>
             <p className="text-[10px] text-white/35 leading-relaxed">
-              {ui('配置网易云音乐开放平台 App ID 和 Private Key，用于授权播放。', 'Configure NetEase Cloud Music developer App ID and Private Key for authenticated playback.')}
+              {uiMessage('music-center.configure-netease-cloud-music-developer.93af9d7db5')}
             </p>
             <input
-              type="text" placeholder={ui('App ID', 'App ID')}
+              type="text" placeholder={uiMessage('music-center.app-id.63ea67559e')}
               value={appId} onChange={e => setAppId(e.target.value)}
               className="lumi-field w-full py-2 text-xs focus:border-red-500/40"
             />
             <input
-              type="password" placeholder={ui('Private Key', 'Private Key')}
+              type="password" placeholder={uiMessage('music-center.private-key.e858a6ebc5')}
               value={privateKey} onChange={e => setPrivateKey(e.target.value)}
               className="lumi-field w-full py-2 text-xs focus:border-red-500/40"
             />
@@ -443,27 +445,27 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               onClick={saveCreds} disabled={cfgBusy || !appId.trim() || !privateKey.trim()}
               className="lumi-button w-full"
             >
-              {cfgBusy ? (t?.saving || ui('保存中...', 'Saving...')) : (t?.saveCredentials || ui('保存凭据', 'Save credentials'))}
+              {cfgBusy ? (t?.saving || uiMessage('music-center.saving.5a02b802aa')) : (t?.saveCredentials || uiMessage('music-center.save-credentials.7e47a5e3e3'))}
             </button>
             {cfgMsg && <p className="text-[10px] text-center text-white/40">{cfgMsg}</p>}
           </section>
 
           <section className="lumi-panel bg-white/[0.02] p-5 flex flex-col items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-white/35">{ui('网易云音乐', 'NetEase Cloud')}</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/35">{uiMessage('music-center.netease-cloud.52664367fe')}</span>
               {loginDone && (
-                <span className="text-[9px] text-emerald-400 font-mono bg-emerald-400/10 px-2 py-0.5 rounded-full">{ui('已连接', 'CONNECTED')}</span>
+                <span className="text-[9px] text-emerald-400 font-mono bg-emerald-400/10 px-2 py-0.5 rounded-full">{uiMessage('music-center.connected.4f18b17c87')}</span>
               )}
             </div>
             <p className="text-[11px] text-white/40 text-center leading-relaxed">
-              {ui('扫码一次即可启用账号播放、歌单、推荐，以及可用的 VIP 曲目。', 'Scan once to enable account playback, playlists, recommendations, and VIP songs when available.')}
+              {uiMessage('music-center.scan-once-to-enable-account.aa7e8ba24e')}
             </p>
 
             {qrImgSrc ? (
-              <img src={qrImgSrc} alt={ui('二维码', 'QR Code')} className="w-40 h-40 rounded-xl bg-white" />
+              <img src={qrImgSrc} alt={uiMessage('music-center.qr-code.8711909654')} className="w-40 h-40 rounded-xl bg-white" />
             ) : (
               <div className="lumi-panel flex h-40 w-40 items-center justify-center rounded-xl bg-white/[0.03] text-xs text-white/25">
-                {loginDone ? ui('已连接', 'Connected') : ui('扫码登录', 'QR Login')}
+                {loginDone ? uiMessage('music-center.connected.77956f6a16') : uiMessage('music-center.qr-login.74e074b88b')}
               </div>
             )}
 
@@ -472,7 +474,7 @@ export function MusicCenter({ isOpen, onClose, t }: { isOpen: boolean; onClose: 
               disabled={loading}
               className="lumi-button w-full border-red-500/25 bg-red-500/15 py-2.5 text-sm font-medium text-red-400 hover:bg-red-500/25"
             >
-              {loading ? (t?.loading || ui('加载中...', 'Loading...')) : loginDone ? (t?.musicConnected || ui('已连接', 'Connected')) : (t?.scanToLogin || ui('扫码登录', 'Scan to login'))}
+              {loading ? (t?.loading || uiMessage('music-center.loading.586f5af819')) : loginDone ? (t?.musicConnected || uiMessage('music-center.connected.77956f6a16')) : (t?.scanToLogin || uiMessage('music-center.scan-to-login.f5545d0f96'))}
             </button>
           </section>
         </div>

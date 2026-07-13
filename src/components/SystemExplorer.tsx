@@ -23,6 +23,8 @@ import {
   getSystemAppMatches,
   isSystemAppDetected,
 } from '../../shared/system_apps';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { systemExplorerCopy } from '../i18n/locales/systemExplorer';
 
 interface DiskInfo {
   name: string;
@@ -135,7 +137,7 @@ function ui(isZh: boolean, zh: string, en: string) {
 }
 
 function formatTime(value?: string, isZh = false) {
-  if (!value) return ui(isZh, '从未', 'Never');
+  if (!value) return uiMessage('system-explorer.never.7aaabcc4ec', (isZh) ? 'zh' : 'en');
   try { return new Date(value).toLocaleString(isZh ? 'zh-CN' : undefined); } catch { return value; }
 }
 
@@ -152,39 +154,21 @@ function StatusIcon({ status }: { status: CapabilityItem['status'] }) {
 }
 
 function getPermissionLabel(value?: PermissionStateValue, isZh = false) {
-  if (!value || value === 'unknown') return ui(isZh, '未知', 'Unknown');
-  if (value === 'granted') return ui(isZh, '已授权', 'Granted');
-  if (value === 'denied') return ui(isZh, '已拒绝', 'Denied');
-  if (value === 'prompt') return ui(isZh, '未请求', 'Not requested');
-  if (value === 'available') return ui(isZh, '可用', 'Available');
-  return ui(isZh, '不可用', 'Unavailable');
+  if (!value || value === 'unknown') return uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en');
+  if (value === 'granted') return uiMessage('system-explorer.granted.cfc584d5d6', (isZh) ? 'zh' : 'en');
+  if (value === 'denied') return uiMessage('system-explorer.denied.004ef4d1ef', (isZh) ? 'zh' : 'en');
+  if (value === 'prompt') return uiMessage('system-explorer.not-requested.9cc3d19cba', (isZh) ? 'zh' : 'en');
+  if (value === 'available') return uiMessage('system-explorer.available.a4637fcb01', (isZh) ? 'zh' : 'en');
+  return uiMessage('system-explorer.unavailable.a19c84a34b', (isZh) ? 'zh' : 'en');
 }
 
 function getAppGroupLabel(id: string, fallback: string, isZh: boolean) {
-  if (!isZh) return fallback;
-  const labels: Record<string, string> = {
-    browser: '浏览器',
-    vscode: 'VS Code',
-    git: 'Git',
-    node: 'Node.js',
-    python: 'Python',
-    wps: 'WPS / Office',
-    wechat: '微信 / 企业通讯',
-    cad: 'CAD',
-    ai_apps: '本地 AI 应用',
-    netease: '网易云音乐',
-  };
+  const labels = systemExplorerCopy(isZh ? 'zh' : 'en').appGroups as Record<string, string>;
   return labels[id] || fallback;
 }
 
 function getPermissionName(key: string, isZh: boolean) {
-  if (!isZh) return key.replace(/([A-Z])/g, ' $1');
-  const labels: Record<string, string> = {
-    microphone: '麦克风',
-    camera: '摄像头',
-    notifications: '通知',
-    desktopAutomation: '桌面控制',
-  };
+  const labels = systemExplorerCopy(isZh ? 'zh' : 'en').permissions as Record<string, string>;
   return labels[key] || key;
 }
 
@@ -214,89 +198,89 @@ function buildReport(
   const capabilities: CapabilityItem[] = [
     {
       id: 'desktop_shell',
-      label: ui(isZh, '桌面壳能力', 'Desktop shell'),
+      label: uiMessage('system-explorer.desktop-shell.634c816416', (isZh) ? 'zh' : 'en'),
       status: isDesktop ? 'ready' : 'missing',
-      detail: isDesktop ? ui(isZh, '原生桌面自动化桥接可用。', 'Native desktop automation bridge is available.') : ui(isZh, '桌面自动化需要 Tauri 客户端。', 'Desktop automation requires the Tauri client.'),
+      detail: isDesktop ? uiMessage('system-explorer.native-desktop-automation-bridge-is.9925e11c0b', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.desktop-automation-requires-the-tauri.150793d6f4', (isZh) ? 'zh' : 'en'),
     },
     {
       id: 'local_runtime',
-      label: ui(isZh, '本地运行环境', 'Local runtime'),
+      label: uiMessage('system-explorer.local-runtime.530d5e4cb8', (isZh) ? 'zh' : 'en'),
       status: nodeReady && pythonReady ? 'ready' : nodeReady || pythonReady ? 'partial' : 'missing',
-      detail: `Node ${latest?.software?.nodeVersion || ui(isZh, '未检测到', 'not detected')} / Python ${latest?.software?.pythonVersion || ui(isZh, '未检测到', 'not detected')}`,
-      actionLabel: nodeReady && pythonReady ? undefined : ui(isZh, '查看 MCP', 'Review MCP'),
+      detail: `Node ${latest?.software?.nodeVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')} / Python ${latest?.software?.pythonVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')}`,
+      actionLabel: nodeReady && pythonReady ? undefined : uiMessage('system-explorer.review-mcp.e42e25bdaf', (isZh) ? 'zh' : 'en'),
       actionSection: nodeReady && pythonReady ? undefined : 'mcp',
     },
     {
       id: 'llm',
-      label: ui(isZh, 'AI 服务商', 'AI providers'),
+      label: uiMessage('system-explorer.ai-providers.727eb47f14', (isZh) ? 'zh' : 'en'),
       status: llmReady > 0 ? 'ready' : 'partial',
-      detail: llmReady > 0 ? ui(isZh, `已配置 ${llmReady} 个服务商。`, `${llmReady} provider(s) configured.`) : ui(isZh, '尚未检测到服务商密钥。', 'No provider key detected yet.'),
-      actionLabel: llmReady > 0 ? undefined : ui(isZh, '添加服务商', 'Add provider'),
+      detail: llmReady > 0 ? formatUiMessage('system-explorer.value0-provider-s-configured.79482e6f0f', { value0: llmReady }, (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.no-provider-key-detected-yet.4d8c977571', (isZh) ? 'zh' : 'en'),
+      actionLabel: llmReady > 0 ? undefined : uiMessage('system-explorer.add-provider.bf4c973279', (isZh) ? 'zh' : 'en'),
       actionSection: llmReady > 0 ? undefined : 'llm-providers',
     },
     {
       id: 'mcp',
-      label: ui(isZh, 'MCP 与技能', 'MCP and skills'),
+      label: uiMessage('system-explorer.mcp-and-skills.0bbce8b9ac', (isZh) ? 'zh' : 'en'),
       status: (ecosystem?.enabledSkillCount || 0) > 0 ? 'ready' : (ecosystem?.skillCount || 0) > 0 ? 'partial' : 'missing',
-      detail: ui(isZh, `已启用 ${ecosystem?.enabledSkillCount || 0}/${ecosystem?.skillCount || 0} 个技能，已注册 ${ecosystem?.toolCount || 0} 个工具。`, `${ecosystem?.enabledSkillCount || 0}/${ecosystem?.skillCount || 0} skills enabled, ${ecosystem?.toolCount || 0} tools registered.`),
-      actionLabel: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : ui(isZh, '打开 MCP', 'Open MCP'),
+      detail: formatUiMessage('system-explorer.value0-value1-skills-enabled-value2.1c3d9e8c13', { value0: ecosystem?.enabledSkillCount || 0, value1: ecosystem?.skillCount || 0, value2: ecosystem?.toolCount || 0 }, (isZh) ? 'zh' : 'en'),
+      actionLabel: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
       actionSection: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : 'mcp',
     },
     {
       id: 'knowledge_files',
-      label: ui(isZh, '知识库文件', 'Knowledge files'),
+      label: uiMessage('system-explorer.knowledge-files.166a683950', (isZh) ? 'zh' : 'en'),
       status: 'ready',
-      detail: ui(isZh, '文件会进入 Lumi 知识库，并由知识库负责浏览、吸收和检索。', 'Files live in Lumi Knowledge Base, where they can be browsed, absorbed, and retrieved.'),
+      detail: uiMessage('system-explorer.files-live-in-lumi-knowledge.1153562b59', (isZh) ? 'zh' : 'en'),
     },
     {
       id: 'sensors',
-      label: ui(isZh, '麦克风与摄像头', 'Mic and camera'),
+      label: uiMessage('system-explorer.mic-and-camera.8be2fe4a27', (isZh) ? 'zh' : 'en'),
       status: permissions.microphone === 'granted' || permissions.camera === 'granted'
         ? 'ready'
         : permissions.microphone === 'denied' || permissions.camera === 'denied'
           ? 'missing'
           : 'partial',
-      detail: ui(isZh, `麦克风 ${getPermissionLabel(permissions.microphone, isZh)}，摄像头 ${getPermissionLabel(permissions.camera, isZh)}`, `Mic ${getPermissionLabel(permissions.microphone)}, Camera ${getPermissionLabel(permissions.camera)}`),
-      actionLabel: permissions.microphone === 'granted' && permissions.camera === 'granted' ? undefined : ui(isZh, '打开硬件设置', 'Open hardware'),
+      detail: formatUiMessage('system-explorer.mic-value0-camera-value1.efb8a36889', { value0: { en: getPermissionLabel(permissions.microphone), zh: getPermissionLabel(permissions.microphone, isZh) }, value1: { en: getPermissionLabel(permissions.camera), zh: getPermissionLabel(permissions.camera, isZh) } }, (isZh) ? 'zh' : 'en'),
+      actionLabel: permissions.microphone === 'granted' && permissions.camera === 'granted' ? undefined : uiMessage('system-explorer.open-hardware.25065f0afd', (isZh) ? 'zh' : 'en'),
       actionSection: permissions.microphone === 'granted' && permissions.camera === 'granted' ? undefined : 'hardware',
     },
     {
       id: 'office',
-      label: ui(isZh, '办公与文档', 'Office and documents'),
+      label: uiMessage('system-explorer.office-and-documents.ba756146d4', (isZh) ? 'zh' : 'en'),
       status: hasOffice ? 'ready' : 'partial',
-      detail: hasOffice ? ui(isZh, '已检测到 Office/WPS 应用。', 'Office/WPS app detected.') : ui(isZh, '最近扫描未检测到 WPS/Office 应用。', 'No WPS/Office app detected in the latest scan.'),
+      detail: hasOffice ? uiMessage('system-explorer.office-wps-app-detected.cb2369717e', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.no-wps-office-app-detected.c057ff3540', (isZh) ? 'zh' : 'en'),
     },
     {
       id: 'messaging',
-      label: ui(isZh, '通讯应用', 'Messaging apps'),
+      label: uiMessage('system-explorer.messaging-apps.e93f9a0875', (isZh) ? 'zh' : 'en'),
       status: hasComms ? 'ready' : 'partial',
       detail: hasComms
-        ? ui(isZh, `已检测到：${commApps.join('、')}。环境识别已就绪，实际发送仍以窗口、收件人和发送结果验收为准。`, `Detected: ${commApps.join(', ')}. Environment detection is ready; actual sending still requires window, recipient, and result verification.`)
-        : ui(isZh, '尚未检测到通讯应用。', 'Messaging app not detected yet.'),
+        ? formatUiMessage('system-explorer.detected-value0-environment-detection-is.0752b3466b', { value0: { en: commApps.join(', '), zh: commApps.join('、') } }, (isZh) ? 'zh' : 'en')
+        : uiMessage('system-explorer.messaging-app-not-detected-yet.fb220aa845', (isZh) ? 'zh' : 'en'),
     },
     {
       id: 'cad',
-      label: ui(isZh, 'CAD 制图', 'CAD drafting'),
+      label: uiMessage('system-explorer.cad-drafting.d30b4baac6', (isZh) ? 'zh' : 'en'),
       status: hasCad ? 'ready' : 'partial',
       detail: hasCad
-        ? ui(isZh, `已检测到：${cadApps.join('、')}。环境已就绪；实际绘图仍需完成窗口控制、保存文件和图纸验收。`, `Detected: ${cadApps.join(', ')}. The environment is ready; actual drafting still requires window control, file save, and drawing verification.`)
-        : ui(isZh, '未检测到 CAD 应用；Lumi 仍可生成 DXF 草稿文件。', 'No CAD app detected; Lumi can still generate DXF draft files.'),
+        ? formatUiMessage('system-explorer.detected-value0-the-environment-is.10ede6869e', { value0: { en: cadApps.join(', '), zh: cadApps.join('、') } }, (isZh) ? 'zh' : 'en')
+        : uiMessage('system-explorer.no-cad-app-detected-lumi.6a7f1c3d05', (isZh) ? 'zh' : 'en'),
     },
     {
       id: 'external_ai',
-      label: ui(isZh, '外部 AI 应用', 'External AI apps'),
+      label: uiMessage('system-explorer.external-ai-apps.1a49be2730', (isZh) ? 'zh' : 'en'),
       status: hasAiApps ? 'ready' : 'partial',
       detail: hasAiApps
-        ? ui(isZh, `已检测到：${aiApps.join('、')}。应用登录、提问和回答回收需在实际任务中验收。`, `Detected: ${aiApps.join(', ')}. App login, prompting, and answer collection must be verified in a real task.`)
-        : ui(isZh, '未检测到本地 AI 应用；Lumi 仍可通过浏览器和 MCP 协同。', 'No local AI app detected; Lumi can still coordinate through browser and MCP.'),
+        ? formatUiMessage('system-explorer.detected-value0-app-login-prompting.e38b6b2de7', { value0: { en: aiApps.join(', '), zh: aiApps.join('、') } }, (isZh) ? 'zh' : 'en')
+        : uiMessage('system-explorer.no-local-ai-app-detected.f9839a0523', (isZh) ? 'zh' : 'en'),
     },
     {
       id: 'music',
-      label: ui(isZh, '音乐工作流', 'Music workflow'),
+      label: uiMessage('system-explorer.music-workflow.98c227d998', (isZh) ? 'zh' : 'en'),
       status: hasMusic ? 'ready' : 'partial',
       detail: hasMusic
-        ? ui(isZh, `已检测到：${musicApps.join('、')}。播放与控制能力仍以实际播放器状态验收。`, `Detected: ${musicApps.join(', ')}. Playback and controls still require verification against the actual player state.`)
-        : ui(isZh, '未检测到音乐应用；Lumi 音乐能力仍可使用已配置服务。', 'Music app not detected; Lumi music playback can still use configured services.'),
+        ? formatUiMessage('system-explorer.detected-value0-playback-and-controls.41f179030b', { value0: { en: musicApps.join(', '), zh: musicApps.join('、') } }, (isZh) ? 'zh' : 'en')
+        : uiMessage('system-explorer.music-app-not-detected-lumi.82c5d4e6ab', (isZh) ? 'zh' : 'en'),
     },
   ];
 
@@ -311,54 +295,54 @@ function buildReport(
   const suggestions: SetupSuggestion[] = [];
   if (!isDesktop) suggestions.push({
     id: 'desktop',
-    text: ui(isZh, '安装或启动桌面客户端，才能启用知识库导入和桌面控制。', 'Install or launch the desktop client to enable desktop control and knowledge import.'),
+    text: uiMessage('system-explorer.install-or-launch-the-desktop.2894f8e31a', (isZh) ? 'zh' : 'en'),
     priority: 'high',
   });
   if (!nodeReady) suggestions.push({
     id: 'node',
-    text: ui(isZh, '如果要让本地 MCP 工具和生成技能稳定运行，建议安装 Node.js。', 'Install Node.js if you want local MCP tools and generated skills to run smoothly.'),
-    actionLabel: ui(isZh, '打开 MCP', 'Open MCP'),
+    text: uiMessage('system-explorer.install-node-js-if-you.b5276aecd6', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
     actionSection: 'mcp',
     priority: 'medium',
   });
   if (!pythonReady) suggestions.push({
     id: 'python',
-    text: ui(isZh, '如果要使用依赖 Python 的文档、图像、视频或自动化技能，建议安装 Python。', 'Install Python if you want document, image, video, or automation skills that depend on Python.'),
-    actionLabel: ui(isZh, '打开 MCP', 'Open MCP'),
+    text: uiMessage('system-explorer.install-python-if-you-want.226d7d6c6d', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
     actionSection: 'mcp',
     priority: 'medium',
   });
   if (llmReady === 0) suggestions.push({
     id: 'llm',
-    text: ui(isZh, '请在“设置 > LLM 服务商”里至少添加一个 API Key。', 'Add at least one API key in Settings > LLM Providers.'),
-    actionLabel: ui(isZh, '添加服务商', 'Add provider'),
+    text: uiMessage('system-explorer.add-at-least-one-api.9d438f82d8', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.add-provider.bf4c973279', (isZh) ? 'zh' : 'en'),
     actionSection: 'llm-providers',
     priority: 'high',
   });
   if ((ecosystem?.enabledSkillCount || 0) === 0) suggestions.push({
     id: 'mcp',
-    text: ui(isZh, '请在技能大厅或 MCP 设置里至少启用一个 MCP 技能。', 'Enable at least one MCP skill from Skill Center or MCP Settings.'),
-    actionLabel: ui(isZh, '打开 MCP', 'Open MCP'),
+    text: uiMessage('system-explorer.enable-at-least-one-mcp.1bccc5f0e7', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
     actionSection: 'mcp',
     priority: 'medium',
   });
   if (permissions.microphone !== 'granted') suggestions.push({
     id: 'microphone',
-    text: ui(isZh, '需要语音、会议、唤醒词或声纹时，再授权麦克风。', 'Grant microphone access when you want voice, meetings, wake word, or voiceprint.'),
-    actionLabel: ui(isZh, '打开硬件设置', 'Open hardware'),
+    text: uiMessage('system-explorer.grant-microphone-access-when-you.fa5ae7c9ea', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.open-hardware.25065f0afd', (isZh) ? 'zh' : 'en'),
     actionSection: 'hardware',
     priority: 'medium',
   });
   if (permissions.camera !== 'granted') suggestions.push({
     id: 'camera',
-    text: ui(isZh, '需要在场感知、人脸识别或手势能力时，再授权摄像头。', 'Grant camera access only when you want presence, face recognition, or gesture features.'),
-    actionLabel: ui(isZh, '打开硬件设置', 'Open hardware'),
+    text: uiMessage('system-explorer.grant-camera-access-only-when.5b546a63f7', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.open-hardware.25065f0afd', (isZh) ? 'zh' : 'en'),
     actionSection: 'hardware',
     priority: 'low',
   });
   if (!hasOffice) suggestions.push({
     id: 'office',
-    text: ui(isZh, '如果希望 Lumi 操作 Office/WPS 工作流，请安装或连接你常用的文档套件。', 'Install or connect your preferred document suite if Lumi should operate Office/WPS workflows.'),
+    text: uiMessage('system-explorer.install-or-connect-your-preferred.aff851b466', (isZh) ? 'zh' : 'en'),
     priority: 'low',
   });
 
@@ -411,7 +395,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       setEcosystem(ecosystemData || null);
       setProviders(providerData.providers || {});
     } catch (err: any) {
-      toast.error(err?.message || ui(isZh, '电脑适配报告加载失败', 'Failed to load adaptation report'));
+      toast.error(err?.message || uiMessage('system-explorer.failed-to-load-adaptation-report.15e33730d2', (isZh) ? 'zh' : 'en'));
     } finally {
       setLoading(false);
     }
@@ -436,14 +420,14 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
     try {
       const res = await fetch('/api/explore/scan', { method: 'POST', credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(isZh, '电脑扫描失败', 'Computer scan failed'));
+      if (!res.ok) throw new Error(data.error || uiMessage('system-explorer.computer-scan-failed.fa6815bf84', (isZh) ? 'zh' : 'en'));
       if (data.snapshot) {
         setLatest(data.snapshot);
         setHistory(prev => [data.snapshot, ...prev.filter(item => item.id !== data.snapshot.id)]);
       }
-      toast.success(ui(isZh, '电脑适配报告已刷新', 'Computer adaptation report refreshed'));
+      toast.success(uiMessage('system-explorer.computer-adaptation-report-refreshed.afbd63dcf6', (isZh) ? 'zh' : 'en'));
     } catch (err: any) {
-      toast.error(err?.message || ui(isZh, '电脑扫描失败', 'Computer scan failed'));
+      toast.error(err?.message || uiMessage('system-explorer.computer-scan-failed.fa6815bf84', (isZh) ? 'zh' : 'en'));
     } finally {
       setScanning(false);
     }
@@ -453,11 +437,11 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
     try {
       const res = await fetch('/api/explore/profession/install', { method: 'POST', credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(isZh, '职业智能体安装失败', 'Failed to install profession agents'));
+      if (!res.ok) throw new Error(data.error || uiMessage('system-explorer.failed-to-install-profession-agents.781aeed1b4', (isZh) ? 'zh' : 'en'));
       setProfiles(data.profiles || profiles);
-      toast.success(ui(isZh, `已安装 ${data.installed || 0} 个职业智能体`, `Installed ${data.installed || 0} profession agent(s)`));
+      toast.success(formatUiMessage('system-explorer.installed-value0-profession-agent-s.d405e4517e', { value0: data.installed || 0 }, (isZh) ? 'zh' : 'en'));
     } catch (err: any) {
-      toast.error(err?.message || ui(isZh, '职业智能体安装失败', 'Failed to install profession agents'));
+      toast.error(err?.message || uiMessage('system-explorer.failed-to-install-profession-agents.781aeed1b4', (isZh) ? 'zh' : 'en'));
     }
   };
 
@@ -477,28 +461,28 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
 
   const copyReport = async () => {
     const lines = [
-      ui(isZh, '# Lumi 电脑适配报告', '# Lumi Computer Adaptation Report'),
+      uiMessage('system-explorer.lumi-computer-adaptation-report.c4d06d37ba', (isZh) ? 'zh' : 'en'),
       '',
-      `${ui(isZh, '状态', 'Status')}: ${report.status}`,
-      `${ui(isZh, '分数', 'Score')}: ${report.readyCount}/${report.totalCount} ${ui(isZh, '就绪', 'ready')}`,
-      `${ui(isZh, '主机', 'Host')}: ${latest?.hardware?.hostname || latest?.network?.hostname || ui(isZh, '未知', 'Unknown')}`,
-      `${ui(isZh, '采集范围', 'Computer scope')}: ${ui(isZh, 'Lumi 服务运行本机', 'Lumi server host')}`,
-      `OS: ${latest?.software?.osVersion || latest?.hardware?.platform || ui(isZh, '未知', 'Unknown')}`,
-      `CPU: ${latest?.hardware?.cpus?.model || ui(isZh, '未知', 'Unknown')}`,
-      `${ui(isZh, '内存', 'Memory')}: ${latest?.hardware?.totalMemoryGB || ui(isZh, '未知', 'Unknown')} GB`,
-      `${ui(isZh, '最近扫描', 'Last scan')}: ${formatTime(latest?.timestamp, isZh)}`,
+      `${uiMessage('system-explorer.status.b8f1474d96', (isZh) ? 'zh' : 'en')}: ${report.status}`,
+      `${uiMessage('system-explorer.score.6944d91537', (isZh) ? 'zh' : 'en')}: ${report.readyCount}/${report.totalCount} ${uiMessage('system-explorer.ready.d472b01242', (isZh) ? 'zh' : 'en')}`,
+      `${uiMessage('system-explorer.host.e732aabf49', (isZh) ? 'zh' : 'en')}: ${latest?.hardware?.hostname || latest?.network?.hostname || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')}`,
+      `${uiMessage('system-explorer.computer-scope.8cdbdb0aac', (isZh) ? 'zh' : 'en')}: ${uiMessage('system-explorer.lumi-server-host.88940fdc68', (isZh) ? 'zh' : 'en')}`,
+      `OS: ${latest?.software?.osVersion || latest?.hardware?.platform || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')}`,
+      `CPU: ${latest?.hardware?.cpus?.model || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')}`,
+      `${uiMessage('system-explorer.memory.2c8fd6fe1f', (isZh) ? 'zh' : 'en')}: ${latest?.hardware?.totalMemoryGB || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')} GB`,
+      `${uiMessage('system-explorer.last-scan.9d09d06882', (isZh) ? 'zh' : 'en')}: ${formatTime(latest?.timestamp, isZh)}`,
       '',
-      ui(isZh, '## 能力', '## Capabilities'),
+      uiMessage('system-explorer.capabilities.52852006c2', (isZh) ? 'zh' : 'en'),
       ...report.capabilities.map(item => `- ${item.label}: ${item.status} — ${item.detail}`),
       '',
-      ui(isZh, '## 建议', '## Suggestions'),
-      ...(report.suggestions.length > 0 ? report.suggestions.map(item => `- [${item.priority}] ${item.text}`) : [ui(isZh, '- 暂无设置建议。', '- No setup suggestions.')]),
+      uiMessage('system-explorer.suggestions.cebe6b0764', (isZh) ? 'zh' : 'en'),
+      ...(report.suggestions.length > 0 ? report.suggestions.map(item => `- [${item.priority}] ${item.text}`) : [uiMessage('system-explorer.no-setup-suggestions.21457e2ca4', (isZh) ? 'zh' : 'en')]),
     ];
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
-      toast.success(ui(isZh, '适配报告已复制', 'Adaptation report copied'));
+      toast.success(uiMessage('system-explorer.adaptation-report-copied.af31c4ce36', (isZh) ? 'zh' : 'en'));
     } catch (err: any) {
-      toast.error(err?.message || ui(isZh, '复制报告失败', 'Failed to copy report'));
+      toast.error(err?.message || uiMessage('system-explorer.failed-to-copy-report.a19a8f9f8c', (isZh) ? 'zh' : 'en'));
     }
   };
 
@@ -506,7 +490,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
     return (
       <div className="flex min-h-[420px] items-center justify-center text-white/45">
         <Loader2 size={18} className="mr-2 animate-spin" />
-        {ui(isZh, '正在加载电脑适配报告...', 'Loading computer adaptation report...')}
+        {uiMessage('system-explorer.loading-computer-adaptation-report.098017d6ec', (isZh) ? 'zh' : 'en')}
       </div>
     );
   }
@@ -518,11 +502,11 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           <div className="flex items-center gap-3">
             <Monitor size={20} className="text-cyan-300" />
             <h3 className="text-xl font-bold uppercase tracking-normal text-white/90">
-              {t?.computerAdaptation || ui(isZh, '电脑适配', 'Computer Adaptation')}
+              {t?.computerAdaptation || uiMessage('system-explorer.computer-adaptation.6112f821aa', (isZh) ? 'zh' : 'en')}
             </h3>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/45">
-            {ui(isZh, '这里检查的是运行 Lumi 服务的本机，不是组织网页访问者的电脑。文件统计只覆盖桌面、文档和下载目录的有限深度，不会索引全盘，也不会主动请求传感器权限。', 'This report describes the machine running the Lumi service, not an organization web visitor\'s computer. File counts use bounded scans of Desktop, Documents, and Downloads; this page does not index the full disk or request sensor access.')}
+            {uiMessage('system-explorer.this-report-describes-the-machine.9c6fdca89b', (isZh) ? 'zh' : 'en')}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -531,7 +515,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-xs font-black uppercase tracking-widest text-white/55 transition-colors hover:bg-white/[0.08] hover:text-white"
           >
             <Copy size={14} />
-            {ui(isZh, '复制报告', 'Copy Report')}
+            {uiMessage('system-explorer.copy-report.33a25a2283', (isZh) ? 'zh' : 'en')}
           </button>
           <button
             onClick={runScan}
@@ -539,7 +523,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 text-xs font-black uppercase tracking-widest text-cyan-100 transition-colors hover:bg-cyan-300/16 disabled:opacity-40"
           >
             <RefreshCw size={14} className={scanning ? 'animate-spin' : ''} />
-            {scanning ? ui(isZh, '扫描中', 'Scanning') : ui(isZh, '刷新报告', 'Refresh Report')}
+            {scanning ? uiMessage('system-explorer.scanning.2f595960f6', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.refresh-report.5e25a812a7', (isZh) ? 'zh' : 'en')}
           </button>
         </div>
       </div>
@@ -547,17 +531,17 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       <section className={`rounded-2xl border p-5 ${statusColor(report.status)}`}>
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-xs font-black uppercase tracking-[0.18em] opacity-70">{ui(isZh, '适配评分', 'Adaptation Score')}</div>
+            <div className="text-xs font-black uppercase tracking-[0.18em] opacity-70">{uiMessage('system-explorer.adaptation-score.52be51a16a', (isZh) ? 'zh' : 'en')}</div>
             <div className="mt-1 text-3xl font-black text-white">
-              {report.readyCount}/{report.totalCount} {ui(isZh, '就绪', 'ready')}
+              {report.readyCount}/{report.totalCount} {uiMessage('system-explorer.ready.d472b01242', (isZh) ? 'zh' : 'en')}
             </div>
           </div>
           <div className="text-sm leading-relaxed text-white/65 md:max-w-md">
              {report.status === 'ready'
-               ? ui(isZh, '这台电脑的运行环境已完成识别；“就绪”代表适配条件满足，不代替具体任务的执行验收。', 'This computer environment has been mapped. Ready means adaptation prerequisites are present, not that a real task has already passed execution verification.')
+               ? uiMessage('system-explorer.this-computer-environment-has-been.34067648b5', (isZh) ? 'zh' : 'en')
                : report.status === 'partial'
-                 ? ui(isZh, '已识别部分运行环境；仍有适配条件未确认，不能据此判断对应工作流已经可用。', 'Part of the environment is mapped, but some prerequisites remain unconfirmed; workflow readiness cannot be inferred yet.')
-                 : ui(isZh, '这台电脑仍有关键适配条件缺失，相关工作流尚不能标记为就绪。', 'Key adaptation prerequisites are still missing, so related workflows cannot be marked ready.')}
+                 ? uiMessage('system-explorer.part-of-the-environment-is.af1add6d3e', (isZh) ? 'zh' : 'en')
+                 : uiMessage('system-explorer.key-adaptation-prerequisites-are-still.9ee73a72cb', (isZh) ? 'zh' : 'en')}
           </div>
         </div>
       </section>
@@ -565,34 +549,34 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <InfoPanel
           icon={<Cpu size={17} />}
-          title={ui(isZh, '系统', 'System')}
+          title={uiMessage('system-explorer.system.bd68977ed1', (isZh) ? 'zh' : 'en')}
           rows={[
-            [ui(isZh, '主机', 'Host'), latest?.hardware?.hostname || latest?.network?.hostname || ui(isZh, '未知', 'Unknown')],
-            ['OS', latest?.software?.osVersion || `${latest?.hardware?.platform || ui(isZh, '未知', 'unknown')} ${latest?.hardware?.arch || ''}`],
-            ['CPU', latest?.hardware?.cpus?.model || ui(isZh, '未知', 'Unknown')],
-            [ui(isZh, '核心 / 线程', 'Cores / threads'), latest?.hardware?.cpus ? `${latest.hardware.cpus.cores ?? '?'} / ${latest.hardware.cpus.threads ?? '?'}` : ui(isZh, '未知', 'Unknown')],
-            [ui(isZh, '内存', 'Memory'), latest?.hardware?.totalMemoryGB ? `${latest.hardware.totalMemoryGB} GB` : ui(isZh, '未知', 'Unknown')],
+            [uiMessage('system-explorer.host.e732aabf49', (isZh) ? 'zh' : 'en'), latest?.hardware?.hostname || latest?.network?.hostname || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')],
+            ['OS', latest?.software?.osVersion || `${latest?.hardware?.platform || uiMessage('system-explorer.unknown.82d553bbee', (isZh) ? 'zh' : 'en')} ${latest?.hardware?.arch || ''}`],
+            ['CPU', latest?.hardware?.cpus?.model || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')],
+            [uiMessage('system-explorer.cores-threads.fdc5cb6e3d', (isZh) ? 'zh' : 'en'), latest?.hardware?.cpus ? `${latest.hardware.cpus.cores ?? '?'} / ${latest.hardware.cpus.threads ?? '?'}` : uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')],
+            [uiMessage('system-explorer.memory.2c8fd6fe1f', (isZh) ? 'zh' : 'en'), latest?.hardware?.totalMemoryGB ? `${latest.hardware.totalMemoryGB} GB` : uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')],
           ]}
         />
         <InfoPanel
           icon={<HardDrive size={17} />}
-          title={ui(isZh, '存储', 'Storage')}
+          title={uiMessage('system-explorer.storage.2bcf954da9', (isZh) ? 'zh' : 'en')}
           rows={[
-            [ui(isZh, '用户目录', 'Home'), latest?.filesystem?.homeDir || ui(isZh, '未知', 'Unknown')],
-            [ui(isZh, '桌面项目', 'Desktop items'), String(latest?.filesystem?.desktopFiles ?? ui(isZh, '未知', 'Unknown'))],
-            [ui(isZh, '文档项目', 'Documents items'), String(latest?.filesystem?.documentsFiles ?? ui(isZh, '未知', 'Unknown'))],
-            [ui(isZh, '下载项目', 'Downloads items'), String(latest?.filesystem?.downloadsFiles ?? ui(isZh, '未知', 'Unknown'))],
-            [ui(isZh, '已统计文件', 'Counted files'), String(latest?.filesystem?.totalUserFiles ?? ui(isZh, '未知', 'Unknown'))],
+            [uiMessage('system-explorer.home.a65d5fe17a', (isZh) ? 'zh' : 'en'), latest?.filesystem?.homeDir || uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en')],
+            [uiMessage('system-explorer.desktop-items.0ae932d238', (isZh) ? 'zh' : 'en'), String(latest?.filesystem?.desktopFiles ?? uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en'))],
+            [uiMessage('system-explorer.documents-items.8463ae5248', (isZh) ? 'zh' : 'en'), String(latest?.filesystem?.documentsFiles ?? uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en'))],
+            [uiMessage('system-explorer.downloads-items.f28a912a40', (isZh) ? 'zh' : 'en'), String(latest?.filesystem?.downloadsFiles ?? uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en'))],
+            [uiMessage('system-explorer.counted-files.75688f91fb', (isZh) ? 'zh' : 'en'), String(latest?.filesystem?.totalUserFiles ?? uiMessage('system-explorer.unknown.d748bba592', (isZh) ? 'zh' : 'en'))],
           ]}
         />
         <InfoPanel
           icon={<Database size={17} />}
-          title={ui(isZh, 'Lumi 运行时', 'Lumi Runtime')}
+          title={uiMessage('system-explorer.lumi-runtime.f49ff341a2', (isZh) ? 'zh' : 'en')}
           rows={[
-            [ui(isZh, '技能', 'Skills'), ui(isZh, `${ecosystem?.enabledSkillCount || 0}/${ecosystem?.skillCount || 0} 已启用`, `${ecosystem?.enabledSkillCount || 0}/${ecosystem?.skillCount || 0} enabled`)],
-            [ui(isZh, '工具', 'Tools'), String(ecosystem?.toolCount || 0)],
-            [ui(isZh, '智能体', 'Agents'), String(ecosystem?.agentCount || 0)],
-            [ui(isZh, '最近扫描', 'Last scan'), formatTime(latest?.timestamp, isZh)],
+            [uiMessage('system-explorer.skills.2a98e03d13', (isZh) ? 'zh' : 'en'), formatUiMessage('system-explorer.value0-value1-enabled.39a43397ce', { value0: ecosystem?.enabledSkillCount || 0, value1: ecosystem?.skillCount || 0 }, (isZh) ? 'zh' : 'en')],
+            [uiMessage('system-explorer.tools.f622b4dd19', (isZh) ? 'zh' : 'en'), String(ecosystem?.toolCount || 0)],
+            [uiMessage('system-explorer.agents.8039b1040e', (isZh) ? 'zh' : 'en'), String(ecosystem?.agentCount || 0)],
+            [uiMessage('system-explorer.last-scan.9d09d06882', (isZh) ? 'zh' : 'en'), formatTime(latest?.timestamp, isZh)],
           ]}
         />
       </div>
@@ -600,7 +584,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
         <div className="mb-4 flex items-center gap-2">
           <Shield size={17} className="text-white/55" />
-          <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '能力地图', 'Capability Map')}</h4>
+          <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{uiMessage('system-explorer.capability-map.0c9a92f070', (isZh) ? 'zh' : 'en')}</h4>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {report.capabilities.map(item => (
@@ -616,7 +600,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
                     onClick={() => onSectionChange(item.actionSection!)}
                     className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-black uppercase tracking-widest text-white/45 hover:bg-white/[0.08] hover:text-white"
                   >
-                    {item.actionLabel || ui(isZh, '打开', 'Open')}
+                    {item.actionLabel || uiMessage('system-explorer.open.0dbeeb1a9f', (isZh) ? 'zh' : 'en')}
                   </button>
                 )}
               </div>
@@ -629,7 +613,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
         <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
           <div className="mb-4 flex items-center gap-2">
             <Wrench size={17} className="text-white/55" />
-            <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '已检测应用', 'Detected Apps')}</h4>
+            <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{uiMessage('system-explorer.detected-apps.d95d3e891e', (isZh) ? 'zh' : 'en')}</h4>
           </div>
           {detectedAppGroups.length > 0 ? (
             <div className="space-y-3">
@@ -643,18 +627,14 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
               ))}
             </div>
           ) : (
-            <p className="text-sm text-white/40">{ui(isZh, '最近扫描未匹配到常用应用。', 'No common apps were matched in the latest scan.')}</p>
+            <p className="text-sm text-white/40">{uiMessage('system-explorer.no-common-apps-were-matched.a312cd221a', (isZh) ? 'zh' : 'en')}</p>
           )}
           <div className="mt-4 text-xs text-white/30">
-            {ui(isZh, `最近扫描看到 ${apps.length} 条已安装应用记录。`, `Latest scan saw ${apps.length} installed app entries.`)}
+            {formatUiMessage('system-explorer.latest-scan-saw-value0-installed.11bfc73e38', { value0: apps.length }, (isZh) ? 'zh' : 'en')}
           </div>
           {discovery && (
             <div className="mt-2 text-xs leading-relaxed text-white/28">
-              {ui(
-                isZh,
-                `来源：注册表 ${discovery.registryEntries || 0}，开始菜单 ${discovery.startMenuShortcuts || 0}，桌面快捷方式 ${discovery.desktopShortcuts || 0}，应用目录可执行文件 ${discovery.commonFolderEntries || 0}，PATH ${discovery.pathExecutables || 0}。扫描根目录 ${discovery.scannedRoots?.length || 0} 个${discovery.limitReached ? '，已达到上限' : ''}。`,
-                `Sources: registry ${discovery.registryEntries || 0}, Start Menu ${discovery.startMenuShortcuts || 0}, Desktop shortcuts ${discovery.desktopShortcuts || 0}, app-folder executables ${discovery.commonFolderEntries || 0}, PATH ${discovery.pathExecutables || 0}. Scanned ${discovery.scannedRoots?.length || 0} roots${discovery.limitReached ? ', limit reached' : ''}.`,
-              )}
+              {formatUiMessage('system-explorer.sources-registry-value0-start-menu.a60f269dc0', { value0: discovery.registryEntries || 0, value1: discovery.startMenuShortcuts || 0, value2: discovery.desktopShortcuts || 0, value3: discovery.commonFolderEntries || 0, value4: discovery.pathExecutables || 0, value5: discovery.scannedRoots?.length || 0, value6: discovery.limitReached ? systemExplorerCopy(isZh ? 'zh' : 'en').limitReachedSuffix : '' }, (isZh) ? 'zh' : 'en')}
             </div>
           )}
         </section>
@@ -662,7 +642,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
         <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
           <div className="mb-4 flex items-center gap-2">
             <Mic size={17} className="text-white/55" />
-            <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '权限', 'Permissions')}</h4>
+            <h4 className="text-sm font-black uppercase tracking-widest text-white/70">{uiMessage('system-explorer.permissions.be9338af25', (isZh) ? 'zh' : 'en')}</h4>
           </div>
           <div className="space-y-2">
             {Object.entries(permissions).map(([key, value]) => (
@@ -681,7 +661,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
             <div>
               <div className="flex items-center gap-2">
                 <Sparkles size={17} className="text-amber-200" />
-                <h4 className="text-sm font-black uppercase tracking-widest text-white/75">{ui(isZh, '工作画像', 'Work Profile')}</h4>
+                <h4 className="text-sm font-black uppercase tracking-widest text-white/75">{uiMessage('system-explorer.work-profile.e7297e9c26', (isZh) ? 'zh' : 'en')}</h4>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {profiles.map(profile => {
@@ -698,55 +678,55 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
               onClick={installProfessionAgents}
               className="h-10 rounded-xl border border-amber-300/25 bg-amber-300/10 px-4 text-xs font-black uppercase tracking-widest text-amber-100 transition-colors hover:bg-amber-300/16"
             >
-              {ui(isZh, '安装智能体', 'Install Agents')}
+              {uiMessage('system-explorer.install-agents.1f1acb3e5d', (isZh) ? 'zh' : 'en')}
             </button>
           </div>
         </section>
       )}
 
       <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
-        <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '工作流环境', 'Workflow Environment')}</div>
+        <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{uiMessage('system-explorer.workflow-environment.42bfbf30f2', (isZh) ? 'zh' : 'en')}</div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <WorkflowTile
-            title={ui(isZh, '知识库文件', 'Knowledge files')}
-            detail={ui(isZh, '上传到知识库的文件会自动吸收，未吸收的文件也可以在知识库里一键补吸收。', 'Uploaded knowledge files are absorbed automatically, and any pending file can be absorbed from Knowledge Base.')}
+            title={uiMessage('system-explorer.knowledge-files.166a683950', (isZh) ? 'zh' : 'en')}
+            detail={uiMessage('system-explorer.uploaded-knowledge-files-are-absorbed.ab7be47a64', (isZh) ? 'zh' : 'en')}
             ready={true}
           />
           <WorkflowTile
-            title={ui(isZh, '语音与会议', 'Voice and meetings')}
-            detail={permissions.microphone === 'granted' ? ui(isZh, '会议模式和语音交互可以使用麦克风。', 'Meeting mode and speech interaction can use the microphone.') : ui(isZh, '需要语音或会议时再授权麦克风。', 'Grant microphone only when you want voice or meetings.')}
+            title={uiMessage('system-explorer.voice-and-meetings.20076dcba8', (isZh) ? 'zh' : 'en')}
+            detail={permissions.microphone === 'granted' ? uiMessage('system-explorer.meeting-mode-and-speech-interaction.c5070e78fa', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.grant-microphone-only-when-you.668cbf7c0f', (isZh) ? 'zh' : 'en')}
             ready={permissions.microphone === 'granted'}
           />
           <WorkflowTile
-            title={ui(isZh, '生成技能', 'Generated skills')}
-            detail={(ecosystem?.enabledSkillCount || 0) > 0 ? ui(isZh, 'MCP 技能已启用，Lumi 可以看到。', 'MCP skills are enabled and visible to Lumi.') : ui(isZh, '依赖生成工具工作流前，请先启用 MCP 技能。', 'Enable MCP skills before relying on generated tool workflows.')}
+            title={uiMessage('system-explorer.generated-skills.5ff448f10c', (isZh) ? 'zh' : 'en')}
+            detail={(ecosystem?.enabledSkillCount || 0) > 0 ? uiMessage('system-explorer.mcp-skills-are-enabled-and.a8b5eed7ba', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.enable-mcp-skills-before-relying.89c4f5a7c4', (isZh) ? 'zh' : 'en')}
             ready={(ecosystem?.enabledSkillCount || 0) > 0}
           />
           <WorkflowTile
-            title={ui(isZh, '文档工作', 'Document work')}
-            detail={detectedAppGroups.some(group => group.id === 'wps') ? ui(isZh, '已检测到 Office/WPS；实际编辑与保存仍需任务验收。', 'Office/WPS was detected; actual editing and saving still require task verification.') : ui(isZh, '最近扫描未检测到 Office/WPS 应用。', 'No Office/WPS app was detected in the latest scan.')}
+            title={uiMessage('system-explorer.document-work.cffa7bf266', (isZh) ? 'zh' : 'en')}
+            detail={detectedAppGroups.some(group => group.id === 'wps') ? uiMessage('system-explorer.office-wps-was-detected-actual.8c7ca6f2bf', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.no-office-wps-app-was.46f876d440', (isZh) ? 'zh' : 'en')}
             ready={detectedAppGroups.some(group => group.id === 'wps')}
           />
           <WorkflowTile
-            title={ui(isZh, '开发工作', 'Developer work')}
-            detail={detectedAppGroups.some(group => group.id === 'vscode' || group.id === 'git') ? ui(isZh, '已检测到开发工具。', 'Developer tools were detected.') : ui(isZh, '安装 VS Code/Git/Node 后，本地开发工作流会更完整。', 'Install VS Code/Git/Node for stronger local dev workflows.')}
+            title={uiMessage('system-explorer.developer-work.7250e012e2', (isZh) ? 'zh' : 'en')}
+            detail={detectedAppGroups.some(group => group.id === 'vscode' || group.id === 'git') ? uiMessage('system-explorer.developer-tools-were-detected.2dab9ce534', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.install-vs-code-git-node.d97529992b', (isZh) ? 'zh' : 'en')}
             ready={detectedAppGroups.some(group => group.id === 'vscode' || group.id === 'git')}
           />
           <WorkflowTile
-            title={ui(isZh, '外部应用', 'External apps')}
-            detail={detectedAppGroups.some(group => group.id === 'wechat' || group.id === 'cad' || group.id === 'ai_apps') ? ui(isZh, '通讯/CAD/AI 应用交接已出现在适配地图中。', 'Messaging/CAD/AI app handoff is visible in the adapter map.') : ui(isZh, '即使未启用外部应用控制，Lumi 仍可先准备草稿和文件。', 'Lumi can still prepare drafts and files before external app control is enabled.')}
+            title={uiMessage('system-explorer.external-apps.fb16db7b2f', (isZh) ? 'zh' : 'en')}
+            detail={detectedAppGroups.some(group => group.id === 'wechat' || group.id === 'cad' || group.id === 'ai_apps') ? uiMessage('system-explorer.messaging-cad-ai-app-handoff.741c6f0f06', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.lumi-can-still-prepare-drafts.5469f876b7', (isZh) ? 'zh' : 'en')}
             ready={detectedAppGroups.some(group => group.id === 'wechat' || group.id === 'cad' || group.id === 'ai_apps')}
           />
           <WorkflowTile
-            title={ui(isZh, '音乐能力', 'Music playback')}
-            detail={detectedAppGroups.some(group => group.id === 'netease') ? ui(isZh, '已检测到音乐应用；实际播放和控制仍需运行验收。', 'A music app was detected; playback and controls still require runtime verification.') : ui(isZh, '未检测到本地音乐应用；已配置服务不等于本地播放器已通过验收。', 'No local music app was detected; configured services do not prove that a local player has passed verification.')}
+            title={uiMessage('system-explorer.music-playback.eb88681e22', (isZh) ? 'zh' : 'en')}
+            detail={detectedAppGroups.some(group => group.id === 'netease') ? uiMessage('system-explorer.a-music-app-was-detected.c7933a87a2', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.no-local-music-app-was.e2f05f03f0', (isZh) ? 'zh' : 'en')}
             ready={detectedAppGroups.some(group => group.id === 'netease')}
           />
         </div>
       </section>
 
       <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
-        <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '推荐设置', 'Recommended Setup')}</div>
+        <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{uiMessage('system-explorer.recommended-setup.065ab674e2', (isZh) ? 'zh' : 'en')}</div>
         {report.suggestions.length > 0 ? (
           <div className="space-y-2">
             {report.suggestions.map(item => (
@@ -762,7 +742,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
                     onClick={() => onSectionChange(item.actionSection!)}
                     className="shrink-0 self-start rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white/45 hover:bg-white/[0.08] hover:text-white sm:self-center"
                   >
-                    {item.actionLabel || ui(isZh, '打开', 'Open')}
+                    {item.actionLabel || uiMessage('system-explorer.open.0dbeeb1a9f', (isZh) ? 'zh' : 'en')}
                   </button>
                 )}
               </div>
@@ -771,20 +751,20 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
         ) : (
           <div className="flex gap-3 rounded-xl bg-emerald-300/8 px-3 py-2 text-sm text-emerald-100/70">
             <CheckCircle2 size={15} />
-            {ui(isZh, '这台电脑看起来已经适合运行 Lumi 桌面工作流。', 'This computer looks ready for Lumi desktop workflows.')}
+            {uiMessage('system-explorer.this-computer-looks-ready-for.c2544a5c0b', (isZh) ? 'zh' : 'en')}
           </div>
         )}
       </section>
 
       {latest?.hardware?.disks && latest.hardware.disks.length > 0 && (
         <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
-          <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{ui(isZh, '磁盘', 'Disks')}</div>
+          <div className="mb-4 text-sm font-black uppercase tracking-widest text-white/70">{uiMessage('system-explorer.disks.edbc3837ac', (isZh) ? 'zh' : 'en')}</div>
           <div className="space-y-2">
             {latest.hardware.disks.map(disk => (
               <div key={disk.name} className="rounded-xl bg-black/18 p-3">
                 <div className="flex items-center justify-between text-xs text-white/52">
                   <span className="font-bold">{disk.name}{disk.fsType ? ` · ${disk.fsType}` : ''}</span>
-                  <span>{ui(isZh, `可用 ${disk.freeGB} GB / 共 ${disk.totalGB} GB`, `${disk.freeGB} GB free / ${disk.totalGB} GB`)}</span>
+                  <span>{formatUiMessage('system-explorer.value0-gb-free-value1-gb.8f4d25e84b', { value0: disk.freeGB, value1: disk.totalGB }, (isZh) ? 'zh' : 'en')}</span>
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">
                   <div
@@ -800,7 +780,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
 
       {history.length > 0 && (
         <div className="text-xs text-white/30">
-          {ui(isZh, `扫描历史：${history.length} 个快照。最近类型：${latest?.type || '未知'}。`, `Scan history: ${history.length} snapshot(s). Latest type: ${latest?.type || 'unknown'}.`)}
+          {formatUiMessage('system-explorer.scan-history-value0-snapshot-s.87dc26fe22', { value0: history.length, value1: latest?.type || systemExplorerCopy(isZh ? 'zh' : 'en').unknown }, (isZh) ? 'zh' : 'en')}
         </div>
       )}
     </div>

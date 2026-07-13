@@ -1524,7 +1524,9 @@ describe('semi-automated legal workflows', () => {
     const registry = createLegalRegistry();
     const legalHubSource = fs.readFileSync(path.join(process.cwd(), 'src/components/org/LegalHub.tsx'), 'utf-8');
     const toolRouterSource = fs.readFileSync(path.join(process.cwd(), 'server/cognition/tool_router.ts'), 'utf-8');
-    const legalToolsSource = fs.readFileSync(path.join(process.cwd(), 'server/tools/definitions/legal_tools.ts'), 'utf-8');
+    const legalToolsShimSource = fs.readFileSync(path.join(process.cwd(), 'server/tools/definitions/legal_tools.ts'), 'utf-8');
+    const legalToolsSource = fs.readFileSync(path.join(process.cwd(), 'server/regions/packs/cn/legal_tools.ts'), 'utf-8');
+    const uiMessagesSource = fs.readFileSync(path.join(process.cwd(), 'src/i18n/locales/ui.generated.json'), 'utf-8');
     const chatRoutesSource = fs.readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf-8');
 
     expect(legalHubSource).not.toContain("id: 'triad'");
@@ -1538,11 +1540,13 @@ describe('semi-automated legal workflows', () => {
     expect(legalHubSource).not.toContain('案件行动面板');
     expect(legalHubSource).toContain('legalCaseToolArgs');
     expect(legalHubSource).toContain("runLegalTool('legal_case_reasoning_matrix'");
-    expect(legalHubSource).toContain('办案闭环');
+    expect(legalHubSource).not.toContain('办案闭环');
+    expect(uiMessagesSource).toContain('办案闭环');
     expect(legalHubSource).toContain('persistCase: true');
     expect(legalHubSource).toContain('legal_finalize_delivery_package');
     expect(legalHubSource).toContain('legal_process_notice_link');
-    expect(legalHubSource).toContain('处理短信链接');
+    expect(legalHubSource).not.toContain('处理短信链接');
+    expect(uiMessagesSource).toContain('处理短信链接');
     expect(fs.readFileSync(path.join(process.cwd(), 'src/lib/legalToolClient.ts'), 'utf-8')).toContain('/api/legal/tool/');
     expect(chatRoutesSource).toContain('DIRECT_LEGAL_TOOL_ALLOWLIST');
     expect(chatRoutesSource).toContain('/legal/tool/:toolName');
@@ -1559,6 +1563,8 @@ describe('semi-automated legal workflows', () => {
     expect(registry.get('legal_message_intake_to_case')).toBeTruthy();
     expect(registry.get('legal_refresh_authoritative_sources')).toBeTruthy();
     expect(registry.get('legal_authority_source_status')).toBeTruthy();
+    expect(legalToolsShimSource).toContain("../../regions/packs/cn/legal_tools");
+    expect(legalToolsShimSource).not.toContain('三段论是 Lumi 法律工作的核心基础');
     expect(legalToolsSource).toContain('三段论是 Lumi 法律工作的核心基础');
     expect(legalToolsSource).toContain('Standard Legal Casework Sequence');
     expect(legalToolsSource).toContain('Major premise');

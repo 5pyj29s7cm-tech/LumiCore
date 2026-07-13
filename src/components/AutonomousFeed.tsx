@@ -4,6 +4,7 @@ import { Zap, CheckCircle, XCircle, Clock, Monitor, Terminal, Search, ChevronDow
 import { useSocket } from '@/hooks/useSocket';
 import { toast } from 'sonner';
 import { useT } from '@/lib/useT';
+import { uiMessage } from '../i18n/uiMessages';
 
 interface AutoTask {
   id: string;
@@ -137,7 +138,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
       setQueue(prev => prev.filter(t => t.id !== task.id));
       setTasks(prev => prev.filter(t => t.id !== task.id));
       setHistory(prev => [cancelledTask, ...prev.filter(t => t.id !== task.id)].slice(0, 50));
-      toast.success(ui('自主任务已取消', 'Autonomous task cancelled'));
+      toast.success(uiMessage('autonomous-feed.autonomous-task-cancelled.3452aa8efe'));
     } catch (err: any) {
       toast.error(err?.message || 'Failed to cancel task');
     } finally {
@@ -178,13 +179,13 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
   };
 
   const filters: { id: FilterMode; label: string }[] = [
-    { id: 'all', label: ui('全部', 'All') },
-    { id: 'running', label: ui('进行中', 'Active') },
-    { id: 'completed', label: ui('完成', 'Done') },
-    { id: 'failed', label: ui('失败', 'Failed') },
-    { id: 'cancelled', label: ui('已取消', 'Cancelled') },
-    { id: 'desktop', label: ui('桌面', 'Desktop') },
-    { id: 'analysis', label: ui('分析', 'Analysis') },
+    { id: 'all', label: uiMessage('autonomous-feed.all.eae0ae1b46') },
+    { id: 'running', label: uiMessage('autonomous-feed.active.ebb6679ed2') },
+    { id: 'completed', label: uiMessage('autonomous-feed.done.9ffd599475') },
+    { id: 'failed', label: uiMessage('autonomous-feed.failed.948e2ae057') },
+    { id: 'cancelled', label: uiMessage('autonomous-feed.cancelled.bf41d7d123') },
+    { id: 'desktop', label: uiMessage('autonomous-feed.desktop.849ee52db0') },
+    { id: 'analysis', label: uiMessage('autonomous-feed.analysis.2e6c72d59d') },
   ];
 
   return (
@@ -205,13 +206,13 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
           <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-amber-300/15 bg-amber-400/10 text-amber-300">
             <Zap size={16} />
           </span>
-          <span className="text-sm font-black uppercase tracking-[0.12em] text-white/75">{ui('自主学习执行', 'Autonomous Learning')}</span>
+          <span className="text-sm font-black uppercase tracking-[0.12em] text-white/75">{uiMessage('autonomous-feed.autonomous-learning.ce7e4bb92f')}</span>
           {liveItems.length > 0 && (
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] font-mono text-white/35">{liveItems.length} {ui('实时', 'live')}</span>
+          <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] font-mono text-white/35">{liveItems.length} {uiMessage('autonomous-feed.live.b49692fb4a')}</span>
           <button
             type="button"
             onClick={(event) => { event.stopPropagation(); void loadTasks(); }}
@@ -223,7 +224,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
               }
             }}
             className="lumi-icon-button h-7 w-7 rounded-lg"
-            title={ui('刷新自主任务', 'Refresh autonomous work')}
+            title={uiMessage('autonomous-feed.refresh-autonomous-work.00dccc5c6e')}
           >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -258,11 +259,11 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
             <AnimatePresence>
               {loading && allItems.length === 0 ? (
                 <div className="lumi-panel py-8 text-center text-xs text-white/30">
-                  {ui('正在加载自主学习记录...', 'Loading autonomous learning...')}
+                  {uiMessage('autonomous-feed.loading-autonomous-learning.14b3f53441')}
                 </div>
               ) : allItems.length === 0 ? (
                 <div className="lumi-panel py-8 text-center text-xs text-white/30">
-                  {ui('暂无自主学习任务。进入自主模式并开启自动处理后，Lumi 会持续创建学习和吸收任务。', 'No autonomous learning tasks yet. In autonomous mode with auto processing enabled, Lumi will keep creating learning and absorption work.')}
+                  {uiMessage('autonomous-feed.no-autonomous-learning-tasks-yet.41b8e1c56b')}
                 </div>
               ) : (
                 allItems.map(task => (
@@ -285,7 +286,7 @@ export function AutonomousFeed({ expanded: initialExpanded }: { expanded?: boole
                           onClick={(event) => { event.stopPropagation(); void cancelTask(task); }}
                           disabled={cancellingIds.includes(task.id)}
                           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-red-400/15 bg-red-500/10 text-red-200/55 hover:bg-red-500/18 hover:text-red-100 disabled:opacity-30"
-                          title={ui('取消任务', 'Cancel task')}
+                          title={uiMessage('autonomous-feed.cancel-task.ea0c83beba')}
                         >
                           <X size={12} />
                         </button>

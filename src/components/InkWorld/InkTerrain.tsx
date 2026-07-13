@@ -94,13 +94,13 @@ void main() {
   float hNorm = (vHeight + 1.5) / 12.0; // remap height to 0-1 (terrain spans ~ -1.5 to 10.5)
   hNorm = clamp(hNorm, 0.0, 1.0);
 
-  // 焦:0-0.1, 濃:0.1-0.3, 重:0.3-0.55, 淡:0.55-0.8, 清:0.8-1.0
+  // Five traditional ink levels, from near-black valley wash to paper-white peaks.
   float inkLevel;
-  if (hNorm < 0.12) inkLevel = 0.04;       // 焦墨 — near black (valley floor)
-  else if (hNorm < 0.32) inkLevel = 0.15;  // 濃墨 — very dark
-  else if (hNorm < 0.55) inkLevel = 0.35;  // 重墨 — medium
-  else if (hNorm < 0.78) inkLevel = 0.62;  // 淡墨 — light wash
-  else inkLevel = 0.90;                      // 清墨 / 留白 — near paper white (peak)
+  if (hNorm < 0.12) inkLevel = 0.04;       // Near black, valley floor
+  else if (hNorm < 0.32) inkLevel = 0.15;  // Very dark ink
+  else if (hNorm < 0.55) inkLevel = 0.35;  // Medium ink
+  else if (hNorm < 0.78) inkLevel = 0.62;  // Light wash
+  else inkLevel = 0.90;                    // Clear wash and negative space
 
   // Smooth transitions between levels
   float wash = inkLevel;

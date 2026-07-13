@@ -2,6 +2,7 @@ import React from 'react';
 import { CheckCircle2, FolderOpen, Loader2, Link2, MinusCircle } from 'lucide-react';
 import { useT } from '../../lib/useT';
 import type { LegalCaseFile } from '../../lib/legalCaseStore';
+import { uiMessage } from '../../i18n/uiMessages';
 
 export type LegalToolState = 'input' | 'running' | 'result';
 
@@ -17,20 +18,20 @@ export function LegalCaseContextBar({
   const t = useT();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const title = caseFile?.title || caseFile?.party || caseFile?.caseNumber || ui('未命名案件', 'Untitled case');
+  const title = caseFile?.title || caseFile?.party || caseFile?.caseNumber || uiMessage('legal-case-context-bar.untitled-case.796e2578d9');
   const stageLabel = caseFile ? ({
-    consultation: ui('咨询与收案', 'Consultation'),
-    filing: ui('立案', 'Filing'),
-    trial: ui('审理', 'Trial'),
-    judgment: ui('裁判', 'Judgment'),
-    enforcement: ui('执行', 'Enforcement'),
-    closed: ui('已结案', 'Closed'),
+    consultation: uiMessage('legal-case-context-bar.consultation.af6082a2f4'),
+    filing: uiMessage('legal-case-context-bar.filing.84e2c4dc09'),
+    trial: uiMessage('legal-case-context-bar.trial.dd116e8770'),
+    judgment: uiMessage('legal-case-context-bar.judgment.f074948f1e'),
+    enforcement: uiMessage('legal-case-context-bar.enforcement.10a7440dfb'),
+    closed: uiMessage('legal-case-context-bar.closed.f9c16bb807'),
   } as const)[caseFile.stage] : '';
   const stateMeta = state === 'running'
-    ? { icon: <Loader2 size={13} className="animate-spin" />, label: ui('执行中', 'Running'), className: 'border-amber-400/20 bg-amber-500/10 text-amber-100' }
+    ? { icon: <Loader2 size={13} className="animate-spin" />, label: uiMessage('legal-case-context-bar.running.db90792ce0'), className: 'border-amber-400/20 bg-amber-500/10 text-amber-100' }
     : state === 'result'
-      ? { icon: <CheckCircle2 size={13} />, label: ui('结果已生成', 'Result ready'), className: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100' }
-      : { icon: <MinusCircle size={13} />, label: ui('等待输入', 'Awaiting input'), className: 'border-white/10 bg-white/[0.04] text-white/50' };
+      ? { icon: <CheckCircle2 size={13} />, label: uiMessage('legal-case-context-bar.result-ready.b0ca5c7857'), className: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100' }
+      : { icon: <MinusCircle size={13} />, label: uiMessage('legal-case-context-bar.awaiting-input.17d3a4d6ae'), className: 'border-white/10 bg-white/[0.04] text-white/50' };
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/16 px-4 py-3">
@@ -40,19 +41,19 @@ export function LegalCaseContextBar({
         </span>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 text-xs text-white/38">{ui('当前案件', 'Current case')}</span>
-            <span className="truncate text-sm font-semibold text-white/78">{caseFile ? title : ui('未关联案件', 'No case linked')}</span>
+            <span className="shrink-0 text-xs text-white/38">{uiMessage('legal-case-context-bar.current-case.0708a66402')}</span>
+            <span className="truncate text-sm font-semibold text-white/78">{caseFile ? title : uiMessage('legal-case-context-bar.no-case-linked.46aa65b93f')}</span>
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/35">
             {caseFile ? (
               <>
-                <span>{ui('阶段', 'Stage')}: {stageLabel}</span>
-                <span>{ui('案由', 'Cause')}: {caseFile.cause || '-'}</span>
-                <span>{ui('材料', 'Materials')}: {(caseFile.materials || []).length}</span>
-                <span>{detail || ui('执行结果将与当前案件关联', 'Results stay linked to the current case')}</span>
+                <span>{uiMessage('legal-case-context-bar.stage.1f0cfbfea3')}: {stageLabel}</span>
+                <span>{uiMessage('legal-case-context-bar.cause.8d47df5928')}: {caseFile.cause || '-'}</span>
+                <span>{uiMessage('legal-case-context-bar.materials.821acb0776')}: {(caseFile.materials || []).length}</span>
+                <span>{detail || uiMessage('legal-case-context-bar.results-stay-linked-to-the.8c34a53402')}</span>
               </>
             ) : (
-              <span>{detail || ui('先在案件工作台选择或创建案件，才能形成完整归档闭环', 'Select or create a case in Case Workspace to complete the archive loop')}</span>
+              <span>{detail || uiMessage('legal-case-context-bar.select-or-create-a-case.55c616e673')}</span>
             )}
           </div>
         </div>

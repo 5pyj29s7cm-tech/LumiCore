@@ -1,16 +1,28 @@
-import { translations, type TranslationDict } from './translations';
+import { useSyncExternalStore } from 'react';
+import {
+  getLocale,
+  getMessages,
+  setLocale,
+  subscribeLocale,
+  translate,
+  type Locale,
+} from '../i18n/runtime';
+import type { TranslationDict } from './translations';
 
-let currentLang: 'en' | 'zh' = 'zh';
+export function useLocale(): Locale {
+  return useSyncExternalStore(subscribeLocale, getLocale, getLocale);
+}
 
-export function setLang(lang: 'en' | 'zh') {
-  currentLang = lang;
+export function setLang(lang: Locale): Locale {
+  return setLocale(lang);
 }
 
 export function useT(): TranslationDict {
-  return translations[currentLang];
+  return getMessages(useLocale());
 }
 
-export function t(key: string): string {
-  const dict = translations[currentLang];
-  return dict[key] || key;
+export function t(key: string, values?: Record<string, string | number>): string {
+  return translate(key, values);
 }
+
+export type { Locale } from '../i18n/runtime';

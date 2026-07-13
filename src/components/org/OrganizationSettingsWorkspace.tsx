@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import { OrgBranchPanel } from '../OrgBranchPanel';
 import { OrgSettings } from './OrgSettings';
+import { uiMessage } from '../../i18n/uiMessages';
 
 type OrganizationSettingsTab = 'general' | 'branch';
 
@@ -33,7 +34,7 @@ export function OrganizationSettingsWorkspace({ initialTab = 'general' }: { init
             }`}
           >
             <Settings size={15} />
-            {ui('组织配置', 'Organization')}
+            {uiMessage('organization-settings-workspace.organization.64916bf919')}
           </button>
         )}
         <button
@@ -46,7 +47,7 @@ export function OrganizationSettingsWorkspace({ initialTab = 'general' }: { init
           }`}
         >
           <GitBranch size={15} />
-          {ui('分支连接', 'Branch Connection')}
+          {uiMessage('organization-settings-workspace.branch-connection.9cecc72547')}
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">

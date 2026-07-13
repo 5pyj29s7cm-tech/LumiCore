@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useT } from '../../lib/useT';
 import { useSocket } from '../../hooks/useSocket';
+import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 interface Template {
   id: string;
@@ -57,7 +58,7 @@ export function TemplateMarketplace() {
         if (!agent?.installedTemplateId || !agent?.id || agent.status === 'terminated') continue;
         installed[String(agent.installedTemplateId)] = {
           id: String(agent.id),
-          name: String(agent.name || ui('团队智能体', 'Team agent')),
+          name: String(agent.name || uiMessage('template-marketplace.team-agent.1c58ff3fa8')),
         };
       }
       setInstalledAgentsByTemplate(installed);
@@ -72,7 +73,7 @@ export function TemplateMarketplace() {
     try {
       const res = await fetch('/api/org/templates?status=published', { credentials: 'include' });
       const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error((data as any).error || ui(`模板加载失败（${res.status}）`, `Failed to load templates (${res.status})`));
+      if (!res.ok) throw new Error((data as any).error || formatUiMessage('template-marketplace.failed-to-load-templates-value0.e91945cfaa', { value0: res.status }));
       setTemplates(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setFeedback({ type: 'error', text: err.message || String(err) });
@@ -132,23 +133,23 @@ export function TemplateMarketplace() {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`模板安装失败（${res.status}）`, `Template install failed (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('template-marketplace.template-install-failed-value0.6282358313', { value0: res.status }));
       void loadTemplates();
       void loadInstalledAgents();
       const agentId = data.agent?.id ? String(data.agent.id) : '';
       if (agentId) {
         setInstalledAgentsByTemplate(prev => ({
           ...prev,
-          [templateId]: { id: agentId, name: String(data.agent?.name || data.template?.name || selected?.name || ui('团队智能体', 'Team agent')) },
+          [templateId]: { id: agentId, name: String(data.agent?.name || data.template?.name || selected?.name || uiMessage('template-marketplace.team-agent.1c58ff3fa8')) },
         }));
       }
       window.dispatchEvent(new CustomEvent('lumi:agents-changed', { detail: { agent: data.agent, agentId } }));
-      const agentName = data.agent?.name || data.template?.name || selected?.name || ui('智能体', 'Agent');
+      const agentName = data.agent?.name || data.template?.name || selected?.name || uiMessage('template-marketplace.agent.252fc75cc3');
       setFeedback({
         type: 'success',
         text: data.alreadyInstalled
-          ? ui(`已安装过，团队里已有：${agentName}`, `Already installed in Team: ${agentName}`)
-          : ui(`已安装到 Lumi 团队：${agentName}`, `Installed to Lumi Team: ${agentName}`),
+          ? formatUiMessage('template-marketplace.already-installed-in-team-value0.d2753e7997', { value0: agentName })
+          : formatUiMessage('template-marketplace.installed-to-lumi-team-value0.96ffdcb7f2', { value0: agentName }),
         agentId,
       });
     } catch (err: any) {
@@ -180,9 +181,9 @@ export function TemplateMarketplace() {
                 <Package size={22} />
               </span>
               <div>
-                <h2 className="text-xl font-semibold text-white">{t.templateMarketplace || ui('智能体模板市场', 'Agent Template Marketplace')}</h2>
+                <h2 className="text-xl font-semibold text-white">{t.templateMarketplace || uiMessage('template-marketplace.agent-template-marketplace.f417d328f7')}</h2>
                 <p className="mt-1 text-sm text-white/50">
-                  {t.templateMarketplaceDesc || ui('把组织审核通过的子 agent 安装到 Lumi 团队。', 'Install organization-approved sub-agents into Lumi Team.')}
+                  {t.templateMarketplaceDesc || uiMessage('template-marketplace.install-organization-approved-sub-agents.c11cf71519')}
                 </p>
               </div>
             </div>
@@ -191,12 +192,12 @@ export function TemplateMarketplace() {
               className="inline-flex items-center gap-2 rounded-lg border border-violet-400/20 bg-violet-500/15 px-3 py-2 text-sm font-medium text-violet-100 transition hover:bg-violet-500/25"
             >
               <Send size={15} />
-              {t.submitTemplate || ui('提交智能体模板', 'Submit Agent Template')}
+              {t.submitTemplate || uiMessage('template-marketplace.submit-agent-template.e19dabf8b3')}
             </button>
           </div>
         </section>
 
-        {feedback && <FeedbackBanner feedback={feedback} goToTeamLabel={ui('去团队查看', 'View in Team')} onGoToTeam={goToTeamAgent} />}
+        {feedback && <FeedbackBanner feedback={feedback} goToTeamLabel={uiMessage('template-marketplace.view-in-team.8b7f9d6b70')} onGoToTeam={goToTeamAgent} />}
 
         <section className="grid gap-3 md:grid-cols-[1fr_220px]">
           <div className="relative">
@@ -204,7 +205,7 @@ export function TemplateMarketplace() {
             <input
               value={search}
               onChange={event => setSearch(event.target.value)}
-              placeholder={t.searchTemplates || ui('搜索模板...', 'Search templates...')}
+              placeholder={t.searchTemplates || uiMessage('template-marketplace.search-templates.cadce8f679')}
               className="w-full rounded-lg border border-white/10 bg-white/[0.04] py-2 pl-9 pr-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-violet-400/35"
             />
           </div>
@@ -213,7 +214,7 @@ export function TemplateMarketplace() {
             onChange={event => setCategory(event.target.value)}
             className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/75 outline-none focus:border-violet-400/35"
           >
-            <option value="">{t.allCategoriesFilter || ui('全部分类', 'All Categories')}</option>
+            <option value="">{t.allCategoriesFilter || uiMessage('template-marketplace.all-categories.d592b03960')}</option>
             {categories.map(item => <option key={item} value={item}>{item}</option>)}
           </select>
         </section>
@@ -225,7 +226,7 @@ export function TemplateMarketplace() {
         ) : filtered.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] text-center text-sm text-white/45">
             <Package size={32} className="text-white/20" />
-            <span>{t.noTemplatesFound || ui('未找到模板', 'No templates found')}</span>
+            <span>{t.noTemplatesFound || uiMessage('template-marketplace.no-templates-found.7742312a83')}</span>
           </div>
         ) : (
           <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -244,7 +245,7 @@ export function TemplateMarketplace() {
                     {template.icon || 'Bot'}
                   </span>
                   <span className={`rounded-md px-2 py-1 text-xs ${installed ? 'bg-emerald-500/10 text-emerald-200' : 'bg-violet-500/10 text-violet-200'}`}>
-                    {installed ? ui('已在团队', 'In Team') : `v${template.version}`}
+                    {installed ? uiMessage('template-marketplace.in-team.d6238c0478') : `v${template.version}`}
                   </span>
                 </div>
                 <h3 className="truncate text-sm font-medium text-white">{template.name}</h3>
@@ -312,7 +313,7 @@ export function TemplateMarketplace() {
                   </span>
                   <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1">
                     <Download size={11} />
-                    {selected.downloadCount || 0} {t.numInstalls || ui('次安装', 'installs')}
+                    {selected.downloadCount || 0} {t.numInstalls || uiMessage('template-marketplace.installs.21bf1b481d')}
                   </span>
                   <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1">
                     <Clock size={11} />
@@ -334,10 +335,10 @@ export function TemplateMarketplace() {
                 >
                   {installing === selected.id ? <Loader2 size={16} className="animate-spin" /> : installed ? <Bot size={16} /> : <Download size={16} />}
                   {installing === selected.id
-                    ? (t.installingTemplate || ui('安装中...', 'Installing...'))
+                    ? (t.installingTemplate || uiMessage('template-marketplace.installing.80a6fa7d17'))
                     : installed
-                      ? ui('查看团队智能体', 'View Team Agent')
-                      : ui('安装为团队智能体', 'Install as Team Agent')}
+                      ? uiMessage('template-marketplace.view-team-agent.54e02ca3ef')
+                      : uiMessage('template-marketplace.install-as-team-agent.1c97e9f4e0')}
                 </button>
                   );
                 })()}

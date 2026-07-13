@@ -12,6 +12,7 @@ import { useApp } from '../contexts/AppContext';
 import { useVoiceCall } from '@/hooks/useVoiceCall';
 import { useSocket } from '@/hooks/useSocket';
 import { toast } from 'sonner';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any; onEnterSanctuary?: () => void }) {
   const isZh = t?.langCode !== 'en';
@@ -33,7 +34,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
         const userMsg = {
           id: Date.now().toString(),
           text,
-          userName: user?.displayName || ui('用户', 'User'),
+          userName: user?.displayName || uiMessage('unified-agent.user.d25ece72d0'),
           timestamp: new Date().toISOString(),
           type: 'user'
         };
@@ -123,7 +124,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
         setMessages(data.map((i: any) => ({
           id: i.id,
           text: i.content,
-          userName: i.role === 'user' ? (user?.displayName || ui('用户', 'User')) : (agentConfig?.name || 'Lumi'),
+          userName: i.role === 'user' ? (user?.displayName || uiMessage('unified-agent.user.d25ece72d0')) : (agentConfig?.name || 'Lumi'),
           timestamp: i.timestamp,
           type: i.role === 'user' ? 'user' : 'agent'
         })));
@@ -183,17 +184,17 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
           const ctx = data.sensoryContext;
           if (ctx && ctx.deviceCount > 0) {
             const caps: string[] = [];
-            if (ctx.hasAudio) caps.push(ui('音频输入', 'Audio Input'));
-            if (ctx.hasVideo) caps.push(ui('摄像头', 'Camera'));
-            if (ctx.hasSpatial) caps.push(ui('空间追踪', 'Spatial Tracking'));
-            if (ctx.hasHaptic) caps.push(ui('触觉反馈', 'Haptic Feedback'));
-            if (ctx.hasHolographic) caps.push(ui('全息输出', 'Holographic Output'));
-            setVisionData(caps.length > 0 ? caps : [ui('没有活跃传感器', 'No active sensors')]);
+            if (ctx.hasAudio) caps.push(uiMessage('unified-agent.audio-input.6576a47986'));
+            if (ctx.hasVideo) caps.push(uiMessage('unified-agent.camera.b084bb3f31'));
+            if (ctx.hasSpatial) caps.push(uiMessage('unified-agent.spatial-tracking.00b02e47a0'));
+            if (ctx.hasHaptic) caps.push(uiMessage('unified-agent.haptic-feedback.1f62c7f820'));
+            if (ctx.hasHolographic) caps.push(uiMessage('unified-agent.holographic-output.b41d04feea'));
+            setVisionData(caps.length > 0 ? caps : [uiMessage('unified-agent.no-active-sensors.6be33346bb')]);
           } else {
-            setVisionData([ui('没有连接设备', 'No devices connected')]);
+            setVisionData([uiMessage('unified-agent.no-devices-connected.a663f62582')]);
           }
         })
-        .catch(() => setVisionData([ui('传感器 API 不可用', 'Sensor API unavailable')]));
+        .catch(() => setVisionData([uiMessage('unified-agent.sensor-api-unavailable.e1cde145cc')]));
     } else {
       setVisionData([]);
     }
@@ -220,7 +221,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
     const userMsg = {
       id: Date.now().toString(),
       text: messageText,
-      userName: user.displayName || user.username || ui('匿名用户', 'Anonymous'),
+      userName: user.displayName || user.username || uiMessage('unified-agent.anonymous.39c1bd4767'),
       timestamp: new Date().toISOString(),
       type: 'user'
     };
@@ -249,7 +250,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
           <div className="flex items-center justify-between">
             <h3 className="text-xl font-bold tracking-tighter flex items-center gap-2">
               <Cpu size={20} className={isPrivateMode ? "text-celestial-saturn" : "text-celestial-glow animate-pulse"} />
-              {isPrivateMode ? ui('物理隔离', 'Physical Isolation') : ui('神经载体', 'Neural Carrier')}
+              {isPrivateMode ? uiMessage('unified-agent.physical-isolation.9d64f9ccf2') : uiMessage('unified-agent.neural-carrier.ff8509e4a3')}
             </h3>
             <div className="flex gap-2">
               <Button 
@@ -258,7 +259,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
                   isVisionActive ? 'bg-celestial-saturn text-black' : 'bg-white/5 text-white/40'
                 }`}
               >
-                {ui('传感器', 'Sensors')}
+                {uiMessage('unified-agent.sensors.5d0ff4c71e')}
               </Button>
               <Button 
                 onClick={() => setIsPrivateMode(!isPrivateMode)}
@@ -266,7 +267,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
                   isPrivateMode ? 'bg-celestial-saturn text-black' : 'bg-white/5 text-white/40'
                 }`}
               >
-                {isPrivateMode ? ui('上线', 'Online') : ui('断开开关', 'Kill-Switch')}
+                {isPrivateMode ? uiMessage('unified-agent.online.ab9849070c') : uiMessage('unified-agent.kill-switch.02bd0841f8')}
               </Button>
             </div>
           </div>
@@ -276,7 +277,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
               <div className="flex items-center gap-3">
                 <div className={`w-2 h-2 rounded-full status-pulse ${isPrivateMode ? 'bg-celestial-saturn' : 'bg-celestial-glow'}`} />
                 <span className="text-xs font-bold uppercase tracking-widest text-white/60">
-                  {isPrivateMode ? ui('本地 NPU 活跃', 'Local NPU Active') : ui('网络已同步', 'Mesh Synced')}
+                  {isPrivateMode ? uiMessage('unified-agent.local-npu-active.a60727058f') : uiMessage('unified-agent.mesh-synced.7075001361')}
                 </span>
               </div>
               <span className="text-[12px] font-mono text-white/45">v2.0-Alpha</span>
@@ -296,7 +297,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
                   </motion.div>
                 ))
               ) : (
-                <p className="text-xs text-white/45 italic">{ui('边缘传感器待命中...', 'Edge sensors on standby...')}</p>
+                <p className="text-xs text-white/45 italic">{uiMessage('unified-agent.edge-sensors-on-standby.59037c03d6')}</p>
               )}
             </div>
           </div>
@@ -307,14 +308,14 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
           <div className="flex items-center justify-between">
             <h3 className="text-xl font-bold tracking-tighter flex items-center gap-2">
               <Zap size={20} className="text-celestial-mars" />
-              {t.founderVision || ui('创始愿景', "Founder's Vision")}
+              {t.founderVision || uiMessage('unified-agent.founder-s-vision.c0fa614a0e')}
             </h3>
             {user?.role === 'admin' && (
               <Button 
                 onClick={() => isFounderEditing ? updateFounderVision() : setIsFounderEditing(true)}
                 className="rounded-full px-4 h-8 text-xs font-bold uppercase tracking-widest bg-white/5 text-white/40 hover:bg-white/10"
               >
-                {isFounderEditing ? (t.updateVision || ui('更新愿景', 'Update Vision')) : ui('编辑愿景', 'Edit Vision')}
+                {isFounderEditing ? (t.updateVision || uiMessage('unified-agent.update-vision.04bb4e41be')) : uiMessage('unified-agent.edit-vision.f704aaa37a')}
               </Button>
             )}
           </div>
@@ -328,14 +329,14 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
           ) : (
             <div className="space-y-4">
               <p className="text-sm text-white/60 leading-relaxed italic">
-                "{founderVision || ui('LumiAI 旨在构建一个去中心化的智能协议...', 'LumiAI aims to build a decentralized intelligence protocol...')}"
+                "{founderVision || uiMessage('unified-agent.lumiai-aims-to-build-a.ef32f8bf6c')}"
               </p>
               <Button 
                 onClick={onEnterSanctuary}
                 className="w-full py-6 rounded-2xl bg-celestial-saturn/10 border border-celestial-saturn/30 text-celestial-saturn font-bold hover:bg-celestial-saturn hover:text-black transition-all flex items-center justify-center gap-2 group"
               >
                 <Sparkles size={18} className="group-hover:animate-spin" />
-                {t.enterSanctuary || ui('进入创始人圣所', 'Enter Founder Sanctuary')}
+                {t.enterSanctuary || uiMessage('unified-agent.enter-founder-sanctuary.503e7ea673')}
               </Button>
             </div>
           )}
@@ -346,7 +347,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
       <section className="relative">
         <div className="text-center space-y-4 mb-8">
           <h2 className="text-4xl font-bold tracking-tighter glow-text">
-            {ui('Lumi 核心智能体', 'Lumi Core Agent')}
+            {uiMessage('unified-agent.lumi-core-agent.f03abbcc53')}
           </h2>
           <p className="text-white/40 max-w-xl mx-auto italic">
             "{t.holographicEntranceDesc}"
@@ -385,19 +386,19 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
             <div className="p-6 border-b border-white/5 flex items-center justify-between bg-white/5">
               <div className="flex items-center gap-3">
                 <div className={`w-2 h-2 rounded-full ${isSpeaking ? 'bg-celestial-mars animate-ping' : 'bg-celestial-saturn animate-pulse'}`} />
-                <span className="text-xs font-bold uppercase tracking-widest text-white/60">{t.realTimeNode || ui('实时节点', 'Real-time Node')}</span>
+                <span className="text-xs font-bold uppercase tracking-widest text-white/60">{t.realTimeNode || uiMessage('unified-agent.real-time-node.b5eb7f62d7')}</span>
                 {isSpeaking && (
                   <Button 
                     onClick={stop}
                     className="h-6 px-2 text-xs bg-red-500/20 text-red-500 hover:bg-red-500/40 rounded-full border border-red-500/20"
                   >
-                    {t.stopSpeaking || ui('停止', 'STOP')}
+                    {t.stopSpeaking || uiMessage('unified-agent.stop.6864db7885')}
                   </Button>
                 )}
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-xs text-white/40 font-mono uppercase">
-                  {t.founderMode || ui('创始人模式', 'Founder Mode')}
+                  {t.founderMode || uiMessage('unified-agent.founder-mode.354f37c16b')}
                 </div>
               </div>
             </div>
@@ -409,7 +410,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
               {messages.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-20">
                   <MessageSquare size={48} />
-                  <p className="text-sm">{ui('尚未有交互记录', 'No interactions yet')}<br />{ui('开始与您的本地智能体对话', 'Start talking with your local agent')}</p>
+                  <p className="text-sm">{uiMessage('unified-agent.no-interactions-yet.536ca35cec')}<br />{uiMessage('unified-agent.start-talking-with-your-local.83ee0df1d3')}</p>
                 </div>
               )}
               <AnimatePresence initial={false}>
@@ -436,7 +437,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
               {isTyping && (
                 <div className="flex gap-1 items-center text-celestial-saturn/40 text-xs">
                   <Loader2 size={12} className="animate-spin" />
-                  {ui('智能体正在思考...', 'Agent is thinking...')}
+                  {uiMessage('unified-agent.agent-is-thinking.5f1dd108b4')}
                 </div>
               )}
             </div>
@@ -446,7 +447,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
                 <Input
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder={ui('输入指令或留言...', 'Type a command or message...')}
+                  placeholder={uiMessage('unified-agent.type-a-command-or-message.ba53e37dab')}
                   className="bg-black/20 border-white/10 rounded-xl focus-visible:ring-celestial-saturn/50"
                 />
                 <Button 
@@ -509,19 +510,19 @@ function StatsRow({ socket, t }: { socket: any; t: any }) {
     <div className="grid md:grid-cols-3 gap-6">
       <StatCard
         icon={<Cpu size={24} />}
-        label={t.computePower || ui('计算能力', 'Compute Power')}
-        value={ui(`${cpuCores} 核`, `${cpuCores} Cores`)}
+        label={t.computePower || uiMessage('unified-agent.compute-power.820b0308d9')}
+        value={formatUiMessage('unified-agent.value0-cores.ab9c5a4a13', { value0: cpuCores })}
         color="text-celestial-saturn"
       />
       <StatCard
         icon={<Globe size={24} />}
-        label={t.nodeSync || ui('节点同步', 'Node Sync')}
-        value={connected ? (t.meshActiveLabel || ui('网络已连接', 'Mesh Connected')) : (t.disconnected || ui('未连接', 'Disconnected'))}
+        label={t.nodeSync || uiMessage('unified-agent.node-sync.2761bbdeec')}
+        value={connected ? (t.meshActiveLabel || uiMessage('unified-agent.mesh-connected.b5eb8c66fb')) : (t.disconnected || uiMessage('unified-agent.disconnected.0065488a05'))}
         color={connected ? 'text-celestial-mars' : 'text-white/40'}
       />
       <StatCard
         icon={<Zap size={24} />}
-        label={t.responseLatency || ui('响应延迟', 'Response Latency')}
+        label={t.responseLatency || uiMessage('unified-agent.response-latency.6bd0d2579c')}
         value={latency ? `${latency}ms` : '--'}
         color="text-celestial-glow"
       />

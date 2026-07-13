@@ -8,6 +8,7 @@ import { OrgHub } from './org/OrgHub';
 import { useApp } from '../contexts/AppContext';
 import { useT } from '../lib/useT';
 import { apiFetch } from '../services/apiClient';
+import { uiMessage } from '../i18n/uiMessages';
 
 interface OrgStatus {
   connected: boolean;
@@ -130,7 +131,7 @@ export function OrgPortal({
         };
         localStorage.setItem('lumi_org_connection', JSON.stringify(createdConnection));
         setCreateResult('success');
-        setCreateMsg(ui('组织创建成功，正在进入工作域...', 'Organization created. Opening the work domain...'));
+        setCreateMsg(uiMessage('org-portal.organization-created-opening-the-work.4cd95ce1ee'));
         try { await refreshUser(); } catch {}
         const switched = await switchDomain('work');
         setStatus({
@@ -141,15 +142,15 @@ export function OrgPortal({
           sessionConnected: switched.success,
         });
         if (!switched.success) {
-          setSwitchMsg(switched.message || ui('组织已创建，请重试进入工作域', 'Organization created. Retry entering the work domain.'));
+          setSwitchMsg(switched.message || uiMessage('org-portal.organization-created-retry-entering-the.b0f5625489'));
         }
       } else {
         setCreateResult('error');
-        setCreateMsg(data.error || ui('创建组织失败', 'Failed to create organization'));
+        setCreateMsg(data.error || uiMessage('org-portal.failed-to-create-organization.0ae7b0d044'));
       }
     } catch (err: any) {
       setCreateResult('error');
-      setCreateMsg(err.message || ui('连接失败', 'Connection failed'));
+      setCreateMsg(err.message || uiMessage('org-portal.connection-failed.96c47f8e92'));
     } finally {
       setCreating(false);
     }
@@ -185,7 +186,7 @@ export function OrgPortal({
           <div>
             <h2 className="text-xl font-bold text-white">{t.orgWorkSpace || 'Organization Workspace'}</h2>
             <p className="text-white/45 text-sm mt-2">
-              {ui('已加入组织。进入组织工作台前，需要先切换到工作域。', 'You have joined an organization. Switch to the work domain before opening the org workspace.')}
+              {uiMessage('org-portal.you-have-joined-an-organization.ea1042968a')}
             </p>
           </div>
           {switchMsg && <p className="text-red-400 text-sm">{switchMsg}</p>}
@@ -203,7 +204,7 @@ export function OrgPortal({
                   sessionConnected: true,
                 });
               } else {
-                setSwitchMsg(result.message || ui('工作域切换失败', 'Failed to switch to work domain'));
+                setSwitchMsg(result.message || uiMessage('org-portal.failed-to-switch-to-work.2aa0470780'));
               }
               setSwitchingWork(false);
             }}
@@ -211,7 +212,7 @@ export function OrgPortal({
             className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-medium transition-colors"
           >
             {switchingWork ? <Loader2 size={18} className="animate-spin" /> : <Briefcase size={18} />}
-            {switchingWork ? ui('切换中...', 'Switching...') : ui('切换到工作域', 'Switch to Work Domain')}
+            {switchingWork ? uiMessage('org-portal.switching.c197a0b742') : uiMessage('org-portal.switch-to-work-domain.ac0a56b956')}
           </button>
           {onBack && (
             <button onClick={onBack} className="text-white/50 text-sm hover:text-white/70">
@@ -279,7 +280,7 @@ export function OrgPortal({
 
             {onBack && (
               <button onClick={onBack} className="w-full text-center text-white/55 text-sm hover:text-white/50 py-2">
-                ← {t.back || ui('返回', 'Back')}
+                ← {t.back || uiMessage('org-portal.back.5db5cac55e')}
               </button>
             )}
           </motion.div>

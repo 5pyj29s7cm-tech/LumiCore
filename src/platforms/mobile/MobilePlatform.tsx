@@ -292,7 +292,7 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
                     onClick={() => setLang('zh')}
                     className={`p-4 rounded-2xl border text-xs font-black uppercase tracking-widest transition-all ${lang === 'zh' ? 'bg-celestial-saturn text-black border-celestial-saturn shadow-lg' : 'bg-white/5 border-white/5 text-white/40'}`}
                   >
-                    {t.chinese || '中文'}
+                    {t.chinese || 'Chinese'}
                   </button>
                 </div>
               </div>
@@ -391,4 +391,3 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
     </div>
   );
 }
-

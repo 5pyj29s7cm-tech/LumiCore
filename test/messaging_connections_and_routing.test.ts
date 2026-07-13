@@ -250,6 +250,8 @@ describe('messaging long connections and organization routing', () => {
     const code = bindings.createBindingCode('wechat', lumiUserId, '', 'personal');
     expect(code.code).toMatch(/^[A-F0-9]{12}$/);
     expect(bindings.parseMessagingBindingCommand('绑定 Lumi V_3XJS8J')).toEqual({ kind: 'bind', code: 'V_3XJS8J' });
+    expect(bindings.parseMessagingBindingCommand('Bind Lumi V_3XJS8J')).toEqual({ kind: 'bind', code: 'V_3XJS8J' });
+    expect(bindings.parseMessagingBindingCommand('Already bound?')).toEqual({ kind: 'status' });
     expect(bindings.parseMessagingBindingCommand('我已经绑定成功了')).toEqual({ kind: 'status' });
     const consumed = bindings.consumeBindingCode('wechat', code.code, 'wx-personal-user', 'wx-personal-user', 'private');
 

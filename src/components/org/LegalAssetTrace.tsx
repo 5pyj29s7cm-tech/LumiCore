@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, Building2, FileText, FolderOpen, Loader2, Network, Search, Target } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
-import type { LegalCaseFile, LegalCaseMaterial } from '../../lib/legalCaseStore';
+import { getLegalCaseLabel, type LegalCaseFile, type LegalCaseMaterial } from '../../lib/legalCaseStore';
 import { runLegalTool } from '../../lib/legalToolClient';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
+import { uiMessage } from '../../i18n/uiMessages';
+import { chinaLegalCopy } from '../../i18n/regions/cn/legal';
 
 interface TraceResult {
   company?: string;
@@ -19,8 +21,7 @@ interface TraceResult {
 }
 
 function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
-  if (!caseFile) return '未命名案件';
-  return caseFile.title || caseFile.party || caseFile.caseNumber || '未命名案件';
+  return getLegalCaseLabel(caseFile || null) || chinaLegalCopy().unnamedCase;
 }
 
 function assetTraceCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
@@ -28,7 +29,7 @@ function assetTraceCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Re
   return {
     caseId: caseFile.id,
     caseName: legalCaseTitle(caseFile),
-    caseType: caseFile.cause || '执行/财产保全',
+    caseType: caseFile.cause || chinaLegalCopy().assetTraceCaseType,
     parties: caseFile.party || undefined,
     orgId,
     persistCase: true,
@@ -77,7 +78,7 @@ export function LegalAssetTrace({
       setResult(parsed);
       setActiveTab(parsed.company ? 'info' : 'raw');
     } catch (e: any) {
-      setResult({ raw: `${ui('错误', 'Error')}: ${e.message}` });
+      setResult({ raw: `${uiMessage('legal-asset-trace.error.1d47687da7')}: ${e.message}` });
       setActiveTab('raw');
     } finally {
       setLoading(false);
@@ -86,8 +87,8 @@ export function LegalAssetTrace({
 
   const archive = () => {
     if (!result?.raw || !onAddMaterial) return;
-    onAddMaterial('note', `${legalCaseTitle(caseFile)} ${ui('财产线索报告', 'asset trace report')}`, result.raw, 'tool');
-    toast.success(ui('财产线索报告已归档到当前案件', 'Asset trace report archived to the current case'));
+    onAddMaterial('note', `${legalCaseTitle(caseFile)} ${uiMessage('legal-asset-trace.asset-trace-report.d6c2fdd263')}`, result.raw, 'tool');
+    toast.success(uiMessage('legal-asset-trace.asset-trace-report-archived-to.2e6765985f'));
   };
 
   return (
@@ -99,9 +100,9 @@ export function LegalAssetTrace({
               <Target size={22} />
             </span>
             <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-white">{t.legalAssetTraceTitle || ui('财产线索', 'Asset Trace')}</h2>
+              <h2 className="text-xl font-semibold text-white">{t.legalAssetTraceTitle || uiMessage('legal-asset-trace.asset-trace.494723c6e0')}</h2>
               <p className="mt-1 text-sm leading-6 text-white/50">
-                {t.legalAssetTraceDesc || ui('围绕被执行人、企业和股权结构整理公开线索，辅助执行策略判断。', 'Organize public clues around debtors, companies, and equity structure for enforcement planning.')}
+                {t.legalAssetTraceDesc || uiMessage('legal-asset-trace.organize-public-clues-around-debtors.4c099af3ad')}
               </p>
             </div>
           </div>
@@ -118,7 +119,7 @@ export function LegalAssetTrace({
                 value={name}
                 onChange={event => setName(event.target.value)}
                 onKeyDown={event => { if (event.key === 'Enter') trace(); }}
-                placeholder={t.legalAssetTracePlaceholder || ui('输入被执行人、企业名称或统一社会信用代码...', 'Enter debtor, company name, or registration code...')}
+                placeholder={t.legalAssetTracePlaceholder || uiMessage('legal-asset-trace.enter-debtor-company-name-or.97560b906d')}
                 className="w-full rounded-lg border border-white/10 bg-black/20 py-2.5 pl-9 pr-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-cyan-400/35"
               />
             </div>
@@ -128,7 +129,7 @@ export function LegalAssetTrace({
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-500/15 px-4 py-2.5 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/25 disabled:opacity-50"
             >
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-              {t.legalAssetTraceSearch || ui('开始追踪', 'Trace')}
+              {t.legalAssetTraceSearch || uiMessage('legal-asset-trace.trace.d2c6a7c6c9')}
             </button>
           </div>
         </section>
@@ -142,15 +143,15 @@ export function LegalAssetTrace({
             <div className="flex h-full min-h-[420px] flex-col">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                 <div className="flex flex-wrap gap-2">
-                  <TabButton active={activeTab === 'info'} icon={<Building2 size={14} />} label={ui('企业信息', 'Enterprise')} onClick={() => setActiveTab('info')} />
-                  <TabButton active={activeTab === 'enforcement'} icon={<AlertCircle size={14} />} label={ui('执行记录', 'Enforcement')} onClick={() => setActiveTab('enforcement')} />
-                  <TabButton active={activeTab === 'equity'} icon={<Network size={14} />} label={ui('股权结构', 'Equity')} onClick={() => setActiveTab('equity')} />
-                  <TabButton active={activeTab === 'raw'} icon={<FileText size={14} />} label={ui('原始报告', 'Raw Report')} onClick={() => setActiveTab('raw')} />
+                  <TabButton active={activeTab === 'info'} icon={<Building2 size={14} />} label={uiMessage('legal-asset-trace.enterprise.f29acd4634')} onClick={() => setActiveTab('info')} />
+                  <TabButton active={activeTab === 'enforcement'} icon={<AlertCircle size={14} />} label={uiMessage('legal-asset-trace.enforcement.43186c5e00')} onClick={() => setActiveTab('enforcement')} />
+                  <TabButton active={activeTab === 'equity'} icon={<Network size={14} />} label={uiMessage('legal-asset-trace.equity.88cbe6797c')} onClick={() => setActiveTab('equity')} />
+                  <TabButton active={activeTab === 'raw'} icon={<FileText size={14} />} label={uiMessage('legal-asset-trace.raw-report.ed806061d6')} onClick={() => setActiveTab('raw')} />
                 </div>
                 {result.raw && onAddMaterial && !orgId && (
                   <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
                     <FolderOpen size={14} />
-                    {ui('归档到案件', 'Archive to Case')}
+                    {uiMessage('legal-asset-trace.archive-to-case.6dc41a223d')}
                   </button>
                 )}
               </div>
@@ -159,13 +160,13 @@ export function LegalAssetTrace({
                 {activeTab === 'info' && <EnterpriseInfo result={result} ui={ui} />}
                 {activeTab === 'enforcement' && <EnforcementList result={result} ui={ui} />}
                 {activeTab === 'equity' && <EquityList result={result} ui={ui} />}
-                {activeTab === 'raw' && <RawReport text={result.raw || ui('暂无原始输出。', 'No raw output.')} />}
+                {activeTab === 'raw' && <RawReport text={result.raw || uiMessage('legal-asset-trace.no-raw-output.f6fab13ffa')} />}
               </div>
             </div>
           ) : (
             <div className="flex h-96 flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
               <Target size={34} className="text-white/20" />
-              <span>{ui('输入对象后开始追踪财产线索。', 'Enter a subject to trace asset clues.')}</span>
+              <span>{uiMessage('legal-asset-trace.enter-a-subject-to-trace.741abddf3e')}</span>
             </div>
           )}
         </section>
@@ -192,14 +193,14 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 
 function EnterpriseInfo({ result, ui }: { result: TraceResult; ui: (zh: string, en: string) => string }) {
   if (!result.company && !result.legalPerson && !result.capital && !result.status) {
-    return <Empty text={ui('没有解析到结构化企业信息，请查看原始报告。', 'No structured enterprise data parsed. Check raw report.')} />;
+    return <Empty text={uiMessage('legal-asset-trace.no-structured-enterprise-data-parsed.a78346c3cf')} />;
   }
   const items = [
-    [ui('名称', 'Name'), result.company],
-    [ui('法定代表人', 'Legal Person'), result.legalPerson],
-    [ui('注册资本', 'Capital'), result.capital],
-    [ui('状态', 'Status'), result.status],
-    [ui('成立日期', 'Established'), result.establishDate],
+    [uiMessage('legal-asset-trace.name.dd4dc4c5a9'), result.company],
+    [uiMessage('legal-asset-trace.legal-person.ea73efc282'), result.legalPerson],
+    [uiMessage('legal-asset-trace.capital.6fd6a86cb2'), result.capital],
+    [uiMessage('legal-asset-trace.status.b8f1474d96'), result.status],
+    [uiMessage('legal-asset-trace.established.307fd80c80'), result.establishDate],
   ].filter(([, value]) => value);
 
   return (
@@ -216,7 +217,7 @@ function EnterpriseInfo({ result, ui }: { result: TraceResult; ui: (zh: string, 
 
 function EnforcementList({ result, ui }: { result: TraceResult; ui: (zh: string, en: string) => string }) {
   if (!result.enforcements || result.enforcements.length === 0) {
-    return <Empty text={ui('没有解析到执行记录，请查看原始报告。', 'No enforcement records parsed. Check raw report.')} />;
+    return <Empty text={uiMessage('legal-asset-trace.no-enforcement-records-parsed-check.19d42c2925')} />;
   }
   return (
     <div className="space-y-2">
@@ -227,9 +228,9 @@ function EnforcementList({ result, ui }: { result: TraceResult; ui: (zh: string,
             {item.caseNumber}
           </div>
           <div className="mt-2 grid gap-2 text-xs text-white/50 md:grid-cols-3">
-            <span>{ui('法院', 'Court')}: {item.court}</span>
-            <span>{ui('立案/日期', 'Date')}: {item.date}</span>
-            <span>{ui('执行标的', 'Target')}: {item.target}</span>
+            <span>{uiMessage('legal-asset-trace.court.4dc052bdf6')}: {item.court}</span>
+            <span>{uiMessage('legal-asset-trace.date.6d5f0033b0')}: {item.date}</span>
+            <span>{uiMessage('legal-asset-trace.target.86287a26eb')}: {item.target}</span>
           </div>
         </div>
       ))}
@@ -239,7 +240,7 @@ function EnforcementList({ result, ui }: { result: TraceResult; ui: (zh: string,
 
 function EquityList({ result, ui }: { result: TraceResult; ui: (zh: string, en: string) => string }) {
   if (!result.shareholders || result.shareholders.length === 0) {
-    return <Empty text={ui('没有解析到股权结构，请查看原始报告。', 'No equity structure parsed. Check raw report.')} />;
+    return <Empty text={uiMessage('legal-asset-trace.no-equity-structure-parsed-check.60dfc119e1')} />;
   }
   return (
     <div className="space-y-2">

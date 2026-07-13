@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Clock, Plus, AlertCircle, Loader2 } from 'lucide-react';
 import { GlassCard } from './SharedUI';
 import { toast } from 'sonner';
+import { useT } from '../lib/useT';
 
 interface Reminder {
   id: string;
@@ -11,6 +12,7 @@ interface Reminder {
 }
 
 export function ReminderWidget({ onOpenFull }: { onOpenFull: () => void }) {
+  const t = useT();
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [quickAdd, setQuickAdd] = useState('');
   const [adding, setAdding] = useState(false);
@@ -43,7 +45,7 @@ export function ReminderWidget({ onOpenFull }: { onOpenFull: () => void }) {
       });
       if (res.ok) {
         setQuickAdd('');
-        toast.success('已添加');
+        toast.success(t.reminderAdded);
         fetchReminders();
       }
     } catch {}
@@ -58,9 +60,9 @@ export function ReminderWidget({ onOpenFull }: { onOpenFull: () => void }) {
       >
         <h4 className="text-xs font-black uppercase tracking-widest text-white/55 flex items-center gap-2">
           <Clock size={12} className="text-amber-400" />
-          提醒 {reminders.length > 0 ? `(${reminders.length})` : ''}
+          {t.notifReminder} {reminders.length > 0 ? `(${reminders.length})` : ''}
         </h4>
-        <span className="text-white/35 text-[12px] hover:text-white/55">查看全部</span>
+        <span className="text-white/35 text-[12px] hover:text-white/55">{t.viewAll}</span>
       </div>
 
       {reminders.length > 0 && (
@@ -85,7 +87,7 @@ export function ReminderWidget({ onOpenFull }: { onOpenFull: () => void }) {
           value={quickAdd}
           onChange={e => setQuickAdd(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd(); }}
-          placeholder="快速添加..."
+          placeholder={t.quickAddReminder}
           className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white/50 placeholder:text-white/35 focus:outline-none focus:border-amber-500/20"
         />
         <button

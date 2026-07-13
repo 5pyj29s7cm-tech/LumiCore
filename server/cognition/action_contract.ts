@@ -179,7 +179,7 @@ function buildLegalDocumentContract(): LumiActionContract {
     preferredTools: LEGAL_ENTRY_PREFERRED_TOOLS,
     verificationTools: ['legal_case_reasoning_matrix', 'legal_authority_source_status', 'legal_refresh_authoritative_sources', 'legal_generate_citation_verification_report', 'legal_finalize_delivery_package', 'legal_search_statute', 'read_docx', 'read_pdf', 'desktop_path_info', 'work_product_verify'],
     nextStep: '\u5148\u62ff\u5230\u4e8b\u5b9e\u3001\u8bc1\u636e\u3001\u8bc9\u8bbc\u76ee\u6807\u548c\u7ba1\u8f96\u7b49\u4fe1\u606f\uff0c\u518d\u8d77\u8349\u6216\u5ba1\u9605\u3002',
-    caution: '\u4e0d\u80fd\u628a\u4e00\u822c\u6cd5\u5f8b\u8bf4\u660e\u8bf4\u6210\u5b8c\u6574\u4ee3\u7406\u8bcd\uff1b\u6cd5\u9662\u7acb\u6848\u7f51\u3001\u6cd5\u8749\u3001Alpha\u3001\u88c1\u5224\u6587\u4e66\u7f51\u3001\u4f01\u67e5\u67e5\u7b49\u53ea\u80fd\u505a\u6388\u6743\u534f\u4f5c\u3001\u7ed3\u679c\u5f52\u6863\u548c\u4ea4\u4ed8\u524d\u6838\u9a8c\uff1b\u91cd\u5927\u6cd5\u5f8b\u51b3\u7b56\u9700\u8981\u4e13\u4e1a\u5f8b\u5e08\u590d\u6838\u3002',
+    caution: 'Do not present general legal guidance as a complete formal argument. External court, case-law, and company-research platforms support authorized collaboration, result archiving, and pre-delivery verification only. Material legal decisions require review by a qualified lawyer.',
   });
 }
 

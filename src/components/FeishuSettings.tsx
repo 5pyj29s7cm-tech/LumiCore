@@ -4,6 +4,8 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { appConfirm } from '../lib/appConfirm';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { formatMessagingBindingCommand } from '../i18n/locales/messaging';
 
 interface FeishuBinding {
   id: string;
@@ -27,6 +29,7 @@ interface ConnectionStatus {
 
 export function FeishuSettings({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
+  const locale = isZh ? 'zh' : 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
@@ -83,7 +86,7 @@ export function FeishuSettings({ t }: { t?: any }) {
 
   const save = async () => {
     if (!appId.trim()) {
-      toast.error(ui('App ID 不能为空', 'App ID is required'));
+      toast.error(uiMessage('feishu-settings.app-id-is-required.cb6e433919'));
       return;
     }
     setSaving(true);
@@ -108,7 +111,7 @@ export function FeishuSettings({ t }: { t?: any }) {
           setVerificationToken('');
           setHasVerificationToken(true);
         }
-        toast.success(ui('飞书配置已保存', 'Feishu configuration saved'));
+        toast.success(uiMessage('feishu-settings.feishu-configuration-saved.1e3f2a86b1'));
       } else {
         toast.error(data.error || (t?.saveFailed || 'Save failed'));
       }
@@ -132,9 +135,9 @@ export function FeishuSettings({ t }: { t?: any }) {
       if (!res.ok) throw new Error(data.error || 'Failed to generate binding code');
       setBindingCode(data.code || '');
       setBindingExpiresAt(data.expiresAt || '');
-      toast.success(ui('飞书绑定码已生成', 'Feishu binding code generated'));
+      toast.success(uiMessage('feishu-settings.feishu-binding-code-generated.d9594b70f2'));
     } catch (err: any) {
-      toast.error(err?.message || ui('绑定码生成失败，请确认已切换到组织工作域', 'Failed to generate binding code. Switch to work domain first.'));
+      toast.error(err?.message || uiMessage('feishu-settings.failed-to-generate-binding-code.0792c78b45'));
     } finally {
       setBindingLoading(false);
     }
@@ -142,10 +145,10 @@ export function FeishuSettings({ t }: { t?: any }) {
 
   const copyBindingCommand = async () => {
     if (!bindingCode) return;
-    const command = `绑定 Lumi ${bindingCode}`;
+    const command = formatMessagingBindingCommand(bindingCode, locale);
     try {
       await navigator.clipboard.writeText(command);
-      toast.success(ui('绑定命令已复制', 'Binding command copied'));
+      toast.success(uiMessage('feishu-settings.binding-command-copied.932649e202'));
     } catch {
       toast.info(command);
     }
@@ -153,10 +156,10 @@ export function FeishuSettings({ t }: { t?: any }) {
 
   const removeBinding = async (binding: FeishuBinding) => {
     const ok = await appConfirm({
-      title: ui('解除飞书绑定', 'Remove Feishu Binding'),
-      message: ui('解除后，这个飞书身份将不能再访问当前 Lumi 的组织数据。', 'This Feishu identity will no longer access this Lumi organization data.'),
-      confirmText: ui('解除绑定', 'Remove'),
-      cancelText: ui('取消', 'Cancel'),
+      title: uiMessage('feishu-settings.remove-feishu-binding.305599e119'),
+      message: uiMessage('feishu-settings.this-feishu-identity-will-no.c603452aeb'),
+      confirmText: uiMessage('feishu-settings.remove.22ca1b73bd'),
+      cancelText: uiMessage('feishu-settings.cancel.998b9c48fb'),
       tone: 'danger',
     });
     if (!ok) return;
@@ -167,18 +170,18 @@ export function FeishuSettings({ t }: { t?: any }) {
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui(`解除绑定失败（${res.status}）`, `Failed to remove binding (${res.status})`));
+      if (!res.ok) throw new Error(data.error || formatUiMessage('feishu-settings.failed-to-remove-binding-value0.6c1df5c705', { value0: res.status }));
       setBindings(prev => prev.filter(item => item.id !== binding.id));
-      toast.success(ui('飞书绑定已解除', 'Feishu binding removed'));
+      toast.success(uiMessage('feishu-settings.feishu-binding-removed.6cc30eda79'));
     } catch (err: any) {
-      toast.error(err?.message || ui('解除绑定失败', 'Failed to remove binding'));
+      toast.error(err?.message || uiMessage('feishu-settings.failed-to-remove-binding.01934a75af'));
     }
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="text-xs font-black uppercase tracking-widest text-white/45">{ui('加载中...', 'Loading...')}</div>
+        <div className="text-xs font-black uppercase tracking-widest text-white/45">{uiMessage('feishu-settings.loading.586f5af819')}</div>
       </div>
     );
   }
@@ -186,18 +189,18 @@ export function FeishuSettings({ t }: { t?: any }) {
   const connectionState = connection?.state || 'disabled';
   const online = transport === 'webhook' ? configured : connectionState === 'connected';
   const statusLabel = !configured
-    ? ui('飞书未配置', 'Feishu not configured')
+    ? uiMessage('feishu-settings.feishu-not-configured.783a463eac')
     : transport === 'webhook'
-      ? ui('回调模式已配置', 'Webhook configured')
+      ? uiMessage('feishu-settings.webhook-configured.b513832994')
       : connectionState === 'connected'
-        ? ui('飞书长连接在线', 'Feishu long connection online')
+        ? uiMessage('feishu-settings.feishu-long-connection-online.c0250f13b5')
         : connectionState === 'reconnecting'
-          ? ui('飞书正在重连', 'Feishu reconnecting')
+          ? uiMessage('feishu-settings.feishu-reconnecting.cf463bf20b')
           : connectionState === 'connecting'
-            ? ui('飞书正在连接', 'Feishu connecting')
+            ? uiMessage('feishu-settings.feishu-connecting.7494650863')
             : connectionState === 'error'
-              ? ui('飞书连接失败', 'Feishu connection failed')
-              : ui('已配置，等待连接', 'Configured, waiting for connection');
+              ? uiMessage('feishu-settings.feishu-connection-failed.f52a1cca90')
+              : uiMessage('feishu-settings.configured-waiting-for-connection.b4a0caf1b0');
 
   return (
     <div className="space-y-6">
@@ -209,7 +212,7 @@ export function FeishuSettings({ t }: { t?: any }) {
             {statusLabel}
           </div>
           <div className="truncate text-xs text-white/40">
-            {configured ? `App ID: ${appIdMasked}` : ui('请输入 App ID 和 App Secret', 'Enter App ID and App Secret')}
+            {configured ? `App ID: ${appIdMasked}` : uiMessage('feishu-settings.enter-app-id-and-app.30fddfa0a6')}
           </div>
           {connection?.lastError && transport === 'long_connection' && (
             <div className="mt-1 line-clamp-2 text-[11px] text-red-300/75">{connection.lastError}</div>
@@ -223,8 +226,8 @@ export function FeishuSettings({ t }: { t?: any }) {
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs font-black uppercase tracking-widest text-white/50">{ui('接收方式', 'Connection Mode')}</div>
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1" role="tablist" aria-label={ui('飞书接收方式', 'Feishu connection mode')}>
+        <div className="text-xs font-black uppercase tracking-widest text-white/50">{uiMessage('feishu-settings.connection-mode.2c89f8db53')}</div>
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1" role="tablist" aria-label={uiMessage('feishu-settings.feishu-connection-mode.0b2e94ccbe')}>
           <button
             type="button"
             role="tab"
@@ -233,7 +236,7 @@ export function FeishuSettings({ t }: { t?: any }) {
             className={`flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-xs font-bold transition-colors ${transport === 'long_connection' ? 'bg-white/12 text-white' : 'text-white/45 hover:bg-white/5 hover:text-white/70'}`}
           >
             <Radio size={14} />
-            {ui('长连接（推荐）', 'Long Connection')}
+            {uiMessage('feishu-settings.long-connection.bee4cc1896')}
           </button>
           <button
             type="button"
@@ -243,26 +246,26 @@ export function FeishuSettings({ t }: { t?: any }) {
             className={`flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-xs font-bold transition-colors ${transport === 'webhook' ? 'bg-white/12 text-white' : 'text-white/45 hover:bg-white/5 hover:text-white/70'}`}
           >
             <Webhook size={14} />
-            {ui('公网回调', 'Webhook')}
+            {uiMessage('feishu-settings.webhook.bad1b22a82')}
           </button>
         </div>
         <p className="text-xs leading-relaxed text-white/40">
           {transport === 'long_connection'
-            ? ui('适合本地部署，不需要公网地址；Lumi 启动后会主动连接飞书。', 'Best for local deployments. No public URL is required; Lumi connects to Feishu after startup.')
-            : ui('仅在你已有稳定公网 HTTPS 地址时使用。', 'Use only when you already have a stable public HTTPS endpoint.')}
+            ? uiMessage('feishu-settings.best-for-local-deployments-no.0164d7d873')
+            : uiMessage('feishu-settings.use-only-when-you-already.a78c47baa1')}
         </p>
       </div>
 
       <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
         <div className="flex items-center gap-2 text-xs font-bold text-white/60">
           <MessagesSquare size={14} />
-          {ui('飞书远程身份绑定', 'Feishu Remote Identity Binding')}
+          {uiMessage('feishu-settings.feishu-remote-identity-binding.dc05107de4')}
         </div>
         <p className="text-xs leading-relaxed text-white/40">
-          {ui('生成一次性绑定码后，在飞书里发送“绑定 Lumi 绑定码”。绑定后，Lumi 才能通过飞书安全地查询组织知识库、查案件或归档案件文件。', 'Generate a one-time code, then send “绑定 Lumi CODE” in Feishu. After binding, Lumi can securely query org KB, search cases, and archive case files from Feishu.')}
+          {uiMessage('feishu-settings.generate-a-one-time-code.a348fb36d4')}
         </p>
         <p className="text-xs leading-relaxed text-white/40">
-          {ui('每位组织成员都必须使用自己的 Lumi 账号单独绑定。私聊、群成员和群话题分别隔离，未绑定成员不会继承他人的组织权限。', 'Each organization member must bind with their own Lumi account. Direct chats, group members, and group threads are isolated; unbound members never inherit another person’s organization access.')}
+          {uiMessage('feishu-settings.each-organization-member-must-bind.2937f38191')}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -270,7 +273,7 @@ export function FeishuSettings({ t }: { t?: any }) {
             disabled={bindingLoading}
             className="h-9 bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-black uppercase tracking-widest"
           >
-            {bindingLoading ? ui('生成中...', 'Generating...') : ui('生成绑定码', 'Generate Code')}
+            {bindingLoading ? uiMessage('feishu-settings.generating.634308f29b') : uiMessage('feishu-settings.generate-code.099ef173d3')}
           </Button>
           {bindingCode && (
             <button
@@ -278,21 +281,21 @@ export function FeishuSettings({ t }: { t?: any }) {
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 text-xs font-bold text-cyan-200 hover:bg-cyan-400/15"
             >
               <Copy size={13} />
-              {`绑定 Lumi ${bindingCode}`}
+              {formatMessagingBindingCommand(bindingCode, locale)}
             </button>
           )}
         </div>
         {bindingExpiresAt && (
           <div className="text-[11px] text-white/32">
-            {ui('过期时间：', 'Expires: ')}{new Date(bindingExpiresAt).toLocaleString()}
+            {uiMessage('feishu-settings.expires.4094fda731')}{new Date(bindingExpiresAt).toLocaleString()}
           </div>
         )}
         <div className="rounded-lg border border-white/8 bg-black/20 p-3">
           <div className="mb-2 text-[11px] font-black uppercase tracking-widest text-white/45">
-            {ui('已绑定飞书身份', 'Bound Feishu Identities')}
+            {uiMessage('feishu-settings.bound-feishu-identities.9bcf38e7e2')}
           </div>
           {bindings.length === 0 ? (
-            <div className="text-xs text-white/32">{ui('暂无绑定身份', 'No bound identities yet')}</div>
+            <div className="text-xs text-white/32">{uiMessage('feishu-settings.no-bound-identities-yet.9e261ae027')}</div>
           ) : (
             <div className="space-y-2">
               {bindings.map(binding => (
@@ -300,17 +303,17 @@ export function FeishuSettings({ t }: { t?: any }) {
                   <div className="min-w-0">
                     <div className="truncate text-xs font-mono text-white/70">{binding.platformUserId}</div>
                     <div className="text-[11px] text-white/32">
-                      {binding.chatType === 'group' ? ui('群聊路由', 'Group route') : ui('私聊路由', 'Private route')}
+                      {binding.chatType === 'group' ? uiMessage('feishu-settings.group-route.be66ad213e') : uiMessage('feishu-settings.private-route.c9c1cf8c68')}
                       {binding.chatId ? ` · ${binding.chatId}` : ''}
                     </div>
                     <div className="text-[11px] text-white/32">
-                      {ui('绑定于', 'Bound at')} {new Date(binding.createdAt).toLocaleString()}
+                      {uiMessage('feishu-settings.bound-at.ffced93a5e')} {new Date(binding.createdAt).toLocaleString()}
                     </div>
                   </div>
                   <button
                     onClick={() => removeBinding(binding)}
                     className="shrink-0 rounded-md p-1.5 text-white/35 hover:bg-red-500/10 hover:text-red-300"
-                    title={ui('解除绑定', 'Remove binding')}
+                    title={uiMessage('feishu-settings.remove-binding.d68e6d4dac')}
                   >
                     <Unlink size={13} />
                   </button>
@@ -344,14 +347,14 @@ export function FeishuSettings({ t }: { t?: any }) {
               type={showSecret ? 'text' : 'password'}
               value={appSecret}
               onChange={e => setAppSecret(e.target.value)}
-              placeholder={configured ? ui('留空则保持现有密钥不变', 'Leave blank to keep the current secret') : ui('输入 App Secret', 'Enter App Secret')}
+              placeholder={configured ? uiMessage('feishu-settings.leave-blank-to-keep-the.4d0d0cdd5d') : uiMessage('feishu-settings.enter-app-secret.d8aba5f168')}
               className="bg-white/5 border-white/10 text-white text-xs h-10 font-mono placeholder:text-white/45 pr-12"
             />
             <button
               onClick={() => setShowSecret(!showSecret)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[12px] font-black uppercase tracking-widest text-white/55 hover:text-white/60"
             >
-              {showSecret ? ui('隐藏', 'Hide') : ui('显示', 'Show')}
+              {showSecret ? uiMessage('feishu-settings.hide.d2e660d104') : uiMessage('feishu-settings.show.520bd3e959')}
             </button>
           </div>
         </div>
@@ -365,7 +368,7 @@ export function FeishuSettings({ t }: { t?: any }) {
               type="password"
               value={verificationToken}
               onChange={e => setVerificationToken(e.target.value)}
-              placeholder={hasVerificationToken ? ui('留空则保持现有 Token 不变', 'Leave blank to keep the current token') : ui('输入事件订阅 Verification Token', 'Enter the event verification token')}
+              placeholder={hasVerificationToken ? uiMessage('feishu-settings.leave-blank-to-keep-the.c312eede26') : uiMessage('feishu-settings.enter-the-event-verification-token.4b6dbbf3fb')}
               className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45"
             />
           </div>
@@ -377,7 +380,7 @@ export function FeishuSettings({ t }: { t?: any }) {
           className="w-full h-10 bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-black uppercase tracking-widest"
         >
           {saving ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Save size={14} className="mr-2" />}
-          {saving ? ui('保存中...', 'Saving...') : ui('保存配置', 'Save Configuration')}
+          {saving ? uiMessage('feishu-settings.saving.5a02b802aa') : uiMessage('feishu-settings.save-configuration.1ace864ca8')}
         </Button>
       </div>
 
@@ -385,20 +388,20 @@ export function FeishuSettings({ t }: { t?: any }) {
       <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
         <div className="flex items-center gap-2 text-xs font-bold text-white/60">
           <MessagesSquare size={14} />
-          {ui('飞书机器人接入指南', 'Feishu Bot Setup Guide')}
+          {uiMessage('feishu-settings.feishu-bot-setup-guide.f3171848ca')}
         </div>
         <div className="space-y-2 text-xs text-white/40 leading-relaxed">
-          <p>{ui('1. 前往', '1. Go to')} <a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer" className="text-celestial-saturn underline inline-flex items-center gap-0.5">{ui('飞书开放平台', 'Feishu Open Platform')}<ExternalLink size={10} /></a> {ui('创建应用', 'and create an app')}</p>
-          <p>{ui('2. 左侧菜单「应用能力」-> 启用「机器人」', '2. In App Capabilities, enable Bot')}</p>
-          <p>{ui('3. 左侧菜单「凭证与基础信息」-> 复制 App ID 和 App Secret', '3. In Credentials & Basic Info, copy App ID and App Secret')}</p>
+          <p>{uiMessage('feishu-settings.1-go-to.9e1436280f')} <a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer" className="text-celestial-saturn underline inline-flex items-center gap-0.5">{uiMessage('feishu-settings.feishu-open-platform.6a073feb82')}<ExternalLink size={10} /></a> {uiMessage('feishu-settings.and-create-an-app.6e30d2e8be')}</p>
+          <p>{uiMessage('feishu-settings.2-in-app-capabilities-enable.1fe4d35d81')}</p>
+          <p>{uiMessage('feishu-settings.3-in-credentials-basic-info.723d264831')}</p>
           {transport === 'long_connection' ? (
-            <p>{ui('4. 左侧菜单「事件订阅」-> 选择「使用长连接接收事件」', '4. In Event Subscriptions, select “Use long connection to receive events”')}</p>
+            <p>{uiMessage('feishu-settings.4-in-event-subscriptions-select.a2526278a4')}</p>
           ) : (
-            <p>{ui('4. 左侧菜单「事件订阅」-> 填入你自己的公网 HTTPS 地址：', '4. In Event Subscriptions, enter your own public HTTPS endpoint:')}<code className="ml-1 rounded bg-white/5 px-1 text-celestial-jupiter">https://你的域名/api/feishu/events</code></p>
+            <p>{uiMessage('feishu-settings.4-in-event-subscriptions-enter.ab4866edf7')}<code className="ml-1 rounded bg-white/5 px-1 text-celestial-jupiter">https://example.com/api/feishu/events</code></p>
           )}
-          <p>{ui('5. 订阅事件：添加「接收消息」im.message.receive_v1', '5. Subscribe to event: im.message.receive_v1')}</p>
-          <p>{ui('6. 左侧菜单「权限管理」-> 开通「获取并发送单聊、群聊消息」', '6. In Permissions, enable reading and sending direct/group messages')}</p>
-          <p>{ui('7. 左侧菜单「应用发布」-> 创建版本并发布', '7. In App Release, create a version and publish it')}</p>
+          <p>{uiMessage('feishu-settings.5-subscribe-to-event-im.8263a5232d')}</p>
+          <p>{uiMessage('feishu-settings.6-in-permissions-enable-reading.ba4d8850c0')}</p>
+          <p>{uiMessage('feishu-settings.7-in-app-release-create.3277ee6333')}</p>
         </div>
         <a
           href="https://open.feishu.cn/app"
@@ -406,7 +409,7 @@ export function FeishuSettings({ t }: { t?: any }) {
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-xs font-black uppercase tracking-widest text-celestial-saturn hover:underline mt-2"
         >
-          {ui('打开飞书开放平台', 'Open Feishu Open Platform')} <ExternalLink size={10} />
+          {uiMessage('feishu-settings.open-feishu-open-platform.14a544ce39')} <ExternalLink size={10} />
         </a>
       </div>
     </div>

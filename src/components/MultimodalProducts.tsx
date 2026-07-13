@@ -4,6 +4,7 @@ import { Watch, Headphones, Cpu, Zap, Shield, Globe, ShoppingCart, Eye, Mic, Cod
 import { Button } from './ui/button';
 import { useModuleData } from '@/hooks/useModuleData';
 import { LoadingSpinner, GlassCard, IconBox, FeatureItem } from './SharedUI';
+import { CN_PRODUCT_CATEGORY_ALIASES } from '../i18n/regions/cn/recognition';
 
 const iconMap: { [key: string]: React.ReactNode } = {
   Hologram: <Monitor size={40} className="text-celestial-saturn" />,
@@ -74,10 +75,10 @@ export function MultimodalProducts({ t, onSelectProduct }: { t: any; onSelectPro
               ?.filter((p) => {
                 // Map database categories to translated categories
                 const dbCatMap: { [key: string]: string } = {
-                  "核心设备": t.coreDevices,
-                  "智能穿戴": t.smartWearables,
-                  "AI 陪伴": t.aiCompanionToys,
-                  "合作区": t.partnershipZone
+                  [CN_PRODUCT_CATEGORY_ALIASES.coreDevices]: t.coreDevices,
+                  [CN_PRODUCT_CATEGORY_ALIASES.smartWearables]: t.smartWearables,
+                  [CN_PRODUCT_CATEGORY_ALIASES.aiCompanionToys]: t.aiCompanionToys,
+                  [CN_PRODUCT_CATEGORY_ALIASES.partnershipZone]: t.partnershipZone,
                 };
                 return dbCatMap[p.category] === category || p.category === category;
               })

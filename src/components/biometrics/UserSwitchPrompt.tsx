@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { useState, useEffect, useCallback } from 'react';
 import { useT } from '../../lib/useT';
+import { uiMessage } from '../../i18n/uiMessages';
 
 interface DetectedUser {
   uid: string;
@@ -75,8 +76,8 @@ export function UserSwitchPrompt({ socket }: UserSwitchPromptProps) {
                 </span>
               </div>
               <div>
-                <p className="text-sm text-white/90 font-medium">{isZh ? '检测到' : 'Detected'} {detected.username}</p>
-                <p className="text-[10px] text-white/40">{isZh ? '置信度' : 'Confidence'} {Math.round(detected.confidence * 100)}%</p>
+                <p className="text-sm text-white/90 font-medium">{uiMessage('user-switch-prompt.detected.7548e82813', (isZh) ? 'zh' : 'en')} {detected.username}</p>
+                <p className="text-[10px] text-white/40">{uiMessage('user-switch-prompt.confidence.dc2fc3df56', (isZh) ? 'zh' : 'en')} {Math.round(detected.confidence * 100)}%</p>
               </div>
             </div>
             <div className="flex gap-2">
@@ -85,13 +86,13 @@ export function UserSwitchPrompt({ socket }: UserSwitchPromptProps) {
                 disabled={switching}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/80 text-black hover:bg-amber-400 transition-colors"
               >
-                {switching ? (isZh ? '切换中...' : 'Switching...') : (isZh ? '切换' : 'Switch')}
+                {switching ? (uiMessage('user-switch-prompt.switching.c197a0b742', (isZh) ? 'zh' : 'en')) : (uiMessage('user-switch-prompt.switch.5a77f0584c', (isZh) ? 'zh' : 'en'))}
               </button>
               <button
                 onClick={handleDismiss}
                 className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors"
               >
-                {isZh ? '忽略' : 'Ignore'}
+                {uiMessage('user-switch-prompt.ignore.9330c23b1e', (isZh) ? 'zh' : 'en')}
               </button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { useT } from '../../lib/useT';
+import { uiMessage } from '../../i18n/uiMessages';
 
 interface PresenceIndicatorProps {
   status: 'present' | 'uncertain' | 'away';
@@ -11,9 +12,9 @@ export function PresenceIndicator({ status, faceConfidence, voiceConfidence }: P
   const t = useT();
   const isZh = t.langCode !== 'en';
   const colors = {
-    present: { bg: 'rgba(76,175,80,0.8)', ring: 'rgba(76,175,80,0.3)', label: isZh ? '在场' : 'Present' },
-    uncertain: { bg: 'rgba(255,193,7,0.8)', ring: 'rgba(255,193,7,0.3)', label: isZh ? '不确定' : 'Uncertain' },
-    away: { bg: 'rgba(244,67,54,0.8)', ring: 'rgba(244,67,54,0.3)', label: isZh ? '离场' : 'Away' },
+    present: { bg: 'rgba(76,175,80,0.8)', ring: 'rgba(76,175,80,0.3)', label: uiMessage('presence-indicator.present.680c4a192a', (isZh) ? 'zh' : 'en') },
+    uncertain: { bg: 'rgba(255,193,7,0.8)', ring: 'rgba(255,193,7,0.3)', label: uiMessage('presence-indicator.uncertain.b045da699d', (isZh) ? 'zh' : 'en') },
+    away: { bg: 'rgba(244,67,54,0.8)', ring: 'rgba(244,67,54,0.3)', label: uiMessage('presence-indicator.away.a1b127ce19', (isZh) ? 'zh' : 'en') },
   };
 
   const c = colors[status] || colors.away;

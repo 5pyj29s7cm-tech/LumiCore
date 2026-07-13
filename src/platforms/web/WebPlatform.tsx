@@ -131,10 +131,10 @@ export function WebPlatform({
                        
                        <div className="flex gap-8">
                           <button onClick={() => setActiveTab('solutions')} className="text-xs font-bold text-white/40 hover:text-celestial-saturn uppercase tracking-[0.3em] transition-all border-b border-transparent hover:border-celestial-saturn/60 pb-1">
-                             Core Vision • 核心愿景
+                             {t.coreVision || 'Core Vision'}
                           </button>
                           <button onClick={() => setActiveTab('founders')} className="text-xs font-bold text-white/40 hover:text-celestial-saturn uppercase tracking-[0.3em] transition-all border-b border-transparent hover:border-celestial-saturn/60 pb-1">
-                             Founder's Sanctuary • 创始人圣殿
+                             {t.foundersSanctuary || "Founder's Sanctuary"}
                           </button>
                        </div>
                     </div>

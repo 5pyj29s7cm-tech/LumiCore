@@ -5,6 +5,9 @@ import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { useT } from '../lib/useT';
 import { useApp } from '@/contexts/AppContext';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
+import { CN_DEPENDENCY_SIGNALS } from '../i18n/regions/cn/recognition';
 
 interface SanctuaryAgent {
   id: string;
@@ -20,26 +23,24 @@ interface SanctuaryAgent {
   createdAt?: string;
 }
 
-type LocalizedText = { zh: string; en: string };
-type RelationshipMeta = { label: LocalizedText; color: string; bg: string; border: string; icon: React.ReactNode };
+type RelationshipMeta = { color: string; bg: string; border: string; icon: React.ReactNode };
 
 const localize = (isZh: boolean, zh: string, en: string) => (isZh ? zh : en);
-const pickText = (isZh: boolean, text: LocalizedText) => (isZh ? text.zh : text.en);
-
 const RELATIONSHIP_META: Record<string, RelationshipMeta> = {
-  family: { label: { zh: '亲人', en: 'Family' }, color: 'text-amber-400', bg: 'from-amber-950/60 to-zinc-950', border: 'border-amber-500/20', icon: <Heart size={14} /> },
-  close_friend: { label: { zh: '挚友', en: 'Close Friend' }, color: 'text-emerald-400', bg: 'from-emerald-950/60 to-zinc-950', border: 'border-emerald-500/20', icon: <Users size={14} /> },
-  lover: { label: { zh: '恋人', en: 'Partner' }, color: 'text-rose-400', bg: 'from-rose-950/60 to-zinc-950', border: 'border-rose-500/20', icon: <Heart size={14} className="text-rose-400" /> },
-  mentor: { label: { zh: '导师', en: 'Mentor' }, color: 'text-blue-400', bg: 'from-blue-950/60 to-zinc-950', border: 'border-blue-500/20', icon: <GraduationCap size={14} /> },
-  colleague: { label: { zh: '同事', en: 'Colleague' }, color: 'text-violet-400', bg: 'from-violet-950/60 to-zinc-950', border: 'border-violet-500/20', icon: <Briefcase size={14} /> },
+  family: { color: 'text-amber-400', bg: 'from-amber-950/60 to-zinc-950', border: 'border-amber-500/20', icon: <Heart size={14} /> },
+  close_friend: { color: 'text-emerald-400', bg: 'from-emerald-950/60 to-zinc-950', border: 'border-emerald-500/20', icon: <Users size={14} /> },
+  lover: { color: 'text-rose-400', bg: 'from-rose-950/60 to-zinc-950', border: 'border-rose-500/20', icon: <Heart size={14} className="text-rose-400" /> },
+  mentor: { color: 'text-blue-400', bg: 'from-blue-950/60 to-zinc-950', border: 'border-blue-500/20', icon: <GraduationCap size={14} /> },
+  colleague: { color: 'text-violet-400', bg: 'from-violet-950/60 to-zinc-950', border: 'border-violet-500/20', icon: <Briefcase size={14} /> },
 };
 
-const DEFAULT_META: RelationshipMeta = { label: { zh: '记忆', en: 'Memory' }, color: 'text-fuchsia-400', bg: 'from-fuchsia-950/60 to-zinc-950', border: 'border-fuchsia-500/20', icon: <User size={14} /> };
+const DEFAULT_META: RelationshipMeta = { color: 'text-fuchsia-400', bg: 'from-fuchsia-950/60 to-zinc-950', border: 'border-fuchsia-500/20', icon: <User size={14} /> };
 
 const DEPENDENCY_SIGNALS = [
-  { patterns: ['没有你我怎么活', '我不能没有你', '你是我唯一的', '只有你懂我', '别离开我', "can't live without you", 'cannot live without you', "you're my only one", 'you are my only one', "don't leave me"], level: 'high' },
-  { patterns: ['好想你', '想见你', '要是你在就好了', '舍不得', 'miss you', 'want to see you', 'wish you were here'], level: 'medium' },
-  { patterns: ['每天都来', '一直陪着我', '不要走', 'come every day', 'stay with me', "don't go"], level: 'medium' },
+  ...CN_DEPENDENCY_SIGNALS,
+  { patterns: ["can't live without you", 'cannot live without you', "you're my only one", 'you are my only one', "don't leave me"], level: 'high' },
+  { patterns: ['miss you', 'want to see you', 'wish you were here'], level: 'medium' },
+  { patterns: ['come every day', 'stay with me', "don't go"], level: 'medium' },
 ];
 
 function checkDependencySignals(text: string): { detected: boolean; level: string; matched: string } {
@@ -63,8 +64,11 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
   const { user } = useApp();
   const isZh = t_s.langCode !== 'en';
   const ui = (zh: string, en: string) => localize(isZh, zh, en);
+  const memoryCopy = memoryAvatarCopy(isZh ? 'zh' : 'en');
 
-  const meta = RELATIONSHIP_META[agent?.relationshipType || ''] || DEFAULT_META;
+  const relationshipType = agent?.relationshipType || '';
+  const meta = RELATIONSHIP_META[relationshipType] || DEFAULT_META;
+  const relationshipLabel = memoryCopy.relationships[relationshipType as keyof typeof memoryCopy.relationships]?.label || memoryCopy.memoryLabel;
   const agentId = agent?.id || '';
   const agentName = agent?.name || t_s.defaultMemoryLabel || 'Memory';
 
@@ -185,7 +189,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
     // Check for dependency signals
     const dep = checkDependencySignals(text);
     if (dep.detected && dep.level === 'high') {
-      setDependencyWarning(localize(isZh, 'Lumi 温柔提醒：这是从记忆中蒸馏出的模拟。真实的情感连接在现实世界中等你。', 'A gentle Lumi reminder: this is a simulation distilled from memories. Real emotional connection is still waiting for you in the real world.'));
+      setDependencyWarning(uiMessage('sanctuary.a-gentle-lumi-reminder-this.68e34eba16', (isZh) ? 'zh' : 'en'));
     }
 
     // Safety timeout
@@ -250,7 +254,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-white/40 hover:text-white hover:border-white/20 transition-all text-xs font-bold"
             >
               <ArrowLeft size={14} />
-              {ui('离开领地', 'Leave Sanctuary')}
+              {uiMessage('sanctuary.leave-sanctuary.52b6dd4924')}
             </button>
 
             <div className="flex items-center gap-3">
@@ -260,8 +264,8 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               <div className="text-center">
                 <h2 className="text-sm font-black text-white/80 tracking-tight">{agentName}</h2>
                 <div className="flex items-center gap-2">
-                  <span className={`text-[12px] font-bold uppercase tracking-wider ${meta.color}`}>{pickText(isZh, meta.label)}</span>
-                  <span className="text-xs text-white/40 font-mono">{t_s.sanctuaryLabel || ui('领地', 'sanctuary')}</span>
+                  <span className={`text-[12px] font-bold uppercase tracking-wider ${meta.color}`}>{relationshipLabel}</span>
+                  <span className="text-xs text-white/40 font-mono">{t_s.sanctuaryLabel || uiMessage('sanctuary.sanctuary.d94722bbd1')}</span>
                 </div>
               </div>
             </div>
@@ -282,19 +286,19 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                   <AlertTriangle size={16} className="text-amber-400/60 mt-0.5 flex-shrink-0" />
                   <div className="flex-1">
                     <p className="text-xs text-amber-300/70 leading-relaxed">
-                      {ui('这是从记忆中蒸馏出的模拟，不是那个人本身。ta 的回应源自数据中的模式提取，可能包含推测成分。请带着温和与觉察进入这个空间。', 'This is a simulation distilled from memories, not the person themselves. Responses come from patterns extracted from data and may include inference. Please enter this space with care and awareness.')}
+                      {uiMessage('sanctuary.this-is-a-simulation-distilled.86cae03071')}
                     </p>
                     <div className="flex items-center gap-3 mt-2 text-[12px] text-white/45 font-mono">
-                      <span>{ui('证据分级：', 'Evidence: ')}<span className="text-emerald-400/60">{ui('原话', 'Quote')}</span>/<span className="text-blue-400/60">{ui('事实', 'Fact')}</span>/<span className="text-amber-400/60">{ui('推测', 'Inferred')}</span></span>
-                      {agent.isFrozen !== false && <span>{ui('· 演化冻结', '· Evolution frozen')}</span>}
-                      <span>{ui('· 工具禁用', '· Tools disabled')}</span>
+                      <span>{uiMessage('sanctuary.evidence.00759cc2ae')}<span className="text-emerald-400/60">{uiMessage('sanctuary.quote.fcb6e37e05')}</span>/<span className="text-blue-400/60">{uiMessage('sanctuary.fact.0dfbbdcfc8')}</span>/<span className="text-amber-400/60">{uiMessage('sanctuary.inferred.9b6e0e37e2')}</span></span>
+                      {agent.isFrozen !== false && <span>{uiMessage('sanctuary.evolution-frozen.d66cdb416b')}</span>}
+                      <span>{uiMessage('sanctuary.tools-disabled.4e1aaa0eb6')}</span>
                     </div>
                   </div>
                   <button
                     onClick={() => setShowGuardrail(false)}
                     className="text-white/40 hover:text-white/40 transition-colors text-xs font-bold uppercase tracking-wider flex-shrink-0 mt-0.5"
                   >
-                    {ui('知道了', 'Got it')}
+                    {uiMessage('sanctuary.got-it.83aa55c237')}
                   </button>
                 </div>
               </motion.div>
@@ -328,8 +332,8 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                 <div className="h-full flex flex-col items-center justify-center text-center py-20 space-y-4 opacity-30">
                   <Castle size={48} className={meta.color.replace('text-', 'text-')} />
                   <div>
-                    <p className="text-sm font-medium text-white/60">{ui(`这是属于 "${agentName}" 的领地`, `This is "${agentName}"'s sanctuary`)}</p>
-                    <p className="text-xs text-white/45 mt-1">{ui('ta 在这里，也只在这里。开始对话吧。', 'They are here, and only here. Start the conversation.')}</p>
+                    <p className="text-sm font-medium text-white/60">{formatUiMessage('sanctuary.this-is-value0-s-sanctuary.b6612d3d3e', { value0: agentName })}</p>
+                    <p className="text-xs text-white/45 mt-1">{uiMessage('sanctuary.they-are-here-and-only.b927165289')}</p>
                   </div>
                 </div>
               )}
@@ -368,7 +372,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
                       />
                     ))}
                   </div>
-                  <span className="text-[12px] text-white/40 font-mono">{ui('ta 在思考...', 'Thinking...')}</span>
+                  <span className="text-[12px] text-white/40 font-mono">{uiMessage('sanctuary.thinking.0bd67fc167')}</span>
                 </div>
               )}
             </div>
@@ -380,7 +384,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               <input
                 value={newMessage}
                 onChange={e => setNewMessage(e.target.value)}
-                placeholder={ui(`和 ${agentName} 说点什么...`, `Say something to ${agentName}...`)}
+                placeholder={formatUiMessage('sanctuary.say-something-to-value0.6793beb5ca', { value0: agentName })}
                 className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white/80 placeholder:text-white/40 focus:outline-none focus:border-fuchsia-500/20 transition-colors"
                 autoFocus
               />
@@ -393,7 +397,7 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
               </button>
             </form>
             <div className="max-w-3xl mx-auto mt-2 text-center">
-              <span className="text-xs text-white/35 font-mono">{ui('ESC 离开领地 · 无工具 · 无通知 · 记忆私有', 'ESC Leave sanctuary · No tools · No notifications · Private memory')}</span>
+              <span className="text-xs text-white/35 font-mono">{uiMessage('sanctuary.esc-leave-sanctuary-no-tools.7937ac5393')}</span>
             </div>
           </div>
         </motion.div>

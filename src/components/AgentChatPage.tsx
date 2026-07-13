@@ -27,6 +27,8 @@ import {
 import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
+import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { CN_FOUNDER_ALIASES } from '../i18n/regions/cn/recognition';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -368,20 +370,20 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
-  const activeDomainLabel = isWorkChat ? ui('Lumi · 组织工作域', 'Lumi · Work Workspace') : ui('Lumi · 个人域', 'Lumi · Personal Workspace');
+  const activeDomainLabel = isWorkChat ? uiMessage('agent-chat-page.lumi-work-workspace.87c39acadf') : uiMessage('agent-chat-page.lumi-personal-workspace.25d2bcfab7');
   const activeDomainDetail = isWorkChat
-    ? ui('当前消息、附件、记忆和工具调用进入组织工作域。', 'Messages, attachments, memories, and tools are scoped to the organization.')
-    : ui('当前消息只进入个人域，不写入组织知识和组织记忆。', 'Messages stay in your personal domain and do not write to organization knowledge or memory.');
+    ? uiMessage('agent-chat-page.messages-attachments-memories-and-tools.84b41176b1')
+    : uiMessage('agent-chat-page.messages-stay-in-your-personal.5e15655a2c');
   const activeCapabilities = [
-    isWorkChat ? ui('组织记忆', 'Org Memory') : (t.neuralCore || 'Neural Core'),
-    isWorkChat ? ui('知识库引用', 'Knowledge Base') : (t.webMesh || 'Web Mesh'),
-    isElectron ? ui('本地节点', 'Local Node') : ui('浏览器通道', 'Browser Channel'),
+    isWorkChat ? uiMessage('agent-chat-page.org-memory.8fef7743d2') : (t.neuralCore || 'Neural Core'),
+    isWorkChat ? uiMessage('agent-chat-page.knowledge-base.3b55921264') : (t.webMesh || 'Web Mesh'),
+    isElectron ? uiMessage('agent-chat-page.local-node.da9f577e7d') : uiMessage('agent-chat-page.browser-channel.61c3c86e02'),
   ];
   const operationModeMeta = (() => {
     if (operationMode === 'chat') {
       return {
-        label: t.modeChat || ui('聊天', 'Chat'),
-        detail: t.modeChatHint || ui('纯聊天', 'Conversation only'),
+        label: t.modeChat || uiMessage('agent-chat-page.chat.1594b2f45c'),
+        detail: t.modeChatHint || uiMessage('agent-chat-page.conversation-only.33f7067683'),
         badgeClass: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200',
         subtleClass: 'border-emerald-400/15 bg-emerald-400/10 text-emerald-100/75',
         dotClass: 'bg-emerald-300',
@@ -390,8 +392,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     }
     if (operationMode === 'autonomous') {
       return {
-        label: t.modeAutonomy || t.modeAutoExecute || ui('自主', 'Autonomy'),
-        detail: t.modeAutonomyHint || t.modeAutoExecuteHint || ui('24h 自主运行', '24h autonomous work'),
+        label: t.modeAutonomy || t.modeAutoExecute || uiMessage('agent-chat-page.autonomy.6aea974e38'),
+        detail: t.modeAutonomyHint || t.modeAutoExecuteHint || uiMessage('agent-chat-page.24h-autonomous-work.81b1d75d6b'),
         badgeClass: 'border-cyan-300/30 bg-cyan-400/12 text-cyan-100',
         subtleClass: 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100/80',
         dotClass: 'bg-cyan-300 animate-pulse',
@@ -400,8 +402,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     }
     if (operationMode === 'meeting') {
       return {
-        label: t.modeMeeting || ui('会议', 'Meeting'),
-        detail: t.modeMeetingHint || ui('会议记录', 'Live notes'),
+        label: t.modeMeeting || uiMessage('agent-chat-page.meeting.e16a90b510'),
+        detail: t.modeMeetingHint || uiMessage('agent-chat-page.live-notes.578276ba0a'),
         badgeClass: 'border-blue-300/30 bg-blue-400/12 text-blue-100',
         subtleClass: 'border-blue-300/20 bg-blue-400/10 text-blue-100/80',
         dotClass: 'bg-blue-300 animate-pulse',
@@ -409,8 +411,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       };
     }
     return {
-      label: t.modeAssistant || ui('助理', 'Assistant'),
-      detail: t.modeAssistantHint || ui('现场全权限', 'Foreground full access'),
+      label: t.modeAssistant || uiMessage('agent-chat-page.assistant.4a363bbe1a'),
+      detail: t.modeAssistantHint || uiMessage('agent-chat-page.foreground-full-access.a5a81a90e7'),
       badgeClass: 'border-celestial-saturn/30 bg-celestial-saturn/12 text-celestial-saturn',
       subtleClass: 'border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn/85',
       dotClass: 'bg-celestial-saturn',
@@ -441,11 +443,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const hasDesktop = installedSkillNames.some((n: string) => ['desktop', 'commander'].some(k => n.includes(k)));
 
   const quickSuggestions = [
-    { id: 'chat', label: t.suggestChat || ui('随便聊聊', 'Just Chat'), prompt: ui('你好 Lumi，今天有什么有趣的发现吗？', 'Hi Lumi, any interesting discoveries today?'), show: true },
-    { id: 'creative', label: t.suggestCreative || ui('生成一张图片', 'Generate Image'), prompt: ui('帮我生成一张星空下的赛博朋克城市图片', 'Generate an image of a cyberpunk city under a starry sky'), show: hasCreativeSkill },
-    { id: 'fetch', label: t.suggestFetch || ui('总结网页内容', 'Summarize Webpage'), prompt: ui('帮我抓取这篇文章的内容并总结要点', 'Fetch this article and summarize the key points'), show: hasFetcher },
-    { id: 'desktop', label: t.suggestDesktop || ui('桌面整理', 'Organize Desktop'), prompt: ui('帮我把桌面上的文件按日期整理一下', 'Organize the desktop files by date'), show: hasDesktop },
-    { id: 'music', label: t.suggestMusic || ui('创作一首音乐', 'Create Music'), prompt: ui('帮我创作一首舒缓的钢琴曲，带有海浪的声音', 'Create a calm piano track with ocean wave ambience'), show: hasCreativeSkill },
+    { id: 'chat', label: t.suggestChat || uiMessage('agent-chat-page.just-chat.7c27608f4f'), prompt: uiMessage('agent-chat-page.hi-lumi-any-interesting-discoveries.7f551f39b3'), show: true },
+    { id: 'creative', label: t.suggestCreative || uiMessage('agent-chat-page.generate-image.bc8f1ebf69'), prompt: uiMessage('agent-chat-page.generate-an-image-of-a.c9d2d59ffd'), show: hasCreativeSkill },
+    { id: 'fetch', label: t.suggestFetch || uiMessage('agent-chat-page.summarize-webpage.5a4d1f82b7'), prompt: uiMessage('agent-chat-page.fetch-this-article-and-summarize.56b2a4e0a2'), show: hasFetcher },
+    { id: 'desktop', label: t.suggestDesktop || uiMessage('agent-chat-page.organize-desktop.7b61137114'), prompt: uiMessage('agent-chat-page.organize-the-desktop-files-by.6e88097cfe'), show: hasDesktop },
+    { id: 'music', label: t.suggestMusic || uiMessage('agent-chat-page.create-music.b1c541ba28'), prompt: uiMessage('agent-chat-page.create-a-calm-piano-track.4d8e126213'), show: hasCreativeSkill },
   ];
 
   const visibleSuggestions = quickSuggestions.filter(s => s.show).slice(0, 4);
@@ -696,19 +698,19 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
   const readyKnowledgeCount = useMemo(() => knowledgeFiles.filter(isKnowledgeReady).length, [isKnowledgeReady, knowledgeFiles]);
   const knowledgeStatusText = knowledgeFiles.length > 0
-    ? ui(`${readyKnowledgeCount}/${knowledgeFiles.length} 个资料可用于对话`, `${readyKnowledgeCount}/${knowledgeFiles.length} knowledge files available`)
+    ? formatUiMessage('agent-chat-page.value0-value1-knowledge-files-available.ff2ac54c48', { value0: readyKnowledgeCount, value1: knowledgeFiles.length })
     : knowledgeLoading
-      ? ui('正在同步资料库', 'Syncing knowledge')
-      : ui('暂无资料', 'No knowledge files');
+      ? uiMessage('agent-chat-page.syncing-knowledge.21a09d4faa')
+      : uiMessage('agent-chat-page.no-knowledge-files.40ce139e3c');
   const fileKindLabel = useCallback((kind: ChatFilePanelItem['kind']) => {
-    if (kind === 'deck') return ui('演示文稿', 'Presentation');
-    if (kind === 'sheet') return ui('表格', 'Spreadsheet');
+    if (kind === 'deck') return uiMessage('agent-chat-page.presentation.1c730b18ce');
+    if (kind === 'sheet') return uiMessage('agent-chat-page.spreadsheet.93f365c65d');
     if (kind === 'pdf') return 'PDF';
     if (kind === 'cad') return 'CAD';
-    if (kind === 'image') return ui('图片', 'Image');
-    if (kind === 'audio') return ui('音频', 'Audio');
-    if (kind === 'document') return ui('文档', 'Document');
-    return ui('文件', 'File');
+    if (kind === 'image') return uiMessage('agent-chat-page.image.07bb82eb07');
+    if (kind === 'audio') return uiMessage('agent-chat-page.audio.2fd1cbe8ae');
+    if (kind === 'document') return uiMessage('agent-chat-page.document.c4e0476ce2');
+    return uiMessage('agent-chat-page.file.9588151a85');
   }, [isZh]);
   const generatedChatFiles = useMemo(() => {
     const collected: GeneratedFileLink[] = [];
@@ -749,7 +751,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       try {
         const openedNatively = await openNativeFilePath(file.path);
         if (openedNatively) {
-          toast.success(ui(`已打开：${file.path}`, `Opened: ${file.path}`));
+          toast.success(formatUiMessage('agent-chat-page.opened-value0.4bd8105ea5', { value0: file.path }));
           return;
         }
       } catch (err: any) {
@@ -770,14 +772,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           throw new Error(data?.error || 'Open file failed');
         }
         const data = await res.json().catch(() => ({}));
-        toast.success(ui(`已请求系统打开：${data.path || file.fileName}`, `Requested system open: ${data.path || file.fileName}`));
+        toast.success(formatUiMessage('agent-chat-page.requested-system-open-value0.43fcf5747f', { value0: data.path || file.fileName }));
         return;
       } catch (err: any) {
         if (!file.openUrl && !file.saveUrl) {
-          toast.error(err?.message || ui('打开文件失败', 'Failed to open file'));
+          toast.error(err?.message || uiMessage('agent-chat-page.failed-to-open-file.8c8df8ffc5'));
           return;
         }
-        toast.error(ui('系统打开失败，已改用预览链接', 'Default app failed; opening the preview link instead'));
+        toast.error(uiMessage('agent-chat-page.default-app-failed-opening-the.56984c4d66'));
       }
     }
 
@@ -786,7 +788,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       try {
         window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
       } catch (err: any) {
-        toast.error(err?.message || ui('无法打开预览链接', 'Could not open preview link'));
+        toast.error(err?.message || uiMessage('agent-chat-page.could-not-open-preview-link.99248ef9e6'));
       }
     }
   }, [isZh, openNativeFilePath, scopedFileUrl]);
@@ -795,7 +797,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
       id: `pending-${item.id}`,
       fileName: item.fileName,
-      subtitle: item.transcript ? ui('已转写附件', 'Transcribed attachment') : ui('本次消息附件', 'Current attachment'),
+      subtitle: item.transcript ? uiMessage('agent-chat-page.transcribed-attachment.08a3fe2e67') : uiMessage('agent-chat-page.current-attachment.6500636ab4'),
       kind: item.kind,
       source: 'pending',
       fileId: item.fileId,
@@ -808,7 +810,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     const generated: ChatFilePanelItem[] = generatedChatFiles.map(file => ({
       id: `generated-panel-${file.id}`,
       fileName: file.fileName,
-      subtitle: ui('Lumi 生成文件', 'Generated by Lumi'),
+      subtitle: uiMessage('agent-chat-page.generated-by-lumi.27ac470b2c'),
       kind: file.kind,
       source: 'generated',
       path: file.path,
@@ -827,7 +829,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       return {
         id: `knowledge-${file.id}`,
         fileName,
-        subtitle: ready ? ui('可用于对话', 'Available for chat') : ui('资料库文件', 'Knowledge file'),
+        subtitle: ready ? uiMessage('agent-chat-page.available-for-chat.46797753d0') : uiMessage('agent-chat-page.knowledge-file.890340ad5c'),
         kind,
         source: 'knowledge',
         fileId: file.id,
@@ -843,7 +845,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const requestMeetingMode = useCallback(() => {
     window.dispatchEvent(new CustomEvent('lumi:request-meeting-mode'));
   }, []);
-  const isFounder = agentId === 'founder' || agentCategory === 'founder' || agentName.includes('Founder') || agentName.includes('创始人');
+  const isFounder = agentId === 'founder'
+    || agentCategory === 'founder'
+    || agentName.includes('Founder')
+    || CN_FOUNDER_ALIASES.some(alias => agentName.includes(alias));
 
   useEffect(() => {
     if (!isOpen || isFounder) return;
@@ -910,13 +915,13 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const renderGeneratedFiles = useCallback((files: GeneratedFileLink[], align: 'start' | 'end' = 'start') => {
     if (files.length === 0) return null;
     const labelFor = (kind: GeneratedFileLink['kind']) => {
-      if (kind === 'deck') return ui('演示文稿', 'Presentation');
-      if (kind === 'sheet') return ui('表格', 'Spreadsheet');
+      if (kind === 'deck') return uiMessage('agent-chat-page.presentation.1c730b18ce');
+      if (kind === 'sheet') return uiMessage('agent-chat-page.spreadsheet.93f365c65d');
       if (kind === 'pdf') return 'PDF';
       if (kind === 'cad') return 'CAD';
-      if (kind === 'image') return ui('图片', 'Image');
-      if (kind === 'document') return ui('文档', 'Document');
-      return ui('文件', 'File');
+      if (kind === 'image') return uiMessage('agent-chat-page.image.07bb82eb07');
+      if (kind === 'document') return uiMessage('agent-chat-page.document.c4e0476ce2');
+      return uiMessage('agent-chat-page.file.9588151a85');
     };
 
     return (
@@ -1244,7 +1249,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       setIsTyping(data.status === "thinking");
       if (data.status === 'thinking') {
         setWorkflowStatus('thinking');
-        pushChatProgress(isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', 'thinking');
+        pushChatProgress(uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
         setWorkflowSteps(prev => {
           const last = prev[prev.length - 1];
           if (last?.type === 'thinking' && Date.now() - last.time < 1200) return prev;
@@ -1273,7 +1278,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       } else if (data.status === 'error') {
         setWorkflowStatus('error');
         finishChatProgress(
-          isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.',
+          uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
           'error'
         );
         setTimeout(() => {
@@ -1297,7 +1302,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       setIsTyping(false);
       setWorkflowStatus('error');
       finishChatProgress(
-        isZh ? '处理遇到问题了，我把原因整理给你。' : 'Something went wrong. I am showing you the reason.',
+        uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
         'error'
       );
       setWorkflowSteps(prev => [...prev, {
@@ -1487,7 +1492,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       ? recentAttachmentContextRef.current.map(serializeChatAttachment)
       : directAttachments;
     if ((!trimmedText && outgoingAttachments.length === 0) || !user) return;
-    const outgoingText = trimmedText || ui('请帮我看看这些附件。', 'Please review these attachments.');
+    const outgoingText = trimmedText || uiMessage('agent-chat-page.please-review-these-attachments.6b61a7fa38');
 
     const userMsg = {
       id: makeChatMessageId('user'),
@@ -1508,10 +1513,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     clearChatProgress();
     pushChatProgress(
       reusedRecentAttachmentContext
-        ? (isZh ? '我沿用刚才上传的附件和转写结果继续处理。' : 'I am using the recent attachment and transcript for this request.')
+        ? (uiMessage('agent-chat-page.i-am-using-the-recent.10f9fdc1e9', (isZh) ? 'zh' : 'en'))
         : outgoingAttachments.length > 0
-        ? (isZh ? '我先读取你发来的附件和要求。' : 'I am checking your attachments and request first.')
-        : (isZh ? '我先看一下你的要求。' : 'I am checking your request first.'),
+        ? (uiMessage('agent-chat-page.i-am-checking-your-attachments.79cfe8a290', (isZh) ? 'zh' : 'en'))
+        : (uiMessage('agent-chat-page.i-am-checking-your-request.05a5e81231', (isZh) ? 'zh' : 'en')),
       'thinking'
     );
     setWorkflowStatus('thinking');
@@ -1571,9 +1576,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (!resolved) {
         if (socketAcknowledged) {
           pushChatProgress(
-            isZh
-              ? '后端已经接收，正在等待最终回复；我不会切到旧兜底通道。'
-              : 'The backend has accepted this turn. I am waiting for the final response instead of using the old fallback path.',
+            uiMessage('agent-chat-page.the-backend-has-accepted-this.aa53249e15', (isZh) ? 'zh' : 'en'),
             'thinking'
           );
           return;
@@ -1605,16 +1608,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (resolved || socketAcknowledged) return;
       setWorkflowStatus('error');
       pushChatProgress(
-        isZh
-          ? '这条消息还没有被后端确认接收，我会继续等结果；如果没有后续进度，说明发送链路没打通。'
-          : 'The backend has not acknowledged this message yet. I will keep waiting, but the send path may be disconnected.',
+        uiMessage('agent-chat-page.the-backend-has-not-acknowledged.4a6f380020', (isZh) ? 'zh' : 'en'),
         'error'
       );
       setWorkflowSteps(prev => [...prev, {
         id: `chat-ack-timeout-${Date.now()}`,
         type: 'error',
-        text: isZh ? '后端未确认接收' : 'Backend did not acknowledge receipt',
-        detail: socket.connected ? undefined : (isZh ? 'Socket 当前未连接' : 'Socket is currently disconnected'),
+        text: uiMessage('agent-chat-page.backend-did-not-acknowledge-receipt.02f7aa3200', (isZh) ? 'zh' : 'en'),
+        detail: socket.connected ? undefined : (uiMessage('agent-chat-page.socket-is-currently-disconnected.8f04ddd3b7', (isZh) ? 'zh' : 'en')),
         time: Date.now(),
       }]);
     }, 5000);
@@ -1629,11 +1630,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       }
       if (resolved) return;
       if (ack?.ok) {
-        pushChatProgress(isZh ? '后端已收到，我开始处理。' : 'The backend has received this. I am working on it.', 'thinking');
+        pushChatProgress(uiMessage('agent-chat-page.the-backend-has-received-this.859b50e7ed', (isZh) ? 'zh' : 'en'), 'thinking');
       } else {
         setWorkflowStatus('error');
         pushChatProgress(
-          ack?.error || (isZh ? '后端没有接收这条消息。' : 'The backend did not accept this message.'),
+          ack?.error || (uiMessage('agent-chat-page.the-backend-did-not-accept.44d78fa21a', (isZh) ? 'zh' : 'en')),
           'error'
         );
       }
@@ -1682,7 +1683,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       const useBackendDictation = isElectron || !recognition.current;
       if (useBackendDictation) {
         if (callState !== 'idle') {
-          toast.error(ui('语音通话正在进行，先结束当前通话', 'Voice is already active. End the current call first.'));
+          toast.error(uiMessage('agent-chat-page.voice-is-already-active-end.361c5fb6e4'));
           return;
         }
         inputDictationActiveRef.current = true;
@@ -1759,12 +1760,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         if (audioTranscripts.length > 0) {
           const current = draftTextRef.current.trim();
           setDraftText([current, audioTranscripts.join('\n\n')].filter(Boolean).join('\n\n'));
-          toast.success(ui('录音已转成文字并填入输入框', 'Audio transcript inserted into the input'));
+          toast.success(uiMessage('agent-chat-page.audio-transcript-inserted-into-the.cd2c9c3972'));
         } else if (attachments.some(item => item.kind === 'audio' && item.transcriptionError)) {
           const failed = attachments.find(item => item.kind === 'audio' && item.transcriptionError);
-          toast.error(failed?.transcriptionError || ui('录音转文字失败', 'Audio transcription failed'));
+          toast.error(failed?.transcriptionError || uiMessage('agent-chat-page.audio-transcription-failed.becab97e32'));
         } else if (attachments.length > 0) {
-          toast.success(ui('已添加到本条消息', 'Attached to this message'));
+          toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
         }
         notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
       } else {
@@ -1840,9 +1841,9 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const chatProgressStatusText =
     latestChatProgressLine?.text ||
     (workflowStatus === 'background'
-      ? (isZh ? '我在后台继续处理这件事。' : 'I am continuing this in the background.')
+      ? (uiMessage('agent-chat-page.i-am-continuing-this-in.3d1e9bcbcd', (isZh) ? 'zh' : 'en'))
       : isTyping
-        ? (isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.')
+        ? (uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'))
         : workflowStatusText);
   const chatPanelStyle: React.CSSProperties = {
     background: chatAccentTheme.panel,
@@ -1916,14 +1917,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             >
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
                 <div>
-                  <h3 className="text-sm font-bold text-white">{ui('个人微信连接', 'Personal WeChat')}</h3>
-                  <p className="mt-1 text-xs text-white/40">{ui('扫码授权并完成一次绑定后，微信收发会同步到当前个人 Lumi 聊天。', 'After QR authorization and one-time linking, WeChat messages sync with this personal Lumi chat.')}</p>
+                  <h3 className="text-sm font-bold text-white">{uiMessage('agent-chat-page.personal-wechat.153d58f0e9')}</h3>
+                  <p className="mt-1 text-xs text-white/40">{uiMessage('agent-chat-page.after-qr-authorization-and-one.a49fcea5c7')}</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowWeChatSettings(false)}
                   className="rounded-full p-1.5 text-white/35 transition-colors hover:bg-white/10 hover:text-white"
-                  aria-label={ui('关闭', 'Close')}
+                  aria-label={uiMessage('agent-chat-page.close.6cf4a7773a')}
                 >
                   <XCircle size={18} />
                 </button>
@@ -1995,8 +1996,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               type="button"
               onClick={() => setShowWeChatSettings(true)}
               className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-200 transition-all hover:border-emerald-300/35 hover:bg-emerald-400/15 md:h-10 md:w-10"
-              title={ui('个人微信连接', 'Personal WeChat')}
-              aria-label={ui('打开个人微信连接', 'Open personal WeChat connection')}
+              title={uiMessage('agent-chat-page.personal-wechat.153d58f0e9')}
+              aria-label={uiMessage('agent-chat-page.open-personal-wechat-connection.24ff73324a')}
             >
               <MessageCircle className="h-4 w-4 md:h-5 md:w-5" />
             </button>
@@ -2005,8 +2006,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             type="button"
             onClick={requestMeetingMode}
             className="flex h-8 w-8 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-200 transition-all hover:border-cyan-300/35 hover:bg-cyan-400/15 md:h-10 md:w-10"
-            title={ui('会议模式', 'Meeting mode')}
-            aria-label={ui('打开会议模式', 'Open meeting mode')}
+            title={uiMessage('agent-chat-page.meeting-mode.958510fb80')}
+            aria-label={uiMessage('agent-chat-page.open-meeting-mode.3aabc87fcb')}
           >
             <FileText className="h-4 w-4 md:h-5 md:w-5" />
           </button>
@@ -2207,7 +2208,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             )}
             {hiddenMessageCount > 0 && (
               <div className="text-center text-[10px] font-mono uppercase tracking-wider text-white/25">
-                {ui(`已折叠 ${hiddenMessageCount} 条较早消息，可用搜索查看`, `${hiddenMessageCount} older messages hidden; use search to find them`)}
+                {formatUiMessage('agent-chat-page.value0-older-messages-hidden-use.3f41a4ca89', { value0: hiddenMessageCount })}
               </div>
             )}
             <AnimatePresence initial={false}>
@@ -2304,8 +2305,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                         className={`absolute top-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-white/10 ${
                           msg.type === 'agent' ? 'right-2' : 'left-2'
                         }`}
-                        title={ui('复制选中内容；未选中时复制整条', 'Copy selection, or the whole message')}
-                        aria-label={ui('复制选中内容；未选中时复制整条', 'Copy selection, or the whole message')}
+                        title={uiMessage('agent-chat-page.copy-selection-or-the-whole.063df0e978')}
+                        aria-label={uiMessage('agent-chat-page.copy-selection-or-the-whole.063df0e978')}
                       >
                         {copiedId === msg.id ? (
                           <Check size={12} className="text-green-400" />
@@ -2336,12 +2337,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                     ) : (
                       <Loader2 size={13} className="animate-spin text-celestial-saturn" />
                     )}
-                    {isZh ? 'Lumi 正在处理' : 'Lumi is working'}
+                    {uiMessage('agent-chat-page.lumi-is-working.98a841ddde', (isZh) ? 'zh' : 'en')}
                   </div>
                   <div className="mt-2 space-y-1.5">
                     {(chatProgressLines.length > 0
                       ? chatProgressLines.slice(-3)
-                      : [{ id: 'chat-progress-fallback', text: isZh ? '我在判断这件事该怎么处理。' : 'I am figuring out how to handle this.', tone: 'thinking', time: Date.now() }]
+                      : [{ id: 'chat-progress-fallback', text: uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), tone: 'thinking', time: Date.now() }]
                     ).map((line, index, list) => (
                       <div
                         key={line.id}
@@ -2392,8 +2393,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                         type="button"
                         onClick={() => removePendingAttachment(item.id)}
                         className="ml-1 rounded-full p-0.5 text-white/30 transition-colors hover:bg-white/10 hover:text-white/70"
-                        title={ui('移除附件', 'Remove attachment')}
-                        aria-label={ui('移除附件', 'Remove attachment')}
+                        title={uiMessage('agent-chat-page.remove-attachment.10963433c4')}
+                        aria-label={uiMessage('agent-chat-page.remove-attachment.10963433c4')}
                       >
                         <XCircle size={13} />
                       </button>
@@ -2428,8 +2429,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 disabled={isTyping || isOptimizing}
                 variant="ghost"
                 className="h-12 w-12 shrink-0 rounded-2xl border border-white/10 bg-black/30 p-0 text-white/45 transition-all hover:border-celestial-saturn/30 hover:bg-celestial-saturn/10 hover:text-celestial-saturn disabled:opacity-40"
-                title={ui('添加图片或文件', 'Attach image or file')}
-                aria-label={ui('添加图片或文件', 'Attach image or file')}
+                title={uiMessage('agent-chat-page.attach-image-or-file.966f49c5b6')}
+                aria-label={uiMessage('agent-chat-page.attach-image-or-file.966f49c5b6')}
               >
                 {isOptimizing ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
               </Button>
@@ -2490,7 +2491,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               <div className="min-w-0">
                 <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white/45">
                   <FolderOpen size={14} />
-                  {ui('对话文件', 'Chat Files')}
+                  {uiMessage('agent-chat-page.chat-files.bfc05d58f7')}
                 </h4>
                 <p className="mt-1 truncate text-[11px] text-white/32">{knowledgeStatusText}</p>
               </div>
@@ -2498,8 +2499,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 type="button"
                 onClick={() => void refreshKnowledgeFiles()}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/40 transition-colors hover:bg-white/10 hover:text-white/70"
-                title={ui('刷新文件', 'Refresh files')}
-                aria-label={ui('刷新文件', 'Refresh files')}
+                title={uiMessage('agent-chat-page.refresh-files.7b90fd0f8a')}
+                aria-label={uiMessage('agent-chat-page.refresh-files.7b90fd0f8a')}
               >
                 {knowledgeLoading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
               </button>
@@ -2508,25 +2509,25 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             <div className="max-h-[22rem] space-y-3 overflow-y-auto pr-1 custom-scrollbar">
               {chatFileSections.pending.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{ui('本次附件', 'Current Attachments')}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('agent-chat-page.current-attachments.9deb8aeeb4')}</div>
                   {chatFileSections.pending.map(renderChatFileRow)}
                 </div>
               )}
               {chatFileSections.generated.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{ui('生成文件', 'Generated Files')}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('agent-chat-page.generated-files.f3b9745393')}</div>
                   {chatFileSections.generated.map(renderChatFileRow)}
                 </div>
               )}
               {chatFileSections.knowledge.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{ui('对话资料', 'Knowledge Files')}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white/30">{uiMessage('agent-chat-page.knowledge-files.cc19d1427e')}</div>
                   {chatFileSections.knowledge.map(renderChatFileRow)}
                 </div>
               )}
               {chatFileSections.pending.length === 0 && chatFileSections.generated.length === 0 && chatFileSections.knowledge.length === 0 && (
                 <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-3 py-4 text-center text-xs text-white/35">
-                  {ui('暂无可操作文件', 'No files available yet')}
+                  {uiMessage('agent-chat-page.no-files-available-yet.6ac4767777')}
                 </div>
               )}
             </div>

@@ -10,11 +10,9 @@ export function MessagingHub({ t }: { t?: any }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white">{t?.messaging || '消息接入'}</h2>
+        <h2 className="text-lg font-semibold text-white">{t?.messagingIntegrations || 'Messaging Integrations'}</h2>
         <p className="mt-1 text-sm text-white/45">
-          {t?.langCode === 'en'
-            ? 'Connect organization channels for work-domain knowledge, cases, and remote collaboration.'
-            : '把组织工作域接入飞书和企业微信，用于知识库查询、案件资料归档和远程协作。'}
+          {t?.messagingIntegrationsDesc || 'Connect organization channels for work-domain knowledge, cases, and remote collaboration.'}
         </p>
       </div>
       <div className="flex gap-2 p-1 bg-white/5 rounded-xl border border-white/5">

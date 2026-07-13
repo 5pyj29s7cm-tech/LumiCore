@@ -3,6 +3,7 @@ import { Building2, Loader2, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
 import type { DomainSwitchResult } from '../../contexts/AppContext';
+import { uiMessage } from '../../i18n/uiMessages';
 
 interface Props {
   domain: 'personal' | 'work';
@@ -30,10 +31,10 @@ export function WorkModeSwitch({
   const reportResult = (result: DomainSwitchResult, target: 'personal' | 'work') => {
     if (result?.success) {
       toast.success(result.message || (target === 'work'
-        ? ui('已进入组织', 'Entered organization')
-        : ui('已切换到个人', 'Switched to personal')));
+        ? uiMessage('work-mode-switch.entered-organization.4ca4829204')
+        : uiMessage('work-mode-switch.switched-to-personal.378022176b')));
     } else {
-      toast.error(result?.message || ui('模式切换失败', 'Mode switch failed'));
+      toast.error(result?.message || uiMessage('work-mode-switch.mode-switch-failed.ff1179bd78'));
     }
   };
 
@@ -49,7 +50,7 @@ export function WorkModeSwitch({
       reportResult(result, 'personal');
       if (result?.success) onCloseOrganization?.();
     } catch (err: any) {
-      toast.error(err.message || ui('模式切换失败', 'Mode switch failed'));
+      toast.error(err.message || uiMessage('work-mode-switch.mode-switch-failed.ff1179bd78'));
     } finally {
       setSwitching(false);
     }
@@ -71,7 +72,7 @@ export function WorkModeSwitch({
       reportResult(result, 'work');
       if (result?.success) onOpenOrganization();
     } catch (err: any) {
-      toast.error(err.message || ui('模式切换失败', 'Mode switch failed'));
+      toast.error(err.message || uiMessage('work-mode-switch.mode-switch-failed.ff1179bd78'));
     } finally {
       setSwitching(false);
     }
@@ -83,7 +84,7 @@ export function WorkModeSwitch({
         type="button"
         onClick={handlePersonal}
         disabled={switching}
-        title={ui('切换到个人', 'Switch to personal')}
+        title={uiMessage('work-mode-switch.switch-to-personal.fbe06c3447')}
         className={`flex h-7 min-w-[78px] items-center justify-center gap-1.5 rounded-full px-3 transition-all ${
           !isWork && !organizationOpen
             ? 'bg-white/12 text-white shadow-[0_0_18px_rgba(255,255,255,0.08)]'
@@ -91,13 +92,13 @@ export function WorkModeSwitch({
         } disabled:cursor-wait`}
       >
         <User size={13} />
-        {ui('个人', 'Personal')}
+        {uiMessage('work-mode-switch.personal.d3eb901f5d')}
       </button>
       <button
         type="button"
         onClick={handleOrganization}
         disabled={switching}
-        title={connected ? ui('打开组织', 'Open organization') : ui('创建组织', 'Create organization')}
+        title={connected ? uiMessage('work-mode-switch.open-organization.2fb9a9e9af') : uiMessage('work-mode-switch.create-organization.0cada00795')}
         className={`flex h-7 min-w-[82px] items-center justify-center gap-1.5 rounded-full px-3 transition-all ${
           isWork || organizationOpen
             ? 'border border-blue-400/25 bg-blue-500/18 text-blue-100 shadow-[0_0_18px_rgba(59,130,246,0.16)]'
@@ -105,7 +106,7 @@ export function WorkModeSwitch({
         } disabled:cursor-wait`}
       >
         {switching ? <Loader2 size={13} className="animate-spin" /> : <Building2 size={13} />}
-        {ui('组织', 'Organization')}
+        {uiMessage('work-mode-switch.organization.86b86ee61b')}
       </button>
     </div>
   );

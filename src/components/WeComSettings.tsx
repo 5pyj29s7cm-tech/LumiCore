@@ -17,6 +17,8 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { appConfirm } from '../lib/appConfirm';
+import { uiMessage } from '../i18n/uiMessages';
+import { formatMessagingBindingCommand } from '../i18n/locales/messaging';
 
 type WeComMode = 'aibot_long_connection' | 'app_webhook';
 
@@ -64,6 +66,7 @@ const EMPTY_FORM = {
 
 export function WeComSettings({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
+  const locale = isZh ? 'zh' : 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
   const [config, setConfig] = useState<WeComConfigResponse | null>(null);
   const [mode, setMode] = useState<WeComMode>('aibot_long_connection');
@@ -79,7 +82,7 @@ export function WeComSettings({ t }: { t?: any }) {
   const loadConfig = async (resetForm = false) => {
     const res = await fetch('/api/wecom/config', { credentials: 'include' });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ui('配置加载失败', 'Failed to load configuration'));
+    if (!res.ok) throw new Error(data.error || uiMessage('we-com-settings.failed-to-load-configuration.7ef35e8101'));
     const nextMode: WeComMode = data.mode === 'app_webhook' ? 'app_webhook' : 'aibot_long_connection';
     setConfig(data);
     setMode(nextMode);
@@ -115,7 +118,7 @@ export function WeComSettings({ t }: { t?: any }) {
 
   useEffect(() => {
     void Promise.all([loadConfig(true), loadBindings()])
-      .catch(error => toast.error(error?.message || ui('企微配置加载失败', 'Failed to load WeCom configuration')))
+      .catch(error => toast.error(error?.message || uiMessage('we-com-settings.failed-to-load-wecom-configuration.b014a0bd18')))
       .finally(() => setLoading(false));
     const timer = window.setInterval(() => void loadStatus(), 5000);
     return () => window.clearInterval(timer);
@@ -124,15 +127,15 @@ export function WeComSettings({ t }: { t?: any }) {
   const save = async () => {
     if (mode === 'aibot_long_connection') {
       if (!form.botId.trim()) {
-        toast.error(ui('Bot ID 不能为空', 'Bot ID is required'));
+        toast.error(uiMessage('we-com-settings.bot-id-is-required.efd9d5b119'));
         return;
       }
       if (!form.botSecret.trim() && !config?.hasBotSecret) {
-        toast.error(ui('Bot Secret 不能为空', 'Bot Secret is required'));
+        toast.error(uiMessage('we-com-settings.bot-secret-is-required.0c6b88fa5f'));
         return;
       }
     } else if (!form.corpId.trim() || !form.agentId.trim()) {
-      toast.error(ui('Corp ID 和 Agent ID 不能为空', 'Corp ID and Agent ID are required'));
+      toast.error(uiMessage('we-com-settings.corp-id-and-agent-id.cad2adc369'));
       return;
     }
 
@@ -155,11 +158,11 @@ export function WeComSettings({ t }: { t?: any }) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.error || ui('保存失败', 'Save failed'));
+      if (!res.ok || !data.success) throw new Error(data.error || uiMessage('we-com-settings.save-failed.5b5ea27d01'));
       await loadConfig(true);
-      toast.success(ui('企业微信配置已保存', 'WeCom configuration saved'));
+      toast.success(uiMessage('we-com-settings.wecom-configuration-saved.f22d319d7b'));
     } catch (error: any) {
-      toast.error(error?.message || ui('保存失败', 'Save failed'));
+      toast.error(error?.message || uiMessage('we-com-settings.save-failed.5b5ea27d01'));
     } finally {
       setSaving(false);
     }
@@ -175,12 +178,12 @@ export function WeComSettings({ t }: { t?: any }) {
         body: JSON.stringify({}),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('绑定码生成失败', 'Failed to generate binding code'));
+      if (!res.ok) throw new Error(data.error || uiMessage('we-com-settings.failed-to-generate-binding-code.5db5228dfd'));
       setBindingCode(data.code || '');
       setBindingExpiresAt(data.expiresAt || '');
-      toast.success(ui('企微绑定码已生成', 'WeCom binding code generated'));
+      toast.success(uiMessage('we-com-settings.wecom-binding-code-generated.9d85410deb'));
     } catch (error: any) {
-      toast.error(error?.message || ui('请先切换到要绑定的组织工作域', 'Switch to the organization work domain first'));
+      toast.error(error?.message || uiMessage('we-com-settings.switch-to-the-organization-work.32f809cbce'));
     } finally {
       setBindingLoading(false);
     }
@@ -188,10 +191,10 @@ export function WeComSettings({ t }: { t?: any }) {
 
   const copyBindingCommand = async () => {
     if (!bindingCode) return;
-    const command = `绑定 Lumi ${bindingCode}`;
+    const command = formatMessagingBindingCommand(bindingCode, locale);
     try {
       await navigator.clipboard.writeText(command);
-      toast.success(ui('绑定命令已复制', 'Binding command copied'));
+      toast.success(uiMessage('we-com-settings.binding-command-copied.932649e202'));
     } catch {
       toast.info(command);
     }
@@ -199,21 +202,21 @@ export function WeComSettings({ t }: { t?: any }) {
 
   const removeBinding = async (binding: WeComBinding) => {
     const confirmed = await appConfirm({
-      title: ui('解除企微绑定', 'Remove WeCom Binding'),
-      message: ui('解除后，这个企微会话将不能再访问当前组织的数据。', 'This WeCom conversation will no longer access the current organization data.'),
-      confirmText: ui('解除绑定', 'Remove'),
-      cancelText: ui('取消', 'Cancel'),
+      title: uiMessage('we-com-settings.remove-wecom-binding.8b29e9dc48'),
+      message: uiMessage('we-com-settings.this-wecom-conversation-will-no.94f7e96e71'),
+      confirmText: uiMessage('we-com-settings.remove.22ca1b73bd'),
+      cancelText: uiMessage('we-com-settings.cancel.998b9c48fb'),
       tone: 'danger',
     });
     if (!confirmed) return;
     try {
       const res = await fetch(`/api/wecom/bindings/${binding.id}`, { method: 'DELETE', credentials: 'include' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || ui('解除绑定失败', 'Failed to remove binding'));
+      if (!res.ok) throw new Error(data.error || uiMessage('we-com-settings.failed-to-remove-binding.01934a75af'));
       setBindings(previous => previous.filter(item => item.id !== binding.id));
-      toast.success(ui('企微绑定已解除', 'WeCom binding removed'));
+      toast.success(uiMessage('we-com-settings.wecom-binding-removed.c964dea89e'));
     } catch (error: any) {
-      toast.error(error?.message || ui('解除绑定失败', 'Failed to remove binding'));
+      toast.error(error?.message || uiMessage('we-com-settings.failed-to-remove-binding.01934a75af'));
     }
   };
 
@@ -225,18 +228,18 @@ export function WeComSettings({ t }: { t?: any }) {
   const configured = Boolean(config?.enabled);
   const online = mode === 'app_webhook' ? configured : state === 'connected';
   const statusLabel = !configured
-    ? ui('企业微信未配置完整', 'WeCom is not fully configured')
+    ? uiMessage('we-com-settings.wecom-is-not-fully-configured.74552f4d8f')
     : mode === 'app_webhook'
-      ? ui('应用回调已配置', 'App webhook configured')
+      ? uiMessage('we-com-settings.app-webhook-configured.dd5ed03206')
       : state === 'connected'
-        ? ui('企微长连接在线', 'WeCom long connection online')
+        ? uiMessage('we-com-settings.wecom-long-connection-online.6e7cf5cb6a')
         : state === 'reconnecting'
-          ? ui('企微正在重连', 'WeCom reconnecting')
+          ? uiMessage('we-com-settings.wecom-reconnecting.e652f88861')
           : state === 'connecting'
-            ? ui('企微正在连接', 'WeCom connecting')
+            ? uiMessage('we-com-settings.wecom-connecting.7a230b775f')
             : state === 'error'
-              ? ui('企微连接失败', 'WeCom connection failed')
-              : ui('已配置，等待连接', 'Configured, waiting for connection');
+              ? uiMessage('we-com-settings.wecom-connection-failed.0d0a758725')
+              : uiMessage('we-com-settings.configured-waiting-for-connection.b4a0caf1b0');
 
   return (
     <div className="space-y-6">
@@ -246,8 +249,8 @@ export function WeComSettings({ t }: { t?: any }) {
           <div className="text-sm font-bold text-white">{statusLabel}</div>
           <div className="truncate text-xs text-white/40">
             {mode === 'aibot_long_connection'
-              ? (config?.botIdMasked || ui('填写 Bot ID 和 Bot Secret', 'Enter Bot ID and Bot Secret'))
-              : (config?.corpIdMasked || ui('填写自建应用配置', 'Enter custom app credentials'))}
+              ? (config?.botIdMasked || uiMessage('we-com-settings.enter-bot-id-and-bot.a5090f8eed'))
+              : (config?.corpIdMasked || uiMessage('we-com-settings.enter-custom-app-credentials.45e18d313e'))}
           </div>
           {connection?.lastError && mode === 'aibot_long_connection' && (
             <div className="mt-1 line-clamp-2 text-[11px] text-red-300/75">{connection.lastError}</div>
@@ -257,8 +260,8 @@ export function WeComSettings({ t }: { t?: any }) {
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs font-black uppercase tracking-widest text-white/50">{ui('接入方式', 'Connection Mode')}</div>
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1" role="tablist" aria-label={ui('企业微信接入方式', 'WeCom connection mode')}>
+        <div className="text-xs font-black uppercase tracking-widest text-white/50">{uiMessage('we-com-settings.connection-mode.b923a6156c')}</div>
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1" role="tablist" aria-label={uiMessage('we-com-settings.wecom-connection-mode.6107249740')}>
           <button
             type="button"
             role="tab"
@@ -266,7 +269,7 @@ export function WeComSettings({ t }: { t?: any }) {
             onClick={() => setMode('aibot_long_connection')}
             className={`flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-xs font-bold transition-colors ${mode === 'aibot_long_connection' ? 'bg-white/12 text-white' : 'text-white/45 hover:bg-white/5 hover:text-white/70'}`}
           >
-            <Radio size={14} /> {ui('AI 机器人长连接', 'AI Bot Long Connection')}
+            <Radio size={14} /> {uiMessage('we-com-settings.ai-bot-long-connection.e52d12010c')}
           </button>
           <button
             type="button"
@@ -275,13 +278,13 @@ export function WeComSettings({ t }: { t?: any }) {
             onClick={() => setMode('app_webhook')}
             className={`flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-xs font-bold transition-colors ${mode === 'app_webhook' ? 'bg-white/12 text-white' : 'text-white/45 hover:bg-white/5 hover:text-white/70'}`}
           >
-            <Webhook size={14} /> {ui('旧版应用回调', 'Legacy App Webhook')}
+            <Webhook size={14} /> {uiMessage('we-com-settings.legacy-app-webhook.84777c9e1d')}
           </button>
         </div>
         <p className="text-xs leading-relaxed text-white/40">
           {mode === 'aibot_long_connection'
-            ? ui('推荐本地部署使用，不需要公网地址，支持私聊、群聊和流式回复。', 'Recommended for local deployment. It needs no public URL and supports direct chats, groups, and streaming replies.')
-            : ui('保留给已有企微自建应用和公网 HTTPS 回调地址的部署。', 'For existing custom apps with a public HTTPS callback endpoint.')}
+            ? uiMessage('we-com-settings.recommended-for-local-deployment-it.014a598097')
+            : uiMessage('we-com-settings.for-existing-custom-apps-with.b4fa92b335')}
         </p>
       </div>
 
@@ -292,72 +295,72 @@ export function WeComSettings({ t }: { t?: any }) {
               <Input value={form.botId} onChange={event => setForm(previous => ({ ...previous, botId: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white" placeholder="bot_..." />
             </Field>
             <Field label="Bot Secret" icon={<Key size={12} />}>
-              <Input type="password" value={form.botSecret} onChange={event => setForm(previous => ({ ...previous, botSecret: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasBotSecret ? ui('留空则保持现有密钥不变', 'Leave blank to keep the current secret') : ui('输入 Bot Secret', 'Enter Bot Secret')} />
+              <Input type="password" value={form.botSecret} onChange={event => setForm(previous => ({ ...previous, botSecret: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasBotSecret ? uiMessage('we-com-settings.leave-blank-to-keep-the.4d0d0cdd5d') : uiMessage('we-com-settings.enter-bot-secret.754f6b325f')} />
             </Field>
           </>
         ) : (
           <>
-            <Field label={ui('Corp ID（企业 ID）', 'Corp ID')}><Input value={form.corpId} onChange={event => setForm(previous => ({ ...previous, corpId: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white" placeholder="ww..." /></Field>
-            <Field label={ui('Agent ID（应用 ID）', 'Agent ID')}><Input value={form.agentId} onChange={event => setForm(previous => ({ ...previous, agentId: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white" placeholder="1000001" /></Field>
-            <Field label="App Secret"><Input type="password" value={form.appSecret} onChange={event => setForm(previous => ({ ...previous, appSecret: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasSecret ? ui('留空则保持现有密钥不变', 'Leave blank to keep the current secret') : 'App Secret'} /></Field>
-            <Field label="Callback Token"><Input type="password" value={form.token} onChange={event => setForm(previous => ({ ...previous, token: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasToken ? ui('留空则保持现有 Token 不变', 'Leave blank to keep the current token') : 'Callback Token'} /></Field>
-            <Field label="Encoding AES Key"><Input type="password" value={form.encodingAESKey} onChange={event => setForm(previous => ({ ...previous, encodingAESKey: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasAesKey ? ui('留空则保持现有密钥不变', 'Leave blank to keep the current key') : ui('43 位 EncodingAESKey', '43-character EncodingAESKey')} /></Field>
+            <Field label={uiMessage('we-com-settings.corp-id.07ead2f288')}><Input value={form.corpId} onChange={event => setForm(previous => ({ ...previous, corpId: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white" placeholder="ww..." /></Field>
+            <Field label={uiMessage('we-com-settings.agent-id.d41b42283a')}><Input value={form.agentId} onChange={event => setForm(previous => ({ ...previous, agentId: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white" placeholder="1000001" /></Field>
+            <Field label="App Secret"><Input type="password" value={form.appSecret} onChange={event => setForm(previous => ({ ...previous, appSecret: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasSecret ? uiMessage('we-com-settings.leave-blank-to-keep-the.4d0d0cdd5d') : 'App Secret'} /></Field>
+            <Field label="Callback Token"><Input type="password" value={form.token} onChange={event => setForm(previous => ({ ...previous, token: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasToken ? uiMessage('we-com-settings.leave-blank-to-keep-the.c312eede26') : 'Callback Token'} /></Field>
+            <Field label="Encoding AES Key"><Input type="password" value={form.encodingAESKey} onChange={event => setForm(previous => ({ ...previous, encodingAESKey: event.target.value }))} className="h-10 border-white/10 bg-white/5 font-mono text-xs text-white placeholder:text-white/45" placeholder={config?.hasAesKey ? uiMessage('we-com-settings.leave-blank-to-keep-the.76e0fa4bb0') : uiMessage('we-com-settings.43-character-encodingaeskey.e08311ab4e')} /></Field>
           </>
         )}
         <Button onClick={save} disabled={saving} className="h-10 w-full border border-white/10 bg-white/10 text-xs font-black uppercase tracking-widest hover:bg-white/15">
           {saving ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Save size={14} className="mr-2" />}
-          {saving ? ui('保存并连接中...', 'Saving and connecting...') : ui('保存配置', 'Save Configuration')}
+          {saving ? uiMessage('we-com-settings.saving-and-connecting.305712a223') : uiMessage('we-com-settings.save-configuration.1ace864ca8')}
         </Button>
       </div>
 
       <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 p-4">
-        <div className="flex items-center gap-2 text-xs font-bold text-white/60"><Link2 size={14} />{ui('企微组织身份绑定', 'WeCom Organization Binding')}</div>
-        <p className="text-xs leading-relaxed text-white/40">{ui('在当前组织生成一次性绑定码，再到企微私聊或群聊发送绑定命令。每个群可以独立路由到不同组织，离开组织后权限立即失效。', 'Generate a one-time code in the active organization, then send the binding command in a direct chat or group. Each group can route to a different organization, and access ends when membership is revoked.')}</p>
+        <div className="flex items-center gap-2 text-xs font-bold text-white/60"><Link2 size={14} />{uiMessage('we-com-settings.wecom-organization-binding.80abf9a22c')}</div>
+        <p className="text-xs leading-relaxed text-white/40">{uiMessage('we-com-settings.generate-a-one-time-code.097db830ab')}</p>
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={generateBindingCode} disabled={bindingLoading} className="h-9 border border-white/10 bg-white/10 text-xs font-bold hover:bg-white/15">
             {bindingLoading ? <Loader2 size={13} className="mr-2 animate-spin" /> : <Link2 size={13} className="mr-2" />}
-            {ui('生成绑定码', 'Generate Code')}
+            {uiMessage('we-com-settings.generate-code.099ef173d3')}
           </Button>
           {bindingCode && (
             <button type="button" onClick={copyBindingCommand} className="inline-flex h-9 items-center gap-2 rounded-md border border-cyan-400/20 bg-cyan-400/10 px-3 text-xs font-bold text-cyan-200 hover:bg-cyan-400/15">
-              <Copy size={13} />{`绑定 Lumi ${bindingCode}`}
+              <Copy size={13} />{formatMessagingBindingCommand(bindingCode, locale)}
             </button>
           )}
         </div>
-        {bindingExpiresAt && <div className="text-[11px] text-white/32">{ui('过期时间：', 'Expires: ')}{new Date(bindingExpiresAt).toLocaleString()}</div>}
+        {bindingExpiresAt && <div className="text-[11px] text-white/32">{uiMessage('we-com-settings.expires.4094fda731')}{new Date(bindingExpiresAt).toLocaleString()}</div>}
         <div className="border-t border-white/8 pt-3">
           {bindings.length === 0 ? (
-            <div className="text-xs text-white/32">{ui('暂无绑定身份', 'No bound identities yet')}</div>
+            <div className="text-xs text-white/32">{uiMessage('we-com-settings.no-bound-identities-yet.9e261ae027')}</div>
           ) : bindings.map(binding => (
             <div key={binding.id} className="flex items-center justify-between gap-3 py-2">
               <div className="min-w-0">
                 <div className="truncate font-mono text-xs text-white/70">{binding.platformUserId}</div>
-                <div className="truncate text-[11px] text-white/32">{binding.chatType === 'group' ? ui('群聊路由', 'Group route') : ui('私聊路由', 'Private route')}{binding.chatId ? ` · ${binding.chatId}` : ''}</div>
+                <div className="truncate text-[11px] text-white/32">{binding.chatType === 'group' ? uiMessage('we-com-settings.group-route.be66ad213e') : uiMessage('we-com-settings.private-route.c9c1cf8c68')}{binding.chatId ? ` · ${binding.chatId}` : ''}</div>
               </div>
-              <button type="button" onClick={() => removeBinding(binding)} className="shrink-0 rounded-md p-1.5 text-white/35 hover:bg-red-500/10 hover:text-red-300" title={ui('解除绑定', 'Remove binding')}><Unlink size={13} /></button>
+              <button type="button" onClick={() => removeBinding(binding)} className="shrink-0 rounded-md p-1.5 text-white/35 hover:bg-red-500/10 hover:text-red-300" title={uiMessage('we-com-settings.remove-binding.d68e6d4dac')}><Unlink size={13} /></button>
             </div>
           ))}
         </div>
       </div>
 
       <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 p-4">
-        <div className="flex items-center gap-2 text-xs font-bold text-white/60"><Radio size={14} />{ui('企业微信接入步骤', 'WeCom Setup')}</div>
+        <div className="flex items-center gap-2 text-xs font-bold text-white/60"><Radio size={14} />{uiMessage('we-com-settings.wecom-setup.409e25c692')}</div>
         <div className="space-y-2 text-xs leading-relaxed text-white/40">
-          <p>{ui('1. 前往', '1. Open')} <a href="https://work.weixin.qq.com/wework_admin/frame#apps" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-celestial-saturn underline">{ui('企业微信管理后台', 'WeCom Admin Console')}<ExternalLink size={10} /></a></p>
+          <p>{uiMessage('we-com-settings.1-open.50a072fb3b')} <a href="https://work.weixin.qq.com/wework_admin/frame#apps" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-celestial-saturn underline">{uiMessage('we-com-settings.wecom-admin-console.cbacd9db7c')}<ExternalLink size={10} /></a></p>
           {mode === 'aibot_long_connection' ? (
             <>
-              <p>{ui('2. 创建智能机器人，在 API 模式中选择长连接。', '2. Create an AI Bot and choose long connection for its API mode.')}</p>
-              <p>{ui('3. 复制 Bot ID 和 Bot Secret，填入上方并保存。', '3. Copy the Bot ID and Bot Secret, then save them above.')}</p>
-              <p>{ui('4. 状态显示“长连接在线”后，把机器人加入需要使用的私聊或群聊。', '4. After the status is online, add the bot to the required direct chats or groups.')}</p>
+              <p>{uiMessage('we-com-settings.2-create-an-ai-bot.6d18bab932')}</p>
+              <p>{uiMessage('we-com-settings.3-copy-the-bot-id.bdbdbc1bc5')}</p>
+              <p>{uiMessage('we-com-settings.4-after-the-status-is.ab7af3cdde')}</p>
             </>
           ) : (
             <>
-              <p>{ui('2. 创建自建应用，复制 Corp ID、Agent ID 和 App Secret。', '2. Create a custom app and copy its Corp ID, Agent ID, and App Secret.')}</p>
-              <p>{ui('3. 在“接收消息”中填写你自己的公网 HTTPS 地址：', '3. In Receive Messages, enter your own public HTTPS endpoint:')}<code className="ml-1 rounded bg-white/5 px-1 text-celestial-jupiter">https://你的域名/api/wecom/events</code></p>
-              <p>{ui('4. 将同一组 Token 和 EncodingAESKey 填入企微后台和上方表单。', '4. Enter the same Token and EncodingAESKey in WeCom and the form above.')}</p>
+              <p>{uiMessage('we-com-settings.2-create-a-custom-app.13c8a4857e')}</p>
+              <p>{uiMessage('we-com-settings.3-in-receive-messages-enter.79794ae243')}<code className="ml-1 rounded bg-white/5 px-1 text-celestial-jupiter">https://example.com/api/wecom/events</code></p>
+              <p>{uiMessage('we-com-settings.4-enter-the-same-token.4294764508')}</p>
             </>
           )}
-          <p>{ui('5. 在当前组织生成绑定码，并在对应会话发送“绑定 Lumi 绑定码”。', '5. Generate a binding code in the active organization and send “绑定 Lumi CODE” in the target conversation.')}</p>
+          <p>{uiMessage('we-com-settings.5-generate-a-binding-code.30c9b5eebb')}</p>
         </div>
       </div>
     </div>

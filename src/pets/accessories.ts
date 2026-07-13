@@ -5,7 +5,6 @@ export type AccessoryCategory = 'hat' | 'glasses' | 'scarf' | 'collar' | 'ears' 
 export interface AccessoryDef {
   id: string;
   name: string;
-  nameCN: string;
   category: AccessoryCategory;
   /** Draw the accessory on canvas context at given cell dimensions */
   draw: (ctx: CanvasRenderingContext2D, w: number, h: number, frameIndex: number) => void;
@@ -413,29 +412,29 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 export const ALL_ACCESSORIES: AccessoryDef[] = [
-  { id: 'hat_propeller', name: 'Propeller Hat', nameCN: '竹蜻蜓帽', category: 'hat', draw: hatPropeller },
-  { id: 'hat_crown', name: 'Crown', nameCN: '皇冠', category: 'hat', draw: hatCrown },
-  { id: 'glasses_round', name: 'Round Glasses', nameCN: '圆框眼镜', category: 'glasses', draw: glassesRound },
-  { id: 'glasses_sunglasses', name: 'Sunglasses', nameCN: '墨镜', category: 'glasses', draw: glassesSunglasses },
-  { id: 'scarf_warm', name: 'Warm Scarf', nameCN: '保暖围巾', category: 'scarf', draw: scarfWarm },
-  { id: 'collar_spiked', name: 'Spiked Collar', nameCN: '铆钉项圈', category: 'collar', draw: collarSpiked },
-  { id: 'ears_bunny', name: 'Bunny Ears', nameCN: '兔耳朵', category: 'ears', draw: earsBunny },
-  { id: 'ears_cat', name: 'Cat Ears', nameCN: '猫耳朵', category: 'ears', draw: earsCat },
-  { id: 'tail_cat', name: 'Cat Tail', nameCN: '猫尾巴', category: 'tail', draw: tailCat },
+  { id: 'hat_propeller', name: 'Propeller Hat', category: 'hat', draw: hatPropeller },
+  { id: 'hat_crown', name: 'Crown', category: 'hat', draw: hatCrown },
+  { id: 'glasses_round', name: 'Round Glasses', category: 'glasses', draw: glassesRound },
+  { id: 'glasses_sunglasses', name: 'Sunglasses', category: 'glasses', draw: glassesSunglasses },
+  { id: 'scarf_warm', name: 'Warm Scarf', category: 'scarf', draw: scarfWarm },
+  { id: 'collar_spiked', name: 'Spiked Collar', category: 'collar', draw: collarSpiked },
+  { id: 'ears_bunny', name: 'Bunny Ears', category: 'ears', draw: earsBunny },
+  { id: 'ears_cat', name: 'Cat Ears', category: 'ears', draw: earsCat },
+  { id: 'tail_cat', name: 'Cat Tail', category: 'tail', draw: tailCat },
   // New: Masks
-  { id: 'mask_surgical', name: 'Surgical Mask', nameCN: '口罩', category: 'mask', draw: maskSurgical },
-  { id: 'mask_fox', name: 'Fox Mask', nameCN: '狐狸面具', category: 'mask', draw: maskFox },
+  { id: 'mask_surgical', name: 'Surgical Mask', category: 'mask', draw: maskSurgical },
+  { id: 'mask_fox', name: 'Fox Mask', category: 'mask', draw: maskFox },
   // New: Back items
-  { id: 'back_backpack', name: 'Tiny Backpack', nameCN: '小背包', category: 'back', draw: backBackpack },
-  { id: 'back_bow', name: 'Back Bow', nameCN: '蝴蝶结', category: 'back', draw: backBow },
-  { id: 'back_miniwings', name: 'Mini Wings', nameCN: '小翅膀', category: 'back', draw: backMiniWings },
+  { id: 'back_backpack', name: 'Tiny Backpack', category: 'back', draw: backBackpack },
+  { id: 'back_bow', name: 'Back Bow', category: 'back', draw: backBow },
+  { id: 'back_miniwings', name: 'Mini Wings', category: 'back', draw: backMiniWings },
   // New: Face marks
-  { id: 'face_blush', name: 'Blush', nameCN: '腮红', category: 'faceMark', draw: faceMarkBlush },
-  { id: 'face_star', name: 'Star Mark', nameCN: '星星印记', category: 'faceMark', draw: faceMarkStar },
-  { id: 'face_heart', name: 'Heart Mark', nameCN: '心形印记', category: 'faceMark', draw: faceMarkHeart },
+  { id: 'face_blush', name: 'Blush', category: 'faceMark', draw: faceMarkBlush },
+  { id: 'face_star', name: 'Star Mark', category: 'faceMark', draw: faceMarkStar },
+  { id: 'face_heart', name: 'Heart Mark', category: 'faceMark', draw: faceMarkHeart },
   // New: Auras
-  { id: 'aura_halo', name: 'Halo', nameCN: '光环', category: 'aura', draw: auraHalo },
-  { id: 'aura_sparkles', name: 'Sparkles', nameCN: '星光', category: 'aura', draw: auraSparkles },
+  { id: 'aura_halo', name: 'Halo', category: 'aura', draw: auraHalo },
+  { id: 'aura_sparkles', name: 'Sparkles', category: 'aura', draw: auraSparkles },
 ];
 
 export function getAccessoryById(id: string): AccessoryDef | undefined {
