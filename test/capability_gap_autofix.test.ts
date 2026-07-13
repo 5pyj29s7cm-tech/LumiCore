@@ -17,11 +17,19 @@ describe('capability gap autofix', () => {
       const registry = new ToolRegistry();
       registerExternalAppTools(registry);
       registerSelfExtensionTools(registry);
+      registry.register({
+        name: 'mcp_cad-drafting_autocad_playback_file',
+        description: 'Test-only AutoCAD MCP declaration.',
+        parameters: { type: 'object', properties: {} },
+        handler: async () => JSON.stringify({ status: 'not_called' }),
+        permission: 'user',
+        securityLevel: 'safe',
+      });
 
       const raw = await registry.execute('capability_gap_autofix', {
         goal: '让 Lumi 在 AutoCAD 里一笔一笔画图，不要用鼠标硬点',
         domain: 'cad_bim',
-        observedFailure: '过去只是生成 DXF 或打开软件，没有把脚本送进 AutoCAD 并验证执行闭环。',
+        observedFailure: '过去只是生成 DXF 或打开软件，没有通过 MCP/COM 在 AutoCAD 中完成实体绘制和验收。',
         outputDirectory,
         allowExternalExecution: false,
       }, {
@@ -30,19 +38,20 @@ describe('capability gap autofix', () => {
       } as any);
 
       const result = JSON.parse(raw);
-      expect(result.selectedRoute.id).toBe('cad.autocad_script_bridge');
+      expect(result.selectedRoute.id).toBe('cad.autocad_mcp_playback');
+      expect(result.selectedRoute.fallbackTools).toEqual([]);
       expect(result.experiment.status).toBe('prepared');
       expect(result.record.status).toBe('experiment_prepared');
       expect(result.record.nextUse.preferredTools).toEqual(expect.arrayContaining([
-        'cad_generate_autocad_draw_script',
-        'cad_run_autocad_draw_script',
+        'cad_prepare_autocad_operations',
+        'mcp_cad-drafting_autocad_playback_file',
       ]));
 
       const artifactPaths = result.experiment.artifacts.map((artifact: any) => artifact.path);
-      expect(artifactPaths.some((filePath: string) => filePath.endsWith('.lsp'))).toBe(true);
-      expect(artifactPaths.some((filePath: string) => filePath.endsWith('.scr'))).toBe(true);
-      expect(artifactPaths.some((filePath: string) => filePath.endsWith('.ps1'))).toBe(true);
-      for (const artifact of result.experiment.artifacts.filter((item: any) => !item.label.includes('marker'))) {
+      expect(artifactPaths.some((filePath: string) => filePath.endsWith('_operations.json'))).toBe(true);
+      expect(artifactPaths.some((filePath: string) => filePath.endsWith('_manifest.json'))).toBe(true);
+      expect(artifactPaths.some((filePath: string) => /\.(?:lsp|scr|ps1)$/i.test(filePath))).toBe(false);
+      for (const artifact of result.experiment.artifacts) {
         expect(fs.existsSync(artifact.path)).toBe(true);
       }
 
@@ -85,13 +94,13 @@ describe('capability gap autofix', () => {
         userId: 'capability_user',
       } as any);
       const afterSecondList = JSON.parse(afterSecondListRaw);
-      expect(afterSecondList.records.filter((record: any) => record.selectedRoute.id === 'cad.autocad_script_bridge')).toHaveLength(1);
+      expect(afterSecondList.records.filter((record: any) => record.selectedRoute.id === 'cad.autocad_mcp_playback')).toHaveLength(1);
 
       const { formatClientSelfPrompt } = await import('../server/client/self_model');
       const prompt = formatClientSelfPrompt('capability_user');
       expect(prompt).toContain('### Learned Capability Routes');
-      expect(prompt).toContain('AutoCAD 脚本/API 优先绘图路线');
-      expect(prompt).toContain('cad_generate_autocad_draw_script');
+      expect(prompt).toContain('AutoCAD MCP/COM drawing route');
+      expect(prompt).toContain('cad_prepare_autocad_operations');
     } finally {
       fs.rmSync(outputDirectory, { recursive: true, force: true });
     }

@@ -57,9 +57,8 @@ const declarations = [
   'wechat_prepare_reply',
   'wechat_copy_reply_draft',
   'cad_generate_dxf',
-  'cad_generate_autocad_draw_script',
+  'cad_prepare_autocad_operations',
   'mcp_cad-drafting_autocad_playback_file',
-  'cad_run_autocad_draw_script',
   'mcp_cad-drafting_cad_space_program',
   'mcp_cad-drafting_cad_renovation_folder_workflow',
   'mcp_stockbot_stock_quote',
@@ -176,11 +175,11 @@ describe('Lumi runtime action pressure coverage', () => {
       },
       {
         id: 'cad-drafting',
-        text: 'CAD\u81ea\u52a8\u753b\u56fe',
+        text: '\u5728 AutoCAD \u4e2d\u4e00\u7b14\u4e00\u7b14\u5b9e\u9645\u753b\u56fe',
         kind: 'cad_drafting',
         categories: ['cad_design'],
-        tools: ['cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'],
-        earlyTools: ['cad_generate_dxf'],
+        tools: ['cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file'],
+        earlyTools: ['cad_prepare_autocad_operations'],
       },
       {
         id: 'stock-watch',
@@ -229,7 +228,7 @@ describe('Lumi runtime action pressure coverage', () => {
       '\u6253\u5f00\u6d4f\u89c8\u5668\u81ea\u52a8\u767b\u5f55\u6dd8\u5b9d\u540e\u53f0',
       'pressure_direct_login_lane',
     );
-    const cad = evaluate('CAD\u81ea\u52a8\u753b\u56fe', 'pressure_direct_cad_order');
+    const cad = evaluate('\u5728 AutoCAD \u4e2d\u4e00\u7b14\u4e00\u7b14\u5b9e\u9645\u753b\u56fe', 'pressure_direct_cad_order');
 
     expect(login.contract.kind).toBe('browser_account');
     expect(login.dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
@@ -241,13 +240,12 @@ describe('Lumi runtime action pressure coverage', () => {
     ]));
 
     expect(cad.contract.kind).toBe('cad_drafting');
-    expect(cad.route?.toolNames.slice(0, 5)).toEqual([
+    expect(cad.route?.toolNames.slice(0, 3)).toEqual([
       'desktop_list_apps',
-      'cad_generate_dxf',
-      'cad_generate_autocad_draw_script',
+      'cad_prepare_autocad_operations',
       'mcp_cad-drafting_autocad_playback_file',
-      'cad_run_autocad_draw_script',
     ]);
+    expect(cad.route?.toolNames).not.toContain('cad_generate_dxf');
   });
 
   it('does not treat reading a chat as sending a chat', () => {

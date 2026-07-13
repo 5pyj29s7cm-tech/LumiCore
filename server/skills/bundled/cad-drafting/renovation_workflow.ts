@@ -748,19 +748,19 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
             reason: 'The folder workflow catalogued this likely floor-plan image but did not visually trace it.',
           },
           {
+            tool: 'cad_prepare_autocad_operations',
+            useResultFrom: 'floorplan_extract_geometry.cadPrepareAutocadOperationsArgs',
+            reason: 'Prepare the validated entity operations required by the AutoCAD MCP/COM bridge.',
+          },
+          {
+            tool: 'mcp_cad-drafting_autocad_playback_file',
+            useResultFrom: 'cad_prepare_autocad_operations',
+            reason: 'Draw visibly in real AutoCAD through MCP/COM and require its completion marker. Do not fall back to files or scripts.',
+          },
+          {
             tool: 'cad_generate_dxf',
             useResultFrom: 'floorplan_extract_geometry.cadGenerateDxfArgs',
-            reason: 'Generate the editable DXF from extracted image geometry, not from the conceptual room grid.',
-          },
-          {
-            tool: 'cad_generate_autocad_draw_script',
-            useResultFrom: 'floorplan_extract_geometry.cadGenerateAutocadArgs',
-            reason: 'Prepare visible stroke-by-stroke AutoCAD drawing from the same extracted geometry.',
-          },
-          {
-            tool: 'cad_run_autocad_draw_script',
-            useResultFrom: 'cad_generate_autocad_draw_script',
-            reason: 'Actually execute and verify the AutoCAD drawing through its completion marker.',
+            reason: 'Generate an editable DXF only as a separate requested deliverable, never as visible AutoCAD completion evidence.',
           },
         ]
       : [],

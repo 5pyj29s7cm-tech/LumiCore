@@ -111,7 +111,7 @@ server.registerTool('cad_drafting_checklist', {
 server.registerTool('autocad_playback_file', {
   description: 'Control the real Windows AutoCAD application through its COM automation API and visibly create each validated line, circle, arc, or text operation one at a time. Reads a Lumi-generated operations JSON file, opens a separate drawing by default, refreshes AutoCAD after every operation, waits between strokes, and writes a completion marker only after the visible playback finishes. This is Lumi MCP automation for AutoCAD, not an Autodesk-official MCP server.',
   inputSchema: {
-    operationsPath: z.string().describe('Path to the operations JSON produced by cad_generate_autocad_draw_script.'),
+    operationsPath: z.string().describe('Path to the operations JSON produced by cad_prepare_autocad_operations.'),
     completionMarkerPath: z.string().describe('Marker file written only after every AutoCAD operation completes.'),
     strokeDelayMs: z.number().int().min(100).max(5000).optional().describe('Visible delay after every drawing operation. Defaults to 450ms.'),
     createNewDocument: z.boolean().optional().describe('Open a separate blank AutoCAD document before playback. Defaults true to avoid modifying an existing drawing.'),

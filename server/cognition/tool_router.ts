@@ -1,7 +1,7 @@
 import { ToolPolicy } from '../personality/types';
 import { ToolRegistry } from '../tools/registry';
 import { mcpManager } from '../mcp/client';
-import { requiresAutoCadMcpPlayback, requiresVisibleAutoCadExecution } from './action_contract';
+import { requiresVisibleAutoCadExecution } from './action_contract';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -142,9 +142,8 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'generate_image_dalle',
     'edit_image',
     'cad_generate_dxf',
-    'cad_generate_autocad_draw_script',
+    'cad_prepare_autocad_operations',
     'mcp_cad-drafting_autocad_playback_file',
-    'cad_run_autocad_draw_script',
     'floorplan_extract_geometry',
     'ocr_image_file',
   ],
@@ -557,19 +556,25 @@ function isLocalCadSourceRequest(text: string): boolean {
   return hasLocalSource && hasSourceReading && hasCadTarget;
 }
 
-function isDirectAutocadScriptRun(text: string): boolean {
+function isDirectAutocadOperationsPlayback(text: string): boolean {
   const raw = String(text || '');
-  const hasGeneratedScript = /\.scr\b/i.test(raw) && /\.lsp\b/i.test(raw);
-  const hasAutocadTarget = /\b(?:autocad|acad|cad_run_autocad_draw_script)\b/i.test(raw);
+  const hasOperations = /(?:_operations\.json\b|operationsPath|AutoCAD\s+operations)/i.test(raw);
+  const hasAutocadTarget = /\b(?:autocad|acad|mcp_cad-drafting_autocad_playback_file)\b/i.test(raw);
   const hasRunIntent = /\b(?:run|execute|launch|playback|acceptance|verify)\b/i.test(raw)
     || /(?:\u8fd0\u884c|\u6267\u884c|\u542f\u52a8|\u56de\u653e|\u9a8c\u6536|\u6821\u9a8c)/u.test(raw);
-  return hasGeneratedScript && hasAutocadTarget && hasRunIntent;
+  return hasOperations && hasAutocadTarget && hasRunIntent;
+}
+
+function requestsExplicitCadFileExport(text: string): boolean {
+  const raw = String(text || '');
+  return /(?:\u5bfc\u51fa|\u751f\u6210|\u4fdd\u5b58|\u4ea4\u4ed8).{0,24}(?:DXF|DWG)|(?:DXF|DWG).{0,24}(?:\u5bfc\u51fa|\u751f\u6210|\u4fdd\u5b58|\u4ea4\u4ed8)/iu.test(raw)
+    || /\b(?:export|generate|save|deliver)\b.{0,24}\b(?:DXF|DWG)\b|\b(?:DXF|DWG)\b.{0,24}\b(?:export|generate|save|deliver)\b/i.test(raw);
 }
 
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
-  if (isDirectAutocadScriptRun(text)) {
-    priorities.push('cad_run_autocad_draw_script');
+  if (isDirectAutocadOperationsPlayback(text)) {
+    priorities.push('mcp_cad-drafting_autocad_playback_file');
   }
   if (isDesktopAiCollaboration(text)) {
     const wantsCollectedComparison = /(?:\u603b\u7ed3|\u6c47\u603b|\u5bf9\u6bd4|\u90fd\u62ff\u56de\u6765|\u6240\u6709\u56de\u7b54|summari[sz]e|compare|collect\s+all|all\s+answers)/iu.test(text);
@@ -683,11 +688,8 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
             'desktop_list_apps',
             'floorplan_extract_geometry',
             'ocr_image_file',
-            'cad_generate_dxf',
-            'cad_generate_autocad_draw_script',
+            'cad_prepare_autocad_operations',
             'mcp_cad-drafting_autocad_playback_file',
-            'cad_run_autocad_draw_script',
-            'mcp_cad-drafting_cad_renovation_folder_workflow',
             'desktop_capture_screen',
           ]
         : [
@@ -698,19 +700,15 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
             'ocr_image_file',
             'mcp_cad-drafting_cad_renovation_folder_workflow',
             'cad_generate_dxf',
-            'cad_generate_autocad_draw_script',
-            'mcp_cad-drafting_autocad_playback_file',
-            'cad_run_autocad_draw_script',
             'desktop_capture_screen',
           ];
       priorities.push(...localCadSourceTools);
     } else {
       priorities.push(
         'desktop_list_apps',
-        'cad_generate_dxf',
-        'cad_generate_autocad_draw_script',
+        'cad_prepare_autocad_operations',
         'mcp_cad-drafting_autocad_playback_file',
-        'cad_run_autocad_draw_script',
+        'cad_generate_dxf',
         'mcp_cad-drafting_cad_space_program',
         'mcp_cad-drafting_cad_renovation_folder_workflow',
         'desktop_capture_screen',
@@ -880,7 +878,7 @@ export function routeToolsForTurn(
       isDesktopAiCollaboration(text) &&
       !/(?:文件|文档|表格|幻灯片|导出|保存|PPT|PDF|DOCX|XLSX|document|file|spreadsheet|presentation|export|save)/iu.test(text)
     ) continue;
-    if (route.category === 'documents' && isDirectAutocadScriptRun(text)) continue;
+    if (route.category === 'documents' && isDirectAutocadOperationsPlayback(text)) continue;
     categories.push(route.category);
     reasons.push(route.reason);
 
@@ -903,17 +901,18 @@ export function routeToolsForTurn(
     }
   }
 
-  if (isDirectAutocadScriptRun(text)) {
+  if (isDirectAutocadOperationsPlayback(text)) {
     for (const name of TOOL_GROUPS.documents) selected.delete(name);
-    addIfAvailable(selected, available, 'cad_run_autocad_draw_script');
-    reasons.push('existing AutoCAD script execution bypasses general document extraction');
+    addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
+    reasons.push('existing AutoCAD operations are played only through MCP/COM');
   }
 
-  if (requiresAutoCadMcpPlayback(text)) {
-    selected.delete('cad_run_autocad_draw_script');
-    addIfAvailable(selected, available, 'cad_generate_autocad_draw_script');
+  if (requiresVisibleAutoCadExecution(text)) {
+    if (!requestsExplicitCadFileExport(text)) selected.delete('cad_generate_dxf');
+    selected.delete('mcp_cad-drafting_cad_renovation_folder_workflow');
+    addIfAvailable(selected, available, 'cad_prepare_autocad_operations');
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
-    reasons.push('explicit AutoCAD MCP-only playback excludes LISP/script fallback');
+    reasons.push('visible AutoCAD execution requires MCP/COM playback and excludes generated-file or script fallback');
   }
 
   const orderedBeforeHealthGate = applyRoutePriority(

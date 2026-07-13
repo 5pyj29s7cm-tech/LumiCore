@@ -244,31 +244,59 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
-    expect(result.text).toContain('cad_run_autocad_draw_script');
+    expect(result.text).toContain('mcp_cad-drafting_autocad_playback_file');
   });
 
-  it('allows visible AutoCAD completion after the draw script run is completed', async () => {
+  it('rejects unrelated generated charts when a terse continuation belongs to an AutoCAD task', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: [
+        '执行绘图',
+        '## Recent action continuation context',
+        'Recent user task context:',
+        '- 读取桌面阿陆文件夹里的户型图，并在 AutoCAD 中实际画出来。',
+        'Recent Lumi execution state:',
+        '- AutoCAD 回放仍被阻塞，尚未获得完成标记。',
+      ].join('\n'),
+      responseText: '已完成绘图，生成了六张业务数据可视化 PNG 图表。',
+      toolRecords: [{
+        name: 'write_file',
+        arguments: { path: 'C:\\tmp\\charts.py' },
+        result: 'C:\\tmp\\charts.py',
+      }, {
+        name: 'python_exec',
+        arguments: { path: 'C:\\tmp\\charts.py' },
+        result: 'Generated C:\\tmp\\sales_dashboard.png',
+      }],
+      source: 'background_delegation',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
+    expect(result.text).toContain('还没完成');
+  });
+
+  it('rejects a legacy batch marker even when the task did not explicitly say MCP-only', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
     const result = finalizeLumiResponse({
       taskText: '\u684c\u9762\u4e0a\u6709\u4e2a\u300c\u963f\u9646\u300d\u6587\u4ef6\u5939\uff0c\u8bf7\u6839\u636e\u91cc\u9762\u7684\u56fe\u7247\u751f\u6210 CAD \u56fe\u7eb8\uff0c\u5e76\u5728 AutoCAD \u91cc\u5b9e\u9645\u753b\u51fa\u6765',
       responseText: 'AutoCAD drawing completed.',
       toolRecords: [{
-        name: 'cad_generate_autocad_draw_script',
+        name: 'cad_prepare_autocad_operations',
         arguments: { width: 7800, height: 6200 },
-        result: '{"scriptPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr","completionMarkerPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan.done","operationCount":12}',
+        result: '{"operationsPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan_operations.json","completionMarkerPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan.done","operationCount":12}',
       }, {
-        name: 'cad_run_autocad_draw_script',
-        arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
+        name: 'legacy_autocad_batch',
+        arguments: { operationsPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan_operations.json' },
         result: '{"status":"completed","completionMarkerExists":true,"completionMarkerPath":"C:\\\\Users\\\\me\\\\Desktop\\\\plan_completed.txt","autocadExecutable":"D:\\\\AutoCAD\\\\acad.exe","autocadExecutableSource":"desktop_app_index"}',
       }],
       source: 'chat',
     });
 
-    expect(result.blocked).toBe(false);
-    expect(result.reason).toContain('CAD completion marker');
-    expect(result.text).toContain('已在真实 AutoCAD 中完成');
-    expect(result.text).toContain('plan_completed.txt');
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
   });
 
   it('grounds visible AutoCAD MCP playback in its operation file and marker', async () => {
@@ -286,22 +314,22 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.reason).toContain('MCP visible-playback');
+    expect(result.reason).toContain('MCP/COM visible-playback');
     expect(result.text).toContain('stroke-by-stroke playback');
     expect(result.text).toContain('plan_operations.json');
     expect(result.text).toContain('450 ms');
   });
 
-  it('does not accept a completed LISP fallback for an explicit AutoCAD MCP-only task', async () => {
+  it('does not accept a generated drawing file for an explicit AutoCAD MCP-only task', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
     const result = finalizeLumiResponse({
       taskText: 'Draw visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only; do not use LISP, scripts, or fallback.',
       responseText: 'The AutoCAD drawing is complete.',
       toolRecords: [{
-        name: 'cad_run_autocad_draw_script',
+        name: 'cad_generate_dxf',
         arguments: {},
-        result: '{"status":"completed","completionMarkerExists":true,"completionMarkerPath":"C:\\\\CAD\\\\fallback.txt"}',
+        result: '{"status":"completed","path":"C:\\\\CAD\\\\fallback.dxf"}',
       }],
       source: 'chat',
     });

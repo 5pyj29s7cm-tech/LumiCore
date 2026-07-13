@@ -46,6 +46,7 @@ function buildDeclarations() {
       'mcp_stockbot_paper_portfolio',
       'mcp_cad-drafting_cad_space_program',
       'mcp_cad-drafting_cad_renovation_folder_workflow',
+      'mcp_cad-drafting_autocad_playback_file',
     ].map(name => declaration(name)),
   ];
 }
@@ -134,10 +135,10 @@ describe('Lumi continuous real-action pressure', () => {
       },
       {
         id: 'cad',
-        text: 'CAD\u81ea\u52a8\u753b\u56fe',
+        text: '\u5728 AutoCAD \u4e2d\u4e00\u7b14\u4e00\u7b14\u5b9e\u9645\u753b\u56fe',
         kind: 'cad_drafting',
         categories: ['cad_design'],
-        earlyTools: ['cad_generate_dxf', 'cad_generate_autocad_draw_script'],
+        earlyTools: ['cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file'],
       },
       {
         id: 'legal',

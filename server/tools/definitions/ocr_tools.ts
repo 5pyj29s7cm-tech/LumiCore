@@ -353,10 +353,10 @@ async function floorplanExtractGeometry(args: Record<string, any>, context?: any
       geometry: parsed,
       geometryReady,
       cadGenerateDxfArgs: geometryReady ? cadArgs : null,
-      cadGenerateAutocadArgs: geometryReady ? cadArgs : null,
+      cadPrepareAutocadOperationsArgs: geometryReady ? cadArgs : null,
       rawAnalysis: parsed ? undefined : analysis,
       next: geometryReady
-        ? 'Pass cadGenerateDxfArgs into cad_generate_dxf and cadGenerateAutocadArgs into cad_generate_autocad_draw_script. Preserve inferredScale, confidence, assumptions, missingForPrecision, and precisionStatus in the result.'
+        ? 'For visible AutoCAD work, pass cadPrepareAutocadOperationsArgs into cad_prepare_autocad_operations, then pass its operationsPath and completionMarkerPath into mcp_cad-drafting_autocad_playback_file. Use cadGenerateDxfArgs only when an explicit DXF deliverable is requested. Never substitute DXF or scripts for failed MCP playback.'
         : parsed
         ? 'Geometry was parsed but has no usable outer dimensions or coordinate extent. Ask for one confirmed dimension or retry a clearer crop before generating CAD.'
         : 'Vision did not return valid JSON. Retry with a tighter crop or use ocr_image_file for manual extraction.',

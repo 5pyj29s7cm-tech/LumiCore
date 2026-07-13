@@ -2,12 +2,12 @@ import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import { formatDesktopObservationResult } from './desktop_observation';
+import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
 import {
   buildActionContract,
   hasAuthenticatedWebResultEvidence,
   hasCoreActionEvidence,
   hasVisibleAutoCadExecutionEvidence,
-  requiresAutoCadMcpPlayback,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
   summarizeActionContractBlocker,
@@ -351,11 +351,9 @@ function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string 
 
 function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   if (taskActionContract(input).kind !== 'cad_drafting') return null;
-  const mcpOnly = requiresAutoCadMcpPlayback(input.taskText);
   const record = [...(input.toolRecords || [])].reverse().find(item => (
     !item.error
-    && /^(?:cad_run_autocad_draw_script|mcp_cad-drafting_autocad_playback_file)$/i.test(String(item.name || ''))
-    && (!mcpOnly || /^mcp_cad-drafting_autocad_playback_file$/i.test(String(item.name || '')))
+    && /^mcp_cad-drafting_autocad_playback_file$/i.test(String(item.name || ''))
     && String(item.result || '').trim()
   ));
   if (!record) return null;
@@ -369,48 +367,37 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
 
   const zh = isChineseText(input.taskText);
   const markerPath = String(parsed?.completionMarkerPath || '').trim();
-  const scriptPath = String(parsed?.scriptPath || '').trim();
   const operationsPath = String(parsed?.operationsPath || parsed?.manifest?.operationsPath || '').trim();
   const executable = String(parsed?.autocadExecutable || parsed?.manifest?.autocadExecutable || '').trim();
   const executableSource = String(parsed?.autocadExecutableSource || parsed?.manifest?.autocadExecutableSource || '').trim();
   const operationCount = Number(parsed?.operationCount || parsed?.manifest?.operationCount || 0);
   const strokeDelayMs = Number(parsed?.strokeDelayMs || parsed?.manifest?.strokeDelayMs || 0);
-  const mcpPlayback = /^mcp_cad-drafting_autocad_playback_file$/i.test(String(record.name || ''))
-    || parsed?.transport === 'mcp_autocad_com';
   const completed = parsed?.status === 'completed'
     && parsed?.completionMarkerExists === true
-    && (!mcpOnly || (
-      mcpPlayback
-      && parsed?.transport === 'mcp_autocad_com'
-      && parsed?.visiblePlayback === true
-    ));
+    && parsed?.transport === 'mcp_autocad_com'
+    && parsed?.visiblePlayback === true;
 
   if (completed) {
     const lines = zh
       ? [
-          '已在真实 AutoCAD 中完成绘图脚本回放并通过验收。',
+          CN_CAD_MESSAGES.playbackCompleted,
           markerPath ? `完成标记：${markerPath}` : '',
-          scriptPath ? `绘图脚本：${scriptPath}` : '',
+          operationsPath ? `${CN_CAD_MESSAGES.drawingOperations}${operationsPath}` : '',
           executable ? `AutoCAD：${executable}${executableSource ? `（来源：${executableSource}）` : ''}` : '',
           operationCount > 0 ? `已执行 ${operationCount} 个绘图操作。` : '',
         ]
       : [
-          mcpPlayback
-            ? 'The visible stroke-by-stroke playback completed in the real AutoCAD application through Lumi CAD MCP and passed marker verification.'
-            : 'The drawing script completed in the real AutoCAD application and passed marker verification.',
+          'The visible stroke-by-stroke playback completed in the real AutoCAD application through Lumi CAD MCP/COM and passed marker verification.',
           markerPath ? `Completion marker: ${markerPath}` : '',
           operationsPath ? `Drawing operations: ${operationsPath}` : '',
-          scriptPath ? `Drawing script: ${scriptPath}` : '',
           executable ? `AutoCAD: ${executable}${executableSource ? ` (source: ${executableSource})` : ''}` : '',
           operationCount > 0 ? `${operationCount} drawing operations completed.` : '',
-          mcpPlayback && strokeDelayMs > 0 ? `Visible stroke interval: ${strokeDelayMs} ms.` : '',
+          strokeDelayMs > 0 ? `Visible stroke interval: ${strokeDelayMs} ms.` : '',
         ];
     return {
       text: lines.filter(Boolean).join('\n'),
       blocked: false,
-      reason: mcpPlayback
-        ? 'Grounded AutoCAD MCP visible-playback summary from the CAD completion marker.'
-        : 'Grounded AutoCAD completion summary from the CAD completion marker.',
+      reason: 'Grounded AutoCAD MCP/COM visible-playback summary from the CAD completion marker.',
     };
   }
 

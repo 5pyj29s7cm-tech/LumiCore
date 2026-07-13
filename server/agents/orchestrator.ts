@@ -812,6 +812,7 @@ async function executeWorkerTask(
     const workerPrompt = [
       `You are worker agent "${currentAgent.name}" (${currentAgent.category}). You have tool access — use tools to complete the task, don't just describe what to do.`,
       `Task: ${compactTaskForPlanning(subTask.description, 7000)}${retryHint}`,
+      'Context boundary: use only the task inputs and referenced paths. Do not inspect the clipboard, unrelated files, databases, usage logs, or unrelated application state unless the task explicitly requests that source.',
       modeDirective,
       memoryContext ? `Relevant memories:\n${memoryContext}` : '',
       'Complete this sub-task using available tools. Output the final result.',

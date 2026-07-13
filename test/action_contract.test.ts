@@ -110,24 +110,26 @@ describe('Lumi action contract', () => {
     }])).toBe(false);
     expect(hasVisibleAutoCadExecutionEvidence([{
       id: 'run',
-      name: 'cad_run_autocad_draw_script',
+      name: 'legacy_autocad_batch',
       arguments: { scriptPath: 'C:\\\\Users\\\\me\\\\Desktop\\\\plan.scr' },
       result: '{"status":"completed","completionMarkerExists":true}',
-    }])).toBe(true);
+    }])).toBe(false);
     expect(hasVisibleAutoCadExecutionEvidence([{
       id: 'mcp-run',
       name: 'mcp_cad-drafting_autocad_playback_file',
       arguments: { operationsPath: 'C:\\Users\\me\\Desktop\\plan_operations.json' },
       result: '{"status":"completed","transport":"mcp_autocad_com","visiblePlayback":true,"completionMarkerExists":true}',
     }])).toBe(true);
+    expect(buildActionContract(text).preferredTools).toContain('cad_prepare_autocad_operations');
     expect(buildActionContract(text).preferredTools).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(buildActionContract(text).preferredTools).not.toContain('cad_generate_dxf');
   });
 
   it('requires MCP marker evidence and excludes script fallback for an explicit MCP-only run', () => {
     const text = 'Draw this visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only; do not use LISP, scripts, or fallback.';
     const fallback = [{
       id: 'fallback',
-      name: 'cad_run_autocad_draw_script',
+      name: 'cad_generate_dxf',
       arguments: {},
       result: '{"status":"completed","completionMarkerExists":true}',
     }];
@@ -139,7 +141,8 @@ describe('Lumi action contract', () => {
     }];
 
     expect(requiresAutoCadMcpPlayback(text)).toBe(true);
-    expect(buildActionContract(text).preferredTools).not.toContain('cad_run_autocad_draw_script');
+    expect(buildActionContract(text).preferredTools).toContain('cad_prepare_autocad_operations');
+    expect(buildActionContract(text).preferredTools).not.toContain('cad_generate_dxf');
     expect(hasVisibleAutoCadExecutionEvidence(fallback, text)).toBe(false);
     expect(hasVisibleAutoCadExecutionEvidence(mcp, text)).toBe(true);
   });

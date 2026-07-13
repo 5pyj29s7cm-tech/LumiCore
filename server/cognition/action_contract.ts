@@ -72,8 +72,8 @@ export function requiresAutoCadMcpPlayback(input: string): boolean {
   if (!text) return false;
   const mentionsMcp = /mcp_cad-drafting_autocad_playback_file|(?:AutoCAD|CAD)\s*MCP|MCP.{0,24}(?:AutoCAD|CAD)/i.test(text);
   const requiresExclusivePath =
-    /(?:仅|只|只能|必须|务必|不要|别|禁止|不得|不能|不准).{0,48}(?:AutoCAD\s*MCP|CAD\s*MCP|mcp_cad-drafting_autocad_playback_file|LISP|脚本|回退|降级|cad_run_autocad_draw_script)/iu.test(text)
-    || /\b(?:only|must|required|exclusively)\b.{0,64}\b(?:AutoCAD|CAD|MCP)\b|\b(?:do\s+not|don't|dont|without|no)\b.{0,64}\b(?:LISP|script|fallback|cad_run_autocad_draw_script)\b/i.test(text);
+    /(?:\u4ec5|\u53ea|\u53ea\u80fd|\u5fc5\u987b|\u52a1\u5fc5|\u4e0d\u8981|\u522b|\u7981\u6b62|\u4e0d\u5f97|\u4e0d\u80fd|\u4e0d\u51c6).{0,48}(?:AutoCAD\s*MCP|CAD\s*MCP|mcp_cad-drafting_autocad_playback_file|LISP|\u811a\u672c|\u56de\u9000|\u964d\u7ea7)/iu.test(text)
+    || /\b(?:only|must|required|exclusively)\b.{0,64}\b(?:AutoCAD|CAD|MCP)\b|\b(?:do\s+not|don't|dont|without|no)\b.{0,64}\b(?:LISP|script|fallback)\b/i.test(text);
   return mentionsMcp && requiresExclusivePath;
 }
 
@@ -88,39 +88,18 @@ function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | nul
 
 export function hasVisibleAutoCadExecutionEvidence(
   records: ToolExecutionRecord[] = [],
-  taskText = '',
+  _taskText = '',
 ): boolean {
   const successful = records.filter(record => !record.error && String(record.result || '').trim());
   if (successful.length === 0) return false;
-  const mcpOnly = requiresAutoCadMcpPlayback(taskText);
-
-  const generatedVisibleScript = successful.some(record =>
-    /^cad_generate_autocad_draw_script$/i.test(record.name) &&
-    /scriptPath|lispPath|operationsPath|completionMarkerPath|operationCount/i.test(String(record.result || ''))
-  );
-
-  const completedRun = successful.some(record => {
-    if (!/^(?:cad_run_autocad_draw_script|mcp_cad-drafting_autocad_playback_file)$/i.test(record.name)) return false;
+  return successful.some(record => {
+    if (!/^mcp_cad-drafting_autocad_playback_file$/i.test(record.name)) return false;
     const payload = parseRecordJson(record);
-    if (/^mcp_cad-drafting_autocad_playback_file$/i.test(record.name)) {
-      return payload?.status === 'completed'
-        && payload?.transport === 'mcp_autocad_com'
-        && payload?.visiblePlayback === true
-        && payload?.completionMarkerExists === true;
-    }
-    if (mcpOnly) return false;
-    return payload?.status === 'completed' && payload?.completionMarkerExists === true;
+    return payload?.status === 'completed'
+      && payload?.transport === 'mcp_autocad_com'
+      && payload?.visiblePlayback === true
+      && payload?.completionMarkerExists === true;
   });
-  if (completedRun) return true;
-
-  if (mcpOnly) return false;
-
-  const visibleCadSurface = successful.some(record => {
-    if (!/^(desktop_capture_screen|desktop_active_window|desktop_ui_snapshot|desktop_running_processes)$/i.test(record.name)) return false;
-    return /AutoCAD|Autodesk|acad(?:\.exe)?|\bDWG\b|\bDXF\b|model\s*space/i.test(String(record.result || ''));
-  });
-
-  return generatedVisibleScript && visibleCadSurface;
 }
 
 export function requiresAuthenticatedWebResult(input: string): boolean {
@@ -290,21 +269,23 @@ export function buildActionContract(input: string): LumiActionContract {
     !appInventoryInspection &&
     matches(text, /\bCAD\b|\bDXF\b|\bDWG\b|AutoCAD|\u753b\u56fe|\u753b\u56fe\u7eb8|\u56fe\u7eb8|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe|\u88c5\u4fee|cad/i)
   ) {
-    const mcpOnly = requiresAutoCadMcpPlayback(text);
+    const visibleAutoCad = requiresVisibleAutoCadExecution(text) || requiresAutoCadMcpPlayback(text);
     return withDefaults({
       kind: 'cad_drafting',
       label: 'CAD/\u56fe\u7eb8\u4f5c\u6218',
       coreAction: '\u751f\u6210\u6216\u64cd\u4f5c CAD \u56fe\u7eb8\uff0c\u786e\u8ba4\u6587\u4ef6\u4ea7\u7269\u6216\u53ef\u89c1\u8f6f\u4ef6\u7ed8\u5236\u7ed3\u679c',
       preparationIsNotCompletion: ['\u8ba1\u7b97\u65b9\u6848', '\u5199\u51fa\u811a\u672c', '\u6253\u5f00 CAD \u8f6f\u4ef6', '\u67e5\u770b\u6587\u4ef6\u5939', '\u53ea\u751f\u6210 DXF/\u65b9\u6848\u5305'],
-      requiredEvidence: mcpOnly
+      requiredEvidence: visibleAutoCad
         ? ['created operations JSON path with nonzero size', 'mcp_cad-drafting_autocad_playback_file result with transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true']
-        : ['created CAD/DXF/script/operations file path with nonzero size', '\u82e5\u7528\u6237\u8981\u5728 AutoCAD/CAD \u91cc\u5b9e\u9645\u753b\uff1amcp_cad-drafting_autocad_playback_file or cad_run_autocad_draw_script completed/marker evidence', '\u6216 CAD \u8f6f\u4ef6\u4e2d\u53ef\u89c1\u56fe\u5f62\u7684\u684c\u9762\u8bc1\u636e'],
-      preferredTools: mcpOnly
-        ? ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_generate_autocad_draw_script', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
-        : ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'mcp_cad-drafting_autocad_playback_file', 'cad_run_autocad_draw_script', 'desktop_path_info', 'desktop_capture_screen'],
+        : ['created CAD/DXF file path with nonzero size and successful file verification'],
+      preferredTools: visibleAutoCad
+        ? ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
+        : ['floorplan_extract_geometry', 'cad_generate_dxf', 'desktop_path_info', 'work_product_verify'],
       verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen', 'desktop_active_window'],
-      nextStep: '\u5148\u8bfb\u53d6\u56fe\u7247/\u6587\u4ef6\u5f62\u6210\u7ed3\u6784\u5316\u51e0\u4f55\uff0c\u518d\u751f\u6210 CAD/DXF\uff1b\u82e5\u7528\u6237\u660e\u8bf4 AutoCAD \u5b9e\u753b\uff0c\u5fc5\u987b\u7ee7\u7eed\u5230 AutoCAD \u811a\u672c\u6267\u884c\u548c\u53ef\u89c1\u9a8c\u8bc1\u3002',
-      caution: '\u4e0d\u80fd\u628a\u8bbe\u8ba1\u601d\u8def\u3001DXF/\u65b9\u6848\u5305\u3001\u811a\u672c\u8349\u7a3f\u6216\u6253\u5f00\u8f6f\u4ef6\u8bf4\u6210\u5df2\u5728 AutoCAD \u91cc\u753b\u5b8c\u3002',
+      nextStep: visibleAutoCad
+        ? 'Extract structured geometry, prepare the operations JSON, then run AutoCAD MCP/COM playback and verify its completion marker. If playback fails, report the exact blocker.'
+        : 'Extract structured geometry, create the requested CAD file, and verify the file exists and is non-empty.',
+      caution: 'A DXF/DWG file, operations JSON, opened AutoCAD window, desktop screenshot, or any script is not evidence that visible AutoCAD drawing completed.',
     });
   }
 

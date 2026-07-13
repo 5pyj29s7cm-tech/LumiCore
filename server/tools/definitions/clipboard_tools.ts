@@ -18,7 +18,7 @@ export function registerClipboardTools(registry: ToolRegistry): void {
   registry.register({
     name: 'read_clipboard',
     description:
-      'Read the current text content from the user\'s system clipboard. Use this to understand what the user recently copied — it often reveals their current task or intent.',
+      'Read clipboard text only when the user explicitly asks to inspect copied content or a selected workflow explicitly requires clipboard input. Never use clipboard contents to recover missing context or guess the current task.',
     parameters: {
       type: 'object',
       properties: {},

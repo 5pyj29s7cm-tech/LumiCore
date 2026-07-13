@@ -56,7 +56,7 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
-        goal: { type: 'string', description: 'Capability gap to fix, e.g. "AutoCAD should draw stroke by stroke through script/API instead of mouse".' },
+        goal: { type: 'string', description: 'Capability gap to fix, e.g. "AutoCAD should draw stroke by stroke through MCP/COM instead of mouse or generated-file fallback".' },
         domain: { type: 'string', description: 'Optional domain hint, e.g. cad_bim, messaging, design, browser, client_control.' },
         context: { type: 'string', description: 'Optional task context or user expectation.' },
         observedFailure: { type: 'string', description: 'What went wrong or felt too manual/scripted.' },

@@ -31,6 +31,32 @@ describe('background delegation', () => {
     expect(decision.reason).toBe('explicit_background_preference');
   });
 
+  it('keeps an implicit continuation in the foreground even when it looks moderate', () => {
+    const decision = shouldDelegateWorkInBackground({
+      ...BASE,
+      text: '执行绘图',
+      continuationContext: true,
+    });
+
+    expect(decision).toEqual({
+      shouldDelegate: false,
+      reason: 'foreground_task_continuation',
+    });
+  });
+
+  it('still delegates a continuation when the current message explicitly requests background work', () => {
+    const decision = shouldDelegateWorkInBackground({
+      ...BASE,
+      text: '后台继续这个任务',
+      continuationContext: true,
+    });
+
+    expect(decision).toEqual({
+      shouldDelegate: true,
+      reason: 'explicit_background_preference',
+    });
+  });
+
   it('keeps simple foreground chat and visible desktop work in the foreground', () => {
     expect(shouldDelegateWorkInBackground({
       ...BASE,

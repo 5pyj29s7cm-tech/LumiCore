@@ -20,17 +20,18 @@ const ARTIFACT_ACTION_PATTERNS: RegExp[] = [
 
 const DIRECT_DESKTOP_PATTERNS: RegExp[] = [
   /\bdesktop_ai_(?:ask|roundtable|collect_answer)\b/i,
-  /\bcad_(?:generate_autocad_draw_script|run_autocad_draw_script)\b/i,
+  /\bcad_prepare_autocad_operations\b/i,
   /\bmcp_cad-drafting_autocad_playback_file\b/i,
   /\b(?:ask|send|collect|compare|summari[sz]e|use)\b.*\b(?:desktop\s+AI|work\s*buddy|codex|chatgpt|claude|gemini|deep\s*seek|kimi|doubao|qwen|lm\s*studio)\b/i,
   /\b(use|control|operate|take over|drive)\b.*\b(mouse|keyboard|cursor|desktop|screen|computer|autocad|cad\s*software|sketchup|librecad|zwcad|gstarcad)\b/i,
   /\b(open|launch|start)\b.*\b(autocad|cad\s*software|sketchup|librecad|zwcad|gstarcad)\b/i,
+  /\b(?:draw|draft|execute|play\s*back|playback)\b.*\b(?:in|inside|through|with)\s+(?:autocad|cad)\b/i,
   /\b(on|in)\s+the\s+desktop\b.*\b(do|complete|draw|operate|control)\b/i,
   /(?:\u7528|\u901a\u8fc7).*(?:\u5149\u6807|\u9f20\u6807|\u952e\u76d8|\u9f20\u952e|\u7535\u8111\u63a7\u5236|\u684c\u9762\u63a7\u5236|\u89c6\u89c9\u63a7\u5236|computer_use)/u,
   /(?:\u64cd\u4f5c|\u63a5\u7ba1|\u63a7\u5236).*(?:\u7535\u8111|\u684c\u9762|\u9f20\u6807|\u952e\u76d8|\u5149\u6807|CAD\u8f6f\u4ef6|AutoCAD|\u6d69\u8fb0CAD|\u4e2d\u671bCAD)/u,
   /(?:\u6253\u5f00|\u542f\u52a8|\u8fdb\u5165).*(?:CAD\u8f6f\u4ef6|AutoCAD|\u6d69\u8fb0CAD|\u4e2d\u671bCAD|SketchUp|LibreCAD)/u,
   /(?:\u5728\u684c\u9762|\u684c\u9762\u4e0a).*(?:\u5b8c\u6210|\u753b|\u7ed8\u5236|\u5904\u7406|\u64cd\u4f5c)/u,
-  /(?:\u4e00\u6b65\u4e00\u6b65).*(?:\u753b|\u64cd\u4f5c|CAD)/u,
+  /(?:\u4e00\u6b65\u4e00\u6b65|\u4e00\u7b14\u4e00\u7b14).*(?:\u753b|\u64cd\u4f5c|CAD)/u,
   /(?:\u8be2\u95ee|\u53d1\u7ed9|\u6536\u96c6|\u62ff\u56de|\u6c47\u603b|\u603b\u7ed3|\u534f\u540c).*(?:\u684c\u9762\s*AI|WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|\u8c46\u5305|\u901a\u4e49|Qwen|LM\s*Studio)/iu,
 ];
 
@@ -70,8 +71,8 @@ export function resolveWorkSurfaceRoute(text: string): WorkSurfaceRoute {
         '- For floor plans, renovation sketches, CAD reference images, or folders containing plan images: locate the source file, call floorplan_extract_geometry first when available, then call cad_generate_dxf with the extracted rooms/walls/doors/windows/dimensions. Use ocr_image_file only as a fallback or for non-floor-plan images.',
         '- If scale, dimensions, wall thickness, or room boundaries are inferred, mark the DXF as a calibrated draft/base drawing and ask for one confirmed dimension before claiming precision.',
         '- Do not use mouse/keyboard desktop control for this task unless the user explicitly asked to use the cursor, mouse, keyboard, a CAD desktop app, or to operate the computer directly.',
-        '- If the user explicitly asks for desktop/CAD-app operation, first prepare draft files and an action guide, then operate the visible app through UIA/browser controls, clipboard, raw mouse/keyboard, or vision computer_use according to the active desktop mode and confirmation/autonomy boundary.',
-        '- Mention generated file paths and unfinished parts. Do not claim production CAD completion unless a verified CAD app workflow produced it.',
+        '- If the user explicitly asks for visible AutoCAD drawing, derive geometry, call cad_prepare_autocad_operations, then call mcp_cad-drafting_autocad_playback_file. Do not substitute DXF/DWG generation, LISP/SCRIPT, raw mouse/keyboard, or vision computer_use if MCP playback fails.',
+        '- Mention generated file paths and unfinished parts. Visible AutoCAD completion requires MCP/COM playback evidence and its completion marker; file generation or an opened window is not completion.',
       ].join('\n')
     : '';
 

@@ -31,7 +31,7 @@ const PACKAGE_INSTALL_PATTERN = /\b(npm|pnpm|yarn|bun|pip|pip3|uv|cargo|go|gem|w
 const GIT_MUTATION_PATTERN = /\bgit\s+(?:commit|push|tag|merge|rebase|reset|checkout|clean|branch\s+-d|branch\s+-D)\b/i;
 const SHELL_DOWNLOAD_EXEC_PATTERN = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[\s\S]*(?:\||;|&&)\s*(?:sh|bash|powershell|pwsh|iex|invoke-expression)\b/i;
 const TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE =
-  /^(write_file|create_(?:docx|pdf|ppt|pptx|xlsx|txt|markdown|md)|transcribe_audio_to_text_file|cad_generate_dxf|cad_generate_autocad_draw_script|document_|export_|save_)/i;
+  /^(write_file|create_(?:docx|pdf|ppt|pptx|xlsx|txt|markdown|md)|transcribe_audio_to_text_file|cad_generate_dxf|cad_prepare_autocad_operations|document_|export_|save_)/i;
 
 const LOW_RISK_DESKTOP_COMMAND_PATTERN =
   /^(?:cmd(?:\.exe)?\s+\/c\s+start\b|start\s+|explorer(?:\.exe)?\b|rundll32\b|powershell(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|pwsh(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|acad(?:\.exe)?\b|".+?\\(?:acad|wps|weixin|wechat|winword|excel|powerpnt|notepad)\.exe")/i;
@@ -201,8 +201,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (name === 'desktop_ai_register_target') return 'local_write';
   if (name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';
   if (isTrustedDesktopRunCommand(toolName, args)) return 'desktop_control';
-  if (name === 'cad_generate_autocad_draw_script') return args.launchAutoCAD === true ? 'desktop_control' : 'local_write';
-  if (name === 'cad_run_autocad_draw_script') return 'desktop_control';
+  if (name === 'cad_prepare_autocad_operations') return 'local_write';
   if (name === 'mcp_cad-drafting_autocad_playback_file') return 'desktop_control';
   if (name.includes('run_command') || name.includes('terminal') || name.includes('shell') || name.includes('code_execution')) return 'system';
   if (name.includes('wechat') || name.includes('feishu') || name.includes('wecom') || name.includes('message')) return 'messaging';
@@ -257,14 +256,12 @@ function isTrustedDesktopRunCommand(toolName: string, args: Record<string, any> 
   ) {
     return false;
   }
-  return LOW_RISK_DESKTOP_COMMAND_PATTERN.test(command) || /_run_autocad\.ps1"?$/i.test(command);
+  return LOW_RISK_DESKTOP_COMMAND_PATTERN.test(command);
 }
 
-function isAutocadPlaybackAction(toolName: string, args: Record<string, any> = {}): boolean {
+function isAutocadPlaybackAction(toolName: string, _args: Record<string, any> = {}): boolean {
   const name = toolName.toLowerCase();
-  return name === 'cad_run_autocad_draw_script' ||
-    name === 'mcp_cad-drafting_autocad_playback_file' ||
-    (name === 'cad_generate_autocad_draw_script' && args.launchAutoCAD === true);
+  return name === 'mcp_cad-drafting_autocad_playback_file';
 }
 
 function hasSecretCredentialArgs(args: Record<string, any> = {}): boolean {

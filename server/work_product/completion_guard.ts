@@ -104,7 +104,7 @@ const INSPECTION_ONLY_TOOL_RE =
   /^(read_|list_|search_|grep_|desktop_path_info|desktop_list_files|client_get_state|adapter_health_check|usage_get_summary|calendar_|lumi_constitution|agent_list|get_|path_info)/i;
 
 const FILE_PRODUCER_TOOL_RE =
-  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|cad_generate_autocad_draw_script|cad_run_autocad_draw_script|mcp_cad-drafting_autocad_playback_file|transcribe_audio_to_text_file|legal_generate_(?!citation_verification_report)|legal_analyze_folder_and_draft_argument|legal_review_contract|legal_draft_contract|legal_finalize_delivery_package|legal_prepare_filing_handoff|legal_external_research_plan|legal_prepare_external_browser_workspace|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
+  /^(write_file|create_ppt|create_docx|create_pdf|cad_generate_dxf|cad_prepare_autocad_operations|mcp_cad-drafting_autocad_playback_file|transcribe_audio_to_text_file|legal_generate_(?!citation_verification_report)|legal_analyze_folder_and_draft_argument|legal_review_contract|legal_draft_contract|legal_finalize_delivery_package|legal_prepare_filing_handoff|legal_external_research_plan|legal_prepare_external_browser_workspace|generate_.*(?:dxf|ppt|file)|export_|save_|document_)/i;
 
 const OPEN_TOOL_RE =
   /^(desktop_open|client_action|computer_use|external_app_.*open|open_)/i;

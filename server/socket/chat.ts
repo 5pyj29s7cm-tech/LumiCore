@@ -45,6 +45,8 @@ import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
+import { buildRecentActionContinuationBridge } from "../cognition/action_continuation";
+import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { matchQuickCommand } from "../cognition/quick_commands";
 import { checkLLMAccess, recordUsage, estimateTokens } from "../subscription/proxy";
 import { recordTokenUsage } from "../llm/token_tracker";
@@ -765,6 +767,7 @@ export function registerChatHandler(
     const attachmentContext = buildChatAttachmentContext(attachments);
     const historyItems = Array.isArray(history) ? history : [];
     let chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, historyItems);
+    let actionContinuationBridge = '';
     const text = [visibleUserText, attachmentContext].filter(Boolean).join('\n\n');
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
     const allowLocalFileWrites = shouldAllowLocalFileWriteForTurn(visibleUserText, attachments);
@@ -902,11 +905,16 @@ export function registerChatHandler(
       }
       console.log('[ChatHandler] conversationId:', conversationId, 'mode:', conversationMode);
 
+      const persistedConversationHistory = conversationId ? getMessages(conversationId, 18) : [];
       if (!chatContextBridge && conversationId && isShortClientContinuation(visibleUserText)) {
-        const dbHistoryItems = getMessages(conversationId, 12)
+        const dbHistoryItems = persistedConversationHistory.slice(-12)
           .map(record => ({ role: record.role, message: record.message, response: record.response }));
         chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, dbHistoryItems);
       }
+      actionContinuationBridge = buildRecentActionContinuationBridge(
+        visibleUserText,
+        [...historyItems, ...persistedConversationHistory],
+      );
 
       if (shouldBlockDetachedAttachmentFollowup(visibleUserText, attachments, history)) {
         const responseText = buildDetachedAttachmentFollowupResponse(visibleUserText);
@@ -978,17 +986,23 @@ export function registerChatHandler(
         }
       }
       effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
-      effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn or exact local paths stated in the current user message. If the user says "this file", "the attachment", or similar without a current attachment/path, ask them to reattach the file or provide the exact path before calling file tools.';
+      effectiveSystemPrompt += '\n\nFile handling rule: historical attachments or previous file names are not current files. Use file tools only with files attached in the current user turn, exact local paths stated in the current user message, or exact local paths preserved by the Recent action continuation context for the same unresolved task. If the user says "this file", "the attachment", or similar without a current attachment/path or a verified continuation path, ask them to reattach the file or provide the exact path before calling file tools.';
       if (pendingConfirmationPrompt) {
         effectiveSystemPrompt += `\n\n${pendingConfirmationPrompt}`;
       }
       if (chatContextBridge) {
         effectiveSystemPrompt += '\n\n' + chatContextBridge;
       }
-      const effectiveRoutedVisibleUserText = [visibleUserText, chatContextBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+      if (actionContinuationBridge) {
+        effectiveSystemPrompt += '\n\n' + actionContinuationBridge;
+      }
+      const effectiveRoutedVisibleUserText = [visibleUserText, chatContextBridge, actionContinuationBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
       const routingText = attachments.length > 0
         ? [effectiveRoutedVisibleUserText, attachmentContext].filter(Boolean).join('\n\n')
         : (effectiveRoutedVisibleUserText || text);
+      const executionTaskText = actionContinuationBridge
+        ? [text, actionContinuationBridge].filter(Boolean).join('\n\n')
+        : text;
 
       const turnDispatch = buildLumiTurnDispatch({
         userId: uid,
@@ -1236,9 +1250,7 @@ export function registerChatHandler(
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           for (const tc of workflowToolCalls) {
-            const tcSummary = tc.error
-              ? `[Tool: ${tc.name}] Error: ${tc.error}`
-              : `[Tool: ${tc.name}] Done`;
+            const tcSummary = summarizeToolRecordForPersistence(tc);
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
           }
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined });
@@ -1525,7 +1537,7 @@ export function registerChatHandler(
             });
           }
           const quickFinalized = finalizeLumiResponse({
-            taskText: visibleUserText,
+            taskText: executionTaskText,
             responseText: quickResponseText,
             toolRecords: quickToolRecords,
             source: 'chat',
@@ -1805,7 +1817,7 @@ export function registerChatHandler(
 
       const deferCompletionStream = turnFlow.completionEvidenceNeeded;
       const prefersSequentialWorkflow =
-        shouldChainTask(text) &&
+        shouldChainTask(executionTaskText) &&
         workSurfaceRoute.artifactFirst &&
         !workSurfaceRoute.directDesktop;
       const availableWorkerAgents = (() => {
@@ -1821,7 +1833,7 @@ export function registerChatHandler(
           return [];
         }
       })();
-      const backgroundComplexity = classifyComplexity(text, {
+      const backgroundComplexity = classifyComplexity(executionTaskText, {
         userId: uid,
         personalityId,
         domain: resolvedDomain,
@@ -2000,13 +2012,14 @@ export function registerChatHandler(
 
       if (!responseText && !actionPreflightContext) {
         const delegationDecision = shouldDelegateWorkInBackground({
-          text,
+          text: visibleUserText || text,
           source: eventSource,
           category: cognition.intent.category,
           complexity: backgroundComplexity,
           allowToolUse: executionDecision.allowToolUse,
           clientActionOnly: clientActionOnlyTurn,
           clientSurfaceRequest: Boolean(chatContextBridge) || isClientSurfaceRequestText(routingText),
+          continuationContext: Boolean(actionContinuationBridge),
           selfRepair: selfRepairTurn,
           sanctuary: isSanctuary,
           directDesktop: workSurfaceRoute.directDesktop,
@@ -2018,7 +2031,7 @@ export function registerChatHandler(
           const backgroundTask = registerBackgroundTask({
             userId: uid,
             title: visibleUserText.slice(0, 140) || storedUserContent.slice(0, 140) || 'Background task',
-            prompt: text,
+            prompt: executionTaskText,
             reason: delegationDecision.reason,
             complexity: backgroundComplexity,
             workers: availableWorkerAgents.slice(0, 6).map((agent: any) => ({
@@ -2123,7 +2136,7 @@ export function registerChatHandler(
                   detail: `后台子 agent 正在处理 ${backgroundTaskId}`,
                 });
                 const orchResult = await runOrchestratedTask(
-                  text,
+                  executionTaskText,
                   {
                     userId: uid,
                     personalityId,
@@ -2173,7 +2186,7 @@ export function registerChatHandler(
 
                 let finalText = orchResult.responseText || '后台子 agent 已完成任务，但没有返回详细文本。';
                 const finalizedBackground = finalizeLumiResponse({
-                  taskText: text,
+                  taskText: executionTaskText,
                   responseText: finalText,
                   toolRecords: backgroundToolRecords,
                   source: 'background_delegation',
@@ -2210,8 +2223,8 @@ export function registerChatHandler(
                   message: completionText.slice(0, 180),
                 });
 
-                if (shouldDistillSkill(text) && orchResult.workflowResult.totalAgentsUsed >= 2) {
-                  const skillDesc = buildSkillDescription(text, orchResult.workflowResult);
+                if (shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
+                  const skillDesc = buildSkillDescription(executionTaskText, orchResult.workflowResult);
                   emitBackground("agent:proactive", {
                     type: 'distill_hint',
                     message: '这类后台多 agent 工作可以沉淀成自动技能，需要我继续做技能化吗？',
@@ -2260,7 +2273,7 @@ export function registerChatHandler(
         try {
           emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
           const orchResult = await runOrchestratedTask(
-            text,
+            executionTaskText,
             { userId: uid, personalityId, domain: resolvedDomain, orgId: resolvedOrgId, desktopRelay },
             { provider: activeProvider, model: activeModel },
             llmGetters,
@@ -2294,8 +2307,8 @@ export function registerChatHandler(
             llmWasCalled = true;
 
             // Check if this pattern should be auto-distilled into a skill
-            if (shouldDistillSkill(text) && orchResult.workflowResult.totalAgentsUsed >= 2) {
-              const skillDesc = buildSkillDescription(text, orchResult.workflowResult);
+            if (shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
+              const skillDesc = buildSkillDescription(executionTaskText, orchResult.workflowResult);
               console.log('[Orchestrator] Pattern detected — candidate for skill distillation:', skillDesc.slice(0, 100));
               emitAgent("agent:proactive", {
                 type: 'distill_hint',
@@ -2312,10 +2325,10 @@ export function registerChatHandler(
       }
 
       // Path B2: NL Task Chainer — for office workflows that chain tools (search→read→create etc.)
-      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(text)) {
+      if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && shouldChainTask(executionTaskText)) {
         // Pre-flight: auto-install any matching uninstalled/outdated skills
         await autoInstallForTask(
-          text,
+          executionTaskText,
           { emit: (event, data) => socket.emit(event, data) },
           {
             ownerUid: uid,
@@ -2328,7 +2341,7 @@ export function registerChatHandler(
         try {
           emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background' });
           const chainerResult = await runNLChainer(
-            text,
+            executionTaskText,
             {
               userId: uid,
               provider: activeProvider,
@@ -2653,7 +2666,7 @@ export function registerChatHandler(
       }
 
       const finalResponse = finalizeLumiResponse({
-        taskText: text,
+        taskText: executionTaskText,
         responseText,
         toolRecords: allToolRecords,
         source: 'chat',
@@ -2688,9 +2701,7 @@ export function registerChatHandler(
         // Persist tool calls interleaved before the assistant response
         for (const tc of allToolRecords) {
           if (!tc.error && !String(tc.result || '').trim()) continue;
-          const tcSummary = tc.error
-            ? `[Tool: ${tc.name}] Error: ${tc.error}`
-            : `[Tool: ${tc.name}] Done`;
+          const tcSummary = summarizeToolRecordForPersistence(tc);
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
         }
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: allToolRecords.length ? allToolRecords : undefined });

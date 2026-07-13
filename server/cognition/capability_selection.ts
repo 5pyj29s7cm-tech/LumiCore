@@ -3,7 +3,6 @@ import type { LumiTurnDispatch } from './turn_dispatch';
 import {
   buildActionContract,
   formatActionContractPrompt,
-  requiresAutoCadMcpPlayback,
   requiresVisibleAutoCadExecution,
 } from './action_contract';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn } from './legal_entry';
@@ -104,9 +103,8 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'ocr_image_file',
     'mcp_cad-drafting_cad_renovation_folder_workflow',
     'cad_generate_dxf',
-    'cad_generate_autocad_draw_script',
+    'cad_prepare_autocad_operations',
     'mcp_cad-drafting_autocad_playback_file',
-    'cad_run_autocad_draw_script',
   ],
   desktop_control: [
     'desktop_ai_list_targets',
@@ -397,10 +395,7 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':
       if (requiresVisibleAutoCadExecution(text)) {
-        if (requiresAutoCadMcpPlayback(text)) {
-          return 'Generate the validated operations JSON, then use mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke playback in the real AutoCAD application. Do not call cad_run_autocad_draw_script or use LISP/script fallback. Accept completion only when the MCP result reports transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true; otherwise report the exact blocker.';
-        }
-        return 'Use the source files/images to derive structured geometry, then generate CAD/DXF and continue to visible AutoCAD drawing execution. After cad_generate_autocad_draw_script creates operationsPath, prefer mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke AutoCAD playback; use cad_run_autocad_draw_script only as a compatibility fallback. A DXF, folder workflow, design package, generated script, or merely opened AutoCAD window is not completion evidence; require the playback completion marker or state the exact blocker.';
+        return 'Derive structured geometry from the source, call cad_prepare_autocad_operations, then call mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke drawing in the real AutoCAD application. This is the only visible AutoCAD actuation path: never substitute DXF/DWG generation, LISP, scripts, batch commands, desktop cursor drawing, or a merely opened AutoCAD window. Accept completion only when MCP reports transport=mcp_autocad_com, visiblePlayback=true, and completionMarkerExists=true; otherwise report the exact blocker.';
       }
       return 'Prefer structured design/CAD tools over raw cursor work; use desktop CAD only when the user asks to operate visible software or a tool needs it.';
     case 'desktop_control':
@@ -417,11 +412,16 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
 
 export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput): LumiCapabilitySelection {
   const selected = selectLane(input);
-  const actionContract = buildActionContract(input.text || input.dispatch.flow.routeText || '');
+  const routeText = input.text || input.dispatch.flow.routeText || '';
+  const actionContract = buildActionContract(routeText);
+  const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
   const preferredTools = unique([
     ...availablePreferredTools(input, selected.lane),
     ...(actionContract.applies ? actionContract.preferredTools : []),
-  ]).slice(0, 22);
+  ]).filter(name => !visibleAutoCad || ![
+    'cad_generate_dxf',
+    'mcp_cad-drafting_cad_renovation_folder_workflow',
+  ].includes(name)).slice(0, 22);
   const routeCategories = input.execution.toolRoute?.categories || [];
   const promptOverlay = [
     '## Lumi Capability Selection',
@@ -430,7 +430,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     `Why: ${unique(selected.reasons).join('; ')}.`,
     routeCategories.length ? `Tool route categories: ${routeCategories.join(', ')}.` : 'Tool route categories: none.',
     preferredTools.length ? `Preferred tools for this lane: ${preferredTools.join(', ')}.` : 'Preferred tools for this lane: none.',
-    laneRule(selected, input.text || input.dispatch.flow.routeText || ''),
+    laneRule(selected, routeText),
     formatActionContractPrompt(actionContract),
     'This lane is an execution bias, not a fixed script. If the newest user wording contradicts it, follow the newest wording and update task state when work is persistent.',
   ].filter(Boolean).join('\n');

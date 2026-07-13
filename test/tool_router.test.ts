@@ -122,9 +122,8 @@ const DECLARATIONS = [
   'mcp_cad-drafting_cad_renovation_folder_workflow',
   'floorplan_extract_geometry',
   'cad_generate_dxf',
-  'cad_generate_autocad_draw_script',
+  'cad_prepare_autocad_operations',
   'mcp_cad-drafting_autocad_playback_file',
-  'cad_run_autocad_draw_script',
   'generate_image',
   'git_status',
   'git_commit',
@@ -608,9 +607,6 @@ describe('tool router', () => {
       'mcp_cad-drafting_cad_renovation_folder_workflow',
       'mcp_cad-drafting_cad_space_program',
       'cad_generate_dxf',
-      'cad_generate_autocad_draw_script',
-      'mcp_cad-drafting_autocad_playback_file',
-      'cad_run_autocad_draw_script',
       'read_file',
       'extract_document_text',
       'ocr_image_file',
@@ -618,29 +614,30 @@ describe('tool router', () => {
     expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
   });
 
-  it('does not expose document extraction for a direct generated AutoCAD script run', () => {
+  it('does not expose document extraction for direct AutoCAD operations playback', () => {
     const route = routeToolsForTurn(
-      'Run and verify the existing AutoCAD drawing with C:\\cad\\plan.scr and C:\\cad\\plan.lsp.',
+      'Run and verify C:\\cad\\plan_operations.json through AutoCAD MCP playback.',
       DECLARATIONS,
     );
 
     expect(route.categories).toContain('cad_design');
-    expect(route.toolNames).toContain('cad_run_autocad_draw_script');
+    expect(route.toolNames).toContain('mcp_cad-drafting_autocad_playback_file');
     expect(route.toolNames).not.toContain('extract_document_text');
     expect(route.toolNames).not.toContain('read_pdf');
   });
 
-  it('does not expose the LISP runner when AutoCAD MCP-only playback is required', () => {
+  it('exposes only the operations-to-MCP path for visible AutoCAD playback', () => {
     const route = routeToolsForTurn(
-      'Draw visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only and do not use LISP, scripts, cad_run_autocad_draw_script, or fallback.',
+      'Draw visibly in AutoCAD stroke by stroke. Use AutoCAD MCP only and do not use LISP, scripts, generated files, or fallback.',
       DECLARATIONS,
     );
 
     expect(route.categories).toContain('cad_design');
-    expect(route.toolNames).toContain('cad_generate_autocad_draw_script');
+    expect(route.toolNames).toContain('cad_prepare_autocad_operations');
     expect(route.toolNames).toContain('mcp_cad-drafting_autocad_playback_file');
-    expect(route.toolNames).not.toContain('cad_run_autocad_draw_script');
-    expect(route.reasons).toContain('explicit AutoCAD MCP-only playback excludes LISP/script fallback');
+    expect(route.toolNames).not.toContain('cad_generate_dxf');
+    expect(route.toolNames).not.toContain('mcp_cad-drafting_cad_renovation_folder_workflow');
+    expect(route.reasons).toContain('visible AutoCAD execution requires MCP/COM playback and excludes generated-file or script fallback');
   });
 
   it('routes local desktop CAD folders through source discovery before drafting', () => {
@@ -655,17 +652,15 @@ describe('tool router', () => {
       'desktop_list_files',
       'desktop_list_apps',
       'floorplan_extract_geometry',
-      'mcp_cad-drafting_cad_renovation_folder_workflow',
-      'cad_generate_dxf',
-      'cad_generate_autocad_draw_script',
+      'cad_prepare_autocad_operations',
       'mcp_cad-drafting_autocad_playback_file',
-      'cad_run_autocad_draw_script',
     ]));
-    expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
-    expect(route.toolNames.indexOf('desktop_list_apps')).toBeLessThan(route.toolNames.indexOf('cad_run_autocad_draw_script'));
-    expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_generate_dxf'));
-    expect(route.toolNames.indexOf('mcp_cad-drafting_autocad_playback_file')).toBeLessThan(route.toolNames.indexOf('cad_run_autocad_draw_script'));
-    expect(route.toolNames.indexOf('cad_run_autocad_draw_script')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_cad_renovation_folder_workflow'));
+    expect(route.toolNames).not.toContain('cad_generate_dxf');
+    expect(route.toolNames).not.toContain('mcp_cad-drafting_cad_renovation_folder_workflow');
+    expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
+    expect(route.toolNames.indexOf('desktop_list_apps')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
+    expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
+    expect(route.toolNames.indexOf('cad_prepare_autocad_operations')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_autocad_playback_file'));
   });
 
   it('routes court website login searches through saved web login profiles before browser clicks', () => {

@@ -65,9 +65,9 @@ describe('Action Constitution', () => {
     expect(classifyAction('mouse_click')).toBe('desktop_control');
     expect(classifyAction('keyboard_type')).toBe('desktop_control');
     expect(classifyAction('cad_generate_dxf')).toBe('local_write');
-    expect(classifyAction('cad_generate_autocad_draw_script', { launchAutoCAD: true })).toBe('desktop_control');
-    expect(classifyAction('cad_run_autocad_draw_script')).toBe('desktop_control');
-    expect(classifyAction('desktop_run_command', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\me\\Desktop\\plan_run_autocad.ps1"' })).toBe('desktop_control');
+    expect(classifyAction('cad_prepare_autocad_operations')).toBe('local_write');
+    expect(classifyAction('mcp_cad-drafting_autocad_playback_file')).toBe('desktop_control');
+    expect(classifyAction('desktop_run_command', { command: 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\me\\Desktop\\legacy_runner.ps1"' })).toBe('system');
   });
 
   it('uses the original task intent to classify a raw coordinate click', () => {
@@ -321,23 +321,15 @@ describe('Action Constitution', () => {
     expect(dxf.level).toBe('safe');
     expect(dxf.requiresUserConfirmation).toBe(false);
 
-    const runCad = evaluateActionConstitution('cad_generate_autocad_draw_script', {
+    const prepareCad = evaluateActionConstitution('cad_prepare_autocad_operations', {
       title: 'visible_playback',
       width: 12000,
       height: 8000,
-      launchAutoCAD: true,
     }, 'safe', {
       allowLocalFileWrites: true,
     });
-    expect(runCad.level).toBe('safe');
-    expect(runCad.requiresUserConfirmation).toBe(false);
-
-    const playback = evaluateActionConstitution('cad_run_autocad_draw_script', {
-      scriptPath: 'C:\\Users\\me\\Desktop\\plan.scr',
-      launch: true,
-    }, 'safe');
-    expect(playback.level).toBe('safe');
-    expect(playback.requiresUserConfirmation).toBe(false);
+    expect(prepareCad.level).toBe('safe');
+    expect(prepareCad.requiresUserConfirmation).toBe(false);
 
     const mcpPlayback = evaluateActionConstitution('mcp_cad-drafting_autocad_playback_file', {
       operationsPath: 'C:\\Users\\me\\Desktop\\plan_operations.json',

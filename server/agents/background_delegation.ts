@@ -8,6 +8,7 @@ export interface BackgroundDelegationDecisionInput {
   allowToolUse: boolean;
   clientActionOnly: boolean;
   clientSurfaceRequest?: boolean;
+  continuationContext?: boolean;
   selfRepair: boolean;
   sanctuary: boolean;
   directDesktop: boolean;
@@ -78,6 +79,9 @@ export function shouldDelegateWorkInBackground(input: BackgroundDelegationDecisi
   if (!WORK_CATEGORY_ALLOWLIST.has(input.category || '')) return { shouldDelegate: false, reason: 'non_work_category' };
 
   const explicitlyRequested = hasExplicitBackgroundDelegationPreference(input.text);
+  if (input.continuationContext && !explicitlyRequested) {
+    return { shouldDelegate: false, reason: 'foreground_task_continuation' };
+  }
   if (explicitlyRequested) return { shouldDelegate: true, reason: 'explicit_background_preference' };
   if (input.complexity === 'complex' || input.complexity === 'moderate') {
     return { shouldDelegate: true, reason: `work_complexity_${input.complexity}` };

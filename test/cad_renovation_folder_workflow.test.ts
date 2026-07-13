@@ -40,9 +40,9 @@ describe('cad renovation folder workflow', () => {
       expect(result.primaryReferenceImage).toBe(path.join(dir, '草稿图.png'));
       expect(result.recommendedToolCalls.map(call => call.tool)).toEqual([
         'floorplan_extract_geometry',
+        'cad_prepare_autocad_operations',
+        'mcp_cad-drafting_autocad_playback_file',
         'cad_generate_dxf',
-        'cad_generate_autocad_draw_script',
-        'cad_run_autocad_draw_script',
       ]);
       expect(result.warnings.join(' ')).toContain('not visually traced');
 

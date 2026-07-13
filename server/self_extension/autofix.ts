@@ -59,20 +59,19 @@ function inferRoute(goal: string, domain: string, tools: string[]): CapabilityRo
   const text = `${goal} ${domain}`.toLowerCase();
   if (/autocad|acad|cad|dwg|dxf|施工图|图纸|一笔一笔|画图|画线/i.test(text)) {
     return {
-      id: 'cad.autocad_script_bridge',
-      label: 'AutoCAD 脚本/API 优先绘图路线',
-      interfacePattern: 'script_bridge',
+      id: 'cad.autocad_mcp_playback',
+      label: 'AutoCAD MCP/COM drawing route',
+      interfacePattern: 'mcp',
       preferredTools: [
         'floorplan_extract_geometry',
-        'cad_generate_autocad_draw_script',
-        'cad_run_autocad_draw_script',
-        'cad_generate_dxf',
+        'cad_prepare_autocad_operations',
+        'mcp_cad-drafting_autocad_playback_file',
         'work_takeover_task_verify_result',
       ].filter(name => hasTool(tools, name)),
-      fallbackTools: ['desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'computer_use'].filter(name => hasTool(tools, name)),
-      avoid: ['不要优先用鼠标逐点画 CAD', '不要把浏览器/SVG 预览冒充 CAD 软件结果'],
-      reason: 'AutoCAD 这类软件应该优先走 LISP/SCR/COM/API 等结构化接口，让实体按坐标生成并可验证，而不是依赖鼠标坐标。',
-      confirmationRequired: ['启动 AutoCAD、执行外部软件脚本、保存/覆盖 DWG/DXF 或声称生产图纸前需要确认'],
+      fallbackTools: [],
+      avoid: ['Do not draw CAD with raw pointer coordinates', 'Do not replace MCP with LISP, SCRIPT, or batch execution', 'Do not present DXF/DWG, browser/SVG previews, or an opened window as visible AutoCAD completion'],
+      reason: 'Visible AutoCAD drawing uses validated entity operations and MCP/COM playback only, with the completion marker as acceptance evidence. A failure remains blocked instead of switching to generated drawings or scripts.',
+      confirmationRequired: ['Confirm before overwriting an existing DWG/DXF or claiming production-ready drawings'],
     };
   }
 
@@ -227,26 +226,34 @@ function experimentDirectory(outputDirectory?: string): string {
 
 async function runAutocadMinimalExperiment(options: CapabilityGapAutofixOptions, route: CapabilityRoute): Promise<CapabilityExperimentRecord> {
   const executeTool = options.executeTool;
-  if (!executeTool || !route.preferredTools.includes('cad_generate_autocad_draw_script')) {
+  if (!executeTool || !route.preferredTools.includes('cad_prepare_autocad_operations')) {
     return {
       status: 'needs_review',
-      summary: 'AutoCAD route selected, but cad_generate_autocad_draw_script is not available to run a minimal experiment.',
+      summary: 'AutoCAD route selected, but cad_prepare_autocad_operations is not available to run a minimal experiment.',
       toolCalls: [],
       artifacts: [],
-      verification: [{ label: '可用工具', passed: false, detail: '缺少 cad_generate_autocad_draw_script' }],
+      verification: [{ label: 'Available tool', passed: false, detail: 'Missing cad_prepare_autocad_operations' }],
+    };
+  }
+  if (options.allowExternalExecution === true && !route.preferredTools.includes('mcp_cad-drafting_autocad_playback_file')) {
+    return {
+      status: 'blocked',
+      summary: 'AutoCAD MCP/COM playback is unavailable. The experiment cannot fall back to scripts or generated drawings.',
+      toolCalls: [],
+      artifacts: [],
+      verification: [{ label: 'AutoCAD MCP', passed: false, detail: 'Missing mcp_cad-drafting_autocad_playback_file' }],
     };
   }
 
   const dir = experimentDirectory(options.outputDirectory);
-  const generateArgs = {
+  const prepareArgs = {
     title: 'Lumi能力学习_AutoCAD一笔一笔绘图实验',
     width: 1600,
     height: 1000,
     unit: 'mm',
     wallThickness: 80,
     outputDirectory: dir,
-    strokeDelayMs: 80,
-    launchAutoCAD: false,
+    strokeDelayMs: 150,
     rooms: [{ name: '能力实验房间', x: 0, y: 0, width: 1600, height: 1000 }],
     walls: [
       { x1: 0, y1: 0, x2: 1600, y2: 0, thickness: 80 },
@@ -261,57 +268,73 @@ async function runAutocadMinimalExperiment(options: CapabilityGapAutofixOptions,
   const toolCalls: CapabilityExperimentRecord['toolCalls'] = [];
   const artifacts: CapabilityExperimentRecord['artifacts'] = [];
   const verification: CapabilityExperimentRecord['verification'] = [];
+  let activeTool = 'cad_prepare_autocad_operations';
   try {
-    const raw = await executeTool('cad_generate_autocad_draw_script', generateArgs);
-    const generated = JSON.parse(raw);
-    toolCalls.push({ name: 'cad_generate_autocad_draw_script', args: generateArgs, status: 'passed', result: generated });
+    const raw = await executeTool('cad_prepare_autocad_operations', prepareArgs);
+    const prepared = JSON.parse(raw);
+    toolCalls.push({ name: 'cad_prepare_autocad_operations', args: prepareArgs, status: 'passed', result: prepared });
     for (const [label, filePath] of Object.entries({
-      lisp: generated.lispPath,
-      script: generated.scriptPath,
-      runner: generated.powershellRunnerPath,
-      marker: generated.completionMarkerPath,
+      operations: prepared.operationsPath,
+      manifest: prepared.manifestPath,
     })) {
       if (!filePath) continue;
       artifacts.push({ label, path: String(filePath), exists: fs.existsSync(String(filePath)) });
     }
-
-    const runArgs = {
-      scriptPath: generated.scriptPath,
-      lispPath: generated.lispPath,
-      completionMarkerPath: generated.completionMarkerPath,
-      launch: options.allowExternalExecution === true,
-      waitSeconds: options.allowExternalExecution === true ? 45 : 0,
-      requireCompletionMarker: options.allowExternalExecution === true,
-    };
-    const runRaw = await executeTool('cad_run_autocad_draw_script', runArgs);
-    const run = JSON.parse(runRaw);
-    toolCalls.push({ name: 'cad_run_autocad_draw_script', args: runArgs, status: run.status, result: run });
-    artifacts.push({ label: 'execution_runner', path: run.powershellRunnerPath, exists: fs.existsSync(run.powershellRunnerPath) });
     verification.push(
-      { label: '生成 LISP', passed: fs.existsSync(generated.lispPath), detail: generated.lispPath },
-      { label: '生成 SCR', passed: fs.existsSync(generated.scriptPath), detail: generated.scriptPath },
-      { label: '生成 runner', passed: fs.existsSync(run.powershellRunnerPath), detail: run.powershellRunnerPath },
-      {
-        label: options.allowExternalExecution ? 'AutoCAD 执行完成标记' : '执行命令已准备',
-        passed: options.allowExternalExecution ? run.completionMarkerExists === true : run.status === 'ready_to_launch',
-        detail: options.allowExternalExecution ? run.note : run.launchCommand,
-      },
+      { label: 'Operations file', passed: fs.existsSync(prepared.operationsPath), detail: prepared.operationsPath },
+      { label: 'Operations manifest', passed: fs.existsSync(prepared.manifestPath), detail: prepared.manifestPath },
     );
+
+    if (options.allowExternalExecution !== true) {
+      return {
+        status: verification.every(item => item.passed) ? 'prepared' : 'needs_review',
+        summary: 'AutoCAD operations are prepared. No visible execution was attempted, and no drawing-complete claim is allowed.',
+        toolCalls,
+        artifacts,
+        verification,
+      };
+    }
+
+    activeTool = 'mcp_cad-drafting_autocad_playback_file';
+    const savePath = path.join(dir, `lumi_autocad_mcp_probe_${Date.now()}.dwg`);
+    const playbackArgs = {
+      operationsPath: prepared.operationsPath,
+      completionMarkerPath: prepared.completionMarkerPath,
+      strokeDelayMs: prepared.strokeDelayMs,
+      createNewDocument: true,
+      savePath,
+    };
+    const playbackRaw = await executeTool('mcp_cad-drafting_autocad_playback_file', playbackArgs);
+    const playback = JSON.parse(playbackRaw);
+    toolCalls.push({ name: 'mcp_cad-drafting_autocad_playback_file', args: playbackArgs, status: playback.status, result: playback });
+    artifacts.push(
+      { label: 'completion_marker', path: prepared.completionMarkerPath, exists: fs.existsSync(prepared.completionMarkerPath) },
+      { label: 'dwg', path: savePath, exists: fs.existsSync(savePath) },
+    );
+    verification.push({
+      label: 'AutoCAD MCP/COM completion marker',
+      passed: playback.status === 'completed'
+        && playback.transport === 'mcp_autocad_com'
+        && playback.visiblePlayback === true
+        && playback.completionMarkerExists === true
+        && fs.existsSync(prepared.completionMarkerPath),
+      detail: playback.note || JSON.stringify(playback),
+    });
     const passed = verification.every(item => item.passed);
     return {
-      status: options.allowExternalExecution ? (passed ? 'passed' : 'needs_review') : 'prepared',
-      summary: options.allowExternalExecution
-        ? (passed ? 'AutoCAD minimal experiment completed.' : 'AutoCAD launch attempted but completion still needs review.')
-        : 'AutoCAD minimal experiment prepared: LISP/SCR/runner exist and are ready to launch on confirmation.',
+      status: passed ? 'passed' : 'blocked',
+      summary: passed
+        ? 'AutoCAD MCP/COM minimal experiment completed and passed marker verification.'
+        : 'AutoCAD MCP/COM playback did not pass verification. No fallback was attempted.',
       toolCalls,
       artifacts,
       verification,
     };
   } catch (error: any) {
-    toolCalls.push({ name: 'cad_generate_autocad_draw_script', args: generateArgs, status: 'blocked', error: error?.message || String(error) });
+    toolCalls.push({ name: activeTool, args: activeTool === 'cad_prepare_autocad_operations' ? prepareArgs : {}, status: 'blocked', error: error?.message || String(error) });
     return {
       status: 'blocked',
-      summary: error?.message || 'AutoCAD minimal experiment failed.',
+      summary: `${error?.message || 'AutoCAD minimal experiment failed.'} No fallback was attempted.`,
       toolCalls,
       artifacts,
       verification: [{ label: '实验执行', passed: false, detail: error?.message || String(error) }],
@@ -320,7 +343,7 @@ async function runAutocadMinimalExperiment(options: CapabilityGapAutofixOptions,
 }
 
 async function runMinimalExperiment(options: CapabilityGapAutofixOptions, route: CapabilityRoute): Promise<CapabilityExperimentRecord> {
-  if (route.id === 'cad.autocad_script_bridge') return runAutocadMinimalExperiment(options, route);
+  if (route.id === 'cad.autocad_mcp_playback') return runAutocadMinimalExperiment(options, route);
   return defaultExperiment();
 }
 

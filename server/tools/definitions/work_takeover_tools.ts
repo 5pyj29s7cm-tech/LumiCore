@@ -207,7 +207,7 @@ function buildRealSmokeControlRoutes(
     });
   }
 
-  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf', 'cad_generate_autocad_draw_script', 'cad_run_autocad_draw_script'])) {
+  if (task.category === 'design_delivery' || hasTool(tools, ['desktop_open', 'cad_generate_dxf', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file'])) {
     routes.push({
       id: 'external_design_apps',
       label: 'WPS/CAD/Revit 可见交付路线',
@@ -220,10 +220,10 @@ function buildRealSmokeControlRoutes(
         'desktop_ui_click',
         'desktop_ui_type',
         'cad_generate_dxf',
-        'cad_generate_autocad_draw_script',
-        'cad_run_autocad_draw_script',
+        'cad_prepare_autocad_operations',
+        'mcp_cad-drafting_autocad_playback_file',
       ],
-      reason: '用于把本地方案包、PPT/PDF、CAD DXF、AutoCAD 一笔一笔可视绘图脚本与执行验证、Revit/Dynamo 交接数据交给外部软件继续深化。',
+      reason: 'Hands local proposal packages, PPT/PDF, explicit CAD file deliverables, verified AutoCAD MCP/COM stroke-by-stroke drawing, and Revit/Dynamo handoff data to external software. Visible AutoCAD execution has no script or generated-drawing fallback.',
       confirmationRequired: confirmationForCapabilities(plan, ['cad_bim.design_handoff', 'presentation.client_deck'], [
         '打开外部 CAD/Revit 修改生产图纸、承诺尺寸/结构/水电/报价/施工结果前需要确认',
       ]),
