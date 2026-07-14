@@ -36,10 +36,16 @@ export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[
     useWhen: 'Configure cloud or local language-model providers and inspect their runtime status.',
   },
   {
-    id: 'vision-models',
-    label: 'Vision models',
-    aliases: ['vision', 'vision-model', 'vision-models', 'computer-vision'],
-    useWhen: 'Configure the vision model used for screenshots and desktop understanding.',
+    id: 'world-model',
+    label: 'World model',
+    aliases: ['world', 'world-model', 'world-models', 'vision', 'vision-model', 'vision-models', 'computer-vision', 'desktop-action-model'],
+    useWhen: 'Configure visual perception and the desktop action model inside Lumi world intelligence.',
+  },
+  {
+    id: 'generation-models',
+    label: 'Generative models',
+    aliases: ['generation', 'generative', 'generation-model', 'generation-models', 'generative-models', 'image-model', 'video-model'],
+    useWhen: 'Configure image and video generation roles and their model-service providers.',
   },
   {
     id: 'voice-services',

@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
+import { getUserPreferredGenerationModels } from '../../llm/generation_preferences';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
@@ -12,114 +14,204 @@ function ensureOutputDir(): string {
   return OUTPUT_DIR;
 }
 
-// ── DALL-E 3 ──
+// OpenAI image generation
 
-async function generateImageDalle(args: Record<string, any>): Promise<string> {
+async function generateImageOpenAI(args: Record<string, any>, selectedModel: string): Promise<string> {
   const prompt = args.prompt || '';
   if (!prompt) throw new Error('prompt is required');
 
   const keys = loadKeys();
-  const apiKey = keys.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('OPENAI_API_KEY not configured. Set it in Settings > API Matrix.');
+  const apiKey = process.env.OPENAI_API_KEY || keys.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured. Set it in Settings > LLM Providers.');
 
   const { default: OpenAI } = await import('openai');
   const openai = new OpenAI({ apiKey });
-
-  const size = args.size || '1024x1024';
-  const quality = args.quality || 'standard';
-  const style = args.style || 'vivid';
+  const model = selectedModel || 'gpt-image-1';
   const n = Math.min(args.n || 1, 4);
-
-  const response = await openai.images.generate({
-    model: 'dall-e-3',
+  const isDalle = /^dall-e-/i.test(model);
+  const request: any = {
+    model,
     prompt,
     n,
-    size: size as '1024x1024' | '1792x1024' | '1024x1792',
-    quality: quality as 'standard' | 'hd',
-    style: style as 'vivid' | 'natural',
-  });
+    size: args.size || '1024x1024',
+    quality: args.quality || (isDalle ? 'standard' : 'auto'),
+    ...(isDalle ? { style: args.style || 'vivid' } : {}),
+  };
+  const response = await openai.images.generate(request);
 
-  const urls = response.data.map((img: any) => img.url).filter(Boolean);
-  if (urls.length === 0) throw new Error('DALL-E returned no image URLs');
+  const images: string[] = [];
+  const artifacts: Array<{ type: string; path?: string; url?: string }> = [];
+  for (const [index, image] of response.data.entries()) {
+    if ((image as any).url) {
+      images.push((image as any).url);
+      artifacts.push({ type: 'image_url', url: (image as any).url });
+      continue;
+    }
+    if ((image as any).b64_json) {
+      const outputPath = path.join(ensureOutputDir(), 'generated_image_' + Date.now() + '_' + (index + 1) + '.png');
+      fs.writeFileSync(outputPath, Buffer.from((image as any).b64_json, 'base64'));
+      images.push(outputPath);
+      artifacts.push({ type: 'image', path: outputPath });
+    }
+  }
+  if (images.length === 0) throw new Error('OpenAI image generation returned no image data');
 
   return JSON.stringify({
     success: true,
     prompt,
-    images: urls,
+    images,
+    artifacts,
     revised_prompt: response.data[0]?.revised_prompt || prompt,
-    model: 'dall-e-3',
-    tip: `Generated ${urls.length} image(s) with DALL-E 3.`,
+    provider: 'openai',
+    model,
+    tip: 'Generated ' + images.length + ' image(s) with ' + model + '.',
   });
 }
 
-// ── Auto-router: try DALL-E first, fallback DashScope ──
+async function generateImageDalle(args: Record<string, any>): Promise<string> {
+  return generateImageOpenAI(args, String(args.model || 'dall-e-3'));
+}
 
-async function generateImage(args: Record<string, any>): Promise<string> {
+async function generateImageDashScope(args: Record<string, any>, selectedModel: string): Promise<string> {
   const prompt = args.prompt || '';
   if (!prompt) throw new Error('prompt is required');
 
   const keys = loadKeys();
+  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || keys.DASHSCOPE_API_KEY || keys.QWEN_API_KEY;
+  if (!apiKey) throw new Error('DASHSCOPE_API_KEY not configured. Set it in Settings > LLM Providers.');
 
-  // Try DALL-E first if key configured
-  if (keys.OPENAI_API_KEY) {
-    try {
-      return await generateImageDalle(args);
-    } catch (err: any) {
-      console.warn('[generateImage] DALL-E failed, falling back to DashScope:', err.message);
-    }
-  }
-
-  // Fallback to DashScope
-  const apiKey = keys.DASHSCOPE_API_KEY;
-  if (!apiKey) throw new Error('No image generation provider available. Configure OPENAI_API_KEY or DASHSCOPE_API_KEY.');
-
+  const model = selectedModel || 'wan2.2-t2i-plus';
   const size = args.size?.replace('*', 'x') || '1024*1024';
   const n = Math.min(args.n || 1, 4);
 
   const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      'Authorization': 'Bearer ' + apiKey,
       'Content-Type': 'application/json',
       'X-DashScope-Async': 'enable',
     },
     body: JSON.stringify({
-      model: 'wan2.2-t2i-plus',
+      model,
       input: { prompt },
       parameters: { size, n },
     }),
   });
 
   const data = await response.json() as any;
-  if (data.code) throw new Error(`DashScope image error (${data.code}): ${data.message}`);
+  if (data.code) throw new Error('DashScope image error (' + data.code + '): ' + data.message);
 
   const taskId = data.output?.task_id;
   if (!taskId) throw new Error('No task_id returned from DashScope');
 
   for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
     const pollRes = await fetch(
-      `https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`,
-      { headers: { 'Authorization': `Bearer ${apiKey}` } },
+      'https://dashscope.aliyuncs.com/api/v1/tasks/' + taskId,
+      { headers: { 'Authorization': 'Bearer ' + apiKey } },
     );
     const pollData = await pollRes.json() as any;
     if (pollData.output?.task_status === 'SUCCEEDED') {
       const results = pollData.output.results || [];
-      const urls = results.map((r: any) => r.url).filter(Boolean);
+      const urls = results.map((result: any) => result.url).filter(Boolean);
       if (urls.length === 0) throw new Error('Image generation completed but no URLs returned');
       return JSON.stringify({
-        success: true, prompt, images: urls, taskId, model: 'wan2.2-t2i-plus',
-        tip: `Generated ${urls.length} image(s).`,
+        success: true,
+        prompt,
+        images: urls,
+        taskId,
+        provider: 'qwen',
+        model,
+        tip: 'Generated ' + urls.length + ' image(s).',
       });
     }
     if (pollData.output?.task_status === 'FAILED') {
-      throw new Error(`Image generation failed: ${pollData.output.message || 'unknown error'}`);
+      throw new Error('Image generation failed: ' + (pollData.output.message || 'unknown error'));
     }
   }
   throw new Error('Image generation timed out (60s). Task: ' + taskId);
 }
 
-// ── Image Editing (sharp) ──
+async function generateImageSiliconFlow(args: Record<string, any>, selectedModel: string): Promise<string> {
+  const prompt = String(args.prompt || '').trim();
+  if (!prompt) throw new Error('prompt is required');
+
+  const keys = loadKeys();
+  const apiKey = process.env.SILICONFLOW_API_KEY || keys.SILICONFLOW_API_KEY;
+  if (!apiKey) throw new Error('SILICONFLOW_API_KEY not configured. Set it in Settings > Generative Models.');
+
+  const model = selectedModel || 'Kwai-Kolors/Kolors';
+  const response = await fetch('https://api.siliconflow.cn/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      n: Math.min(args.n || 1, 4),
+      size: args.size?.replace('*', 'x') || '1024x1024',
+    }),
+  });
+
+  const data = await response.json() as any;
+  if (!response.ok) {
+    throw new Error(`SiliconFlow image error (${response.status}): ${data.message || data.error || 'unknown error'}`);
+  }
+  const urls = (data.data || []).map((image: any) => image.url).filter(Boolean);
+  if (urls.length === 0) throw new Error('SiliconFlow image generation returned no image URLs');
+
+  return JSON.stringify({
+    success: true,
+    prompt,
+    images: urls,
+    artifacts: urls.map((url: string) => ({ type: 'image_url', url })),
+    provider: 'siliconflow',
+    model,
+    remainingCredits: data.credits,
+    tip: 'Generated ' + urls.length + ' image(s) with ' + model + '.',
+  });
+}
+
+async function generateImage(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const prefs = getUserPreferredGenerationModels(context?.userId || 'anonymous').image;
+  if (prefs.provider === 'openai') {
+    return generateImageOpenAI(args, prefs.model || prefs.models.openai);
+  }
+  if (prefs.provider === 'qwen') {
+    return generateImageDashScope(args, prefs.model || prefs.models.qwen);
+  }
+  if (prefs.provider === 'siliconflow') {
+    return generateImageSiliconFlow(args, prefs.model || prefs.models.siliconflow);
+  }
+
+  const keys = loadKeys();
+  const failures: string[] = [];
+  if (process.env.OPENAI_API_KEY || keys.OPENAI_API_KEY) {
+    try {
+      return await generateImageOpenAI(args, prefs.models.openai);
+    } catch (error: any) {
+      failures.push('openai: ' + (error?.message || error));
+    }
+  }
+  if (process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || keys.DASHSCOPE_API_KEY || keys.QWEN_API_KEY) {
+    try {
+      return await generateImageDashScope(args, prefs.models.qwen);
+    } catch (error: any) {
+      failures.push('qwen: ' + (error?.message || error));
+    }
+  }
+  if (process.env.SILICONFLOW_API_KEY || keys.SILICONFLOW_API_KEY) {
+    try {
+      return await generateImageSiliconFlow(args, prefs.models.siliconflow);
+    } catch (error: any) {
+      failures.push('siliconflow: ' + (error?.message || error));
+    }
+  }
+  const detail = failures.length > 0 ? ' Attempts: ' + failures.join('; ') : '';
+  throw new Error('No working image generation provider is available. Configure OpenAI, DashScope, or SiliconFlow in Settings, or select a configured provider in Settings > Generative Models.' + detail);
+}
 
 async function editImage(args: Record<string, any>): Promise<string> {
   const { filePath, action, params } = args;
@@ -201,7 +293,7 @@ async function editImage(args: Record<string, any>): Promise<string> {
 export function registerImageTools(registry: ToolRegistry): void {
   registry.register({
     name: 'generate_image',
-    description: 'Generate AI images from text prompts. Auto-selects the best available provider: DALL-E 3 (if OPENAI_API_KEY is configured) or DashScope Wan2.2. Supports styles like "oil painting", "anime", "photorealistic", "architectural rendering", etc.',
+    description: 'Generate AI images from text prompts using the image provider and model selected in Settings > Generative Models. Automatic mode may try configured OpenAI, DashScope, and SiliconFlow providers; an explicitly selected provider never silently switches to another provider.',
     parameters: {
       type: 'object',
       properties: {
@@ -213,7 +305,7 @@ export function registerImageTools(registry: ToolRegistry): void {
       },
       required: ['prompt'],
     },
-    handler: generateImage,
+    handler: (args, context) => generateImage(args, context),
     permission: 'user',
     securityLevel: 'safe',
   });

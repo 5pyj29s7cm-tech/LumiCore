@@ -175,7 +175,8 @@ describe('complete personal-client surface contract', () => {
   it('normalizes public settings names to actual Settings component sections', () => {
     expect(normalizeClientSettingsSection('autonomy')).toBe('neural');
     expect(normalizeClientSettingsSection('llm')).toBe('llm-providers');
-    expect(normalizeClientSettingsSection('vision')).toBe('vision-models');
+    expect(normalizeClientSettingsSection('vision')).toBe('world-model');
+    expect(normalizeClientSettingsSection('generation')).toBe('generation-models');
     expect(normalizeClientSettingsSection('voice cloning')).toBe('voice');
     expect(getClientActionExpectation({ action: 'open_settings', section: 'autonomy' }).expectedState)
       .toContain('settings-section:neural');

@@ -801,7 +801,7 @@ export async function analyzeScreen(
     // doubao-1-5-pro/lite → doubao-1-5-vision-pro for vision
     model = 'doubao-1-5-vision-pro-32k';
   } else if (provider === 'deepseek') {
-    throw new Error('DeepSeek does not support vision. Choose a separate vision model in Settings → LLM Providers → Vision Model.');
+    throw new Error('DeepSeek does not support visual perception. Choose a visual-perception model in Settings > World Model.');
   }
 
   const messages: NormalizedMessage[] = [

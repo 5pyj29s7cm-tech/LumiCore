@@ -1,4 +1,152 @@
 {
+  "skill-center.model-service-configuration.070b9fc0e3": {
+    "en": "Model service configuration",
+    "zh": "模型服务配置"
+  },
+  "skill-center.value0-is-managed-in-value1-settings.918a11b372": {
+    "en": "{value0} credentials are managed in {value1} settings. Skill Hall only reports whether the required model service is ready.",
+    "zh": "{value0} 凭据统一在“{value1}”设置中管理。技能大厅只显示所需模型服务是否就绪。"
+  },
+  "skill-center.open-model-settings.b1d3766b80": {
+    "en": "Open model settings",
+    "zh": "打开模型设置"
+  },
+  "settings.visual-perception-model.c74ca64c0f": {
+    "en": "Visual Perception",
+    "zh": "视觉感知模型"
+  },
+  "settings.world-model-overview.a8194dcb51": {
+    "en": "World intelligence combines visual perception with desktop action planning. The two roles stay independently configurable while sharing one clear settings entry.",
+    "zh": "世界智能由视觉感知与桌面行动规划组成。两个运行角色可以独立配置，但统一放在一个清晰的设置入口中。"
+  },
+  "settings.desktop-action-model.091115083c": {
+    "en": "Desktop Action Model",
+    "zh": "桌面行动模型"
+  },
+  "settings.desktop-action-provider.c56456b63f": {
+    "en": "Action model provider",
+    "zh": "行动模型服务商"
+  },
+  "settings.save-desktop-action-model.1fb3f1157c": {
+    "en": "Save action model",
+    "zh": "保存行动模型"
+  },
+  "settings.generation-model-providers.b4f1c95162": {
+    "en": "Generation Model Providers",
+    "zh": "生成模型服务商"
+  },
+  "settings.generation-model-providers-description.a548399017": {
+    "en": "Credentials for model services used by generative roles and installed generation skills. Data sources and tool runtimes are configured elsewhere.",
+    "zh": "管理生成模型角色和已安装生成技能使用的模型服务商凭据。数据源与工具运行服务在其他分类中配置。"
+  },
+  "settings.minimax-generation-provider-hint.2c939bd0f7": {
+    "en": "Enables installed MiniMax model tools for image, video, music, speech, and voice generation.",
+    "zh": "用于启用已安装的 MiniMax 图像、视频、音乐、语音与声音生成模型工具。"
+  },
+  "settings.siliconflow-generation-provider-hint.73aa2ce8e7": {
+    "en": "Provides image generation for the SiliconFlow role and the installed Nano Banana skill.",
+    "zh": "用于 SiliconFlow 图像生成角色以及已安装的 Nano Banana 技能。"
+  },
+  "settings.provider-console.f2138df9a1": {
+    "en": "Provider console",
+    "zh": "服务商控制台"
+  },
+  "settings.generative-models.3ef22638d1": {
+    "en": "Generative Models",
+    "zh": "生成模型"
+  },
+  "settings.world-model.67c5d91de2": {
+    "en": "World Model",
+    "zh": "世界模型"
+  },
+  "settings.failed-to-load-generative-models.6f0ef4ec18": {
+    "en": "Failed to load generative model settings",
+    "zh": "生成模型设置加载失败"
+  },
+  "settings.generative-models-saved.478e2f8603": {
+    "en": "Generative model settings saved",
+    "zh": "生成模型设置已保存"
+  },
+  "settings.failed-to-save-generative-models.12ea083f89": {
+    "en": "Failed to save generative model settings",
+    "zh": "生成模型设置保存失败"
+  },
+  "settings.generative-models-description.57367bb3cc": {
+    "en": "Choose independent defaults for image and video generation. Only real model services belong here; data sources and tool runtimes stay separate.",
+    "zh": "分别配置图像和视频生成的默认模型。这里只包含真实模型服务，数据源与工具运行服务保持独立。"
+  },
+  "settings.image-generation-model.fdd84f5c71": {
+    "en": "Image generation",
+    "zh": "图像生成模型"
+  },
+  "settings.image-generation-model-description.65439bd21c": {
+    "en": "Creates and edits visual assets",
+    "zh": "用于生成和编辑视觉内容"
+  },
+  "settings.automatic-provider.58089561bd": {
+    "en": "Automatic (configured providers)",
+    "zh": "自动选择已配置服务商"
+  },
+  "settings.video-generation-model.390997b87b": {
+    "en": "Video generation",
+    "zh": "视频生成模型"
+  },
+  "settings.video-generation-model-description.20aed0c099": {
+    "en": "Creates motion and video assets",
+    "zh": "用于生成动态影像和视频内容"
+  },
+  "settings.save-model-roles.2f4ed87292": {
+    "en": "Save model roles",
+    "zh": "保存模型角色"
+  },
+  "settings.failed-to-load-world-model.3111ba80e6": {
+    "en": "Failed to load world model settings",
+    "zh": "世界模型设置加载失败"
+  },
+  "settings.world-model-saved.c98e892ead": {
+    "en": "World model settings saved",
+    "zh": "世界模型设置已保存"
+  },
+  "settings.failed-to-save-world-model.5d460901d9": {
+    "en": "Failed to save world model settings",
+    "zh": "世界模型设置保存失败"
+  },
+  "settings.world-model-call-passed-value0-ms.386cfeaf91": {
+    "en": "World model call passed ({value0} ms)",
+    "zh": "世界模型调用成功（{value0} 毫秒）"
+  },
+  "settings.world-model-call-failed.814cb05bd8": {
+    "en": "World model call failed",
+    "zh": "世界模型调用失败"
+  },
+  "settings.world-model-description.a7cbc8eaf3": {
+    "en": "The desktop action role uses perceived screen state to choose the next action and verify how the desktop changes after each step.",
+    "zh": "桌面行动角色根据感知到的屏幕状态选择下一步操作，并在每一步之后验证桌面变化。"
+  },
+  "settings.world-model-provider.7839fc8a4c": {
+    "en": "World model provider",
+    "zh": "世界模型服务商"
+  },
+  "settings.follow-vision-model.d174430ac2": {
+    "en": "Inherit Visual Perception",
+    "zh": "继承视觉感知模型"
+  },
+  "settings.world-action-model.403910143b": {
+    "en": "World/action model",
+    "zh": "世界与动作模型"
+  },
+  "settings.effective-model.60bc31ba15": {
+    "en": "Effective model",
+    "zh": "实际生效模型"
+  },
+  "settings.test-effective-model.c9648a120e": {
+    "en": "Test effective model",
+    "zh": "测试生效模型"
+  },
+  "settings.save-world-model.800cece3cf": {
+    "en": "Save world model",
+    "zh": "保存世界模型"
+  },
   "agent-chat-page.24h-autonomous-work.81b1d75d6b": {
     "en": "24h autonomous work",
     "zh": "24h 自主运行"
@@ -6344,8 +6492,8 @@
     "zh": "保存"
   },
   "settings.screen-understanding-vision-control.a9be431876": {
-    "en": "Screen Understanding & Vision Control",
-    "zh": "屏幕理解与视觉控制模型"
+    "en": "Primary visual perception role",
+    "zh": "主要视觉感知角色"
   },
   "settings.security.7c0dadaf08": {
     "en": "Security",
@@ -6448,8 +6596,8 @@
     "zh": "视觉实调成功 · {value0} ms"
   },
   "settings.vision-is-used-only-for.9a9cf081fd": {
-    "en": "Vision is used only for screen reading, OCR, and desktop control. It does not change the main reasoning brain or voice services.",
-    "zh": "视觉模型只用于看屏幕、OCR、电脑控制等视觉任务；不会改变主推理大脑，也不会改变语音服务。"
+    "en": "Visual perception reads images, screenshots, OCR, and interfaces inside the World Model. It does not replace the primary reasoning or voice roles.",
+    "zh": "视觉感知负责世界模型中的图片、截图、OCR 与界面理解，不会替代主推理或语音角色。"
   },
   "settings.vision-model.df2108ba57": {
     "en": "Vision Model",

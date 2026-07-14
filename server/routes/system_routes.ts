@@ -13,6 +13,18 @@ import { requireAuth, requireLocalRequest, requireOrgMember, requireOrgRole } fr
 import { getLatencyStats } from "../monitor/latency_store";
 import { mcpManager, getMCPConfig } from "../mcp";
 import { DEFAULT_VISION_MODELS } from "../llm/vision_preferences";
+import {
+  getUserPreferredGenerationModels,
+  isImageGenerationProvider,
+  isVideoGenerationProvider,
+  upsertUserPreferredGenerationModels,
+} from "../llm/generation_preferences";
+import {
+  getUserPreferredWorldModel,
+  getUserWorldModelPrefs,
+  isWorldModelProvider,
+  upsertUserWorldModelPrefs,
+} from "../llm/world_preferences";
 import { DEFAULT_MODELS, getOrgPreferredLLM, upsertOrgPreferredLLM } from "../llm/user_preferences";
 import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
@@ -752,6 +764,52 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       return res.json({ provider: 'openai', model: DEFAULT_VISION_MODELS.openai, models: {} });
     } catch {
       res.json({ provider: 'openai', model: DEFAULT_VISION_MODELS.openai, models: {} });
+    }
+  });
+
+  router.put("/preferences/generation", (req, res) => {
+    try {
+      const imageProvider = req.body?.image?.provider;
+      const videoProvider = req.body?.video?.provider;
+      if (!isImageGenerationProvider(imageProvider) || !isVideoGenerationProvider(videoProvider)) {
+        return res.status(400).json({ error: 'Invalid generation model provider' });
+      }
+      const uid = getUserIdFromRequest(req, jwtSecret);
+      const prefs = upsertUserPreferredGenerationModels(uid, req.body);
+      res.json({ success: true, ...prefs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get("/preferences/generation", (req, res) => {
+    try {
+      const uid = getUserIdFromRequest(req, jwtSecret);
+      res.json(getUserPreferredGenerationModels(uid));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put("/preferences/world", (req, res) => {
+    try {
+      if (!isWorldModelProvider(req.body?.provider)) {
+        return res.status(400).json({ error: 'Invalid world model provider' });
+      }
+      const uid = getUserIdFromRequest(req, jwtSecret);
+      const prefs = upsertUserWorldModelPrefs(uid, req.body);
+      res.json({ success: true, ...prefs, resolved: getUserPreferredWorldModel(uid) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get("/preferences/world", (req, res) => {
+    try {
+      const uid = getUserIdFromRequest(req, jwtSecret);
+      res.json({ ...getUserWorldModelPrefs(uid), resolved: getUserPreferredWorldModel(uid) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

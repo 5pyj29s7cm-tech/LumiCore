@@ -3,6 +3,7 @@ import { withCloudResilience } from '../cloud/resilience';
 import { isStrictPrivacy, requireLocalProvider } from '../config/privacy';
 import { getScopedPreferredLLM } from './user_preferences';
 import { getUserPreferredVision } from './vision_preferences';
+import { getUserPreferredWorldModel } from './world_preferences';
 
 export type MessageContent =
   | string
@@ -56,17 +57,23 @@ function isQwenVisionModel(model: string): boolean {
   return /(?:qwen.*vl|vl-|vl_|vision)/i.test(model || '');
 }
 
-function assertQwenAllowedByUserPrefs(config: { provider: string; model: string; userId?: string; domain?: string; orgId?: string }): void {
+function assertQwenAllowedByUserPrefs(config: { provider: string; model: string; userId?: string; domain?: string; orgId?: string; role?: 'reasoning' | 'vision' | 'world' }): void {
   if (config.provider !== 'qwen') return;
 
   if (!config.userId) {
     throw new Error('Qwen model call blocked: missing user preference context. Pass userId so Lumi can respect the selected brain/vision provider.');
   }
 
-  if (isQwenVisionModel(config.model)) {
+  if (config.role === 'world') {
+    const world = getUserPreferredWorldModel(config.userId);
+    if (world.provider === 'qwen') return;
+    throw new Error(`Qwen desktop-action call blocked: the current action role is ${world.provider}/${world.model}. Select Qwen-VL under Settings > World Model > Desktop Action Model.`);
+  }
+
+  if (isQwenVisionModel(config.model) || config.role === 'vision') {
     const vision = getUserPreferredVision(config.userId);
     if (vision.provider === 'qwen') return;
-    throw new Error(`Qwen-VL call blocked: current vision provider is ${vision.provider}/${vision.model}. Change Vision Model to Qwen-VL to use Alibaba vision.`);
+    throw new Error(`Qwen-VL call blocked: the current visual-perception role is ${vision.provider}/${vision.model}. Select Qwen-VL under Settings > World Model > Visual Perception.`);
   }
 
   const preferred = getScopedPreferredLLM(config.userId, { domain: config.domain, orgId: config.orgId });
@@ -529,7 +536,7 @@ export function parseAnthropicResponse(rawResponse: any): NormalizedLLMResponse 
 export async function makeLLMCall(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
-  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; responseFormat?: LLMResponseFormat },  getDeepSeek: () => any,
+  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; responseFormat?: LLMResponseFormat; role?: 'reasoning' | 'vision' | 'world' },  getDeepSeek: () => any,
   getGemini: () => any,
   getOpenAI?: () => any,
   getAnthropic?: () => any,
@@ -706,7 +713,7 @@ function isReasoningModel(model: string): boolean {
 export async function makeLLMCallStreaming(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
-  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; signal?: AbortSignal },
+  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; signal?: AbortSignal; role?: 'reasoning' | 'vision' | 'world' },
   onChunk: StreamCallback,
   getDeepSeek: () => any,
   getGemini: () => any,

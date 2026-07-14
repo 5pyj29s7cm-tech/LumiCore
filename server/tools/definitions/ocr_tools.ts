@@ -241,7 +241,7 @@ async function ocrScreen(args: Record<string, any>, context?: any): Promise<stri
   const g = context?.llmGetters || {};
   const provider = resolveVisionProvider(args, context);
   if (!provider) {
-    return JSON.stringify({ format: 'screenshot_base64', data: base64, note: 'No configured vision model is available. Choose a vision provider and add its API key in Settings → LLM Providers → Vision Model.' });
+    return JSON.stringify({ format: 'screenshot_base64', data: base64, note: 'No configured visual-perception model is available. Configure one in Settings > World Model > Visual Perception.' });
   }
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
@@ -264,7 +264,7 @@ async function ocrRegion(args: Record<string, any>, context?: any): Promise<stri
   const g = context?.llmGetters || {};
   const provider = resolveVisionProvider(args, context);
   if (!provider) {
-    return JSON.stringify({ format: 'screenshot_base64', data: base64, note: 'No configured vision model is available. Choose a vision provider and add its API key in Settings → LLM Providers → Vision Model.' });
+    return JSON.stringify({ format: 'screenshot_base64', data: base64, note: 'No configured visual-perception model is available. Configure one in Settings > World Model > Visual Perception.' });
   }
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
@@ -285,7 +285,7 @@ async function ocrImageFile(args: Record<string, any>, context?: any): Promise<s
   if (!provider) {
     return JSON.stringify({
       path: imagePath,
-      note: 'No configured vision model is available. Choose a vision provider and add its API key in Settings -> LLM Providers -> Vision Model.',
+      note: 'No configured visual-perception model is available. Configure one in Settings > World Model > Visual Perception.',
     }, null, 2);
   }
 
@@ -770,7 +770,7 @@ async function floorplanExtractGeometry(args: Record<string, any>, context?: any
   if (!provider) {
     return JSON.stringify({
       path: imagePath,
-      note: 'No configured vision model is available. Choose a vision provider and add its API key in Settings -> LLM Providers -> Vision Model.',
+      note: 'No configured visual-perception model is available. Configure one in Settings > World Model > Visual Perception.',
     }, null, 2);
   }
 

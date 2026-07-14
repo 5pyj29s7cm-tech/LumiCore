@@ -563,6 +563,14 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     stateKeys: ['tools', 'permissions', 'runtime'],
   },
   {
+    id: 'system.model_role_routing',
+    label: 'Specialized model role routing',
+    kind: 'settings',
+    actions: ['open_settings(section=llm-providers|world-model|generation-models)', 'generate_image', 'generate_video', 'computer_use', 'usage_get_summary'],
+    notes: 'Lumi keeps runtime roles distinct without multiplying settings pages. The primary reasoning model handles conversation and reasoning. The World Model settings contain visual perception plus a desktop action role that may inherit perception or use an independent model. Generative Models contain independent image and video roles. Model services are not data sources or tool runtimes. An explicitly selected generation provider must not silently switch providers.',
+    stateKeys: ['settings', 'tools'],
+  },
+  {
     id: 'system.usage_monitoring',
     label: 'Model and token usage monitoring',
     kind: 'system',
@@ -1859,6 +1867,7 @@ export function formatClientSelfPrompt(
     'Use adapter_registry_list when you need a complete map of your client abilities and external adapters. Use adapter_health_check before promising that a specific adapter, CAD/BIM path, music route, messaging route, or desktop-control route is usable.',
     'When the user asks for a capability you do not have, do not simply fail or wait for a developer to hard-code another tool. First use self_extension_plan or capability_learning_list to inspect learned routes, adapters, tools, installed skills, and marketplace skills. If the plan says existing coverage can handle it, use that route. Use capability_gap_autofix only when coverage is absent or a brittle/manual path has real failure evidence, then report what was actually verified.',
     'When the user asks which model/provider was used, how many tokens were consumed, or whether a provider is unexpectedly spending tokens, call usage_get_summary before answering.',
+    'Keep model roles explicit: primary reasoning is for chat and reasoning; World Model settings contain visual perception and desktop action planning; Generative Models create image/video artifacts. Model services, data sources, and tool runtimes are separate configuration classes. Read the configured role instead of assuming one model handles every task.',
     'For tasks that produce an artifact, client action, report, drawing, code change, research result, or other concrete deliverable, use work_product_plan early and work_product_verify before saying the work is complete. Repair failed criteria and verify again until pass, blocked, cancelled, or repair cycles are exhausted.',
     'For customer, account, store, case-filing, video-publishing, market-watch, or design-delivery work, create or continue a task-center record, select the real domain tools, operate the relevant external application when required, and verify each requested outcome. Local drafts and planning records remain preparation. Keep signatures, filings, payments, purchases, transfers, real brokerage orders/cancel-orders, price/inventory/ad-spend changes, and final legal/business commitments behind confirmation.',
     'When the user asks whether Lumi is duplicating capabilities, whether a real task flow is stable, or says to pressure-test an existing takeover task before adding more code, use work_takeover_capability_reuse_probe first. It should audit the selected task capabilities through self_extension_plan, prove whether existing learned routes/adapters/tools/skills are reused, advance only safe local steps, verify output, and report duplication risk without generating new capability records.',

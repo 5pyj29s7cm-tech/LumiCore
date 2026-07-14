@@ -7,7 +7,7 @@ const SILICONFLOW_BASE = 'https://api.siliconflow.cn/v1';
 async function handler(args: any) {
   const apiKey = process.env.SILICONFLOW_API_KEY;
   if (!apiKey) {
-    return { content: [{ type: 'text' as const, text: 'SILICONFLOW_API_KEY not configured. Add it in Settings → API Matrix → SiliconFlow.' }], isError: true };
+    return { content: [{ type: 'text' as const, text: 'SILICONFLOW_API_KEY not configured. Add it in Settings > Generative Models > Generation Model Providers.' }], isError: true };
   }
 
   const { prompt, model, size, n } = args;

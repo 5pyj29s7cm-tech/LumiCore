@@ -22,7 +22,9 @@ import {
   Cloud,
   Volume2,
   Sun,
-  Moon
+  Moon,
+  Save,
+  ExternalLink
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
@@ -54,14 +56,15 @@ function buildSidebarGroups(t: any, isZh: boolean) {
       label: t.sidebarCore || uiMessage('settings.core.38f8d0ecb8'),
       items: [
         { id: 'general', label: t.sidebarGeneral || uiMessage('settings.general.40e00570d2'), icon: <Globe size={16} /> },
+        { id: 'neural', label: t.neuralEngine || uiMessage('settings.neural-engine.dd539ca320'), icon: <BrainCircuit size={16} /> },
       ],
     },
     {
       label: t.sidebarAiNeural || uiMessage('settings.ai-neural.253e6de004'),
       items: [
-        { id: 'neural', label: t.neuralEngine || uiMessage('settings.neural-engine.dd539ca320'), icon: <BrainCircuit size={16} /> },
         { id: 'llm-providers', label: t.llmProviders || uiMessage('settings.llm-providers.8d18bc9417'), icon: <BrainCircuit size={16} /> },
-        { id: 'vision-models', label: t.visionModelSettings || uiMessage('settings.vision-model.df2108ba57'), icon: <Camera size={16} /> },
+        { id: 'world-model', label: uiMessage('settings.world-model.67c5d91de2'), icon: <Globe size={16} /> },
+        { id: 'generation-models', label: uiMessage('settings.generative-models.3ef22638d1'), icon: <Sparkle size={16} /> },
         { id: 'voice-services', label: t.voiceServices || uiMessage('settings.voice-services.abc302ed3a'), icon: <Mic size={16} /> },
       ],
     },
@@ -215,7 +218,10 @@ export function Settings({
       case 'llm-providers':
         return <LLMProvidersPage t={t} providerStatus={providerStatus} />;
       case 'vision-models':
-        return <VisionModelPage t={t} />;
+      case 'world-model':
+        return <WorldModelsPage t={t} />;
+      case 'generation-models':
+        return <GenerativeModelsPage t={t} />;
       case 'voice-services':
         return <VoiceServicesPage t={t} />;
       case 'security':
@@ -1387,7 +1393,7 @@ function VisionModelPage({ t }: { t: any }) {
   const { visionConfig, updateVisionConfig } = useApp();
   return (
     <div className="space-y-8">
-      <SettingsSection title={t.visionModelSettings || uiMessage('settings.vision-model.df2108ba57')} icon={<Camera size={18} className="text-cyan-300" />}>
+      <SettingsSection title={uiMessage('settings.visual-perception-model.c74ca64c0f')} icon={<Camera size={18} className="text-cyan-300" />}>
         <div className="mb-6 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.04] p-4 space-y-2">
           <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryVisionModel || uiMessage('settings.screen-understanding-vision-control.a9be431876')}</label>
           <div className="relative">
@@ -1438,6 +1444,430 @@ function VisionModelPage({ t }: { t: any }) {
           <VisionRelayProviderRow t={t} />
         </div>
       </SettingsSection>
+    </div>
+  );
+}
+
+type GenerationPreference = {
+  provider: string;
+  model: string;
+  models: Record<string, string>;
+};
+
+type GenerationPreferences = {
+  image: GenerationPreference;
+  video: GenerationPreference;
+};
+
+const DEFAULT_GENERATION_PREFERENCES: GenerationPreferences = {
+  image: {
+    provider: 'auto',
+    model: '',
+    models: { openai: 'gpt-image-1', qwen: 'wan2.2-t2i-plus', siliconflow: 'Kwai-Kolors/Kolors' },
+  },
+  video: {
+    provider: 'qwen',
+    model: 'wanx2.1-t2v-turbo',
+    models: { qwen: 'wanx2.1-t2v-turbo' },
+  },
+};
+
+const GENERATION_MODEL_OPTIONS: Record<string, string[]> = {
+  openai: ['gpt-image-1', 'gpt-image-1-mini', 'dall-e-3'],
+  qwenImage: ['wan2.2-t2i-plus'],
+  siliconflowImage: ['Kwai-Kolors/Kolors', 'stabilityai/stable-diffusion-3-5-large'],
+  qwenVideo: ['wanx2.1-t2v-turbo', 'wanx2.1-t2v-plus'],
+};
+
+function GenerationModelInput({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid gap-2 md:grid-cols-[150px_minmax(0,1fr)] md:items-center">
+      <span className="text-xs font-bold text-white/55">{label}</span>
+      <span>
+        <input
+          value={value}
+          onChange={event => onChange(event.target.value)}
+          list={id}
+          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-celestial-saturn/45"
+        />
+        <datalist id={id}>
+          {options.map(option => <option key={option} value={option} />)}
+        </datalist>
+      </span>
+    </label>
+  );
+}
+
+function GenerativeModelsPage({ t }: { t: any }) {
+  const [preferences, setPreferences] = useState<GenerationPreferences>(DEFAULT_GENERATION_PREFERENCES);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/preferences/generation')
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        return body;
+      })
+      .then(body => {
+        if (!cancelled) setPreferences(body as GenerationPreferences);
+      })
+      .catch(error => toast.error(error?.message || uiMessage('settings.failed-to-load-generative-models.6f0ef4ec18')))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const setImageProvider = (provider: string) => {
+    setPreferences(previous => ({
+      ...previous,
+      image: {
+        ...previous.image,
+        provider,
+        model: provider === 'auto' ? '' : previous.image.models[provider] || '',
+      },
+    }));
+  };
+
+  const setRoleModel = (role: 'image' | 'video', provider: string, model: string) => {
+    setPreferences(previous => ({
+      ...previous,
+      [role]: {
+        ...previous[role],
+        model: previous[role].provider === provider ? model : previous[role].model,
+        models: { ...previous[role].models, [provider]: model },
+      },
+    }));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const response = await apiFetch('/api/preferences/generation', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(preferences),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      setPreferences(body as GenerationPreferences);
+      toast.success(uiMessage('settings.generative-models-saved.478e2f8603'));
+    } catch (error: any) {
+      toast.error(error?.message || uiMessage('settings.failed-to-save-generative-models.12ea083f89'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
+
+  return (
+    <div className="space-y-8">
+      <SettingsSection title={uiMessage('settings.generative-models.3ef22638d1')} icon={<Sparkle size={18} className="text-celestial-saturn" />}>
+        <p className="mb-5 max-w-2xl text-sm leading-relaxed text-white/45">
+          {uiMessage('settings.generative-models-description.57367bb3cc')}
+        </p>
+
+        <div className="divide-y divide-white/10 border-y border-white/10">
+          <section className="py-5">
+            <div className="mb-4 grid gap-2 md:grid-cols-[150px_minmax(0,1fr)] md:items-center">
+              <div>
+                <h3 className="text-sm font-semibold text-white">{uiMessage('settings.image-generation-model.fdd84f5c71')}</h3>
+                <p className="mt-1 text-xs text-white/35">{uiMessage('settings.image-generation-model-description.65439bd21c')}</p>
+              </div>
+              <select
+                value={preferences.image.provider}
+                onChange={event => setImageProvider(event.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
+              >
+                <option value="auto">{uiMessage('settings.automatic-provider.58089561bd')}</option>
+                <option value="openai">OpenAI</option>
+                <option value="qwen">Qwen / DashScope</option>
+                <option value="siliconflow">SiliconFlow</option>
+              </select>
+            </div>
+            <div className="space-y-3">
+              <GenerationModelInput
+                id="generation-openai-image-models"
+                label="OpenAI"
+                value={preferences.image.models.openai || ''}
+                options={GENERATION_MODEL_OPTIONS.openai}
+                onChange={model => setRoleModel('image', 'openai', model)}
+              />
+              <GenerationModelInput
+                id="generation-qwen-image-models"
+                label="Qwen / DashScope"
+                value={preferences.image.models.qwen || ''}
+                options={GENERATION_MODEL_OPTIONS.qwenImage}
+                onChange={model => setRoleModel('image', 'qwen', model)}
+              />
+              <GenerationModelInput
+                id="generation-siliconflow-image-models"
+                label="SiliconFlow"
+                value={preferences.image.models.siliconflow || ''}
+                options={GENERATION_MODEL_OPTIONS.siliconflowImage}
+                onChange={model => setRoleModel('image', 'siliconflow', model)}
+              />
+            </div>
+          </section>
+
+          <section className="py-5">
+            <div className="mb-4 grid gap-2 md:grid-cols-[150px_minmax(0,1fr)] md:items-center">
+              <div>
+                <h3 className="text-sm font-semibold text-white">{uiMessage('settings.video-generation-model.390997b87b')}</h3>
+                <p className="mt-1 text-xs text-white/35">{uiMessage('settings.video-generation-model-description.20aed0c099')}</p>
+              </div>
+              <select
+                value={preferences.video.provider}
+                disabled
+                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white/70 outline-none disabled:cursor-not-allowed"
+              >
+                <option value="qwen">Qwen / DashScope</option>
+              </select>
+            </div>
+            <GenerationModelInput
+              id="generation-qwen-video-models"
+              label="Qwen / DashScope"
+              value={preferences.video.models.qwen || preferences.video.model}
+              options={GENERATION_MODEL_OPTIONS.qwenVideo}
+              onChange={model => setRoleModel('video', 'qwen', model)}
+            />
+          </section>
+        </div>
+
+        <div className="mt-5 flex justify-end">
+          <Button onClick={save} disabled={saving} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
+            {saving ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Save size={15} className="mr-2" />}
+            {uiMessage('settings.save-model-roles.2f4ed87292')}
+          </Button>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title={uiMessage('settings.generation-model-providers.b4f1c95162')} icon={<Cloud size={18} className="text-cyan-300" />}>
+        <p className="mb-4 max-w-2xl text-sm leading-relaxed text-white/45">
+          {uiMessage('settings.generation-model-providers-description.a548399017')}
+        </p>
+        <div className="divide-y divide-white/10 border-y border-white/10">
+          <ApiKeyField
+            compact
+            icon={<Sparkle size={18} className="text-rose-300" />}
+            label="MiniMax"
+            placeholder="sk-..."
+            storageKey="lumi_minimax_key"
+            serverKey="MINIMAX_API_KEY"
+            consoleUrl="https://platform.minimaxi.com"
+            hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')}
+            t={t}
+          />
+          <ApiKeyField
+            compact
+            icon={<Sparkle size={18} className="text-emerald-300" />}
+            label="SiliconFlow"
+            placeholder="sk-..."
+            storageKey="lumi_siliconflow_key"
+            serverKey="SILICONFLOW_API_KEY"
+            consoleUrl="https://cloud.siliconflow.cn"
+            hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')}
+            t={t}
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+type WorldPreference = {
+  provider: string;
+  model: string;
+  models: Record<string, string>;
+  resolved?: {
+    provider: string;
+    model: string;
+    inheritedFromVision: boolean;
+  };
+};
+
+const WORLD_MODEL_OPTIONS: Record<string, string[]> = {
+  openai: ['gpt-4o', 'gpt-4o-mini'],
+  gemini: ['gemini-2.0-flash', 'gemini-1.5-pro'],
+  ark: ['doubao-1-5-vision-pro-32k'],
+  qwen: ['qwen-vl-max'],
+  ollama: ['qwen2.5vl:7b', 'minicpm-v:8b', 'llama3.2-vision:11b'],
+  lmstudio: ['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b'],
+  relay: ['qwen2.5-vl-7b-instruct', 'glm-4.1v-9b-thinking'],
+};
+
+function WorldActionModelPage({ t }: { t: any }) {
+  const [preference, setPreference] = useState<WorldPreference>({ provider: 'inherit_vision', model: '', models: {} });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testMessage, setTestMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/preferences/world')
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        return body;
+      })
+      .then(body => { if (!cancelled) setPreference(body as WorldPreference); })
+      .catch(error => toast.error(error?.message || uiMessage('settings.failed-to-load-world-model.3111ba80e6')))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const setProvider = (provider: string) => {
+    setTestMessage('');
+    setPreference(previous => ({
+      ...previous,
+      provider,
+      model: provider === 'inherit_vision' ? '' : previous.models[provider] || WORLD_MODEL_OPTIONS[provider]?.[0] || '',
+    }));
+  };
+
+  const setModel = (model: string) => {
+    setTestMessage('');
+    setPreference(previous => ({
+      ...previous,
+      model,
+      models: { ...previous.models, [previous.provider]: model },
+    }));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const response = await apiFetch('/api/preferences/world', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(preference),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      setPreference(body as WorldPreference);
+      toast.success(uiMessage('settings.world-model-saved.c98e892ead'));
+    } catch (error: any) {
+      toast.error(error?.message || uiMessage('settings.failed-to-save-world-model.5d460901d9'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const test = async () => {
+    const provider = preference.provider === 'inherit_vision' ? preference.resolved?.provider : preference.provider;
+    const model = preference.provider === 'inherit_vision' ? preference.resolved?.model : preference.model;
+    if (!provider || !model) return;
+    setTesting(true);
+    setTestMessage('');
+    try {
+      const result = await runVisionConnectionTest(provider, model);
+      setTestMessage(formatUiMessage('settings.world-model-call-passed-value0-ms.386cfeaf91', { value0: result.latencyMs }));
+    } catch (error: any) {
+      setTestMessage(error?.message || uiMessage('settings.world-model-call-failed.814cb05bd8'));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
+
+  const inherited = preference.provider === 'inherit_vision';
+  const modelOptions = inherited ? [] : WORLD_MODEL_OPTIONS[preference.provider] || [];
+  const activeProvider = inherited ? preference.resolved?.provider : preference.provider;
+  const activeModel = inherited ? preference.resolved?.model : preference.model;
+
+  return (
+    <div className="space-y-8">
+      <SettingsSection title={uiMessage('settings.desktop-action-model.091115083c')} icon={<Globe size={18} className="text-cyan-300" />}>
+        <p className="mb-5 max-w-2xl text-sm leading-relaxed text-white/45">
+          {uiMessage('settings.world-model-description.a7cbc8eaf3')}
+        </p>
+        <div className="border-y border-white/10 py-5">
+          <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+            <span className="text-xs font-bold text-white/55">{uiMessage('settings.desktop-action-provider.c56456b63f')}</span>
+            <select
+              value={preference.provider}
+              onChange={event => setProvider(event.target.value)}
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-300/45"
+            >
+              <option value="inherit_vision">{uiMessage('settings.follow-vision-model.d174430ac2')}</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="ark">Doubao / Ark</option>
+              <option value="qwen">Qwen-VL / DashScope</option>
+              <option value="ollama">Ollama Local</option>
+              <option value="lmstudio">LM Studio Local</option>
+              <option value="relay">OpenAI-Compatible</option>
+            </select>
+          </label>
+
+          {!inherited && (
+            <div className="mt-4">
+              <GenerationModelInput
+                id={`world-model-${preference.provider}`}
+                label={uiMessage('settings.desktop-action-model.091115083c')}
+                value={preference.model}
+                options={modelOptions}
+                onChange={setModel}
+              />
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+            <span className="text-xs font-bold text-white/55">{uiMessage('settings.effective-model.60bc31ba15')}</span>
+            <span className="min-w-0 truncate rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5 font-mono text-xs text-white/55">
+              {activeProvider || '-'} / {activeModel || '-'}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button onClick={test} disabled={testing || !activeProvider || !activeModel} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
+            {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
+            {uiMessage('settings.test-effective-model.c9648a120e')}
+          </Button>
+          <Button onClick={save} disabled={saving} className="h-10 rounded-lg bg-cyan-300 px-4 text-xs font-bold text-black hover:bg-cyan-200 disabled:opacity-40">
+            {saving ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Save size={15} className="mr-2" />}
+            {uiMessage('settings.save-desktop-action-model.1fb3f1157c')}
+          </Button>
+        </div>
+        {testMessage && <p className="mt-3 text-right text-xs text-white/55">{testMessage}</p>}
+      </SettingsSection>
+    </div>
+  );
+}
+
+function WorldModelsPage({ t }: { t: any }) {
+  return (
+    <div className="space-y-8">
+      <div className="border-b border-white/10 pb-5">
+        <div className="flex items-center gap-2">
+          <Globe size={20} className="text-cyan-300" />
+          <h2 className="text-lg font-semibold text-white">{uiMessage('settings.world-model.67c5d91de2')}</h2>
+        </div>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/45">
+          {uiMessage('settings.world-model-overview.a8194dcb51')}
+        </p>
+      </div>
+      <VisionModelPage t={t} />
+      <WorldActionModelPage t={t} />
     </div>
   );
 }
@@ -1782,7 +2212,7 @@ function VoiceServicesPage({ t }: { t: any }) {
   );
 }
 
-function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, t?: any }) {
+function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, compact = false, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, compact?: boolean, t?: any }) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [value, setValue] = useState(() => {
@@ -1835,12 +2265,17 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
   };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
+    <div className={compact ? 'space-y-3 py-5' : 'space-y-4 rounded-3xl border border-white/5 bg-white/5 p-6'}>
       <div className="flex items-center gap-2">
         <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
         <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
+        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-xs font-bold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {consoleUrl && (
+          <a href={consoleUrl} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-xs font-bold text-cyan-300/70 hover:text-cyan-200">
+            {uiMessage('settings.provider-console.f2138df9a1')} <ExternalLink size={12} />
+          </a>
+        )}
+        {saved && <CheckCircle size={14} className={consoleUrl ? 'text-green-400' : 'ml-auto text-green-400'} />}
       </div>
       <div className="flex gap-2">
         <div className="relative flex-1">

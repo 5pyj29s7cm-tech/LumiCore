@@ -1,4 +1,6 @@
 import { getUserPreferredVision } from '../llm/vision_preferences';
+import { getUserPreferredGenerationModels } from '../llm/generation_preferences';
+import { getUserPreferredWorldModel } from '../llm/world_preferences';
 
 const VISUAL_INTENT_PATTERNS: RegExp[] = [
   /\b(?:look\s+at|see|read|ocr|identify|recognize|describe|analy[sz]e|inspect|scan)\b.*\b(?:screen|screenshot|image|photo|picture|diagram|drawing|ui|interface|error|qr|barcode|table|receipt|chart)\b/i,
@@ -20,17 +22,19 @@ export function hasVisionIntent(text: string): boolean {
 export function buildVisionRoutingOverlay(userId: string, text: string): string {
   if (!hasVisionIntent(text)) return '';
   const vision = getUserPreferredVision(userId);
+  const world = getUserPreferredWorldModel(userId);
   return [
-    '## Vision Capability Routing',
-    `Configured Vision Model: ${vision.provider}/${vision.model}.`,
-    'The current primary reasoning model is not the whole Lumi. For visual requests, route perception through the configured Vision Model and vision tools.',
+    '## World Perception Routing',
+    `Configured visual-perception role: ${vision.provider}/${vision.model}.`,
+    'The current primary reasoning model is not the whole Lumi. For visual requests, route perception through the visual-perception role inside World Model settings and the matching vision tools.',
     'If the user asks to see, identify, recognize, read, OCR, inspect, or analyze an image, photo, screenshot, visible screen, UI, diagram, drawing, floor plan, QR code, or visual error:',
     '- Do not refuse by saying the primary model lacks vision.',
     '- Use ocr_screen for the current visible screen.',
     '- Use ocr_region when the user names a specific area.',
     '- Use ocr_image_file when the user provides or references an image file path.',
     '- Use floorplan_extract_geometry for floor plans or drawings that need CAD-ready structure.',
-    '- Use computer_use only when the user asks Lumi to operate the desktop after seeing it.',
+    `Configured desktop-action role: ${world.provider}/${world.model}${world.inheritedFromVision ? ' (inherited from visual perception)' : ''}.`,
+    '- Use computer_use only when the user asks Lumi to operate the desktop after seeing it. Its screenshot-to-action loop uses the desktop-action role inside World Model settings.',
     '- If there is no visible screen target, image, screenshot, or file path available, ask the user for the image or clarify what Lumi should look at.',
   ].join('\n');
 }
@@ -47,13 +51,21 @@ export function buildModelSelfAwareness(
   }
 
   const vision = getUserPreferredVision(userId);
+  const world = getUserPreferredWorldModel(userId);
+  const generation = getUserPreferredGenerationModels(userId);
+  const imageRole = generation.image.provider === 'auto'
+    ? `automatic (OpenAI=${generation.image.models.openai}, Qwen=${generation.image.models.qwen}, SiliconFlow=${generation.image.models.siliconflow})`
+    : `${generation.image.provider}/${generation.image.model}`;
   return [
     '',
     '',
     '[System note:',
     base,
-    `Configured vision provider: ${vision.provider}, model: ${vision.model}.`,
-    'If asked about visual capability, explain that Lumi routes visual perception through the configured Vision Model and vision tools; do not say Lumi cannot see merely because the primary reasoning model is text-only.',
+    `Configured world visual-perception provider: ${vision.provider}, model: ${vision.model}.`,
+    `Configured desktop-action provider: ${world.provider}, model: ${world.model}${world.inheritedFromVision ? ' (inherited from visual perception)' : ''}.`,
+    `Configured image-generation role: ${imageRole}. Configured video-generation role: ${generation.video.provider}/${generation.video.model}.`,
+    'If asked about visual capability, explain that Lumi routes visual perception through the configured World Model perception role and vision tools; do not say Lumi cannot see merely because the primary reasoning model is text-only.',
+    'Keep runtime roles separate inside the product classification: the primary model reasons and chats; World Model settings contain visual perception and desktop action planning; generation models create image or video artifacts.',
     ']',
   ].join('\n');
 }

@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, ShoppingBag, Cpu, Download, Trash2, Power, PowerOff, RefreshCw, Star, Wrench, CheckCircle, Globe, Search, Zap, Tag, Upload, Palette, Terminal, Monitor, Film, Key, ExternalLink, Github, AlertTriangle, X, ShieldCheck, Info, Mail, QrCode, Link, Image, FileText, CloudSun, Languages, Calculator, StickyNote, Timer, TrendingUp, Music, GraduationCap, BriefcaseBusiness, Stethoscope } from 'lucide-react';
+import { Sparkles, ShoppingBag, Cpu, Download, Trash2, Power, PowerOff, RefreshCw, Star, Wrench, CheckCircle, Globe, Search, Zap, Tag, Upload, Palette, Terminal, Monitor, Film, Key, ExternalLink, Github, AlertTriangle, X, ShieldCheck, Info, Mail, QrCode, Link, Image, FileText, CloudSun, Languages, Calculator, StickyNote, Timer, TrendingUp, Music, GraduationCap, BriefcaseBusiness, Stethoscope, Settings2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
@@ -9,6 +9,7 @@ import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
 import { apiFetch } from '@/services/apiClient';
 import { WORK_RECOMMENDATION_RULES } from '../i18n/locales/skillRecommendations';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import { getSkillModelServiceSettingsTarget } from '../../shared/model_service_settings';
 
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 
@@ -121,6 +122,24 @@ function findInstalledSkillForMarket(skill: MarketplaceSkill, installedSkills: I
   return installedSkills.find(installed => candidates.has(normalizeSkillKey(installed.name)));
 }
 
+function getApiKeyConfigurationDetail(
+  skill: MarketplaceSkill,
+  lang: 'en' | 'zh',
+  fallbackMessage:
+    | 'skill-center.configure-value0-after-install-before.18059ad8fc'
+    | 'skill-center.configure-value0-before-real-calls.041e3cf5db',
+): string {
+  const locale = lang === 'zh' ? 'zh' : 'en';
+  const modelServiceTarget = getSkillModelServiceSettingsTarget(skill.apiKeyEnv);
+  if (modelServiceTarget) {
+    return formatUiMessage('skill-center.value0-is-managed-in-value1-settings.918a11b372', {
+      value0: modelServiceTarget.provider,
+      value1: uiMessage('settings.generative-models.3ef22638d1', locale),
+    }, locale);
+  }
+  return formatUiMessage(fallbackMessage, { value0: skill.apiKeyEnv || '' }, locale);
+}
+
 function getSkillAvailability(
   skill: MarketplaceSkill,
   installedSkills: InstalledSkill[],
@@ -170,7 +189,7 @@ function getSkillAvailability(
   if (skill.requiresApiKey && skill.apiKeyEnv && !savedKeys[skill.apiKeyEnv]) {
     return {
       label: uiMessage('skill-center.needs-api-key.2e4a04bc58', (lang === 'zh') ? 'zh' : 'en'),
-      detail: formatUiMessage('skill-center.configure-value0-after-install-before.18059ad8fc', { value0: skill.apiKeyEnv }, (lang === 'zh') ? 'zh' : 'en'),
+      detail: getApiKeyConfigurationDetail(skill, lang, 'skill-center.configure-value0-after-install-before.18059ad8fc'),
       tone: 'amber',
     };
   }
@@ -254,7 +273,7 @@ function getDisplayAvailability(
     return {
       label: uiMessage('skill-center.needs-configuration.d8fbbeff8a', (lang === 'zh') ? 'zh' : 'en'),
       detail: skill.requiresApiKey && skill.apiKeyEnv
-        ? (formatUiMessage('skill-center.configure-value0-before-real-calls.041e3cf5db', { value0: skill.apiKeyEnv }, (lang === 'zh') ? 'zh' : 'en'))
+        ? getApiKeyConfigurationDetail(skill, lang, 'skill-center.configure-value0-before-real-calls.041e3cf5db')
         : (skill.setupNote || (uiMessage('skill-center.requires-local-dependencies-or-account.87aec9deaa', (lang === 'zh') ? 'zh' : 'en'))),
       tone: 'amber',
     };
@@ -1157,6 +1176,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
               <AnimatePresence>
                 {sortedMarket.map(skill => {
                   const availability = getDisplayAvailability(skill, installedSkills, savedKeys, lang);
+                  const modelServiceTarget = getSkillModelServiceSettingsTarget(skill.apiKeyEnv);
                   const runtimeInstalled = !!availability.installedSkill;
                   const isInstalled = skill.installed || runtimeInstalled;
                   return (
@@ -1210,9 +1230,17 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                       </div>
                     )}
                     {skill.requiresApiKey && skill.apiKeyUrl && (
-                      <div className="mb-3 p-2 bg-amber-500/5 border border-amber-500/10 rounded-xl">
-                        <p className="text-[12px] text-amber-300/70 leading-relaxed">
-                          Requires <strong>{skill.apiKeyEnv}</strong> — <a href={skill.apiKeyUrl} target="_blank" rel="noopener" className="underline hover:text-amber-200">{t.getApiKey || 'get API key'}</a>
+                      <div className={`mb-3 rounded-lg border p-2 ${modelServiceTarget ? 'border-cyan-400/10 bg-cyan-400/[0.04]' : 'border-amber-500/10 bg-amber-500/5'}`}>
+                        <p className={`text-[12px] leading-relaxed ${modelServiceTarget ? 'text-cyan-200/60' : 'text-amber-300/70'}`}>
+                          {modelServiceTarget
+                            ? getApiKeyConfigurationDetail(skill, lang, 'skill-center.configure-value0-before-real-calls.041e3cf5db')
+                            : <>Requires <strong>{skill.apiKeyEnv}</strong></>}
+                          {' · '}
+                          <a href={skill.apiKeyUrl} target="_blank" rel="noopener" className="underline hover:text-white">
+                            {modelServiceTarget
+                              ? uiMessage('settings.provider-console.f2138df9a1', lang === 'zh' ? 'zh' : 'en')
+                              : (t.getApiKey || 'get API key')}
+                          </a>
                         </p>
                       </div>
                     )}
@@ -1561,6 +1589,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
   const mSkill: any | undefined = isMarketSkill
     ? detailSkill
     : marketSkills.find(s => s.id === `skill-${detailSkill.name}`);
+  const modelServiceTarget = getSkillModelServiceSettingsTarget(mSkill?.apiKeyEnv);
   const marketAvailability = mSkill
     ? getDisplayAvailability(mSkill, installedSkills, savedKeys, lang)
     : undefined;
@@ -1668,7 +1697,43 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
         </div>
       )}
 
-      {mSkill?.requiresApiKey && mSkill.apiKeyEnv && (
+      {mSkill?.requiresApiKey && mSkill.apiKeyEnv && modelServiceTarget && (
+        <div className="space-y-3 rounded-lg border border-cyan-400/15 bg-cyan-400/[0.04] p-4">
+          <div className="flex items-center gap-1.5">
+            <Key size={12} className="text-cyan-300" />
+            <span className="text-xs font-bold uppercase text-cyan-200">
+              {uiMessage('skill-center.model-service-configuration.070b9fc0e3', (lang === 'zh') ? 'zh' : 'en')}
+            </span>
+          </div>
+          <p className="text-sm leading-relaxed text-white/55">
+            {formatUiMessage('skill-center.value0-is-managed-in-value1-settings.918a11b372', {
+              value0: modelServiceTarget.provider,
+              value1: uiMessage('settings.generative-models.3ef22638d1', (lang === 'zh') ? 'zh' : 'en'),
+            }, (lang === 'zh') ? 'zh' : 'en')}
+          </p>
+          <div className="flex items-center justify-between gap-3">
+            {savedKeys[mSkill.apiKeyEnv] ? (
+              <span className="flex items-center gap-1 text-sm text-green-400"><CheckCircle size={14} /> {t.keyConfigured || 'Key configured'}</span>
+            ) : (
+              <span className="flex items-center gap-1 text-sm text-amber-300"><AlertTriangle size={14} /> {uiMessage('skill-center.needs-api-key.2e4a04bc58', (lang === 'zh') ? 'zh' : 'en')}</span>
+            )}
+            <Button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('lumi:client-action', {
+                  detail: { action: 'open_settings', section: modelServiceTarget.settingsSection },
+                }));
+                setDetailSkill(null);
+              }}
+              className="h-9 shrink-0 rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 text-xs font-bold text-cyan-100 hover:bg-cyan-300/15"
+            >
+              <Settings2 size={13} className="mr-1.5" />
+              {uiMessage('skill-center.open-model-settings.b1d3766b80', (lang === 'zh') ? 'zh' : 'en')}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {mSkill?.requiresApiKey && mSkill.apiKeyEnv && !modelServiceTarget && (
         <div className="p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl space-y-3">
           <div className="flex items-center gap-1.5">
             <Key size={12} className="text-amber-400" />

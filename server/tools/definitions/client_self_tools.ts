@@ -192,7 +192,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         section: {
           type: 'string',
-          description: 'Optional section. For open_organization_workspace use dashboard, kb, chat, messaging, templates, review, members, audit, settings, branch, legal, spatial-design, or brand-design. For open_settings use general, neural/autonomy, llm-providers, vision-models, voice-services, security, hardware, mcp, voice, or computer.',
+          description: 'Optional section. For open_organization_workspace use dashboard, kb, chat, messaging, templates, review, members, audit, settings, branch, legal, spatial-design, or brand-design. For open_settings use general, neural/autonomy, llm-providers, world-model, generation-models, voice-services, security, hardware, mcp, voice, or computer. Legacy vision-model aliases open world-model.',
         },
         confirmed: {
           type: 'boolean',

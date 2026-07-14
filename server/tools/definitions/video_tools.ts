@@ -1,15 +1,21 @@
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
+import { getUserPreferredGenerationModels } from '../../llm/generation_preferences';
 
-async function generateVideo(args: Record<string, any>): Promise<string> {
+async function generateVideo(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const prompt = args.prompt || '';
   if (!prompt) throw new Error('prompt is required');
 
   const keys = loadKeys();
-  const apiKey = keys.DASHSCOPE_API_KEY;
-  if (!apiKey) throw new Error('DASHSCOPE_API_KEY not configured. Set it in Settings > API Matrix.');
+  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || keys.DASHSCOPE_API_KEY || keys.QWEN_API_KEY;
+  if (!apiKey) throw new Error('DASHSCOPE_API_KEY not configured. Set it in Settings > LLM Providers.');
 
-  const model = args.model || 'wanx2.1-t2v-turbo';
+  const preference = getUserPreferredGenerationModels(context?.userId || 'anonymous').video;
+  if (preference.provider !== 'qwen') {
+    throw new Error(`Unsupported video generation provider: ${preference.provider}`);
+  }
+  const model = args.model || preference.model || preference.models.qwen;
   const size = args.size || '1280*720';
   const seed = args.seed || Math.floor(Math.random() * 2147483647);
 
@@ -75,19 +81,19 @@ async function generateVideo(args: Record<string, any>): Promise<string> {
 export function registerVideoTools(registry: ToolRegistry): void {
   registry.register({
     name: 'generate_video',
-    description: 'Generate AI videos from text descriptions using DashScope Wan2.1. Describe the scene, subjects, motion, lighting, and style. Use "wanx2.1-t2v-turbo" for fast results (~1min) or "wanx2.1-t2v-plus" for higher quality (~2min). Videos are 5 seconds, 720p, no audio. Returns a download URL valid for 24 hours.',
+    description: 'Generate AI videos from text descriptions using the provider and default model selected in Settings > Generative Models. The model argument may override that default only when the task explicitly requests a model.',
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Video description in English or Chinese. Describe the scene, motion, lighting, camera angle, and style. Be specific — up to 800 characters.' },
-        model: { type: 'string', description: 'Model: wanx2.1-t2v-turbo (fast) or wanx2.1-t2v-plus (quality). Default turbo.' },
+        model: { type: 'string', description: 'Optional explicit model override. Otherwise the configured video generation model is used.' },
         size: { type: 'string', description: 'Video resolution: 1280*720 (16:9, default), 720*1280 (9:16 vertical), 960*960 (1:1 square)' },
         prompt_extend: { type: 'boolean', description: 'Whether to intelligently expand the prompt for better quality (default true)' },
         seed: { type: 'number', description: 'Random seed for reproducibility' },
       },
       required: ['prompt'],
     },
-    handler: generateVideo,
+    handler: (args, context) => generateVideo(args, context),
     permission: 'user',
     securityLevel: 'safe',
   });

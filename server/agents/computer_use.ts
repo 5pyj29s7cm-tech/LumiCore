@@ -18,7 +18,8 @@
 
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
 import { parseScreenshotBase64 } from '../llm/adapter';
-import { getUserPreferredVision, type VisionProvider } from '../llm/vision_preferences';
+import type { VisionProvider } from '../llm/vision_preferences';
+import { getUserPreferredWorldModel } from '../llm/world_preferences';
 import { recordTokenUsage } from '../llm/token_tracker';
 
 interface ComputerUseAction {
@@ -133,9 +134,9 @@ function isCancelled(options: Pick<ComputerUseOptions, 'isCancelled'>): boolean 
   return options.isCancelled?.() === true;
 }
 
-// ── Vision model call ──
+// World-model action planning
 
-async function callVisionModel(
+async function callWorldModel(
   screenshotBase64: string,
   screenshotMime: string,
   task: string,
@@ -144,11 +145,11 @@ async function callVisionModel(
   userId?: string,
 ): Promise<string> {
   const g = llmGetters;
-  const vision = getUserPreferredVision(userId || 'anonymous');
+  const world = getUserPreferredWorldModel(userId || 'anonymous');
 
   let provider: VisionProvider;
-  let model = vision.model;
-  provider = vision.provider;
+  let model = world.model;
+  provider = world.provider;
   const getterAvailable = provider === 'openai' ? !!g.getOpenAI?.()
     : provider === 'gemini' ? !!g.getGemini?.()
       : provider === 'ark' ? !!g.getArk?.()
@@ -158,7 +159,7 @@ async function callVisionModel(
               : provider === 'relay' ? !!g.getRelay?.()
                 : false;
   if (!getterAvailable) {
-    throw new Error(`Computer use vision provider "${provider}" is not configured. Add its API key in Settings → LLM Providers → Vision Model, or choose a configured vision model.`);
+    throw new Error(`Desktop action provider "${provider}" is not configured. Configure it in Settings > World Model, or inherit a configured visual-perception model.`);
   }
 
   const historyContext = actionHistory.length > 0
@@ -177,7 +178,7 @@ async function callVisionModel(
 
   const result = await makeLLMCall(
     messages, [],
-    { provider, model, maxTokens: 400, userId },
+    { provider, model, maxTokens: 400, userId, role: 'world' },
     g.getDeepSeek?.() || (() => null),
     g.getGemini?.() || (() => null),
     g.getOpenAI,
@@ -192,7 +193,7 @@ async function callVisionModel(
     g.getRelay,
   );
   if (userId) {
-    recordTokenUsage(userId, provider, model, result.usage, `vision_computer_use_${Date.now()}`, 'vision');
+    recordTokenUsage(userId, provider, model, result.usage, `world_computer_use_${Date.now()}`, 'world');
   }
 
   return result.text || '';
@@ -279,7 +280,7 @@ function historyForAction(action: ComputerUseAction, step: number, total: number
 // ── Main loop ──
 
 /**
- * Run the computer use loop: screenshot → vision → action → repeat.
+ * Run the computer use loop: screenshot -> world model -> action -> repeat.
  *
  * @param task Natural-language description of what to do on the desktop.
  * @param options desktopRelay, llmGetters, and optional callbacks.
@@ -336,19 +337,19 @@ export async function computerUseLoop(
       continue;
     }
 
-    // ── 2. Vision analysis ──
+    // 2. World-model action planning
     if (isCancelled(options)) {
       return `Task cancelled after screenshot capture. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
     }
 
     let responseText: string;
     try {
-      responseText = await callVisionModel(screenshotBase64, screenshotMime, task, actionHistory, options.llmGetters, options.userId);
+      responseText = await callWorldModel(screenshotBase64, screenshotMime, task, actionHistory, options.llmGetters, options.userId);
     } catch (err: any) {
-      options.onProgress?.(`[${i + 1}/${maxIter}] Vision call failed: ${err.message}`);
+      options.onProgress?.(`[${i + 1}/${maxIter}] World model call failed: ${err.message}`);
       consecutiveErrors++;
       if (consecutiveErrors >= 3) {
-        return `Vision model failed 3 times: ${err.message}`;
+        return `World model failed 3 times: ${err.message}`;
       }
       await sleep(2000);
       continue;
@@ -356,7 +357,7 @@ export async function computerUseLoop(
 
     // ── 3. Parse action ──
     if (isCancelled(options)) {
-      return `Task cancelled after vision analysis. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
+      return `Task cancelled after world-model analysis. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
     }
 
     let action = extractActionJSON(responseText);

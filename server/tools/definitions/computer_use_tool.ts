@@ -25,7 +25,7 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
   }
 
   if (!context?.llmGetters) {
-    throw new Error('Computer use requires a configured Vision Model. Set one in Settings -> LLM Providers -> Vision Model.');
+    throw new Error('Computer use requires a configured desktop-action role. Set one in Settings -> World Model.');
   }
 
   const task = args.task || args.prompt || '';
@@ -51,7 +51,7 @@ export function registerComputerUseTool(registry: ToolRegistry): void {
   registry.register({
     name: 'computer_use',
     description:
-      'Take control of the user desktop to complete a task after foreground confirmation or inside an approved autonomous workflow. This tool uses screenshot capture and the configured Vision Model to understand what is on screen, enters wallpaper mode when available, shows/moves the visible cursor before clicks, then controls the mouse and keyboard step by step. Supports configured vision providers such as Qwen-VL/DashScope, GPT-4o, Gemini, Doubao Vision, Ollama, LM Studio, or relay models. Use this for opening applications, navigating websites, filling forms, closing dialogs, moving files, managing windows, or other visible desktop interactions. Each iteration takes a screenshot, analyzes it, executes one mouse/keyboard action, verifies through the next screenshot, and repeats. Default 12 iterations; capped by the active desktop/autonomy tool policy up to 50; wallpaper/cursor overlay is cleaned up when finished.',
+      'Take control of the user desktop to complete a task after foreground confirmation or inside an approved autonomous workflow. Screenshot perception and next-action prediction use the desktop-action role in World Model settings, which may inherit visual perception or use an independent multimodal model. The tool enters wallpaper mode when available, visibly moves the cursor, performs one action, verifies the next screen state, and repeats. Use this for opening applications, navigating websites, filling forms, closing dialogs, moving files, managing windows, or other visible desktop interactions. Default 12 iterations; capped by the active desktop/autonomy tool policy up to 50; wallpaper/cursor overlay is cleaned up when finished.',
     parameters: {
       type: 'object',
       properties: {
