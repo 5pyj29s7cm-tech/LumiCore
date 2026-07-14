@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -505,7 +506,8 @@ fn delete_item(target: String) -> CommandResult {
         };
     }
 
-    if cfg!(target_os = "windows") {
+    #[cfg(target_os = "windows")]
+    {
         let script = r#"
           $p = $args[0]
           Add-Type -AssemblyName Microsoft.VisualBasic
@@ -542,20 +544,23 @@ fn delete_item(target: String) -> CommandResult {
         };
     }
 
-    let result = if path.is_dir() {
-        std::fs::remove_dir_all(&path)
-    } else {
-        std::fs::remove_file(&path)
-    };
-    match result {
-        Ok(_) => CommandResult {
-            success: true,
-            output: format!("Deleted: {}", target),
-        },
-        Err(e) => CommandResult {
-            success: false,
-            output: e.to_string(),
-        },
+    #[cfg(not(target_os = "windows"))]
+    {
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match result {
+            Ok(_) => CommandResult {
+                success: true,
+                output: format!("Deleted: {}", target),
+            },
+            Err(e) => CommandResult {
+                success: false,
+                output: e.to_string(),
+            },
+        }
     }
 }
 
