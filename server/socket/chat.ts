@@ -10,7 +10,12 @@ import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } 
 import { LLMUsage, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { runWithTools } from "../llm/adapter";
-import { normalizeOperationMode, parseStoredOperationMode } from "../cognition/operation_modes";
+import {
+  isPureOperationModeSwitchRequest,
+  normalizeOperationMode,
+  type OperationMode,
+} from "../cognition/operation_modes";
+import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
@@ -71,6 +76,7 @@ import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflo
 import { buildProfessionOverlay } from "../autonomy/professions";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildResponseLanguageInstruction } from "../utils/language";
+import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
@@ -933,9 +939,7 @@ export function registerChatHandler(
       const operationMode = (() => {
         if (typeof data.operationMode === 'string') return normalizeOperationMode(data.operationMode);
         try {
-          const db = readDB();
-          const setting = (db.settings || []).find((s: any) => s.key === `op_mode_${uid}`);
-          if (setting) return parseStoredOperationMode(setting.value);
+          return getStoredOperationMode(uid);
         } catch {}
         return 'assistant';
       })();
@@ -1174,6 +1178,51 @@ export function registerChatHandler(
         console.warn(`[ChatHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
         return false;
       };
+
+      const directlyAppliedMode: OperationMode | null = turnFlow.autoPromoteToAssistant
+        ? 'assistant'
+        : turnFlow.requestedMode;
+      if (directlyAppliedMode) {
+        let modeSynced = true;
+        try {
+          await desktopRelay('client_action', {
+            action: 'set_client_mode',
+            mode: directlyAppliedMode,
+            confirmed: directlyAppliedMode === 'meeting' || directlyAppliedMode === 'autonomous',
+          });
+        } catch (err: any) {
+          modeSynced = false;
+          emitAgent('agent:notification', {
+            type: 'client_action',
+            level: 'warning',
+            message: `Mode switch did not reach the client: ${err?.message || err}`,
+          });
+        }
+        if (modeSynced) saveStoredOperationMode(uid, directlyAppliedMode);
+
+        if (isPureOperationModeSwitchRequest(visibleUserText || text, turnFlow.requestedMode)) {
+          const responseText = formatOperationModeSwitchResponse(
+            directlyAppliedMode,
+            modeSynced,
+            visibleUserText || text,
+          );
+
+          emitAgent('agent:status', { status: 'responding', agentName: personality.name });
+          emitAgent('agent:response', { text: responseText, agentName: personality.name, source: 'chat_mode' });
+          if (conversationId) {
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
+            socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat_mode' });
+          }
+          persistChatLearning(responseText, {
+            sourceInteractionId: `${interactionId}_mode`,
+            logLabel: 'chat mode switch',
+          });
+          emitAgent('agent:status', { status: 'idle', agentName: personality.name });
+          chatSessionMap.delete(sessionKey);
+          return;
+        }
+      }
 
       const specialWorkflowText = [visibleUserText || text, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
       const specialWorkflow = turnFlow.specialWorkflow;

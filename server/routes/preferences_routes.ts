@@ -3,8 +3,7 @@ import { readDB, writeDB } from "../../db_layer";
 import { requireAuth } from "../middleware/auth";
 import { broadcastPreferenceChange } from "../memory";
 import { broadcastToOrg } from '../org/ws_sync';
-import { normalizeOperationMode, parseStoredOperationMode } from "../cognition/operation_modes";
-import { autonomyLevelForOperationMode, saveGateConfig } from "../autonomy/safety_gate";
+import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 
 export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
   const petPreferenceKey = (user: NonNullable<Express.Request['user']>) => (
@@ -63,14 +62,7 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
 
   router.get("/preferences/operation_mode", requireAuth, (req, res) => {
     try {
-      const uid = req.user!.uid;
-      const db = readDB();
-      const setting = (db.settings || []).find((s: any) => s.key === `op_mode_${uid}`);
-      if (setting) {
-        res.json({ mode: parseStoredOperationMode(setting.value) });
-      } else {
-        res.json({ mode: 'assistant' });
-      }
+      res.json({ mode: getStoredOperationMode(req.user!.uid) });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -81,22 +73,9 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
       const uid = req.user!.uid;
       const { mode } = req.body || {};
       if (!mode) return res.status(400).json({ error: 'mode is required' });
-      const normalizedMode = normalizeOperationMode(mode);
-      const db = readDB();
-      if (!db.settings) db.settings = [];
-      const key = `op_mode_${uid}`;
-      const value = JSON.stringify({ mode: normalizedMode });
-      const existing = db.settings.findIndex((s: any) => s.key === key);
-      if (existing >= 0) {
-        db.settings[existing].value = value;
-      } else {
-        db.settings.push({ key, value });
-      }
-      writeDB(db);
-      const autonomyLevel = autonomyLevelForOperationMode(normalizedMode);
-      if (autonomyLevel) saveGateConfig({ autonomyLevel }, uid);
-      broadcastPreferenceChange(uid, 'operation_mode', { mode: normalizedMode });
-      res.json({ ok: true, autonomyLevel: autonomyLevel || undefined });
+      const saved = saveStoredOperationMode(uid, mode);
+      broadcastPreferenceChange(uid, 'operation_mode', { mode: saved.mode });
+      res.json({ ok: true, autonomyLevel: saved.autonomyLevel });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

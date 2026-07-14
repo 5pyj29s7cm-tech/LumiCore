@@ -7,6 +7,7 @@ import { getDesktopContext } from '../context/activity_stream';
 import { getModeConfig, ConversationMode } from '../cognition/modes';
 import { formatLumiConstitutionForPrompt } from './constitution';
 import { buildResponseLanguageInstruction } from '../utils/language';
+import { formatUserIdentityBoundary } from './user_identity';
 
 const VERBOSITY_GUIDE: Record<ExpressionStyle['verbosity'], string> = {
   concise: 'Keep responses short and direct. One or two sentences when possible.',
@@ -259,6 +260,7 @@ export function generateSystemPrompt(
   blocks.push(`You are ${config.name}, ${effective.expressionStyle.persona}.\n${config.coreMotivation}`);
   const stableIdentityAnchor = formatStableLumiIdentityAnchor(config);
   if (stableIdentityAnchor) blocks.push(stableIdentityAnchor);
+  blocks.push(formatUserIdentityBoundary(options?.userId, options?.userText));
   blocks.push(formatLumiConstitutionForPrompt());
 
   if (config.growthState) {

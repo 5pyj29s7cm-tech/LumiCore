@@ -1,5 +1,9 @@
 import type { OperationMode } from './operation_modes';
-import { getOperationModeConfig, normalizeOperationMode } from './operation_modes';
+import {
+  detectRequestedOperationMode,
+  getOperationModeConfig,
+  normalizeOperationMode,
+} from './operation_modes';
 import {
   hasClientActionOnlyIntent,
   hasExplicitToolIntent,
@@ -111,7 +115,7 @@ export function shouldAutoPromoteWorkTurn(
   if (QUESTION_RE.test(text)) return false;
   if (!hasExplicitToolIntent(text)) return false;
   if (channel === 'voice') return WORK_ACTION_RE.test(text);
-  return false;
+  return channel === 'chat';
 }
 
 function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): string {
@@ -319,7 +323,7 @@ function buildExecutionGovernance(input: {
 
 export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const operationMode = normalizeOperationMode(input.operationMode);
-  const requestedMode = input.requestedMode || null;
+  const requestedMode = input.requestedMode || detectRequestedOperationMode(input.text);
   const surface = resolveTurnSurface({
     channel: input.channel,
     source: input.source,
@@ -335,9 +339,14 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const clientActionIntent = hasClientActionOnlyIntent(input.text);
   const actionContract = buildActionContract(input.text);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
-  const autoPromoteToAssistant = false;
+  const autoPromoteToAssistant = shouldAutoPromoteWorkTurn(
+    input.text,
+    operationMode,
+    requestedMode,
+    input.channel,
+  );
   const taskEntryTurn = input.channel === 'task';
-  const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn;
+  const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn && !autoPromoteToAssistant;
   const shouldPromoteForAction =
     operationMode === 'chat' &&
     !requestedMode &&
@@ -345,13 +354,14 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools);
   const effectiveOperationMode = requestedMode || (shouldPromoteForAction ? 'assistant' : operationMode);
   const selfRepairTurn = !chatModePureConversation && isDiagnosticOrRepairRequest(input.text);
-  const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent && (effectiveOperationMode === 'chat' || effectiveOperationMode === 'meeting');
+  const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
   const visionIntent = hasVisionIntent(input.text);
   const workSurfaceRoute = resolveWorkSurfaceRoute(input.text);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
   const allowToolUseForTurn = chatModePureConversation
     ? clientActionOnlyTurn
-    : taskEntryTurn ||
+    : clientActionOnlyTurn ||
+      taskEntryTurn ||
       autoPromoteToAssistant ||
       actionContractRequiresTools ||
       workTakeover.shouldResumeTask ||

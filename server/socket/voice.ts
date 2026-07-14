@@ -29,7 +29,13 @@ import { searchKnowledgeBase } from "../org/kb";
 import { matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
-import { parseStoredOperationMode, OperationMode } from "../cognition/operation_modes";
+import {
+  detectRequestedOperationMode,
+  isPureOperationModeSwitchRequest,
+  type OperationMode,
+} from "../cognition/operation_modes";
+import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
+import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
@@ -177,37 +183,6 @@ function isExplicitInterruptCommand(text: string): boolean {
 function isPureInterruptCommand(text: string): boolean {
   const normalized = normalizeSpeechText(text);
   return /^(停|停下|停止|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样|stop|wait|pause|interrupt|holdon|shutup)$/.test(normalized);
-}
-
-function detectVoiceClientModeSwitch(text: string): OperationMode | null {
-  const normalized = text.replace(/\s+/g, '').toLowerCase();
-  const hasSwitchVerb = /(切换|切到|切成|换到|进入|打开|开启|启动|设为|设置为|切回|回到|switch|change|enter|start|open)/i.test(normalized);
-  if (!hasSwitchVerb) return null;
-  if (/(会议模式|会议|meetingmode|meeting)/i.test(normalized)) return 'meeting';
-  if (/(聊天模式|聊天|chatmode|chat)/i.test(normalized)) return 'chat';
-  if (/(助手模式|助手|assistantmode|assistant)/i.test(normalized)) return 'assistant';
-  if (/(自主模式|自主|自主执行|自动执行|autonomymode|autonomousmode|autonomy|autonomous|autoexecute)/i.test(normalized)) return 'autonomous';
-  return null;
-}
-
-function isPureModeSwitchRequest(text: string, mode: OperationMode | null): boolean {
-  if (!mode) return false;
-  const normalized = text.replace(/\s+/g, '').toLowerCase();
-  return /^(lumi|露米)?(请|帮我|给我|麻烦)?(切换|切到|切成|换到|进入|打开|开启|启动|设为|设置为|切回|回到|switch|change|enter|start|open)(到|成)?(会议|聊天|助手|自主|自主执行|自动执行|meeting|chat|assistant|autonomy|autonomous|autoexecute)(模式|mode)?[。.!！?？]*$/i.test(normalized);
-}
-function saveOperationModePreference(userId: string, mode: OperationMode): void {
-  try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const key = `op_mode_${userId}`;
-    const value = JSON.stringify({ mode });
-    const existing = db.settings.findIndex((s: any) => s.key === key);
-    if (existing >= 0) db.settings[existing].value = value;
-    else db.settings.push({ key, value });
-    writeDB(db);
-  } catch (err: any) {
-    logger.warn(`[Audio] Failed to persist operation mode: ${err?.message || err}`);
-  }
 }
 
 function cancelActiveVoiceTurn(session: AudioSession): void {
@@ -621,13 +596,11 @@ async function processVoiceInput(
 
   const operationMode = (() => {
     try {
-      const db = readDB();
-      const setting = (db.settings || []).find((s: any) => s.key === `op_mode_${session.userId}`);
-      if (setting) return parseStoredOperationMode(setting.value);
+      return getStoredOperationMode(session.userId);
     } catch {}
     return 'assistant';
   })();
-  const requestedMode = detectVoiceClientModeSwitch(userText);
+  const requestedMode = detectRequestedOperationMode(userText);
   const turnDispatch = buildLumiTurnDispatch({
     userId: session.userId,
     text: routedUserText,
@@ -1024,15 +997,11 @@ async function processVoiceInput(
       });
     }
     if (modeSynced) {
-      saveOperationModePreference(session.userId, directlyAppliedMode);
+      saveStoredOperationMode(session.userId, directlyAppliedMode);
     }
 
-    if (isPureModeSwitchRequest(userText, requestedMode)) {
-      const modeLabel = directlyAppliedMode === 'meeting' ? '会议模式'
-        : directlyAppliedMode === 'chat' ? '聊天模式'
-        : directlyAppliedMode === 'assistant' ? '助手模式'
-        : '自主模式';
-      responseText = modeSynced ? `已切到${modeLabel}。` : `我收到切换到${modeLabel}的请求了，但前端没有完成切换。`;
+    if (isPureOperationModeSwitchRequest(userText, requestedMode)) {
+      responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, userText);
       flushSentence(responseText);
       await Promise.allSettled(ttsPromises);
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);

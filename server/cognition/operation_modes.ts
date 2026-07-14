@@ -37,13 +37,13 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
     id: 'chat',
     label: 'Chat',
     labelCN: 'Chat',
-    description: 'Pure conversation. Lumi answers, thinks, explains, and may suggest or switch into a higher mode when action is needed, but does not operate tools, apps, files, commands, desktop control, teams, or background work from chat mode.',
+    description: 'Pure conversation. Lumi answers, thinks, and explains without tools. A clear request for real action transitions the client and that turn to Assistant before execution; long-running work uses Autonomy.',
     promptOverlay: [
       'You are in chat mode.',
       'This mode is pure conversation: answer, reason, explain, brainstorm, and help the user decide.',
       'Do not call tools, operate the desktop, run commands, write files, open apps, assemble teams, or claim that external work has started.',
-      'If the user asks for real action, explain briefly that the task needs Assistant mode for foreground execution or Autonomy mode for long-running work.',
-      'You may help the user switch modes when the request is explicitly about Lumi/client mode control, but external execution still waits for the higher mode.',
+      'If the user clearly asks for real action, transition the client and that turn to Assistant before using tools. Do not run the action inside Chat itself.',
+      'A direct action request is enough authorization for this Chat-to-Assistant transition; do not add a redundant permission question. Use Autonomy for explicit continuous or long-running work.',
       'When the task can be answered naturally without tools, just answer.',
     ].join('\n'),
     toolPolicy: {
@@ -137,4 +137,52 @@ export function parseStoredOperationMode(value: unknown): OperationMode {
 
 export function getOperationModeConfig(mode?: string): OperationModeConfig {
   return OPERATION_MODE_CONFIGS[normalizeOperationMode(mode)];
+}
+
+function normalizeModeCommandText(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[.,!?;:'"()\[\]{}\u3002\uff0c\uff01\uff1f\uff1b\uff1a\u3001\uff08\uff09\u3010\u3011]/g, '');
+}
+
+function stripModeCommandCourtesy(text: string): string {
+  return text.replace(/(?:\u5427|\u4e00\u4e0b|\u597d\u5417|\u53ef\u4ee5\u5417|please)$/i, '');
+}
+
+const MODE_SWITCH_VERB_RE = /(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)/i;
+const MODE_TARGET_RES: Readonly<Record<OperationMode, RegExp>> = {
+  chat: /(?:\u7eaf\u804a\u5929|\u804a\u5929\u6a21\u5f0f|chatmode)/i,
+  assistant: /(?:\u52a9\u624b\u6a21\u5f0f|assistantmode)/i,
+  autonomous: /(?:\u81ea\u4e3b\u6a21\u5f0f|\u81ea\u4e3b\u6267\u884c|\u81ea\u52a8\u6267\u884c|autonomymode|autonomousmode|autoexecutemode)/i,
+  meeting: /(?:\u4f1a\u8bae\u6a21\u5f0f|meetingmode)/i,
+};
+
+const PURE_MODE_COMMAND_RES: Readonly<Record<OperationMode, RegExp>> = {
+  chat: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u7eaf\u804a\u5929|\u804a\u5929\u6a21\u5f0f|\u804a\u5929|chatmode|chat)$/i,
+  assistant: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u52a9\u624b\u6a21\u5f0f|\u52a9\u624b|assistantmode|assistant)$/i,
+  autonomous: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u81ea\u4e3b\u6a21\u5f0f|\u81ea\u4e3b\u6267\u884c|\u81ea\u52a8\u6267\u884c|\u81ea\u4e3b|autonomymode|autonomousmode|autonomy|autonomous|autoexecute)$/i,
+  meeting: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u4f1a\u8bae\u6a21\u5f0f|\u4f1a\u8bae|meetingmode|meeting)$/i,
+};
+
+export function detectRequestedOperationMode(text: string): OperationMode | null {
+  const normalized = stripModeCommandCourtesy(normalizeModeCommandText(text));
+  if (!normalized) return null;
+
+  for (const mode of ['chat', 'assistant', 'autonomous', 'meeting'] as OperationMode[]) {
+    if (PURE_MODE_COMMAND_RES[mode].test(normalized)) return mode;
+  }
+
+  if (!MODE_SWITCH_VERB_RE.test(normalized)) return null;
+  for (const mode of ['meeting', 'chat', 'assistant', 'autonomous'] as OperationMode[]) {
+    if (MODE_TARGET_RES[mode].test(normalized)) return mode;
+  }
+  return null;
+}
+
+export function isPureOperationModeSwitchRequest(text: string, mode?: OperationMode | null): boolean {
+  const requested = mode || detectRequestedOperationMode(text);
+  return Boolean(requested && PURE_MODE_COMMAND_RES[requested].test(
+    stripModeCommandCourtesy(normalizeModeCommandText(text)),
+  ));
 }

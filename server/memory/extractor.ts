@@ -1,6 +1,7 @@
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { ExtractedMemory } from './types';
 import type { UserLLMProvider } from '../llm/user_preferences';
+import { extractExplicitUserAddress } from '../personality/user_identity';
 
 export interface ExtractedReminder {
   content: string;
@@ -8,6 +9,7 @@ export interface ExtractedReminder {
   confidence: number;
 }
 
+// i18n-allow -- Model protocol preserves multilingual keyword examples from the existing memory schema.
 const EXTRACTION_PROMPT = `You are a memory extraction system for a personal AI assistant. Analyze the conversation below and identify any new information about the user AND any time-sensitive tasks or reminders.
 
 The user's memories are organized as a tree with topic branches. When extracting new memories, suggest which branch they belong to.
@@ -45,6 +47,8 @@ Reminders: only extract if the user explicitly says they want to be reminded abo
 
 Rules:
 - Only extract NEW information not in "Existing memories"
+- Treat contacts, recipients, filenames, folders, documents, projects, cases, and task targets as external entities, not as the user's identity.
+- Extract the user's name or preferred form of address only when the user explicitly says what they are called or how they want to be addressed. The assistant's guess is never evidence.
 - If nothing new, output {"memories": [], "reminders": []}
 - Be conservative on confidence
 - Output valid JSON only, no explanation
@@ -73,6 +77,22 @@ export interface ExtractionContext {
   treeBranches?: string[];
   /** Location tag from sensory context or user message (e.g. 'home', 'office', 'cafe') */
   locationTag?: string;
+}
+
+const IDENTITY_MEMORY_RE = /(?:\u7528\u6237|\u4e3b\u4eba|\buser\b|\bowner\b).{0,24}(?:\u540d\u5b57|\u59d3\u540d|\u79f0\u547c|\u53eb|\bname\b|\bnamed\b|\baddress)/iu;
+const IDENTITY_KEYWORD_RE = /^(?:\u540d\u5b57|\u59d3\u540d|\u79f0\u547c|\u6635\u79f0|name|nickname|preferred address)$/iu;
+
+export function isSupportedUserIdentityMemory(
+  item: { content?: unknown; keywords?: unknown },
+  userMessage: string,
+): boolean {
+  const content = String(item?.content || '');
+  const keywords = Array.isArray(item?.keywords) ? item.keywords.map(String) : [];
+  const identityClaim = IDENTITY_MEMORY_RE.test(content)
+    || keywords.some(keyword => IDENTITY_KEYWORD_RE.test(keyword.trim()));
+  if (!identityClaim) return true;
+  const explicitAddress = extractExplicitUserAddress(userMessage);
+  return Boolean(explicitAddress && content.includes(explicitAddress));
 }
 
 export async function extractMemories(
@@ -160,6 +180,7 @@ export async function extractMemories(
         if (/^[\d\s.,;:!?，。；：！？、""''「」『』【】（）()\[\]{}<>%$#@&*+\-/=~^`|]+$/.test(content)) return false;
         return true;
       })
+      .filter((item: any) => isSupportedUserIdentityMemory(item, ctx.userMessage))
       .map((item: any) => ({
         type: item.type as ExtractedMemory['type'],
         content: item.content.trim().slice(0, 500),

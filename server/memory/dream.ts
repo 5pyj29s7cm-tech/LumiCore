@@ -12,6 +12,7 @@ import {
 import { consolidateEpisodic, consolidateNarrative, selfReflect, ConsolidationContext } from './consolidator';
 import { Memory } from './types';
 import { loadEmotionalState } from '../personality/state';
+import { formatUserIdentityBoundary } from '../personality/user_identity';
 
 export interface DreamLLMGetters {
   getDeepSeek: () => any;
@@ -194,7 +195,9 @@ async function synthesizeDream(
     '- Do not mutate core identity.',
     '- Do not delete original memories.',
     '- Distinguish confirmed facts from uncertain or conflicting fragments.',
+    '- Contact names, recipients, filenames, folders, documents, cases, projects, and task targets are external entities, not the user\'s identity.',
     '- Keep the original language when possible.',
+    formatUserIdentityBoundary(ctx.userId),
     '- Sound like a short dream journal, not a technical report.',
     '',
     'Return ONLY valid JSON:',

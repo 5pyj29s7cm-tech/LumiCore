@@ -98,19 +98,20 @@ describe('Lumi requirement matrix pressure', () => {
     });
   });
 
-  it('keeps chat, assistant, and autonomous modes distinct for the same real action', () => {
+  it('promotes explicit Chat actions while keeping Assistant and Autonomy execution depths distinct', () => {
     const text = '微信给阿陆发晚安';
     const chat = evaluateTurn({ text, operationMode: 'chat' });
     const assistant = evaluateTurn({ text, operationMode: 'assistant' });
     const autonomous = evaluateTurn({ text, operationMode: 'autonomous' });
 
-    expect(chat.dispatch.flow.allowToolUseForTurn).toBe(false);
-    expect(chat.execution.allowToolUse).toBe(false);
-    expect(chat.execution.toolRoute).toBeNull();
-    expect(chat.execution.toolPolicy.forbiddenTools).toContain('*');
-    expect(chat.execution.maxIterations).toBe(0);
+    expect(chat.dispatch.flow.autoPromoteToAssistant).toBe(true);
+    expect(chat.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(chat.dispatch.flow.allowToolUseForTurn).toBe(true);
+    expect(chat.execution.allowToolUse).toBe(true);
+    expect(chat.execution.toolRoute?.categories).toContain('messaging');
+    expect(chat.execution.maxIterations).toBe(assistant.execution.maxIterations);
 
-    for (const result of [assistant, autonomous]) {
+    for (const result of [chat, assistant, autonomous]) {
       expect(result.dispatch.boundary).toBe('tool_action');
       expect(result.execution.allowToolUse).toBe(true);
       expect(result.selection.lane).toBe('messaging');

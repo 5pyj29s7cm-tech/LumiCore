@@ -108,7 +108,7 @@ describe('Lumi execution decision', () => {
     expect(decision.toolRoute).toBeNull();
   });
 
-  it('keeps explicit external actions tool-free in pure chat mode', async () => {
+  it('promotes an explicit external action from Chat to Assistant execution', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
 
@@ -127,11 +127,12 @@ describe('Lumi execution decision', () => {
       toolDeclarations: declarations,
     });
 
-    expect(dispatch.boundary).toBe('conversation');
-    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
-    expect(decision.allowToolUse).toBe(false);
-    expect(decision.toolPolicy.forbiddenTools).toContain('*');
-    expect(decision.toolRoute).toBeNull();
+    expect(dispatch.boundary).toBe('tool_action');
+    expect(dispatch.flow.autoPromoteToAssistant).toBe(true);
+    expect(dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolRoute?.categories).toContain('messaging');
+    expect(decision.toolRoute?.toolNames).toContain('wechat_send_message');
   });
 
   it('restricts client action turns to client state/action tools', async () => {
