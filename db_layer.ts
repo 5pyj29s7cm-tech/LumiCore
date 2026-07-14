@@ -173,6 +173,9 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE interactions ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN source TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN channel TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN externalMessageId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN routeSequence INTEGER", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN receivedAt TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
     // Add domain + orgId to conversations for personal/work isolation
@@ -305,6 +308,9 @@ function createTables(): Promise<void> {
         orgId TEXT DEFAULT '',
         source TEXT DEFAULT '',
         channel TEXT DEFAULT '',
+        externalMessageId TEXT DEFAULT '',
+        routeSequence INTEGER,
+        receivedAt TEXT DEFAULT '',
         timestamp TEXT NOT NULL
       );
 
@@ -639,6 +645,9 @@ async function loadMemoryDB(): Promise<void> {
     orgId: i.orgId || '',
     source: i.source || '',
     channel: i.channel || '',
+    externalMessageId: i.externalMessageId || '',
+    routeSequence: Number.isFinite(i.routeSequence) ? Number(i.routeSequence) : undefined,
+    receivedAt: i.receivedAt || '',
   }));
 
   memoryDB = {
@@ -798,9 +807,9 @@ async function persistMemoryDB(): Promise<void> {
     },
     {
       name: 'interactions',
-      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, domain, orgId, source, channel, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.timestamp]),
+      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.timestamp]),
     },
     {
       name: 'memories',

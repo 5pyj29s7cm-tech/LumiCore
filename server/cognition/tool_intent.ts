@@ -152,12 +152,25 @@ const DIAGNOSTIC_OR_REPAIR_PATTERNS: RegExp[] = [
   /\b(?:HTTP\s*)?(?:400|404|500)\b/i,
 ];
 
-function isInformationOnlyQuestion(text: string): boolean {
+function hasExplicitActionRequest(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return /^(?:\u4f60\s*)?(?:\u5e2e\u6211|\u5e2e\u5fd9|\u8bf7(?!\u95ee)|\u7ed9|\u66ff\u6211|\u73b0\u5728|\u9a6c\u4e0a|\u7acb\u5373|\u76f4\u63a5|\u628a|\u5c06)/u.test(normalized)
+    || /^(?:please\s+)?(?:send|open|read|run|execute|create|generate|download|install|search|find|check)\b/i.test(normalized);
+}
+
+export function isInformationOnlyQuestion(text: string): boolean {
   if (isDiagnosticOrRepairRequest(text)) return false;
-  if (/(?:\u5e2e\u6211|\u5e2e\u5fd9|\u8bf7|\u7ed9\u6211|\u66ff\u6211)/u.test(text)) return false;
+  if (hasExplicitActionRequest(text)) return false;
+  if (
+    CLIENT_NAVIGATION_VERBS.test(text) &&
+    (CLIENT_SURFACES.test(text) || EXTENDED_PERSONAL_CLIENT_SURFACES.test(text) || ORGANIZATION_WORKSPACE_SURFACES.test(text))
+  ) return false;
   return [
     /(?:^|\s)(?:why\b)|(?:\u4e3a\u4ec0\u4e48|\u4e3a\u5565|\u4e3a\u4f55)/iu,
     /(?:\u662f\u4ec0\u4e48|\u4ec0\u4e48\u610f\u601d|\u600e\u4e48\u7406\u89e3|\u600e\u4e48\u7528|\u5982\u4f55\u4f7f\u7528|\u4f7f\u7528\u65b9\u6cd5|\u6709\u4ec0\u4e48\u533a\u522b|\u53ef\u4ee5\u7528\u5417|\u80fd\u7528\u5417|\u80fd\u4e0d\u80fd\u7528|\u4e5f\u80fd\u7528\u5417|\u80fd\u4e0d\u80fd\u8bf4\u660e|\u4f1a\u4e0d\u4f1a|\u6709\u98ce\u9669|\u5b89\u5168\u5417|\u662f\u4e0d\u662f)(?:.*[\uff1f?]|\s*)$/u,
+    /(?:\u53ef\u4ee5|\u80fd|\u53ef\u4e0d\u53ef\u4ee5|\u80fd\u4e0d\u80fd|\u662f\u5426\u53ef\u4ee5|\u662f\u5426\u80fd|\u4f1a\u4e0d\u4f1a).{0,48}(?:\u53d1\u9001|\u53d1|\u8f6c\u53d1|\u4f20\u8f93|\u4f20|\u5206\u4eab|\u4e0b\u8f7d|\u5bfc\u51fa|\u8fdb\u5165|\u8bbf\u95ee|\u8fde\u63a5|\u63a5\u5165).{0,48}(?:\u5417|\u4e48|\u561b|\u5462|[\uff1f?])$/u,
+    /\b(?:can|could|would)\s+(?:you|lumi|it)\b[^?]{0,160}\?|\b(?:is\s+it\s+possible|are\s+you\s+able)\b[^?]{0,160}\??$/i,
   ].some((pattern) => pattern.test(text));
 }
 

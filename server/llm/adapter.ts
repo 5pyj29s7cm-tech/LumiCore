@@ -216,11 +216,15 @@ export function localizeInternalStatusLeak(text: string, userText: string): stri
   return raw;
 }
 
-const CONFIRMATION_REQUIRED_RE =
+const CONFIRMATION_REQUIRED_ERROR_RE =
   /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i;
+const CONFIRMATION_BLOCK_RESULT_RE =
+  /^Tool\s+"[^"]+"\s+requires user confirmation(?:\s+and was not approved\.|:\s*[^\n]+)$/i;
 
-function isConfirmationBlocked(record: ToolExecutionRecord): boolean {
-  return CONFIRMATION_REQUIRED_RE.test(String(record.error || record.result || ''));
+export function isConfirmationBlockedToolRecord(record: ToolExecutionRecord): boolean {
+  const error = String(record.error || '').trim();
+  if (error && CONFIRMATION_REQUIRED_ERROR_RE.test(error)) return true;
+  return CONFIRMATION_BLOCK_RESULT_RE.test(String(record.result || '').trim());
 }
 
 function humanToolLabel(name: string): string {
@@ -237,7 +241,7 @@ function humanToolLabel(name: string): string {
 
 function buildConfirmationBlockedSummary(executionLog: ToolExecutionRecord[], task: string): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
-  const blocked = executionLog.filter(isConfirmationBlocked);
+  const blocked = executionLog.filter(isConfirmationBlockedToolRecord);
   const successful = executionLog.filter(record => !record.error);
   const labels = Array.from(new Set(blocked.map(record => humanToolLabel(record.name)))).slice(0, 4);
 
@@ -259,7 +263,7 @@ function buildConfirmationBlockedSummary(executionLog: ToolExecutionRecord[], ta
 }
 
 function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], task: string = ''): string {
-  if (executionLog.some(isConfirmationBlocked)) {
+  if (executionLog.some(isConfirmationBlockedToolRecord)) {
     return buildConfirmationBlockedSummary(executionLog, task);
   }
 
@@ -691,7 +695,7 @@ export async function runWithTools(
         name: tc.name,
       });
 
-      if (isConfirmationBlocked(record)) {
+      if (isConfirmationBlockedToolRecord(record)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
         return {
           text: buildConfirmationBlockedSummary(executionLog, getPrimaryUserText(messages)),

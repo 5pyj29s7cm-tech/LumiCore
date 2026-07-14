@@ -40,6 +40,12 @@ export interface MessageRecord {
   orgId?: string;
   source?: string;
   channel?: string;
+  /** Provider message identity used to keep asynchronous remote turns ordered. */
+  externalMessageId?: string;
+  /** Monotonic sequence within one external conversation. */
+  routeSequence?: number;
+  /** Time the remote transport received the message. */
+  receivedAt?: string;
   timestamp: string;
 }
 
@@ -173,6 +179,9 @@ export function addMessage(msg: {
   orgId?: string;
   source?: string;
   channel?: string;
+  externalMessageId?: string;
+  routeSequence?: number;
+  receivedAt?: string;
 }): string {
   const db = readDB();
   const id = 'msg_' + crypto.randomUUID();
@@ -194,6 +203,9 @@ export function addMessage(msg: {
     orgId: msg.orgId || '',
     source: msg.source || '',
     channel: msg.channel || '',
+    externalMessageId: msg.externalMessageId || '',
+    routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : undefined,
+    receivedAt: msg.receivedAt || '',
     timestamp: now,
   };
 
@@ -301,8 +313,20 @@ export function getMessagesByTokenBudget(
   conversationId: string,
   maxTokens: number = DEFAULT_CONTEXT_TOKENS,
   keepRecent: number = 4,
+  throughExternalMessageId = '',
 ): MessageRecord[] {
-  const all = getMessages(conversationId, CONTEXT_HISTORY_LIMIT)
+  const messages = getMessages(conversationId, CONTEXT_HISTORY_LIMIT);
+  let cutoffIndex = -1;
+  if (throughExternalMessageId) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role !== 'user') continue;
+      if (messages[index].externalMessageId !== throughExternalMessageId) continue;
+      cutoffIndex = index;
+      break;
+    }
+  }
+  const visibleMessages = cutoffIndex >= 0 ? messages.slice(0, cutoffIndex + 1) : messages;
+  const all = visibleMessages
     .filter(isPromptEligibleMessage)
     .map(compactRecordForPrompt);
   if (all.length <= keepRecent) return all;
@@ -329,6 +353,23 @@ export function getMessagesByTokenBudget(
   }
 
   return [...selected, ...keep];
+}
+
+export function getMessagesThroughExternalMessage(
+  conversationId: string,
+  externalMessageId: string,
+  limit = 1000,
+): MessageRecord[] {
+  const messages = getMessages(conversationId, 1000);
+  let cutoffIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== 'user') continue;
+    if (messages[index].externalMessageId !== externalMessageId) continue;
+    cutoffIndex = index;
+    break;
+  }
+  const visibleMessages = cutoffIndex >= 0 ? messages.slice(0, cutoffIndex + 1) : messages;
+  return visibleMessages.slice(-limit);
 }
 
 export function getMessagesForAgent(userId: string, agentId: string, limit = 500): MessageRecord[] {

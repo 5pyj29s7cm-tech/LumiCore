@@ -14,17 +14,12 @@ import {
   parseMessagingBindingCommand,
 } from '../../../messaging/bindings';
 import { getMember } from '../../../org/db';
-import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import {
-  enqueueMessageRoute,
+  dispatchIncomingMessage,
   enrichMessagingAttachments,
-  handleRemoteOrgCommand,
-  persistBoundMessagingExchange,
-  processWithPersonality,
 } from './messaging_routes';
 import type { MessagingRouteOptions } from './messaging_routes';
 import { setActiveWeChatAdapter } from '../../../messaging/wechat_runtime';
-import { requestsOrganizationScope, resolvePersonalOrganizationScope } from '../../../messaging/personal_org_scope';
 
 function requireWechatAdmin(req: any, res: any): boolean {
   if (req.user?.role === 'admin') return true;
@@ -193,7 +188,7 @@ export function createWeChatRoutes(
 
 // ── Polling + AI reply pipeline ──
 
-function startWeChatPolling(
+export function startWeChatPolling(
   adapter: WeChatClawBotAdapter,
   _config: WeChatClawBotConfig,
   options?: MessagingRouteOptions,
@@ -203,46 +198,28 @@ function startWeChatPolling(
     if (bindingReply) return { text: bindingReply, platform: 'wechat' as const };
 
     const boundMsg = applyWeChatBinding(msg);
-    const enrichedMsg = await enrichMessagingAttachments(
-      boundMsg,
-      'wechat',
-      '以下是用户通过个人微信发送的真实附件内容。个人绑定的附件保持在个人域；只有用户明确要求转入组织，或法院通知唯一匹配到其有权限的组织案件时，才可跨域归档。',
-      attachment => adapter.downloadAttachment(attachment),
-    );
-    let outgoing: { text: string; platform: 'wechat' } | null = null;
-    await enqueueMessageRoute(enrichedMsg, async () => {
-      const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMsg);
-      if (legalNoticeReply) {
-        persistBoundMessagingExchange(enrichedMsg, legalNoticeReply, options?.onConversationUpdated);
-        outgoing = { text: legalNoticeReply, platform: 'wechat' };
-        return;
-      }
-      const scope = resolvePersonalOrganizationScope(enrichedMsg, requestsOrganizationScope(enrichedMsg.text));
-      if (scope.kind === 'reply') {
-        persistBoundMessagingExchange(scope.message, scope.reply, options?.onConversationUpdated);
-        outgoing = { text: scope.reply, platform: 'wechat' };
-        return;
-      }
-      const routedMsg = scope.message;
-      const remoteOrgReply = await handleRemoteOrgCommand(routedMsg);
-      if (remoteOrgReply) {
-        persistBoundMessagingExchange(routedMsg, remoteOrgReply, options?.onConversationUpdated);
-        outgoing = { text: remoteOrgReply, platform: 'wechat' };
-        return;
-      }
+    dispatchIncomingMessage(boundMsg, {
+      enrich: message => enrichMessagingAttachments(
+        message,
+        'wechat',
+        '以下是用户通过个人微信发送的真实附件内容。个人绑定的附件保持在个人域；只有用户明确要求转入组织，或法院通知唯一匹配到其有权限的组织案件时，才可跨域归档。',
+        attachment => adapter.downloadAttachment(attachment),
+      ),
+      reply: async (message, text) => {
+        const outgoing: any = {
+          text,
+          platform: 'wechat' as const,
+          replyTo: message.messageId,
+          context_token: message.raw?.context_token || message.raw?.message?.context_token || '',
+        };
+        return adapter.sendMessage(message.userId, outgoing);
+      },
+    }, options);
 
-      if (options?.onMessage) {
-        const reply = await options.onMessage(routedMsg);
-        if (reply) {
-          persistBoundMessagingExchange(routedMsg, reply.text, options?.onConversationUpdated);
-          outgoing = { text: reply.text, platform: 'wechat' };
-        }
-        return;
-      }
-      const replyText = await processWithPersonality(routedMsg, options);
-      outgoing = { text: replyText, platform: 'wechat' };
-    });
-    return outgoing;
+    // Intake returns immediately. The shared route queue now owns execution and
+    // reply delivery, so a slow tool call cannot stop WeChat from receiving the
+    // user's next message.
+    return null;
   }).catch(err => console.error('[WeChat] Polling failed:', err?.message || err));
 }
 

@@ -4,6 +4,106 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi result finalizer', () => {
+  it('blocks a claimed diagnostic tool run when the current turn has no matching records', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u786e\u8ba4',
+      responseText: '\u597d\u7684\uff0c\u6211\u5df2\u7ecf\u8fd0\u884c\u4e86 `client_health_check` \u548c `client_get_state`\uff0c\u72b6\u6001\u6b63\u5e38\u3002',
+      toolRecords: [],
+      source: 'wechat_bot',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('without matching tool records');
+    expect(result.text).toContain('client_health_check');
+    expect(result.text).toContain('client_get_state');
+  });
+
+  it('replaces a diagnostic narrative with a summary grounded in real records', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '\u6211\u5df2\u7ecf\u8fd0\u884c\u4e86 `client_health_check` \u548c `client_get_state`\u3002';
+
+    const result = finalizeLumiResponse({
+      taskText: '\u786e\u8ba4',
+      responseText,
+      toolRecords: [
+        { name: 'client_health_check', arguments: {}, result: '{"level":"ready"}' },
+        { name: 'client_get_state', arguments: {}, result: '{"state":"ready"}' },
+      ],
+      source: 'wechat_bot',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('\u81ea\u68c0\u5b8c\u6210');
+    expect(result.text).toContain('\u5065\u5eb7\u7b49\u7ea7\uff1aready');
+    expect(result.text).toContain('client_health_check');
+    expect(result.text).toContain('client_get_state');
+    expect(result.text).not.toBe(responseText);
+  });
+
+  it('does not invent a WeChat desktop limitation from a work-scope routing miss', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u4f60\u81ea\u5df1\u80fd\u591f\u4fee\u590d\u5417',
+      responseText: '\u56e0\u4e3a\u6211\u4eec\u73b0\u5728\u8d70\u7684\u662f\u5fae\u4fe1\u6e20\u9053\uff0c\u6240\u4ee5\u5fae\u4fe1\u8fd9\u8fb9\u770b\u4e0d\u5230\u684c\u9762\u3002',
+      toolRecords: [{
+        name: 'client_health_check',
+        arguments: {},
+        result: JSON.stringify({
+          report: {
+            level: 'unknown',
+            stateAgeSeconds: null,
+            findings: [{ id: 'client_state_missing', message: 'No live scoped client state' }],
+          },
+          scope: { domain: 'work', orgId: 'org-1' },
+          skillRuntimeFindings: [
+            { name: 'minimax', connected: false },
+            { name: 'code-sandbox', connected: false },
+          ],
+        }),
+      }, {
+        name: 'get_active_window_info',
+        arguments: {},
+        result: '',
+        error: 'No desktop client connected for this user.',
+      }, {
+        name: 'desktop_running_processes',
+        arguments: {},
+        result: '',
+        error: 'No desktop client connected for this user.',
+      }, {
+        name: 'client_self_repair',
+        arguments: { action: 'refresh_client_state' },
+        result: '',
+        error: 'No desktop client connected for this user.',
+      }],
+      source: 'wechat_bot',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('\u7ec4\u7ec7\u5de5\u4f5c\u57df');
+    expect(result.text).toContain('\u4e0d\u80fd\u636e\u6b64\u65ad\u8a00');
+    expect(result.text).toContain('get_active_window_info: No desktop client connected for this user.');
+    expect(result.text).toContain('\u53ef\u9009\u6280\u80fd\u5f53\u524d\u672a\u8fde\u63a5\uff1aminimax\u3001code-sandbox');
+    expect(result.text).not.toContain('\u56e0\u4e3a\u6211\u4eec\u73b0\u5728\u8d70\u7684\u662f\u5fae\u4fe1\u6e20\u9053');
+  });
+
+  it('reports missing diagnostic receipts instead of fabricating a self-check', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u4f60\u81ea\u68c0\u4e00\u4e0b\uff0c\u770b\u770b\u6709\u6ca1\u6709\u4ec0\u4e48\u5730\u65b9\u4e0d\u591f\u81ea\u7136\u4e0e\u901a\u7545',
+      responseText: '\u5df2\u8fd0\u884c client_health_check\uff0c45/47 \u4e2a MCP \u5df2\u8fde\u63a5\u3002',
+      toolRecords: [],
+      source: 'wechat_bot',
+    });
+
+    expect(result.text).toContain('\u672c\u8f6e\u6ca1\u6709\u53d6\u5f97\u4efb\u4f55\u5ba2\u6237\u7aef\u81ea\u68c0\u5de5\u5177\u56de\u6267');
+    expect(result.text).not.toContain('45/47');
+  });
+
   it('blocks unverified completion claims for concrete work', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 

@@ -390,6 +390,15 @@ describe('messaging long connections and organization routing', () => {
     expect(greeting.execution.allowToolUse).toBe(false);
     expect(greeting.execution.toolPolicy.forbiddenTools).toContain('*');
 
+    const knowledgeFileCapabilityQuestion = routes.buildRemoteLumiExecutionPlan({
+      ...base,
+      text: '\u77e5\u8bc6\u5e93\u91cc\u7684\u6587\u4ef6\u53ef\u4ee5\u53d1\u7ed9\u6211\u5417',
+      operationMode: 'assistant',
+    });
+    expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
+    expect(knowledgeFileCapabilityQuestion.execution.allowToolUse).toBe(false);
+    expect(knowledgeFileCapabilityQuestion.execution.toolPolicy.forbiddenTools).toContain('*');
+
     const chatAction = routes.buildRemoteLumiExecutionPlan({
       ...base,
       text: '操作桌面打开微信',

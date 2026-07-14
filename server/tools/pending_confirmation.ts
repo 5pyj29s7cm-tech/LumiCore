@@ -7,11 +7,21 @@ export interface PendingToolConfirmation {
   argsHash: string;
   safeArgs: Record<string, any>;
   source: string;
+  domain: string;
+  orgId: string;
+  channelId: string;
   createdAt: string;
   expiresAt: number;
 }
 
-const pendingByUser = new Map<string, PendingToolConfirmation>();
+export interface PendingConfirmationScope {
+  source?: string;
+  domain?: string;
+  orgId?: string;
+  channelId?: string;
+}
+
+const pendingById = new Map<string, PendingToolConfirmation>();
 const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const SECRET_KEY_RE = /password|passkey|secret|token|api.?key|credential|otp|captcha|verification.?code/i;
 
@@ -39,14 +49,25 @@ function sanitizeValue(value: any, depth = 0): any {
   ]));
 }
 
-function readFresh(userId: string): PendingToolConfirmation | null {
-  const pending = pendingByUser.get(userId);
-  if (!pending) return null;
-  if (pending.expiresAt <= Date.now()) {
-    pendingByUser.delete(userId);
-    return null;
+function matchesScope(pending: PendingToolConfirmation, scope?: PendingConfirmationScope): boolean {
+  if (!scope) return true;
+  if (scope.source !== undefined && pending.source !== scope.source) return false;
+  if (scope.domain !== undefined && pending.domain !== scope.domain) return false;
+  if (scope.orgId !== undefined && pending.orgId !== scope.orgId) return false;
+  if (scope.channelId !== undefined && pending.channelId !== scope.channelId) return false;
+  return true;
+}
+
+function readFresh(userId: string, scope?: PendingConfirmationScope): PendingToolConfirmation | null {
+  const fresh: PendingToolConfirmation[] = [];
+  for (const [id, pending] of pendingById.entries()) {
+    if (pending.expiresAt <= Date.now()) {
+      pendingById.delete(id);
+      continue;
+    }
+    if (pending.userId === userId && matchesScope(pending, scope)) fresh.push(pending);
   }
-  return pending;
+  return fresh.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null;
 }
 
 export function recordPendingConfirmation(
@@ -54,6 +75,7 @@ export function recordPendingConfirmation(
   toolName: string,
   args: Record<string, any>,
   source = 'chat',
+  scope: Omit<PendingConfirmationScope, 'source'> = {},
 ): PendingToolConfirmation {
   const pending: PendingToolConfirmation = {
     id: crypto.randomUUID(),
@@ -62,15 +84,32 @@ export function recordPendingConfirmation(
     argsHash: argsHash(args),
     safeArgs: sanitizeValue(args || {}),
     source,
+    domain: scope.domain || '',
+    orgId: scope.orgId || '',
+    channelId: scope.channelId || '',
     createdAt: new Date().toISOString(),
     expiresAt: Date.now() + CONFIRMATION_TTL_MS,
   };
-  pendingByUser.set(userId, pending);
+  for (const [id, existing] of pendingById.entries()) {
+    if (
+      existing.userId === userId &&
+      existing.source === pending.source &&
+      existing.domain === pending.domain &&
+      existing.orgId === pending.orgId &&
+      existing.channelId === pending.channelId
+    ) {
+      pendingById.delete(id);
+    }
+  }
+  pendingById.set(pending.id, pending);
   return pending;
 }
 
-export function getPendingConfirmation(userId: string): PendingToolConfirmation | null {
-  return readFresh(userId);
+export function getPendingConfirmation(
+  userId: string,
+  scope?: PendingConfirmationScope,
+): PendingToolConfirmation | null {
+  return readFresh(userId, scope);
 }
 
 export function consumePendingConfirmation(
@@ -78,16 +117,28 @@ export function consumePendingConfirmation(
   pendingId: string,
   toolName: string,
   args: Record<string, any>,
+  scope?: PendingConfirmationScope,
 ): boolean {
-  const pending = readFresh(userId);
-  if (!pending || pending.id !== pendingId) return false;
+  const pending = pendingById.get(pendingId);
+  if (!pending || pending.expiresAt <= Date.now()) {
+    if (pending) pendingById.delete(pendingId);
+    return false;
+  }
+  if (pending.userId !== userId || !matchesScope(pending, scope)) return false;
   if (pending.toolName !== toolName || pending.argsHash !== argsHash(args)) return false;
-  pendingByUser.delete(userId);
+  pendingById.delete(pending.id);
   return true;
 }
 
-export function clearPendingConfirmation(userId: string): boolean {
-  return pendingByUser.delete(userId);
+export function clearPendingConfirmation(userId: string, scope?: PendingConfirmationScope): boolean {
+  let cleared = false;
+  for (const [id, pending] of pendingById.entries()) {
+    if (pending.userId === userId && matchesScope(pending, scope)) {
+      pendingById.delete(id);
+      cleared = true;
+    }
+  }
+  return cleared;
 }
 
 export function isExplicitConfirmationReply(text: string): boolean {
@@ -103,6 +154,7 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
     '## Exact Pending Action Confirmation',
     'The user explicitly confirmed the single pending action below in this turn.',
     'You may call only the exact same tool with exactly the same arguments. The grant is one-time and cannot authorize any other action.',
+    'Execute the exact pending tool now, then report only its real result.',
     `Pending id: ${pending.id}`,
     `Tool: ${pending.toolName}`,
     `Arguments (secrets redacted): ${JSON.stringify(pending.safeArgs)}`,
@@ -110,5 +162,5 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
 }
 
 export function clearAllPendingConfirmationsForTests(): void {
-  pendingByUser.clear();
+  pendingById.clear();
 }

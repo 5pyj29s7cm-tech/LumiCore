@@ -2,8 +2,13 @@ import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import { formatDesktopObservationResult } from './desktop_observation';
+import { formatClientDiagnosticResult } from './client_diagnostic_result';
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
-import { CN_MESSAGING_MESSAGES, formatCnMessagingContractBlocker } from '../regions/packs/cn/messaging_messages';
+import {
+  CN_MESSAGING_MESSAGES,
+  formatCnMessagingContractBlocker,
+  formatCnUnsupportedToolExecutionClaim,
+} from '../regions/packs/cn/messaging_messages';
 import {
   buildActionContract,
   hasAuthenticatedWebResultEvidence,
@@ -35,6 +40,45 @@ export interface LumiResultFinalizerResult {
 
 function hasToolEvidence(records: ToolExecutionRecord[]): boolean {
   return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
+}
+
+function claimedExecutedToolNames(text: string): { asserted: boolean; toolNames: string[] } {
+  const raw = String(text || '');
+  const clauses: string[] = [];
+  const patterns = [
+    /(?:\u8fd0\u884c|\u8c03\u7528|\u6267\u884c|\u4f7f\u7528)\u4e86[^\u3002\uff01\uff1f\n\r)]{0,180}/gu,
+    /\b(?:I|we|Lumi)\s+(?:have\s+)?(?:ran|called|executed|used)\b[^.!?\n\r)]{0,180}/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of raw.matchAll(pattern)) {
+      const prefix = raw.slice(Math.max(0, (match.index || 0) - 28), match.index || 0);
+      if (/(?:\u6ca1\u6709|\u5e76\u672a|\u672a\u66fe|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u8981|\u5e76\u975e|did\s+not|didn't|cannot|can't|must\s+not|never)\s*$/i.test(prefix)) continue;
+      clauses.push(match[0]);
+    }
+  }
+  const toolNames = Array.from(new Set(clauses.flatMap(clause =>
+    Array.from(clause.matchAll(/`([A-Za-z][A-Za-z0-9_.:-]{1,127})`/g), match => match[1])
+  )));
+  return { asserted: clauses.length > 0, toolNames };
+}
+
+function unsupportedToolExecutionClaim(input: LumiResultFinalizerInput): string | null {
+  const claim = claimedExecutedToolNames(input.responseText);
+  if (!claim.asserted) return null;
+  const actualNames = new Set((input.toolRecords || []).map(record => String(record.name || '')));
+  const missing = claim.toolNames.length > 0
+    ? claim.toolNames.filter(name => !actualNames.has(name))
+    : (actualNames.size === 0 ? ['tool execution evidence'] : []);
+  if (missing.length === 0) return null;
+  if (isChineseText(input.taskText) || isChineseText(input.responseText)) {
+    return formatCnUnsupportedToolExecutionClaim(missing[0] === 'tool execution evidence' ? [] : missing);
+  }
+  return [
+    missing[0] === 'tool execution evidence'
+      ? 'No actual tool execution was recorded for this turn.'
+      : `No actual tool call was recorded for: ${missing.join(', ')}.`,
+    'I cannot present an unrecorded action as executed; the real tools must run before I report their results.',
+  ].join('\n');
 }
 
 function taskActionContract(input: LumiResultFinalizerInput) {
@@ -546,6 +590,27 @@ function correctCurrentTurnContractDrift(
 }
 
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
+  const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], input.taskText);
+  if (diagnosticResult) {
+    return {
+      text: diagnosticResult,
+      blocked: false,
+      reason: 'Grounded client diagnostic summary from current-turn tool receipts.',
+    };
+  }
+  const unsupportedExecution = unsupportedToolExecutionClaim(input);
+  if (unsupportedExecution) {
+    return {
+      text: unsupportedExecution,
+      blocked: true,
+      reason: 'Response claimed tool execution without matching tool records.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Response claimed tool execution without matching tool records.',
+      },
+    };
+  }
   if (!shouldRunCompletionGuard(input)) {
     return { text: input.responseText, blocked: false };
   }

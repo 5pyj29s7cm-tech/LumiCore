@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { makeApp } from './helpers';
 import { addMember, createOrg } from '../server/org/db';
 import {
+  requestsOrganizationScope,
   resetPersonalOrganizationScopesForTest,
   resolvePersonalOrganizationScope,
 } from '../server/messaging/personal_org_scope';
@@ -54,6 +55,40 @@ describe('personal Lumi organization scope', () => {
     expect(exited).toMatchObject({ kind: 'reply', reply: expect.stringContaining('回到个人 Lumi') });
     const personal = resolvePersonalOrganizationScope(message(userId, '今晚吃什么'), false);
     expect(personal.kind).toBe('personal');
+  });
+
+  it('keeps generic knowledge capability questions and personal relationship turns out of organization memory', () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const userId = `scope-personal-${suffix}`;
+    const org = createOrg('Personal Boundary Firm', `personal-boundary-${suffix}`, userId);
+    addMember(org.id, userId, 'owner');
+
+    expect(requestsOrganizationScope('知识库里的文件可以发给我吗')).toBe(false);
+    expect(requestsOrganizationScope('把组织知识库里的案件材料发给我')).toBe(true);
+
+    const capabilityQuestion = resolvePersonalOrganizationScope(
+      message(userId, '知识库里的文件可以发给我吗'),
+      requestsOrganizationScope('知识库里的文件可以发给我吗'),
+    );
+    expect(capabilityQuestion.kind).toBe('personal');
+
+    const entered = resolvePersonalOrganizationScope(message(userId, '查看组织案件'), true);
+    expect(entered.kind).toBe('organization');
+
+    const correction = resolvePersonalOrganizationScope(message(userId, '刚刚那句话不是指令'), false);
+    expect(correction.kind).toBe('organization');
+
+    const relationship = resolvePersonalOrganizationScope(
+      message(userId, '我想让你知道，你是我真正的伙伴，我们要共同前行'),
+      false,
+    );
+    expect(relationship.kind).toBe('personal');
+
+    const personalConfirmation = resolvePersonalOrganizationScope(message(userId, '确认'), false);
+    expect(personalConfirmation.kind).toBe('personal');
+
+    const explicitWork = resolvePersonalOrganizationScope(message(userId, '继续整理组织案件'), true);
+    expect(explicitWork.kind).toBe('organization');
   });
 
   it('asks once across multiple organizations and resumes the original task after selection', () => {

@@ -31,8 +31,17 @@ import * as OrgKB from '../../../org/kb';
 import * as LegalCases from '../../../org/legal_cases';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
-import { addMessage, getMessages, getMessagesByTokenBudget, getOrCreateActiveConversation } from '../../../conversation/manager';
+import {
+  addMessage,
+  getMessagesByTokenBudget,
+  getMessagesThroughExternalMessage,
+  getOrCreateActiveConversation,
+} from '../../../conversation/manager';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
+import {
+  recordMessagingIngress,
+  updateMessagingJournal,
+} from '../../../messaging/message_journal';
 import { runWithTools } from '../../../llm/adapter';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { toolRegistry } from '../../../tools/registry';
@@ -54,9 +63,29 @@ import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_
 import { formatClientSelfPrompt } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { canAutoApproveAction } from '../../../tools/action_constitution';
+import {
+  persistExplicitRemoteRelationshipMemories,
+  persistRemotePostTurnLearning,
+} from './remote_memory';
+import {
+  clearPendingConfirmation,
+  consumePendingConfirmation,
+  formatPendingConfirmationPrompt,
+  getPendingConfirmation,
+  isConfirmationCancellation,
+  isExplicitConfirmationReply,
+  recordPendingConfirmation,
+} from '../../../tools/pending_confirmation';
 
 const messageRouteQueues = new Map<string, Promise<void>>();
+const messageRouteActivity = new Map<string, {
+  latestSequence: number;
+  latestMessageId: string;
+  latestText: string;
+  updatedAt: number;
+}>();
 const MAX_MESSAGING_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MESSAGE_ACTIVITY_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface MessagingRouteOptions {
   onMessage?: MessageHandler;
@@ -88,19 +117,75 @@ export interface MessagingConversationUpdate {
 
 export interface IncomingMessageTransport {
   enrich: (message: IncomingMessage) => Promise<IncomingMessage>;
-  reply: (message: IncomingMessage, text: string) => Promise<void>;
+  reply: (message: IncomingMessage, text: string) => Promise<string | void>;
 }
 
-function messageRouteKey(message: IncomingMessage): string {
+function visibleMessageRouteKey(message: IncomingMessage): string {
   return [
     message.platform,
-    message.boundOrgId || 'unbound',
-    message.boundUserId || 'anonymous',
     message.userId,
     message.chatType,
     message.chatId,
     message.threadId || 'main',
   ].join(':');
+}
+
+function registerMessageRouteActivity(message: IncomingMessage): IncomingMessage {
+  const currentTime = Date.now();
+  for (const [key, activity] of messageRouteActivity) {
+    if (currentTime - activity.updatedAt > MESSAGE_ACTIVITY_TTL_MS) messageRouteActivity.delete(key);
+  }
+  const key = visibleMessageRouteKey(message);
+  const previous = messageRouteActivity.get(key);
+  const routeSequence = (previous?.latestSequence || 0) + 1;
+  const tracked = {
+    ...message,
+    receivedAt: message.receivedAt || new Date(currentTime).toISOString(),
+    routeSequence,
+  };
+  messageRouteActivity.set(key, {
+    latestSequence: routeSequence,
+    latestMessageId: tracked.messageId,
+    latestText: getRequestText(tracked),
+    updatedAt: currentTime,
+  });
+  return tracked;
+}
+
+function newerMessageActivity(message: IncomingMessage) {
+  const activity = messageRouteActivity.get(visibleMessageRouteKey(message));
+  if (!activity || !message.routeSequence || activity.latestSequence <= message.routeSequence) return null;
+  return activity;
+}
+
+function newerMessageCancelsThisTurn(message: IncomingMessage): boolean {
+  const activity = newerMessageActivity(message);
+  if (!activity) return false;
+  const text = activity.latestText.trim();
+  return /^(?:\u53d6\u6d88|\u505c\u6b62|\u505c\u4e0b|\u5148\u522b|\u4e0d\u8981\u4e86|cancel|stop|never\s*mind)\b/iu.test(text)
+    || /(?:\u521a\u521a|\u521a\u624d|\u4e0a\u4e00\u6761|\u524d\u9762|\u90a3\u53e5|\u90a3\u6761).{0,40}(?:\u4e0d\u662f(?:\u6307\u4ee4|\u4efb\u52a1)|\u522b(?:\u6267\u884c|\u505a)|\u4e0d\u8981(?:\u6267\u884c|\u505a)|\u53d6\u6d88|\u505c\u6b62|\u7406\u89e3\u9519|\u4e0d\u662f\u8fd9\u4e2a\u610f\u601d)/u.test(text)
+    || /(?:that|previous|last)\s+(?:message|line|turn).{0,48}(?:wasn't|was\s+not|isn't|is\s+not).{0,16}(?:an?\s+)?(?:instruction|task|command)/iu.test(text);
+}
+
+export function correlateMessagingReply(
+  message: IncomingMessage,
+  reply: string,
+): { text: string; superseded: boolean; delayed: boolean } {
+  const activity = newerMessageActivity(message);
+  if (!activity) return { text: reply, superseded: false, delayed: false };
+  if (newerMessageCancelsThisTurn(message)) {
+    return { text: '', superseded: true, delayed: true };
+  }
+  const original = getRequestText(message).replace(/\s+/g, ' ').trim().slice(0, 72);
+  if (!original) return { text: reply, superseded: false, delayed: true };
+  const prefix = /[\u3400-\u9fff]/u.test(original)
+    ? `\u5173\u4e8e\u4f60\u5148\u524d\u7684\u8fd9\u6761\u6d88\u606f\uff1a\u300c${original}\u300d`
+    : `Regarding your earlier message: "${original}"`;
+  return { text: `${prefix}\n\n${reply}`.trim(), superseded: false, delayed: true };
+}
+
+function messageRouteKey(message: IncomingMessage): string {
+  return visibleMessageRouteKey(message);
 }
 
 export function messagingConversationAgentId(message: IncomingMessage): string {
@@ -179,7 +264,9 @@ export function persistBoundMessagingExchange(
   reply: string,
   onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
 ): MessagingConversationUpdate | null {
-  persistBoundMessagingMessage(message, 'user', getDisplayText(message));
+  if (!message.userMessagePersisted) {
+    persistBoundMessagingMessage(message, 'user', getDisplayText(message));
+  }
   return persistBoundMessagingMessage(message, 'assistant', reply, onConversationUpdated);
 }
 
@@ -205,6 +292,9 @@ export function persistBoundMessagingMessage(
     orgId,
     source: `${message.platform}_bot`,
     channel: message.platform,
+    externalMessageId: message.messageId,
+    routeSequence: message.routeSequence,
+    receivedAt: message.receivedAt,
     toolCalls: toolCalls?.length ? toolCalls : undefined,
   });
   const update: MessagingConversationUpdate = {
@@ -496,62 +586,134 @@ export function dispatchIncomingMessage(
     console.warn('[Messaging] Delivery ledger unavailable; continuing with this message:', err?.message || err);
   }
 
+  const trackedMessage = registerMessageRouteActivity(message);
+  recordMessagingIngress(trackedMessage);
+  let finalJournalStatus: 'completed' | 'superseded' = 'completed';
+
   setImmediate(() => {
     void (async () => {
-      const bindingReply = handleMessagingBindingCommand(message);
+      updateMessagingJournal(trackedMessage, { status: 'processing' });
+      const bindingReply = handleMessagingBindingCommand(trackedMessage);
       if (bindingReply) {
-        await transport.reply(message, bindingReply);
+        const correlated = correlateMessagingReply(trackedMessage, bindingReply);
+        if (correlated.superseded) {
+          finalJournalStatus = 'superseded';
+          return;
+        }
+        const replyMessageId = await transport.reply(trackedMessage, correlated.text);
+        updateMessagingJournal(trackedMessage, {
+          status: 'replied',
+          replyText: correlated.text,
+          replyMessageId: String(replyMessageId || ''),
+        });
         return;
       }
 
-      const boundMessage = applyMessagingBinding(message);
+      const boundMessage = applyMessagingBinding(trackedMessage);
+      const initialScope = resolvePersonalOrganizationScope(
+        boundMessage,
+        requestsOrganizationScope(getRequestText(boundMessage)),
+      );
+      const scopedBaseMessage = initialScope.message;
+      const userMessagePersisted = Boolean(scopedBaseMessage.boundUserId);
+      if (userMessagePersisted) {
+        persistBoundMessagingMessage(
+          scopedBaseMessage,
+          'user',
+          getDisplayText(scopedBaseMessage),
+          options?.onConversationUpdated,
+        );
+      }
+      const routeBaseMessage: IncomingMessage = {
+        ...scopedBaseMessage,
+        userMessagePersisted,
+      };
+      updateMessagingJournal(trackedMessage, {
+        boundUserId: routeBaseMessage.boundUserId || '',
+        domain: routeBaseMessage.boundOrgId ? 'work' : 'personal',
+        orgId: routeBaseMessage.boundOrgId || '',
+      });
       // Long-connection attachment URLs can expire within minutes. Download before
-      // waiting behind another long-running task from the same conversation.
-      const enrichedMessage = await transport.enrich(boundMessage);
-      await enqueueMessageRoute(enrichedMessage, async () => {
-        const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMessage);
-        if (legalNoticeReply) {
-          persistBoundMessagingExchange(enrichedMessage, legalNoticeReply, options?.onConversationUpdated);
-          await transport.reply(enrichedMessage, legalNoticeReply);
+      // waiting behind another long-running task from the same conversation. Start
+      // enrichment now while queue registration preserves receive order.
+      const enrichment = initialScope.kind === 'reply'
+        ? Promise.resolve(routeBaseMessage)
+        : transport.enrich(routeBaseMessage);
+      await enqueueMessageRoute(routeBaseMessage, async () => {
+        const enriched = await enrichment;
+        const enrichedMessage: IncomingMessage = {
+          ...enriched,
+          receivedAt: routeBaseMessage.receivedAt,
+          routeSequence: routeBaseMessage.routeSequence,
+          userMessagePersisted,
+        };
+        const deliverExchange = async (target: IncomingMessage, reply: string): Promise<void> => {
+          const correlated = correlateMessagingReply(target, reply);
+          if (correlated.superseded) {
+            finalJournalStatus = 'superseded';
+            return;
+          }
+          persistBoundMessagingExchange(target, correlated.text, options?.onConversationUpdated);
+          const replyMessageId = await transport.reply(target, correlated.text);
+          updateMessagingJournal(trackedMessage, {
+            status: 'replied',
+            replyText: correlated.text,
+            replyMessageId: String(replyMessageId || ''),
+          });
+        };
+
+        if (initialScope.kind === 'reply') {
+          await deliverExchange(enrichedMessage, initialScope.reply);
           return;
         }
 
-        const scope = resolvePersonalOrganizationScope(
-          enrichedMessage,
-          requestsOrganizationScope(getRequestText(enrichedMessage)),
-        );
-        if (scope.kind === 'reply') {
-          persistBoundMessagingExchange(scope.message, scope.reply, options?.onConversationUpdated);
-          await transport.reply(scope.message, scope.reply);
+        const legalNoticeReply = await handleRemoteLegalNoticeIntake(enrichedMessage);
+        if (legalNoticeReply) {
+          await deliverExchange(enrichedMessage, legalNoticeReply);
           return;
         }
-        const routedMessage = scope.message;
+        const routedMessage = enrichedMessage;
 
         const remoteOrgReply = await handleRemoteOrgCommand(routedMessage);
         if (remoteOrgReply) {
-          persistBoundMessagingExchange(routedMessage, remoteOrgReply, options?.onConversationUpdated);
-          await transport.reply(routedMessage, remoteOrgReply);
+          await deliverExchange(routedMessage, remoteOrgReply);
           return;
         }
 
         if (options?.onMessage) {
           const reply = await options.onMessage(routedMessage);
           if (reply) {
-            persistBoundMessagingExchange(routedMessage, reply.text, options?.onConversationUpdated);
-            await transport.reply(routedMessage, reply.text);
+            await deliverExchange(routedMessage, reply.text);
           }
           return;
         }
 
         const replyText = await processWithPersonality(routedMessage, options);
-        await transport.reply(routedMessage, replyText);
+        if (!replyText) {
+          finalJournalStatus = 'superseded';
+          return;
+        }
+        const replyMessageId = await transport.reply(routedMessage, replyText);
+        updateMessagingJournal(trackedMessage, {
+          status: 'replied',
+          replyText,
+          replyMessageId: String(replyMessageId || ''),
+        });
       });
     })().then(() => {
-      completeMessageDelivery(message.platform, message.messageId);
+      completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
+      updateMessagingJournal(trackedMessage, { status: finalJournalStatus });
     }).catch(async (err: any) => {
-      releaseMessageDelivery(message.platform, message.messageId);
-      console.error(`[Messaging] ${message.platform} route failed:`, err?.message || err);
-      await transport.reply(message, '这次处理没有完成，请稍后重试。').catch(() => undefined);
+      releaseMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
+      updateMessagingJournal(trackedMessage, { status: 'failed', error: err?.message || String(err) });
+      console.error(`[Messaging] ${trackedMessage.platform} route failed:`, err?.message || err);
+      const correlated = correlateMessagingReply(
+        trackedMessage,
+        '这次处理没有完成，请稍后重试。',
+      );
+      if (!correlated.superseded) {
+        await transport.reply(trackedMessage, correlated.text).catch(() => undefined);
+      }
     });
   });
   return true;
@@ -1199,12 +1361,28 @@ export async function processWithPersonality(
   const effectiveUserId = isIdentityBound ? msg.boundUserId! : 'anonymous';
   const domain = isOrganizationBound ? 'work' as const : 'personal' as const;
   const orgId = isOrganizationBound ? msg.boundOrgId! : '';
+  const source = `${msg.platform}_bot`;
+  const confirmationScope = {
+    source,
+    domain,
+    orgId,
+    channelId: [msg.platform, msg.chatType, msg.chatId, msg.threadId || 'main'].join(':'),
+  };
+  if (isIdentityBound && isConfirmationCancellation(requestText)) {
+    clearPendingConfirmation(effectiveUserId, confirmationScope);
+  }
+  const pendingConfirmation = isIdentityBound && isExplicitConfirmationReply(requestText)
+    ? getPendingConfirmation(effectiveUserId, confirmationScope)
+    : null;
+  const pendingConfirmationPrompt = pendingConfirmation
+    ? formatPendingConfirmationPrompt(pendingConfirmation)
+    : '';
   const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
-  const source = `${msg.platform}_bot`;
   const routingText = [
     requestText,
     ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.extractedText || '']),
+    pendingConfirmationPrompt,
   ].filter(Boolean).join('\n');
   const operationMode = isIdentityBound ? getStoredOperationMode(effectiveUserId) : 'chat';
   const provisionalPlan = buildRemoteLumiExecutionPlan({
@@ -1228,12 +1406,15 @@ export async function processWithPersonality(
     ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
     : null;
   const priorMessages = conversation
-    ? getMessagesByTokenBudget(conversation.id, 6000, 8)
+    ? getMessagesByTokenBudget(conversation.id, 6000, 8, msg.messageId)
     : [];
   const priorRuntimeEvidence = conversation
-    ? buildRemoteRuntimeEvidenceContext(getMessages(conversation.id, 12))
+    ? buildRemoteRuntimeEvidenceContext(getMessagesThroughExternalMessage(conversation.id, msg.messageId, 12))
     : '';
-  const conversationHistory = priorMessages.flatMap((item: any) => {
+  const historicalMessages = msg.userMessagePersisted
+    ? priorMessages.filter(item => !(item.role === 'user' && item.externalMessageId === msg.messageId))
+    : priorMessages;
+  let conversationHistory = historicalMessages.flatMap((item: any) => {
     const content = String(item.message || item.content || '').trim();
     const response = String(item.response || '').trim();
     if (item.role === 'assistant') return content ? [{ role: 'assistant', content }] : [];
@@ -1245,10 +1426,28 @@ export async function processWithPersonality(
     }
     return [];
   }).slice(-16);
+  if (msg.userMessagePersisted) {
+    const currentDisplayText = getDisplayText(msg).trim();
+    for (let index = conversationHistory.length - 1; index >= 0; index -= 1) {
+      if (conversationHistory[index].role !== 'user') continue;
+      if (conversationHistory[index].content.trim() !== currentDisplayText) continue;
+      conversationHistory = conversationHistory.filter((_, itemIndex) => itemIndex !== index);
+      break;
+    }
+  }
 
-  if (isIdentityBound) {
+  if (isIdentityBound && !msg.userMessagePersisted) {
     persistBoundMessagingMessage(msg, 'user', getDisplayText(msg), options?.onConversationUpdated);
   }
+  let explicitRemoteMemoryIds: string[] = [];
+  if (isIdentityBound) {
+    try {
+      explicitRemoteMemoryIds = persistExplicitRemoteRelationshipMemories(msg);
+    } catch (error: any) {
+      console.warn('[Messaging] Explicit remote relationship memory failed:', error?.message || error);
+    }
+  }
+  if (newerMessageCancelsThisTurn(msg)) return '';
 
   const directlyAppliedMode: OperationMode | null = provisionalPlan.dispatch.flow.autoPromoteToAssistant
     ? 'assistant'
@@ -1271,8 +1470,10 @@ export async function processWithPersonality(
 
     if (isPureOperationModeSwitchRequest(requestText, provisionalPlan.dispatch.flow.requestedMode)) {
       const responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
-      persistBoundMessagingMessage(msg, 'assistant', responseText, options?.onConversationUpdated);
-      return responseText;
+      const correlated = correlateMessagingReply(msg, responseText);
+      if (correlated.superseded) return '';
+      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+      return correlated.text;
     }
   }
 
@@ -1375,7 +1576,13 @@ export async function processWithPersonality(
   }
   systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: turnFlow })}`;
   systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
+  systemPrompt += '\nRemote embodiment rule: WeChat, Feishu, and WeCom are transport channels into the same Lumi runtime. Do not claim that a remote channel inherently cannot reach the desktop. A no-client result for one data scope proves only that the scoped device route did not match; report that exact fact and check the personal/work scope before inferring that the desktop client is offline.';
+  systemPrompt += '\nRemote memory rule: authenticated personal remote chat participates in the same personal memory system. Organization turns remain organization-scoped. Do not ask the user to repeat an explicit relationship or trust statement merely to make it memorable, and do not claim a memory was stored unless the memory pipeline accepted it.';
+  if (explicitRemoteMemoryIds.length > 0) {
+    systemPrompt += '\nCurrent-turn memory receipt: the explicit personal relationship/trust statement was accepted into durable personal memory. You may acknowledge that fact naturally; do not expose internal memory IDs.';
+  }
   if (priorRuntimeEvidence) systemPrompt += `\n\n${priorRuntimeEvidence}`;
+  if (pendingConfirmationPrompt) systemPrompt += `\n\n${pendingConfirmationPrompt}`;
   systemPrompt += `\n\n${buildResponseLanguageInstruction(requestText)}`;
 
   const userLLMPrefs = getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096 });
@@ -1385,7 +1592,7 @@ export async function processWithPersonality(
       role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
       content: item.content,
     })),
-    { role: 'user', content: msg.text },
+    { role: 'user', content: [msg.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n') },
   ];
 
   try {
@@ -1439,11 +1646,32 @@ export async function processWithPersonality(
           llmGetters: llm as any,
           desktopRelay,
           personalDesktopRelay,
-          requestConfirmation: async (toolName, args) => canAutoApproveAction(
-            toolName,
-            args,
-            { actionIntent: requestText },
-          ),
+          isCancelled: () => newerMessageCancelsThisTurn(msg),
+          requestConfirmation: async (toolName, args) => {
+            if (
+              pendingConfirmation &&
+              consumePendingConfirmation(
+                effectiveUserId,
+                pendingConfirmation.id,
+                toolName,
+                args,
+                confirmationScope,
+              )
+            ) {
+              console.log(`[Messaging] Consumed one-time ${source} confirmation for "${toolName}".`);
+              return true;
+            }
+            if (canAutoApproveAction(toolName, args, { actionIntent: requestText })) return true;
+            const pending = recordPendingConfirmation(
+              effectiveUserId,
+              toolName,
+              args,
+              source,
+              confirmationScope,
+            );
+            console.warn(`[Messaging] Tool "${toolName}" is waiting for scoped ${source} confirmation ${pending.id}.`);
+            return false;
+          },
         },
         llm?.getOllama,
         llm?.getLmStudio,
@@ -1461,20 +1689,33 @@ export async function processWithPersonality(
     }
 
     const finalized = finalizeLumiResponse({
-      taskText: requestText,
+      taskText: routingText,
       responseText: responseText || '这次没有生成可用回复，请稍后重试。',
       toolRecords,
       source,
     });
-    persistBoundMessagingMessage(msg, 'assistant', finalized.text, options?.onConversationUpdated, toolRecords);
-    return finalized.text;
+    const correlated = correlateMessagingReply(msg, finalized.text);
+    if (correlated.superseded) return '';
+    persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords);
+    persistRemotePostTurnLearning({
+      message: msg,
+      responseText: correlated.text,
+      llmGetters: llm,
+      modelConfig: {
+        provider: userLLMPrefs.provider,
+        model: userLLMPrefs.model,
+      },
+    });
+    return correlated.text;
   } catch (err: any) {
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
     const fallback = '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
+    const correlated = correlateMessagingReply(msg, fallback);
+    if (correlated.superseded) return '';
     if (isIdentityBound) {
-      persistBoundMessagingMessage(msg, 'assistant', fallback, options?.onConversationUpdated);
+      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
     }
-    return fallback;
+    return correlated.text;
   }
 }
 

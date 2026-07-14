@@ -507,6 +507,17 @@ describe('Lumi execution decision', () => {
     expect(skillInstallQuestion.decision.allowToolUse).toBe(false);
     expect(skillInstallQuestion.decision.toolRoute).toBeNull();
 
+    const knowledgeFileCapabilityQuestion = decide('\u77e5\u8bc6\u5e93\u91cc\u7684\u6587\u4ef6\u53ef\u4ee5\u53d1\u7ed9\u6211\u5417');
+    expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
+    expect(knowledgeFileCapabilityQuestion.dispatch.flow.autoPromoteToAssistant).toBe(false);
+    expect(knowledgeFileCapabilityQuestion.decision.allowToolUse).toBe(false);
+    expect(knowledgeFileCapabilityQuestion.decision.toolRoute).toBeNull();
+
+    const knowledgeFileSendCommand = decide('\u628a\u77e5\u8bc6\u5e93\u91cc\u7684\u9886\u822a\u5458\u624b\u518c\u53d1\u7ed9\u6211');
+    expect(knowledgeFileSendCommand.dispatch.boundary).toBe('tool_action');
+    expect(knowledgeFileSendCommand.decision.allowToolUse).toBe(true);
+    expect(knowledgeFileSendCommand.decision.toolRoute?.categories).toContain('messaging');
+
     const installerQuestion = decide('\u7f16\u8bd1\u6210\u5b89\u88c5\u5305\u4e5f\u80fd\u7528\u5417');
     expect(installerQuestion.dispatch.boundary).toBe('conversation');
     expect(installerQuestion.decision.allowToolUse).toBe(false);

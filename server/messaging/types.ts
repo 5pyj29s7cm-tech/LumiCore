@@ -19,6 +19,12 @@ export interface IncomingMessage {
   boundOrgId?: string;
   raw: Record<string, any>; // raw platform payload
   timestamp: string;
+  /** Local receipt time, independent from the platform timestamp. */
+  receivedAt?: string;
+  /** Monotonic sequence within the visible external conversation. */
+  routeSequence?: number;
+  /** Internal marker used when ingress persistence happened before queued execution. */
+  userMessagePersisted?: boolean;
 }
 
 export interface IncomingAttachment {

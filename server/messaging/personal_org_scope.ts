@@ -1,7 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import { getDataPath } from '../config/data_path';
+import { isInformationOnlyQuestion } from '../cognition/tool_intent';
 import { getMember, listUserOrgs, type Organization } from '../org/db';
+import {
+  matchesCnOrganizationContinuationRequest,
+  matchesCnOrganizationScopeRequest,
+} from '../regions/packs/cn/personal_org_scope_patterns';
 import type { IncomingAttachment, IncomingMessage } from './types';
 
 const STORE_PATH = getDataPath(path.join('messaging', 'personal_org_scopes.json'));
@@ -21,6 +26,7 @@ interface PersonalOrganizationScopeRecord {
   platformUserId: string;
   chatId: string;
   activeOrgId?: string;
+  lastRoutedDomain?: 'personal' | 'work';
   pending?: PendingOrganizationSelection;
   updatedAt: string;
 }
@@ -41,8 +47,15 @@ function requestText(text: string): string {
 
 export function requestsOrganizationScope(text: string): boolean {
   const request = requestText(text);
-  return /(组织|工作域|知识库|资料库|文档库|案件|案号|归档|保存|材料|卷宗|律所)/.test(request)
-    || /(提取|调取|获取|查看|整理|总结|摘要|列出).*(案件|案号|卷宗|组织资料|组织文档|组织知识)/.test(request);
+  if (isInformationOnlyQuestion(request)) return false;
+  return matchesCnOrganizationScopeRequest(request);
+}
+
+function isOrganizationContinuationRequest(text: string): boolean {
+  const request = text.trim();
+  if (!request) return false;
+  if (requestsOrganizationScope(request)) return true;
+  return matchesCnOrganizationContinuationRequest(request);
 }
 
 function now(): string {
@@ -163,7 +176,7 @@ export function resolvePersonalOrganizationScope(
     const selected = selectOrganization(request, pendingOrganizations);
     if (selected) {
       const pending = record.pending;
-      record = { ...record, activeOrgId: selected.id, pending: undefined, updatedAt: now() };
+      record = { ...record, activeOrgId: selected.id, lastRoutedDomain: 'work', pending: undefined, updatedAt: now() };
       store.records[recordIndex] = record;
       writeStore(store);
       return { kind: 'organization', message: scopedMessage(message, selected, pending), org: selected, entered: true };
@@ -184,6 +197,7 @@ export function resolvePersonalOrganizationScope(
       platformUserId: message.userId,
       chatId: message.chatId,
       activeOrgId: selected.id,
+      lastRoutedDomain: 'work',
       updatedAt: now(),
     };
     if (recordIndex >= 0) store.records[recordIndex] = next;
@@ -202,14 +216,28 @@ export function resolvePersonalOrganizationScope(
   const activeOrg = record?.activeOrgId
     ? organizations.find(org => org.id === record?.activeOrgId)
     : undefined;
-  if (activeOrg) {
+  const continuesActiveOrganization = Boolean(
+    activeOrg && (
+      requiresOrganization ||
+      (record?.lastRoutedDomain !== 'personal' && isOrganizationContinuationRequest(request))
+    )
+  );
+  if (activeOrg && continuesActiveOrganization) {
+    record!.lastRoutedDomain = 'work';
     record!.updatedAt = now();
     store.records[recordIndex] = record!;
     writeStore(store);
     return { kind: 'organization', message: scopedMessage(message, activeOrg), org: activeOrg, entered: false };
   }
 
-  if (!requiresOrganization) return { kind: 'personal', message };
+  if (!requiresOrganization) {
+    if (record && record.lastRoutedDomain !== 'personal') {
+      record.lastRoutedDomain = 'personal';
+      store.records[recordIndex] = record;
+      writeStore(store);
+    }
+    return { kind: 'personal', message };
+  }
   if (organizations.length === 0) {
     return { kind: 'reply', message, reply: '当前个人 Lumi 身份没有可访问的组织。请先创建组织或由组织管理员添加成员权限。' };
   }
@@ -222,6 +250,7 @@ export function resolvePersonalOrganizationScope(
       platformUserId: message.userId,
       chatId: message.chatId,
       activeOrgId: selected.id,
+      lastRoutedDomain: 'work',
       updatedAt: now(),
     };
     if (recordIndex >= 0) store.records[recordIndex] = next;
