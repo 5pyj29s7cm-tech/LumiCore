@@ -5,11 +5,11 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
-import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
+import { getSavedKeyStatus } from '@/services/settingsKeys';
 import { apiFetch } from '@/services/apiClient';
 import { WORK_RECOMMENDATION_RULES } from '../i18n/locales/skillRecommendations';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
-import { getSkillModelServiceSettingsTarget } from '../../shared/model_service_settings';
+import { getSkillSettingsTarget } from '../../shared/model_service_settings';
 
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 
@@ -122,6 +122,13 @@ function findInstalledSkillForMarket(skill: MarketplaceSkill, installedSkills: I
   return installedSkills.find(installed => candidates.has(normalizeSkillKey(installed.name)));
 }
 
+function getSkillSettingsSectionLabel(settingsSection: string, locale: 'en' | 'zh'): string {
+  if (settingsSection === 'ai-providers') return uiMessage('settings.ai-providers.38c3f21901', locale);
+  if (settingsSection === 'data-sources') return uiMessage('settings.data-sources.9f7efbc2df', locale);
+  if (settingsSection === 'applications') return uiMessage('settings.applications.36d70e9597', locale);
+  return uiMessage('settings.tools.145e2645a6', locale);
+}
+
 function getApiKeyConfigurationDetail(
   skill: MarketplaceSkill,
   lang: 'en' | 'zh',
@@ -130,11 +137,11 @@ function getApiKeyConfigurationDetail(
     | 'skill-center.configure-value0-before-real-calls.041e3cf5db',
 ): string {
   const locale = lang === 'zh' ? 'zh' : 'en';
-  const modelServiceTarget = getSkillModelServiceSettingsTarget(skill.apiKeyEnv);
-  if (modelServiceTarget) {
-    return formatUiMessage('skill-center.value0-is-managed-in-value1-settings.918a11b372', {
-      value0: modelServiceTarget.provider,
-      value1: uiMessage('settings.generative-models.3ef22638d1', locale),
+  const settingsTarget = getSkillSettingsTarget(skill.apiKeyEnv);
+  if (settingsTarget) {
+    return formatUiMessage('skill-center.value0-is-managed-in-value1-settings.41f04ac801', {
+      value0: settingsTarget.label,
+      value1: getSkillSettingsSectionLabel(settingsTarget.settingsSection, locale),
     }, locale);
   }
   return formatUiMessage(fallbackMessage, { value0: skill.apiKeyEnv || '' }, locale);
@@ -435,8 +442,6 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
   const [installProgress, setInstallProgress] = useState<{ skillId: string; stage: string } | null>(null);
   const [detailSkill, setDetailSkill] = useState<MarketplaceSkill | InstalledSkill | null>(null);
   const [savedKeys, setSavedKeys] = useState<Record<string, boolean>>({});
-  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
-  const [savingKey, setSavingKey] = useState<string | null>(null);
   const [professionProfiles, setProfessionProfiles] = useState<ProfessionProfile[]>([]);
   const [workSignalText, setWorkSignalText] = useState('');
   const [recommendationError, setRecommendationError] = useState('');
@@ -682,18 +687,6 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
     } catch (err: any) {
       toast.error(err.message || 'Toggle failed');
     }
-  };
-
-  const handleSaveKey = async (envKey: string, value: string) => {
-    if (!value.trim()) return;
-    setSavingKey(envKey);
-    try {
-      await saveServerKeys({ [envKey]: value.trim() });
-      setSavedKeys(prev => ({ ...prev, [envKey]: true }));
-      setKeyInputs(prev => { const n = { ...prev }; delete n[envKey]; return n; });
-      toast.success(`${envKey} saved`);
-    } catch (err: any) { toast.error(err.message || 'Failed to save key'); }
-    finally { setSavingKey(null); }
   };
 
   const handleGenerate = async () => {
@@ -1176,7 +1169,7 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
               <AnimatePresence>
                 {sortedMarket.map(skill => {
                   const availability = getDisplayAvailability(skill, installedSkills, savedKeys, lang);
-                  const modelServiceTarget = getSkillModelServiceSettingsTarget(skill.apiKeyEnv);
+                  const settingsTarget = getSkillSettingsTarget(skill.apiKeyEnv);
                   const runtimeInstalled = !!availability.installedSkill;
                   const isInstalled = skill.installed || runtimeInstalled;
                   return (
@@ -1230,14 +1223,12 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
                       </div>
                     )}
                     {skill.requiresApiKey && skill.apiKeyUrl && (
-                      <div className={`mb-3 rounded-lg border p-2 ${modelServiceTarget ? 'border-cyan-400/10 bg-cyan-400/[0.04]' : 'border-amber-500/10 bg-amber-500/5'}`}>
-                        <p className={`text-[12px] leading-relaxed ${modelServiceTarget ? 'text-cyan-200/60' : 'text-amber-300/70'}`}>
-                          {modelServiceTarget
-                            ? getApiKeyConfigurationDetail(skill, lang, 'skill-center.configure-value0-before-real-calls.041e3cf5db')
-                            : <>Requires <strong>{skill.apiKeyEnv}</strong></>}
+                      <div className="mb-3 rounded-lg border border-cyan-400/10 bg-cyan-400/[0.04] p-2">
+                        <p className="text-[12px] leading-relaxed text-cyan-200/60">
+                          {getApiKeyConfigurationDetail(skill, lang, 'skill-center.configure-value0-before-real-calls.041e3cf5db')}
                           {' · '}
                           <a href={skill.apiKeyUrl} target="_blank" rel="noopener" className="underline hover:text-white">
-                            {modelServiceTarget
+                            {settingsTarget?.category === 'model_provider'
                               ? uiMessage('settings.provider-console.f2138df9a1', lang === 'zh' ? 'zh' : 'en')
                               : (t.getApiKey || 'get API key')}
                           </a>
@@ -1559,14 +1550,14 @@ export function SkillCenter({ t, lang, initialTab = 'featured' }: { t: any; lang
       </AnimatePresence>
       <AnimatePresence>
         {detailSkill && (
-          <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={skillHallMarketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} keyInputs={keyInputs} setKeyInputs={setKeyInputs} savingKey={savingKey} handleInstall={handleInstall} handleSaveKey={handleSaveKey} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
+          <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={skillHallMarketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} handleInstall={handleInstall} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
         )}
       </AnimatePresence>
     </div>
   );
 }
 
-function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, installedSkills, installing, repairing, savedKeys, keyInputs, setKeyInputs, savingKey, handleInstall, handleSaveKey, handleToggle, handleUninstall, handleRepair }: {
+function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, installedSkills, installing, repairing, savedKeys, handleInstall, handleToggle, handleUninstall, handleRepair }: {
   detailSkill: any;
   setDetailSkill: (v: any) => void;
   t: any;
@@ -1576,11 +1567,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
   installing: string | null;
   repairing: string | null;
   savedKeys: Record<string, boolean>;
-  keyInputs: Record<string, string>;
-  setKeyInputs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  savingKey: string | null;
   handleInstall: (skill: any) => void;
-  handleSaveKey: (envKey: string, value: string) => void;
   handleToggle: (name: string, enabled: boolean) => void;
   handleUninstall: (name: string) => void;
   handleRepair: (name: string) => void;
@@ -1589,7 +1576,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
   const mSkill: any | undefined = isMarketSkill
     ? detailSkill
     : marketSkills.find(s => s.id === `skill-${detailSkill.name}`);
-  const modelServiceTarget = getSkillModelServiceSettingsTarget(mSkill?.apiKeyEnv);
+  const settingsTarget = getSkillSettingsTarget(mSkill?.apiKeyEnv);
   const marketAvailability = mSkill
     ? getDisplayAvailability(mSkill, installedSkills, savedKeys, lang)
     : undefined;
@@ -1697,18 +1684,18 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
         </div>
       )}
 
-      {mSkill?.requiresApiKey && mSkill.apiKeyEnv && modelServiceTarget && (
+      {mSkill?.requiresApiKey && mSkill.apiKeyEnv && settingsTarget && (
         <div className="space-y-3 rounded-lg border border-cyan-400/15 bg-cyan-400/[0.04] p-4">
           <div className="flex items-center gap-1.5">
             <Key size={12} className="text-cyan-300" />
             <span className="text-xs font-bold uppercase text-cyan-200">
-              {uiMessage('skill-center.model-service-configuration.070b9fc0e3', (lang === 'zh') ? 'zh' : 'en')}
+              {uiMessage('skill-center.required-connection.287063c109', (lang === 'zh') ? 'zh' : 'en')}
             </span>
           </div>
           <p className="text-sm leading-relaxed text-white/55">
-            {formatUiMessage('skill-center.value0-is-managed-in-value1-settings.918a11b372', {
-              value0: modelServiceTarget.provider,
-              value1: uiMessage('settings.generative-models.3ef22638d1', (lang === 'zh') ? 'zh' : 'en'),
+            {formatUiMessage('skill-center.value0-is-managed-in-value1-settings.41f04ac801', {
+              value0: settingsTarget.label,
+              value1: getSkillSettingsSectionLabel(settingsTarget.settingsSection, (lang === 'zh') ? 'zh' : 'en'),
             }, (lang === 'zh') ? 'zh' : 'en')}
           </p>
           <div className="flex items-center justify-between gap-3">
@@ -1720,51 +1707,16 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
             <Button
               onClick={() => {
                 window.dispatchEvent(new CustomEvent('lumi:client-action', {
-                  detail: { action: 'open_settings', section: modelServiceTarget.settingsSection },
+                  detail: { action: 'open_settings', section: settingsTarget.settingsSection },
                 }));
                 setDetailSkill(null);
               }}
               className="h-9 shrink-0 rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-3 text-xs font-bold text-cyan-100 hover:bg-cyan-300/15"
             >
               <Settings2 size={13} className="mr-1.5" />
-              {uiMessage('skill-center.open-model-settings.b1d3766b80', (lang === 'zh') ? 'zh' : 'en')}
+              {uiMessage('skill-center.open-required-settings.4e70b69abc', (lang === 'zh') ? 'zh' : 'en')}
             </Button>
           </div>
-        </div>
-      )}
-
-      {mSkill?.requiresApiKey && mSkill.apiKeyEnv && !modelServiceTarget && (
-        <div className="p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl space-y-3">
-          <div className="flex items-center gap-1.5">
-            <Key size={12} className="text-amber-400" />
-            <span className="text-xs font-bold uppercase text-amber-400">API Key Required</span>
-          </div>
-          <p className="text-sm text-amber-300/70">
-            Requires <strong>{mSkill.apiKeyEnv}</strong>
-            {mSkill.apiKeyUrl && (
-              <> &mdash; <a href={mSkill.apiKeyUrl} target="_blank" rel="noopener" className="underline hover:text-amber-200">get API key</a></>
-            )}
-          </p>
-          {savedKeys[mSkill.apiKeyEnv] ? (
-            <span className="flex items-center gap-1 text-sm text-green-400"><CheckCircle size={14} /> {t.keyConfigured || 'Key configured'}</span>
-          ) : (
-            <div className="flex items-center gap-2">
-              <input
-                type="password"
-                value={keyInputs[mSkill.apiKeyEnv] || ''}
-                onChange={e => setKeyInputs(prev => ({ ...prev, [mSkill.apiKeyEnv]: e.target.value }))}
-                placeholder="sk-..."
-                className="flex-1 px-3 py-2 bg-white/10 border border-amber-500/20 rounded-xl text-white text-sm placeholder:text-white/35 focus:outline-none focus:border-amber-500/50"
-              />
-              <Button
-                onClick={() => handleSaveKey(mSkill.apiKeyEnv!, keyInputs[mSkill.apiKeyEnv!] || '')}
-                disabled={savingKey === mSkill.apiKeyEnv || !keyInputs[mSkill.apiKeyEnv!]?.trim()}
-                className="shrink-0 px-4 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs font-bold rounded-xl disabled:opacity-40"
-              >
-                {savingKey === mSkill.apiKeyEnv ? <RefreshCw size={12} className="animate-spin" /> : 'Save'}
-              </Button>
-            </div>
-          )}
         </div>
       )}
 

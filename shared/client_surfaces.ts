@@ -16,6 +16,15 @@ export interface ClientSettingsSectionDefinition {
   useWhen: string;
 }
 
+const DATA_SOURCE_SETTINGS_ALIASES = [
+  'data-source', 'data-sources', 'factual-data', 'external-data',
+] as const;
+
+const APPLICATION_SETTINGS_ALIASES = [
+  'application', 'applications', 'app-connection', 'app-connections',
+  'application-connection', 'application-connections', 'integrations', 'integration',
+] as const;
+
 export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[] = [
   {
     id: 'general',
@@ -30,46 +39,75 @@ export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[
     useWhen: 'Inspect or configure the agent framework, operation modes, and autonomous execution policy.',
   },
   {
-    id: 'llm-providers',
-    label: 'LLM providers',
-    aliases: ['llm', 'llm-provider', 'llm-providers', 'provider', 'providers', 'models'],
-    useWhen: 'Configure cloud or local language-model providers and inspect their runtime status.',
+    id: 'ai-providers',
+    label: 'AI providers',
+    aliases: [
+      'ai-provider', 'ai-providers', 'provider', 'providers', 'model-provider', 'model-providers',
+      'llm', 'llm-provider', 'llm-providers', 'api-provider', 'api-providers',
+    ],
+    useWhen: 'Configure credentials, endpoints, and local runtimes for every model provider in one place.',
+  },
+  {
+    id: 'reasoning-model',
+    label: 'Reasoning model',
+    aliases: ['model', 'models', 'model-role', 'model-roles', 'model-routing', 'reasoning', 'reasoning-model'],
+    useWhen: 'Choose the configured provider and model used for reasoning and general conversation.',
   },
   {
     id: 'world-model',
     label: 'World model',
-    aliases: ['world', 'world-model', 'world-models', 'vision', 'vision-model', 'vision-models', 'computer-vision', 'desktop-action-model'],
-    useWhen: 'Configure visual perception and the desktop action model inside Lumi world intelligence.',
+    aliases: ['world', 'world-model', 'world-models', 'vision', 'vision-model', 'vision-models', 'computer-vision', 'desktop-action-model', 'document-model', 'document-models'],
+    useWhen: 'Choose configured visual perception and desktop action models; document understanding reuses world and reasoning models.',
   },
   {
-    id: 'generation-models',
-    label: 'Generative models',
+    id: 'generation-model',
+    label: 'Generation model',
     aliases: ['generation', 'generative', 'generation-model', 'generation-models', 'generative-models', 'image-model', 'video-model'],
-    useWhen: 'Configure image and video generation roles and their model-service providers.',
+    useWhen: 'Choose configured image and video generation models.',
   },
   {
-    id: 'voice-services',
-    label: 'Voice services',
-    aliases: ['voice-service', 'voice-services', 'speech-services', 'audio-services'],
-    useWhen: 'Configure speech recognition, synthesis, and voice-service providers.',
+    id: 'retrieval-model',
+    label: 'Retrieval model',
+    aliases: ['retrieval-model', 'retrieval-models', 'embedding-model', 'rerank-model', 'knowledge-retrieval-model'],
+    useWhen: 'Choose the configured Embedding semantic-recall model and optional Rerank candidate-ordering model.',
+  },
+  {
+    id: 'voice-model',
+    label: 'Voice and sound model',
+    aliases: ['voice-model', 'voice-service', 'voice-services', 'speech-model', 'speech-models', 'speech-services', 'audio-services'],
+    useWhen: 'Choose configured speech recognition, synthesis, and sound models.',
+  },
+  {
+    id: 'external-connections',
+    label: 'External connections',
+    aliases: [
+      'external-connection', 'external-connections',
+      ...DATA_SOURCE_SETTINGS_ALIASES,
+      ...APPLICATION_SETTINGS_ALIASES,
+    ],
+    useWhen: 'Configure external data sources and application connections. Data sources are read-oriented factual services; applications may read, write, or act.',
+  },
+  {
+    id: 'tools',
+    label: 'Tool runtimes',
+    aliases: [
+      'tool', 'tools', 'tool-runtime', 'tool-runtimes', 'tool-connection', 'tool-connections',
+      'connections', 'connection', 'connections-tools', 'app-tool', 'app-tools', 'application-tool', 'application-tools',
+      'mcp', 'mcp-settings', 'model-context-protocol',
+    ],
+    useWhen: 'Configure execution-tool credentials, inspect runtimes, and diagnose or add private custom MCP connections.',
   },
   {
     id: 'security',
     label: 'Privacy, security, and biometrics',
-    aliases: ['security', 'privacy', 'biometrics', 'face', 'voiceprint'],
-    useWhen: 'Manage local security, background runtime security, face enrollment, and voiceprint enrollment.',
+    aliases: ['security', 'privacy', 'biometrics', 'face', 'voiceprint', 'safety-model', 'safety-models', 'moderation-model'],
+    useWhen: 'Manage local security, policy enforcement, auditing, background runtime security, face enrollment, and voiceprint enrollment.',
   },
   {
     id: 'hardware',
     label: 'Hardware permissions',
     aliases: ['hardware', 'permissions', 'sensors', 'camera', 'microphone'],
     useWhen: 'Inspect and configure camera, microphone, notification, and sensor permissions.',
-  },
-  {
-    id: 'mcp',
-    label: 'MCP settings',
-    aliases: ['mcp', 'mcp-settings', 'model-context-protocol'],
-    useWhen: 'Inspect, configure, enable, and diagnose MCP servers.',
   },
   {
     id: 'voice',
@@ -175,8 +213,8 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     label: 'MCP settings',
     target: 'settings',
     actions: ['open_mcp_settings'],
-    settingsSection: 'mcp',
-    useWhen: 'Configure and diagnose MCP servers from the main settings window.',
+    settingsSection: 'tools',
+    useWhen: 'Inspect MCP runtime health, restart a connection, or add a private custom server from Tool Runtimes. Use Skill Hall for discovery, install, enablement, repair, and removal.',
     launcherIds: ['mcp'],
   },
   {
@@ -192,7 +230,7 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     label: 'Skill Hall',
     target: 'skills',
     actions: ['open_skills'],
-    useWhen: 'Browse installed skills, discover extensions, and inspect skill health.',
+    useWhen: 'Discover, install, enable, repair, and remove skills or MCP extensions, and inspect their health.',
     launcherIds: ['skills'],
   },
   {
@@ -348,6 +386,10 @@ for (const section of CLIENT_SETTINGS_SECTIONS) {
   for (const alias of section.aliases) settingsSectionByAlias.set(alias, section.id);
 }
 
+const settingsConnectionTabByAlias = new Map<string, string>();
+for (const alias of DATA_SOURCE_SETTINGS_ALIASES) settingsConnectionTabByAlias.set(alias, 'data-sources');
+for (const alias of APPLICATION_SETTINGS_ALIASES) settingsConnectionTabByAlias.set(alias, 'applications');
+
 const surfaceByAction = new Map<string, PersonalClientSurfaceDefinition>();
 for (const surface of PERSONAL_CLIENT_SURFACES) {
   for (const action of surface.actions) surfaceByAction.set(action, surface);
@@ -365,6 +407,8 @@ export function getPersonalClientSurfaceByAction(action?: string): PersonalClien
 export function normalizeClientSettingsSection(value?: string): string | null {
   const normalized = String(value || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
   if (!normalized) return 'general';
+  const connectionTab = settingsConnectionTabByAlias.get(normalized);
+  if (connectionTab) return connectionTab;
   return settingsSectionByAlias.get(normalized) || null;
 }
 

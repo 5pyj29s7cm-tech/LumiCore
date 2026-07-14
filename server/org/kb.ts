@@ -5,6 +5,7 @@
 import * as EDB from './db';
 import { logAudit } from './db';
 import { generateEmbedding, cosineSimilarity } from '../memory/store';
+import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 
 export interface KnowledgeSearchResult {
   articleId: string;
@@ -44,6 +45,7 @@ interface SearchOptions {
   limit?: number;
   category?: string;
   status?: string;
+  userId?: string;
 }
 
 // Article CRUD
@@ -235,7 +237,7 @@ export async function indexArticle(orgId: string, articleId: string): Promise<nu
   let indexed = 0;
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const embedding = await generateEmbedding(`${contextPrefix}\n\n${chunks[i]}`);
+      const embedding = await generateEmbedding(`${contextPrefix}\n\n${chunks[i]}`, article.authorId);
       if (embedding) {
         EDB.saveKbEmbedding(articleId, i, embedding, chunks[i]);
         indexed++;
@@ -282,7 +284,8 @@ export async function searchKnowledgeBase(
   if (articles.length === 0) return [];
 
   const articleById = new Map(articles.map(article => [article.id, article]));
-  const semanticResults = await semanticSearch(orgId, normalizedQuery, limit * 2, articleById);
+  const retrievalUserId = options.userId || 'anonymous';
+  const semanticResults = await semanticSearch(orgId, normalizedQuery, limit * 4, articleById, retrievalUserId);
   const keywordResults = keywordSearch(articles, normalizedQuery, limit * 2);
 
   const merged = new Map<string, KnowledgeSearchResult>();
@@ -294,16 +297,43 @@ export async function searchKnowledgeBase(
     }
   }
 
-  return [...merged.values()]
+  const candidates = [...merged.values()]
     .sort((a, b) => b.score - a.score || b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, limit);
+    .slice(0, Math.max(limit * 4, 20));
+
+  const rerank = getRerankSelection(retrievalUserId);
+  if (rerank.enabled && candidates.length > 1) {
+    try {
+      const ranked = await rerankConfiguredDocuments(
+        normalizedQuery,
+        candidates.map(result => `${result.title}\n${result.chunk}`),
+        retrievalUserId,
+        Math.max(limit, rerank.topN),
+      );
+      const seen = new Set<number>();
+      const reordered = ranked.items
+        .map(item => {
+          seen.add(item.index);
+          const result = candidates[item.index];
+          return result ? { ...result, score: item.score } : null;
+        })
+        .filter((result): result is KnowledgeSearchResult => result !== null);
+      reordered.push(...candidates.filter((_, index) => !seen.has(index)));
+      return reordered.slice(0, limit);
+    } catch (error: any) {
+      console.warn(`[KB] Rerank unavailable; preserving hybrid search order: ${error?.message || String(error)}`);
+    }
+  }
+
+  return candidates.slice(0, limit);
 }
 
 async function semanticSearch(
   orgId: string,
   query: string,
   limit: number,
-  articleById: Map<string, EDB.KbArticle>
+  articleById: Map<string, EDB.KbArticle>,
+  userId: string,
 ): Promise<KnowledgeSearchResult[]> {
   const allEmbeddings = EDB.getAllKbEmbeddings(orgId)
     .filter(embedding => articleById.has(embedding.articleId));
@@ -311,7 +341,7 @@ async function semanticSearch(
 
   let queryEmbedding: number[] | null = null;
   try {
-    queryEmbedding = await generateEmbedding(query);
+    queryEmbedding = await generateEmbedding(query, userId);
   } catch {
     return [];
   }

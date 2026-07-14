@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, RefreshCw, CheckCircle, XCircle, Wrench, Sparkles, Download, Plus, Search, Star, ExternalLink, AlertTriangle, XOctagon } from 'lucide-react';
+import { Cpu, RefreshCw, CheckCircle, XCircle, Wrench, Sparkles, Download, Plus, AlertTriangle, XOctagon } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
@@ -103,12 +103,6 @@ export function MCPSettings({ t }: { t?: any }) {
   const [newCommand, setNewCommand] = useState('npx');
   const [newArgs, setNewArgs] = useState('');
 
-  // GitHub search
-  const [ghQuery, setGhQuery] = useState('');
-  const [ghResults, setGhResults] = useState<any[]>([]);
-  const [ghSearching, setGhSearching] = useState(false);
-  const [ghSearched, setGhSearched] = useState(false);
-
   const handleAddServer = async () => {
     if (!newName.trim() || !newCommand.trim()) {
       toast.error(t?.mcpNameCommandRequired || 'Name and command are required');
@@ -132,66 +126,6 @@ export function MCPSettings({ t }: { t?: any }) {
     }
   };
 
-  const handleGitHubSearch = async () => {
-    if (!ghQuery.trim()) return;
-    setGhSearching(true);
-    setGhSearched(true);
-    try {
-      const res = await fetch(`/api/mcp/github/search?q=${encodeURIComponent(ghQuery.trim())}`);
-      const data = await res.json();
-      setGhResults(data.results || []);
-    } catch {
-      toast.error(t?.mcpSearchFailed || 'GitHub search failed');
-    } finally {
-      setGhSearching(false);
-    }
-  };
-
-  const handleInstallFromGitHub = async (repo: string) => {
-    try {
-      const res = await fetch('/api/mcp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ servers: { [repo]: { command: 'npx', args: ['-y', repo], enabled: true } } }),
-      });
-      await res.json();
-      toast.success(`${t?.mcpInstalling || 'Installing'} ${repo}...`);
-      fetchServers();
-    } catch (err: any) {
-      toast.error(`${t?.mcpInstallFailed || 'Install failed'}: ${err.message}`);
-    }
-  };
-
-  const toggleServer = async (name: string, enabled: boolean) => {
-    const updated = servers.map(s => s.name === name ? { ...s, enabled } : s);
-    setServers(updated);
-
-    const payload: Record<string, any> = {};
-    for (const s of updated) {
-      const { name, connected, ...config } = s as any;
-      payload[name] = {
-        ...config,
-        command: config.command || 'npx',
-        args: Array.isArray(config.args) ? config.args : [],
-        enabled: Boolean(config.enabled),
-      };
-    }
-
-    try {
-      const res = await fetch('/api/mcp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ servers: payload }),
-      });
-      const data = await res.json();
-      toast.success(`${data.count} ${t?.mcpToolsRegistered || 'tools registered'}`);
-      fetchServers();
-    } catch (err: any) {
-      toast.error(`${t?.mcpUpdateFailed || 'MCP update failed'}: ${err.message}`);
-      fetchServers();
-    }
-  };
-
   const restartServer = async (name: string) => {
     try {
       const res = await fetch(`/api/mcp/restart/${name}`, { method: 'POST' });
@@ -208,7 +142,7 @@ export function MCPSettings({ t }: { t?: any }) {
       <div className="space-y-8 animate-in fade-in duration-500">
         <div className="flex items-center gap-3">
           <Cpu className="text-celestial-saturn" />
-          <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t?.mcpServers || 'MCP Servers'}</h3>
+          <h3 className="text-xl font-bold text-white/90">{uiMessage('mcpsettings.mcp-runtime.84b64d94d2', isZh ? 'zh' : 'en')}</h3>
         </div>
         <p className="text-white/40 text-sm">{t?.mcpScanning || 'Scanning for MCP protocol servers...'}</p>
       </div>
@@ -217,20 +151,29 @@ export function MCPSettings({ t }: { t?: any }) {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex items-center gap-3">
-        <Cpu className="text-celestial-saturn" />
-        <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t?.mcpServers || 'MCP Servers'}</h3>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Cpu className="text-celestial-saturn" />
+          <h3 className="text-xl font-bold text-white/90">{uiMessage('mcpsettings.mcp-runtime.84b64d94d2', isZh ? 'zh' : 'en')}</h3>
+        </div>
+        <Button
+          onClick={() => window.dispatchEvent(new CustomEvent('lumi:client-action', { detail: { action: 'open_app', target: 'skills' } }))}
+          className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-xs font-semibold text-white/70 hover:bg-white/10"
+        >
+          <Wrench size={14} className="mr-2" />
+          {uiMessage('mcpsettings.manage-in-skill-hall.23e8f7ca56', isZh ? 'zh' : 'en')}
+        </Button>
       </div>
 
       <p className="text-sm text-white/40 max-w-xl">
-        {t?.mcpDescription || "Model Context Protocol servers extend Lumi's capabilities. Auto-generated skills appear here alongside community-maintained servers."}
+        {uiMessage('mcpsettings.runtime-description.47929f0108', isZh ? 'zh' : 'en')}
       </p>
 
       {servers.length === 0 ? (
         <div className="p-10 bg-white/5 rounded-[2rem] border border-white/5 text-center">
           <Wrench size={32} className="text-white/45 mx-auto mb-4" />
           <p className="text-white/40 font-bold uppercase tracking-widest text-sm">{t?.mcpNoServers || 'No MCP servers configured'}</p>
-          <p className="text-white/45 text-xs mt-2">{t?.mcpAddHint || 'Add servers from this settings panel'}</p>
+          <p className="text-white/45 text-xs mt-2">{uiMessage('mcpsettings.install-from-skill-hall-or-add.1f2c552d19', isZh ? 'zh' : 'en')}</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -290,16 +233,6 @@ export function MCPSettings({ t }: { t?: any }) {
                       {t?.mcpRestart || 'Restart'}
                     </Button>
                   )}
-                  <button
-                    onClick={() => toggleServer(server.name, !server.enabled)}
-                    className={`w-10 h-5 rounded-full p-1 transition-colors cursor-pointer ${
-                      server.enabled ? 'bg-celestial-saturn' : 'bg-white/10'
-                    }`}
-                  >
-                    <div className={`w-3 h-3 rounded-full bg-white transition-transform ${
-                      server.enabled ? 'translate-x-5' : 'translate-x-0'
-                    }`} />
-                  </button>
                 </div>
               </div>
 
@@ -387,69 +320,6 @@ export function MCPSettings({ t }: { t?: any }) {
         )}
       </div>
 
-      {/* GitHub Search */}
-      <div className="p-6 glass-dark rounded-[2rem] border border-white/5 space-y-4">
-        <div className="flex items-center gap-3">
-          <Search className="text-celestial-saturn" size={18} />
-          <h4 className="text-sm font-bold uppercase tracking-tight text-white">{t?.mcpSearchGitHubTitle || 'Search GitHub for MCP Servers'}</h4>
-        </div>
-        <div className="flex gap-3">
-          <Input
-            value={ghQuery}
-            onChange={e => setGhQuery(e.target.value)}
-            placeholder={t?.mcpSearchPlaceholder || 'Search MCP servers on GitHub...'}
-            className="flex-1 bg-white/5 border-white/10 rounded-xl py-2 text-sm"
-            onKeyDown={e => e.key === 'Enter' && handleGitHubSearch()}
-          />
-          <Button
-            onClick={handleGitHubSearch}
-            disabled={ghSearching || !ghQuery.trim()}
-            className="bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black uppercase tracking-widest px-4 h-10 rounded-xl"
-          >
-            {ghSearching ? (t?.mcpSearching || 'Searching...') : (t?.mcpSearchBtn || 'Search')}
-          </Button>
-        </div>
-        {ghSearched && ghResults.length === 0 && !ghSearching && (
-          <p className="text-xs text-white/55">{t?.mcpNoResultsFound || 'No results found for'} "{ghQuery}"</p>
-        )}
-        {ghResults.length > 0 && (
-          <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
-            {ghResults.map((repo: any) => (
-              <div key={repo.id} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:border-white/10 transition-all">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold text-white/80 truncate">{repo.name}</span>
-                    <a href={repo.url} target="_blank" rel="noopener noreferrer" className="text-white/45 hover:text-white/60">
-                      <ExternalLink size={12} />
-                    </a>
-                  </div>
-                  <p className="text-xs text-white/55 truncate mt-0.5">{repo.description || (t?.mcpNoDescription || 'No description')}</p>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-[12px] text-white/45 flex items-center gap-1"><Star size={10} /> {repo.stars || 0}</span>
-                    {repo.language && <span className="text-[12px] text-white/45">{repo.language}</span>}
-                  </div>
-                </div>
-                <Button
-                  onClick={() => handleInstallFromGitHub(repo.name)}
-                  className="ml-3 bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black uppercase tracking-widest px-3 h-8 rounded-xl flex-shrink-0"
-                >
-                  <Download size={12} className="mr-1" /> {t?.mcpInstall || 'Install'}
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="p-6 glass-dark rounded-[2rem] border border-white/5 space-y-4">
-        <div className="flex items-center gap-3">
-          <Wrench className="text-celestial-saturn" size={18} />
-          <h4 className="text-sm font-bold uppercase tracking-tight text-white">{t?.mcpAvailableServers || 'Available MCP Servers'}</h4>
-        </div>
-        <p className="text-xs text-white/55 leading-relaxed">
-          {t?.mcpInstallHint || 'Install MCP servers via npm or add them from this settings panel.'}
-        </p>
-      </div>
     </div>
   );
 }

@@ -24,7 +24,11 @@ import {
   Sun,
   Moon,
   Save,
-  ExternalLink
+  ExternalLink,
+  Wrench,
+  FileText,
+  Search,
+  Trash2
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
@@ -46,11 +50,16 @@ import {
   type SensorPermissionState,
 } from '@/services/sensorPermissionService';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import {
+  CHINA_LEGAL_DATA_SOURCES,
+  chinaLegalCopy,
+  type ChinaLegalDataSourceDefinition,
+  type ChinaLegalDataSourceField,
+} from '../i18n/regions/cn/legal';
 
 const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.VoiceForge })));
 
-function buildSidebarGroups(t: any, isZh: boolean) {
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
+function buildSidebarGroups(t: any) {
   return [
     {
       label: t.sidebarCore || uiMessage('settings.core.38f8d0ecb8'),
@@ -60,12 +69,21 @@ function buildSidebarGroups(t: any, isZh: boolean) {
       ],
     },
     {
-      label: t.sidebarAiNeural || uiMessage('settings.ai-neural.253e6de004'),
+      label: uiMessage('settings.ai-and-models.5bf41de4e3'),
       items: [
-        { id: 'llm-providers', label: t.llmProviders || uiMessage('settings.llm-providers.8d18bc9417'), icon: <BrainCircuit size={16} /> },
+        { id: 'ai-providers', label: uiMessage('settings.ai-providers.38c3f21901'), icon: <BrainCircuit size={16} /> },
+        { id: 'reasoning-model', label: uiMessage('settings.reasoning.6a171d96b4'), icon: <BrainCircuit size={16} /> },
         { id: 'world-model', label: uiMessage('settings.world-model.67c5d91de2'), icon: <Globe size={16} /> },
-        { id: 'generation-models', label: uiMessage('settings.generative-models.3ef22638d1'), icon: <Sparkle size={16} /> },
-        { id: 'voice-services', label: t.voiceServices || uiMessage('settings.voice-services.abc302ed3a'), icon: <Mic size={16} /> },
+        { id: 'generation-model', label: uiMessage('settings.generation.702ee6d1d7'), icon: <Sparkle size={16} /> },
+        { id: 'retrieval-model', label: uiMessage('settings.retrieval.a3cd857a16'), icon: <Search size={16} /> },
+        { id: 'voice-model', label: uiMessage('settings.voice-and-sound.e1a9a13b38'), icon: <Mic size={16} /> },
+      ],
+    },
+    {
+      label: uiMessage('settings.resources.36c2abf7a1'),
+      items: [
+        { id: 'external-connections', label: uiMessage('settings.external-connections.a83a9fc1d2'), icon: <Database size={16} /> },
+        { id: 'tools', label: uiMessage('settings.tools.145e2645a6'), icon: <Wrench size={16} /> },
       ],
     },
     {
@@ -73,7 +91,6 @@ function buildSidebarGroups(t: any, isZh: boolean) {
       items: [
         { id: 'security', label: t.privacySecurity || uiMessage('settings.security.7c0dadaf08'), icon: <Shield size={16} /> },
         { id: 'hardware', label: t.settingsHardware || uiMessage('settings.hardware.8177f0148a'), icon: <Camera size={16} /> },
-        { id: 'mcp', label: t.settingsMCP || 'MCP', icon: <Cpu size={16} /> },
       ],
     },
   ];
@@ -95,8 +112,15 @@ export function Settings({
   const { platform, isElectron } = usePlatform();
   const { operationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, workDomain, switchDomain } = useApp();
   const [providerStatus, setProviderStatus] = useState<Record<string, ProviderRuntimeStatus>>({});
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const visibleSection = activeSection === 'computer' || activeSection === 'messaging' ? 'general' : activeSection;
+  const [modelConfigurationRevision, setModelConfigurationRevision] = useState(0);
+  const visibleSection = activeSection === 'computer' || activeSection === 'messaging'
+    ? 'general'
+    : activeSection === 'data-sources' || activeSection === 'applications'
+      ? 'external-connections'
+      : activeSection === 'connections-tools' || activeSection === 'app-tools' || activeSection === 'mcp'
+        ? 'tools'
+        : activeSection;
+  const externalConnectionsTab = activeSection === 'applications' ? 'applications' : 'data-sources';
   const isZh = lang !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
 
@@ -123,16 +147,16 @@ export function Settings({
     };
   }, []);
 
+  useEffect(() => {
+    const handleModelConfigurationChanged = () => {
+      setModelConfigurationRevision(previous => previous + 1);
+    };
+    window.addEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
+    return () => window.removeEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
+  }, []);
+
   const handleSectionChange = (section: string) => {
     if (onSectionChange) onSectionChange(section);
-  };
-
-  const toggleGroup = (label: string) => {
-    setCollapsedGroups(prev => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label); else next.add(label);
-      return next;
-    });
   };
 
   const renderContent = (section: string) => {
@@ -215,13 +239,28 @@ export function Settings({
             <VoiceForge t={t} />
           </Suspense>
         );
+      case 'ai-providers':
       case 'llm-providers':
-        return <LLMProvidersPage t={t} providerStatus={providerStatus} />;
+        return <AIProvidersPage t={t} providerStatus={providerStatus} />;
+      case 'reasoning-model':
+      case 'model-routing':
+        return <ReasoningRoleSettings t={t} />;
+      case 'external-connections':
+        return <ExternalConnectionsPage t={t} initialTab={externalConnectionsTab} />;
+      case 'tools':
+      case 'app-tools':
+      case 'connections-tools':
+      case 'mcp':
+        return <ToolRuntimeConnections t={t} />;
       case 'vision-models':
       case 'world-model':
         return <WorldModelsPage t={t} />;
+      case 'generation-model':
       case 'generation-models':
         return <GenerativeModelsPage t={t} />;
+      case 'retrieval-model':
+        return <RetrievalModelSettings />;
+      case 'voice-model':
       case 'voice-services':
         return <VoiceServicesPage t={t} />;
       case 'security':
@@ -265,8 +304,6 @@ export function Settings({
         );
       case 'hardware':
         return <HardwareSettings t={t} />;
-      case 'mcp':
-        return <MCPSettings t={t} />;
       default:
         return null;
     }
@@ -280,34 +317,24 @@ export function Settings({
           <h2 className="text-xs font-black uppercase tracking-widest text-white/60">{t.settings || uiMessage('settings.settings.8d4d0d8541')}</h2>
         </div>
         <div className="flex-1 px-1.5 pb-3 space-y-0.5 overflow-y-auto custom-scrollbar min-h-0 md:px-2">
-          {buildSidebarGroups(t, isZh).map(group => {
-            const isCollapsed = collapsedGroups.has(group.label);
-            const hasActiveItem = group.items.some(item => item.id === visibleSection);
-            return (
-              <div key={group.label} className="mb-1">
-                <button
-                  onClick={() => toggleGroup(group.label)}
-                  className="flex w-full items-center gap-1 px-2 py-1 text-xs font-black uppercase tracking-widest text-white/45 transition-colors hover:text-white/70"
-                >
-                  <ChevronDown size={9} className={`transition-transform ${isCollapsed ? '-rotate-90' : ''}`} />
+          {buildSidebarGroups(t).map(group => (
+              <div key={group.label} className="mb-3">
+                <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold text-white/35">
                   {group.label}
-                </button>
-                {!isCollapsed && (
-                  <div className="space-y-0.5">
-                    {group.items.map(item => (
-                      <SidebarItem
-                        key={item.id}
-                        active={visibleSection === item.id}
-                        onClick={() => handleSectionChange(item.id)}
-                        icon={item.icon}
-                        label={item.label}
-                      />
-                    ))}
-                  </div>
-                )}
+                </div>
+                <div className="space-y-0.5">
+                  {group.items.map(item => (
+                    <SidebarItem
+                      key={item.id}
+                      active={visibleSection === item.id}
+                      onClick={() => handleSectionChange(item.id)}
+                      icon={item.icon}
+                      label={item.label}
+                    />
+                  ))}
+                </div>
               </div>
-            );
-          })}
+          ))}
         </div>
 
         <div className="px-2 pb-4 pt-2 border-t border-white/[0.08]">
@@ -322,7 +349,7 @@ export function Settings({
                 window.location.reload();
               }
             }}
-            className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold text-red-400/60 transition-all hover:bg-red-500/10 hover:text-red-300"
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-medium text-red-400/60 transition-all hover:bg-red-500/10 hover:text-red-300"
           >
             <LogOut size={14} />
             {t?.signOut || uiMessage('settings.sign-out.db1b9e9fea')}
@@ -335,7 +362,8 @@ export function Settings({
         <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-3 md:p-6">
           <AnimatePresence mode="popLayout">
             <motion.div
-              key={visibleSection}
+              key={`${visibleSection}:${modelConfigurationRevision}`}
+              className="mx-auto w-full max-w-6xl"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -588,16 +616,47 @@ function SidebarItem({ active, onClick, icon, label }: { active: boolean, onClic
   return (
     <button
       onClick={onClick}
-      className={`relative flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors duration-150 ${active ? 'border border-white/10 bg-white/[0.075] text-white' : 'border border-transparent text-white/55 hover:bg-white/[0.045] hover:text-white/75'}`}
+      className={`relative flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors duration-150 ${active ? 'border border-white/10 bg-white/[0.075] text-white' : 'border border-transparent text-white/55 hover:bg-white/[0.045] hover:text-white/75'}`}
     >
       <div className={`flex-shrink-0 w-4 h-4 flex items-center justify-center ${active ? 'text-celestial-saturn' : 'text-current'}`}>{icon}</div>
-      <span className="text-[12px] font-bold uppercase tracking-tight truncate">{label}</span>
+      <span className="truncate text-[13px] font-medium">{label}</span>
       {active && <div className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-celestial-saturn" />}
     </button>
   );
 }
 
 type ProviderTestState = 'idle' | 'testing' | 'ok' | 'error';
+
+function SettingsDisclosure({
+  icon,
+  label,
+  badges,
+  defaultOpen = false,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  badges?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <details open={open} onToggle={event => setOpen(event.currentTarget.open)} className="group border-b border-white/10 last:border-b-0">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 py-3 text-left marker:content-none">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/8 bg-white/[0.035] text-white/70">
+          {icon}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/80">{label}</span>
+        {badges}
+        <ChevronDown size={15} className="shrink-0 text-white/30 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="pb-5 sm:pl-11">
+        {children}
+      </div>
+    </details>
+  );
+}
 
 async function runLLMConnectionTest(provider: string, model: string): Promise<{ latencyMs: number; model: string }> {
   const response = await apiFetch('/api/llm/test', {
@@ -685,26 +744,22 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
     }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key.58568a4911')));
   };
 
-  const syncToServer = (models: Record<string, string>) => {
-    fetch('/api/preferences/llm', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: aiConfig.provider, models }),
-      credentials: 'include',
-    }).catch(() => {});
-  };
-
-  const handleModelChange = (m: string) => {
-    setModel(m);
+  const handleModelChange = (nextModel: string) => {
+    setModel(nextModel);
+    setTestState('idle');
+    setTestMessage('');
     const allModels = (() => {
       try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
     })();
-    allModels[providerId] = m;
+    allModels[providerId] = nextModel;
     localStorage.setItem('lumi_llm_models', JSON.stringify(allModels));
-    syncToServer(allModels);
-    if (aiConfig.provider === providerId) {
-      updateAIConfig({ model: m });
-    }
+    apiFetch('/api/preferences/llm', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ provider: aiConfig.provider, models: allModels }),
+    }).catch(() => {});
+    if (aiConfig.provider === providerId) updateAIConfig({ model: nextModel });
   };
 
   const handleTest = async () => {
@@ -722,14 +777,18 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
   };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
-      <div className="flex gap-3">
+    <SettingsDisclosure
+      icon={icon}
+      label={label}
+      defaultOpen={aiConfig.provider === providerId}
+      badges={<>
+        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {aiConfig.provider === providerId && <span className="rounded-full border border-celestial-saturn/20 bg-celestial-saturn/10 px-2 py-0.5 text-[11px] font-semibold text-celestial-saturn">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
+      <div className="space-y-3">
+      <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
         <div className="relative flex-1">
           <input
             disabled={disabled}
@@ -738,11 +797,11 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
             onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
             placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server.1ca0422100')) : placeholder}
-            className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-celestial-saturn/50 transition-colors disabled:opacity-50"
+            className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 pr-14 font-mono text-sm text-white outline-none transition-colors focus:border-celestial-saturn/50 disabled:opacity-50"
           />
-          <div className="absolute right-2 top-2 flex gap-1">
+          <div className="absolute right-1.5 top-1.5 flex gap-1">
             <button type="button" onClick={() => setShowKey(!showKey)}
-              className="h-10 px-2 bg-white/5 hover:bg-white/10 text-xs font-bold uppercase border border-white/5 rounded-lg">
+              className="h-8 rounded-md border border-white/5 bg-white/5 px-2 text-[11px] font-semibold text-white/60 hover:bg-white/10">
               {showKey ? (t?.hide || uiMessage('settings.hide.d2e660d104')) : (t?.show || uiMessage('settings.show.520bd3e959'))}
             </button>
           </div>
@@ -750,48 +809,46 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
         <Button
           onClick={handleSaveKey}
           disabled={disabled || !keyValue.trim()}
-          className="h-[56px] px-4 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-celestial-saturn/90 transition-all"
+          className="h-11 rounded-lg bg-celestial-saturn px-4 text-xs font-semibold text-black transition-all hover:bg-celestial-saturn/90 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleRemoveKey}
           disabled={disabled || (!keyValue && !serverConfigured)}
-          className="h-[56px] px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+          className="h-11 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
-          className="h-[56px] px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+          className="h-11 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
-        <input
-          type="text"
-          value={model}
-          onChange={e => handleModelChange(e.target.value)}
-          list={`models-${providerId}`}
-          placeholder={models[0]}
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono font-bold outline-none focus:border-celestial-saturn/50"
-        />
-        <datalist id={`models-${providerId}`}>
-          {models.map(m => <option key={m} value={m} />)}
-        </datalist>
-        {aiConfig.provider === providerId && (
-          <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold whitespace-nowrap">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>
-        )}
-      </div>
+      <label className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)] sm:items-center">
+        <span className="text-xs font-semibold text-white/50">{uiMessage('settings.model.44c0cd4289')}</span>
+        <span>
+          <input
+            value={model}
+            onChange={event => handleModelChange(event.target.value)}
+            list={`provider-models-${providerId}`}
+            className="h-10 w-full rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-celestial-saturn/50"
+          />
+          <datalist id={`provider-models-${providerId}`}>
+            {models.map(option => <option key={option} value={option} />)}
+          </datalist>
+        </span>
+      </label>
       {testMessage && (
         <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
           {testMessage}
         </p>
       )}
-    </div>
+      </div>
+    </SettingsDisclosure>
   );
 }
 
@@ -889,14 +946,18 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
   };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
-      <div className="flex gap-3">
+    <SettingsDisclosure
+      icon={icon}
+      label={label}
+      defaultOpen={visionConfig.provider === providerId}
+      badges={<>
+        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {visionConfig.provider === providerId && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-200">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
+      <div className="space-y-3">
+      <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
         <div className="relative flex-1">
           <input
             disabled={disabled}
@@ -905,11 +966,11 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
             onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
             placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server.1ca0422100')) : placeholder}
-            className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-cyan-300/50 transition-colors disabled:opacity-50"
+            className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 pr-14 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-300/50 disabled:opacity-50"
           />
-          <div className="absolute right-2 top-2 flex gap-1">
+          <div className="absolute right-1.5 top-1.5 flex gap-1">
             <button type="button" onClick={() => setShowKey(!showKey)}
-              className="h-10 px-2 bg-white/5 hover:bg-white/10 text-xs font-bold uppercase border border-white/5 rounded-lg">
+              className="h-8 rounded-md border border-white/5 bg-white/5 px-2 text-[11px] font-semibold text-white/60 hover:bg-white/10">
               {showKey ? (t?.hide || uiMessage('settings.hide.d2e660d104')) : (t?.show || uiMessage('settings.show.520bd3e959'))}
             </button>
           </div>
@@ -917,44 +978,42 @@ function VisionProviderRow({ icon, label, providerId, models, placeholder, disab
         <Button
           onClick={handleSaveKey}
           disabled={disabled || !keyValue.trim()}
-          className="h-[56px] px-4 bg-cyan-300 text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cyan-200 transition-all"
+          className="h-11 rounded-lg bg-cyan-300 px-4 text-xs font-semibold text-black transition-all hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleRemoveKey}
           disabled={disabled || (!keyValue && !serverConfigured)}
-          className="h-[56px] px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+          className="h-11 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
-          className="h-[56px] px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+          className="h-11 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
+      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)] sm:items-center">
+        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
           onChange={e => handleModelChange(e.target.value)}
           list={`vision-models-${providerId}`}
           placeholder={models[0]}
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono font-bold outline-none focus:border-cyan-300/50"
+          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-cyan-300/50"
         />
         <datalist id={`vision-models-${providerId}`}>
           {models.map(m => <option key={m} value={m} />)}
         </datalist>
-        {visionConfig.provider === providerId && (
-          <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold whitespace-nowrap">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>
-        )}
       </div>
       {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-    </div>
+      </div>
+    </SettingsDisclosure>
   );
 }
 
@@ -1077,40 +1136,43 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
   };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.connected.4f18b17c87')}</span>}
-        {visionConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
-      <div className="flex gap-3">
+    <SettingsDisclosure
+      icon={icon}
+      label={label}
+      defaultOpen={visionConfig.provider === providerId}
+      badges={<>
+        {detected && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.connected.4f18b17c87')}</span>}
+        {visionConfig.provider === providerId && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-200">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
+      <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
           type="text"
           value={baseUrl}
           onChange={e => { setBaseUrl(e.target.value); setSaved(false); setDetected(false); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleDetect()}
           placeholder={defaultUrl}
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-emerald-400/50 transition-colors"
+          className="h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-emerald-400/50"
         />
         <Button
           onClick={handleDetect}
           disabled={checking || !baseUrl.trim()}
-          className="h-[56px] px-5 bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500 transition-all"
+          className="h-11 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white transition-all hover:bg-emerald-500 disabled:opacity-30"
         >
           {checking ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.detect.333c762fe5')}
         </Button>
       </div>
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
+      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)_auto_auto] sm:items-center">
+        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
           onChange={e => persistModel(e.target.value)}
           list={`vision-local-models-${providerId}`}
           placeholder={defaultModel}
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono font-bold outline-none focus:border-emerald-400/50"
+          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-emerald-400/50"
         />
         <datalist id={`vision-local-models-${providerId}`}>
           {allModelOptions.map(m => <option key={m} value={m} />)}
@@ -1118,14 +1180,14 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
         <Button
           onClick={handleUse}
           disabled={!model.trim()}
-          className="h-9 px-3 bg-cyan-300 text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-cyan-200 transition-all"
+          className="h-10 rounded-lg bg-cyan-300 px-3 text-xs font-semibold text-black transition-all hover:bg-cyan-200 disabled:opacity-30"
         >
           {uiMessage('settings.use.998b2bc522')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={!detected || !model.trim() || testState === 'testing'}
-          className="h-9 px-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20 transition-all"
+          className="h-10 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:opacity-30"
         >
           {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
@@ -1142,7 +1204,8 @@ function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey,
       )}
       {error && !checking && <p className="text-xs text-amber-300/80">{error}</p>}
       {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-    </div>
+      </div>
+    </SettingsDisclosure>
   );
 }
 
@@ -1232,14 +1295,17 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
   };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg"><Globe size={18} className="text-cyan-400" /></div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">OpenAI-Compatible Vision</label>
-        {serverConfigured && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {visionConfig.provider === 'relay' && <span className="text-xs px-2 py-0.5 bg-cyan-300/10 border border-cyan-300/20 text-cyan-200 rounded-full font-bold">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
+    <SettingsDisclosure
+      icon={<Globe size={18} className="text-cyan-400" />}
+      label="OpenAI-Compatible Vision"
+      defaultOpen={visionConfig.provider === 'relay'}
+      badges={<>
+        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {visionConfig.provider === 'relay' && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-200">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
+      <div className="space-y-3">
       <div className="grid grid-cols-1 gap-3">
         <input
           type="password"
@@ -1247,7 +1313,7 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
           onChange={e => { setApiKey(e.target.value); setConnectionDirty(true); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleSave()}
           placeholder="API Key"
-          className="bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-cyan-400/50 transition-colors"
+          className="h-11 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
         />
         <input
           type="text"
@@ -1255,48 +1321,48 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
           onChange={e => { setBaseUrl(e.target.value); setConnectionDirty(true); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleSave()}
           placeholder="http://127.0.0.1:8000/v1"
-          className="bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-cyan-400/50 transition-colors"
+          className="h-11 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
         />
       </div>
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
+      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)] sm:items-center">
+        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
           onChange={e => persistModel(e.target.value)}
           list="vision-relay-models"
-          className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono font-bold outline-none focus:border-cyan-400/50"
+          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-cyan-400/50"
         />
         <datalist id="vision-relay-models">
           {['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b', 'glm-4.1v-9b-thinking'].map(m => <option key={m} value={m} />)}
         </datalist>
       </div>
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-2">
         <Button
           onClick={handleSave}
           disabled={!apiKey.trim() || !baseUrl.trim()}
-          className="h-[44px] px-5 bg-cyan-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-cyan-500 transition-all"
+          className="h-10 rounded-lg bg-cyan-600 px-4 text-xs font-semibold text-white transition-all hover:bg-cyan-500 disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleUse}
           disabled={!model.trim()}
-          className="h-[44px] px-5 bg-cyan-300 text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-cyan-200 transition-all"
+          className="h-10 rounded-lg bg-cyan-300 px-4 text-xs font-semibold text-black transition-all hover:bg-cyan-200 disabled:opacity-30"
         >
           {uiMessage('settings.use-as-vision.adf03f9489')}
         </Button>
         <Button
           onClick={handleTest}
           disabled={!serverConfigured || connectionDirty || !model.trim() || testState === 'testing'}
-          className="h-[44px] px-5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20 transition-all"
+          className="h-10 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:opacity-30"
         >
           {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
         <Button
           onClick={handleRemove}
           disabled={!serverConfigured && !apiKey}
-          className="h-[44px] px-4 bg-red-500/10 border border-red-500/20 text-red-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-red-500/20 transition-all"
+          className="h-10 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-300 transition-all hover:bg-red-500/20 disabled:opacity-30"
         >
           {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
@@ -1305,7 +1371,8 @@ function VisionRelayProviderRow({ t }: { t?: any }) {
         {uiMessage('settings.use-this-for-vllm-sglang.6ba52812bd')}
       </p>
       {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-    </div>
+      </div>
+    </SettingsDisclosure>
   );
 }
 
@@ -1387,64 +1454,91 @@ function AlwaysOnVoiceToggle() {
   );
 }
 
-function VisionModelPage({ t }: { t: any }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
+function VisionRoleSettings({ t }: { t: any }) {
   const { visionConfig, updateVisionConfig } = useApp();
+  const setVisionModel = (model: string) => {
+    const savedModels = (() => {
+      try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
+    })();
+    savedModels[visionConfig.provider] = model;
+    localStorage.setItem('lumi_vision_models', JSON.stringify(savedModels));
+    updateVisionConfig({ model });
+  };
   return (
-    <div className="space-y-8">
-      <SettingsSection title={uiMessage('settings.visual-perception-model.c74ca64c0f')} icon={<Camera size={18} className="text-cyan-300" />}>
-        <div className="mb-6 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.04] p-4 space-y-2">
-          <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryVisionModel || uiMessage('settings.screen-understanding-vision-control.a9be431876')}</label>
-          <div className="relative">
+    <SettingsSection title={uiMessage('settings.visual-perception-model.c74ca64c0f')} icon={<Camera size={18} className="text-cyan-300" />}>
+      <div className="border-y border-white/10 py-5">
+        <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+          <span className="text-xs font-bold text-white/55">{t.primaryVisionModel || uiMessage('settings.screen-understanding-vision-control.a9be431876')}</span>
+          <span className="relative">
             <select value={visionConfig.provider} onChange={(e) => updateVisionConfig({ provider: e.target.value })}
-              className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm font-bold appearance-none cursor-pointer focus:border-cyan-300/50 outline-none">
+              className="w-full appearance-none rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-300/45">
               <option value="openai">OpenAI Vision</option>
               <option value="gemini">Google Gemini Vision</option>
-               <option value="ark">Doubao Vision (Ark)</option>
+              <option value="ark">Doubao Vision (Ark)</option>
               <option value="qwen">Qwen-VL (DashScope)</option>
               <option value="ollama">Ollama Local Vision</option>
               <option value="lmstudio">LM Studio Local Vision</option>
               <option value="relay">OpenAI-Compatible Vision</option>
             </select>
-            <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/45" />
-          </div>
-          <p className="text-[12px] text-white/45 px-1">
-            {uiMessage('settings.vision-is-used-only-for.9a9cf081fd')}
-            <span className="ml-2 text-white/40 font-mono">{visionConfig.provider}/{visionConfig.model}</span>
-          </p>
-        </div>
-        <div className="grid grid-cols-1 gap-6">
-          <VisionProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI Vision" providerId="openai" models={['gpt-4o', 'gpt-4o-mini']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
-          <VisionProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="Google Gemini Vision" providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={uiMessage('settings.enter-gemini-api-key.4295b94e77')} serverKey="GEMINI_API_KEY" t={t} />
-           <VisionProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao Vision (Ark)" providerId="ark" models={['doubao-1-5-vision-pro-32k']} placeholder={uiMessage('settings.enter-ark-api-key.9f82bf67e1')} serverKey="ARK_API_KEY" t={t} />
-          <VisionProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen-VL / DashScope" providerId="qwen" models={['qwen-vl-max']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
-          <VisionLocalProviderRow
-            icon={<Cpu size={18} className="text-emerald-400" />}
-            label="Ollama Local Vision"
-            providerId="ollama"
-            endpoint="/api/ollama/config"
-            storageKey="lumi_ollama_url"
-            defaultUrl="http://127.0.0.1:11434"
-            defaultModel="qwen2.5vl:7b"
-            suggestions={['qwen2.5vl:7b', 'minicpm-v:8b', 'llama3.2-vision:11b']}
-            t={t}
+            <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/45" />
+          </span>
+        </label>
+        <div className="mt-4">
+          <GenerationModelInput
+            id={`vision-role-${visionConfig.provider}`}
+            label={uiMessage('settings.model.44c0cd4289')}
+            value={visionConfig.model}
+            options={WORLD_MODEL_OPTIONS[visionConfig.provider] || []}
+            onChange={setVisionModel}
           />
-          <VisionLocalProviderRow
-            icon={<Cpu size={18} className="text-amber-400" />}
-            label="LM Studio Local Vision"
-            providerId="lmstudio"
-            endpoint="/api/lmstudio/config"
-            storageKey="lumi_lmstudio_url"
-            defaultUrl="http://127.0.0.1:1234"
-            defaultModel="local-vision-model"
-            suggestions={['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b']}
-            t={t}
-          />
-          <VisionRelayProviderRow t={t} />
         </div>
-      </SettingsSection>
-    </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+          <span className="text-xs font-bold text-white/55">{uiMessage('settings.effective-model.60bc31ba15')}</span>
+          <span className="min-w-0 truncate rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5 font-mono text-xs text-white/55">
+            {visionConfig.provider} / {visionConfig.model}
+          </span>
+        </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
+function VisionProviderSettings({ t }: { t: any }) {
+  return (
+    <SettingsSection title={uiMessage('settings.vision-capable-providers.40ab375ce2')} icon={<Camera size={18} className="text-cyan-300" />}>
+      <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/45">
+        {uiMessage('settings.vision-provider-description.77b9f301aa')}
+      </p>
+      <div className="border-y border-white/10">
+        <VisionProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI Vision" providerId="openai" models={['gpt-4o', 'gpt-4o-mini']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
+        <VisionProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="Google Gemini Vision" providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={uiMessage('settings.enter-gemini-api-key.4295b94e77')} serverKey="GEMINI_API_KEY" t={t} />
+        <VisionProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao Vision (Ark)" providerId="ark" models={['doubao-1-5-vision-pro-32k']} placeholder={uiMessage('settings.enter-ark-api-key.9f82bf67e1')} serverKey="ARK_API_KEY" t={t} />
+        <VisionProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen-VL / DashScope" providerId="qwen" models={['qwen-vl-max']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
+        <VisionLocalProviderRow
+          icon={<Cpu size={18} className="text-emerald-400" />}
+          label="Ollama Local Vision"
+          providerId="ollama"
+          endpoint="/api/ollama/config"
+          storageKey="lumi_ollama_url"
+          defaultUrl="http://127.0.0.1:11434"
+          defaultModel="qwen2.5vl:7b"
+          suggestions={['qwen2.5vl:7b', 'minicpm-v:8b', 'llama3.2-vision:11b']}
+          t={t}
+        />
+        <VisionLocalProviderRow
+          icon={<Cpu size={18} className="text-amber-400" />}
+          label="LM Studio Local Vision"
+          providerId="lmstudio"
+          endpoint="/api/lmstudio/config"
+          storageKey="lumi_lmstudio_url"
+          defaultUrl="http://127.0.0.1:1234"
+          defaultModel="local-vision-model"
+          suggestions={['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b']}
+          t={t}
+        />
+        <VisionRelayProviderRow t={t} />
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -1468,7 +1562,12 @@ const DEFAULT_GENERATION_PREFERENCES: GenerationPreferences = {
   video: {
     provider: 'qwen',
     model: 'wanx2.1-t2v-turbo',
-    models: { qwen: 'wanx2.1-t2v-turbo' },
+    models: {
+      qwen: 'wanx2.1-t2v-turbo',
+      minimax: 'MiniMax-Hailuo-2.3',
+      siliconflow: 'Wan-AI/Wan2.2-T2V-A14B',
+      openai: 'sora-2',
+    },
   },
 };
 
@@ -1477,6 +1576,22 @@ const GENERATION_MODEL_OPTIONS: Record<string, string[]> = {
   qwenImage: ['wan2.2-t2i-plus'],
   siliconflowImage: ['Kwai-Kolors/Kolors', 'stabilityai/stable-diffusion-3-5-large'],
   qwenVideo: ['wanx2.1-t2v-turbo', 'wanx2.1-t2v-plus'],
+  minimaxVideo: ['MiniMax-Hailuo-2.3', 'MiniMax-Hailuo-02'],
+  siliconflowVideo: ['Wan-AI/Wan2.2-T2V-A14B', 'Wan-AI/Wan2.1-T2V-14B-720P', 'Wan-AI/Wan2.1-T2V-14B-720P-Turbo'],
+  openaiVideo: ['sora-2', 'sora-2-pro'],
+};
+
+const IMAGE_GENERATION_PROVIDERS: Record<string, { label: string; models: string[] }> = {
+  openai: { label: 'OpenAI', models: GENERATION_MODEL_OPTIONS.openai },
+  qwen: { label: 'Qwen / DashScope', models: GENERATION_MODEL_OPTIONS.qwenImage },
+  siliconflow: { label: 'SiliconFlow', models: GENERATION_MODEL_OPTIONS.siliconflowImage },
+};
+
+const VIDEO_GENERATION_PROVIDERS: Record<string, { label: string; models: string[] }> = {
+  qwen: { label: 'Qwen / DashScope', models: GENERATION_MODEL_OPTIONS.qwenVideo },
+  minimax: { label: 'MiniMax', models: GENERATION_MODEL_OPTIONS.minimaxVideo },
+  siliconflow: { label: 'SiliconFlow', models: GENERATION_MODEL_OPTIONS.siliconflowVideo },
+  openai: { label: 'OpenAI', models: GENERATION_MODEL_OPTIONS.openaiVideo },
 };
 
 function GenerationModelInput({
@@ -1492,19 +1607,22 @@ function GenerationModelInput({
   options: string[];
   onChange: (value: string) => void;
 }) {
+  const modelOptions = Array.from(new Set([value, ...options].map(option => option.trim()).filter(Boolean)));
   return (
     <label className="grid gap-2 md:grid-cols-[150px_minmax(0,1fr)] md:items-center">
       <span className="text-xs font-bold text-white/55">{label}</span>
-      <span>
-        <input
+      <span className="relative">
+        <select
+          id={id}
           value={value}
           onChange={event => onChange(event.target.value)}
-          list={id}
-          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-celestial-saturn/45"
-        />
-        <datalist id={id}>
-          {options.map(option => <option key={option} value={option} />)}
-        </datalist>
+          disabled={modelOptions.length === 0}
+          className="w-full appearance-none rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 pr-9 font-mono text-xs text-white outline-none focus:border-celestial-saturn/45 disabled:opacity-45"
+        >
+          {modelOptions.length === 0 && <option value="">{uiMessage('settings.no-models-configured.0c98ec7051')}</option>}
+          {modelOptions.map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+        <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/35" />
       </span>
     </label>
   );
@@ -1537,7 +1655,20 @@ function GenerativeModelsPage({ t }: { t: any }) {
       image: {
         ...previous.image,
         provider,
-        model: provider === 'auto' ? '' : previous.image.models[provider] || '',
+        model: provider === 'auto'
+          ? ''
+          : previous.image.models[provider] || IMAGE_GENERATION_PROVIDERS[provider]?.models[0] || '',
+      },
+    }));
+  };
+
+  const setVideoProvider = (provider: string) => {
+    setPreferences(previous => ({
+      ...previous,
+      video: {
+        ...previous.video,
+        provider,
+        model: previous.video.models[provider] || VIDEO_GENERATION_PROVIDERS[provider]?.models[0] || '',
       },
     }));
   };
@@ -1575,13 +1706,12 @@ function GenerativeModelsPage({ t }: { t: any }) {
 
   if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
 
+  const imageProvider = IMAGE_GENERATION_PROVIDERS[preferences.image.provider];
+  const videoProvider = VIDEO_GENERATION_PROVIDERS[preferences.video.provider];
+
   return (
     <div className="space-y-8">
       <SettingsSection title={uiMessage('settings.generative-models.3ef22638d1')} icon={<Sparkle size={18} className="text-celestial-saturn" />}>
-        <p className="mb-5 max-w-2xl text-sm leading-relaxed text-white/45">
-          {uiMessage('settings.generative-models-description.57367bb3cc')}
-        </p>
-
         <div className="divide-y divide-white/10 border-y border-white/10">
           <section className="py-5">
             <div className="mb-4 grid gap-2 md:grid-cols-[150px_minmax(0,1fr)] md:items-center">
@@ -1600,29 +1730,15 @@ function GenerativeModelsPage({ t }: { t: any }) {
                 <option value="siliconflow">SiliconFlow</option>
               </select>
             </div>
-            <div className="space-y-3">
+            {imageProvider && (
               <GenerationModelInput
-                id="generation-openai-image-models"
-                label="OpenAI"
-                value={preferences.image.models.openai || ''}
-                options={GENERATION_MODEL_OPTIONS.openai}
-                onChange={model => setRoleModel('image', 'openai', model)}
+                id={`generation-${preferences.image.provider}-image-model`}
+                label={imageProvider.label}
+                value={preferences.image.models[preferences.image.provider] || preferences.image.model}
+                options={imageProvider.models}
+                onChange={model => setRoleModel('image', preferences.image.provider, model)}
               />
-              <GenerationModelInput
-                id="generation-qwen-image-models"
-                label="Qwen / DashScope"
-                value={preferences.image.models.qwen || ''}
-                options={GENERATION_MODEL_OPTIONS.qwenImage}
-                onChange={model => setRoleModel('image', 'qwen', model)}
-              />
-              <GenerationModelInput
-                id="generation-siliconflow-image-models"
-                label="SiliconFlow"
-                value={preferences.image.models.siliconflow || ''}
-                options={GENERATION_MODEL_OPTIONS.siliconflowImage}
-                onChange={model => setRoleModel('image', 'siliconflow', model)}
-              />
-            </div>
+            )}
           </section>
 
           <section className="py-5">
@@ -1633,19 +1749,23 @@ function GenerativeModelsPage({ t }: { t: any }) {
               </div>
               <select
                 value={preferences.video.provider}
-                disabled
-                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white/70 outline-none disabled:cursor-not-allowed"
+                onChange={event => setVideoProvider(event.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
               >
-                <option value="qwen">Qwen / DashScope</option>
+                {Object.entries(VIDEO_GENERATION_PROVIDERS).map(([provider, definition]) => (
+                  <option key={provider} value={provider}>{definition.label}</option>
+                ))}
               </select>
             </div>
-            <GenerationModelInput
-              id="generation-qwen-video-models"
-              label="Qwen / DashScope"
-              value={preferences.video.models.qwen || preferences.video.model}
-              options={GENERATION_MODEL_OPTIONS.qwenVideo}
-              onChange={model => setRoleModel('video', 'qwen', model)}
-            />
+            {videoProvider && (
+              <GenerationModelInput
+                id={`generation-${preferences.video.provider}-video-model`}
+                label={videoProvider.label}
+                value={preferences.video.models[preferences.video.provider] || preferences.video.model}
+                options={videoProvider.models}
+                onChange={model => setRoleModel('video', preferences.video.provider, model)}
+              />
+            )}
           </section>
         </div>
 
@@ -1656,37 +1776,41 @@ function GenerativeModelsPage({ t }: { t: any }) {
           </Button>
         </div>
       </SettingsSection>
-
-      <SettingsSection title={uiMessage('settings.generation-model-providers.b4f1c95162')} icon={<Cloud size={18} className="text-cyan-300" />}>
-        <p className="mb-4 max-w-2xl text-sm leading-relaxed text-white/45">
-          {uiMessage('settings.generation-model-providers-description.a548399017')}
-        </p>
-        <div className="divide-y divide-white/10 border-y border-white/10">
-          <ApiKeyField
-            compact
-            icon={<Sparkle size={18} className="text-rose-300" />}
-            label="MiniMax"
-            placeholder="sk-..."
-            storageKey="lumi_minimax_key"
-            serverKey="MINIMAX_API_KEY"
-            consoleUrl="https://platform.minimaxi.com"
-            hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')}
-            t={t}
-          />
-          <ApiKeyField
-            compact
-            icon={<Sparkle size={18} className="text-emerald-300" />}
-            label="SiliconFlow"
-            placeholder="sk-..."
-            storageKey="lumi_siliconflow_key"
-            serverKey="SILICONFLOW_API_KEY"
-            consoleUrl="https://cloud.siliconflow.cn"
-            hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')}
-            t={t}
-          />
-        </div>
-      </SettingsSection>
     </div>
+  );
+}
+
+function GenerationProviderSettings({ t }: { t: any }) {
+  return (
+    <SettingsSection title={uiMessage('settings.generation-model-providers.b4f1c95162')} icon={<Cloud size={18} className="text-cyan-300" />}>
+      <p className="mb-4 max-w-2xl text-sm leading-relaxed text-white/45">
+        {uiMessage('settings.generation-model-providers-description.a548399017')}
+      </p>
+      <div className="border-y border-white/10">
+        <ApiKeyField
+          compact
+          icon={<Sparkle size={18} className="text-rose-300" />}
+          label="MiniMax"
+          placeholder="sk-..."
+          storageKey="lumi_minimax_key"
+          serverKey="MINIMAX_API_KEY"
+          consoleUrl="https://platform.minimaxi.com"
+          hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')}
+          t={t}
+        />
+        <ApiKeyField
+          compact
+          icon={<Sparkle size={18} className="text-emerald-300" />}
+          label="SiliconFlow"
+          placeholder="sk-..."
+          storageKey="lumi_siliconflow_key"
+          serverKey="SILICONFLOW_API_KEY"
+          consoleUrl="https://cloud.siliconflow.cn"
+          hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')}
+          t={t}
+        />
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -1857,17 +1981,514 @@ function WorldActionModelPage({ t }: { t: any }) {
 function WorldModelsPage({ t }: { t: any }) {
   return (
     <div className="space-y-8">
-      <div className="border-b border-white/10 pb-5">
-        <div className="flex items-center gap-2">
-          <Globe size={20} className="text-cyan-300" />
-          <h2 className="text-lg font-semibold text-white">{uiMessage('settings.world-model.67c5d91de2')}</h2>
-        </div>
-        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-white/45">
-          {uiMessage('settings.world-model-overview.a8194dcb51')}
-        </p>
-      </div>
-      <VisionModelPage t={t} />
+      <VisionRoleSettings t={t} />
       <WorldActionModelPage t={t} />
+    </div>
+  );
+}
+
+type EmbeddingModelSelection = {
+  provider: string;
+  model: string;
+  fallbackProvider: string;
+  fallbackModel: string;
+};
+
+type RerankModelSelection = {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  topN: number;
+};
+
+type RetrievalModelPreferences = {
+  embedding: EmbeddingModelSelection;
+  rerank: RerankModelSelection;
+};
+
+const DEFAULT_RETRIEVAL_MODEL_PREFERENCES: RetrievalModelPreferences = {
+  embedding: {
+    provider: 'openai',
+    model: 'text-embedding-3-small',
+    fallbackProvider: 'ollama',
+    fallbackModel: 'nomic-embed-text',
+  },
+  rerank: {
+    enabled: false,
+    provider: 'siliconflow',
+    model: 'Qwen/Qwen3-Reranker-8B',
+    topN: 5,
+  },
+};
+
+const EMBEDDING_MODEL_PROVIDERS = ['openai', 'qwen', 'siliconflow', 'ollama', 'lmstudio', 'relay'];
+const RERANK_MODEL_PROVIDERS = ['siliconflow'];
+
+const EMBEDDING_MODELS: Record<string, string[]> = {
+  openai: ['text-embedding-3-small', 'text-embedding-3-large'],
+  qwen: ['text-embedding-v4', 'text-embedding-v3'],
+  siliconflow: ['Qwen/Qwen3-Embedding-8B', 'Qwen/Qwen3-Embedding-4B', 'Qwen/Qwen3-Embedding-0.6B'],
+  ollama: ['nomic-embed-text', 'mxbai-embed-large'],
+  lmstudio: ['text-embedding-nomic-embed-text-v1.5'],
+  relay: ['text-embedding-3-small'],
+};
+
+const RERANK_MODELS: Record<string, string[]> = {
+  siliconflow: ['Qwen/Qwen3-Reranker-8B', 'Qwen/Qwen3-Reranker-4B', 'Qwen/Qwen3-Reranker-0.6B'],
+};
+
+function retrievalProviderLabel(provider: string): string {
+  const labels: Record<string, string> = {
+    '': uiMessage('settings.no-fallback.532319d005'),
+    openai: 'OpenAI',
+    qwen: 'Qwen / DashScope',
+    siliconflow: 'SiliconFlow',
+    ollama: 'Ollama Local',
+    lmstudio: 'LM Studio Local',
+    relay: 'OpenAI-Compatible',
+  };
+  return labels[provider] || provider;
+}
+
+function RetrievalModelSettings() {
+  const [preferences, setPreferences] = useState<RetrievalModelPreferences>(DEFAULT_RETRIEVAL_MODEL_PREFERENCES);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testMessage, setTestMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/preferences/retrieval-model')
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        return body;
+      })
+      .then(body => { if (!cancelled) setPreferences(body as RetrievalModelPreferences); })
+      .catch(error => toast.error(error?.message || uiMessage('settings.failed-to-load-model-roles.2db04d5ff2')))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const setEmbedding = (patch: Partial<EmbeddingModelSelection>) => {
+    setTestMessage('');
+    setPreferences(previous => ({
+      ...previous,
+      embedding: { ...previous.embedding, ...patch },
+    }));
+  };
+
+  const setRerank = (patch: Partial<RerankModelSelection>) => {
+    setTestMessage('');
+    setPreferences(previous => ({
+      ...previous,
+      rerank: { ...previous.rerank, ...patch },
+    }));
+  };
+
+  const setProvider = (provider: string) => {
+    const model = EMBEDDING_MODELS[provider]?.[0] || '';
+    setEmbedding({ provider, model });
+  };
+
+  const setFallbackProvider = (fallbackProvider: string) => {
+    const fallbackModel = fallbackProvider ? EMBEDDING_MODELS[fallbackProvider]?.[0] || '' : '';
+    setEmbedding({ fallbackProvider, fallbackModel });
+  };
+
+  const setRerankProvider = (provider: string) => {
+    setRerank({ provider, model: RERANK_MODELS[provider]?.[0] || '' });
+  };
+
+  const save = async (showToast = true): Promise<boolean> => {
+    setSaving(true);
+    try {
+      const response = await apiFetch('/api/preferences/retrieval-model', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(preferences),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      setPreferences(body as RetrievalModelPreferences);
+      if (showToast) toast.success(uiMessage('settings.model-role-saved.48ed509208'));
+      return true;
+    } catch (error: any) {
+      toast.error(error?.message || uiMessage('settings.failed-to-save-model-role.f325b221b0'));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const test = async () => {
+    if (!(await save(false))) return;
+    setTesting(true);
+    setTestMessage('');
+    try {
+      const response = await apiFetch('/api/retrieval-model/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.ok === false) throw new Error(body.error || `HTTP ${response.status}`);
+      const embeddingLatency = Number(body.embedding?.latencyMs) || 0;
+      const rerankStatus = body.rerank?.enabled
+        ? `Rerank ${Number(body.rerank?.latencyMs) || 0} ms`
+        : `Rerank ${uiMessage('settings.disabled.2caae825fe')}`;
+      setTestMessage(`Embedding ${embeddingLatency} ms · ${rerankStatus}`);
+    } catch (error: any) {
+      setTestMessage(error?.message || uiMessage('settings.model-role-test-failed.6f17ba0837'));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
+
+  return (
+    <SettingsSection title={uiMessage('settings.retrieval-model-role.7d25a85198')} icon={<Search size={18} className="text-emerald-300" />}>
+      <p className="max-w-3xl text-sm leading-relaxed text-white/45">
+        {uiMessage('settings.knowledge-retrieval-description.56e971d4a2')}
+      </p>
+      <div className="divide-y divide-white/10 border-y border-white/10">
+        <section className="space-y-4 py-5">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Embedding</h3>
+            <p className="mt-1 text-xs leading-relaxed text-white/40">{uiMessage('settings.embedding-role-description.73576dd2ab')}</p>
+          </div>
+          <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+            <span className="text-xs font-bold text-white/55">{uiMessage('settings.primary-model.78ee8a421a')}</span>
+            <select value={preferences.embedding.provider} onChange={event => setProvider(event.target.value)} className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none">
+              {EMBEDDING_MODEL_PROVIDERS.map(provider => <option key={provider} value={provider}>{retrievalProviderLabel(provider)}</option>)}
+            </select>
+          </label>
+          <GenerationModelInput
+            id={`embedding-${preferences.embedding.provider}-model`}
+            label={uiMessage('settings.model.44c0cd4289')}
+            value={preferences.embedding.model}
+            options={EMBEDDING_MODELS[preferences.embedding.provider] || []}
+            onChange={model => setEmbedding({ model })}
+          />
+          <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+            <span className="text-xs font-bold text-white/55">{uiMessage('settings.fallback-model.562ec1697f')}</span>
+            <select value={preferences.embedding.fallbackProvider} onChange={event => setFallbackProvider(event.target.value)} className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none">
+              <option value="">{retrievalProviderLabel('')}</option>
+              {EMBEDDING_MODEL_PROVIDERS.filter(provider => provider !== preferences.embedding.provider).map(provider => <option key={provider} value={provider}>{retrievalProviderLabel(provider)}</option>)}
+            </select>
+          </label>
+          {preferences.embedding.fallbackProvider && (
+            <GenerationModelInput
+              id={`embedding-${preferences.embedding.fallbackProvider}-fallback-model`}
+              label={uiMessage('settings.fallback-model-id.31f402c7ca')}
+              value={preferences.embedding.fallbackModel}
+              options={EMBEDDING_MODELS[preferences.embedding.fallbackProvider] || []}
+              onChange={fallbackModel => setEmbedding({ fallbackModel })}
+            />
+          )}
+        </section>
+
+        <section className="space-y-4 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Rerank</h3>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/40">{uiMessage('settings.rerank-role-description.8eac1d6897')}</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={preferences.rerank.enabled}
+              aria-label={uiMessage('settings.enable-rerank.17ba5b1376')}
+              onClick={() => setRerank({ enabled: !preferences.rerank.enabled })}
+              className={`h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors ${preferences.rerank.enabled ? 'bg-emerald-500' : 'bg-white/15'}`}
+            >
+              <span className={`block h-5 w-5 rounded-full bg-white transition-transform ${preferences.rerank.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+          {preferences.rerank.enabled && (
+            <>
+              <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+                <span className="text-xs font-bold text-white/55">{uiMessage('settings.primary-model.78ee8a421a')}</span>
+                <select value={preferences.rerank.provider} onChange={event => setRerankProvider(event.target.value)} className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none">
+                  {RERANK_MODEL_PROVIDERS.map(provider => <option key={provider} value={provider}>{retrievalProviderLabel(provider)}</option>)}
+                </select>
+              </label>
+              <GenerationModelInput
+                id={`rerank-${preferences.rerank.provider}-model`}
+                label={uiMessage('settings.model.44c0cd4289')}
+                value={preferences.rerank.model}
+                options={RERANK_MODELS[preferences.rerank.provider] || []}
+                onChange={model => setRerank({ model })}
+              />
+              <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+                <span className="text-xs font-bold text-white/55">{uiMessage('settings.rerank-top-n.5fa98399c8')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={preferences.rerank.topN}
+                  onChange={event => setRerank({ topN: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })}
+                  className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-sm text-white outline-none"
+                />
+              </label>
+            </>
+          )}
+        </section>
+      </div>
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <Button onClick={test} disabled={saving || testing || !preferences.embedding.model.trim() || (preferences.rerank.enabled && !preferences.rerank.model.trim())} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
+          {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
+          {uiMessage('settings.test.9408c1ff3a')}
+        </Button>
+        <Button onClick={() => { void save(); }} disabled={saving || !preferences.embedding.model.trim() || (preferences.rerank.enabled && !preferences.rerank.model.trim())} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
+          {saving ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Save size={15} className="mr-2" />}
+          {uiMessage('settings.save.ec8e6d5819')}
+        </Button>
+      </div>
+      {testMessage && <p className="mt-3 text-right text-xs text-white/55">{testMessage}</p>}
+    </SettingsSection>
+  );
+}
+
+function dataSourceFieldLabel(field: ChinaLegalDataSourceField): string {
+  if (field.keyName.endsWith('_APP_KEY')) return uiMessage('settings.app-key.48d8312e26');
+  if (field.keyName.endsWith('_SECRET_KEY')) return uiMessage('settings.secret-key.e44bdd0d82');
+  if (field.keyName.endsWith('_API_KEY')) return uiMessage('settings.api-key.8f242c55e5');
+  if (field.keyName.endsWith('_TOKEN')) return uiMessage('settings.access-token.9e3cac6ad8');
+  if (field.keyName.endsWith('_MCP_URL')) return uiMessage('settings.mcp-url.6ddedb1520');
+  if (field.label === 'API Base URL') return uiMessage('settings.api-base-url.f17b3d297b');
+  return uiMessage('settings.base-url.f44ed563c9');
+}
+
+function isDataSourceConfigured(source: ChinaLegalDataSourceDefinition, status: Record<string, boolean>): boolean {
+  if (source.id === 'qichacha') return Boolean(status.QICHACHA_APP_KEY && status.QICHACHA_SECRET_KEY);
+  if (source.id === 'tianyancha') return Boolean(status.TIANYANCHA_API_KEY);
+  if (source.id === 'pkulaw') {
+    return Boolean((status.PKULAW_API_KEY || status.PKULAW_TOKEN) && (status.PKULAW_BASE_URL || status.PKULAW_MCP_URL));
+  }
+  if (source.id === 'farui') return Boolean(status.FARUI_API_KEY && status.FARUI_BASE_URL);
+  return source.fields.some(field => status[field.keyName]);
+}
+
+function DataSourceConnections({ t }: { t: any }) {
+  const isZh = t?.langCode !== 'en';
+  const copy = chinaLegalCopy(isZh ? 'zh' : 'en');
+  const [status, setStatus] = useState<Record<string, boolean>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busySource, setBusySource] = useState('');
+
+  const refreshStatus = async () => {
+    const next = await getSavedKeyStatus();
+    setStatus(next);
+  };
+
+  useEffect(() => {
+    void refreshStatus().catch(() => {});
+  }, []);
+
+  const clearDrafts = (source: ChinaLegalDataSourceDefinition) => {
+    setDrafts(previous => {
+      const next = { ...previous };
+      for (const field of source.fields) delete next[field.keyName];
+      return next;
+    });
+  };
+
+  const saveSource = async (source: ChinaLegalDataSourceDefinition) => {
+    const keys = Object.fromEntries(
+      source.fields
+        .map(field => [field.keyName, (drafts[field.keyName] || '').trim()] as const)
+        .filter(([, value]) => value.length > 0),
+    );
+    if (Object.keys(keys).length === 0) return;
+    setBusySource(source.id);
+    try {
+      await saveServerKeys(keys);
+      clearDrafts(source);
+      await refreshStatus();
+      toast.success(uiMessage('legal-data-sources-settings.legal-data-source-key-saved.aa9bdea122'));
+    } catch (error: any) {
+      toast.error(error?.message || uiMessage('legal-data-sources-settings.save-failed.5b5ea27d01'));
+    } finally {
+      setBusySource('');
+    }
+  };
+
+  const removeSource = async (source: ChinaLegalDataSourceDefinition) => {
+    setBusySource(source.id);
+    try {
+      await saveServerKeys(Object.fromEntries(source.fields.map(field => [field.keyName, ''])));
+      clearDrafts(source);
+      await refreshStatus();
+      toast.success(uiMessage('legal-data-sources-settings.legal-data-source-key-removed.a6062630fb'));
+    } catch (error: any) {
+      toast.error(error?.message || uiMessage('legal-data-sources-settings.remove-failed.415d663686'));
+    } finally {
+      setBusySource('');
+    }
+  };
+
+  return (
+    <SettingsSection title={uiMessage('settings.data-sources.9f7efbc2df')} icon={<Database size={18} className="text-cyan-300" />}>
+      <p className="mb-4 text-sm leading-relaxed text-white/45">
+        {uiMessage('settings.data-sources-description.68775d0d92')}
+      </p>
+      <div className="border-y border-white/10">
+        {CHINA_LEGAL_DATA_SOURCES.map(source => {
+          const providerCopy = copy.dataSources[source.id];
+          const configured = isDataSourceConfigured(source, status);
+          const busy = busySource === source.id;
+          const hasDraft = source.fields.some(field => Boolean((drafts[field.keyName] || '').trim()));
+          const hasStoredField = source.fields.some(field => status[field.keyName]);
+          return (
+            <SettingsDisclosure
+              key={source.id}
+              icon={<Database size={18} className="text-cyan-300" />}
+              label={providerCopy.label}
+              badges={(
+                <span className={`rounded-md border px-2 py-1 text-[11px] font-medium ${configured ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-white/45'}`}>
+                  {configured
+                    ? uiMessage('legal-data-sources-settings.configured.b0740e7ebe')
+                    : uiMessage('legal-data-sources-settings.not-configured.8b6c7ecc15')}
+                </span>
+              )}
+            >
+              <div className="space-y-4">
+                <p className="text-xs leading-5 text-white/45">{providerCopy.boundary}</p>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {source.fields.map(field => {
+                    const fieldConfigured = Boolean(status[field.keyName]);
+                    const value = drafts[field.keyName] || '';
+                    return (
+                      <label key={field.keyName} htmlFor={`data-source-${field.keyName}`} className="grid min-w-0 gap-2">
+                        <span className="flex items-center justify-between gap-2 text-xs font-medium text-white/60">
+                          <span>
+                            {dataSourceFieldLabel(field)}
+                            {field.required && <span className="ml-1 text-cyan-200">*</span>}
+                          </span>
+                          {fieldConfigured && <CheckCircle size={13} className="shrink-0 text-emerald-300" />}
+                        </span>
+                        <input
+                          id={`data-source-${field.keyName}`}
+                          type={field.kind === 'secret' ? 'password' : 'text'}
+                          value={value}
+                          onChange={event => setDrafts(previous => ({ ...previous, [field.keyName]: event.target.value }))}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter') void saveSource(source);
+                          }}
+                          placeholder={fieldConfigured && !value
+                            ? uiMessage('legal-data-sources-settings.saved-type-to-replace.bbdf5a8d1e')
+                            : field.placeholder}
+                          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/25 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-300/35"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap justify-end gap-2 border-t border-white/8 pt-4">
+                  <Button
+                    onClick={() => { void removeSource(source); }}
+                    disabled={busy || (!hasStoredField && !hasDraft)}
+                    className="h-9 rounded-lg border border-red-400/20 bg-red-500/10 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/15 disabled:opacity-30"
+                  >
+                    {busy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Trash2 size={14} className="mr-2" />}
+                    {uiMessage('settings.remove-provider.47319e8331')}
+                  </Button>
+                  <Button
+                    onClick={() => { void saveSource(source); }}
+                    disabled={busy || !hasDraft}
+                    className="h-9 rounded-lg bg-celestial-saturn px-4 text-xs font-semibold text-black hover:bg-yellow-300 disabled:opacity-30"
+                  >
+                    {busy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Save size={14} className="mr-2" />}
+                    {uiMessage('settings.save-provider.2882e9668b')}
+                  </Button>
+                </div>
+              </div>
+            </SettingsDisclosure>
+          );
+        })}
+      </div>
+    </SettingsSection>
+  );
+}
+
+function ApplicationConnections({ t }: { t: any }) {
+  return (
+    <SettingsSection title={uiMessage('settings.application-service-connections.4c05e32d49')} icon={<FileText size={18} className="text-sky-300" />}>
+      <div className="border-y border-white/10">
+        <ApiKeyField compact icon={<Wrench size={18} className="text-white/70" />} label="GitHub" placeholder="Personal access token" storageKey="lumi_github_token" serverKey="GITHUB_TOKEN" t={t} />
+        <ApiKeyField compact icon={<FileText size={18} className="text-white/70" />} label="Notion" placeholder="Integration token" storageKey="lumi_notion_api_key" serverKey="NOTION_API_KEY" t={t} />
+        <ApiKeyField compact icon={<Sparkle size={18} className="text-pink-300" />} label="Figma" placeholder="Access token" storageKey="lumi_figma_access_token" serverKey="FIGMA_ACCESS_TOKEN" t={t} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function ExternalConnectionsPage({
+  t,
+  initialTab = 'data-sources',
+}: {
+  t: any;
+  initialTab?: 'data-sources' | 'applications';
+}) {
+  const [tab, setTab] = useState<'data-sources' | 'applications'>(initialTab);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
+
+  return (
+    <div className="space-y-6">
+      <div className="border-b border-white/10 pb-4">
+        <h2 className="text-lg font-semibold text-white">
+          {uiMessage('settings.external-connections.a83a9fc1d2')}
+        </h2>
+        <div className="mt-4 flex gap-5" role="tablist" aria-label={uiMessage('settings.external-connections.a83a9fc1d2')}>
+          {([
+            { id: 'data-sources', label: uiMessage('settings.data-sources.9f7efbc2df'), icon: <Database size={15} /> },
+            { id: 'applications', label: uiMessage('settings.applications.36d70e9597'), icon: <FileText size={15} /> },
+          ] as const).map(item => {
+            const active = tab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(item.id)}
+                className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
+                  active
+                    ? 'border-celestial-saturn text-white'
+                    : 'border-transparent text-white/45 hover:text-white/75'
+                }`}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {tab === 'data-sources'
+        ? <DataSourceConnections t={t} />
+        : <ApplicationConnections t={t} />}
+    </div>
+  );
+}
+
+function ToolRuntimeConnections({ t }: { t: any }) {
+  return (
+    <div className="space-y-8">
+      <SettingsSection title={uiMessage('settings.tool-runtime-connections.3942c3052f')} icon={<Cpu size={18} className="text-violet-300" />}>
+        <div className="border-y border-white/10">
+          <ApiKeyField compact icon={<Cpu size={18} className="text-violet-300" />} label="E2B Code Sandbox" placeholder="API Key" storageKey="lumi_e2b_api_key" serverKey="E2B_API_KEY" t={t} />
+        </div>
+      </SettingsSection>
+      <MCPSettings t={t} />
     </div>
   );
 }
@@ -1884,40 +2505,136 @@ interface ProviderRuntimeStatus {
   } | null;
 }
 
-function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
+function AIProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
+  const [scope, setScope] = useState<'cloud' | 'local'>('cloud');
+  return (
+    <div className="space-y-6">
+      <div className="border-b border-white/10 pb-4">
+        <h2 className="text-lg font-semibold text-white">{uiMessage('settings.ai-providers.38c3f21901')}</h2>
+        <div className="mt-4 flex gap-5">
+          {([
+            { id: 'cloud', label: uiMessage('settings.cloud-providers.134b71a80d') },
+            { id: 'local', label: uiMessage('settings.local-compatible.4fda3a8732') },
+          ] as const).map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setScope(item.id)}
+              className={`relative pb-2 text-sm font-medium transition-colors ${scope === item.id ? 'text-white' : 'text-white/45 hover:text-white/70'}`}
+            >
+              {item.label}
+              {scope === item.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-celestial-saturn" />}
+            </button>
+          ))}
+        </div>
+      </div>
+      {scope === 'cloud' ? <CloudProviderSettings t={t} providerStatus={providerStatus} /> : <LocalProviderSettings t={t} />}
+    </div>
+  );
+}
+
+const REASONING_MODEL_OPTIONS: Record<string, string[]> = {
+  deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'],
+  qwen: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
+  gemini: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+  anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5'],
+  ark: ['doubao-seed-2-0-lite-260215', 'doubao-1-5-pro-32k', 'doubao-1-5-lite-32k'],
+  xiaomi: ['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-pro'],
+  kimi: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
+  glm: ['glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4-plus'],
+  relay: [],
+  ollama: [],
+  lmstudio: [],
+};
+
+function ReasoningRoleSettings({ t }: { t: any }) {
   const { aiConfig, updateAIConfig } = useApp();
+  const [model, setModel] = useState(aiConfig.model);
+  const [testing, setTesting] = useState(false);
+  const [testMessage, setTestMessage] = useState('');
+
+  useEffect(() => {
+    setModel(aiConfig.model);
+    setTestMessage('');
+  }, [aiConfig.model, aiConfig.provider]);
+
+  const configuredModel = (() => {
+    try {
+      const models = JSON.parse(localStorage.getItem('lumi_llm_models') || '{}');
+      return String(models[aiConfig.provider] || '');
+    } catch {
+      return '';
+    }
+  })();
+
+  const test = async () => {
+    if (!aiConfig.provider || !model.trim()) return;
+    setTesting(true);
+    setTestMessage('');
+    try {
+      const result = await runLLMConnectionTest(aiConfig.provider, model.trim());
+      setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
+    } catch (error: any) {
+      setTestMessage(error?.message || uiMessage('settings.live-call-failed.cd19d46055'));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <SettingsSection title={uiMessage('settings.reasoning-model-role.70c69a008d')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
+      <div className="space-y-4 border-y border-white/10 py-5">
+        <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+          <span className="text-xs font-bold text-white/55">{t.primaryReasoningBrain || uiMessage('settings.primary-reasoning-brain.5bdd279d51')}</span>
+          <select
+            value={aiConfig.provider}
+            onChange={event => updateAIConfig({ provider: event.target.value })}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
+          >
+            <option value="deepseek">DeepSeek</option>
+            <option value="qwen">Qwen / DashScope</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="ark">Doubao / Ark</option>
+            <option value="xiaomi">Xiaomi MiMo</option>
+            <option value="kimi">Kimi / Moonshot</option>
+            <option value="glm">GLM / Zhipu AI</option>
+            <option value="relay">{t.apiRelayLabel || 'OpenAI-Compatible'}</option>
+            <option value="ollama">Ollama Local</option>
+            <option value="lmstudio">LM Studio Local</option>
+          </select>
+        </label>
+        <GenerationModelInput
+          id={`reasoning-role-${aiConfig.provider}`}
+          label={uiMessage('settings.model.44c0cd4289')}
+          value={model}
+          options={[configuredModel, ...(REASONING_MODEL_OPTIONS[aiConfig.provider] || [])].filter(Boolean)}
+          onChange={value => { setModel(value); setTestMessage(''); }}
+        />
+      </div>
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <Button onClick={test} disabled={testing || !model.trim()} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
+          {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
+          {uiMessage('settings.test.9408c1ff3a')}
+        </Button>
+        <Button onClick={() => updateAIConfig({ model: model.trim() })} disabled={!model.trim() || model.trim() === aiConfig.model} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
+          <Save size={15} className="mr-2" />
+          {uiMessage('settings.save.ec8e6d5819')}
+        </Button>
+      </div>
+      {testMessage && <p className="mt-3 text-right text-xs text-white/55">{testMessage}</p>}
+    </SettingsSection>
+  );
+}
+
+function CloudProviderSettings({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
   const failedProbes = Object.entries(providerStatus)
     .filter(([, status]) => status.configured !== false && status.lastProbe?.ok === false);
   return (
     <div className="space-y-8">
-      <SettingsSection title={t.llmProviders || uiMessage('settings.llm-providers.8d18bc9417')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
-        <div className="mb-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-2">
-          <label className="text-xs font-black uppercase text-white/55 ml-1">{t.primaryReasoningBrain || uiMessage('settings.primary-reasoning-brain.5bdd279d51')}</label>
-          <div className="relative">
-            <select value={aiConfig.provider} onChange={(e) => updateAIConfig({ provider: e.target.value })}
-              className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm font-bold appearance-none cursor-pointer focus:border-celestial-saturn/50 outline-none">
-              <option value="deepseek">DeepSeek</option>
-              <option value="qwen">Qwen (DashScope)</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic Claude</option>
-               <option value="ark">Doubao (Ark)</option>
-               <option value="xiaomi">Xiaomi MiMo</option>
-               <option value="kimi">Kimi (Moonshot)</option>
-               <option value="glm">GLM (Zhipu AI)</option>
-               <option value="relay">{t.apiRelayLabel}</option>
-              <option value="ollama">Ollama (Local)</option>
-              <option value="lmstudio">LM Studio (Local)</option>
-            </select>
-            <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/45" />
-          </div>
-          <p className="text-[12px] text-white/45 px-1">{t?.activeModel || uiMessage('settings.active-model.774fc20779')}: <span className="text-white/40 font-mono">{aiConfig.model}</span> - {t?.changePerProvider || uiMessage('settings.adjust-the-model-in-the.80ce4e76ad')}</p>
-        </div>
-        <p className="text-sm text-white/40 max-w-xl mb-6">
-          {t.apiMatrixLLMDesc || uiMessage('settings.configure-api-keys-and-preferred.158e3e0be6')}
-        </p>
+      <SettingsSection title={uiMessage('settings.cloud-model-providers.55a86c3fed')}>
         {failedProbes.length > 0 && (
           <div className="mb-6 flex flex-wrap items-center gap-2 border-y border-red-400/15 py-3 text-xs text-red-200/80">
             <AlertTriangle size={14} />
@@ -1929,7 +2646,7 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
             ))}
           </div>
         )}
-        <div className="grid grid-cols-1 gap-6">
+        <div className="border-y border-white/10">
           <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="DeepSeek" providerId="deepseek" models={['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner']} placeholder="sk-..." serverKey="DEEPSEEK_API_KEY" t={t} />
           <LLMProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen / DashScope (Alibaba Cloud)" providerId="qwen" models={['qwen-plus', 'qwen-max', 'qwen-turbo']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
            <LLMProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao (Ark)" providerId="ark" models={['doubao-seed-2-0-lite-260215', 'doubao-1-5-pro-32k', 'doubao-1-5-lite-32k', 'doubao-1-5-vision-pro-32k']} placeholder={uiMessage('settings.enter-ark-api-key.9f82bf67e1')} serverKey="ARK_API_KEY" t={t} />
@@ -1939,12 +2656,24 @@ function LLMProvidersPage({ t, providerStatus }: { t: any; providerStatus: Recor
           <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label={`Google Gemini${providerStatus.gemini?.available ? ` (${providerStatus.gemini.model})` : ''}`} providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={providerStatus.gemini?.available ? (t.connectedViaEnv || uiMessage('settings.connected-via-environment.2dcffe5622')) : (t.noKeyConfigured || uiMessage('settings.no-key-configured.633defef78'))} serverKey="GEMINI_API_KEY" t={t} />
           <LLMProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI" providerId="openai" models={['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
           <LLMProviderRow icon={<Sparkle size={18} className="text-purple-400" />} label="Anthropic Claude" providerId="anthropic" models={['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5']} placeholder="sk-ant-..." serverKey="ANTHROPIC_API_KEY" t={t} />
-          <OllamaProviderRow t={t} />
-          <LmStudioProviderRow t={t} />
-          <RelayProviderRow t={t} />
+          <ApiKeyField compact icon={<Sparkle size={18} className="text-rose-300" />} label="MiniMax" placeholder="sk-..." storageKey="lumi_minimax_key" serverKey="MINIMAX_API_KEY" consoleUrl="https://platform.minimaxi.com" hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')} t={t} />
+          <ApiKeyField compact icon={<Sparkle size={18} className="text-emerald-300" />} label="SiliconFlow" placeholder="sk-..." storageKey="lumi_siliconflow_key" serverKey="SILICONFLOW_API_KEY" consoleUrl="https://cloud.siliconflow.cn" hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')} t={t} />
+          <ApiKeyField compact icon={<Volume2 size={18} className="text-emerald-300" />} label={t.doubaoSpeechLabel || 'Doubao Speech'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || uiMessage('settings.format-appid-accesstoken-get-both.c1d78f1a86')} t={t} />
         </div>
       </SettingsSection>
     </div>
+  );
+}
+
+function LocalProviderSettings({ t }: { t: any }) {
+  return (
+    <SettingsSection title={uiMessage('settings.local-compatible-providers.f6a71d6a1e')}>
+      <div className="border-y border-white/10">
+        <OllamaProviderRow t={t} />
+        <LmStudioProviderRow t={t} />
+        <RelayProviderRow t={t} />
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -2086,48 +2815,51 @@ function LocalLLMProviderRow({
     : { icon: 'text-amber-400', button: 'bg-amber-600 hover:bg-amber-500', focus: 'focus:border-amber-400/50' };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg"><Cpu size={18} className={accentClasses.icon} /></div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {detected && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.detected.6d745414bb')}</span>}
-        {aiConfig.provider === providerId && <span className="text-xs px-2 py-0.5 bg-celestial-saturn/10 border border-celestial-saturn/20 text-celestial-saturn rounded-full font-bold">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
-      <div className="flex gap-3">
+    <SettingsDisclosure
+      icon={<Cpu size={18} className={accentClasses.icon} />}
+      label={label}
+      defaultOpen={aiConfig.provider === providerId}
+      badges={<>
+        {detected && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.detected.6d745414bb')}</span>}
+        {aiConfig.provider === providerId && <span className="rounded-full border border-celestial-saturn/20 bg-celestial-saturn/10 px-2 py-0.5 text-[11px] font-semibold text-celestial-saturn">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
+      <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
           type="text"
           value={baseUrl}
           onChange={e => { setBaseUrl(e.target.value); setSaved(false); setDetected(false); setTestState('idle'); setTestMessage(''); }}
           onKeyDown={e => e.key === 'Enter' && handleDetect()}
           placeholder={defaultUrl}
-          className={`flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none transition-colors ${accentClasses.focus}`}
+          className={`h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors ${accentClasses.focus}`}
         />
         <Button
           onClick={handleDetect}
           disabled={checking || !baseUrl.trim()}
-          className={`h-[56px] px-5 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 transition-all ${accentClasses.button}`}
+          className={`h-11 rounded-lg px-4 text-xs font-semibold text-white transition-all disabled:opacity-30 ${accentClasses.button}`}
         >
           {checking ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.detect.333c762fe5')}
         </Button>
       </div>
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] font-black uppercase text-white/55 tracking-wider whitespace-nowrap">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
+      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)_auto_auto] sm:items-center">
+        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
         <input
           type="text"
           value={model}
           onChange={event => persistModel(event.target.value)}
           list={`local-llm-models-${providerId}`}
           placeholder={defaultModel}
-          className={`flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs font-mono font-bold outline-none ${accentClasses.focus}`}
+          className={`h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none ${accentClasses.focus}`}
         />
         <datalist id={`local-llm-models-${providerId}`}>
           {[...new Set([model, ...generationModels].filter(Boolean))].map(modelName => <option key={modelName} value={modelName} />)}
         </datalist>
-        <Button onClick={handleUse} disabled={!detected || !model.trim()} className="h-9 px-3 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-celestial-saturn/90">
+        <Button onClick={handleUse} disabled={!detected || !model.trim()} className="h-10 rounded-lg bg-celestial-saturn px-3 text-xs font-semibold text-black hover:bg-celestial-saturn/90 disabled:opacity-30">
           {uiMessage('settings.use.1ec0c92474')}
         </Button>
-        <Button onClick={handleTest} disabled={!detected || !model.trim() || testState === 'testing'} className="h-9 px-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 hover:bg-emerald-500/20">
+        <Button onClick={handleTest} disabled={!detected || !model.trim() || testState === 'testing'} className="h-10 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-30">
           {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
         </Button>
       </div>
@@ -2142,7 +2874,8 @@ function LocalLLMProviderRow({
       )}
       {error && !checking && <p className="text-xs text-amber-300/80">{error}</p>}
       {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-    </div>
+      </div>
+    </SettingsDisclosure>
   );
 }
 
@@ -2155,8 +2888,6 @@ function LmStudioProviderRow({ t }: { t?: any }) {
 }
 
 function VoiceServicesPage({ t }: { t: any }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   return (
     <div className="space-y-8">
       <SettingsSection title={t.audioOutput || uiMessage('settings.audio-voice-output.e1f3dc4c32')} icon={<Music size={18} className="text-celestial-saturn" />}>
@@ -2180,10 +2911,6 @@ function VoiceServicesPage({ t }: { t: any }) {
         <p className="text-sm text-white/40 max-w-xl mb-6">
           {t.voiceServicesDesc || uiMessage('settings.speech-recognition-asr-and-speech.4d604985a1')}
         </p>
-        <div className="grid grid-cols-1 gap-6">
-          <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || uiMessage('settings.format-appid-accesstoken-get-both.c1d78f1a86')} t={t} />
-          <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || uiMessage('settings.powers-qwen-asr-and-dashscope.519f4cb3da')} t={t} />
-        </div>
         <div className="mt-6 p-4 bg-white/5 rounded-xl border border-white/10">
           <div className="flex items-center justify-between">
             <div>
@@ -2212,7 +2939,21 @@ function VoiceServicesPage({ t }: { t: any }) {
   );
 }
 
-function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, compact = false, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, compact?: boolean, t?: any }) {
+function SpeechProviderSettings({ t }: { t: any }) {
+  return (
+    <SettingsSection title={uiMessage('settings.speech-model-providers.99e68f2051')} icon={<Mic size={18} className="text-emerald-300" />}>
+      <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/45">
+        {uiMessage('settings.speech-provider-description.ea8bf84041')}
+      </p>
+      <div className="border-y border-white/10">
+        <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="AppID:AccessToken" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" hint={t.doubaoSpeechHint || uiMessage('settings.format-appid-accesstoken-get-both.c1d78f1a86')} t={t} />
+        <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || uiMessage('settings.powers-qwen-asr-and-dashscope.519f4cb3da')} t={t} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, compact = false, secret = true, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, compact?: boolean, secret?: boolean, t?: any }) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [value, setValue] = useState(() => {
@@ -2265,34 +3006,36 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
   };
 
   return (
-    <div className={compact ? 'space-y-3 py-5' : 'space-y-4 rounded-3xl border border-white/5 bg-white/5 p-6'}>
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg">{icon}</div>
-        <label className="text-xs font-black uppercase tracking-widest text-white/50">{label}</label>
-        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-xs font-bold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {consoleUrl && (
-          <a href={consoleUrl} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-xs font-bold text-cyan-300/70 hover:text-cyan-200">
-            {uiMessage('settings.provider-console.f2138df9a1')} <ExternalLink size={12} />
-          </a>
-        )}
-        {saved && <CheckCircle size={14} className={consoleUrl ? 'text-green-400' : 'ml-auto text-green-400'} />}
-      </div>
-      <div className="flex gap-2">
+    <SettingsDisclosure
+      icon={icon}
+      label={label}
+      badges={<>
+        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
+      <div className="space-y-3">
+      {consoleUrl && (
+        <a href={consoleUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-300/70 hover:text-cyan-200">
+          {uiMessage('settings.provider-console.f2138df9a1')} <ExternalLink size={12} />
+        </a>
+      )}
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="relative flex-1">
           <input
             disabled={disabled}
-            type="password"
+            type={secret ? 'password' : 'text'}
             value={value}
             onChange={e => setValue(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSave()}
             placeholder={serverConfigured && !value ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server-type.3b51321a15')) : placeholder}
-            className="w-full bg-black/40 border border-white/10 rounded-xl p-4 pr-16 text-white font-mono text-sm outline-none focus:border-celestial-saturn/50 transition-colors disabled:opacity-50"
+            className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 pr-20 font-mono text-sm text-white outline-none transition-colors focus:border-celestial-saturn/50 disabled:opacity-50"
           />
           <button
             type="button"
             onClick={handleRemove}
             disabled={disabled || (!value && !serverConfigured)}
-            className="absolute right-2 top-2 h-10 px-3 bg-red-500/10 border border-red-500/20 rounded-lg text-[12px] font-bold uppercase tracking-tight text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+            className="absolute right-1.5 top-1.5 h-8 rounded-md border border-red-500/20 bg-red-500/10 px-2.5 text-[11px] font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
           >
             {t?.remove || uiMessage('settings.remove.78190c6054')}
           </button>
@@ -2300,13 +3043,14 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
         <Button
           onClick={handleSave}
           disabled={disabled || !value.trim()}
-          className="h-[56px] px-6 bg-celestial-saturn text-black rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-celestial-saturn/90 transition-all"
+          className="h-11 rounded-lg bg-celestial-saturn px-5 text-xs font-semibold text-black transition-all hover:bg-celestial-saturn/90 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
       </div>
       {hint && <p className="text-[12px] text-white/45 leading-relaxed">{hint}</p>}
-    </div>
+      </div>
+    </SettingsDisclosure>
   );
 }
 
@@ -2361,53 +3105,50 @@ function RelayProviderRow({ t }: { t?: any }) {
   };
 
   return (
-    <div className="p-6 bg-white/5 rounded-3xl border border-white/5 space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-white/5 rounded-lg"><Globe size={18} className="text-cyan-400" /></div>
-         <label className="text-xs font-black uppercase tracking-widest text-white/50">{t?.apiRelayLabel || 'API Relay'}</label>
-        {(serverKeyOk || serverUrlOk) && <span className="text-xs px-2 py-0.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-full font-bold">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400 ml-auto" />}
-      </div>
+    <SettingsDisclosure
+      icon={<Globe size={18} className="text-cyan-400" />}
+      label={t?.apiRelayLabel || 'API Relay'}
+      badges={<>
+        {(serverKeyOk || serverUrlOk) && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
+        {saved && <CheckCircle size={14} className="text-green-400" />}
+      </>}
+    >
       <div className="space-y-3">
-        <div className="flex gap-2">
-          <input
-            type="password"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSave()}
-            placeholder="API Key"
-            className="flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-cyan-400/50 transition-colors"
-          />
-        </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={baseUrl}
-            onChange={e => setBaseUrl(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSave()}
-            placeholder="https://your-relay.example.com/v1"
-            className="flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-white font-mono text-sm outline-none focus:border-cyan-400/50 transition-colors"
-          />
-        </div>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleSave()}
+          placeholder="API Key"
+          className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
+        />
+        <input
+          type="text"
+          value={baseUrl}
+          onChange={e => setBaseUrl(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleSave()}
+          placeholder="https://your-relay.example.com/v1"
+          className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
+        />
       </div>
-      <div className="flex gap-3">
+      <div className="mt-3 flex flex-wrap gap-2">
         <Button
           onClick={handleSave}
           disabled={!apiKey.trim() || !baseUrl.trim()}
-          className="h-[48px] px-6 bg-cyan-600 text-white rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cyan-500 transition-all"
+          className="h-10 rounded-lg bg-cyan-600 px-4 text-xs font-semibold text-white transition-all hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
           onClick={handleRemove}
           disabled={!apiKey && !serverKeyOk && !serverUrlOk}
-          className="h-[48px] px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-widest text-red-400 hover:bg-red-500/20 disabled:opacity-20 disabled:cursor-not-allowed transition-all"
+          className="h-10 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
       </div>
-      <p className="text-[12px] text-white/45 leading-relaxed">{uiMessage('settings.openai-compatible-api-relay-enter.b0d5520635')}</p>
-    </div>
+      <p className="mt-3 text-[12px] leading-relaxed text-white/45">{uiMessage('settings.openai-compatible-api-relay-enter.b0d5520635')}</p>
+    </SettingsDisclosure>
   );
 }
 
@@ -2682,17 +3423,17 @@ function AutonomousSettingsPanel({ t, operationMode }: { t: any; operationMode: 
   );
 }
 
-function SettingsSection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function SettingsSection({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        {icon}
-        <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{title}</h3>
+    <section className="space-y-5">
+      <div className="flex items-center gap-2.5">
+        {icon || null}
+        <h3 className="text-base font-semibold text-white/90">{title}</h3>
       </div>
       <div className="space-y-4">
         {children}
       </div>
-    </div>
+    </section>
   );
 }
 

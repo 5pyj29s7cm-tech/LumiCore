@@ -1,6 +1,8 @@
 import { readDB, writeDB } from '../../db_layer';
 import { Memory, MemoryQuery, MemoryType, MemoryTier, MemoryPerspective } from './types';
 import { applyMemoryFirewallMetadata, evaluateMemoryFirewall } from './firewall';
+import { generateConfiguredEmbedding, getEmbeddingRoute } from '../llm/embedding_provider';
+import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 
 function getMemoryStore(): Memory[] {
   const db = readDB();
@@ -14,16 +16,16 @@ function getMemoryStore(): Memory[] {
 const embeddingCache = new Map<string, number[]>();
 const EMBEDDING_CACHE_MAX = 500;
 
-function cacheEmbedding(text: string, vec: number[]) {
+function cacheEmbedding(key: string, vec: number[]) {
   if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
     const first = embeddingCache.keys().next().value;
     if (first) embeddingCache.delete(first);
   }
-  embeddingCache.set(text, vec);
+  embeddingCache.set(key, vec);
 }
 
-function getCachedEmbedding(text: string): number[] | undefined {
-  return embeddingCache.get(text);
+function getCachedEmbedding(key: string): number[] | undefined {
+  return embeddingCache.get(key);
 }
 
 /** Cosine similarity between two vectors */
@@ -39,41 +41,59 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-/** Generate embedding vector via OpenAI text-embedding-3-small. Returns null if API unavailable. */
-export async function generateEmbedding(text: string): Promise<number[] | null> {
-  // Check cache first
-  const cached = getCachedEmbedding(text);
+function matchesMemoryQueryFilters(memory: Memory, query: MemoryQuery): boolean {
+  if (query.userId && memory.userId !== query.userId) return false;
+  if (query.agentId !== undefined && (memory.agentId || '') !== query.agentId) return false;
+  if (query.type && memory.type !== query.type) return false;
+  if (query.minConfidence !== undefined && memory.confidence < query.minConfidence) return false;
+  if (query.tier && memory.tier !== query.tier) return false;
+  if (query.perspective && memory.perspective !== query.perspective) return false;
+  if (query.minImportance !== undefined && memory.importance < query.minImportance) return false;
+  if (query.unconsolidatedOnly && memory.parentId) return false;
+  if (query.parentId !== undefined && memory.parentId !== query.parentId) return false;
+  if (query.nodeType && memory.nodeType !== query.nodeType) return false;
+  if (query.before && new Date(memory.createdAt).getTime() > new Date(query.before).getTime()) return false;
+  if (query.after && new Date(memory.createdAt).getTime() < new Date(query.after).getTime()) return false;
+  if (query.location !== undefined && (memory.location || '') !== query.location) return false;
+  if (query.domain !== undefined && (memory.domain || 'personal') !== query.domain) return false;
+  if (query.orgId !== undefined && (memory.orgId || '') !== query.orgId) return false;
+  return true;
+}
+
+function markMemoriesRetrieved(memories: Memory[]): void {
+  if (memories.length === 0) return;
+  const now = new Date().toISOString();
+  const store = getMemoryStore();
+  for (const memory of memories) {
+    const stored = store.find(candidate => candidate.id === memory.id);
+    if (stored) {
+      stored.lastRetrievedAt = now;
+      stored.retrieveCount = (stored.retrieveCount || 0) + 1;
+    }
+  }
+  saveMemoryStore(store);
+}
+
+/** Generate an embedding through the configured retrieval role. */
+export async function generateEmbedding(text: string, userId = 'anonymous'): Promise<number[] | null> {
+  const route = getEmbeddingRoute(userId);
+  const routeKey = [
+    userId,
+    route.primary.provider,
+    route.primary.model,
+    route.fallback?.provider || '',
+    route.fallback?.model || '',
+    text,
+  ].join('\u0000');
+  const cached = getCachedEmbedding(routeKey);
   if (cached) return cached;
 
-  const apiKey = process.env.OPENAI_API_KEY || '';
-  if (!apiKey) return null;
-
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const res = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: text.slice(0, 8000) }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (!res.ok) return null;
-
-    const json = await res.json() as any;
-    const vec = json.data?.[0]?.embedding;
-    if (vec && Array.isArray(vec) && vec.length > 0) {
-      cacheEmbedding(text, vec);
-      return vec;
-    }
-    return null;
+    const result = await generateConfiguredEmbedding(text, userId);
+    cacheEmbedding(routeKey, result.vector);
+    return result.vector;
   } catch {
-    return null; // API unavailable — silent fallback to keyword search
+    return null;
   }
 }
 
@@ -81,7 +101,7 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
 async function attachEmbedding(memory: Memory): Promise<void> {
   if (memory.embedding && memory.embedding.length > 0) return;
   const text = `${memory.type}: ${memory.content} ${memory.keywords.join(' ')}`;
-  const vec = await generateEmbedding(text);
+  const vec = await generateEmbedding(text, memory.userId);
   if (vec) {
     memory.embedding = vec;
     try {
@@ -322,29 +342,7 @@ function relevanceScore(query: string, memory: Memory): number {
 
 export function queryMemories(q: MemoryQuery): Memory[] {
   const all = getMemoryStore();
-
-  const cutoffB = q.before ? new Date(q.before).getTime() : 0;
-  const cutoffA = q.after ? new Date(q.after).getTime() : 0;
-
-  // Single-pass filter combining all conditions
-  let memories = all.filter(m => {
-    if (q.userId && m.userId !== q.userId) return false;
-    if (q.agentId !== undefined && (m.agentId || '') !== q.agentId) return false;
-    if (q.type && m.type !== q.type) return false;
-    if (q.minConfidence !== undefined && m.confidence < q.minConfidence) return false;
-    if (q.tier && m.tier !== q.tier) return false;
-    if (q.perspective && m.perspective !== q.perspective) return false;
-    if (q.minImportance !== undefined && m.importance < q.minImportance) return false;
-    if (q.unconsolidatedOnly && m.parentId) return false;
-    if (q.parentId !== undefined && m.parentId !== q.parentId) return false;
-    if (q.nodeType && m.nodeType !== q.nodeType) return false;
-    if (q.before && new Date(m.createdAt).getTime() > cutoffB) return false;
-    if (q.after && new Date(m.createdAt).getTime() < cutoffA) return false;
-    if (q.location !== undefined && (m.location || '') !== q.location) return false;
-    if (q.domain !== undefined && (m.domain || 'personal') !== q.domain) return false;
-    if (q.orgId !== undefined && (m.orgId || '') !== q.orgId) return false;
-    return true;
-  });
+  let memories = all.filter(memory => matchesMemoryQueryFilters(memory, q));
 
   // Tier-based priority: core_identity always first, then growth, then internalized, then episodic
   const tierPriority: Record<string, number> = {
@@ -431,17 +429,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     // (no pairwise to strengthen, but we can use this info later)
   }
 
-  // Mark as retrieved (including associated ones)
-  const now = new Date().toISOString();
-  const store = getMemoryStore();
-  for (const m of result) {
-    const stored = store.find(s => s.id === m.id);
-    if (stored) {
-      stored.lastRetrievedAt = now;
-      stored.retrieveCount = (stored.retrieveCount || 0) + 1;
-    }
-  }
-  if (result.length > 0) saveMemoryStore(store);
+  markMemoriesRetrieved(result);
 
   return result;
 }
@@ -453,27 +441,67 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   }
 
   // Generate query embedding
-  const queryVec = await generateEmbedding(q.query);
+  const queryVec = await generateEmbedding(q.query, q.userId);
   if (!queryVec) {
     // Embeddings unavailable — fall back to keyword search
     return queryMemories({ ...q, useVector: false });
   }
 
-  // Score all keyword-filtered results with cosine similarity
-  const keywordResults = queryMemories({ ...q, useVector: false });
-  const scored = keywordResults
+  const limit = q.limit || 5;
+  const candidateLimit = Math.max(20, limit * 4);
+  const typeBias = q.retrievalTypeWeights || {};
+  const perspectiveBias = q.retrievalPerspectiveWeights || {};
+
+  // Vector recall scans every memory in the requested scope, including passages with no shared keyword.
+  const scopedMemories = getMemoryStore().filter(memory => matchesMemoryQueryFilters(memory, q));
+  const scored = scopedMemories
     .map(m => {
-      if (!m.embedding || m.embedding.length === 0) {
-        return { m, score: relevanceScore(q.query!, m) }; // fallback for unembedded memories
+      let score = 0;
+      if (!m.embedding || m.embedding.length === 0 || m.embedding.length !== queryVec.length) {
+        score = relevanceScore(q.query!, m);
+      } else {
+        const cos = cosineSimilarity(queryVec, m.embedding);
+        score = +(cos * m.confidence).toFixed(4);
       }
-      const cos = cosineSimilarity(queryVec, m.embedding);
-      return { m, score: +(cos * m.confidence).toFixed(4) };
+      if (score > 0) {
+        score *= typeBias[m.type] || 1;
+        score *= perspectiveBias[m.perspective] || 1;
+      }
+      return { m, score: +score.toFixed(4) };
     })
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score);
 
-  const limit = q.limit || 5;
-  return scored.slice(0, limit).map(({ m }) => m);
+  const retrievalUserId = q.userId || 'anonymous';
+  const rerank = getRerankSelection(retrievalUserId);
+  if (rerank.enabled && scored.length > 1) {
+    try {
+      const candidates = scored.slice(0, candidateLimit);
+      const ranked = await rerankConfiguredDocuments(
+        q.query,
+        candidates.map(({ m }) => `${m.type}: ${m.content}\nKeywords: ${m.keywords.join(', ')}`),
+        retrievalUserId,
+        Math.max(limit, rerank.topN),
+      );
+      const seen = new Set<number>();
+      const reordered = ranked.items
+        .map(item => {
+          seen.add(item.index);
+          return candidates[item.index];
+        })
+        .filter(Boolean);
+      reordered.push(...candidates.filter((_, index) => !seen.has(index)));
+      const result = reordered.slice(0, limit).map(({ m }) => m);
+      markMemoriesRetrieved(result);
+      return result;
+    } catch (error: any) {
+      console.warn(`[Memory] Rerank unavailable; preserving vector order: ${error?.message || String(error)}`);
+    }
+  }
+
+  const result = scored.slice(0, limit).map(({ m }) => m);
+  markMemoriesRetrieved(result);
+  return result;
 }
 
 /** Pre-generate embeddings for all existing memories that lack them. One-time migration. */
@@ -482,7 +510,7 @@ export async function backfillEmbeddings(userId?: string): Promise<number> {
   const targets = all.filter(m => !m.embedding && (!userId || m.userId === userId));
   let count = 0;
   for (const m of targets) {
-    const vec = await generateEmbedding(`${m.type}: ${m.content} ${m.keywords.join(' ')}`);
+    const vec = await generateEmbedding(`${m.type}: ${m.content} ${m.keywords.join(' ')}`, m.userId);
     if (vec) {
       m.embedding = vec;
       count++;

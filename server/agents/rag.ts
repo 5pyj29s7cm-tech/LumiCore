@@ -1,5 +1,5 @@
 import path from 'path';
-import { addMemory } from '../memory/store';
+import { addMemory, queryMemoriesVector } from '../memory/store';
 import { Memory } from '../memory/types';
 import type { MarkdownKnowledgeMetadata } from '../knowledge/markdown';
 
@@ -121,16 +121,14 @@ function buildSourceMetadataKeywords(metadata?: MarkdownKnowledgeMetadata): stri
  * Retrieve relevant chunks for a query from agent-scoped knowledge.
  * Each result includes a citation string tracking source document and chunk position.
  */
-import { queryMemories } from '../memory/store';
-
-export function retrieveChunks(
+export async function retrieveChunks(
   userId: string,
   agentId: string,
   query: string,
   limit = 5,
   scope: { domain?: string; orgId?: string } = {},
-): Array<Memory & { citation: string }> {
-  const memories = queryMemories({
+): Promise<Array<Memory & { citation: string }>> {
+  const memories = await queryMemoriesVector({
     userId,
     agentId,
     type: 'knowledge',
@@ -139,6 +137,7 @@ export function retrieveChunks(
     minConfidence: 0.3,
     domain: scope.domain,
     orgId: scope.orgId,
+    useVector: true,
   });
 
   return memories.map(m => {

@@ -174,14 +174,23 @@ describe('complete personal-client surface contract', () => {
 
   it('normalizes public settings names to actual Settings component sections', () => {
     expect(normalizeClientSettingsSection('autonomy')).toBe('neural');
-    expect(normalizeClientSettingsSection('llm')).toBe('llm-providers');
+    expect(normalizeClientSettingsSection('llm')).toBe('ai-providers');
+    expect(normalizeClientSettingsSection('model-routing')).toBe('reasoning-model');
     expect(normalizeClientSettingsSection('vision')).toBe('world-model');
-    expect(normalizeClientSettingsSection('generation')).toBe('generation-models');
+    expect(normalizeClientSettingsSection('generation')).toBe('generation-model');
+    expect(normalizeClientSettingsSection('document-model')).toBe('world-model');
+    expect(normalizeClientSettingsSection('retrieval-model')).toBe('retrieval-model');
+    expect(normalizeClientSettingsSection('voice-services')).toBe('voice-model');
+    expect(normalizeClientSettingsSection('safety-model')).toBe('security');
+    expect(normalizeClientSettingsSection('external-connections')).toBe('external-connections');
+    expect(normalizeClientSettingsSection('data-sources')).toBe('data-sources');
+    expect(normalizeClientSettingsSection('applications')).toBe('applications');
+    expect(normalizeClientSettingsSection('connections-tools')).toBe('tools');
     expect(normalizeClientSettingsSection('voice cloning')).toBe('voice');
     expect(getClientActionExpectation({ action: 'open_settings', section: 'autonomy' }).expectedState)
       .toContain('settings-section:neural');
     expect(getClientActionExpectation({ action: 'open_mcp_settings' }).expectedState)
-      .toContain('settings-section:mcp');
+      .toContain('settings-section:tools');
     expect(getClientActionExpectation({ action: 'open_voice_forge' }).expectedState)
       .toContain('settings-section:voice');
   });

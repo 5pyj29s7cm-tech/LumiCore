@@ -1,4 +1,288 @@
 {
+  "settings.no-models-configured.0c98ec7051": {
+    "en": "No configured models",
+    "zh": "\u6682\u65e0\u5df2\u914d\u7f6e\u6a21\u578b"
+  },
+  "settings.cloud-providers.134b71a80d": {
+    "en": "Cloud",
+    "zh": "\u4e91\u670d\u52a1"
+  },
+  "settings.local-compatible.4fda3a8732": {
+    "en": "Local & Compatible",
+    "zh": "\u672c\u5730\u4e0e\u517c\u5bb9"
+  },
+  "settings.specialized-providers.22dd71191b": {
+    "en": "Specialized",
+    "zh": "\u4e13\u7528\u670d\u52a1"
+  },
+  "settings.cloud-model-providers.55a86c3fed": {
+    "en": "Cloud Model Providers",
+    "zh": "\u4e91\u6a21\u578b\u670d\u52a1\u5546"
+  },
+  "settings.local-compatible-providers.f6a71d6a1e": {
+    "en": "Local & Compatible Providers",
+    "zh": "\u672c\u5730\u4e0e\u517c\u5bb9\u670d\u52a1"
+  },
+  "settings.local-compatible-providers-description.4a23f443d2": {
+    "en": "Configure Ollama, LM Studio, and OpenAI-compatible endpoints here. Model Roles still owns model selection.",
+    "zh": "\u5728\u8fd9\u91cc\u914d\u7f6e Ollama\u3001LM Studio \u548c OpenAI \u517c\u5bb9\u63a5\u53e3\uff1b\u6a21\u578b\u9009\u62e9\u4ecd\u7531\u201c\u6a21\u578b\u89d2\u8272\u201d\u8d1f\u8d23\u3002"
+  },
+  "settings.specialized-model-providers.8cd92ca6fd": {
+    "en": "Specialized Model Providers",
+    "zh": "\u4e13\u7528\u6a21\u578b\u670d\u52a1\u5546"
+  },
+  "settings.specialized-model-providers-description.f89e76f111": {
+    "en": "Configure providers used only for generation or speech capabilities. General model credentials are not repeated here.",
+    "zh": "\u914d\u7f6e\u4ec5\u7528\u4e8e\u751f\u6210\u6216\u8bed\u97f3\u80fd\u529b\u7684\u4e13\u7528\u670d\u52a1\uff0c\u4e0d\u518d\u91cd\u590d\u586b\u5199\u901a\u7528\u6a21\u578b\u5bc6\u94a5\u3002"
+  },
+  "settings.ai-providers.38c3f21901": {
+    "en": "AI Providers",
+    "zh": "AI 服务商"
+  },
+  "settings.ai-providers-description.d297f58509": {
+    "en": "Configure credentials, endpoints, and local runtimes once. Model roles reuse these providers without duplicating API keys.",
+    "zh": "统一配置服务商凭据、接口地址和本地运行时。模型分工直接复用，不再重复填写 API Key。"
+  },
+  "settings.ai-and-models.5bf41de4e3": {
+    "en": "AI & Models",
+    "zh": "AI 与模型"
+  },
+  "settings.model-roles.6b802d91c2": {
+    "en": "Model Roles",
+    "zh": "模型分工"
+  },
+  "settings.model-roles-description.753f25dd7e": {
+    "en": "Assign independent providers and fallbacks to each model capability without binding Lumi to one model.",
+    "zh": "为每种模型能力独立指定主模型与备用模型，避免 Lumi 被单一模型绑定。"
+  },
+  "settings.language-multimodal.02d79f5890": {
+    "en": "Language & Multimodal",
+    "zh": "语言与多模态"
+  },
+  "settings.vision-local-runtimes.a4358cb103": {
+    "en": "Vision & Local",
+    "zh": "视觉与本地模型"
+  },
+  "settings.generation-providers.f5eef54b1b": {
+    "en": "Generation",
+    "zh": "生成服务"
+  },
+  "settings.speech-providers.452c64b914": {
+    "en": "Speech",
+    "zh": "语音服务"
+  },
+  "settings.language-model-providers.f146c23cb1": {
+    "en": "Language Model Providers",
+    "zh": "语言模型服务商"
+  },
+  "settings.vision-capable-providers.40ab375ce2": {
+    "en": "Vision-Capable Providers",
+    "zh": "视觉模型服务商"
+  },
+  "settings.vision-provider-description.77b9f301aa": {
+    "en": "Configure vision-capable model catalogs and local runtimes here. Choose which one is active under Model Roles.",
+    "zh": "在这里配置视觉模型目录和本地运行时；实际使用哪个模型在“模型分工”中选择。"
+  },
+  "settings.speech-model-providers.99e68f2051": {
+    "en": "Speech Model Providers",
+    "zh": "语音模型服务商"
+  },
+  "settings.speech-provider-description.ea8bf84041": {
+    "en": "Configure cloud speech credentials here. Speech recognition and synthesis roles are selected under Model Roles.",
+    "zh": "在这里配置云端语音凭据；语音识别与合成的实际分工在“模型分工”中选择。"
+  },
+  "settings.reasoning.6a171d96b4": {
+    "en": "Reasoning",
+    "zh": "推理"
+  },
+  "settings.generation.702ee6d1d7": {
+    "en": "Generation",
+    "zh": "生成"
+  },
+  "settings.documents.0ddc091e42": {
+    "en": "Documents",
+    "zh": "文档"
+  },
+  "settings.retrieval.a3cd857a16": {
+    "en": "Retrieval",
+    "zh": "检索"
+  },
+  "settings.voice-and-sound.e1a9a13b38": {
+    "en": "Voice & Sound",
+    "zh": "语音与声音"
+  },
+  "settings.safety-model.715982be13": {
+    "en": "Safety",
+    "zh": "安全"
+  },
+  "settings.reasoning-model-role.70c69a008d": {
+    "en": "Reasoning Model",
+    "zh": "推理模型"
+  },
+  "settings.reasoning-model-role-description.29b79bc55c": {
+    "en": "The primary model for conversation, planning, coding, memory work, and general tool orchestration.",
+    "zh": "负责对话、规划、代码、记忆处理和通用工具编排的主模型。"
+  },
+  "settings.document-model-role.f43f259497": {
+    "en": "Document Model",
+    "zh": "文档模型"
+  },
+  "settings.document-model-role-description.0b18d29b11": {
+    "en": "Handles OCR-assisted document understanding, layouts, tables, and long-form extraction.",
+    "zh": "负责结合 OCR 的文档理解、版面、表格和长文档提取。"
+  },
+  "settings.retrieval-model-role.7d25a85198": {
+    "en": "Knowledge Retrieval Model",
+    "zh": "知识检索模型"
+  },
+  "settings.retrieval-model-role-description.164d1db2e8": {
+    "en": "Creates embeddings for memory and knowledge search. The selected route is used by the real vector retrieval pipeline.",
+    "zh": "为记忆和知识检索生成向量；所选路由会接入真实的向量检索链路。"
+  },
+  "settings.safety-model-role.d44514deac": {
+    "en": "Safety Model",
+    "zh": "安全模型"
+  },
+  "settings.safety-model-role-description.e7c653efaa": {
+    "en": "Reviews risky content, privacy exposure, prompt injection, and high-impact model outputs.",
+    "zh": "检查风险内容、隐私暴露、提示词注入和高影响模型输出。"
+  },
+  "settings.primary-model.78ee8a421a": {
+    "en": "Primary model",
+    "zh": "主模型"
+  },
+  "settings.fallback-model.562ec1697f": {
+    "en": "Fallback provider",
+    "zh": "备用服务商"
+  },
+  "settings.fallback-model-id.31f402c7ca": {
+    "en": "Fallback model",
+    "zh": "备用模型"
+  },
+  "settings.no-fallback.532319d005": {
+    "en": "No fallback",
+    "zh": "不设置备用模型"
+  },
+  "settings.inherit-reasoning-model.aaee08b779": {
+    "en": "Inherit reasoning model",
+    "zh": "继承推理模型"
+  },
+  "settings.inherit-world-model.50f80c988b": {
+    "en": "Inherit world model",
+    "zh": "继承世界模型"
+  },
+  "settings.failed-to-load-model-roles.2db04d5ff2": {
+    "en": "Failed to load model roles",
+    "zh": "模型分工加载失败"
+  },
+  "settings.model-role-saved.48ed509208": {
+    "en": "Model role saved",
+    "zh": "模型分工已保存"
+  },
+  "settings.failed-to-save-model-role.f325b221b0": {
+    "en": "Failed to save model role",
+    "zh": "模型分工保存失败"
+  },
+  "settings.model-role-test-passed-value0-ms.5acd358e4f": {
+    "en": "Model role test passed ({value0} ms)",
+    "zh": "模型分工测试通过（{value0} 毫秒）"
+  },
+  "settings.model-role-test-failed.6f17ba0837": {
+    "en": "Model role test failed",
+    "zh": "模型分工测试失败"
+  },
+  "settings.data-sources.9f7efbc2df": {
+    "en": "Data Sources",
+    "zh": "数据源"
+  },
+  "settings.external-connections.a83a9fc1d2": {
+    "en": "External Connections",
+    "zh": "外部连接"
+  },
+  "settings.data-sources-description.68775d0d92": {
+    "en": "These APIs return authoritative records and factual data. They are not model providers.",
+    "zh": "这些 API 用于返回权威记录和事实数据，不属于模型服务商。"
+  },
+  "settings.resources.36c2abf7a1": {
+    "en": "Resources",
+    "zh": "资源与连接"
+  },
+  "settings.app-key.48d8312e26": {
+    "en": "App Key",
+    "zh": "应用标识（App Key）"
+  },
+  "settings.secret-key.e44bdd0d82": {
+    "en": "Secret Key",
+    "zh": "应用密钥（Secret Key）"
+  },
+  "settings.api-key.8f242c55e5": {
+    "en": "API Key",
+    "zh": "接口密钥（API Key）"
+  },
+  "settings.access-token.9e3cac6ad8": {
+    "en": "Access Token",
+    "zh": "访问令牌（Token）"
+  },
+  "settings.base-url.f44ed563c9": {
+    "en": "Base URL",
+    "zh": "接口地址（Base URL）"
+  },
+  "settings.api-base-url.f17b3d297b": {
+    "en": "API Base URL",
+    "zh": "API 接口地址"
+  },
+  "settings.mcp-url.6ddedb1520": {
+    "en": "MCP URL",
+    "zh": "MCP 接口地址"
+  },
+  "settings.save-provider.2882e9668b": {
+    "en": "Save provider",
+    "zh": "保存此服务商"
+  },
+  "settings.remove-provider.47319e8331": {
+    "en": "Remove provider",
+    "zh": "清除此服务商"
+  },
+  "settings.apps-tools.51d521e506": {
+    "en": "Application Tools",
+    "zh": "应用工具"
+  },
+  "settings.applications.36d70e9597": {
+    "en": "Applications",
+    "zh": "应用连接"
+  },
+  "settings.tools.145e2645a6": {
+    "en": "Tools",
+    "zh": "工具运行"
+  },
+  "settings.application-service-connections.4c05e32d49": {
+    "en": "Application Connections",
+    "zh": "应用服务连接"
+  },
+  "settings.tool-runtime-connections.3942c3052f": {
+    "en": "Tool Runtimes",
+    "zh": "工具服务与运行时"
+  },
+  "settings.tool-service-connections.c252275e84": {
+    "en": "Tool Service Connections",
+    "zh": "工具服务连接"
+  },
+  "settings.tool-service-connections-description.d74af957f8": {
+    "en": "Credentials here enable tools to execute work. Skill Hall only installs workflows that depend on them.",
+    "zh": "这里的凭据用于让工具执行工作；技能大厅只安装依赖这些连接的工作流。"
+  },
+  "skill-center.value0-is-managed-in-value1-settings.41f04ac801": {
+    "en": "{value0} is managed in {value1}. Skill Hall only reports whether the required capability is ready.",
+    "zh": "{value0} 统一在“{value1}”中管理。技能大厅只显示所需能力是否就绪。"
+  },
+  "skill-center.required-connection.287063c109": {
+    "en": "Required capability",
+    "zh": "所需能力"
+  },
+  "skill-center.open-required-settings.4e70b69abc": {
+    "en": "Open settings",
+    "zh": "打开设置"
+  },
   "skill-center.model-service-configuration.070b9fc0e3": {
     "en": "Model service configuration",
     "zh": "模型服务配置"
@@ -56,8 +340,8 @@
     "zh": "生成模型"
   },
   "settings.world-model.67c5d91de2": {
-    "en": "World Model",
-    "zh": "世界模型"
+    "en": "World",
+    "zh": "世界"
   },
   "settings.failed-to-load-generative-models.6f0ef4ec18": {
     "en": "Failed to load generative model settings",
@@ -1042,6 +1326,18 @@
   "central-lumi-chat.model-policy.b8080eef2c": {
     "en": "Model policy",
     "zh": "模型策略"
+  },
+  "central-lumi-chat.lumi-model.4d32a91f0c": {
+    "en": "Lumi model",
+    "zh": "Lumi 模型"
+  },
+  "central-lumi-chat.model-settings.f125a74d22": {
+    "en": "Model settings",
+    "zh": "模型设置"
+  },
+  "central-lumi-chat.open-model-settings.88d35c9bc1": {
+    "en": "Open model settings",
+    "zh": "打开模型设置"
   },
   "central-lumi-chat.open-organization-settings.b0ca996b30": {
     "en": "Open organization settings",
@@ -4730,6 +5026,22 @@
   "mcpsettings.connected.77956f6a16": {
     "en": "Connected",
     "zh": "已连接"
+  },
+  "mcpsettings.mcp-runtime.84b64d94d2": {
+    "en": "MCP Runtime",
+    "zh": "MCP 运行连接"
+  },
+  "mcpsettings.runtime-description.47929f0108": {
+    "en": "View live connection health, restart a runtime, or add a private custom server. Discovery, installation, enablement, repair, and removal are managed in Skill Hall.",
+    "zh": "在这里查看实时连接、重启运行服务或添加私有自定义服务。发现、安装、启停、修复和卸载统一在技能大厅管理。"
+  },
+  "mcpsettings.manage-in-skill-hall.23e8f7ca56": {
+    "en": "Manage in Skill Hall",
+    "zh": "前往技能大厅管理"
+  },
+  "mcpsettings.install-from-skill-hall-or-add.1f2c552d19": {
+    "en": "Install a server from Skill Hall, or add a private custom connection below.",
+    "zh": "请先在技能大厅安装服务，或在下方添加私有自定义连接。"
   },
   "mcpsettings.crashed-value0.9f395a7f76": {
     "en": "Crashed ({value0})",
@@ -8782,6 +9094,26 @@
   "work-mode-switch.switch-to-personal.fbe06c3447": {
     "en": "Switch to personal",
     "zh": "切换到个人"
+  },
+  "settings.knowledge-retrieval-description.56e971d4a2": {
+    "en": "Configure semantic recall and optional candidate reranking for memory and knowledge search. Provider credentials are reused from AI Providers.",
+    "zh": "配置记忆与知识库搜索使用的语义召回和可选候选精排。服务商密钥直接复用 AI 服务商中的配置。"
+  },
+  "settings.embedding-role-description.73576dd2ab": {
+    "en": "Converts documents and queries into vectors so Lumi can recall passages by meaning, not only exact keywords.",
+    "zh": "把资料和问题转换为向量，让 Lumi 能按语义召回内容，而不只是匹配完全相同的关键词。"
+  },
+  "settings.rerank-role-description.8eac1d6897": {
+    "en": "Reorders the recalled candidates with a dedicated relevance model before they enter the answer context.",
+    "zh": "用独立的相关性模型重新排列召回候选，再把最相关的片段送入回答上下文。"
+  },
+  "settings.enable-rerank.17ba5b1376": {
+    "en": "Enable rerank",
+    "zh": "启用精排"
+  },
+  "settings.rerank-top-n.5fa98399c8": {
+    "en": "Results after rerank",
+    "zh": "精排保留数量"
   },
   "work-mode-switch.switched-to-personal.378022176b": {
     "en": "Switched to personal",

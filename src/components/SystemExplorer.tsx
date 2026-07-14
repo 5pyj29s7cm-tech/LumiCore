@@ -208,7 +208,7 @@ function buildReport(
       status: nodeReady && pythonReady ? 'ready' : nodeReady || pythonReady ? 'partial' : 'missing',
       detail: `Node ${latest?.software?.nodeVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')} / Python ${latest?.software?.pythonVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')}`,
       actionLabel: nodeReady && pythonReady ? undefined : uiMessage('system-explorer.review-mcp.e42e25bdaf', (isZh) ? 'zh' : 'en'),
-      actionSection: nodeReady && pythonReady ? undefined : 'mcp',
+      actionSection: nodeReady && pythonReady ? undefined : 'tools',
     },
     {
       id: 'llm',
@@ -216,7 +216,7 @@ function buildReport(
       status: llmReady > 0 ? 'ready' : 'partial',
       detail: llmReady > 0 ? formatUiMessage('system-explorer.value0-provider-s-configured.79482e6f0f', { value0: llmReady }, (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.no-provider-key-detected-yet.4d8c977571', (isZh) ? 'zh' : 'en'),
       actionLabel: llmReady > 0 ? undefined : uiMessage('system-explorer.add-provider.bf4c973279', (isZh) ? 'zh' : 'en'),
-      actionSection: llmReady > 0 ? undefined : 'llm-providers',
+      actionSection: llmReady > 0 ? undefined : 'ai-providers',
     },
     {
       id: 'mcp',
@@ -224,7 +224,7 @@ function buildReport(
       status: (ecosystem?.enabledSkillCount || 0) > 0 ? 'ready' : (ecosystem?.skillCount || 0) > 0 ? 'partial' : 'missing',
       detail: formatUiMessage('system-explorer.value0-value1-skills-enabled-value2.1c3d9e8c13', { value0: ecosystem?.enabledSkillCount || 0, value1: ecosystem?.skillCount || 0, value2: ecosystem?.toolCount || 0 }, (isZh) ? 'zh' : 'en'),
       actionLabel: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
-      actionSection: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : 'mcp',
+      actionSection: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : 'tools',
     },
     {
       id: 'knowledge_files',
@@ -302,28 +302,28 @@ function buildReport(
     id: 'node',
     text: uiMessage('system-explorer.install-node-js-if-you.b5276aecd6', (isZh) ? 'zh' : 'en'),
     actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
-    actionSection: 'mcp',
+    actionSection: 'tools',
     priority: 'medium',
   });
   if (!pythonReady) suggestions.push({
     id: 'python',
     text: uiMessage('system-explorer.install-python-if-you-want.226d7d6c6d', (isZh) ? 'zh' : 'en'),
     actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
-    actionSection: 'mcp',
+    actionSection: 'tools',
     priority: 'medium',
   });
   if (llmReady === 0) suggestions.push({
     id: 'llm',
     text: uiMessage('system-explorer.add-at-least-one-api.9d438f82d8', (isZh) ? 'zh' : 'en'),
     actionLabel: uiMessage('system-explorer.add-provider.bf4c973279', (isZh) ? 'zh' : 'en'),
-    actionSection: 'llm-providers',
+    actionSection: 'ai-providers',
     priority: 'high',
   });
   if ((ecosystem?.enabledSkillCount || 0) === 0) suggestions.push({
     id: 'mcp',
     text: uiMessage('system-explorer.enable-at-least-one-mcp.1bccc5f0e7', (isZh) ? 'zh' : 'en'),
     actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
-    actionSection: 'mcp',
+    actionSection: 'tools',
     priority: 'medium',
   });
   if (permissions.microphone !== 'granted') suggestions.push({

@@ -199,22 +199,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    apiFetch('/api/preferences/vision')
-      .then(r => r.ok ? r.json() : null)
-      .then(pref => {
-        if (!pref?.provider) return;
-        setVisionConfig(prev => {
+    let cancelled = false;
+    const loadModelPreferences = async () => {
+      const [reasoningResponse, visionResponse] = await Promise.all([
+        apiFetch('/api/preferences/llm').catch(() => null),
+        apiFetch('/api/preferences/vision').catch(() => null),
+      ]);
+      const [reasoning, vision] = await Promise.all([
+        reasoningResponse?.ok ? reasoningResponse.json().catch(() => null) : null,
+        visionResponse?.ok ? visionResponse.json().catch(() => null) : null,
+      ]);
+      if (cancelled) return;
+
+      if (reasoning?.provider) {
+        setAiConfig(previous => {
           const next = {
-            ...prev,
-            provider: pref.provider,
-            model: pref.model || pref.models?.[pref.provider] || prev.model,
+            ...previous,
+            provider: reasoning.provider,
+            model: reasoning.model || reasoning.models?.[reasoning.provider] || previous.model,
+            apiKey: '',
           };
-          localStorage.setItem('lumi_vision_config', JSON.stringify(next));
-          if (pref.models) localStorage.setItem('lumi_vision_models', JSON.stringify(pref.models));
+          localStorage.setItem('lumi_ai_config', JSON.stringify(next));
+          if (reasoning.models) localStorage.setItem('lumi_llm_models', JSON.stringify(reasoning.models));
           return next;
         });
-      })
-      .catch(() => {});
+      }
+
+      if (vision?.provider) {
+        setVisionConfig(previous => {
+          const next = {
+            ...previous,
+            provider: vision.provider,
+            model: vision.model || vision.models?.[vision.provider] || previous.model,
+            apiKey: '',
+          };
+          localStorage.setItem('lumi_vision_config', JSON.stringify(next));
+          if (vision.models) localStorage.setItem('lumi_vision_models', JSON.stringify(vision.models));
+          return next;
+        });
+      }
+    };
+    void loadModelPreferences();
+    const handleModelConfigurationChanged = () => { void loadModelPreferences(); };
+    window.addEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
+    };
   }, []);
   // Voice state
   const [selectedVoiceId, setSelectedVoiceIdState] = useState<string | undefined>(() => {
@@ -241,33 +272,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try { return (localStorage.getItem('lumi_work_domain') as 'personal' | 'work') || 'personal'; } catch { return 'personal'; }
   });
   const voiceStorageKeys = getVoiceStorageKeys(workDomain, orgConnection?.orgId);
-
-  useEffect(() => {
-    let cancelled = false;
-    const endpoint = workDomain === 'work' && orgConnection?.orgId
-      ? '/api/preferences/org-llm'
-      : '/api/preferences/llm';
-    apiFetch(endpoint)
-      .then(response => response.ok ? response.json() : null)
-      .then(preference => {
-        if (cancelled || !preference?.provider) return;
-        setAiConfig(previous => {
-          const next = {
-            ...previous,
-            provider: preference.provider,
-            model: preference.model || preference.models?.[preference.provider] || previous.model,
-            apiKey: '',
-          };
-          localStorage.setItem('lumi_ai_config', JSON.stringify(next));
-          if (preference.models && workDomain === 'personal') {
-            localStorage.setItem('lumi_llm_models', JSON.stringify(preference.models));
-          }
-          return next;
-        });
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [orgConnection?.orgId, workDomain]);
 
   useEffect(() => {
     setSelectedVoiceIdState(readStoredVoiceId(voiceStorageKeys));

@@ -40,6 +40,7 @@ import { registerAuthorityResearchTools } from './authority_research_tools';
 import { registerWorkTakeoverTools } from './work_takeover_tools';
 import { registerDesktopAiTools } from './desktop_ai_tools';
 import { registerMessagingTools } from './messaging_tools';
+import { registerModelConfigurationTools } from './model_configuration_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -79,6 +80,7 @@ export function registerAllTools(
   registerBiometricTools(registry);
   registerLegalTools(registry);
   registerClientSelfTools(registry);
+  registerModelConfigurationTools(registry);
   registerExternalAppTools(registry);
   registerExternalControlTools(registry);
   registerAutonomyTools(registry);

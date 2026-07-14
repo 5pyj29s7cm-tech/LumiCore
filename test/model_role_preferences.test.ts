@@ -4,6 +4,7 @@ import {
   DEFAULT_VIDEO_GENERATION_MODELS,
   normalizeGenerationModelPrefs,
 } from '../server/llm/generation_preferences';
+import { normalizeRetrievalModelPreferences } from '../server/llm/retrieval_model_preferences';
 import {
   DEFAULT_WORLD_MODELS,
   normalizeWorldModelPrefs,
@@ -55,6 +56,25 @@ describe('specialized model role preferences', () => {
     expect(prefs.image.model).toBe('stabilityai/stable-diffusion-3-5-large');
   });
 
+  it('supports independent real video providers without losing their saved models', () => {
+    const prefs = normalizeGenerationModelPrefs({
+      image: { provider: 'auto' },
+      video: {
+        provider: 'minimax',
+        models: {
+          minimax: 'MiniMax-Hailuo-02',
+          openai: 'sora-2-pro',
+          siliconflow: 'Wan-AI/Wan2.1-T2V-14B-720P',
+        },
+      },
+    });
+
+    expect(prefs.video.provider).toBe('minimax');
+    expect(prefs.video.model).toBe('MiniMax-Hailuo-02');
+    expect(prefs.video.models.openai).toBe('sora-2-pro');
+    expect(prefs.video.models.siliconflow).toBe('Wan-AI/Wan2.1-T2V-14B-720P');
+  });
+
   it('defaults the World Model to Vision inheritance', () => {
     const prefs = normalizeWorldModelPrefs(null);
 
@@ -76,5 +96,78 @@ describe('specialized model role preferences', () => {
     expect(prefs.provider).toBe('qwen');
     expect(prefs.model).toBe('qwen-vl-world-custom');
     expect(prefs.models.openai).toBe('gpt-world-custom');
+  });
+});
+
+describe('retrieval model preferences', () => {
+  it('uses working defaults when no preferences exist', () => {
+    expect(normalizeRetrievalModelPreferences(null)).toEqual({
+      embedding: {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+        fallbackProvider: 'ollama',
+        fallbackModel: 'nomic-embed-text',
+      },
+      rerank: {
+        enabled: false,
+        provider: 'siliconflow',
+        model: 'Qwen/Qwen3-Reranker-8B',
+        topN: 5,
+      },
+    });
+  });
+
+  it('migrates the legacy flat retrieval value and rejects invalid providers', () => {
+    const prefs = normalizeRetrievalModelPreferences({
+      retrieval: {
+        provider: 'not-a-provider',
+        model: '',
+        fallbackProvider: '',
+        fallbackModel: '',
+      },
+    });
+
+    expect(prefs).toEqual({
+      embedding: {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+        fallbackProvider: '',
+        fallbackModel: '',
+      },
+      rerank: {
+        enabled: false,
+        provider: 'siliconflow',
+        model: 'Qwen/Qwen3-Reranker-8B',
+        topN: 5,
+      },
+    });
+  });
+
+  it('normalizes independent embedding and rerank selections', () => {
+    const prefs = normalizeRetrievalModelPreferences({
+      embedding: {
+        provider: 'siliconflow',
+        model: 'Qwen/Qwen3-Embedding-4B',
+        fallbackProvider: '',
+      },
+      rerank: {
+        enabled: true,
+        provider: 'siliconflow',
+        model: 'Qwen/Qwen3-Reranker-4B',
+        topN: 200,
+      },
+    });
+
+    expect(prefs.embedding).toMatchObject({
+      provider: 'siliconflow',
+      model: 'Qwen/Qwen3-Embedding-4B',
+      fallbackProvider: '',
+    });
+    expect(prefs.rerank).toEqual({
+      enabled: true,
+      provider: 'siliconflow',
+      model: 'Qwen/Qwen3-Reranker-4B',
+      topN: 50,
+    });
   });
 });

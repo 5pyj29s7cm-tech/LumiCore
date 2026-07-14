@@ -34,13 +34,9 @@ interface Message {
   source?: 'socket' | 'history' | 'error' | 'system';
 }
 
-interface OrgLlmPolicy {
-  inheritPersonal?: boolean;
-  configured?: boolean;
+interface LumiModelPreference {
   provider?: string;
   model?: string;
-  inheritedProvider?: string;
-  inheritedModel?: string;
 }
 
 function makeMessageId(prefix = 'org-msg') {
@@ -124,7 +120,7 @@ export function CentralLumiChat() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [requestNotice, setRequestNotice] = useState('');
-  const [llmPolicy, setLlmPolicy] = useState<OrgLlmPolicy | null>(null);
+  const [modelPreference, setModelPreference] = useState<LumiModelPreference | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeRequestIdRef = useRef<string | null>(null);
@@ -148,31 +144,32 @@ export function CentralLumiChat() {
 
   useEffect(() => {
     let cancelled = false;
-    const loadLlmPolicy = async () => {
-      if (!orgConnection?.orgId) {
-        setLlmPolicy(null);
-        return;
-      }
+    const loadModelPreference = async () => {
       try {
-        const res = await fetch('/api/preferences/org-llm', { credentials: 'include' });
+        const res = await fetch('/api/preferences/llm', { credentials: 'include' });
         const data = await res.json().catch(() => ({}));
-        if (!cancelled && res.ok) setLlmPolicy(data);
+        if (!cancelled && res.ok) setModelPreference(data);
       } catch {
-        if (!cancelled) setLlmPolicy(null);
+        if (!cancelled) setModelPreference(null);
       }
     };
-    void loadLlmPolicy();
-    return () => { cancelled = true; };
-  }, [orgConnection?.orgId]);
+    void loadModelPreference();
+    const handleModelChange = () => { void loadModelPreference(); };
+    window.addEventListener('lumi:model-configuration-changed', handleModelChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('lumi:model-configuration-changed', handleModelChange);
+    };
+  }, []);
 
-  const llmPolicyLabel = llmPolicy
-    ? uiMessage('central-lumi-chat.organization-model-policy.ab6d214235')
-    : uiMessage('central-lumi-chat.model-policy.b8080eef2c');
-  const llmPolicyModel = llmPolicy
-    ? `${llmPolicy.provider || '-'} / ${llmPolicy.model || '-'}`
+  const modelPreferenceLabel = uiMessage('central-lumi-chat.lumi-model.4d32a91f0c');
+  const modelPreferenceValue = modelPreference
+    ? `${modelPreference.provider || '-'} / ${modelPreference.model || '-'}`
     : uiMessage('central-lumi-chat.loading.7bfbe693d1');
-  const openOrgSettings = () => {
-    window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'settings' } }));
+  const openModelSettings = () => {
+    window.dispatchEvent(new CustomEvent('lumi:client-action', {
+      detail: { action: 'open_settings', section: 'reasoning-model' },
+    }));
   };
   const scopedFileUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
@@ -479,17 +476,17 @@ export function CentralLumiChat() {
           <p className="text-white/55 text-xs">{uiMessage('central-lumi-chat.same-lumi-organization-permissions-and.681e347d91')}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/60" title={llmPolicyModel}>
+          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/60" title={modelPreferenceValue}>
             <BrainCircuit size={14} className="text-blue-300" />
-            <span className="whitespace-nowrap">{llmPolicyLabel}</span>
-            <span className="hidden max-w-[180px] truncate text-white/35 md:inline">{llmPolicyModel}</span>
+            <span className="whitespace-nowrap">{modelPreferenceLabel}</span>
+            <span className="hidden max-w-[180px] truncate text-white/35 md:inline">{modelPreferenceValue}</span>
           </div>
           <button
             type="button"
-            onClick={openOrgSettings}
+            onClick={openModelSettings}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/50 transition hover:bg-white/10 hover:text-white"
-            title={uiMessage('central-lumi-chat.organization-settings.7e8f1a750a')}
-            aria-label={uiMessage('central-lumi-chat.open-organization-settings.b0ca996b30')}
+            title={uiMessage('central-lumi-chat.model-settings.f125a74d22')}
+            aria-label={uiMessage('central-lumi-chat.open-model-settings.88d35c9bc1')}
           >
             <Settings size={15} />
           </button>

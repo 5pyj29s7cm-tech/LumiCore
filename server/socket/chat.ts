@@ -879,7 +879,7 @@ export function registerChatHandler(
       let ragChunks: string[] = [];
       const ragAgentIds = Array.from(new Set([conversationAgentId, 'lumi'].filter(Boolean)));
       for (const ragAgentId of ragAgentIds) {
-        const chunks = retrieveChunks(uid, ragAgentId, text, 3, {
+        const chunks = await retrieveChunks(uid, ragAgentId, text, 3, {
           domain: resolvedDomain,
           orgId: resolvedDomain === 'work' ? resolvedOrgId : '',
         });
@@ -895,7 +895,7 @@ export function registerChatHandler(
       let kbContext: string | undefined;
       if (resolvedDomain === 'work' && resolvedOrgId) {
         try {
-          const kbResults = await searchKnowledgeBase(resolvedOrgId, text, 3);
+          const kbResults = await searchKnowledgeBase(resolvedOrgId, text, { limit: 3, userId: uid });
           if (kbResults.length > 0) {
             kbContext = kbResults
               .map(r => `[${r.title}] ${r.chunk}`)

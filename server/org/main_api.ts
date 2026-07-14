@@ -149,7 +149,7 @@ export function mountBranchRoutes(router: Router) {
       return;
     }
 
-    KB.searchKnowledgeBase(req.user!.orgId, query, limit || 5)
+    KB.searchKnowledgeBase(req.user!.orgId, query, { limit: limit || 5, userId: req.user!.uid })
       .then(results => res.json(results))
       .catch(err => res.status(500).json({ error: err.message }));
   });

@@ -69,9 +69,12 @@ describe('Settings & Keys API', () => {
           },
         },
         video: {
-          provider: 'qwen',
+          provider: 'minimax',
           model: 'wan-video-direct',
-          models: { qwen: 'wan-video-custom' },
+          models: {
+            qwen: 'wan-video-custom',
+            minimax: 'MiniMax-Hailuo-02',
+          },
         },
       }),
       signal: AbortSignal.timeout(5000),
@@ -87,9 +90,12 @@ describe('Settings & Keys API', () => {
       },
     });
     expect(updateBody.video).toMatchObject({
-      provider: 'qwen',
-      model: 'wan-video-custom',
-      models: { qwen: 'wan-video-custom' },
+      provider: 'minimax',
+      model: 'MiniMax-Hailuo-02',
+      models: {
+        qwen: 'wan-video-custom',
+        minimax: 'MiniMax-Hailuo-02',
+      },
     });
 
     const read = await fetch(`${url}/api/preferences/generation`, {
@@ -98,7 +104,7 @@ describe('Settings & Keys API', () => {
     expect(read.status).toBe(200);
     const readBody = await read.json();
     expect(readBody.image.model).toBe('wan-image-custom');
-    expect(readBody.video.model).toBe('wan-video-custom');
+    expect(readBody.video.model).toBe('MiniMax-Hailuo-02');
   });
 
   it('rejects unsupported generation model providers', async () => {
@@ -163,5 +169,53 @@ describe('Settings & Keys API', () => {
       signal: AbortSignal.timeout(5000),
     });
     expect(res.status).toBe(400);
+  });
+
+  it('stores the knowledge retrieval model independently', async () => {
+    const update = await fetch(`${url}/api/preferences/retrieval-model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embedding: {
+          provider: 'qwen',
+          model: 'text-embedding-v4',
+          fallbackProvider: 'ollama',
+          fallbackModel: 'nomic-embed-text',
+        },
+        rerank: {
+          enabled: true,
+          provider: 'siliconflow',
+          model: 'Qwen/Qwen3-Reranker-4B',
+          topN: 8,
+        },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(update.status).toBe(200);
+    const updateBody = await update.json();
+    expect(updateBody).toMatchObject({
+      embedding: { provider: 'qwen', model: 'text-embedding-v4' },
+      rerank: { enabled: true, provider: 'siliconflow', model: 'Qwen/Qwen3-Reranker-4B', topN: 8 },
+    });
+
+    const read = await fetch(`${url}/api/preferences/retrieval-model`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(read.status).toBe(200);
+    const readBody = await read.json();
+    expect(readBody).toMatchObject({
+      embedding: {
+        provider: 'qwen',
+        model: 'text-embedding-v4',
+        fallbackProvider: 'ollama',
+        fallbackModel: 'nomic-embed-text',
+      },
+      rerank: {
+        enabled: true,
+        provider: 'siliconflow',
+        model: 'Qwen/Qwen3-Reranker-4B',
+        topN: 8,
+      },
+    });
   });
 });

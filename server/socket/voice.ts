@@ -512,7 +512,7 @@ async function processVoiceInput(
   try {
     const ragAgentIds = Array.from(new Set([session.agentId, 'lumi'].filter(Boolean)));
     for (const ragAgentId of ragAgentIds) {
-      const chunks = retrieveChunks(session.userId, ragAgentId, routedUserText, 3, {
+      const chunks = await retrieveChunks(session.userId, ragAgentId, routedUserText, 3, {
         domain: voiceScope.domain,
         orgId: voiceScope.domain === 'work' ? voiceScope.orgId : '',
       });
@@ -530,7 +530,7 @@ async function processVoiceInput(
   let voiceOrganizationKnowledge = '';
   if (voiceScope.domain === 'work' && voiceScope.orgId) {
     try {
-      const results = await searchKnowledgeBase(voiceScope.orgId, routedUserText, 3);
+      const results = await searchKnowledgeBase(voiceScope.orgId, routedUserText, { limit: 3, userId: session.userId });
       voiceOrganizationKnowledge = results
         .map(result => `[${result.title}] ${result.chunk}`)
         .join('\n');

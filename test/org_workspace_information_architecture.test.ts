@@ -62,6 +62,20 @@ describe('organization workspace information architecture', () => {
     expect(branchPanel).not.toContain("ui('分支连接', 'Branch Connection')");
   });
 
+  it('uses the same Lumi model configuration across personal and organization domains', () => {
+    const orgSettings = source('src/components/org/OrgSettings.tsx');
+    const appContext = source('src/contexts/AppContext.tsx');
+    const selfModel = source('server/client/self_model.ts');
+    const systemRoutes = source('server/routes/system_routes.ts');
+
+    expect(orgSettings).not.toContain('/api/preferences/org-llm');
+    expect(orgSettings).not.toContain('LLM_PROVIDER_OPTIONS');
+    expect(appContext).not.toContain("'/api/preferences/org-llm'");
+    expect(systemRoutes).not.toContain('/preferences/org-llm');
+    expect(selfModel).toContain('organizations do not have an independent model policy');
+    expect(selfModel).toContain('model_configuration_update');
+  });
+
   it('reports exact organization views and preserves routed destinations until the workspace mounts', () => {
     const orgHub = source('src/components/org/OrgHub.tsx');
     const desktop = source('src/components/DesktopUI.tsx');

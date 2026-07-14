@@ -221,7 +221,7 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       res.status(400).json({ error: 'query is required' });
       return;
     }
-    KB.searchKnowledgeBase(req.user!.orgId!, query, { limit: limit || 5, category, status }).then(results => {
+    KB.searchKnowledgeBase(req.user!.orgId!, query, { limit: limit || 5, category, status, userId: req.user!.uid }).then(results => {
       res.json(results);
     }).catch(err => {
       res.status(500).json({ error: err.message });

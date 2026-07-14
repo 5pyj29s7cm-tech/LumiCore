@@ -1,7 +1,7 @@
 import { readDB, writeDB } from '../../db_layer';
 
 export type ImageGenerationProvider = 'auto' | 'openai' | 'qwen' | 'siliconflow';
-export type VideoGenerationProvider = 'qwen';
+export type VideoGenerationProvider = 'qwen' | 'minimax' | 'siliconflow' | 'openai';
 
 export interface GenerationModelSelection<TProvider extends string> {
   provider: TProvider;
@@ -22,10 +22,13 @@ export const DEFAULT_IMAGE_GENERATION_MODELS: Record<Exclude<ImageGenerationProv
 
 export const DEFAULT_VIDEO_GENERATION_MODELS: Record<VideoGenerationProvider, string> = {
   qwen: 'wanx2.1-t2v-turbo',
+  minimax: 'MiniMax-Hailuo-2.3',
+  siliconflow: 'Wan-AI/Wan2.2-T2V-A14B',
+  openai: 'sora-2',
 };
 
 const IMAGE_PROVIDERS = new Set<ImageGenerationProvider>(['auto', 'openai', 'qwen', 'siliconflow']);
-const VIDEO_PROVIDERS = new Set<VideoGenerationProvider>(['qwen']);
+const VIDEO_PROVIDERS = new Set<VideoGenerationProvider>(['qwen', 'minimax', 'siliconflow', 'openai']);
 
 function parseSetting(userId: string): any {
   try {

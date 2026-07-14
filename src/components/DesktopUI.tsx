@@ -3744,6 +3744,14 @@ export function DesktopUI({
       };
 
       try {
+        if (action === 'refresh_model_configuration') {
+          const roles = Array.isArray(detail.payload?.roles) ? detail.payload.roles : [];
+          window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed', {
+            detail: { roles },
+          }));
+          respond({ ok: true, action, roles });
+          return;
+        }
         if (action === 'refresh_client_state') {
           window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
           respond({ ok: true, action, mode: operationMode, activeTab, openWindows, widgetMode: isDesktopWidgetMode });
@@ -5372,7 +5380,7 @@ export function DesktopUI({
                         <button onClick={() => { toggleWindow('settings'); setSettingsSection('voice'); }} className="px-6 py-3 bg-celestial-saturn/10 border border-celestial-saturn/30 rounded-2xl text-xs font-black uppercase tracking-widest text-celestial-saturn hover:bg-celestial-saturn/20 transition-all">
                           {t.voiceForge || 'Voice Forge'}
                         </button>
-                        <button onClick={() => { toggleWindow('settings'); setSettingsSection('voice-services'); }} className="px-6 py-3 bg-white/5 border border-white/10 rounded-2xl text-xs font-black uppercase tracking-widest text-white/40 hover:bg-white/10 transition-all">
+                        <button onClick={() => { toggleWindow('settings'); setSettingsSection('voice-model'); }} className="px-6 py-3 bg-white/5 border border-white/10 rounded-2xl text-xs font-black uppercase tracking-widest text-white/40 hover:bg-white/10 transition-all">
                           {t.mediaServices || 'Media Services'}
                         </button>
                       </div>

@@ -19,8 +19,7 @@ export interface UserLLMPrefs {
   provider: UserLLMProvider;
   model: string;
   models: Record<string, string>;
-  source?: 'personal' | 'organization';
-  inheritPersonal?: boolean;
+  source: 'personal';
 }
 
 export const DEFAULT_MODELS: Record<UserLLMProvider, string> = {
@@ -61,6 +60,17 @@ function normalizeProvider(value: unknown): UserLLMProvider {
     : 'deepseek';
 }
 
+export function isUserLLMProvider(value: unknown): value is UserLLMProvider {
+  return typeof value === 'string' && VALID_PROVIDERS.has(value as UserLLMProvider);
+}
+
+function normalizeModels(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, model]) => typeof model === 'string' && model.trim())
+    .map(([provider, model]) => [provider, String(model).trim().slice(0, 200)]));
+}
+
 function parsePrefsRow(key: string): any {
   try {
     const db = readDB();
@@ -77,70 +87,53 @@ function normalizeLegacyModel(provider: UserLLMProvider, model: string): string 
   return model;
 }
 
-function resolvePrefs(raw: any, source: 'personal' | 'organization'): UserLLMPrefs {
+function resolvePrefs(raw: any): UserLLMPrefs {
   const provider = normalizeProvider(raw?.provider);
-  const rawModels = raw?.models && typeof raw.models === 'object' ? raw.models : {};
+  const rawModels = normalizeModels(raw?.models);
   const model = normalizeLegacyModel(provider, rawModels[provider] || DEFAULT_MODELS[provider]);
   const models = { ...rawModels, [provider]: model };
   return {
     provider,
     model,
     models,
-    source,
-    inheritPersonal: raw?.inheritPersonal === true,
+    source: 'personal',
   };
 }
 
 export function getUserPreferredLLM(userId: string): UserLLMPrefs {
-  return resolvePrefs(parsePrefsRow(`llm_prefs_${userId}`), 'personal');
+  return resolvePrefs(parsePrefsRow(`llm_prefs_${userId}`));
 }
 
-export function getOrgPreferredLLM(orgId: string): (UserLLMPrefs & { configured: boolean }) | null {
-  if (!orgId) return null;
-  const raw = parsePrefsRow(`org_llm_prefs_${orgId}`);
-  if (!raw) return null;
-  if (raw.inheritPersonal === true || !raw.provider) {
-    return { ...resolvePrefs(raw, 'organization'), configured: false, inheritPersonal: true };
-  }
-  return { ...resolvePrefs(raw, 'organization'), configured: true, inheritPersonal: false };
+export function upsertUserPreferredLLM(
+  userId: string,
+  input: { provider?: string; model?: string; models?: Record<string, string> },
+): UserLLMPrefs {
+  if (!isUserLLMProvider(input.provider)) throw new Error(`Unsupported reasoning provider: ${input.provider || ''}`);
+  const current = getUserPreferredLLM(userId || 'anonymous');
+  const provider = input.provider;
+  const models = {
+    ...current.models,
+    ...normalizeModels(input.models),
+  };
+  const requestedModel = String(input.model || models[provider] || DEFAULT_MODELS[provider]).trim().slice(0, 200);
+  if (!requestedModel) throw new Error('A reasoning model name is required');
+  models[provider] = requestedModel;
+  const payload = { provider, models, updatedAt: new Date().toISOString() };
+  const db = readDB();
+  const key = `llm_prefs_${userId || 'anonymous'}`;
+  if (!db.settings) (db as any).settings = [];
+  const index = (db.settings || []).findIndex((setting: any) => setting.key === key);
+  if (index >= 0) db.settings[index].value = JSON.stringify(payload);
+  else db.settings.push({ key, value: JSON.stringify(payload) });
+  writeDB(db);
+  return resolvePrefs(payload);
 }
 
 export function getScopedPreferredLLM(
   userId: string,
-  scope: { domain?: string; orgId?: string } = {},
+  _scope: { domain?: string; orgId?: string } = {},
 ): UserLLMPrefs {
-  if (scope.domain === 'work' && scope.orgId) {
-    const orgPrefs = getOrgPreferredLLM(scope.orgId);
-    if (orgPrefs?.configured) return orgPrefs;
-    return resolvePrefs({ provider: 'deepseek', models: {} }, 'organization');
-  }
   return getUserPreferredLLM(userId);
-}
-
-export function upsertOrgPreferredLLM(
-  orgId: string,
-  input: { inheritPersonal?: boolean; provider?: string; models?: Record<string, string> },
-): UserLLMPrefs & { configured: boolean } {
-  if (!orgId) throw new Error('orgId is required');
-  const provider = normalizeProvider(input.provider);
-  const models = input.models && typeof input.models === 'object' ? input.models : {};
-  const payload = {
-    inheritPersonal: false,
-    provider,
-    models,
-    updatedAt: new Date().toISOString(),
-  };
-  const db = readDB();
-  const key = `org_llm_prefs_${orgId}`;
-  if (!db.settings) (db as any).settings = [];
-  const idx = (db.settings || []).findIndex((s: any) => s.key === key);
-  if (idx >= 0) {
-    (db.settings as any[])[idx].value = JSON.stringify(payload);
-  } else {
-    db.settings.push({ key, value: JSON.stringify(payload) });
-  }
-  writeDB(db);
-  return { ...resolvePrefs(payload, 'organization'), configured: true, inheritPersonal: false };
 }
 
 export function getUserPreferredLLMConfig(
