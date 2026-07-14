@@ -36,6 +36,10 @@ export interface MessageRecord {
   personality?: string;
   mode?: string;
   toolCalls?: string;
+  domain?: string;
+  orgId?: string;
+  source?: string;
+  channel?: string;
   timestamp: string;
 }
 
@@ -167,6 +171,8 @@ export function addMessage(msg: {
   toolCalls?: any;
   domain?: string;
   orgId?: string;
+  source?: string;
+  channel?: string;
 }): string {
   const db = readDB();
   const id = 'msg_' + crypto.randomUUID();
@@ -186,6 +192,8 @@ export function addMessage(msg: {
     toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : '',
     domain: msg.domain || 'personal',
     orgId: msg.orgId || '',
+    source: msg.source || '',
+    channel: msg.channel || '',
     timestamp: now,
   };
 

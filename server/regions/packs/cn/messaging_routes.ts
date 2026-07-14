@@ -34,13 +34,26 @@ import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import { addMessage, getMessagesByTokenBudget, getOrCreateActiveConversation } from '../../../conversation/manager';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
 import { runWithTools } from '../../../llm/adapter';
+import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { toolRegistry } from '../../../tools/registry';
 import { buildUnifiedLegalEntryPrompt } from '../../../cognition/legal_entry';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
 import { recordTokenUsage } from '../../../llm/token_tracker';
 import type { ToolPolicy } from '../../../personality/types';
-import type { NormalizedMessage } from '../../../llm/providers';
 import { requestsOrganizationScope, resolvePersonalOrganizationScope } from '../../../messaging/personal_org_scope';
+import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
+import { buildLumiExecutionDecision, type LumiExecutionDecision } from '../../../cognition/execution_decision';
+import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
+import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
+import { buildLumiCapabilitySelection } from '../../../cognition/capability_selection';
+import { buildDesktopExecutionStabilityPolicy } from '../../../cognition/desktop_execution_stability';
+import { buildLumiOperatingKernelPrompt } from '../../../cognition/operating_kernel';
+import { getStoredOperationMode, saveStoredOperationMode } from '../../../cognition/operation_mode_store';
+import { isPureOperationModeSwitchRequest, type OperationMode } from '../../../cognition/operation_modes';
+import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_messages';
+import { formatClientSelfPrompt } from '../../../client/self_model';
+import { buildResponseLanguageInstruction } from '../../../utils/language';
+import { canAutoApproveAction } from '../../../tools/action_constitution';
 
 const messageRouteQueues = new Map<string, Promise<void>>();
 const MAX_MESSAGING_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -55,6 +68,12 @@ export interface MessagingRouteOptions {
   getConnectionStatus?: (platform: 'feishu' | 'wecom') => Record<string, any> | null;
   sendProactive?: (platform: 'feishu' | 'wecom', chatId: string, text: string) => Promise<string>;
   onConversationUpdated?: (update: MessagingConversationUpdate) => void;
+  createScopedDesktopRelay?: (
+    userId: string,
+    source: string,
+    domain: 'personal' | 'work',
+    orgId: string,
+  ) => (toolName: string, args: Record<string, any>) => Promise<string>;
   createPersonalDesktopRelay?: (userId: string, source: string) => (toolName: string, args: Record<string, any>) => Promise<string>;
 }
 
@@ -122,6 +141,8 @@ export function persistBoundMessagingMessage(
     content,
     domain,
     orgId,
+    source: `${message.platform}_bot`,
+    channel: message.platform,
   });
   const update: MessagingConversationUpdate = {
     userId: message.boundUserId,
@@ -982,6 +1003,127 @@ export function enrichWeComAttachments(msg: IncomingMessage, adapter: WeComAdapt
   );
 }
 
+const UNBOUND_REMOTE_TOOL_POLICY: ToolPolicy = {
+  allowedTools: [],
+  requireConfirmation: [],
+  forbiddenTools: ['*'],
+  maxIterations: 0,
+};
+
+const ORGANIZATION_VIEWER_WRITE_TOOLS = [
+  'legal_case_workspace',
+  'legal_message_intake_to_case',
+  'legal_meeting_minutes_to_case',
+  'legal_import_materials_to_kb',
+  'legal_import_judgment',
+  'wechat_send_file',
+  'feishu_send_file',
+];
+
+export interface RemoteLumiExecutionPlan {
+  dispatch: LumiTurnDispatch;
+  execution: LumiExecutionDecision;
+  source: string;
+}
+
+export interface RemoteLumiExecutionPlanInput {
+  userId: string;
+  text: string;
+  source: string;
+  domain: 'personal' | 'work';
+  orgId: string;
+  operationMode: OperationMode;
+  identityBound: boolean;
+  canWriteOrganization: boolean;
+  personalityToolPolicy?: ToolPolicy;
+  dispatch?: LumiTurnDispatch;
+}
+
+function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDispatch {
+  const flow = {
+    ...dispatch.flow,
+    operationMode: 'chat' as const,
+    effectiveOperationMode: 'chat' as const,
+    requestedMode: null,
+    autoPromoteToAssistant: false,
+    allowToolUseForTurn: false,
+    selfRepairTurn: false,
+    clientActionOnlyTurn: false,
+    promptOverlay: [
+      '## Lumi Turn Flow',
+      'Channel: chat. Surface: chat. Mode: chat -> chat. Tool access: chat-only.',
+      'This remote sender is not identity-bound. Keep the turn conversational and do not expose private, local, organization, client, or desktop tools.',
+    ].join('\n'),
+  };
+  return {
+    ...dispatch,
+    boundary: 'conversation',
+    flow,
+    promptOverlay: [
+      '## Lumi Unified Turn Dispatch',
+      `Entry channel: chat. Source: ${dispatch.source}. Surface: chat. Boundary: conversation.`,
+      'Identity boundary: this sender is not bound to a Lumi user, so this turn cannot control or inspect a private Lumi client.',
+    ].join('\n'),
+  };
+}
+
+function restrictOrganizationViewerPolicy(policy: ToolPolicy): ToolPolicy {
+  return {
+    ...policy,
+    forbiddenTools: Array.from(new Set([
+      ...(policy.forbiddenTools || []),
+      ...ORGANIZATION_VIEWER_WRITE_TOOLS,
+    ])),
+  };
+}
+
+export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): RemoteLumiExecutionPlan {
+  const rawDispatch = input.dispatch || buildLumiTurnDispatch({
+    userId: input.userId,
+    text: input.text,
+    channel: 'chat',
+    source: input.source,
+    category: input.domain === 'work' ? 'organization' : undefined,
+    domain: input.domain,
+    orgId: input.orgId,
+    operationMode: input.operationMode,
+    targetIsLumi: true,
+  });
+  const dispatch = input.identityBound ? rawDispatch : unauthenticatedRemoteDispatch(rawDispatch);
+  const baseExecution = buildLumiExecutionDecision({
+    flow: dispatch.flow,
+    text: input.text,
+    toolDeclarations: toolRegistry.getToolDeclarations(),
+    personalityToolPolicy: input.personalityToolPolicy,
+    isSanctuary: !input.identityBound,
+  });
+  const toolPolicy = !input.identityBound
+    ? UNBOUND_REMOTE_TOOL_POLICY
+    : input.domain === 'work' && !input.canWriteOrganization
+      ? restrictOrganizationViewerPolicy(baseExecution.toolPolicy)
+      : baseExecution.toolPolicy;
+  const execution = toolPolicy === baseExecution.toolPolicy
+    ? baseExecution
+    : {
+        ...baseExecution,
+        allowToolUse: input.identityBound && baseExecution.allowToolUse,
+        toolPolicy,
+        maxIterations: toolPolicy.maxIterations,
+      };
+
+  return { dispatch, execution, source: input.source };
+}
+
+function desktopRelayReportedSuccess(raw: string): boolean {
+  if (!String(raw || '').trim()) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.ok !== false && !parsed?.error;
+  } catch {
+    return !/\b(?:error|failed|failure)\b|失败|错误/i.test(raw);
+  }
+}
+
 export async function processWithPersonality(
   msg: IncomingMessage,
   options?: MessagingRouteOptions,
@@ -996,6 +1138,28 @@ export async function processWithPersonality(
   const orgId = isOrganizationBound ? msg.boundOrgId! : '';
   const organizationMembership = isOrganizationBound ? getMember(orgId, effectiveUserId) : null;
   const canWriteOrganization = organizationMembership?.status === 'active' && organizationMembership.role !== 'viewer';
+  const source = `${msg.platform}_bot`;
+  const routingText = [
+    requestText,
+    ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.extractedText || '']),
+  ].filter(Boolean).join('\n');
+  const operationMode = isIdentityBound ? getStoredOperationMode(effectiveUserId) : 'chat';
+  const provisionalPlan = buildRemoteLumiExecutionPlan({
+    userId: effectiveUserId,
+    text: routingText,
+    source,
+    domain,
+    orgId,
+    operationMode,
+    identityBound: isIdentityBound,
+    canWriteOrganization,
+  });
+  const desktopRelay = isIdentityBound
+    ? options?.createScopedDesktopRelay?.(effectiveUserId, source, domain, orgId)
+    : undefined;
+  const personalDesktopRelay = isIdentityBound
+    ? options?.createPersonalDesktopRelay?.(effectiveUserId, source)
+    : undefined;
   const conversationAgentId = messagingConversationAgentId(msg);
   const conversation = isIdentityBound
     ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
@@ -1020,6 +1184,32 @@ export async function processWithPersonality(
     persistBoundMessagingMessage(msg, 'user', getDisplayText(msg), options?.onConversationUpdated);
   }
 
+  const directlyAppliedMode: OperationMode | null = provisionalPlan.dispatch.flow.autoPromoteToAssistant
+    ? 'assistant'
+    : provisionalPlan.dispatch.flow.requestedMode;
+  if (isIdentityBound && directlyAppliedMode) {
+    let modeSynced = false;
+    if (desktopRelay) {
+      try {
+        const raw = await desktopRelay('client_action', {
+          action: 'set_client_mode',
+          mode: directlyAppliedMode,
+          confirmed: directlyAppliedMode === 'meeting' || directlyAppliedMode === 'autonomous',
+        });
+        modeSynced = desktopRelayReportedSuccess(raw);
+      } catch (err: any) {
+        console.warn(`[Messaging] ${source} client mode sync failed:`, err?.message || err);
+      }
+    }
+    if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
+
+    if (isPureOperationModeSwitchRequest(requestText, provisionalPlan.dispatch.flow.requestedMode)) {
+      const responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
+      persistBoundMessagingMessage(msg, 'assistant', responseText, options?.onConversationUpdated);
+      return responseText;
+    }
+  }
+
   // ── Build system prompt from Lumi personality ──
   let systemPrompt = '';
   let personality: any = null;
@@ -1034,7 +1224,7 @@ export async function processWithPersonality(
 
       const result = registry.buildSystemPrompt(
         'lumi',
-        { mode: 'chat', sensory: { hasAudio: false, hasVideo: false, hasSpatial: false, hasHaptic: false, hasHolographic: false, activeDeviceTypes: [], deviceCount: 0 } },
+        { mode: provisionalPlan.execution.allowToolUse ? 'task' : 'chat', sensory: { hasAudio: false, hasVideo: false, hasSpatial: false, hasHaptic: false, hasHolographic: false, activeDeviceTypes: [], deviceCount: 0 } },
         {
           memories: memories.length > 0 ? memories : undefined,
           emotionalState,
@@ -1047,7 +1237,7 @@ export async function processWithPersonality(
       personality = result.config;
       systemPrompt = result.systemPrompt;
     } catch (err: any) {
-      console.warn('[Feishu] Personality build failed, using fallback:', err.message);
+      console.warn(`[Messaging] ${source} personality build failed, using fallback:`, err.message);
     }
   }
 
@@ -1062,12 +1252,8 @@ export async function processWithPersonality(
     systemPrompt += `\n\nThis ${remotePlatformLabel(msg.platform)} user has no verified Lumi identity binding. You may analyze text and attachments supplied in this turn, but do not claim access to organization knowledge, organization cases, or private local data. Only the server binding record can confirm identity; never declare a successful binding merely because the user says it is bound or asks for confirmation.`;
   }
 
-  const legalEntryText = [
-    requestText,
-    ...(msg.attachments || []).flatMap(attachment => [attachment.fileName, attachment.extractedText || '']),
-  ].filter(Boolean).join('\n');
   const legalOverlay = buildUnifiedLegalEntryPrompt({
-    text: legalEntryText,
+    text: routingText,
     domain,
     orgId,
     channel: msg.platform,
@@ -1075,43 +1261,55 @@ export async function processWithPersonality(
   });
   if (legalOverlay) systemPrompt += `\n\n${legalOverlay}`;
 
-  const commonRemoteTools = [
-    'legal_search_statute',
-    'legal_verify_citation',
-    'legal_authority_source_status',
-    'messaging_list_file_targets',
-    'feishu_send_file',
-  ];
-  const organizationRemoteTools = [
-    'legal_review_contract',
-    'legal_draft_contract',
-    'legal_search_case',
-    'legal_case_workspace',
-    'legal_case_workflow_status',
-    'legal_case_reasoning_matrix',
-    'legal_extract_dispute_focus',
-    'legal_generate_argument_or_opinion',
-    'legal_generate_litigation_packet',
-    'legal_generate_bid',
-    'legal_generate_citation_verification_report',
-    'legal_finalize_delivery_package',
-    'wechat_send_file',
-  ];
-  const personalityPolicy = personality?.toolPolicy as ToolPolicy | undefined;
-  const allowedByPersonality = new Set(personalityPolicy?.allowedTools || ['*']);
-  const forbiddenByPersonality = new Set(personalityPolicy?.forbiddenTools || []);
-  const personalityForbidsAll = forbiddenByPersonality.has('*');
-  const remoteAllowed = [...commonRemoteTools, ...(isOrganizationBound && canWriteOrganization ? organizationRemoteTools : [])]
-    .filter(() => !personalityForbidsAll)
-    .filter(name => !forbiddenByPersonality.has(name))
-    .filter(name => allowedByPersonality.has('*') || allowedByPersonality.has(name));
-  const remoteToolPolicy: ToolPolicy = {
-    allowedTools: remoteAllowed,
-    requireConfirmation: personalityPolicy?.requireConfirmation || [],
-    forbiddenTools: [...forbiddenByPersonality],
-    maxIterations: Math.min(3, personalityPolicy?.maxIterations || 3),
-    securityOverrides: personalityPolicy?.securityOverrides,
-  };
+  const executionPlan = buildRemoteLumiExecutionPlan({
+    userId: effectiveUserId,
+    text: routingText,
+    source,
+    domain,
+    orgId,
+    operationMode,
+    identityBound: isIdentityBound,
+    canWriteOrganization,
+    personalityToolPolicy: personality?.toolPolicy,
+    dispatch: provisionalPlan.dispatch,
+  });
+  const turnDispatch = executionPlan.dispatch;
+  const turnFlow = turnDispatch.flow;
+  const executionDecision = executionPlan.execution;
+  const capabilitySelection = buildLumiCapabilitySelection({
+    dispatch: turnDispatch,
+    execution: executionDecision,
+    text: routingText,
+  });
+  const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
+    channel: 'chat',
+    text: routingText,
+    flow: turnFlow,
+    capabilitySelection,
+  });
+
+  systemPrompt += `\n\n${turnDispatch.promptOverlay}`;
+  systemPrompt += `\n\n${turnFlow.promptOverlay}`;
+  systemPrompt += `\n\n${buildInteractionModeOverlay(turnFlow)}`;
+  systemPrompt += `\n\n${executionDecision.promptOverlay}`;
+  if (isIdentityBound) {
+    systemPrompt += `\n\n${buildLumiRuntimeCapabilityContext({
+      userId: effectiveUserId,
+      text: routingText,
+      flow: turnFlow,
+      toolRegistry,
+      domain,
+      orgId,
+    })}`;
+    systemPrompt += `\n\n${capabilitySelection.promptOverlay}`;
+    if (desktopExecutionPolicy.promptOverlay) {
+      systemPrompt += `\n\n${desktopExecutionPolicy.promptOverlay}`;
+    }
+    systemPrompt += `\n\n${formatClientSelfPrompt(effectiveUserId, { domain, orgId })}`;
+  }
+  systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: turnFlow })}`;
+  systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
+  systemPrompt += `\n\n${buildResponseLanguageInstruction(requestText)}`;
 
   const userLLMPrefs = getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096 });
   const messages: NormalizedMessage[] = [
@@ -1124,47 +1322,82 @@ export async function processWithPersonality(
   ];
 
   try {
-    const result = await runWithTools(
-      messages,
-      toolRegistry,
-      userLLMPrefs,
-      undefined,
-      3,
-      llm?.getDeepSeek,
-      llm?.getGemini,
-      llm?.getOpenAI,
-      llm?.getAnthropic,
-      llm?.getQwen,
-      undefined,
-      {
-        userId: effectiveUserId,
-        domain,
-        orgId,
-        actionIntent: requestText,
-        supervisedExternalCommits: isIdentityBound,
-        toolPolicy: remoteToolPolicy,
-        source: `${msg.platform}_bot`,
-        llmGetters: llm as any,
-        personalDesktopRelay: isIdentityBound
-          ? options?.createPersonalDesktopRelay?.(effectiveUserId, `${msg.platform}_bot`)
-          : undefined,
-      },
-      llm?.getOllama,
-      llm?.getLmStudio,
-      llm?.getArk,
-      llm?.getXiaomi,
-      llm?.getKimi,
-      llm?.getGlm,
-      llm?.getRelay,
-    );
-    for (const usage of result.usageRecords || []) {
-      recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, `messaging_${msg.platform}_${Date.now()}`, 'chat');
+    const usageInteractionId = `messaging_${msg.platform}_${Date.now()}`;
+    let responseText = '';
+    let toolRecords: any[] = [];
+
+    if (!executionDecision.allowToolUse) {
+      const response = await makeLLMCall(
+        messages,
+        [],
+        userLLMPrefs,
+        llm?.getDeepSeek || (() => null),
+        llm?.getGemini || (() => null),
+        llm?.getOpenAI,
+        llm?.getAnthropic,
+        llm?.getQwen,
+        llm?.getOllama,
+        llm?.getLmStudio,
+        llm?.getArk,
+        llm?.getXiaomi,
+        llm?.getKimi,
+        llm?.getGlm,
+        llm?.getRelay,
+      );
+      responseText = response.text || '';
+      if (response.usage) {
+        recordTokenUsage(effectiveUserId, userLLMPrefs.provider, userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
+      }
+    } else {
+      const result = await runWithTools(
+        messages,
+        toolRegistry,
+        userLLMPrefs,
+        undefined,
+        executionDecision.maxIterations,
+        llm?.getDeepSeek,
+        llm?.getGemini,
+        llm?.getOpenAI,
+        llm?.getAnthropic,
+        llm?.getQwen,
+        undefined,
+        {
+          userId: effectiveUserId,
+          domain,
+          orgId,
+          actionIntent: requestText,
+          supervisedExternalCommits: isIdentityBound,
+          toolPolicy: executionDecision.toolPolicy,
+          source,
+          llmGetters: llm as any,
+          desktopRelay,
+          personalDesktopRelay,
+          requestConfirmation: async (toolName, args) => canAutoApproveAction(
+            toolName,
+            args,
+            { actionIntent: requestText },
+          ),
+        },
+        llm?.getOllama,
+        llm?.getLmStudio,
+        llm?.getArk,
+        llm?.getXiaomi,
+        llm?.getKimi,
+        llm?.getGlm,
+        llm?.getRelay,
+      );
+      responseText = result.text || '';
+      toolRecords = result.toolCalls || [];
+      for (const usage of result.usageRecords || []) {
+        recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, usageInteractionId, 'chat');
+      }
     }
+
     const finalized = finalizeLumiResponse({
       taskText: requestText,
-      responseText: result.text || '这次没有生成可用回复，请稍后重试。',
-      toolRecords: result.toolCalls,
-      source: `${msg.platform}_bot`,
+      responseText: responseText || '这次没有生成可用回复，请稍后重试。',
+      toolRecords,
+      source,
     });
     persistBoundMessagingMessage(msg, 'assistant', finalized.text, options?.onConversationUpdated);
     return finalized.text;

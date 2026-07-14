@@ -46,6 +46,16 @@ export function setupMessaging(
     },
     getConnectionStatus: platform => messagingConnectionManager.status(platform),
     sendProactive: (platform, chatId, text) => messagingConnectionManager.sendProactive(platform, chatId, text),
+    createScopedDesktopRelay: io
+      ? (userId, source, domain, orgId) => createDesktopRelay({
+          io,
+          userId,
+          domain,
+          orgId,
+          source,
+          timeoutMs: 90_000,
+        })
+      : undefined,
     createPersonalDesktopRelay: io
       ? (userId, source) => createDesktopRelay({
           io,

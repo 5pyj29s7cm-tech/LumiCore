@@ -59,6 +59,11 @@ describe('messaging long connections and organization routing', () => {
       import('../server/messaging/config'),
       import('../server/org/db'),
     ]);
+    const [{ toolRegistry }, { registerAllTools }] = await Promise.all([
+      import('../server/tools/registry'),
+      import('../server/tools/definitions'),
+    ]);
+    registerAllTools(toolRegistry);
   });
 
   beforeEach(() => {
@@ -282,7 +287,7 @@ describe('messaging long connections and organization routing', () => {
     expect(wechatRoutes.handleWeChatBindingCommand(message)).toContain('已连接到你的个人 Lumi');
   });
 
-  it('uses the main Lumi chat for personal WeChat and isolates group members and threads', () => {
+  it('uses the main Lumi chat for personal WeChat and isolates group members and threads', async () => {
     const personal = incoming({
       platform: 'wechat',
       userId: 'wx-user',
@@ -302,6 +307,126 @@ describe('messaging long connections and organization routing', () => {
     const update = routes.persistBoundMessagingExchange(personal, '收到', value => { emitted = value; });
     expect(update).toMatchObject({ agentId: 'lumi', domain: 'personal', orgId: '', source: 'wechat_bot' });
     expect(emitted).toEqual(update);
+
+    const conversations = await import('../server/conversation/manager');
+    const messages = conversations.getMessages(update!.conversationId);
+    expect(messages.slice(-2).map((item: any) => ({ source: item.source, channel: item.channel }))).toEqual([
+      { source: 'wechat_bot', channel: 'wechat' },
+      { source: 'wechat_bot', channel: 'wechat' },
+    ]);
+  });
+
+  it('routes bound remote turns through the same Lumi mode and capability graph', () => {
+    const base = {
+      userId: 'remote-plan-user',
+      source: 'wechat_bot',
+      domain: 'personal' as const,
+      orgId: '',
+      identityBound: true,
+      canWriteOrganization: true,
+    };
+
+    const greeting = routes.buildRemoteLumiExecutionPlan({
+      ...base,
+      text: '在吗',
+      operationMode: 'assistant',
+    });
+    expect(greeting.dispatch.boundary).toBe('conversation');
+    expect(greeting.execution.allowToolUse).toBe(false);
+    expect(greeting.execution.toolPolicy.forbiddenTools).toContain('*');
+
+    const chatAction = routes.buildRemoteLumiExecutionPlan({
+      ...base,
+      text: '操作桌面打开微信',
+      operationMode: 'chat',
+    });
+    expect(chatAction.dispatch.flow.autoPromoteToAssistant).toBe(true);
+    expect(chatAction.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(chatAction.execution.allowToolUse).toBe(true);
+    expect(chatAction.execution.maxIterations).toBeGreaterThan(3);
+    expect(chatAction.execution.toolPolicy.allowedTools).toContain('desktop_open');
+
+    const clientCheck = routes.buildRemoteLumiExecutionPlan({
+      ...base,
+      text: '给客户端做个自检',
+      operationMode: 'assistant',
+    });
+    expect(clientCheck.dispatch.flow.selfRepairTurn).toBe(true);
+    expect(clientCheck.execution.toolPolicy.allowedTools).toEqual(['*']);
+    expect(clientCheck.execution.maxIterations).toBe(8);
+
+    const modeSwitch = routes.buildRemoteLumiExecutionPlan({
+      ...base,
+      text: '切换到自主模式',
+      operationMode: 'assistant',
+    });
+    expect(modeSwitch.dispatch.flow.requestedMode).toBe('autonomous');
+    expect(modeSwitch.execution.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
+  });
+
+  it('keeps unbound remote senders off private tools and organization viewers off write tools', () => {
+    const unbound = routes.buildRemoteLumiExecutionPlan({
+      userId: 'anonymous',
+      text: '打开我的桌面微信',
+      source: 'wechat_bot',
+      domain: 'personal',
+      orgId: '',
+      operationMode: 'chat',
+      identityBound: false,
+      canWriteOrganization: false,
+    });
+    expect(unbound.dispatch.boundary).toBe('conversation');
+    expect(unbound.dispatch.flow.allowToolUseForTurn).toBe(false);
+    expect(unbound.execution.allowToolUse).toBe(false);
+    expect(unbound.execution.toolPolicy.forbiddenTools).toContain('*');
+
+    const viewer = routes.buildRemoteLumiExecutionPlan({
+      userId: 'org-viewer',
+      text: '把这份材料导入案件并发送到个人微信',
+      source: 'feishu_bot',
+      domain: 'work',
+      orgId: 'org-view-only',
+      operationMode: 'assistant',
+      identityBound: true,
+      canWriteOrganization: false,
+    });
+    expect(viewer.execution.toolPolicy.forbiddenTools).toEqual(expect.arrayContaining([
+      'legal_case_workspace',
+      'legal_import_materials_to_kb',
+      'wechat_send_file',
+    ]));
+  });
+
+  it('applies a personal WeChat mode switch through the scoped desktop relay without an LLM round trip', async () => {
+    const userId = `wechat-mode-${Date.now()}-${Math.random()}`;
+    const calls: Array<{ name: string; args: Record<string, any> }> = [];
+    const scopes: Array<{ userId: string; source: string; domain: string; orgId: string }> = [];
+    const message = incoming({
+      platform: 'wechat',
+      userId: `wx-${userId}`,
+      chatId: `wx-${userId}`,
+      boundUserId: userId,
+      text: '切换到自主模式',
+    });
+
+    const reply = await routes.processWithPersonality(message, {
+      createScopedDesktopRelay: (relayUserId, source, domain, orgId) => {
+        scopes.push({ userId: relayUserId, source, domain, orgId });
+        return async (name, args) => {
+          calls.push({ name, args });
+          return JSON.stringify({ ok: true, action: args.action, mode: args.mode });
+        };
+      },
+    });
+
+    expect(reply).toBe('已切到自主模式。');
+    expect(scopes).toEqual([{ userId, source: 'wechat_bot', domain: 'personal', orgId: '' }]);
+    expect(calls).toEqual([{
+      name: 'client_action',
+      args: { action: 'set_client_mode', mode: 'autonomous', confirmed: true },
+    }]);
+    const { getStoredOperationMode } = await import('../server/cognition/operation_mode_store');
+    expect(getStoredOperationMode(userId)).toBe('autonomous');
   });
 
   it('keeps attachment processing instructions out of the synchronized chat history', async () => {
