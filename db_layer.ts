@@ -65,6 +65,23 @@ let memoryDB: any = null;
 const SYSTEM_FLAGS_SETTING = '__lumi_system_flags';
 const SYSTEM_SNAPSHOTS_SETTING = '__lumi_system_snapshots';
 
+function parseStoredToolCalls(value: unknown): any[] | undefined {
+  let current = value;
+  for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return undefined;
+    }
+  }
+  return Array.isArray(current) ? current : undefined;
+}
+
+function serializeStoredToolCalls(value: unknown): string {
+  const records = parseStoredToolCalls(value);
+  return records?.length ? JSON.stringify(records) : '';
+}
+
 function parseJsonSetting<T>(settings: any[], key: string, fallback: T): T {
   const row = settings.find((s: any) => s.key === key);
   if (!row?.value) return fallback;
@@ -154,6 +171,8 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE memories ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     db!.run("ALTER TABLE interactions ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN source TEXT DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE interactions ADD COLUMN channel TEXT DEFAULT ''", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     db!.run("ALTER TABLE agents ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
     // Add domain + orgId to conversations for personal/work isolation
@@ -284,6 +303,8 @@ function createTables(): Promise<void> {
         llmWasCalled INTEGER DEFAULT 0,
         domain TEXT DEFAULT 'personal',
         orgId TEXT DEFAULT '',
+        source TEXT DEFAULT '',
+        channel TEXT DEFAULT '',
         timestamp TEXT NOT NULL
       );
 
@@ -610,12 +631,14 @@ async function loadMemoryDB(): Promise<void> {
     role: i.role || '',
     personality: i.personality || i.module || '',
     mode: i.mode || '',
-    toolCalls: i.toolCalls ? JSON.parse(i.toolCalls) : undefined,
+    toolCalls: parseStoredToolCalls(i.toolCalls),
     conversationId: i.conversationId || '',
     cognitiveIntent: i.cognitiveIntent || '',
     llmWasCalled: i.llmWasCalled ? true : false,
     domain: i.domain || 'personal',
     orgId: i.orgId || '',
+    source: i.source || '',
+    channel: i.channel || '',
   }));
 
   memoryDB = {
@@ -775,9 +798,9 @@ async function persistMemoryDB(): Promise<void> {
     },
     {
       name: 'interactions',
-      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, domain, orgId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', i.toolCalls ? JSON.stringify(i.toolCalls) : '', i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, i.domain || 'personal', i.orgId || '', i.timestamp]),
+      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, domain, orgId, source, channel, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.timestamp]),
     },
     {
       name: 'memories',

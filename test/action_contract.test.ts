@@ -66,13 +66,40 @@ describe('Lumi action contract', () => {
     const contract = buildActionContract('\u7ed9\u5f20\u4e09\u53d1\u4e0b\u5348\u4e09\u70b9\u5f00\u4f1a');
 
     expect(contract.kind).toBe('messaging_send');
-    expect(contract.coreAction).toContain('\u6536\u4ef6\u4eba');
+    expect(contract.coreAction).toContain('recipient');
     expect(hasCoreActionEvidence(contract, [{
       id: '1',
       name: 'desktop_active_window',
       arguments: {},
       result: 'WeChat is active',
     }])).toBe(false);
+  });
+
+  it('accepts a matching verified WeChat file delivery without confusing it with a text send', () => {
+    const task = '\u628a\u9886\u822a\u5458\u8ba1\u52122026\u53d1\u7ed9\u6211';
+    const contract = buildActionContract(task);
+    const delivered = {
+      id: 'file-send-1',
+      name: 'wechat_send_file',
+      arguments: { filePath: 'C:\\Users\\owner\\Desktop\\\u9886\u822a\u5458\u8ba1\u52122026.docx' },
+      result: JSON.stringify({
+        sent: true,
+        verificationStatus: 'provider_accepted',
+        verificationMethod: 'wechat_ilink_provider_ack',
+        fileName: '\u9886\u822a\u5458\u8ba1\u52122026.docx',
+        messageId: 'wx-file-1',
+      }),
+    };
+
+    expect(contract.kind).toBe('messaging_send');
+    expect(contract.preferredTools).toContain('wechat_send_file');
+    expect(contract.requiredEvidence.join(' ')).toContain('wechat_send_file');
+    expect(hasCoreActionEvidence(contract, [delivered], task)).toBe(true);
+    expect(hasCoreActionEvidence(contract, [{
+      ...delivered,
+      arguments: { filePath: 'C:\\Users\\owner\\Desktop\\\u5176\u4ed6\u6587\u4ef6.docx' },
+      result: JSON.stringify({ sent: true, fileName: '\u5176\u4ed6\u6587\u4ef6.docx' }),
+    }], task)).toBe(false);
   });
 
   it('classifies foreground chat reading separately from sending', () => {

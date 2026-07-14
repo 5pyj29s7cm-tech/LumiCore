@@ -31,7 +31,7 @@ import * as OrgKB from '../../../org/kb';
 import * as LegalCases from '../../../org/legal_cases';
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
-import { addMessage, getMessagesByTokenBudget, getOrCreateActiveConversation } from '../../../conversation/manager';
+import { addMessage, getMessages, getMessagesByTokenBudget, getOrCreateActiveConversation } from '../../../conversation/manager';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
 import { runWithTools } from '../../../llm/adapter';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
@@ -113,6 +113,67 @@ export function messagingConversationAgentId(message: IncomingMessage): string {
   return `lumi:${message.platform}:${scope}`;
 }
 
+function parsePersistedToolRecords(value: unknown): any[] {
+  let current = value;
+  for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(current) ? current : [];
+}
+
+function summarizeRemoteToolRecord(record: any): string {
+  const name = String(record?.name || '').trim();
+  if (!name) return '';
+  if (record?.error) return `${name}: failed`;
+
+  let payload: Record<string, any> | null = null;
+  try {
+    const parsed = typeof record?.result === 'string' ? JSON.parse(record.result) : record?.result;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed;
+  } catch {}
+
+  const facts: string[] = [];
+  const allowedKeys = [
+    'sent',
+    'read',
+    'ok',
+    'status',
+    'verificationStatus',
+    'verificationMethod',
+    'fileName',
+    'messageId',
+    'contact',
+    'method',
+  ];
+  for (const key of allowedKeys) {
+    const value = payload?.[key];
+    if (value === undefined || value === null || value === '') continue;
+    facts.push(`${key}=${JSON.stringify(value).slice(0, 180)}`);
+  }
+  if (facts.length === 0 && /"sent"\s*:\s*true|sent:\s*true/i.test(String(record?.result || ''))) {
+    facts.push('sent=true');
+  }
+  return `${name}: ${facts.length > 0 ? facts.join(', ') : 'completed'}`;
+}
+
+export function buildRemoteRuntimeEvidenceContext(messages: any[]): string {
+  const lines = messages
+    .slice(-12)
+    .flatMap(message => parsePersistedToolRecords(message?.toolCalls).map(summarizeRemoteToolRecord))
+    .filter(Boolean)
+    .slice(-10);
+  if (lines.length === 0) return '';
+  return [
+    'Authoritative runtime evidence persisted from recent turns:',
+    ...lines.map(line => `- ${line}`),
+    'Use this evidence when explaining prior outcomes. Do not replace a successful provider acknowledgement with a guess based on the visible assistant wording.',
+  ].join('\n');
+}
+
 export function persistBoundMessagingExchange(
   message: IncomingMessage,
   reply: string,
@@ -127,6 +188,7 @@ export function persistBoundMessagingMessage(
   role: 'user' | 'assistant',
   content: string,
   onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
+  toolCalls?: any[],
 ): MessagingConversationUpdate | null {
   if (!message.boundUserId) return null;
   const agentId = messagingConversationAgentId(message);
@@ -143,6 +205,7 @@ export function persistBoundMessagingMessage(
     orgId,
     source: `${message.platform}_bot`,
     channel: message.platform,
+    toolCalls: toolCalls?.length ? toolCalls : undefined,
   });
   const update: MessagingConversationUpdate = {
     userId: message.boundUserId,
@@ -1167,6 +1230,9 @@ export async function processWithPersonality(
   const priorMessages = conversation
     ? getMessagesByTokenBudget(conversation.id, 6000, 8)
     : [];
+  const priorRuntimeEvidence = conversation
+    ? buildRemoteRuntimeEvidenceContext(getMessages(conversation.id, 12))
+    : '';
   const conversationHistory = priorMessages.flatMap((item: any) => {
     const content = String(item.message || item.content || '').trim();
     const response = String(item.response || '').trim();
@@ -1309,6 +1375,7 @@ export async function processWithPersonality(
   }
   systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: turnFlow })}`;
   systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
+  if (priorRuntimeEvidence) systemPrompt += `\n\n${priorRuntimeEvidence}`;
   systemPrompt += `\n\n${buildResponseLanguageInstruction(requestText)}`;
 
   const userLLMPrefs = getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096 });
@@ -1399,7 +1466,7 @@ export async function processWithPersonality(
       toolRecords,
       source,
     });
-    persistBoundMessagingMessage(msg, 'assistant', finalized.text, options?.onConversationUpdated);
+    persistBoundMessagingMessage(msg, 'assistant', finalized.text, options?.onConversationUpdated, toolRecords);
     return finalized.text;
   } catch (err: any) {
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);

@@ -35,7 +35,7 @@ export interface MessageRecord {
   role: string;
   personality?: string;
   mode?: string;
-  toolCalls?: string;
+  toolCalls?: any[];
   domain?: string;
   orgId?: string;
   source?: string;
@@ -189,7 +189,7 @@ export function addMessage(msg: {
     role: msg.role,
     personality: msg.personality || '',
     mode: msg.mode || '',
-    toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : '',
+    toolCalls: normalizeToolCalls(msg.toolCalls),
     domain: msg.domain || 'personal',
     orgId: msg.orgId || '',
     source: msg.source || '',
@@ -234,6 +234,18 @@ function compactPromptText(value: string, limit: number): string {
   ].join('');
 }
 
+function normalizeToolCalls(value: unknown): any[] | undefined {
+  let current = value;
+  for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return undefined;
+    }
+  }
+  return Array.isArray(current) && current.length > 0 ? current : undefined;
+}
+
 function isPromptEligibleMessage(m: MessageRecord): boolean {
   if (!m) return false;
   if (m.role === 'tool' || m.mode === 'proactive') return false;
@@ -245,7 +257,7 @@ function compactRecordForPrompt(m: MessageRecord): MessageRecord {
     ...m,
     message: compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT),
     response: compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT),
-    toolCalls: '',
+    toolCalls: undefined,
   };
 }
 

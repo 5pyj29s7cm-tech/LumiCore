@@ -135,6 +135,38 @@ function parseRecordJson(record: ToolExecutionRecord): Record<string, any> | nul
   }
 }
 
+function normalizeFileReference(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{1,10}$/i, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function hasRequestedMessagingFileEvidence(record: ToolExecutionRecord, taskText: string): boolean {
+  if (record.error || record.name !== 'wechat_send_file') return false;
+  const payload = parseRecordJson(record);
+  const sent = payload?.sent === true
+    || /"sent"\s*:\s*true|sent:\s*true/i.test(String(record.result || ''));
+  if (!sent) return false;
+
+  const rawPath = String(
+    payload?.fileName
+    || payload?.filePath
+    || record.arguments?.filePath
+    || '',
+  ).trim();
+  const fileName = rawPath.split(/[\\/]/).pop() || '';
+  if (!fileName) return false;
+
+  const primaryTask = extractPrimaryTaskText(taskText);
+  const normalizedTask = normalizeFileReference(primaryTask);
+  const normalizedFile = normalizeFileReference(fileName);
+  const namesRequestedFile = normalizedFile.length >= 2 && normalizedTask.includes(normalizedFile);
+  const explicitFileTransfer = /(?:\u6587\u4ef6|\u6587\u6863|\u9644\u4ef6|\u6750\u6599|\u56fe\u7eb8|\u7167\u7247|\u56fe\u7247|\u89c6\u9891\u6587\u4ef6|\u97f3\u9891\u6587\u4ef6|file|document|attachment|photo|image|video\s+file|audio\s+file|\.(?:docx?|pdf|xlsx?|pptx?|txt|md|zip|rar|7z|png|jpe?g|gif|mp4|mov|mp3|wav)\b)/iu.test(primaryTask);
+  const contextualFileTransfer = /(?:\u628a|\u5c06)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u8fd9\u4efd|\u90a3\u4efd|\u4e0a\u9762\u7684|\u521a\u624d\u7684).{0,16}(?:\u53d1|\u4f20|\u8f6c\u53d1)|\b(?:send|forward|transfer)\s+(?:it|that|this)\b/iu.test(primaryTask);
+  return namesRequestedFile || explicitFileTransfer || contextualFileTransfer;
+}
+
 export function hasVisibleAutoCadExecutionEvidence(
   records: ToolExecutionRecord[] = [],
   _taskText = '',
@@ -393,22 +425,24 @@ export function buildActionContract(input: string): LumiActionContract {
   ) {
     return withDefaults({
       kind: 'messaging_send',
-      label: '\u524d\u53f0\u6d88\u606f\u53d1\u9001',
-      coreAction: '\u5728\u771f\u5b9e\u804a\u5929\u7a97\u53e3\u5b9a\u4f4d\u6536\u4ef6\u4eba\uff0c\u805a\u7126\u8f93\u5165\u6846\uff0c\u7c98\u8d34\u6d88\u606f\u5e76\u6267\u884c\u53d1\u9001',
+      label: 'Verified message/file delivery',
+      coreAction: 'Deliver the requested text or local file to the correct recipient through a bound provider channel or a real messaging window.',
       preparationIsNotCompletion: [
         '\u6253\u5f00\u6216\u805a\u7126\u5fae\u4fe1',
         '\u641c\u7d22\u8054\u7cfb\u4eba',
         '\u622a\u56fe/OCR',
         '\u628a\u6587\u672c\u653e\u5230\u526a\u8d34\u677f',
+        'only listing or opening the requested file',
       ],
       requiredEvidence: [
         'wechat_send_message result with sent=true',
-        '\u6216\u8005\u6709\u7c98\u8d34\u6d88\u606f\u3001\u6309\u53d1\u9001\u3001\u53d1\u9001\u540e\u7a97\u53e3\u4ecd\u4e3a\u5fae\u4fe1\u7684\u5de5\u5177\u8bc1\u636e',
+        'for a file task: wechat_send_file result with sent=true and an acknowledged filename matching the request',
+        'or visible tool evidence showing content insertion, send execution, and the correct conversation after sending',
       ],
-      preferredTools: ['wechat_send_message', 'desktop_open', 'desktop_active_window', 'desktop_mouse_click_at', 'desktop_cursor_glow_show', 'desktop_keyboard_press'],
-      verificationTools: ['wechat_send_message', 'desktop_active_window', 'desktop_capture_screen'],
-      nextStep: '\u76f4\u63a5\u8d70\u524d\u53f0\u53d1\u9001\u94fe\u8def\uff0c\u4ee5 sent=true \u6216\u53ef\u89c1\u53d1\u9001\u8bc1\u636e\u4f5c\u4e3a\u5b8c\u6210\u6761\u4ef6\u3002',
-      caution: '\u4e0d\u80fd\u628a\u6253\u5f00\u5e94\u7528\u3001\u641c\u7d22\u8054\u7cfb\u4eba\u6216\u526a\u8d34\u677f\u8349\u7a3f\u8bf4\u6210\u5df2\u53d1\u9001\u3002',
+      preferredTools: ['wechat_send_message', 'wechat_send_file', 'messaging_list_file_targets', 'desktop_open', 'desktop_active_window', 'desktop_mouse_click_at', 'desktop_cursor_glow_show', 'desktop_keyboard_press'],
+      verificationTools: ['wechat_send_message', 'wechat_send_file', 'desktop_active_window', 'desktop_capture_screen'],
+      nextStep: 'Use the text or file delivery path that matches the request, and require sent=true, a provider acknowledgement, or visible send evidence.',
+      caution: 'Opening an app, finding a recipient, listing a file, or preparing clipboard content is not delivery.',
     });
   }
 
@@ -791,7 +825,7 @@ export function hasCoreActionEvidence(
   if (contract.kind === 'messaging_send') {
     return successful.some(record =>
       record.name === 'wechat_send_message' && /"sent"\s*:\s*true|sent:\s*true/i.test(String(record.result || ''))
-    );
+    ) || successful.some(record => hasRequestedMessagingFileEvidence(record, taskText));
   }
   if (contract.kind === 'public_post') {
     return hasPublicPostEvidence(successful);

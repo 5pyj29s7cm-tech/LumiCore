@@ -278,4 +278,27 @@ describe('Lumi runtime action pressure coverage', () => {
     expect(post.blocked).toBe(true);
     expect(post.reason).toContain('public_post');
   });
+
+  it('keeps a provider-acknowledged matching WeChat file delivery completed', () => {
+    const delivered = finalizeLumiResponse({
+      taskText: '\u628a\u9886\u822a\u5458\u8ba1\u52122026\u53d1\u7ed9\u6211',
+      responseText: '\u9886\u822a\u5458\u8ba1\u52122026.docx \u5df2\u53d1\u9001\u3002',
+      source: 'wechat_bot',
+      toolRecords: [{
+        id: 'wechat-file-delivery',
+        name: 'wechat_send_file',
+        arguments: { filePath: 'C:\\Users\\owner\\Desktop\\\u9886\u822a\u5458\u8ba1\u52122026.docx' },
+        result: JSON.stringify({
+          sent: true,
+          verificationStatus: 'provider_accepted',
+          verificationMethod: 'wechat_ilink_provider_ack',
+          fileName: '\u9886\u822a\u5458\u8ba1\u52122026.docx',
+          messageId: 'wx-file-delivery',
+        }),
+      }],
+    });
+
+    expect(delivered.blocked).toBe(false);
+    expect(delivered.text).toContain('\u5df2\u53d1\u9001');
+  });
 });

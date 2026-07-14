@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import sqlite3 from 'sqlite3';
 import { makeApp } from './helpers';
 import type { IncomingMessage } from '../server/messaging/types';
 
@@ -314,6 +315,60 @@ describe('messaging long connections and organization routing', () => {
       { source: 'wechat_bot', channel: 'wechat' },
       { source: 'wechat_bot', channel: 'wechat' },
     ]);
+  });
+
+  it('persists remote provenance and structured tool evidence through SQLite', async () => {
+    const userId = `wechat-evidence-${Date.now()}-${Math.random()}`;
+    const message = incoming({
+      platform: 'wechat',
+      userId: `wx-${userId}`,
+      chatId: `wx-${userId}`,
+      boundUserId: userId,
+      text: '\u628a\u9879\u76ee\u8ba1\u52122026\u53d1\u7ed9\u6211',
+    });
+    const toolCalls = [{
+      id: 'wechat-file-evidence',
+      name: 'wechat_send_file',
+      arguments: { filePath: 'C:\\Users\\owner\\Desktop\\\u9879\u76ee\u8ba1\u52122026.docx' },
+      result: JSON.stringify({
+        sent: true,
+        verificationStatus: 'provider_accepted',
+        fileName: '\u9879\u76ee\u8ba1\u52122026.docx',
+        messageId: 'wx-file-evidence',
+      }),
+    }];
+
+    const update = routes.persistBoundMessagingMessage(
+      message,
+      'assistant',
+      '\u9879\u76ee\u8ba1\u52122026.docx \u5df2\u53d1\u9001\u3002',
+      undefined,
+      toolCalls,
+    );
+    const conversations = await import('../server/conversation/manager');
+    const inMemory = conversations.getMessages(update!.conversationId).at(-1)!;
+    expect(inMemory.toolCalls).toEqual(toolCalls);
+    expect(routes.buildRemoteRuntimeEvidenceContext([inMemory])).toContain('wechat_send_file');
+    expect(routes.buildRemoteRuntimeEvidenceContext([inMemory])).toContain('sent=true');
+
+    const { flushDB } = await import('../db_layer');
+    const { getDataPath } = await import('../server/config/data_path');
+    await flushDB();
+    const row = await new Promise<any>((resolve, reject) => {
+      const database = new sqlite3.Database(getDataPath('lumi.db'));
+      database.get(
+        'SELECT source, channel, toolCalls FROM interactions WHERE id = ?',
+        [inMemory.id],
+        (error, value) => {
+          database.close();
+          if (error) reject(error);
+          else resolve(value);
+        },
+      );
+    });
+
+    expect(row).toMatchObject({ source: 'wechat_bot', channel: 'wechat' });
+    expect(JSON.parse(row.toolCalls)).toEqual(toolCalls);
   });
 
   it('routes bound remote turns through the same Lumi mode and capability graph', () => {

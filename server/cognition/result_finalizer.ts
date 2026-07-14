@@ -3,6 +3,7 @@ import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import { formatDesktopObservationResult } from './desktop_observation';
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
+import { CN_MESSAGING_MESSAGES, formatCnMessagingContractBlocker } from '../regions/packs/cn/messaging_messages';
 import {
   buildActionContract,
   hasAuthenticatedWebResultEvidence,
@@ -69,7 +70,8 @@ function summarizeToolFailure(records: ToolExecutionRecord[]): string {
     if (/^(desktop_open|open_item)$/i.test(name)) return '\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u7a97\u53e3';
     if (/^(desktop_active_window|get_active_window_info)$/i.test(name)) return '\u8bfb\u53d6\u5f53\u524d\u524d\u53f0\u7a97\u53e3';
     if (/^(wechat_read_recent_chat)$/i.test(name)) return '\u5fae\u4fe1\u524d\u53f0\u804a\u5929\u8bfb\u53d6';
-    if (/^(wechat_send_message)$/i.test(name)) return '\u5fae\u4fe1\u524d\u53f0\u53d1\u9001';
+    if (/^(wechat_send_message)$/i.test(name)) return CN_MESSAGING_MESSAGES.textSendAction;
+    if (/^(wechat_send_file)$/i.test(name)) return CN_MESSAGING_MESSAGES.fileSendAction;
     if (/^(computer_use)$/i.test(name)) return '\u89c6\u89c9\u684c\u9762\u6267\u884c';
     if (/keyboard/i.test(name)) return '\u952e\u76d8\u8f93\u5165';
     if (/mouse|cursor/i.test(name)) return '\u5149\u6807\u70b9\u51fb';
@@ -102,7 +104,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
   const contract = taskActionContract(input);
   if (shouldEnforceCoreActionContract(contract, input.taskText)) return true;
   const hasDesktopOrMessagingTool = records.some(record =>
-    /^(desktop_|wechat_(?:send_message|read_recent_chat)|computer_use|keyboard_|mouse_|cursor_|get_active_window_info|capture_screen|ocr_screen)/i.test(String(record.name || ''))
+    /^(desktop_|wechat_(?:send_message|send_file|read_recent_chat)|computer_use|keyboard_|mouse_|cursor_|get_active_window_info|capture_screen|ocr_screen)/i.test(String(record.name || ''))
   );
   if (!hasDesktopOrMessagingTool) return false;
   const text = `${input.taskText}\n${input.responseText}`;
@@ -249,7 +251,9 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
   const zh = isChineseText(input.taskText) || isChineseText(input.responseText);
   const failure = summarizeToolFailure(input.toolRecords || []);
   const contract = taskActionContract(input);
-  const contractBlocker = summarizeActionContractBlocker(contract, failure);
+  const contractBlocker = zh && contract.kind === 'messaging_send'
+    ? formatCnMessagingContractBlocker(failure)
+    : summarizeActionContractBlocker(contract, failure);
   const source = String(input.source || '').toLowerCase();
   if (/External legal platform final action/i.test(reason || '')) {
     return zh
@@ -322,7 +326,7 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
           ? `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a${failure}\u3002`
           : '\u539f\u56e0\uff1a\u8fd8\u6ca1\u6709\u62ff\u5230\u53ef\u9a8c\u8bc1\u7684\u5b8c\u6210\u8bc1\u636e\u3002'),
         contract.kind === 'messaging_send'
-          ? '\u6211\u4e0d\u4f1a\u628a\u672a\u786e\u8ba4\u7684\u5fae\u4fe1\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002'
+          ? CN_MESSAGING_MESSAGES.unverifiedDelivery
           : contract.kind === 'messaging_read'
             ? '\u6211\u4e0d\u4f1a\u628a\u53ea\u6253\u5f00\u6216\u805a\u7126\u5fae\u4fe1\u8bf4\u6210\u5df2\u8bfb\u5230\u804a\u5929\u5185\u5bb9\uff1b\u9700\u8981\u7ee7\u7eed\u8bfb\u53d6\u5e76\u9a8c\u8bc1\u53ef\u89c1\u5185\u5bb9\u3002'
             : '\u6211\u4e0d\u4f1a\u628a\u8fd9\u79cd\u672a\u786e\u8ba4\u7684\u7ed3\u679c\u8bf4\u6210\u5df2\u5b8c\u6210\uff1b\u9700\u8981\u7ee7\u7eed\u524d\u53f0\u6267\u884c\u5e76\u9a8c\u8bc1\u7ed3\u679c\u3002',
