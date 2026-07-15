@@ -49,6 +49,9 @@
         "installerHooks": "./includes/include-dll.nsh"
       }
     },
+    "macOS": {
+      "infoPlist": "./Info.plist"
+    },
     "linux": {
       "deb": {
         "depends": [

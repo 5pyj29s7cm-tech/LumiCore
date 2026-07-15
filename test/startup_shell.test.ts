@@ -31,6 +31,17 @@ describe('desktop startup shell', () => {
     expect(rustEntry).toContain('webview.window().show()');
   });
 
+  it('merges macOS camera and microphone permission prompts at bundle time', () => {
+    const tauriConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'));
+    const plistPath = path.join(process.cwd(), 'src-tauri', tauriConfig.bundle.macOS.infoPlist);
+    const infoPlist = fs.readFileSync(plistPath, 'utf8');
+
+    expect(infoPlist).toContain('<key>NSCameraUsageDescription</key>');
+    expect(infoPlist).toContain('<key>NSMicrophoneUsageDescription</key>');
+    expect(infoPlist).not.toContain('<key>CFBundleVersion</key>');
+    expect(infoPlist).not.toContain('<key>CFBundleExecutable</key>');
+  });
+
   it('tracks the replacement backend after a supervised restart', () => {
     const launcher = fs.readFileSync(path.join(process.cwd(), 'launcher.ts'), 'utf8');
     expect(launcher).toContain('currentChild = restartServer()');
