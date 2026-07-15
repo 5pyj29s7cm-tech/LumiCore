@@ -118,6 +118,7 @@ async function main() {
   const mcpFactoryConfig = path.join(distServer, 'server', 'mcp', 'config.example.json');
   const mcpRuntimeConfig = path.join(distServer, 'server', 'mcp', 'config.json');
   const tsxCli = path.join(distServer, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const larkSdkPkg = path.join(distServer, 'node_modules', '@larksuiteoapi', 'node-sdk', 'package.json');
   const mcpSdkPkg = path.join(distServer, 'node_modules', '@modelcontextprotocol', 'sdk', 'package.json');
   const zodPkg = path.join(distServer, 'node_modules', 'zod', 'package.json');
 
@@ -128,6 +129,7 @@ async function main() {
   await assertPath(bundledSkillsDir, 'bundled skills directory');
   await assertPath(mcpFactoryConfig, 'factory MCP config');
   await assertPath(tsxCli, 'packaged tsx CLI');
+  await assertPath(larkSdkPkg, 'packaged Lark SDK');
   await assertPath(mcpSdkPkg, 'packaged MCP SDK');
   await assertPath(zodPkg, 'packaged zod');
 
@@ -194,7 +196,7 @@ async function main() {
 
     const install = await fetchJson(`${baseUrl}/marketplace/skills/acquire`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         skillId: skill.id,
         skillName: skill.name,

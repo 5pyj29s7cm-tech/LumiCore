@@ -7,7 +7,18 @@ await build({
   platform: 'node',
   format: 'esm',
   outfile: 'dist-server/server.mjs',
-  external: ['sqlite3', 'sharp', '@img/sharp-win32-x64', '@img/sharp-libvips-win32-x64', 'lightningcss', 'playwright-core'],
+  // Keep CommonJS runtimes that depend on module-scoped globals external.
+  // Bundling the Lark SDK into this ESM file leaves its `__dirname` reference
+  // unresolved and crashes the packaged backend before it can bind its port.
+  external: [
+    'sqlite3',
+    'sharp',
+    '@img/sharp-win32-x64',
+    '@img/sharp-libvips-win32-x64',
+    'lightningcss',
+    'playwright-core',
+    '@larksuiteoapi/node-sdk',
+  ],
   banner: {
     js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);",
   },

@@ -38,4 +38,14 @@ describe('desktop startup shell', () => {
     expect(launcher).toContain('scheduleServerRestart(delay)');
     expect(launcher).not.toContain('setTimeout(() => restartServer()');
   });
+
+  it('keeps the CommonJS Lark SDK outside the ESM server bundle and packages it', () => {
+    const buildScript = fs.readFileSync(path.join(process.cwd(), 'scripts/build-server.mjs'), 'utf8');
+    const resourceScript = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-desktop-resources.mjs'), 'utf8');
+    const packagedSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts/smoke-packaged-first-run.mjs'), 'utf8');
+
+    expect(buildScript).toContain("'@larksuiteoapi/node-sdk'");
+    expect(resourceScript).toContain("'@larksuiteoapi/node-sdk'");
+    expect(packagedSmoke).toContain("'packaged Lark SDK'");
+  });
 });
