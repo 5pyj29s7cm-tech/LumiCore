@@ -35,11 +35,18 @@ describe('desktop startup shell', () => {
     const tauriConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'));
     const plistPath = path.join(process.cwd(), 'src-tauri', tauriConfig.bundle.macOS.infoPlist);
     const infoPlist = fs.readFileSync(plistPath, 'utf8');
+    const macBuildWorkflow = fs.readFileSync(
+      path.join(process.cwd(), '.github/workflows/build-macos.yml'),
+      'utf8',
+    );
 
     expect(infoPlist).toContain('<key>NSCameraUsageDescription</key>');
     expect(infoPlist).toContain('<key>NSMicrophoneUsageDescription</key>');
     expect(infoPlist).not.toContain('<key>CFBundleVersion</key>');
     expect(infoPlist).not.toContain('<key>CFBundleExecutable</key>');
+    expect(macBuildWorkflow).toContain("Print :NSCameraUsageDescription");
+    expect(macBuildWorkflow).toContain("Print :NSMicrophoneUsageDescription");
+    expect(macBuildWorkflow).toContain('CFBundleShortVersionString');
   });
 
   it('tracks the replacement backend after a supervised restart', () => {
