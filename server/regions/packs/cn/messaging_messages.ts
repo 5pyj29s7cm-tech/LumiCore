@@ -1,3 +1,5 @@
+import { formatCnToolFailureDetail } from './voice_fast_path_messages';
+
 export const CN_MESSAGING_MESSAGES = {
   textSendAction: '\u5fae\u4fe1\u6587\u5b57\u53d1\u9001',
   fileSendAction: '\u5fae\u4fe1\u6587\u4ef6\u6295\u9012',
@@ -30,4 +32,19 @@ export function formatCnUnsupportedToolExecutionClaim(missingToolNames: string[]
     detail,
     '\u6211\u4e0d\u80fd\u628a\u6ca1\u6709\u53d1\u751f\u7684\u6267\u884c\u5199\u6210\u5df2\u6267\u884c\uff1b\u9700\u8981\u91cd\u65b0\u8c03\u7528\u771f\u5b9e\u5de5\u5177\uff0c\u518d\u6309\u8fd4\u56de\u7ed3\u679c\u7ed9\u51fa\u7ed3\u8bba\u3002',
   ].join('\n');
+}
+
+export function formatCnVoiceWeChatSendResult(contact: string, message: string, verified: boolean): string {
+  if (verified) {
+    return contact
+      ? `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u7ed9${contact}\uff1a${message}`
+      : `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u5f53\u524d\u804a\u5929\u91cc\u53d1\u9001\uff1a${message}`;
+  }
+  return contact
+    ? `\u6ca1\u6709\u786e\u8ba4\u53d1\u9001\u7ed9${contact}\u6210\u529f\uff1a\u672a\u770b\u5230\u5339\u914d\u7684\u65b0\u6d88\u606f\u6c14\u6ce1\u3002`
+    : '\u6ca1\u6709\u786e\u8ba4\u53d1\u9001\u6210\u529f\uff1a\u672a\u770b\u5230\u5339\u914d\u7684\u65b0\u6d88\u606f\u6c14\u6ce1\u3002';
+}
+
+export function formatCnVoiceWeChatSendError(error: string): string {
+  return `\u8fd9\u6b21\u6ca1\u6709\u53d1\u9001\uff1a${formatCnToolFailureDetail(error)}`;
 }

@@ -6,6 +6,8 @@
  * The LLM is only invoked later for text generation, not for decision-making.
  */
 
+import { isUserCorrectionOrExplanationQuestion } from './tool_intent';
+
 // ── Sentiment ────────────────────────────────────────────────────────────────
 
 export interface SentimentResult {
@@ -147,7 +149,8 @@ const SMALL_TALK = [
 
 // ── Command Patterns ──
 const COMMAND_PATTERNS: Array<{ regex: RegExp; subIntent: string; tool?: string }> = [
-  { regex: /(打开|启动|运行|开启|launch|open|start|run)\s*(程序|应用|app|软件)?\s*(.+)/i, subIntent: 'open', tool: 'desktop_open' },
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  { regex: /^(?:(?:请|麻烦|请你|帮我|你帮我|给我|我要|我想)\s*)?(打开|启动|运行|开启|launch|open|start|run)\s*(程序|应用|app|软件)?\s*(.+)/i, subIntent: 'open', tool: 'desktop_open' },
   { regex: /(打开|浏览|访问|open)\s*(网页|网站|url|链接|link|网址)?\s*(https?:\/\/\S+)/i, subIntent: 'open_url', tool: 'desktop_open' },
   { regex: /(关闭|退出|停止|kill|stop|exit|quit|关掉)\s*(.+)/i, subIntent: 'close' },
   { regex: /(创建|新建|create|make|new|添加|add)\s*(文件|文件夹|目录|file|folder|dir)?\s*(.+)/i, subIntent: 'create', tool: 'write_file' },
@@ -281,6 +284,18 @@ export function classifyIntent(input: string): IntentResult {
         needsLLM: true,
       };
     }
+  }
+
+  // 2.5 Questions/corrections about Lumi's prior behaviour must win over
+  // action keywords contained inside the quoted or questioned behaviour.
+  if (isUserCorrectionOrExplanationQuestion(text)) {
+    return {
+      category: 'question',
+      confidence: 0.9,
+      entities: {},
+      subIntent: 'explain_prior_behavior',
+      needsLLM: true,
+    };
   }
 
   // 3. Commands — many can skip LLM entirely

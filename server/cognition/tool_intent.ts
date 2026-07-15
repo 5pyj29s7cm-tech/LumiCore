@@ -68,6 +68,7 @@ const WORK_PRODUCT_VERBS = /(?:\u6574\u7406|\u751f\u6210|\u8d77\u8349|\u64b0\u51
 const MESSAGE_TERMS = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237|\b(?:wechat|wecom|feishu|lark|message|customer)\b)/iu;
 const REPLY_VERBS = /(?:\u56de\u4e00\u4e0b|\u56de\u590d|\u56de|\u8349\u7a3f|\b(?:reply|respond|draft)\b)/iu;
 const MESSAGE_SEND_VERBS = /(?:\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\u53d1\u7ed9|\u53d1\u9001|\u8f6c\u53d1|\u7c98\u8d34|\u8d34\u5230|\u53d1|\b(?:send|forward|paste)\b)/iu;
+const MESSAGE_INQUIRY_VERBS = /(?:\u95ee\u4e00\u4e0b|\u95ee\u95ee|\u8be2\u95ee|\u95ee|\b(?:ask|inquire|check\s+with)\b)/iu;
 const GREETING_MESSAGE_TERMS = /(?:\u95ee\u5019\u8bed|\u95ee\u5019|\u5bd2\u6684|\u62db\u547c|\u6d88\u606f|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u5ba2\u6237|\u8054\u7cfb\u4eba|\u7fa4|\b(?:greeting|message|wechat|wecom|customer|contact|group)\b)/iu;
 const DESKTOP_AI_TERMS = /\b(?:workbuddy|work\s*buddy|codex|chatgpt|chatgpt\.com|claude|gemini|deepseek|kimi|doubao|tongyi|qwen|wenxin|ernie|perplexity|cursor|copilot|ollama|lm\s*studio|cherry\s*studio|anythingllm|ai\s*(?:tool|tools|app|apps|agent|agents|assistant|assistants|model|models)|other\s+ai|desktop\s+ai|local\s+ai)\b/i;
 const DESKTOP_AI_ACTION_VERBS = /\b(?:ask|query|send|forward|collect|gather|compare|summari[sz]e|bring\s+back|take\s+back|retrieve|paste\s+into|hand\s+off)\b/i;
@@ -89,6 +90,7 @@ const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
   { name: 'legal-work-product', all: [LEGAL_TERMS, WORK_PRODUCT_VERBS] },
   { name: 'messaging-reply', all: [MESSAGE_TERMS, REPLY_VERBS] },
   { name: 'messaging-send-or-greeting', all: [MESSAGE_SEND_VERBS, GREETING_MESSAGE_TERMS] },
+  { name: 'messaging-inquiry', all: [MESSAGE_TERMS, MESSAGE_INQUIRY_VERBS] },
   { name: 'desktop-ai-collaboration', all: [DESKTOP_AI_TERMS, DESKTOP_AI_ACTION_VERBS] },
   { name: 'desktop-control', all: [DESKTOP_CONTROL_TERMS, DESKTOP_CONTROL_VERBS] },
   { name: 'task-continuation', all: [CONTINUE_VERBS, TASK_TERMS] },
@@ -159,7 +161,44 @@ function hasExplicitActionRequest(text: string): boolean {
     || /^(?:please\s+)?(?:send|open|read|run|execute|create|generate|download|install|search|find|check)\b/i.test(normalized);
 }
 
+/**
+ * Questions about Lumi's own immediately preceding behaviour are explanations
+ * or corrections, not fresh commands. Keep this narrow so real diagnostics
+ * such as "为什么打不开 AutoCAD" can still use observation tools.
+ */
+export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:修复|处理|排查|检查|诊断|重新|重试|再试|fix|repair|diagnose|retry)/iu.test(normalized)) return false;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:打不开|不能打开|没打开|没有打开|无法打开|启动失败|运行失败|failed\s+to\s+(?:open|start|run))/iu.test(normalized)) return false;
+  // A foreground messaging instruction may contain a question as the message body.
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:微信|企业微信|wechat|weixin).{0,40}(?:问一下|问问|询问|发给|发送).{0,40}(?:在干嘛|在做什么|忙什么|做什么)/iu.test(normalized)) return false;
+
+  return [
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:你|lumi)[，,\s]*(?:刚才|刚刚|之前|上一轮|上一次)?[^。！？!?\n]{0,24}(?:为什么|怎么|为何|干嘛|做什么|干什么)[^。！？!?\n]{0,60}(?:这么久|这么慢|才回|才回复|打开|启动|运行|执行|操作|做了|干了)/iu,
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:你|lumi)[^。！？!?\n]{0,48}(?:打开|启动|运行|执行|操作)[^。！？!?\n]{0,32}(?:做什么|干什么|干嘛|为什么|怎么回事|干什么用)/iu,
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /(?:刚才|刚刚|之前|上一轮|上一次)[^。！？!?\n]{0,48}(?:为什么|怎么|为何|干嘛|做什么|干什么)[^。！？!?\n]{0,60}(?:打开|启动|运行|执行|操作|回复|回答)/iu,
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /(?:明明|不是)[^。！？!?\n]{0,48}(?:已经|都)?[^。！？!?\n]{0,32}(?:打开|启动|完成|执行)[^。！？!?\n]{0,16}(?:吗|么|呢|[？?])/u,
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:不是[，,\s]*)?(?:我现在)?[^。！？!?\n]{0,40}(?:哪来的|怎么会是|什么微信)[^。！？!?\n]{0,32}(?:微信客户端|微信渠道|渠道|客户端)/u,
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /(?:能不能|能否|可以不可以|可不可以)[^。！？!?\n]{0,16}(?:听见|听到|听清|听得到)[^。！？!?\n]{0,16}(?:我|说话)?/u,
+    /\bcan\s+you\s+hear\s+me\b/i,
+  ].some(pattern => pattern.test(normalized));
+}
+
 export function isInformationOnlyQuestion(text: string): boolean {
+  // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
+  if (/(?:我问你)?(?:刚刚|刚才|之前|上一轮|上一次).{0,80}(?:干了什么|做了什么|操作了什么|打开.{0,24}干了什么|为什么.{0,40}(?:打开|操作|执行|回复))/u.test(text)) return true;
+  if (/^(?:为什么|为何|怎么).{0,80}(?:没有|没|未能|不能).{0,40}(?:打开|启动|运行|执行|发送)/u.test(text)) return true; // i18n-allow: input recognition
+  if (isUserCorrectionOrExplanationQuestion(text)) return true;
   if (isDiagnosticOrRepairRequest(text)) return false;
   if (hasExplicitActionRequest(text)) return false;
   if (

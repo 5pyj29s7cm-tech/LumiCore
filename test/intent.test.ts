@@ -186,6 +186,19 @@ describe('Intent Classifier', () => {
       expect(c('Is this correct?').category).toBe('question');
       expect(c('这个对吗？').category).toBe('question');
     });
+
+    it('treats questions about prior Lumi behavior as questions, not commands', () => {
+      for (const text of [
+        '你怎么运行了这么久才回我？',
+        '你打开画图做什么？',
+        '刚才为什么又打开了画图？',
+        '能不能听见我说话？',
+      ]) {
+        const result = c(text);
+        expect(result.category, text).toBe('question');
+        expect(result.directToolCall, text).toBeUndefined();
+      }
+    });
   });
 
   // ── Agent ──

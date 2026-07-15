@@ -11,6 +11,27 @@ import {
 } from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
+  it('keeps a plain AutoCAD launch as a desktop-open contract', () => {
+    const task = '打开AutoCAD。';
+    const contract = buildActionContract(task);
+
+    expect(contract.kind).toBe('desktop_operation');
+    expect(contract.coreAction).toContain('exactly');
+    expect(contract.preferredTools).toContain('desktop_open');
+    expect(contract.preferredTools).not.toContain('cad_generate_dxf');
+    expect(hasCoreActionEvidence(contract, [{
+      id: 'open-autocad',
+      name: 'desktop_open',
+      arguments: { target: 'AutoCAD' },
+      result: 'Opened app AutoCAD via public desktop shortcut',
+    }], task)).toBe(true);
+  });
+
+  it('does not treat a complaint containing app/action words as a new action contract', () => {
+    expect(buildActionContract('你打开画图做什么？').kind).toBe('none');
+    expect(buildActionContract('你怎么运行了这么久才回我？').kind).toBe('none');
+  });
+
   it('classifies foreground messaging as a send contract', () => {
     const contract = buildActionContract('\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89');
 

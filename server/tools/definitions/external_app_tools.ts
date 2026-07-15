@@ -188,6 +188,57 @@ export function parseWeChatSendVisionVerification(value: unknown): {
   }
 }
 
+export function parseWeChatConversationReadyVerification(value: unknown): {
+  ready: boolean;
+  confidence: number;
+  reason: string;
+} {
+  const raw = String(value || '').trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return { ready: false, confidence: 0, reason: raw.slice(0, 240) || 'No conversation-selection verification result.' };
+  try {
+    const parsed = JSON.parse(match[0]);
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence || 0)));
+    return {
+      ready: parsed.ready === true && confidence >= 0.7,
+      confidence,
+      reason: String(parsed.reason || '').trim().slice(0, 400),
+    };
+  } catch {
+    return { ready: false, confidence: 0, reason: raw.slice(0, 240) || 'Invalid conversation-selection verification result.' };
+  }
+}
+
+function uiSnapshotShowsWeChatConversation(snapshot: string, contact: string): boolean {
+  const target = normalizeEvidenceText(contact);
+  if (!snapshot || !target) return false;
+  try {
+    const root = JSON.parse(snapshot);
+    const nodes: any[] = [];
+    const visit = (node: any) => {
+      if (!node || typeof node !== 'object') return;
+      nodes.push(node);
+      for (const child of Array.isArray(node.children) ? node.children : []) visit(child);
+    };
+    visit(root?.root || root);
+    const rootNode = nodes[0] || {};
+    const rootBounds = rootNode.boundingRectangle || rootNode.bounds || {};
+    const rootY = Number(rootBounds.y || 0);
+    const rootHeight = Number(rootBounds.height || 0);
+    const hasExactContact = nodes.some(node => normalizeEvidenceText(node?.name) === target);
+    const hasBottomComposer = nodes.some(node => {
+      if (String(node?.controlType || '').toLowerCase() !== 'edit') return false;
+      const bounds = node?.boundingRectangle || node?.bounds || {};
+      const y = Number(bounds.y || 0);
+      const width = Number(bounds.width || 0);
+      return rootHeight > 0 && y >= rootY + rootHeight * 0.52 && width >= 180;
+    });
+    return hasExactContact && hasBottomComposer;
+  } catch {
+    return false;
+  }
+}
+
 function firstFiniteNumber(...values: any[]): number | null {
   for (const value of values) {
     const n = Number(value);
@@ -1388,6 +1439,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const desktopRelay = requireDesktopRelay(context);
       const progress = (step: string) => context?.onProgress?.(step);
       const contact = String(args.contact || '').trim();
+      if (/^(?:\u4ed6|\u5979|\u5b83|\u5bf9\u65b9|\u90a3\u4e2a\u4eba|\u8fd9\u4e2a\u4eba)$/u.test(contact)) {
+        throw new Error('Recipient pronoun could not be resolved to a concrete WeChat contact. No search or send was attempted.');
+      }
       const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
       const useSearch = args.useSearch !== false && Boolean(contact);
       const maxMessages = Math.max(3, Math.min(Number(args.maxMessages || 8), 20));
@@ -1514,6 +1568,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const desktopRelay = requireDesktopRelay(context);
       const progress = (step: string) => context?.onProgress?.(step);
       const contact = String(args.contact || '').trim();
+      if (/^(?:\u4ed6|\u5979|\u5b83|\u5bf9\u65b9|\u90a3\u4e2a\u4eba|\u8fd9\u4e2a\u4eba)$/u.test(contact)) {
+        throw new Error('Recipient pronoun could not be resolved to a concrete WeChat contact. No search or send was attempted.');
+      }
       const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
       const useSearch = args.useSearch !== false && Boolean(contact);
       const sendShortcut = String(args.sendShortcut || 'enter').trim() || 'enter';
@@ -1544,6 +1601,55 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
         if (!isWeChatActiveWindow(activeWindow)) {
           throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+        }
+
+        // Selecting a search result is not the same as proving that the
+        // intended chat is open. Never paste or press Enter until the exact
+        // recipient and a real message composer are visibly verified.
+        let selectionSnapshot = '';
+        try { selectionSnapshot = await captureDesktopUiEvidence(desktopRelay, 240); } catch {}
+        let conversationReady = uiSnapshotShowsWeChatConversation(selectionSnapshot, contact);
+        let selectionReason = conversationReady
+          ? 'The UI snapshot contains the requested contact and a conversation composer.'
+          : 'The UI snapshot did not prove that the requested conversation was open.';
+        const selectionVisionConfig = hasVisionProvider(context);
+        if (selectionVisionConfig) {
+          try {
+            const screenCapture = await desktopRelay('desktop_capture_screen', { quality: 75 });
+            const getters = context?.llmGetters;
+            const verificationText = await analyzeScreen(
+              screenCapture,
+              [
+                'Verify the current foreground WeChat state before any message is entered.',
+                `Expected exact recipient/group: ${JSON.stringify(contact)}.`,
+                'Set ready=true only when that exact conversation is visibly open and its message composer is available.',
+                'A contact search box, search-result list, a different conversation, or an ambiguous header must return ready=false.',
+                'Return only JSON: {"ready":boolean,"confidence":number,"reason":"short visible evidence"}.',
+              ].join('\n'),
+              selectionVisionConfig,
+              getters?.getDeepSeek,
+              getters?.getGemini,
+              getters?.getOpenAI,
+              getters?.getAnthropic,
+              getters?.getQwen,
+              getters?.getOllama,
+              getters?.getLmStudio,
+              getters?.getArk,
+              getters?.getXiaomi,
+              getters?.getKimi,
+              getters?.getGlm,
+              getters?.getRelay,
+            );
+            const verifiedSelection = parseWeChatConversationReadyVerification(verificationText);
+            conversationReady = verifiedSelection.ready;
+            selectionReason = verifiedSelection.reason || selectionReason;
+          } catch (err: any) {
+            conversationReady = false;
+            selectionReason = err?.message || String(err);
+          }
+        }
+        if (!conversationReady) {
+          throw new Error(`The requested WeChat conversation was not verified after contact search. ${selectionReason}`);
         }
       }
 

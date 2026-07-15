@@ -17,6 +17,7 @@ import { registerClipboardTools } from './clipboard_tools';
 import { registerOCRTools } from './ocr_tools';
 import { registerPdfTools } from './pdf_tools';
 import { registerDocumentTools } from './document_tools';
+import { registerKnowledgeTools } from './knowledge_tools';
 import { registerWorkflowTools } from './workflow_tools';
 import { registerImageTools } from './image_tools';
 import { registerVideoTools } from './video_tools';
@@ -70,6 +71,7 @@ export function registerAllTools(
   registerOCRTools(registry);
   registerPdfTools(registry);
   registerDocumentTools(registry);
+  registerKnowledgeTools(registry);
   registerWorkflowTools(registry);
   registerImageTools(registry);
   registerVideoTools(registry);

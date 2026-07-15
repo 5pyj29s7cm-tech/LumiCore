@@ -15,6 +15,7 @@ import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getPlan, updatePlan, updatePlanStep } from './planner';
 import { createDesktopRelay } from '../socket/desktop_relay';
 import type { PlanScope } from './planner';
+import { isRealtimeUserActive } from './foreground_activity';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -155,6 +156,9 @@ export async function executeNextAutonomousTask(
   getters: LLMGetters,
   userId?: string,
 ): Promise<{ executed: boolean; taskId?: string; result?: string }> {
+  if (userId && isRealtimeUserActive(userId)) {
+    return { executed: false, result: 'Live user voice session has priority' };
+  }
   // Don't start a new task if one is already running
   if (getRunningTask(userId)) {
     return { executed: false, result: 'Task already running' };
@@ -199,7 +203,7 @@ export async function executeNextAutonomousTask(
       requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args, { actionIntent: task.description }),
       actionIntent: task.description,
       toolPolicy,
-      isCancelled: () => isTaskCancellationRequested(task.id, task.userId),
+      isCancelled: () => isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId),
       autonomous: true,
       source: 'autonomous',
     };
@@ -236,8 +240,11 @@ export async function executeNextAutonomousTask(
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
     recordAutonomousTokens(task.userId, tokensUsed);
 
-    if (isTaskCancellationRequested(task.id, task.userId)) {
-      markCancelled(task.id);
+    if (isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId)) {
+      const reason = isRealtimeUserActive(task.userId)
+        ? 'Cancelled because a live user voice session took priority'
+        : 'Cancelled by user';
+      markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
       io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
         taskId: task.id,
@@ -264,8 +271,11 @@ export async function executeNextAutonomousTask(
     return { executed: true, taskId: task.id, result: summary };
   } catch (err: any) {
     const errorMsg = err.message || 'Unknown error';
-    if (isTaskCancellationRequested(task.id, task.userId)) {
-      markCancelled(task.id, errorMsg);
+    if (isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId)) {
+      const reason = isRealtimeUserActive(task.userId)
+        ? 'Cancelled because a live user voice session took priority'
+        : errorMsg;
+      markCancelled(task.id, reason);
       markLinkedPlanCancelled(task);
       io.to(`user:${task.userId}:personal`).emit('autonomous:task_cancelled', {
         taskId: task.id,

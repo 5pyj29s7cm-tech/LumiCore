@@ -178,6 +178,38 @@ describe('chat and voice tool-call stability', () => {
     });
   });
 
+  it('turns a WeChat inquiry and its barge-in correction into one exact send', () => {
+    expect(buildForegroundWeChatSendArgs('你打开微信问一下阿露在干嘛。')).toMatchObject({
+      contact: '阿露',
+      message: '在干嘛？',
+      applicationTarget: 'wechat',
+    });
+
+    expect(buildForegroundWeChatSendArgs([
+      '你打开微信问一下阿洛在干嘛。',
+      'User correction to the interrupted request: 让你问阿露，不是问阿洛。',
+    ].join('\n\n'))).toMatchObject({
+      contact: '阿露',
+      message: '在干嘛？',
+    });
+
+    const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    expect(voice).toContain("const toolName = 'wechat_send_message'");
+    expect(voice).toContain('if (!isCurrentTurn()) return');
+    expect(voice).toContain('session.pipelineAbortController === pipelineAbort');
+  });
+
+  it('rejects negative send-like statements and applies spoken character correction', () => {
+    expect(buildForegroundWeChatSendArgs('我没有户型图发给你。')).toBeNull();
+    expect(buildForegroundWeChatSendArgs([
+      '打开微信，问一下阿路在干嘛。',
+      'User correction to the interrupted request: 我说的阿路是大陆的陆，不是道路的路。',
+    ].join('\n\n'))).toMatchObject({
+      contact: '阿陆',
+      message: '在干嘛？',
+    });
+  });
+
   it('extracts foreground WeChat chat reading as a generic contact task', () => {
     expect(buildForegroundWeChatReadArgs('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9')).toMatchObject({
       contact: '\u963f\u9646',

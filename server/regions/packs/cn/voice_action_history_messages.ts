@@ -1,0 +1,16 @@
+export const CN_VOICE_ACTION_HISTORY_MESSAGES = {
+  currentConversation: '当前会话',
+  noRecentToolEvidence: '最近一轮没有可核实的工具执行记录，我不能编造刚才做过什么。',
+  noRecentToolRecords: '最近一轮没有可核实的工具执行记录。',
+  wechatStoppedBeforeSend: (recipient: string) => `我打开了微信并搜索${recipient}，但没有确认进入正确聊天，所以在粘贴和回车前就停了，没有发送。`,
+  wechatToolFailed: (recipient: string) => `我打开了微信并尝试处理${recipient}的消息，但工具报错，没有发送成功。`,
+  wechatVerified: (recipient: string, message: string) => `我打开了微信，向${recipient}发送了“${message}”，并拿到了发送成功的界面证据。`,
+  wechatAttempted: (recipient: string, message: string) => `我打开了微信，搜索了${recipient}，并尝试输入和发送“${message}”；但没看到匹配的新消息气泡，所以不能算发送成功。`,
+  wechatLocatedOnly: (recipient: string) => `我只打开了微信并定位${recipient}，没有可核实的发送结果。`,
+  targetFallback: '目标',
+  openFailed: (target: string) => `刚才我尝试打开${target}，但工具返回失败，没有打开。`,
+  openSucceeded: (target: string) => `刚才我调用了桌面启动工具打开${target}；没有其他已记录的外部操作。`,
+  cadNotVerified: '刚才只有户型空间规划和 AutoCAD 操作数据的生成记录，没有完整的可见绘图回放和图纸验收证据，所以我不能确认它已经是要求的户型。你也没有提供参考户型图，之前如果说“按参考图测量”，那句话没有事实依据。',
+  cadPlaybackNeedsInspection: '刚才有 AutoCAD 可见回放记录，但是否符合户型要求还必须以当前图纸的可见验收结果为准，不能只凭工具名称确认。',
+  toolList: (names: string[]) => `刚才有这些工具调用记录：${names.join('、')}。我只按这些真实记录说明，不补编没发生的步骤。`,
+} as const;

@@ -3,37 +3,74 @@ import { createWakeDetector, isWakeWord } from "../stt/wake_detector";
 import { isEchoText, isTtsPlaying } from "./voice";
 import { logger } from "../../logger";
 
+type WakeDetector = ReturnType<typeof createWakeDetector>;
+
+interface ActiveWakeOwner {
+  socketId: string;
+  detector: WakeDetector;
+}
+
+// A desktop session can expose more than one webview/socket. Only one of them
+// may own a paid realtime wake stream for a user at a time.
+const wakeOwnerByUser = new Map<string, ActiveWakeOwner>();
+
 export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => string) {
-  let wakeDetector: ReturnType<typeof createWakeDetector> | null = null;
+  let wakeDetector: WakeDetector | null = null;
   let wakeStarting = false;
+
+  const releaseOwnedDetector = (stop = true) => {
+    const uid = getUserId(socket);
+    const detector = wakeDetector;
+    wakeDetector = null;
+    const owner = wakeOwnerByUser.get(uid);
+    if (owner?.socketId === socket.id && (!detector || owner.detector === detector)) {
+      wakeOwnerByUser.delete(uid);
+    }
+    if (stop && detector) {
+      try { detector.stop(); } catch {}
+    }
+  };
 
   socket.on("wake:start", async () => {
     const uid = getUserId(socket);
     try {
+      const registeredOwner = wakeOwnerByUser.get(uid);
+      if (wakeDetector && registeredOwner?.detector !== wakeDetector) {
+        try { wakeDetector.stop(); } catch {}
+        wakeDetector = null;
+      }
       if (wakeDetector || wakeStarting) {
         socket.emit("wake:started", { reused: true });
         return;
       }
+      const existingOwner = wakeOwnerByUser.get(uid);
+      if (existingOwner && existingOwner.socketId !== socket.id) {
+        logger.info(`[Wake] Socket ${socket.id} taking ownership from ${existingOwner.socketId} for user ${uid}`);
+        wakeOwnerByUser.delete(uid);
+        try { existingOwner.detector.stop(); } catch {}
+      }
       wakeStarting = true;
-      wakeDetector = createWakeDetector(undefined, isEchoText);
+      const detector = createWakeDetector(undefined, isEchoText);
+      wakeDetector = detector;
+      wakeOwnerByUser.set(uid, { socketId: socket.id, detector });
 
-      wakeDetector.onWake((keyword: string) => {
+      detector.onWake((keyword: string) => {
+        if (wakeDetector !== detector || wakeOwnerByUser.get(uid)?.detector !== detector) return;
         logger.info(`[Wake] "${keyword}" detected for user ${uid}`);
         socket.emit("wake:detected", { keyword, timestamp: new Date().toISOString() });
       });
 
-      wakeDetector.onError((err: Error) => {
+      detector.onError((err: Error) => {
+        if (wakeDetector !== detector || wakeOwnerByUser.get(uid)?.detector !== detector) return;
         logger.error(`[Wake] Error for user ${uid}:`, err.message);
         socket.emit("wake:error", { message: err.message });
-        if (wakeDetector) {
-          try { wakeDetector.stop(); } catch {}
-          wakeDetector = null;
-        }
+        releaseOwnedDetector(true);
       });
 
       socket.emit("wake:started");
       logger.info(`[Wake] Started for user ${uid}`);
     } catch (err: any) {
+      releaseOwnedDetector(true);
       socket.emit("wake:error", { message: err.message || 'Failed to start wake detector' });
     } finally {
       wakeStarting = false;
@@ -59,16 +96,10 @@ export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => s
   });
 
   socket.on("wake:stop", () => {
-    if (wakeDetector) {
-      try { wakeDetector.stop(); } catch {}
-      wakeDetector = null;
-    }
+    releaseOwnedDetector(true);
   });
 
   socket.on("disconnect", () => {
-    if (wakeDetector) {
-      try { wakeDetector.stop(); } catch {}
-      wakeDetector = null;
-    }
+    releaseOwnedDetector(true);
   });
 }

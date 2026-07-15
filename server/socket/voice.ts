@@ -26,7 +26,7 @@ import { runOrchestratedTask, classifyComplexity, type LlmGetters } from "../age
 import { retrieveChunks } from "../agents/rag";
 import { queryMemories, addMemory } from "../memory/store";
 import { searchKnowledgeBase } from "../org/kb";
-import { matchQuickCommand } from "../cognition/quick_commands";
+import { isQuickCommand, matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import {
@@ -67,6 +67,20 @@ import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnaly
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
+import { isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
+import { setRealtimeVoiceSessionActive } from "../autonomy/foreground_activity";
+import { buildForegroundWeChatSendArgs } from "../agents/nl_chainer";
+import {
+  isSpeechClearlyDirectedAwayFromLumi,
+  isVoiceCorrectionContinuation,
+  isVoiceFiller,
+  isVoiceReferentialFollowup,
+  mergeInterruptedVoiceTurn,
+  type PendingInterruptedVoiceTurn,
+} from "./voice_turn_state";
+import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../regions/packs/cn/messaging_messages";
+import { resolveWeChatRecipientFromHistory } from "./voice_messaging_context";
+import { describeRecentActionsFromHistory } from "./voice_action_history";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -87,6 +101,12 @@ interface AudioSession {
   isOrchestrating: boolean;
   /** AbortController for the full LLM+tool pipeline — aborted on barge-in */
   pipelineAbortController: AbortController | null;
+  /** User-visible text for the pipeline that currently owns the session. */
+  activeTurnText: string;
+  /** Action text used for routing, including a just-in-time correction when applicable. */
+  activeRoutingText: string;
+  /** Last action interrupted by real user speech; consumed only by an explicit correction. */
+  pendingInterruptedTurn: PendingInterruptedVoiceTurn | null;
   /** Queue of pending utterances while isProcessing=true */
   inputQueue: string[];
   /** True when background agent is executing tools (barge-in requires wake word) */
@@ -185,7 +205,15 @@ function isPureInterruptCommand(text: string): boolean {
   return /^(停|停下|停止|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样|stop|wait|pause|interrupt|holdon|shutup)$/.test(normalized);
 }
 
-function cancelActiveVoiceTurn(session: AudioSession): void {
+function cancelActiveVoiceTurn(session: AudioSession, preserveInterruptedTurn = false): void {
+  if (preserveInterruptedTurn && session.activeRoutingText.trim()) {
+    session.pendingInterruptedTurn = {
+      text: session.activeRoutingText.trim(),
+      interruptedAt: Date.now(),
+    };
+  } else if (!preserveInterruptedTurn) {
+    session.pendingInterruptedTurn = null;
+  }
   session.bgGeneration++;
   session.isSpeaking = false;
   session.isProcessing = false;
@@ -218,9 +246,11 @@ function normalizeVoiceHistoryRecord(m: any): NormalizedMessage[] {
   if (!role) return [];
   const message = typeof m?.message === 'string' ? m.message.trim() : '';
   const response = typeof m?.response === 'string' ? m.response.trim() : '';
+  const origin = String(m?.channel || m?.source || m?.mode || '').trim().toLowerCase();
+  const originPrefix = origin ? `[historical source=${origin}] ` : '';
   const entries: NormalizedMessage[] = [];
-  if (message) entries.push({ role, content: message });
-  if (response && role === 'user') entries.push({ role: 'assistant', content: response });
+  if (message) entries.push({ role, content: `${originPrefix}${message}` });
+  if (response && role === 'user') entries.push({ role: 'assistant', content: `${originPrefix}${response}` });
   return entries;
 }
 
@@ -231,6 +261,9 @@ function buildVoiceReplyStyleOverlay(): string {
     '- Say the final answer only.',
     '- Default to one short sentence. For simple confirmations, use 2-6 Chinese characters.',
     '- If the user interrupts or says you are verbose, stop immediately and do not explain.',
+    '- Never invent a self-check, scan, background action, or tool run to explain latency. Only describe execution that has a real receipt in the current context.',
+    '- The current turn is always coming from the Lumi desktop client voice interface. Historical messages may come from other sources; never infer that the current user is speaking through WeChat or another channel.',
+    '- If a messaging tool such as wechat_send_message is present in the current tool set, never claim that Lumi lacks that capability. Execute it for an explicit ordinary send, or report the exact tool error.',
   ].join('\n');
 }
 
@@ -244,7 +277,13 @@ function shouldAllowVoiceLocalFileWriteForTurn(userText: string): boolean {
 function isVoiceProactiveFollowup(text: string): boolean {
   const raw = String(text || '').trim();
   if (!raw) return false;
-  if (/(刚才|刚刚|弹窗|提示|通知|上面|那个|这个|继续|接着|顺着)/u.test(raw)) return true;
+  // Proactive context is only for short, referential acknowledgements. A full
+  // correction or explicit command must route from the user's own words.
+  if (raw.length > 24) return false;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:打开|启动|运行|发送|发给|问一下|询问|搜索|查找|不是|错了|搞错|弄错|我说的是|我让你)/u.test(raw)) return false;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/^(?:刚才|刚刚|弹窗|提示|通知|上面|那个|这个|继续|接着|顺着)/u.test(raw)) return true;
   const compact = raw.replace(/[\s，。！？,.!?、…~～"“”'‘’]/g, '').toLowerCase();
   if (!compact) return false;
   if (compact.length > 18) return false;
@@ -284,6 +323,9 @@ function getAudioSession(socket: Socket): AudioSession {
       isBackgroundWork: false,
       bgGeneration: 0,
       pipelineAbortController: null,
+      activeTurnText: '',
+      activeRoutingText: '',
+      pendingInterruptedTurn: null,
       inputQueue: [],
       lastChunkTime: 0,
       silenceTimer: null,
@@ -459,11 +501,42 @@ async function processVoiceInput(
     return;
   }
 
+  let interruptedMerge = mergeInterruptedVoiceTurn(session.pendingInterruptedTurn, userText);
+  if (!interruptedMerge.usedInterruptedTurn && isVoiceCorrectionContinuation(userText)) {
+    try {
+      const conv = getOrCreateActiveConversation(session.userId, session.agentId, session.domain, session.orgId);
+      const priorAction = getMessagesByTokenBudget(conv.id)
+        .slice(-16)
+        .reverse()
+        .find((record: any) => {
+          if (record?.role !== 'user') return false;
+          const priorText = String(record?.message || '').trim();
+          return Boolean(priorText && buildForegroundWeChatSendArgs(priorText));
+        });
+      if (priorAction) {
+        interruptedMerge = mergeInterruptedVoiceTurn({
+          text: String((priorAction as any).message || ''),
+          interruptedAt: new Date((priorAction as any).timestamp || 0).getTime(),
+        }, userText, Date.now(), 120_000);
+      }
+    } catch {}
+  }
+  session.pendingInterruptedTurn = null;
+  const actionIntentText = interruptedMerge.routingText || userText;
+  if (interruptedMerge.usedInterruptedTurn) {
+    logger.info(`[Audio] Applied correction to interrupted voice request: "${userText.slice(0, 80)}"`);
+  }
+
   session.isSpeaking = false;
   session.isProcessing = true;
-  session.pipelineAbortController = new AbortController();
+  const pipelineAbort = new AbortController();
+  const ttsAbort = new AbortController();
+  session.pipelineAbortController = pipelineAbort;
+  session.ttsAbortController = ttsAbort;
+  session.activeTurnText = userText;
+  session.activeRoutingText = actionIntentText;
+  const isCurrentTurn = () => session.pipelineAbortController === pipelineAbort && !pipelineAbort.signal.aborted;
   socket.emit("agent:status", { status: "thinking", agentName: "Lumi" });
-  session.ttsAbortController = new AbortController();
   socket.emit("audio:status", { status: "thinking" });
   const voiceScope = { domain: session.domain, orgId: session.orgId };
   const voiceStateKey = getVoiceStateKey(session);
@@ -475,11 +548,16 @@ async function processVoiceInput(
     ? formatPendingConfirmationPrompt(pendingConfirmation)
     : '';
   const recentProactiveSuggestion = getRecentProactiveSuggestion(session.userId);
-  const shouldUseProactiveContext = Boolean(recentProactiveSuggestion && isVoiceProactiveFollowup(userText));
+  const shouldUseProactiveContext = Boolean(
+    !interruptedMerge.usedInterruptedTurn
+    && recentProactiveSuggestion
+    && isVoiceReferentialFollowup(userText),
+  );
   const proactiveContextPrompt = shouldUseProactiveContext && recentProactiveSuggestion
     ? formatProactiveSuggestionForPrompt(recentProactiveSuggestion)
     : '';
-  const routedUserText = [userText, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+  const routedUserText = [actionIntentText, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+  const skipKnowledgeRetrieval = isQuickCommand(userText) || isUserCorrectionOrExplanationQuestion(userText);
   const allowLocalFileWrites = shouldAllowVoiceLocalFileWriteForTurn(routedUserText);
   const localWriteIntentReason = allowLocalFileWrites
     ? `Current voice request explicitly asked Lumi to generate/export a local deliverable: "${userText.slice(0, 120)}"`
@@ -496,39 +574,45 @@ async function processVoiceInput(
 
   // Cross-session memory retrieval — voice now has access to what was discussed before
   let voiceMemories: any[] = [];
-  try {
-    voiceMemories = queryMemories({
-      userId: session.userId,
-      query: routedUserText,
-      limit: 5,
-      minConfidence: 0.4,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-    });
-  } catch {}
+  if (!skipKnowledgeRetrieval) {
+    try {
+      voiceMemories = queryMemories({
+        userId: session.userId,
+        query: routedUserText,
+        limit: 5,
+        minConfidence: 0.4,
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+      });
+    } catch {}
+  }
 
   // Voice and text share the same current-workspace knowledge retrieval path.
   const voiceRagKnowledge: string[] = [];
-  try {
-    const ragAgentIds = Array.from(new Set([session.agentId, 'lumi'].filter(Boolean)));
-    for (const ragAgentId of ragAgentIds) {
-      const chunks = await retrieveChunks(session.userId, ragAgentId, routedUserText, 3, {
-        domain: voiceScope.domain,
-        orgId: voiceScope.domain === 'work' ? voiceScope.orgId : '',
-      });
-      for (const chunk of chunks) {
-        const content = String((chunk as any)?.content || '').trim();
-        if (content && !voiceRagKnowledge.includes(content)) voiceRagKnowledge.push(content);
+  if (!skipKnowledgeRetrieval) {
+    try {
+      const ragAgentIds = Array.from(new Set([session.agentId, 'lumi'].filter(Boolean)));
+      for (const ragAgentId of ragAgentIds) {
+        const chunks = await retrieveChunks(session.userId, ragAgentId, routedUserText, 3, {
+          domain: voiceScope.domain,
+          orgId: voiceScope.domain === 'work' ? voiceScope.orgId : '',
+        });
+        for (const chunk of chunks) {
+          const content = String((chunk as any)?.content || '').trim();
+          if (content && !voiceRagKnowledge.includes(content)) voiceRagKnowledge.push(content);
+          if (voiceRagKnowledge.length >= 5) break;
+        }
         if (voiceRagKnowledge.length >= 5) break;
       }
-      if (voiceRagKnowledge.length >= 5) break;
+    } catch (err: any) {
+      logger.warn(`[Audio] Scoped RAG retrieval failed: ${err?.message || String(err)}`);
     }
-  } catch (err: any) {
-    logger.warn(`[Audio] Scoped RAG retrieval failed: ${err?.message || String(err)}`);
+  } else {
+    logger.info('[Audio] Skipped memory/RAG retrieval for deterministic or corrective voice turn');
   }
 
   let voiceOrganizationKnowledge = '';
-  if (voiceScope.domain === 'work' && voiceScope.orgId) {
+  if (!skipKnowledgeRetrieval && voiceScope.domain === 'work' && voiceScope.orgId) {
     try {
       const results = await searchKnowledgeBase(voiceScope.orgId, routedUserText, { limit: 3, userId: session.userId });
       voiceOrganizationKnowledge = results
@@ -603,7 +687,7 @@ async function processVoiceInput(
   const requestedMode = detectRequestedOperationMode(userText);
   const turnDispatch = buildLumiTurnDispatch({
     userId: session.userId,
-    text: routedUserText,
+    text: actionIntentText,
     channel: 'voice',
     source: 'voice',
     domain: voiceScope.domain,
@@ -622,24 +706,24 @@ async function processVoiceInput(
   const exposeAgentWork = turnFlow.exposeAgentWork;
   const executionDecision = buildLumiExecutionDecision({
     flow: turnFlow,
-    text: routedUserText,
+    text: actionIntentText,
     toolDeclarations: toolRegistry.getToolDeclarations(),
     personalityToolPolicy: personality.toolPolicy,
   });
   const intentTrace = buildLumiIntentTrace({
     dispatch: turnDispatch,
     execution: executionDecision,
-    text: routedUserText,
+    text: actionIntentText,
     source: 'voice',
   });
   const capabilitySelection = buildLumiCapabilitySelection({
     dispatch: turnDispatch,
     execution: executionDecision,
-    text: routedUserText,
+    text: actionIntentText,
   });
   const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
     channel: 'voice',
-    text: routedUserText,
+    text: actionIntentText,
     flow: turnFlow,
     capabilitySelection,
   });
@@ -688,7 +772,7 @@ async function processVoiceInput(
   const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
     userId: session.userId,
-    text: routedUserText,
+    text: actionIntentText,
     flow: turnFlow,
     toolRegistry,
     domain: voiceScope.domain,
@@ -783,12 +867,6 @@ async function processVoiceInput(
     return false;
   };
 
-  // ── Capture abort controller refs BEFORE anything that checks them ──
-  // Must NOT look up session.pipelineAbortController / session.ttsAbortController
-  // in the loop or flushSentence because a new processVoiceInput will overwrite them.
-  const pipelineAbort = session.pipelineAbortController;
-  const ttsAbort = session.ttsAbortController;
-
   const toolContext = {
     userId: session.userId,
     domain: voiceScope.domain,
@@ -799,7 +877,7 @@ async function processVoiceInput(
     supervisedExternalCommits: true,
     allowLocalFileWrites,
     localWriteIntentReason,
-    actionIntent: routedUserText,
+    actionIntent: actionIntentText,
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
     isCancelled: () => pipelineAbort?.signal.aborted ?? false,
     onProgress: (step: string) => {
@@ -935,6 +1013,39 @@ async function processVoiceInput(
     return playbackDone;
   };
 
+  let recentActionExplanation: string | null = null;
+  try {
+    const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    recentActionExplanation = describeRecentActionsFromHistory(
+      userText,
+      getMessagesByTokenBudget(conversation.id).slice(-30),
+    );
+  } catch {}
+  if (recentActionExplanation) {
+    responseText = recentActionExplanation;
+    flushSentence(responseText);
+    await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
+    const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    session.isProcessing = false;
+    session.isSpeaking = false;
+    session.pipelineAbortController = null;
+    session.ttsAbortController = null;
+    session.activeTurnText = '';
+    session.activeRoutingText = '';
+    socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
+    socket.emit('audio:status', { status: 'listening' });
+    socket.emit('agent:status', { status: 'idle' });
+    socket.emit('agent:response', { text: responseText, agentName: 'Lumi', source: 'voice_action_history' });
+    persistVoiceLearning(responseText, {
+      sourceInteractionId: `voice_action_history_${Date.now()}`,
+      logLabel: 'voice action history explanation',
+    });
+    return;
+  }
+
   const specialWorkflow = turnFlow.specialWorkflow;
   if (specialWorkflow) {
     try {
@@ -956,6 +1067,7 @@ async function processVoiceInput(
     }
 
     await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
@@ -996,6 +1108,7 @@ async function processVoiceInput(
         message: `Mode switch did not reach the client: ${err?.message || err}`,
       });
     }
+    if (!isCurrentTurn()) return;
     if (modeSynced) {
       saveStoredOperationMode(session.userId, directlyAppliedMode);
     }
@@ -1004,6 +1117,7 @@ async function processVoiceInput(
       responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, userText);
       flushSentence(responseText);
       await Promise.allSettled(ttsPromises);
+      if (!isCurrentTurn()) return;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
@@ -1022,13 +1136,24 @@ async function processVoiceInput(
     }
   }
 
+  let foregroundWeChatSendArgs = buildForegroundWeChatSendArgs(actionIntentText);
+  if (foregroundWeChatSendArgs) {
+    try {
+      const currentConversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+      foregroundWeChatSendArgs = resolveWeChatRecipientFromHistory(
+        foregroundWeChatSendArgs,
+        getMessagesByTokenBudget(currentConversation.id).slice(-24),
+      );
+    } catch {}
+  }
+
   try {
     const quickResult = await matchQuickCommand(userText, session.userId, {
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
       surface: 'voice',
     });
-    if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
+    if (!foregroundWeChatSendArgs && quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
       logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
       let quickResponseText = quickResult.responseText;
       let quickToolResult = '';
@@ -1068,7 +1193,7 @@ async function processVoiceInput(
         };
       }
       const quickFinalized = finalizeLumiResponse({
-        taskText: routedUserText,
+        taskText: actionIntentText,
         responseText: quickResponseText,
         toolRecords: quickToolRecord ? [quickToolRecord] : [],
         source: 'voice',
@@ -1078,10 +1203,11 @@ async function processVoiceInput(
       if (quickFinalized.notification) socket.emit('agent:notification', quickFinalized.notification);
       flushSentence(quickResponseText);
       await Promise.allSettled(ttsPromises);
+      if (!isCurrentTurn()) return;
       responseText = quickResponseText;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: quickToolRecord ? [quickToolRecord] : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: quickToolRecord ? [quickToolRecord] : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
       session.isProcessing = false;
       session.isSpeaking = false;
       session.pipelineAbortController = null;
@@ -1100,6 +1226,79 @@ async function processVoiceInput(
     logger.warn(`[Audio] Quick command check failed, falling through to LLM: ${qcErr.message}`);
   }
 
+  // Explicit ordinary foreground WeChat sends use the same deterministic path
+  // as text chat. Do not ask the model to rediscover a registered capability.
+  if (foregroundWeChatSendArgs && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn) {
+    const toolName = 'wechat_send_message';
+    const correlationId = `voice-wechat-send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const toolRecord: ToolExecutionRecord = {
+      id: correlationId,
+      name: toolName,
+      arguments: foregroundWeChatSendArgs,
+      result: '',
+    };
+    emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs });
+    let directSendVerified = false;
+    try {
+      toolRecord.result = await toolRegistry.execute(toolName, foregroundWeChatSendArgs, toolContext) || '';
+      if (!isCurrentTurn()) return;
+      emitToolLifecycle({
+        correlationId,
+        name: toolName,
+        arguments: foregroundWeChatSendArgs,
+        result: formatToolResultForUi(toolRecord.result),
+      });
+      let parsed: any = {};
+      try { parsed = JSON.parse(toolRecord.result || '{}'); } catch {}
+      const contact = String(foregroundWeChatSendArgs.contact || '').trim();
+      const message = String(foregroundWeChatSendArgs.message || '').trim();
+      directSendVerified = parsed.sent === true && parsed.verificationStatus === 'verified';
+      responseText = formatCnVoiceWeChatSendResult(
+        contact,
+        message,
+        directSendVerified,
+      );
+    } catch (sendErr: any) {
+      toolRecord.error = sendErr?.message || String(sendErr);
+      if (!isCurrentTurn()) return;
+      emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, error: toolRecord.error });
+      responseText = formatCnVoiceWeChatSendError(toolRecord.error);
+    }
+
+    if (directSendVerified) {
+      const directFinal = finalizeLumiResponse({
+        taskText: actionIntentText,
+        responseText,
+        toolRecords: [toolRecord],
+        source: 'voice',
+        flow: turnFlow,
+      });
+      responseText = directFinal.text;
+    }
+    flushSentence(responseText);
+    await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
+    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: [toolRecord], domain: voiceScope.domain, orgId: voiceScope.orgId });
+    session.isProcessing = false;
+    session.isSpeaking = false;
+    session.pipelineAbortController = null;
+    session.ttsAbortController = null;
+    session.activeTurnText = '';
+    session.activeRoutingText = '';
+    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
+    socket.emit('audio:status', { status: 'listening' });
+    socket.emit('agent:status', { status: 'idle' });
+    socket.emit('agent:response', { text: responseText, agentName: 'Lumi', source: 'voice_foreground_messaging' });
+    persistVoiceLearning(responseText, {
+      toolRecords: [toolRecord],
+      sourceInteractionId: `voice_wechat_send_${Date.now()}`,
+      logLabel: 'voice foreground messaging',
+    });
+    return;
+  }
+
   if (isMusicProfileAnalysisRequest(userText)) {
     try {
       const profile = await analyzeLikedMusicProfile(session.userId, { maxSongs: 3000 });
@@ -1111,6 +1310,7 @@ async function processVoiceInput(
       flushSentence(responseText);
     }
     await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
@@ -1136,6 +1336,7 @@ async function processVoiceInput(
       : '\u597d\uff0c\u6211\u6765\u653e\u3002';
     flushSentence(responseText);
     await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
 
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
@@ -1199,24 +1400,36 @@ async function processVoiceInput(
       return result.text || '{"category":"unknown","confidence":0.5,"entities":{}}';
     };
 
-    const cognition = await processInput(routedUserText, cognitiveCtx, llmClassifier);
+    const cognition = await processInput(routedUserText, cognitiveCtx, llmClassifier, toolContext);
+    if (!isCurrentTurn()) return;
 
     if (cognition.directToolExecuted && cognition.responseText) {
       // Path A: Cognitive engine handled this directly — no LLM needed
-      responseText = cognition.responseText;
+      const directRecords = cognition.toolRecord ? [cognition.toolRecord] : [];
+      const directFinal = finalizeLumiResponse({
+        taskText: actionIntentText,
+        responseText: cognition.responseText,
+        toolRecords: directRecords,
+        source: 'voice',
+        flow: turnFlow,
+      });
+      responseText = directFinal.text;
       flushSentence(responseText);
       await Promise.allSettled(ttsPromises);
+      if (!isCurrentTurn()) return;
       // Persist
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: directRecords.length ? directRecords : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
       session.isProcessing = false;
       session.isSpeaking = false;
       session.pipelineAbortController = null;
       socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening" });
       socket.emit("agent:status", { status: "idle" });
+      socket.emit("agent:response", { text: responseText, agentName: "Lumi", source: "voice_cognition_direct" });
       persistVoiceLearning(responseText, {
+        toolRecords: directRecords,
         sourceInteractionId: `voice_cognition_direct_${Date.now()}`,
         logLabel: 'voice cognition direct',
       });
@@ -1244,6 +1457,7 @@ async function processVoiceInput(
         if (!result.success) socket.emit('music:error', { message: responseText });
         flushSentence(responseText);
         await Promise.allSettled(ttsPromises);
+        if (!isCurrentTurn()) return;
         const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
         addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
         addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
@@ -1264,6 +1478,7 @@ async function processVoiceInput(
         socket.emit('music:error', { message: responseText });
         flushSentence(responseText);
         await Promise.allSettled(ttsPromises);
+        if (!isCurrentTurn()) return;
         const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
         addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
         addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
@@ -1295,7 +1510,14 @@ async function processVoiceInput(
 
         const orchResult = await runOrchestratedTask(
           routedUserText,
-          { userId: session.userId, personalityId: session.personalityId, domain: voiceScope.domain, orgId: voiceScope.orgId, desktopRelay },
+          {
+            userId: session.userId,
+            personalityId: session.personalityId,
+            domain: voiceScope.domain,
+            orgId: voiceScope.orgId,
+            desktopRelay,
+            isCancelled: () => pipelineAbort?.signal.aborted ?? false,
+          },
           { provider, model: effectiveModel },
           llmGetters,
           exposeAgentWork ? (msg) => socket.emit("agent:chunk", { text: msg, agentName: "Lumi" }) : undefined,
@@ -1321,6 +1543,7 @@ async function processVoiceInput(
             });
           },
         );
+        if (!isCurrentTurn()) return;
         if (orchResult) {
           usedOrchestrator = true;
           responseText = orchResult.responseText;
@@ -1389,6 +1612,7 @@ async function processVoiceInput(
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
+      if (!isCurrentTurn()) return;
 
       messages.push({
         role: 'assistant',
@@ -1421,6 +1645,7 @@ async function processVoiceInput(
           execResult = '';
           execError = execErr.message?.slice(0, 200) || 'Tool execution failed';
         }
+        if (!isCurrentTurn()) return;
 
         toolResults.push({
           id: tc.id,
@@ -1449,8 +1674,10 @@ async function processVoiceInput(
     }
     } // end if (!usedOrchestrator)
 
+    if (!isCurrentTurn()) return;
+
     const finalResponse = finalizeLumiResponse({
-      taskText: routedUserText,
+      taskText: actionIntentText,
       responseText,
       toolRecords: toolResults,
       source: 'voice',
@@ -1465,7 +1692,7 @@ async function processVoiceInput(
 
     const executionWriteback = persistWorkTakeoverTurnExecution({
       userId: session.userId,
-      userText: routedUserText,
+      userText: actionIntentText,
       assistantText: responseText,
       source: 'voice',
       domain: voiceScope.domain,
@@ -1491,6 +1718,7 @@ async function processVoiceInput(
       }
     }
     await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
 
     if (responseText) {
       logger.info(`[Audio] Response: "${responseText.slice(0, 80)}" (${sentenceIdx} sentences, ${toolResults.length} tool calls)`);
@@ -1503,9 +1731,9 @@ async function processVoiceInput(
       conv.title = userText.slice(0, 50);
       writeDB(readDB());
     }
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
     if (responseText) {
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: toolResults.length ? toolResults : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     }
     // Topic tracking — extract and record topics for cross-session continuity
     try {
@@ -1545,16 +1773,22 @@ async function processVoiceInput(
       socket.emit("agent:error", { message: "Voice processing failed" });
     }
   } finally {
-    session.isSpeaking = false;
-    session.isProcessing = false;
-    session.isBackgroundWork = false;
-    session.ttsAbortController = null;
-    session.pipelineAbortController = null;
+    // An older aborted pipeline must never clear the state/controllers that
+    // already belong to a newer barge-in turn.
+    if (session.pipelineAbortController === pipelineAbort) {
+      session.isSpeaking = false;
+      session.isProcessing = false;
+      session.isBackgroundWork = false;
+      session.ttsAbortController = null;
+      session.pipelineAbortController = null;
+      session.activeTurnText = '';
+      session.activeRoutingText = '';
 
-    if (session.isActive) {
-      resetSilenceTimer(session, socket);
-      socket.emit("audio:status", { status: "listening" });
-      socket.emit("agent:status", { status: "idle" });
+      if (session.isActive) {
+        resetSilenceTimer(session, socket);
+        socket.emit("audio:status", { status: "listening" });
+        socket.emit("agent:status", { status: "idle" });
+      }
     }
   }
 }
@@ -1583,6 +1817,9 @@ export function registerVoiceHandlers(
   socket.on("audio:start", async (data: { voiceId?: string; personalityId?: string; agentId?: string; transcriptionOnly?: boolean; domain?: 'personal' | 'work'; orgId?: string; sessionId?: string }) => {
     logger.info(`[Audio] Voice call started by ${socket.id}`);
     const session = getAudioSession(socket);
+    if (session.isActive && session.userId) {
+      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
+    }
     session.isActive = true;
     session.accumulatedText = '';
     session.isSpeaking = false;
@@ -1590,6 +1827,7 @@ export function registerVoiceHandlers(
     session.inputQueue = [];
     session.lastChunkTime = 0;
     session.userId = getUserId(socket);
+    setRealtimeVoiceSessionActive(session.userId, socket.id, true);
     session.agentId = data.agentId || 'lumi';
     session.sessionId = normalizeVoiceSessionId(data.sessionId);
     const sessionScope = resolveSocketScope(socket, session.userId, data);
@@ -1672,8 +1910,12 @@ export function registerVoiceHandlers(
 
             // ── Filter filler words: single-char interjections ──
             const isFiller = /^[嗯啊哦呃哼唉呀哈呵嗨喂诶唔嘶啧哎哦哟嘿嘛哇啦嘞][。！？.!?，,～~]*$/.test(text);
-            if (isFiller) {
+            if (isFiller || isVoiceFiller(text)) {
               logger.info(`[Audio] Ignored filler (${text.length} chars)`);
+              return;
+            }
+            if (isSpeechClearlyDirectedAwayFromLumi(text)) {
+              logger.info(`[Audio] Ignored speech explicitly directed to another person (${text.length} chars)`);
               return;
             }
             // ── Filter pure noise (no CJK, no letters, no digits) ──
@@ -1699,7 +1941,7 @@ export function registerVoiceHandlers(
                   return;
                 }
                 logger.info(`[Audio] Barge-in during speech (${text.length} chars)`);
-                cancelActiveVoiceTurn(session);
+                cancelActiveVoiceTurn(session, !isPureInterruptCommand(text));
                 socket.emit("audio:status", { status: "interrupted" });
                 socket.emit("audio:interrupt-ack", {});
                 if (isPureInterruptCommand(text)) {
@@ -1711,7 +1953,7 @@ export function registerVoiceHandlers(
                 // Processing but not speaking (LLM thinking / tool exec):
                 // Any real speech → barge-in, abort current pipeline
                 logger.info(`[Audio] Barge-in during processing (${text.length} chars)`);
-                cancelActiveVoiceTurn(session);
+                cancelActiveVoiceTurn(session, !isPureInterruptCommand(text));
                 socket.emit("audio:status", { status: "interrupted" });
                 socket.emit("audio:interrupt-ack", {});
                 if (isPureInterruptCommand(text)) {
@@ -1839,6 +2081,7 @@ export function registerVoiceHandlers(
     const meetingPcmPath = session.meetingPcmPath;
     const meetingPcmBytes = session.meetingPcmBytes;
     session.isActive = false;
+    setRealtimeVoiceSessionActive(session.userId, socket.id, false);
     session.transcriptionOnly = false;
     cancelActiveVoiceTurn(session);
     if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
@@ -2101,6 +2344,7 @@ export function registerVoiceHandlers(
     const session = socket.data.audioSession as AudioSession | undefined;
     if (session) {
       session.isActive = false;
+      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
       cancelActiveVoiceTurn(session);
       if (session.silenceTimer) { clearTimeout(session.silenceTimer); session.silenceTimer = null; }
       if (session.bargeinTimer) { clearTimeout(session.bargeinTimer); session.bargeinTimer = null; }

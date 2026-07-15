@@ -80,6 +80,9 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   const analyser = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrame = useRef<number>(0);
+  const rawAudioLevelRef = useRef(0);
+  const lastPublishedAudioLevelRef = useRef(0);
+  const lastAudioLevelPublishAtRef = useRef(0);
   const pendingAudio = useRef<ArrayBuffer[]>([]);
   const isPlaying = useRef(false);
   const playbackSource = useRef<AudioBufferSourceNode | null>(null);
@@ -144,7 +147,20 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       sum += v * v;
     }
     const rms = Math.sqrt(sum / dataArray.length);
-    setAudioLevel(rms);
+    rawAudioLevelRef.current = rms;
+    const now = performance.now();
+    // DesktopUI owns a very large React tree. Publishing analyser samples on
+    // every animation frame rerenders that entire tree and can exhaust the
+    // WebView in React development builds. Safety logic reads the realtime ref;
+    // React receives only a low-frequency visual sample.
+    if (now - lastAudioLevelPublishAtRef.current >= 250) {
+      const visualLevel = Math.round(rms * 200) / 200;
+      if (Math.abs(visualLevel - lastPublishedAudioLevelRef.current) >= 0.005) {
+        lastPublishedAudioLevelRef.current = visualLevel;
+        setAudioLevel(visualLevel);
+      }
+      lastAudioLevelPublishAtRef.current = now;
+    }
     animationFrame.current = requestAnimationFrame(updateAudioLevel);
   }, []);
 
@@ -289,6 +305,10 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       timerInterval.current = null;
     }
     cancelAnimationFrame(animationFrame.current);
+    animationFrame.current = 0;
+    rawAudioLevelRef.current = 0;
+    lastPublishedAudioLevelRef.current = 0;
+    lastAudioLevelPublishAtRef.current = 0;
     analyser.current = null;
   }, []);
 
@@ -813,23 +833,26 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   useEffect(() => {
     const threshold = 0.12;
     const minTtsDuration = 500; // ms — ignore barge-in during first 500ms of TTS
-    if (
-      audioLevel > threshold &&
-      isTtsPlaying.current &&
-      (callState === 'speaking' || callState === 'thinking') &&
-      ttsStartedAt.current > 0 &&
-      Date.now() - ttsStartedAt.current > minTtsDuration
-    ) {
-      if (!(canInterruptFromVoiceRef.current?.() ?? true)) return;
-      const preRoll = [...ttsPreRollChunks.current];
-      socket?.emit('audio:interrupt');
-      stopAllPlayback();
-      ttsPreRollChunks.current = preRoll;
-      flushTtsPreRollOnNextAudio.current = true;
-      ttsStartedAt.current = 0;
-      setCallState('listening');
-    }
-  }, [audioLevel, callState, socket, stopAllPlayback]);
+    if (callState !== 'speaking' && callState !== 'thinking') return;
+    const interval = setInterval(() => {
+      if (
+        rawAudioLevelRef.current > threshold &&
+        isTtsPlaying.current &&
+        ttsStartedAt.current > 0 &&
+        Date.now() - ttsStartedAt.current > minTtsDuration
+      ) {
+        if (!(canInterruptFromVoiceRef.current?.() ?? true)) return;
+        const preRoll = [...ttsPreRollChunks.current];
+        socket?.emit('audio:interrupt');
+        stopAllPlayback();
+        ttsPreRollChunks.current = preRoll;
+        flushTtsPreRollOnNextAudio.current = true;
+        ttsStartedAt.current = 0;
+        setCallState('listening');
+      }
+    }, 50);
+    return () => clearInterval(interval);
+  }, [callState, socket, stopAllPlayback]);
 
   // Monitor connection quality via socket latency
   useEffect(() => {
@@ -857,14 +880,14 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     if (!socket || callState === 'idle') return;
     const interval = setInterval(() => {
       socket.emit('ambient:noise_level', {
-        rms: audioLevel,
+        rms: rawAudioLevelRef.current,
         isSpeaking: isTtsPlaying.current,
         callState,
         timestamp: new Date().toISOString(),
       });
     }, 5000);
     return () => clearInterval(interval);
-  }, [socket, callState, audioLevel]);
+  }, [socket, callState]);
 
   return {
     callState,

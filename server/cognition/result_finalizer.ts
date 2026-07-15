@@ -4,6 +4,7 @@ import type { LumiTurnFlow } from './turn_flow';
 import { formatDesktopObservationResult } from './desktop_observation';
 import { formatClientDiagnosticResult } from './client_diagnostic_result';
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
+import { CN_VOICE_FAST_PATH_MESSAGES, formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import {
   CN_MESSAGING_MESSAGES,
   formatCnMessagingContractBlocker,
@@ -11,6 +12,7 @@ import {
 } from '../regions/packs/cn/messaging_messages';
 import {
   buildActionContract,
+  extractSimpleDesktopOpenTarget,
   hasAuthenticatedWebResultEvidence,
   hasCoreActionEvidence,
   hasVisibleAutoCadExecutionEvidence,
@@ -18,6 +20,7 @@ import {
   requiresVisibleAutoCadExecution,
   summarizeActionContractBlocker,
 } from './action_contract';
+import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 
 export interface LumiResultFinalizerInput {
   taskText: string;
@@ -81,6 +84,27 @@ function unsupportedToolExecutionClaim(input: LumiResultFinalizerInput): string 
   ].join('\n');
 }
 
+function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): string | null {
+  const response = String(input.responseText || '');
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const deniesDiagnostic = /(?:没有|没|并未|不是|不在|未曾|无法确认|不能确认)[^。！？!?\n]{0,32}(?:自检|健康检查|扫描|检查)|\b(?:did\s+not|didn't|wasn'?t|cannot\s+confirm)\b[^.!?\n]{0,80}\b(?:self[- ]?check|scan|diagnostic)/iu.test(response);
+  if (deniesDiagnostic) return null;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const claimsDiagnostic = /(?:刚才|刚刚|之前|上一轮|上一次)?[^。！？!?\n]{0,20}(?:在|已经|刚刚|跑了|执行了|进行了|做了)[^。！？!?\n]{0,48}(?:自检|健康检查|扫描\s*MCP|扫描.*技能|检查.*运行时)|\b(?:I|Lumi|we)\s+(?:was|were|have\s+been|had\s+been)?\s*(?:running|performing|doing)[^.!?\n]{0,80}\b(?:self[- ]?check|diagnostic|MCP\s+scan)/iu.test(response);
+  if (!claimsDiagnostic) return null;
+
+  const diagnosticEvidence = (input.toolRecords || []).some(record =>
+    /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|desktop_active_window|desktop_running_processes|open_runtime_log)$/i.test(String(record.name || ''))
+    && !record.error
+    && Boolean(String(record.result || '').trim())
+  );
+  if (diagnosticEvidence) return null;
+
+  return isChineseText(input.taskText) || isChineseText(response)
+    ? CN_RESULT_GROUNDING_MESSAGES.priorDiagnosticUnsupported
+    : 'There is no verifiable client-diagnostic receipt for the prior turn. I cannot explain the delay as a self-check when no such check was recorded.';
+}
+
 function taskActionContract(input: LumiResultFinalizerInput) {
   return buildActionContract(input.taskText);
 }
@@ -121,7 +145,7 @@ function summarizeToolFailure(records: ToolExecutionRecord[]): string {
     if (/mouse|cursor/i.test(name)) return '\u5149\u6807\u70b9\u51fb';
     return name || '\u5de5\u5177\u6267\u884c';
   })();
-  return error ? `${action}: ${error}` : action;
+  return error ? `${action}\uff1a${formatCnToolFailureDetail(error)}` : action;
 }
 
 function summarizeWebAccountBlocker(records: ToolExecutionRecord[]): string {
@@ -582,6 +606,18 @@ function correctCurrentTurnContractDrift(
   if (hasCoreActionEvidence(responseContract, input.toolRecords || [], input.responseText)) return null;
   if (!hasCoreActionEvidence(taskContract, input.toolRecords || [], input.taskText)) return null;
 
+  const requestedTarget = extractSimpleDesktopOpenTarget(input.taskText);
+  const successfulOpen = [...(input.toolRecords || [])].reverse().find(record => (
+    /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
+    && !record.error
+    && String(record.result || '').trim()
+  ));
+  if (requestedTarget && successfulOpen) {
+    return isChineseText(input.taskText)
+      ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
+      : `Opened ${requestedTarget}.`;
+  }
+
   const grounded = formatGroundedDesktopEvidence(input);
   if (grounded) {
     console.warn(`[ResultFinalizer] Corrected current-turn contract drift: task=${taskContract.kind}, response=${responseContract.kind}`);
@@ -596,6 +632,19 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       text: diagnosticResult,
       blocked: false,
       reason: 'Grounded client diagnostic summary from current-turn tool receipts.',
+    };
+  }
+  const unsupportedDiagnostic = unsupportedPriorDiagnosticClaim(input);
+  if (unsupportedDiagnostic) {
+    return {
+      text: unsupportedDiagnostic,
+      blocked: true,
+      reason: 'Response claimed a prior diagnostic run without matching diagnostic receipts.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Response claimed a prior diagnostic run without matching diagnostic receipts.',
+      },
     };
   }
   const unsupportedExecution = unsupportedToolExecutionClaim(input);

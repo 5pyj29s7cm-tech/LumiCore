@@ -19,6 +19,7 @@ import { classifyIntent, classifyIntentLLM, extractSentiment, IntentResult, Sent
 import { generateFallback, isLLMDown } from './fallback';
 import { toolRegistry } from '../tools/registry';
 import { getModeConfig, ConversationMode, ModeConfig } from './modes';
+import type { ToolContext, ToolExecutionRecord } from '../tools/types';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -46,6 +47,8 @@ export interface CognitiveResult {
   directToolExecuted: boolean;
   /** Result from direct tool execution, if any */
   toolResult?: string;
+  /** Grounded receipt for a direct tool execution. */
+  toolRecord?: ToolExecutionRecord;
   /** Whether the response came from the fallback system */
   isFallback: boolean;
 }
@@ -65,6 +68,7 @@ export async function processInput(
   input: string,
   ctx: CognitiveContext,
   llmClassifier?: (prompt: string, userText: string) => Promise<string>,
+  toolContext?: ToolContext,
 ): Promise<CognitiveResult> {
   const regexIntent = classifyIntent(input);
 
@@ -80,6 +84,7 @@ export async function processInput(
       const toolResult = await toolRegistry.execute(
         intent.directToolCall.name,
         intent.directToolCall.args,
+        toolContext,
       );
 
       const fallback = generateFallback(intent, toolResult);
@@ -89,6 +94,12 @@ export async function processInput(
         llmWasCalled: false,
         directToolExecuted: true,
         toolResult,
+        toolRecord: {
+          id: `cognition-${Date.now()}`,
+          name: intent.directToolCall.name,
+          arguments: intent.directToolCall.args,
+          result: toolResult,
+        },
         isFallback: !!fallback,
       };
     } catch (err: any) {

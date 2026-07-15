@@ -8,6 +8,7 @@
 import { readDB } from '../../db_layer';
 import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface } from '../work_takeover/continuity';
 import { listWorkflows } from '../agents/workflows';
+import { CN_VOICE_FAST_PATH_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
@@ -31,7 +32,49 @@ export interface QuickCommandOptions {
   surface?: WorkTakeoverTurnSurface;
 }
 
+function quickOpenToolCall(target: string): { name: string; arguments: Record<string, any> } {
+  const clean = String(target || '').trim();
+  // i18n-allow: Chinese site-name recognition patterns; not user-visible copy.
+  const knownSites: Array<[RegExp, string]> = [
+    [/(?:中国)?裁判文书网/u, 'https://wenshu.court.gov.cn/'], // i18n-allow: site-name input recognition
+    [/人民法院案例库/u, 'https://rmfyalk.court.gov.cn/'], // i18n-allow: site-name input recognition
+    [/人民法院在线服务/u, 'https://zxfw.court.gov.cn/'], // i18n-allow: site-name input recognition
+  ];
+  const known = knownSites.find(([pattern]) => pattern.test(clean));
+  if (known) return { name: 'browser_open_task', arguments: { url: known[1], open: true } };
+  if (/^(?:https?:\/\/|www\.)/i.test(clean)) return { name: 'browser_open_task', arguments: { url: clean, open: true } };
+  // i18n-allow: Chinese website-target recognition pattern; not user-visible copy.
+  if (/(?:网站|网页|网址|网)$/u.test(clean)) return { name: 'browser_open_task', arguments: { query: clean, open: true } };
+  return { name: 'desktop_open', arguments: { target: clean } };
+}
+
 const patterns: QuickPattern[] = [
+  // ── Voice connection acknowledgement ──
+  {
+    patterns: [
+      // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+      /^(?:你)?(?:能不能|能否|可以不可以|可不可以|能)?\s*(?:听见|听到|听清|听得到)\s*(?:我说话|我吗|吗|么)?[。！？.!?]*$/i,
+      /^can\s+you\s+hear\s+me[。！？.!?]*$/i,
+    ],
+    handler: () => ({
+      responseText: CN_VOICE_FAST_PATH_MESSAGES.audible,
+      matched: true,
+    }),
+  },
+
+  {
+    patterns: [
+      // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+      /^(?:(?:看一下|查一下|查一查|告诉我)\s*)?(?:现在\s*)?知识库(?:里|里面|中)?(?:现在\s*)?有多少(?:个|的)?文件(?:内容)?[。！？.!?]*$/u,
+    ],
+    handler: () => ({
+      responseText: CN_VOICE_FAST_PATH_MESSAGES.readingKnowledgeStats,
+      toolCall: { name: 'knowledge_file_stats', arguments: {} },
+      formatToolResult: (raw, error) => CN_VOICE_FAST_PATH_MESSAGES.knowledgeStats(raw, error),
+      matched: true,
+    }),
+  },
+
   // ── Time / Date ──
   {
     patterns: [/^(几点|几点了|现在几点|什么时间|what\s*time|current\s*time|时间)[。！？.!?]*$/i],
@@ -110,7 +153,7 @@ const patterns: QuickPattern[] = [
     patterns: [/^(打开浏览器|浏览器|browser|open\s*browser)[。！？.!?]*$/i],
     handler: () => ({
       responseText: '好的，正在打开浏览器。',
-      toolCall: { name: 'desktop_open', arguments: { target: 'https://www.google.com' } },
+      toolCall: { name: 'browser_open_task', arguments: { url: 'https://www.google.com', open: true } },
       matched: true,
     }),
   },
@@ -121,6 +164,32 @@ const patterns: QuickPattern[] = [
       toolCall: { name: 'desktop_open', arguments: { target: 'code' } },
       matched: true,
     }),
+  },
+  {
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    patterns: [/^(?:(?:请|麻烦|请你|帮我|你帮我|给我|我要|我想)\s*)?(?:打开|启动|运行|开启|launch|open|start|run)\s*(?:程序|应用|app|软件)?\s*(?:一下)?\s*(.+?)[。！？.!?]*$/i],
+    handler: (match) => {
+      const target = String(match[1] || '').trim();
+      if (
+        !target
+        // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+        || /^(?:了|着|得|多久|这么久|这么慢|为什么|怎么|为何)/u.test(target)
+        // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+        || /(?:然后|接着|随后|之后|以后|并且|同时|打开后|启动后|运行后|画图|绘制|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|发送|发布|播放|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|\b(?:then|after|draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(target)
+      ) {
+        return { responseText: '', matched: false };
+      }
+      return {
+        responseText: CN_VOICE_FAST_PATH_MESSAGES.opening(target),
+        toolCall: quickOpenToolCall(target),
+        formatToolResult: (raw, error) => error
+          ? CN_VOICE_FAST_PATH_MESSAGES.openFailed(target, error)
+          : raw.trim()
+            ? CN_VOICE_FAST_PATH_MESSAGES.opened(target)
+            : CN_VOICE_FAST_PATH_MESSAGES.openReceiptMissing(target),
+        matched: true,
+      };
+    },
   },
 
   // ── Volume Control ──

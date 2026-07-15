@@ -3,6 +3,7 @@
  * Gates: time-of-day, user-idle requirement, token budget, quiet hours.
  */
 import { readDB, writeDB } from '../../db_layer';
+import { isRealtimeUserActive } from './foreground_activity';
 
 export type AutonomyLevel = 'reactive' | 'semi' | 'full';
 
@@ -201,6 +202,10 @@ export function isAutonomousWorkAllowed(userId?: string): { allowed: boolean; re
   const cfg = getGateConfig(userId);
   const now = new Date();
   const hour = now.getHours();
+
+  if (userId && isRealtimeUserActive(userId)) {
+    return { allowed: false, reason: 'Live user voice session has priority over background autonomy' };
+  }
 
   if (!cfg.alwaysOnline) {
     return { allowed: false, reason: 'Always Online is disabled' };

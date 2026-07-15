@@ -29,6 +29,8 @@ const DECLARATIONS = [
   'write_file',
   'web_search',
   'url_fetch',
+  'browser_open_task',
+  'knowledge_file_stats',
   'url_fetch_logged_in',
   'web_login_site_presets',
   'web_login_profile_save_from_preset',
@@ -148,6 +150,19 @@ const DECLARATIONS = [
 ].map(name => declaration(name));
 
 describe('tool router', () => {
+  it('aligns exact voice fast-path tools with routed permissions', () => {
+    const browser = routeToolsForTurn('打开浏览器。', DECLARATIONS);
+    expect(browser.toolNames).toContain('browser_open_task');
+
+    const judgments = routeToolsForTurn('打开中国裁判文书网。', DECLARATIONS);
+    expect(judgments.toolNames).toContain('browser_open_task');
+
+    const knowledge = routeToolsForTurn('看一下现在知识库里有多少的文件内容。', DECLARATIONS);
+    expect(knowledge.categories).toContain('knowledge');
+    expect(knowledge.toolNames).toContain('knowledge_file_stats');
+    expect(knowledge.toolNames).not.toContain('client_get_state');
+  });
+
   it('routes legal case-folder work to legal, auth-web, and file tools', () => {
     const route = routeToolsForTurn(
       '读取桌面案件文件夹，去法信和中国裁判文书网整理委托书、代理词和证据目录',
@@ -519,6 +534,21 @@ describe('tool router', () => {
       'desktop_cursor_glow_show',
     ]));
     expect(route.toolNames.indexOf('wechat_send_message')).toBeLessThan(3);
+  });
+
+  it('prioritizes the dedicated send tool for a foreground WeChat inquiry', () => {
+    const route = routeToolsForTurn(
+      '你打开微信问一下阿露在干嘛。',
+      DECLARATIONS,
+      { maxTools: 8 },
+    );
+
+    expect(route.categories).toContain('messaging');
+    expect(route.toolNames[0]).toBe('wechat_send_message');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_open',
+      'desktop_active_window',
+    ]));
   });
 
   it('routes foreground WeChat chat reading away from send/draft tools', () => {

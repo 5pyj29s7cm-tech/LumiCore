@@ -85,6 +85,7 @@ export function useWakeWord({
   const [isSupported, setIsSupported] = useState(false);
   const [lastDetection, setLastDetection] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryEpoch, setRetryEpoch] = useState(0);
 
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
@@ -94,6 +95,14 @@ export function useWakeWord({
   const isListeningRef = useRef(false);
   const startInFlightRef = useRef(false);
   const wakeConfigUnavailableRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryAttemptRef = useRef(0);
+  const retryScheduledRef = useRef(false);
+  const onDetectionRef = useRef(onDetection);
+  const canAcceptWakeRef = useRef(canAcceptWake);
+  const canSendWakeAudioRef = useRef(canSendWakeAudio);
+  const isCallActiveRef = useRef(isCallActive);
+  const onInterruptRef = useRef(onInterrupt);
   const wakeHandlersRef = useRef<{
     detected?: (data: { keyword: string; timestamp: string }) => void;
     started?: () => void;
@@ -102,6 +111,11 @@ export function useWakeWord({
 
   enabledRef.current = enabled;
   socketRef.current = socket;
+  onDetectionRef.current = onDetection;
+  canAcceptWakeRef.current = canAcceptWake;
+  canSendWakeAudioRef.current = canSendWakeAudio;
+  isCallActiveRef.current = isCallActive;
+  onInterruptRef.current = onInterrupt;
 
   useEffect(() => {
     isListeningRef.current = isListening;
@@ -135,7 +149,30 @@ export function useWakeWord({
     }
   }, []);
 
+  const clearRetrySchedule = useCallback((resetAttempts = false) => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    retryScheduledRef.current = false;
+    if (resetAttempts) retryAttemptRef.current = 0;
+  }, []);
+
+  const scheduleRetry = useCallback(() => {
+    if (!enabledRef.current || retryScheduledRef.current || wakeConfigUnavailableRef.current) return;
+    const attempt = retryAttemptRef.current++;
+    const delayMs = Math.min(30_000, 1_000 * (2 ** Math.min(attempt, 5)));
+    retryScheduledRef.current = true;
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      retryScheduledRef.current = false;
+      setRetryEpoch(value => value + 1);
+    }, delayMs);
+    console.warn(`[WakeWord-Qwen] Retrying wake stream in ${delayMs}ms`);
+  }, []);
+
   const disable = useCallback(() => {
+    clearRetrySchedule(true);
     setIsListening(false);
     isListeningRef.current = false;
     startInFlightRef.current = false;
@@ -145,7 +182,7 @@ export function useWakeWord({
     }
     removeWakeHandlers();
     cleanupAudio();
-  }, [cleanupAudio, removeWakeHandlers]);
+  }, [cleanupAudio, removeWakeHandlers, clearRetrySchedule]);
 
   // ── Server-side Qwen ASR wake detection (primary) ──
 
@@ -192,7 +229,8 @@ export function useWakeWord({
 
       processor.onaudioprocess = (event) => {
         if (!enabledRef.current) return;
-        if (canSendWakeAudio && !canSendWakeAudio()) return;
+        const canSend = canSendWakeAudioRef.current;
+        if (canSend && !canSend()) return;
         try {
           const input = event.inputBuffer.getChannelData(0);
           const pcm = new Int16Array(input.length);
@@ -210,16 +248,17 @@ export function useWakeWord({
       removeWakeHandlers();
 
       const onDetected = (data: { keyword: string; timestamp: string }) => {
-        if (canAcceptWake && !canAcceptWake()) {
+        const canAccept = canAcceptWakeRef.current;
+        if (canAccept && !canAccept()) {
           console.log('[WakeWord-Qwen] Ignored detection: voice gate closed');
           return;
         }
         console.log('[WakeWord-Qwen] Detected:', data.keyword);
         setLastDetection(data.timestamp);
-        onDetection?.();
+        onDetectionRef.current?.();
 
-        if (isCallActive?.()) {
-          onInterrupt?.();
+        if (isCallActiveRef.current?.()) {
+          onInterruptRef.current?.();
         } else {
           startCallRef.current?.(voiceId, personalityId, agentId, startCallOptions);
         }
@@ -227,6 +266,7 @@ export function useWakeWord({
 
       const onStarted = () => {
         console.log('[WakeWord-Qwen] Server confirmed, listening');
+        clearRetrySchedule(true);
         isListeningRef.current = true;
         setIsListening(true);
         setIsSupported(true);
@@ -236,6 +276,7 @@ export function useWakeWord({
         console.warn('[WakeWord-Qwen] Server error:', data.message);
         const message = data.message || '';
         if (isWakeProviderUnavailableMessage(message)) {
+          clearRetrySchedule(true);
           wakeConfigUnavailableRef.current = true;
           isListeningRef.current = false;
           setIsListening(false);
@@ -254,6 +295,7 @@ export function useWakeWord({
         try { s.emit('wake:stop'); } catch {}
         removeWakeHandlers();
         setError(data.message);
+        scheduleRetry();
       };
 
       wakeHandlersRef.current = { detected: onDetected, started: onStarted, error: onError };
@@ -280,7 +322,7 @@ export function useWakeWord({
         setError(msg);
       }
     }
-  }, [voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio, removeWakeHandlers, onDetection, canAcceptWake, canSendWakeAudio, isCallActive, onInterrupt]);
+  }, [voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio, removeWakeHandlers, clearRetrySchedule, scheduleRetry]);
 
   // ── Picovoice on-device detection (fallback) ──
 
@@ -299,11 +341,12 @@ export function useWakeWord({
       };
 
       const detectionCallback = (_detection: any) => {
-        if (canAcceptWake && !canAcceptWake()) return;
+        const canAccept = canAcceptWakeRef.current;
+        if (canAccept && !canAccept()) return;
         setLastDetection(new Date().toISOString());
-        onDetection?.();
-        if (isCallActive?.()) {
-          onInterrupt?.();
+        onDetectionRef.current?.();
+        if (isCallActiveRef.current?.()) {
+          onInterruptRef.current?.();
           return;
         }
         startCallRef.current?.(voiceId, personalityId, agentId, startCallOptions);
@@ -380,13 +423,20 @@ export function useWakeWord({
         setError(msg);
       }
     }
-  }, [accessKey, keyword, sensitivity, voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio, canAcceptWake, isCallActive, onDetection, onInterrupt]);
+  }, [accessKey, keyword, sensitivity, voiceId, personalityId, agentId, startCallOptions, startCallRef, cleanupAudio]);
 
   const enable = useCallback(async () => {
     if (startInFlightRef.current || isListeningRef.current) return;
-    // Stop any existing session first
-    disable();
     startInFlightRef.current = true;
+
+    // Replace only this socket's stale session. Keep retryAttemptRef intact so
+    // repeated provider failures back off instead of reconnecting in a loop.
+    const currentSocket = socketRef.current;
+    if (currentSocket?.connected) currentSocket.emit('wake:stop');
+    removeWakeHandlers();
+    cleanupAudio();
+    setIsListening(false);
+    isListeningRef.current = false;
 
     try {
       if (accessKey) {
@@ -402,7 +452,7 @@ export function useWakeWord({
     } finally {
       startInFlightRef.current = false;
     }
-  }, [accessKey, disable, enablePicovoice, enableQwenWake]);
+  }, [accessKey, cleanupAudio, enablePicovoice, enableQwenWake, removeWakeHandlers]);
 
   // Listen for socket disconnect/reconnect — reset so wake auto-restarts on reconnect
   useEffect(() => {
@@ -448,12 +498,12 @@ export function useWakeWord({
   // Auto-start / stop — includes socket state so it retries when connection becomes available
   useEffect(() => {
     console.log('[WakeWord] State change — enabled:', enabled, 'isListening:', isListening, 'socket:', !!socketRef.current?.connected);
-    if (enabled && !isListening && !wakeConfigUnavailableRef.current) {
+    if (enabled && !isListening && !wakeConfigUnavailableRef.current && !retryScheduledRef.current) {
       enable();
     } else if (!enabled && isListening) {
       disable();
     }
-  }, [enabled, isListening, enable, disable, socket?.connected]);
+  }, [enabled, isListening, enable, disable, socket?.connected, retryEpoch]);
 
   // Cleanup on unmount
   useEffect(() => {

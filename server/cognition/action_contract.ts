@@ -64,6 +64,39 @@ function extractPrimaryTaskText(input: string): string {
   return raw.slice(0, marker.index).trim();
 }
 
+export function extractSimpleDesktopOpenTarget(input: string): string {
+  const text = compact(extractPrimaryTaskText(input));
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const match = text.match(/^(?:(?:请|麻烦|请你|帮我|你帮我|给我|我要|我想)\s*)?(?:打开|启动|运行|开启|launch|open|start|run)\s*(?:程序|应用|app|软件)?\s*(?:一下)?\s*(.+?)[。！？.!?]*$/iu);
+  if (!match) return '';
+  const target = compact(match[1]);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (!target || /^(?:了|着|得|多久|这么久|这么慢|为什么|怎么|为何)/u.test(target)) return '';
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:然后|接着|随后|之后|以后|并且|同时|再(?:去|帮|给|用)?|打开后|启动后|运行后|\b(?:then|after|and\s+then)\b)/iu.test(target)) return '';
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:画图|绘制|出图|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|查找|发送|发布|播放|写入|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|\b(?:draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(target)) return '';
+  return target;
+}
+
+export function isSimpleDesktopOpenRequest(input: string): boolean {
+  return Boolean(extractSimpleDesktopOpenTarget(input));
+}
+
+function buildSimpleDesktopOpenContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'desktop_operation',
+    label: 'Desktop target launch/open',
+    coreAction: 'Open or focus exactly the desktop app, file, folder, or URL named by the user',
+    preparationIsNotCompletion: ['only listing installed apps', 'opening a different fallback app', 'planning a larger task inside the app'],
+    requiredEvidence: ['successful desktop_open receipt for the requested target', 'or matching active-window/running-process evidence'],
+    preferredTools: ['desktop_list_apps', 'desktop_open', 'desktop_active_window', 'desktop_running_processes'],
+    verificationTools: ['desktop_active_window', 'desktop_running_processes'],
+    nextStep: 'Resolve the exact requested target, open it once, and verify the matching process or active window when needed.',
+    caution: 'Do not reinterpret a launch request as content creation, and do not substitute a different application unless the user explicitly asks for a fallback.',
+  });
+}
+
 function isCustomerOperationsTurn(text: string): boolean {
   const customerSurface = /(?:\u5ba2\u6237|\u9500\u552e|\u7ebf\u7d22|\u552e\u540e|\u5ba2\u670d|\u5de5\u5355|\u5546\u673a|\u5ba2\u6237\u5173\u7cfb|\bCRM\b|customer|sales|lead|after[-\s]?sales|support\s+ticket)/iu.test(text);
   const operationalIntent = /(?:\u63a5\u7ba1|\u8ddf\u8fdb|\u63a8\u8fdb|\u5904\u7406|\u5206\u6790|\u8bc4\u5206|\u62a5\u4ef7|\u56de\u8bbf|\u6210\u4ea4|\u5f02\u8bae|\u5206\u7c7b|\u6d3e\u5355|\u7ef4\u62a4|\u8fd0\u8425|take\s*over|follow\s*up|advance|triage|qualif|score|quote|handle|operate|manage)/iu.test(text);
@@ -96,6 +129,8 @@ function isDesignDeliveryTurn(text: string): boolean {
 }
 
 function hasNegatedMessagingSendIntent(text: string): boolean {
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/^(?:我)?(?:没有|没|并未|从未|不是|并不是).{0,100}(?:发给|发送给|给.{0,24}发|让你.{0,24}(?:发|回复|告诉))/u.test(text)) return true;
   return /(?:不要|别|无需|禁止).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
 }
 
@@ -382,6 +417,8 @@ export function buildActionContract(input: string): LumiActionContract {
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
   const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
     || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(text);
 
   if (isRemoteLegalMessageTurn(text)) {
     return buildLegalDocumentContract();
@@ -417,6 +454,7 @@ export function buildActionContract(input: string): LumiActionContract {
   if (
     (
       directedMessageSend ||
+      directedMessagingInquiry ||
       (
         matches(text, /wechat|weixin|\u5fae\u4fe1|\u6d88\u606f|\u8054\u7cfb\u4eba|\u7fa4|message|messaging\s+app|chat\s+app/i) &&
         matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u53d1\u4e00\u6761|\u53d1\u4e00\u4e0b|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89|\bsend\b|\breply\b/i)
@@ -446,6 +484,10 @@ export function buildActionContract(input: string): LumiActionContract {
       nextStep: 'Use the text or file delivery path that matches the request, and require sent=true, a provider acknowledgement, or visible send evidence.',
       caution: 'Opening an app, finding a recipient, listing a file, or preparing clipboard content is not delivery.',
     });
+  }
+
+  if (isSimpleDesktopOpenRequest(text)) {
+    return buildSimpleDesktopOpenContract();
   }
 
   const hasPublicPlatformSurface = matches(text, /(?:\u89c6\u9891\u7f51\u7ad9|\u521b\u4f5c\u8005\u5e73\u53f0|\u793e\u4ea4\u5e73\u53f0|\u5546\u5bb6\u540e\u53f0|\u5e97\u94fa\u540e\u53f0|\u7f51\u7ad9|\u7f51\u9875|\u6296\u97f3|\u5feb\u624b|\u5c0f\u7ea2\u4e66|\u6296\u5e97|\u6dd8\u5b9d|\u5929\u732b|\u4eac\u4e1c|\u62fc\u591a\u591a|video\s*site|creator\s*platform|social\s*(?:site|platform)|seller\s*(?:center|platform)|marketplace|website|web\s*page)/iu);
@@ -868,6 +910,18 @@ export function hasCoreActionEvidence(
     return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name));
   }
   if (contract.kind === 'desktop_operation') {
+    if (isSimpleDesktopOpenRequest(taskText)) {
+      const target = extractSimpleDesktopOpenTarget(taskText).toLowerCase();
+      const targetTerms = target.includes('autocad') || /\bacad(?:\.exe)?\b/i.test(target)
+        ? ['autocad', 'acad']
+        : [target.replace(/\.exe$/i, '').trim()].filter(Boolean);
+      return successful.some(record => {
+        if (record.name === 'desktop_open') return true;
+        if (!/^(?:desktop_active_window|desktop_running_processes|get_active_window_info|get_running_processes)$/i.test(record.name)) return false;
+        const evidence = recordText(record).toLowerCase();
+        return targetTerms.some(term => term.length >= 2 && evidence.includes(term));
+      });
+    }
     return toolNames.some(name => /desktop_|computer_use|client_action/i.test(name));
   }
   return successful.length > 0;

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { buildPresenceHeartbeat } from '../src/hooks/usePresence';
 import { waitForVoiceSocket } from '../src/hooks/useVoiceCall';
 
@@ -49,5 +51,28 @@ describe('voice reconnect and perception continuity', () => {
       voiceprintMatched: false,
       voiceprintConfidence: 0.2,
     });
+  });
+
+  it('keeps one wake owner per user and backs off provider retries', () => {
+    const root = process.cwd();
+    const wakeSocket = readFileSync(path.join(root, 'server/socket/wake.ts'), 'utf8');
+    const wakeHook = readFileSync(path.join(root, 'src/hooks/useWakeWord.ts'), 'utf8');
+
+    expect(wakeSocket).toContain('wakeOwnerByUser');
+    expect(wakeSocket).toContain('taking ownership from');
+    expect(wakeHook).toContain('retryScheduledRef');
+    expect(wakeHook).toContain('Math.min(30_000');
+    expect(wakeHook).toContain('scheduleRetry()');
+    expect(wakeHook).toContain('canSendWakeAudioRef.current');
+    expect(wakeHook).toContain('canAcceptWakeRef.current');
+  });
+
+  it('does not rerender the desktop tree on every analyser animation frame', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/hooks/useVoiceCall.ts'), 'utf8');
+    expect(source).toContain('rawAudioLevelRef.current = rms');
+    expect(source).toContain('lastAudioLevelPublishAtRef.current >= 250');
+    expect(source).not.toContain('const rms = Math.sqrt(sum / dataArray.length);\n    setAudioLevel(rms);');
+    expect(source).toContain('rms: rawAudioLevelRef.current');
+    expect(source).toContain('}, [socket, callState]);');
   });
 });

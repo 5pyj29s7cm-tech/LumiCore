@@ -2226,7 +2226,6 @@ export function DesktopUI({
     startCallOptions: voiceScopeOptions,
     onDetection: () => sounds.playWakeChime(),
     canAcceptWake: ownerVoiceGateOpen,
-    canSendWakeAudio: ownerVoiceGateOpen,
     isCallActive: () => callState !== 'idle',
     onInterrupt: () => interrupt(),
   });

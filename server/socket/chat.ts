@@ -7,7 +7,7 @@ import path from "path";
 import { readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
-import { LLMUsage, ToolExecutionRecord } from "../tools/types";
+import { LLMUsage, ToolContext, ToolExecutionRecord } from "../tools/types";
 import { toolRegistry } from "../tools/registry";
 import { runWithTools } from "../llm/adapter";
 import {
@@ -1697,7 +1697,22 @@ export function registerChatHandler(
         return result.text || '{"category":"unknown","confidence":0.5,"entities":{}}';
       };
 
-      const cognition = await processInput(text, cognitiveCtx, llmClassifier);
+      const cognitionToolContext: ToolContext = {
+        userId: uid,
+        domain: resolvedDomain,
+        orgId: resolvedOrgId,
+        desktopRelay,
+        llmGetters,
+        source: 'chat_cognition_direct',
+        supervisedExternalCommits: true,
+        allowLocalFileWrites,
+        localWriteIntentReason,
+        requestConfirmation: requestToolConfirmation,
+        actionIntent: visibleUserText,
+        toolPolicy: routedToolPolicy || personality.toolPolicy,
+        isCancelled: () => abortController.signal.aborted,
+      };
+      const cognition = await processInput(text, cognitiveCtx, llmClassifier, cognitionToolContext);
       console.log('[ChatHandler] cognition result:', cognition.intent.category, 'directToolExecuted:', cognition.directToolExecuted, 'responseText:', cognition.responseText?.slice(0, 100));
 
       // ── Sentiment analysis: detect emotional charge in user input ──
@@ -1915,6 +1930,7 @@ export function registerChatHandler(
       if (cognition.directToolExecuted && cognition.responseText) {
         // Path A: Lumi handled this directly — no LLM needed
         responseText = cognition.responseText;
+        if (cognition.toolRecord) allToolRecords.push(cognition.toolRecord);
         console.log(`[Cognition] Direct tool '${cognition.intent.directToolCall?.name}' handled without LLM`);
       }
 

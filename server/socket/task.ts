@@ -328,7 +328,7 @@ export function registerTaskHandler(
         const finalDirect = finalizeLumiResponse({
           taskText: data.text,
           responseText: cognition.responseText,
-          toolRecords: [],
+          toolRecords: cognition.toolRecord ? [cognition.toolRecord] : [],
           source: 'task',
           flow: turnFlow,
         });

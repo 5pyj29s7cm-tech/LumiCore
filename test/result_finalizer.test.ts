@@ -4,6 +4,21 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi result finalizer', () => {
+  it('blocks a fabricated prior self-check explanation without diagnostic receipts', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '你怎么运行了这么久才回我？',
+      responseText: '刚才在跑自检，扫描 MCP 连接、组织工作区和技能链路。',
+      toolRecords: [],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('prior diagnostic run');
+    expect(result.text).toContain('没有可核实的客户端自检工具回执');
+  });
+
   it('blocks a claimed diagnostic tool run when the current turn has no matching records', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -204,7 +219,8 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
     expect(result.text).toContain('\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u7a97\u53e3');
-    expect(result.text).toContain('desktop_open');
+    expect(result.text).toContain('\u7cfb\u7edf\u8fd4\u56de\u6267\u884c\u5931\u8d25');
+    expect(result.text).not.toContain('timed out');
     expect(result.text).not.toContain('\u56de\u590d\u58f0\u79f0');
     expect(result.text).not.toContain('\u76ee\u524d\u80fd\u786e\u8ba4\u7684\u6210\u529f\u6b65\u9aa4');
   });

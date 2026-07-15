@@ -103,6 +103,32 @@ describe('Lumi turn flow', () => {
     expect(working.allowToolUseForTurn).toBe(true);
   });
 
+  it('routes a foreground WeChat inquiry as messaging work, not Lumi client navigation', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const inquiry = buildLumiTurnFlow({
+      userId: 'turn_flow_voice_wechat_inquiry',
+      text: '你打开微信问一下阿露在干嘛。',
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'autonomous',
+    });
+    expect(inquiry.clientActionOnlyTurn).toBe(false);
+    expect(inquiry.allowToolUseForTurn).toBe(true);
+
+    const channelCorrection = buildLumiTurnFlow({
+      userId: 'turn_flow_voice_channel_correction',
+      text: '不是，我现在就在桌面客户端上，哪来的微信客户端啊？',
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'autonomous',
+    });
+    expect(channelCorrection.clientActionOnlyTurn).toBe(false);
+    expect(channelCorrection.allowToolUseForTurn).toBe(false);
+  });
+
   it('describes Lumi as the orchestrator over skills, tasks, and external systems', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const flow = buildLumiTurnFlow({
