@@ -14,6 +14,7 @@ interface VoiceCallButtonProps {
 }
 
 export function VoiceCallButton({ callState, audioLevel, onStart, onEnd, hasVoice = false, className = '' }: VoiceCallButtonProps) {
+  const audioRingRef = React.useRef<HTMLDivElement | null>(null);
   const isActive = callState !== 'idle' && callState !== 'passive';
   const isOn = callState !== 'idle';
   const t = useT();
@@ -30,6 +31,21 @@ export function VoiceCallButton({ callState, audioLevel, onStart, onEnd, hasVoic
 
   const config = stateConfig[callState];
 
+  React.useEffect(() => {
+    const updateRing = (level: number) => {
+      const ring = audioRingRef.current;
+      if (!ring || !Number.isFinite(level)) return;
+      ring.style.transform = `scale(${1 + level * 0.3})`;
+      ring.style.opacity = String(0.15 + level * 0.2);
+    };
+    updateRing(audioLevel);
+    const onLevel = (event: Event) => {
+      updateRing(Number((event as CustomEvent<{ level?: number }>).detail?.level));
+    };
+    window.addEventListener('lumi:voice-audio-level', onLevel);
+    return () => window.removeEventListener('lumi:voice-audio-level', onLevel);
+  }, [audioLevel, isActive]);
+
   return (
     <div className={`relative ${className}`}>
       {/* Audio level ring */}
@@ -37,17 +53,19 @@ export function VoiceCallButton({ callState, audioLevel, onStart, onEnd, hasVoic
         {isActive && (
           <motion.div
             initial={{ scale: 0.8, opacity: 0 }}
-            animate={{
-              scale: 1 + audioLevel * 0.3,
-              opacity: 0.15 + audioLevel * 0.2,
-            }}
+            animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.8, opacity: 0 }}
-            className={`absolute inset-0 rounded-full ${
-              callState === 'speaking' ? 'bg-celestial-glow' :
-              callState === 'listening' ? 'bg-celestial-saturn' :
-              'bg-celestial-mars'
-            }`}
-          />
+            className="absolute inset-0"
+          >
+            <div
+              ref={audioRingRef}
+              className={`absolute inset-0 rounded-full ${
+                callState === 'speaking' ? 'bg-celestial-glow' :
+                callState === 'listening' ? 'bg-celestial-saturn' :
+                'bg-celestial-mars'
+              }`}
+            />
+          </motion.div>
         )}
       </AnimatePresence>
 

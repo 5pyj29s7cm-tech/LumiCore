@@ -67,12 +67,29 @@ describe('voice reconnect and perception continuity', () => {
     expect(wakeHook).toContain('canAcceptWakeRef.current');
   });
 
-  it('does not rerender the desktop tree on every analyser animation frame', () => {
+  it('keeps realtime microphone levels outside the DesktopUI React state', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/hooks/useVoiceCall.ts'), 'utf8');
-    expect(source).toContain('rawAudioLevelRef.current = rms');
-    expect(source).toContain('lastAudioLevelPublishAtRef.current >= 250');
-    expect(source).not.toContain('const rms = Math.sqrt(sum / dataArray.length);\n    setAudioLevel(rms);');
+    expect(source).toContain('rawAudioLevelRef.current = frameRms');
+    expect(source).toContain("new CustomEvent('lumi:voice-audio-level'");
+    expect(source).not.toContain('setAudioLevel(');
+    expect(source).not.toContain('setElapsedSeconds(');
+    expect(source).not.toContain('requestAnimationFrame(updateAudioLevel)');
     expect(source).toContain('rms: rawAudioLevelRef.current');
-    expect(source).toContain('}, [socket, callState]);');
+    expect(source).toContain('audioLevel: 0');
+  });
+
+  it('releases streaming TTS nodes and contexts when a call ends', () => {
+    const root = process.cwd();
+    const source = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const button = readFileSync(path.join(root, 'src/components/VoiceCallButton.tsx'), 'utf8');
+    const subtitle = readFileSync(path.join(root, 'src/components/VoiceSubtitle.tsx'), 'utf8');
+
+    expect(source).toContain('releaseAudioBufferSource(source)');
+    expect(source).toContain('disposePlaybackContexts()');
+    expect(source).toContain('void context.close().catch');
+    expect(source).not.toContain('audioQueueContext');
+    expect(source).not.toContain('pendingAudio');
+    expect(button).not.toContain('useLiveVoiceAudioLevel');
+    expect(subtitle).not.toContain('useLiveVoiceAudioLevel');
   });
 });

@@ -790,7 +790,7 @@ function getSkillStats(): SkillStats {
     const config = mcpManager.getConfig();
     const local = mcpManager.listLocalSkills();
     const connected = mcpManager.getConnectedServers();
-    const connectedSet = new Set(connected);
+    const availableSet = new Set(mcpManager.getAvailableServers());
     const health = mcpManager.getServerHealth();
     const enabled = Object.values(config).filter((item: any) => item?.enabled).length;
     const brokenSkills = local.filter((skill: any) => skill?.broken);
@@ -798,7 +798,7 @@ function getSkillStats(): SkillStats {
       .filter(([, item]) => ['crashed', 'failed', 'restarting'].includes(item.status))
       .map(([name]) => name);
     const unavailableEnabledNames = Object.entries(config)
-      .filter(([name, item]: [string, any]) => item?.enabled && !connectedSet.has(name))
+      .filter(([name, item]: [string, any]) => item?.enabled && !availableSet.has(name))
       .map(([name]) => name);
     const issueNames = Array.from(new Set([
       ...brokenSkills.map((skill: any) => String(skill.name || 'unknown')),

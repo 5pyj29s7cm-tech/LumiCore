@@ -52,11 +52,12 @@ function mcpHealthGateLines(toolNames: string[]): string[] {
     const config = mcpManager.getConfig();
     const health = mcpManager.getServerHealth();
     const connected = new Set(mcpManager.getConnectedServers());
+    const available = new Set(mcpManager.getAvailableServers());
     const enabledNames = Object.entries(config)
       .filter(([, cfg]) => Boolean(cfg.enabled))
       .map(([name]) => name);
     const unavailableEnabled = enabledNames
-      .filter(name => !connected.has(name))
+      .filter(name => !available.has(name))
       .map(name => {
         const cfg = config[name];
         const status = health[name]?.status || 'disconnected';
@@ -64,11 +65,11 @@ function mcpHealthGateLines(toolNames: string[]): string[] {
         return `${name}(${status}${keyHint})`;
       });
     const declaredMcpServers = Array.from(new Set(toolNames.map(getMcpServerName).filter(Boolean) as string[]));
-    const staleDeclared = connected.size
-      ? declaredMcpServers.filter(name => !connected.has(name))
+    const staleDeclared = available.size
+      ? declaredMcpServers.filter(name => !available.has(name))
       : [];
     return [
-      `MCP health gate: connected=${connected.size}/${enabledNames.length} enabled.`,
+      `MCP health gate: available=${available.size}/${enabledNames.length} enabled (${connected.size} active, ${Math.max(0, available.size - connected.size)} on demand).`,
       unavailableEnabled.length
         ? `Unavailable enabled MCP/skills: ${unavailableEnabled.slice(0, 8).join(', ')}${unavailableEnabled.length > 8 ? ', ...' : ''}.`
         : 'Unavailable enabled MCP/skills: none.',

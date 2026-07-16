@@ -45,6 +45,31 @@ function hasToolEvidence(records: ToolExecutionRecord[]): boolean {
   return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
 }
 
+function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
+  const raw = String(input.responseText || '').trim();
+  if (!/<(?:function_calls|tool_calls|invoke)\b/i.test(raw)) return null;
+  const names = Array.from(raw.matchAll(/<invoke\s+name=["']([^"']+)["']/gi), match => match[1]);
+  const clientStateRequested = names.includes('client_get_state');
+  const chinese = isChineseText(input.taskText);
+  const text = chinese
+    ? clientStateRequested
+      ? CN_RESULT_GROUNDING_MESSAGES.clientStateProtocolBlocked
+      : CN_RESULT_GROUNDING_MESSAGES.toolProtocolBlocked
+    : clientStateRequested
+      ? 'I could not read the current client state, so I will not expose an internal tool request as the answer.'
+      : 'The tool request was not executed; its internal protocol text was blocked.';
+  return {
+    text,
+    blocked: true,
+    reason: 'Legacy tool-call protocol leaked into assistant text.',
+    notification: {
+      type: 'work_product_guard',
+      level: 'warning',
+      message: 'Legacy tool-call protocol leaked into assistant text.',
+    },
+  };
+}
+
 function claimedExecutedToolNames(text: string): { asserted: boolean; toolNames: string[] } {
   const raw = String(text || '');
   const clauses: string[] = [];
@@ -626,6 +651,8 @@ function correctCurrentTurnContractDrift(
 }
 
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
+  const protocolLeak = leakedLegacyToolProtocol(input);
+  if (protocolLeak) return protocolLeak;
   const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], input.taskText);
   if (diagnosticResult) {
     return {

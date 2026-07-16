@@ -4,6 +4,20 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi result finalizer', () => {
+  it('blocks raw legacy function-call markup from reaching the user', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '为我介绍客户端里的每个页面。',
+      responseText: '<function_calls>\n<invoke name="client_get_state">\n</invoke>\n</function_calls>',
+      toolRecords: [],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('<function_calls>');
+    expect(result.text).toContain('没有读取到当前客户端状态');
+  });
+
   it('blocks a fabricated prior self-check explanation without diagnostic receipts', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 

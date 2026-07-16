@@ -62,6 +62,7 @@ interface FaceSphereProps {
 // ── The particle mesh ──
 function FaceParticles({ audioLevel, callState, sentiment, scale: faceScale }: FaceSphereProps) {
   const meshRef = useRef<THREE.Points>(null);
+  const liveAudioLevelRef = useRef(audioLevel || 0);
   const { positions, colors, eyeLeftIndices, eyeRightIndices, mouthIndices, browLeftIndices, browRightIndices } =
     useMemo(() => getOrBuildVertexData(), []);
 
@@ -72,6 +73,16 @@ function FaceParticles({ audioLevel, callState, sentiment, scale: faceScale }: F
   const blinkPhase = useRef(0); // 0=idle, 1=closed
   const blinkTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const nextBlinkAt = useRef(Date.now() + 2000 + Math.random() * 4000);
+
+  useEffect(() => { liveAudioLevelRef.current = audioLevel || 0; }, [audioLevel]);
+  useEffect(() => {
+    const onAudioLevel = (event: Event) => {
+      const level = Number((event as CustomEvent<{ level?: number }>).detail?.level);
+      if (Number.isFinite(level)) liveAudioLevelRef.current = level;
+    };
+    window.addEventListener('lumi:voice-audio-level', onAudioLevel);
+    return () => window.removeEventListener('lumi:voice-audio-level', onAudioLevel);
+  }, []);
 
   useEffect(() => {
     const check = () => {
@@ -94,8 +105,9 @@ function FaceParticles({ audioLevel, callState, sentiment, scale: faceScale }: F
     const posAttr = geoRef.current.getAttribute('position') as THREE.BufferAttribute;
     const arr = posAttr.array as Float32Array;
 
-    const talk = callState === 'speaking' && audioLevel != null && audioLevel > 0.02;
-    const talkAmount = talk ? Math.min(1, audioLevel! * 3) * 0.12 : 0;
+    const liveAudioLevel = liveAudioLevelRef.current;
+    const talk = callState === 'speaking' && liveAudioLevel > 0.02;
+    const talkAmount = talk ? Math.min(1, liveAudioLevel * 3) * 0.12 : 0;
     const mouthOpen = talkAmount * (0.5 + 0.5 * Math.sin(Date.now() * 0.03));
     const valence = sentiment?.valence ?? 0;
 

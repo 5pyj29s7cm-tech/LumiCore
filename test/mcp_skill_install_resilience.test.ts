@@ -60,6 +60,33 @@ afterEach(() => {
 });
 
 describe('MCP skill install resilience', () => {
+  it('registers cached process tools as available without keeping every skill process resident', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({
+      'cad-drafting': {
+        command: 'npx',
+        args: ['tsx', '~/lumi_skills/cad-drafting/index.ts'],
+        enabled: true,
+        source: 'local',
+        cachedTools: [{
+          serverName: 'cad-drafting',
+          name: 'mcp_cad-drafting_autocad_playback_file',
+          description: 'Visible AutoCAD playback',
+          inputSchema: { type: 'object', properties: {} },
+        }],
+      },
+    });
+
+    const tools = await manager.connectAll();
+
+    expect(tools.map(tool => tool.name)).toEqual(['mcp_cad-drafting_autocad_playback_file']);
+    expect(manager.getConnectedServers()).toEqual([]);
+    expect(manager.getAvailableServers()).toEqual(['cad-drafting']);
+    expect(manager.getServerHealth()['cad-drafting'].status).toBe('idle');
+  });
+
   it('throws MCP protocol error results instead of returning them as successful tool text', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);

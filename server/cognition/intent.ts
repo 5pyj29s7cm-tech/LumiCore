@@ -159,6 +159,16 @@ const COMMAND_PATTERNS: Array<{ regex: RegExp; subIntent: string; tool?: string 
   { regex: /(截屏|截图|screenshot|capture)/i, subIntent: 'screenshot' },
 ];
 
+function isSimpleDirectOpenTarget(target: string): boolean {
+  const normalized = String(target || '').trim();
+  if (!normalized) return false;
+  // The regex classifier is intentionally fast, but it must never turn the
+  // entire remainder of a multi-step request into one app/file name. Complex
+  // requests need the normal planner so every requested outcome is preserved.
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  return !/(?:然后|接着|随后|之后|并且|同时|打开后|启动后|运行后|看一下|看下|看看|查看|检查|读取|分析|统计|记住|画图|画出来|绘制|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|发送|发布|播放|执行脚本|运行脚本|问一下|询问|回复|告诉|[，,；;].{0,80}(?:在|用|去|再|把|将)|\b(?:then|after|inspect|read|analy[sz]e|count|remember|draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(normalized);
+}
+
 const NEGATED_COMMAND_PREFIX_RE =
   /(?:\b(?:do\s+not|don't|never|must\s+not|without)\b|\u7981\u6b62|\u4e0d\u8981|\u4e0d\u51c6|\u4e0d\u5f97|\u4e0d\u7528|\u65e0\u9700|\u907f\u514d|\u52ff|\u522b)[^,.;!?\n\r\uFF0C\u3002\uFF1B\uFF01\uFF1F]{0,36}$/iu;
 
@@ -319,7 +329,7 @@ export function classifyIntent(input: string): IntentResult {
       };
 
       // Certain commands can skip LLM entirely
-      if (tool && subIntent === 'open' && target) {
+      if (tool && subIntent === 'open' && isSimpleDirectOpenTarget(target)) {
         const urlPattern = /^https?:\/\//i;
         result.directToolCall = {
           name: tool,

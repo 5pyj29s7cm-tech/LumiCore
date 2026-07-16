@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { matchQuickCommand } from '../server/cognition/quick_commands';
+import { buildQuickCommandToolPolicy, matchQuickCommand } from '../server/cognition/quick_commands';
 import { buildActionContract } from '../server/cognition/action_contract';
+import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
+import { classifyIntent } from '../server/cognition/intent';
+import { traceToolIntentDecision } from '../server/cognition/tool_intent';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { parseWeChatConversationReadyVerification } from '../server/tools/definitions/external_app_tools';
 import { describeRecentActionsFromHistory } from '../server/socket/voice_action_history';
@@ -9,8 +12,62 @@ import { resolveWeChatRecipientFromHistory } from '../server/socket/voice_messag
 describe('live voice regression cases', () => {
   it('keeps combined WeChat inquiry out of the generic app-open quick path', async () => {
     expect(await matchQuickCommand('打开微信，问一下阿陆在干嘛。', 'u1')).toBeNull();
+    expect(await matchQuickCommand('打开微信看下我有多少个联系人，把这些联系人的名字都记住。', 'u1')).toBeNull();
     expect(buildActionContract('打开微信，问一下阿陆在干嘛。').kind).toBe('messaging_send');
     expect(buildActionContract('我没有户型图发给你。').kind).toBe('none');
+  });
+
+  it('does not swallow a compound AutoCAD workflow as one app name', () => {
+    expect(classifyIntent('打开微信')).toMatchObject({
+      directToolCall: { name: 'desktop_open', args: { target: '微信' } },
+      needsLLM: false,
+    });
+    const compound = classifyIntent('打开桌面上的阿陆文件夹，看一下里面的图和需求，在 AutoCAD 里面把这个需求画出来');
+    expect(compound.directToolCall).toBeUndefined();
+    expect(compound.needsLLM).toBe(true);
+  });
+
+  it('treats criticism of client navigation as feedback, not another navigation command', () => {
+    const trace = traceToolIntentDecision('你能不能不要动不动就进入介绍客户端的界面啊', 'voice', 'assistant');
+    expect(trace.allowToolUse).toBe(false);
+    expect(trace.signals.clientActionOnlyIntent).toBe(false);
+  });
+
+  it('bridges a short app-page continuation to the real previous receipt', () => {
+    const bridge = buildRecentActionContinuationBridge('切换到联系人页面', [
+      { role: 'user', message: '打开微信' },
+      {
+        role: 'assistant',
+        message: '已打开微信。',
+        toolCalls: [{ name: 'desktop_open', arguments: { target: '微信' }, result: 'Opened WeChat' }],
+      },
+    ]);
+    expect(bridge).toContain('Recent action continuation context');
+    expect(bridge).toContain('desktop_open');
+    expect(bridge).toContain('打开微信');
+  });
+
+  it('focuses an existing app without treating the rest of the sentence as its name', async () => {
+    expect(await matchQuickCommand('打开正在运行的微信，不要启动新的微信。', 'u1')).toMatchObject({
+      toolCall: { name: 'desktop_open', arguments: { target: '微信' } },
+    });
+    const feedback = await matchQuickCommand('打开了。', 'u1');
+    expect(feedback).toMatchObject({
+      responseText: '好，已经打开了。',
+    });
+    expect(feedback?.toolCall).toBeUndefined();
+  });
+
+  it('adds only the deterministic quick tool to a non-forbidden route policy', () => {
+    const policy = buildQuickCommandToolPolicy({
+      allowedTools: ['client_get_state'],
+      forbiddenTools: ['desktop_run_command'],
+      requireConfirmation: [],
+      maxIterations: 4,
+    }, 'browser_open_task');
+    expect(policy?.allowedTools).toEqual(['client_get_state', 'browser_open_task']);
+    expect(buildQuickCommandToolPolicy({ ...policy!, forbiddenTools: ['browser_open_task'] }, 'browser_open_task'))
+      .toMatchObject({ forbiddenTools: ['browser_open_task'] });
   });
 
   it('uses dedicated browser and knowledge tools for the exact spoken requests', async () => {
@@ -29,6 +86,13 @@ describe('live voice regression cases', () => {
     });
     expect(await matchQuickCommand('看一下现在知识库里有多少的文件内容。', 'u1')).toMatchObject({
       toolCall: { name: 'knowledge_file_stats' },
+    });
+  });
+
+  it('answers the current operation mode without running the full voice pipeline', async () => {
+    expect(await matchQuickCommand('你现在是什么模式？', 'u1')).toMatchObject({
+      responseText: expect.stringMatching(/^当前是(?:聊天|助理|自主|会议)模式。$/),
+      matched: true,
     });
   });
 
@@ -61,6 +125,29 @@ describe('live voice regression cases', () => {
     }]);
     expect(response).toContain('搜索了“阿路”');
     expect(response).toContain('不能算发送成功');
+  });
+
+  it('keeps AutoCAD status questions aligned to CAD receipts instead of newer WeChat receipts', () => {
+    const response = describeRecentActionsFromHistory('刚刚那个 AutoCAD 任务执行得怎么样？', [
+      {
+        role: 'assistant',
+        toolCalls: [{
+          name: 'cad_prepare_autocad_operations',
+          arguments: { source: 'C:\\Desktop\\阿陆' },
+          result: JSON.stringify({ status: 'prepared' }),
+        }],
+      },
+      {
+        role: 'assistant',
+        toolCalls: [{
+          name: 'wechat_send_message',
+          arguments: { contact: '阿陆', message: '在干嘛？' },
+          result: JSON.stringify({ sent: false }),
+        }],
+      },
+    ]);
+    expect(response).toContain('AutoCAD');
+    expect(response).not.toContain('微信');
   });
 
   it('keeps a successful simple AutoCAD open response concise', () => {

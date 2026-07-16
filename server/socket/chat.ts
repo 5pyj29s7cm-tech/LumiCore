@@ -52,7 +52,7 @@ import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
 import { buildRecentActionContinuationBridge } from "../cognition/action_continuation";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
-import { matchQuickCommand } from "../cognition/quick_commands";
+import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
 import { checkLLMAccess, recordUsage, estimateTokens } from "../subscription/proxy";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { runOrchestratedTask, shouldDistillSkill, buildSkillDescription, classifyComplexity } from "../agents/orchestrator";
@@ -1572,7 +1572,9 @@ export function registerChatHandler(
                 localWriteIntentReason,
                 requestConfirmation: requestToolConfirmation,
                 actionIntent: visibleUserText,
-                ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
+                ...(routedToolPolicy ? {
+                  toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
+                } : {}),
               });
               quickToolResult = tcResult || '';
               if (shouldEmitQuickTool) {

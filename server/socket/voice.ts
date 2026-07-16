@@ -20,13 +20,13 @@ import { getMeetingAudioDir } from "../stt/artifact_paths";
 import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, resolveEmotionVoice } from "../tts/adapter";
 import { recordLatency } from "../monitor/latency_store";
-import { getOrCreateActiveConversation, addMessage, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
+import { getOrCreateActiveConversation, addMessage, getMessages, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
 import { processInput, CognitiveContext, extractSentiment } from "../cognition";
 import { runOrchestratedTask, classifyComplexity, type LlmGetters } from "../agents/orchestrator";
 import { retrieveChunks } from "../agents/rag";
 import { queryMemories, addMemory } from "../memory/store";
 import { searchKnowledgeBase } from "../org/kb";
-import { isQuickCommand, matchQuickCommand } from "../cognition/quick_commands";
+import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import {
@@ -67,7 +67,7 @@ import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnaly
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
-import { isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
+import { hasClientActionOnlyIntent, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { setRealtimeVoiceSessionActive } from "../autonomy/foreground_activity";
 import { buildForegroundWeChatSendArgs } from "../agents/nl_chainer";
 import {
@@ -81,6 +81,7 @@ import {
 import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../regions/packs/cn/messaging_messages";
 import { resolveWeChatRecipientFromHistory } from "./voice_messaging_context";
 import { describeRecentActionsFromHistory } from "./voice_action_history";
+import { buildRecentActionContinuationBridge } from "../cognition/action_continuation";
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -195,14 +196,16 @@ function normalizeSpeechText(text: string): string {
 function isExplicitInterruptCommand(text: string): boolean {
   const normalized = normalizeSpeechText(text);
   if (!normalized) return false;
-  return /^(停|停下|停止|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|stop|wait|pause|interrupt|holdon|shutup)$/.test(normalized)
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  return /^(停|停下|停止|停止任务|终止任务|取消任务|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|stop|stoptask|canceltask|wait|pause|interrupt|holdon|shutup)$/.test(normalized)
     || /^(停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样)$/.test(normalized)
     || /(停一下|先停|别说了|不要说了|打断一下|等我一下|暂停一下|不用说了|别讲了|stop|hold on|wait a second|pause)/i.test(text);
 }
 
 function isPureInterruptCommand(text: string): boolean {
   const normalized = normalizeSpeechText(text);
-  return /^(停|停下|停止|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样|stop|wait|pause|interrupt|holdon|shutup)$/.test(normalized);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  return /^(停|停下|停止|停止任务|终止任务|取消任务|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样|stop|stoptask|canceltask|wait|pause|interrupt|holdon|shutup)$/.test(normalized);
 }
 
 function cancelActiveVoiceTurn(session: AudioSession, preserveInterruptedTurn = false): void {
@@ -255,6 +258,7 @@ function normalizeVoiceHistoryRecord(m: any): NormalizedMessage[] {
 }
 
 function buildVoiceReplyStyleOverlay(): string {
+  // i18n-allow: Chinese examples constrain model output; not direct user-visible copy.
   return [
     '\n\n## Spoken Reply Style',
     '- Never speak hidden reasoning, chain-of-thought, private deliberation, or phrases like “我得想想 / 我需要分析 / 好的，毛先生这是在…”.',
@@ -264,6 +268,11 @@ function buildVoiceReplyStyleOverlay(): string {
     '- Never invent a self-check, scan, background action, or tool run to explain latency. Only describe execution that has a real receipt in the current context.',
     '- The current turn is always coming from the Lumi desktop client voice interface. Historical messages may come from other sources; never infer that the current user is speaking through WeChat or another channel.',
     '- If a messaging tool such as wechat_send_message is present in the current tool set, never claim that Lumi lacks that capability. Execute it for an explicit ordinary send, or report the exact tool error.',
+    '- Describe a capability as currently available only when it is present in the current tool set or supported by a current receipt. Distinguish “configured”, “available”, and “completed”.',
+    '- Do not use body/home/owner metaphors, exaggerated loyalty, honorific filler, or apologies for waiting. Answer the product question directly.',
+    // i18n-allow: Chinese examples constrain model output; not direct user-visible copy.
+    '- Do not address the user by name or title in routine replies. Never pad feedback acknowledgements with “记住了”, “你说得对”, promises, or a follow-up question; acknowledge the concrete correction in one plain sentence.',
+    '- Never print or speak XML/JSON tool-call protocol such as <function_calls>, <invoke>, tool_calls, or hidden client actions.',
   ].join('\n');
 }
 
@@ -556,8 +565,28 @@ async function processVoiceInput(
   const proactiveContextPrompt = shouldUseProactiveContext && recentProactiveSuggestion
     ? formatProactiveSuggestionForPrompt(recentProactiveSuggestion)
     : '';
-  const routedUserText = [actionIntentText, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
-  const skipKnowledgeRetrieval = isQuickCommand(userText) || isUserCorrectionOrExplanationQuestion(userText);
+  let recentVoiceHistory: any[] = [];
+  let actionContinuationBridge = '';
+  try {
+    const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    recentVoiceHistory = getMessages(conversation.id, 30);
+    actionContinuationBridge = buildRecentActionContinuationBridge(actionIntentText, recentVoiceHistory);
+  } catch {}
+  const routedUserText = [actionIntentText, actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+  session.activeRoutingText = routedUserText;
+  let preMatchedQuickResult: Awaited<ReturnType<typeof matchQuickCommand>> = null;
+  try {
+    preMatchedQuickResult = await matchQuickCommand(userText, session.userId, {
+      domain: voiceScope.domain,
+      orgId: voiceScope.orgId,
+      surface: 'voice',
+    });
+  } catch {}
+  const requestedModeHint = detectRequestedOperationMode(userText);
+  const skipKnowledgeRetrieval = Boolean(preMatchedQuickResult)
+    || Boolean(requestedModeHint)
+    || hasClientActionOnlyIntent(userText)
+    || isUserCorrectionOrExplanationQuestion(userText);
   const allowLocalFileWrites = shouldAllowVoiceLocalFileWriteForTurn(routedUserText);
   const localWriteIntentReason = allowLocalFileWrites
     ? `Current voice request explicitly asked Lumi to generate/export a local deliverable: "${userText.slice(0, 120)}"`
@@ -684,10 +713,10 @@ async function processVoiceInput(
     } catch {}
     return 'assistant';
   })();
-  const requestedMode = detectRequestedOperationMode(userText);
+  const requestedMode = requestedModeHint;
   const turnDispatch = buildLumiTurnDispatch({
     userId: session.userId,
-    text: actionIntentText,
+    text: routedUserText,
     channel: 'voice',
     source: 'voice',
     domain: voiceScope.domain,
@@ -706,24 +735,24 @@ async function processVoiceInput(
   const exposeAgentWork = turnFlow.exposeAgentWork;
   const executionDecision = buildLumiExecutionDecision({
     flow: turnFlow,
-    text: actionIntentText,
+    text: routedUserText,
     toolDeclarations: toolRegistry.getToolDeclarations(),
     personalityToolPolicy: personality.toolPolicy,
   });
   const intentTrace = buildLumiIntentTrace({
     dispatch: turnDispatch,
     execution: executionDecision,
-    text: actionIntentText,
+    text: routedUserText,
     source: 'voice',
   });
   const capabilitySelection = buildLumiCapabilitySelection({
     dispatch: turnDispatch,
     execution: executionDecision,
-    text: actionIntentText,
+    text: routedUserText,
   });
   const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
     channel: 'voice',
-    text: actionIntentText,
+    text: routedUserText,
     flow: turnFlow,
     capabilitySelection,
   });
@@ -772,7 +801,7 @@ async function processVoiceInput(
   const turnFlowOverlay = '\n\n' + turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = '\n\n' + buildLumiRuntimeCapabilityContext({
     userId: session.userId,
-    text: actionIntentText,
+    text: routedUserText,
     flow: turnFlow,
     toolRegistry,
     domain: voiceScope.domain,
@@ -783,10 +812,11 @@ async function processVoiceInput(
     flow: turnFlow,
   });
   const proactiveContextOverlay = proactiveContextPrompt ? `\n\n${proactiveContextPrompt}` : '';
+  const actionContinuationOverlay = actionContinuationBridge ? `\n\n${actionContinuationBridge}` : '';
   const organizationKnowledgeOverlay = voiceOrganizationKnowledge
     ? `\n\n## Company Knowledge Base\n${voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
     : '';
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + actionContinuationOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -1018,7 +1048,7 @@ async function processVoiceInput(
     const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     recentActionExplanation = describeRecentActionsFromHistory(
       userText,
-      getMessagesByTokenBudget(conversation.id).slice(-30),
+      recentVoiceHistory.length > 0 ? recentVoiceHistory : getMessages(conversation.id, 30),
     );
   } catch {}
   if (recentActionExplanation) {
@@ -1148,11 +1178,7 @@ async function processVoiceInput(
   }
 
   try {
-    const quickResult = await matchQuickCommand(userText, session.userId, {
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-      surface: 'voice',
-    });
+    const quickResult = preMatchedQuickResult;
     if (!foregroundWeChatSendArgs && quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
       logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
       let quickResponseText = quickResult.responseText;
@@ -1162,7 +1188,10 @@ async function processVoiceInput(
       if (quickResult.toolCall && session.isActive) {
         const correlationId = `qc-${Date.now()}`;
         try {
-          const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, toolContext);
+          const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, {
+            ...toolContext,
+            toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
+          });
           quickToolResult = tcResult || '';
           socket.emit("agent:tool_call", {
             correlationId,

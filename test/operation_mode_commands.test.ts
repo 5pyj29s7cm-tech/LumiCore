@@ -16,15 +16,18 @@ describe('shared Lumi operation mode commands', () => {
     const pureChat = '\u7eaf\u804a\u5929';
     const autonomy = '\u5207\u6362\u5230\u81ea\u4e3b\u6a21\u5f0f';
     const assistant = '\u8bf7\u8fdb\u5165\u52a9\u624b\u6a21\u5f0f\u5427';
+    const assistantAlias = '\u5207\u6362\u5230\u52a9\u7406\u6a21\u5f0f';
 
     expect(detectRequestedOperationMode(pureChat)).toBe('chat');
     expect(detectRequestedOperationMode(autonomy)).toBe('autonomous');
     expect(detectRequestedOperationMode(assistant)).toBe('assistant');
+    expect(detectRequestedOperationMode(assistantAlias)).toBe('assistant');
     expect(detectRequestedOperationMode('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c')).toBe('autonomous');
     expect(detectRequestedOperationMode('switch to meeting mode')).toBe('meeting');
     expect(detectRequestedOperationMode('\u6211\u60f3\u804a\u804a\u6700\u8fd1\u7684\u5de5\u4f5c')).toBeNull();
     expect(isPureOperationModeSwitchRequest(autonomy)).toBe(true);
     expect(isPureOperationModeSwitchRequest(assistant)).toBe(true);
+    expect(isPureOperationModeSwitchRequest(assistantAlias)).toBe(true);
     expect(isPureOperationModeSwitchRequest('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c')).toBe(true);
   });
 
@@ -34,6 +37,16 @@ describe('shared Lumi operation mode commands', () => {
 
     expect(hasClientActionIntent(request)).toBe(true);
     expect(hasClientActionOnlyIntent(request)).toBe(true);
+  });
+
+  it('allows only safe client-state tools for an explicit page inspection request', async () => {
+    const { traceToolIntentDecision } = await import('../server/cognition/tool_intent');
+    const trace = traceToolIntentDecision('为我介绍一下客户端里的每一个页面是干什么用的。', 'voice', 'autonomous');
+
+    expect(trace.allowToolUse).toBe(true);
+    expect(trace.signals.clientActionIntent).toBe(true);
+    expect(trace.signals.clientActionOnlyIntent).toBe(true);
+    expect(trace.matchedRules.some(rule => rule.layer === 'client_action_only')).toBe(true);
   });
 
   it('keeps ordinary Chat pure and promotes explicit work to Assistant', async () => {

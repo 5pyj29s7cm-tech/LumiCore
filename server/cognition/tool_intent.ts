@@ -146,6 +146,15 @@ const CLIENT_ACTION_ONLY_PATTERNS: RegExp[] = [
   /(?:\u653e|\u64ad\u653e|\u542c).*(?:\u97f3\u4e50|\u6b4c|\u6b4c\u66f2|\u6b4c\u5355|\u4e13\u8f91)/u,
 ];
 
+// Questions that explicitly ask Lumi to inspect its live client structure are
+// informational in wording but still require the safe client_get_state tool.
+// Keep this separate from broad capability questions so ordinary conversation
+// does not unexpectedly gain desktop access.
+const CLIENT_STATE_INSPECTION_REQUEST = /(?:(?:介绍|说明|讲讲|告诉我|查看|检查).{0,24}(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)?(?:页面|界面|模块)|(?:Lumi\s*)?客户端.{0,24}(?:每一?个|各个|所有|全部)(?:页面|界面|模块).{0,24}(?:干什么|作用|功能|用途|介绍|说明))/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+
+CLIENT_ACTION_INTENT_PATTERNS.push(CLIENT_STATE_INSPECTION_REQUEST);
+CLIENT_ACTION_ONLY_PATTERNS.push(CLIENT_STATE_INSPECTION_REQUEST);
+
 const DIAGNOSTIC_OR_REPAIR_PATTERNS: RegExp[] = [
   /\b(what happened|what went wrong|diagnose|debug|fix|repair|recover|self[-\s]?check|self[-\s]?heal|not working|doesn'?t work|broken|failed|failure|error|crash(?:ed)?|stuck|hang(?:ing)?|blank screen|white screen|no sound|silent|cannot|can'?t)\b/i,
   /\bwhy\b.*\b(not|can'?t|cannot|failed?|failure|error|broken|wrong|crash(?:ed)?|stuck|hang(?:ing)?|blank|silent|doesn'?t\s+work|not\s+working)\b/i,
@@ -178,6 +187,10 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   if (/(?:微信|企业微信|wechat|weixin).{0,40}(?:问一下|问问|询问|发给|发送).{0,40}(?:在干嘛|在做什么|忙什么|做什么)/iu.test(normalized)) return false;
 
   return [
+    // Product-behaviour corrections such as “不要动不动就进入介绍客户端的界面”
+    // are feedback, not requests to navigate the client right now.
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:你|lumi)?[，,\s]*(?:能不能|不要|别|以后不要|别再|不准再)[^。！？!?\n]{0,80}(?:动不动|总是|老是|每次|随便|擅自)[^。！？!?\n]{0,80}(?:进入|打开|切换|跳到|回复|回答|说|讲)/iu,
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     /^(?:你|lumi)[，,\s]*(?:刚才|刚刚|之前|上一轮|上一次)?[^。！？!?\n]{0,24}(?:为什么|怎么|为何|干嘛|做什么|干什么)[^。！？!?\n]{0,60}(?:这么久|这么慢|才回|才回复|打开|启动|运行|执行|操作|做了|干了)/iu,
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -294,7 +307,13 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   pushRule(matchedRules, 'mode', `operation-mode:${mode}`);
   if (requestedMode) pushRule(matchedRules, 'client_action', `operation-mode-request:${requestedMode}`);
 
-  const informationOnlyQuestion = normalized ? isInformationOnlyQuestion(normalized) : false;
+  const clientStateInspectionRequest = normalized ? CLIENT_STATE_INSPECTION_REQUEST.test(normalized) : false;
+  const correctionOrExplanation = normalized
+    ? isUserCorrectionOrExplanationQuestion(normalized)
+    : false;
+  const informationOnlyQuestion = normalized
+    ? correctionOrExplanation || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest)
+    : false;
   const diagnosticRules = normalized ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern') : [];
   const diagnosticOrRepair = diagnosticRules.length > 0;
   const structuredToolRules = !informationOnlyQuestion && normalized
@@ -349,6 +368,11 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     decisionReason = allowToolUse
       ? 'meeting mode allows client control action'
       : 'meeting mode only allows client control action';
+  } else if (clientActionIntent) {
+    allowToolUse = true;
+    decisionReason = clientActionOnlyIntent
+      ? 'safe Lumi client-state/action request matched'
+      : 'Lumi client action request matched';
   } else if (visionIntent) {
     allowToolUse = true;
     decisionReason = 'vision wording asks Lumi to inspect visible content';

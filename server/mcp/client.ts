@@ -29,6 +29,7 @@ export interface MCPServerConfig {
   requiresApiKey?: boolean;             // true if startup needs a configured secret
   apiKeyEnv?: string;                   // env/stored key name required by this server
   apiKeyUrl?: string;                   // provider console URL for setup UI
+  cachedTools?: MCPToolDef[];            // persisted declarations for on-demand process startup
 }
 
 export interface MCPToolDef {
@@ -77,6 +78,7 @@ const SKILLS_DIR = path.join(os.homedir(), 'lumi_skills');
 const DEFAULT_RUNTIME_CONFIG = 'mcp_config.json';
 const LEGACY_REPO_CONFIG = path.join(process.cwd(), 'server', 'mcp', 'config.json');
 const FACTORY_CONFIG = path.join(process.cwd(), 'server', 'mcp', 'config.example.json');
+const PROCESS_IDLE_TIMEOUT_MS = 60_000;
 const DEFAULT_CONFIG_FILE: MCPConfigFile = {
   mcpServers: {
     filesystem: {
@@ -217,6 +219,10 @@ interface CrashTracker {
 
 export class MCPClientManager {
   private servers: Map<string, ConnectedServer> = new Map();
+  private discoveryInitialized = false;
+  private connectingServers: Map<string, Promise<MCPToolDef[]>> = new Map();
+  private activeCalls: Map<string, number> = new Map();
+  private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private configPath: string;
   private legacyConfigPath: string;
   private factoryConfigPath: string;
@@ -1051,6 +1057,62 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
   // ── MCP Server connection management ──
 
+  private isProcessBacked(config: MCPServerConfig): boolean {
+    const transportType = config.transport || (config.url
+      ? (config.url.startsWith('wss://') || config.url.startsWith('ws://') ? 'ws' : 'http')
+      : 'stdio');
+    return transportType === 'stdio';
+  }
+
+  private cacheToolDefinitions(name: string, tools: MCPToolDef[]): void {
+    const config = this.getConfig();
+    if (!config[name]) return;
+    config[name].cachedTools = tools.map(tool => ({
+      serverName: name,
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    }));
+    config[name].toolCount = tools.length;
+    this.saveConfig(config);
+  }
+
+  private clearIdleTimer(name: string): void {
+    const timer = this.idleTimers.get(name);
+    if (timer) clearTimeout(timer);
+    this.idleTimers.delete(name);
+  }
+
+  private scheduleIdleDisconnect(name: string): void {
+    const config = this.getConfig()[name];
+    if (!config || !this.isProcessBacked(config)) return;
+    this.clearIdleTimer(name);
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(name);
+      if ((this.activeCalls.get(name) || 0) > 0) {
+        this.scheduleIdleDisconnect(name);
+        return;
+      }
+      void this.disconnectServer(name).then(() => {
+        console.log(`[MCP] ${name}: released idle on-demand process`);
+        this.broadcastHealth();
+      });
+    }, PROCESS_IDLE_TIMEOUT_MS);
+    if (typeof (timer as any).unref === 'function') (timer as any).unref();
+    this.idleTimers.set(name, timer);
+  }
+
+  private async ensureServerConnected(name: string, config: MCPServerConfig): Promise<MCPToolDef[]> {
+    if (this.servers.has(name)) return this.connectServer(name, config);
+    const pending = this.connectingServers.get(name);
+    if (pending) return pending;
+    const connection = this.connectServer(name, config).finally(() => {
+      this.connectingServers.delete(name);
+    });
+    this.connectingServers.set(name, connection);
+    return connection;
+  }
+
   async connectAll(): Promise<MCPToolDef[]> {
     // Scan local skills directory and register any unregistered skills
     this.ensureSkillsDir();
@@ -1087,17 +1149,23 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         continue;
       }
 
+      if (this.isProcessBacked(serverConfig) && serverConfig.cachedTools?.length) {
+        allTools.push(...serverConfig.cachedTools);
+        console.log(`[MCP] ${serverName}: ${serverConfig.cachedTools.length} cached tools ready on demand`);
+        continue;
+      }
+
       try {
-        const tools = await this.connectServer(serverName, serverConfig);
+        const tools = await this.ensureServerConnected(serverName, serverConfig);
         allTools.push(...tools);
 
-        // Update toolCount in config
-        if (serverConfig.source === 'local' && serverConfig.toolCount !== tools.length) {
-          serverConfig.toolCount = tools.length;
-          this.saveConfig(finalConfig);
-        }
+        this.cacheToolDefinitions(serverName, tools);
 
         console.log(`[MCP] ${serverName}: ${tools.length} tools discovered (${serverConfig.source || 'external'})`);
+        if (this.isProcessBacked(serverConfig)) {
+          await this.disconnectServer(serverName);
+          console.log(`[MCP] ${serverName}: process released; tools will start on demand`);
+        }
       } catch (err: any) {
         console.warn(`[MCP] Failed to connect to ${serverName}: ${err.message}`);
         if (serverConfig.source === 'local') {
@@ -1107,6 +1175,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       }
     }
 
+    this.discoveryInitialized = true;
     return allTools;
   }
 
@@ -1231,34 +1300,61 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   }
 
   async callTool(fullName: string, args: Record<string, any>, options: MCPCallOptions = {}): Promise<string> {
-    const match = fullName.match(/^mcp_(.+?)_(.+)$/);
-    if (!match) throw new Error(`Invalid MCP tool name: ${fullName}`);
-
-    const [, serverName, toolName] = match;
-    const server = this.servers.get(serverName);
-    if (!server) throw new Error(`MCP server "${serverName}" not connected`);
-
-    const request = { name: toolName, arguments: args };
-    const timeoutMs = Number(options.timeoutMs);
-    const result = Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? await server.client.callTool(request, undefined, {
-          timeout: timeoutMs,
-          maxTotalTimeout: timeoutMs,
-        })
-      : await server.client.callTool(request);
-
-    const contents = (result as any).content || [];
-    const text = contents
-      .filter((c: any) => c.type === 'text')
-      .map((c: any) => c.text)
-      .join('\n');
-    if ((result as any).isError === true) {
-      throw new Error(text.trim() || `MCP tool "${fullName}" failed without an error message.`);
+    if (!fullName.startsWith('mcp_')) throw new Error(`Invalid MCP tool name: ${fullName}`);
+    const config = this.getConfig();
+    const serverNames = Array.from(new Set([...Object.keys(config), ...this.servers.keys()]));
+    const serverName = serverNames
+      .filter(name => fullName.startsWith(`mcp_${name}_`))
+      .sort((left, right) => right.length - left.length)[0];
+    if (!serverName) throw new Error(`Invalid MCP tool name: ${fullName}`);
+    const toolName = fullName.slice(`mcp_${serverName}_`.length);
+    const existingServer = this.servers.get(serverName);
+    const serverConfig = config[serverName] || existingServer?.config;
+    if (!serverConfig) throw new Error(`MCP server "${serverName}" is not configured`);
+    if (serverConfig.enabled === false) throw new Error(`MCP server "${serverName}" is disabled`);
+    if (this.isMissingRequiredApiKey(serverConfig)) {
+      throw new Error(`MCP server "${serverName}" requires ${serverConfig.apiKeyEnv}`);
     }
-    return text;
+
+    this.clearIdleTimer(serverName);
+    if (!this.servers.has(serverName)) {
+      await this.ensureServerConnected(serverName, serverConfig);
+    }
+    const server = this.servers.get(serverName);
+    if (!server) throw new Error(`MCP server "${serverName}" failed to connect`);
+    this.activeCalls.set(serverName, (this.activeCalls.get(serverName) || 0) + 1);
+
+    try {
+      const request = { name: toolName, arguments: args };
+      const timeoutMs = Number(options.timeoutMs);
+      const result = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? await server.client.callTool(request, undefined, {
+            timeout: timeoutMs,
+            maxTotalTimeout: timeoutMs,
+          })
+        : await server.client.callTool(request);
+
+      const contents = (result as any).content || [];
+      const text = contents
+        .filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text)
+        .join('\n');
+      if ((result as any).isError === true) {
+        throw new Error(text.trim() || `MCP tool "${fullName}" failed without an error message.`);
+      }
+      return text;
+    } finally {
+      const remaining = Math.max(0, (this.activeCalls.get(serverName) || 1) - 1);
+      if (remaining > 0) this.activeCalls.set(serverName, remaining);
+      else this.activeCalls.delete(serverName);
+      this.scheduleIdleDisconnect(serverName);
+    }
   }
 
   async disconnectAll(): Promise<void> {
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+    this.activeCalls.clear();
     // Cancel all pending restart timers
     for (const [n, tracker] of this.crashTrackers) {
       if (tracker.restartTimer) {
@@ -1277,6 +1373,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
   }
 
   async restartServer(name: string): Promise<MCPToolDef[]> {
+    this.clearIdleTimer(name);
     const server = this.servers.get(name);
     if (server) {
       this.closingSet.add(name);
@@ -1289,11 +1386,15 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     const serverConfig = config[name];
     if (!serverConfig || !serverConfig.enabled) return [];
 
-    return this.connectServer(name, serverConfig);
+    const tools = await this.ensureServerConnected(name, serverConfig);
+    this.cacheToolDefinitions(name, tools);
+    this.scheduleIdleDisconnect(name);
+    return tools;
   }
 
   /** Disconnect a server without restarting it (used when disabling) */
   async disconnectServer(name: string): Promise<void> {
+    this.clearIdleTimer(name);
     const server = this.servers.get(name);
     if (server) {
       this.closingSet.add(name);
@@ -1339,6 +1440,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         tracker.lastSuccessfulConnect = new Date().toISOString();
 
         this.onServerRecovered?.(name, tools);
+        this.cacheToolDefinitions(name, tools);
+        this.scheduleIdleDisconnect(name);
       } catch (err: any) {
         tracker.lastError = String(err?.message || err);
         console.error(`[MCP] Restart attempt for "${name}" failed: ${err.message}`);
@@ -1381,11 +1484,13 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     for (const [name] of Object.entries(config)) {
       const tracker = this.crashTrackers.get(name);
       const isRestarting = !!tracker?.restartTimer;
+      const readyOnDemand = Boolean(config[name]?.enabled && this.isProcessBacked(config[name]) && config[name]?.cachedTools?.length);
       health[name] = {
         status: isRestarting ? 'restarting'
           : this.servers.has(name) ? 'connected'
           : (tracker?.consecutiveCrashes ?? 0) >= 5 ? 'failed'
           : (tracker?.consecutiveCrashes ?? 0) > 0 ? 'crashed'
+          : readyOnDemand ? 'idle'
           : 'disconnected',
         consecutiveCrashes: tracker?.consecutiveCrashes || 0,
         lastCrashTime: tracker?.lastCrashTime || undefined,
@@ -1404,6 +1509,18 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
   getConnectedServers(): string[] {
     return Array.from(this.servers.keys());
+  }
+
+  getAvailableServers(): string[] {
+    const config = this.getConfig();
+    return Object.entries(config)
+      .filter(([, serverConfig]) => serverConfig.enabled && !this.isMissingRequiredApiKey(serverConfig))
+      .filter(([name]) => (this.crashTrackers.get(name)?.consecutiveCrashes || 0) < 5)
+      .map(([name]) => name);
+  }
+
+  getRoutableServers(): string[] {
+    return this.discoveryInitialized ? this.getAvailableServers() : [];
   }
 }
 

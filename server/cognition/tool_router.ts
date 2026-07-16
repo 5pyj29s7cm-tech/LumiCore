@@ -903,7 +903,7 @@ function getConnectedMcpGate(options?: {
   if (options?.enableMcpHealthGate === false) return null;
   if (options?.connectedMcpServers) return new Set(options.connectedMcpServers);
   try {
-    const connected = mcpManager.getConnectedServers();
+    const connected = mcpManager.getRoutableServers();
     // In isolated tests or before MCP startup, no runtime signal exists. Do not
     // hide synthetic MCP declarations unless the caller provided an explicit gate.
     return connected.length ? new Set(connected) : null;

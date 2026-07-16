@@ -153,14 +153,14 @@ function stripModeCommandCourtesy(text: string): string {
 const MODE_SWITCH_VERB_RE = /(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)/i;
 const MODE_TARGET_RES: Readonly<Record<OperationMode, RegExp>> = {
   chat: /(?:\u7eaf\u804a\u5929|\u804a\u5929\u6a21\u5f0f|chatmode)/i,
-  assistant: /(?:\u52a9\u624b\u6a21\u5f0f|assistantmode)/i,
+  assistant: /(?:\u52a9\u624b\u6a21\u5f0f|\u52a9\u7406\u6a21\u5f0f|assistantmode)/i,
   autonomous: /(?:\u81ea\u4e3b\u6a21\u5f0f|\u81ea\u4e3b\u6267\u884c|\u81ea\u52a8\u6267\u884c|autonomymode|autonomousmode|autoexecutemode)/i,
   meeting: /(?:\u4f1a\u8bae\u6a21\u5f0f|meetingmode)/i,
 };
 
 const PURE_MODE_COMMAND_RES: Readonly<Record<OperationMode, RegExp>> = {
   chat: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u7eaf\u804a\u5929|\u804a\u5929\u6a21\u5f0f|\u804a\u5929|chatmode|chat)$/i,
-  assistant: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u52a9\u624b\u6a21\u5f0f|\u52a9\u624b|assistantmode|assistant)$/i,
+  assistant: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u52a9\u624b\u6a21\u5f0f|\u52a9\u7406\u6a21\u5f0f|\u52a9\u624b|\u52a9\u7406|assistantmode|assistant)$/i,
   autonomous: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u81ea\u4e3b\u6a21\u5f0f|\u81ea\u4e3b\u6267\u884c|\u81ea\u52a8\u6267\u884c|\u81ea\u4e3b|autonomymode|autonomousmode|autonomy|autonomous|autoexecute)$/i,
   meeting: /^(?:(?:lumi|\u9732\u7c73))?(?:(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u9ebb\u70e6))?(?:(?:\u5207\u6362|\u5207\u5230|\u5207\u6210|\u6362\u5230|\u8fdb\u5165|\u6253\u5f00|\u5f00\u542f|\u542f\u52a8|\u5f00\u59cb|\u8bbe\u4e3a|\u8bbe\u7f6e\u4e3a|\u5207\u56de|\u56de\u5230|switch|change|enter|start|open|set)(?:\u5230|\u6210|to)?)?(?:\u4f1a\u8bae\u6a21\u5f0f|\u4f1a\u8bae|meetingmode|meeting)$/i,
 };

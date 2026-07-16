@@ -9,6 +9,7 @@ import { readDB } from '../../db_layer';
 import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface } from '../work_takeover/continuity';
 import { listWorkflows } from '../agents/workflows';
 import { CN_VOICE_FAST_PATH_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import type { ToolPolicy } from '../personality/types';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
@@ -48,6 +49,48 @@ function quickOpenToolCall(target: string): { name: string; arguments: Record<st
   return { name: 'desktop_open', arguments: { target: clean } };
 }
 
+/**
+ * A deterministic quick command has already selected one exact tool from the
+ * user's words. Route selection occasionally omits that same tool from the
+ * broader LLM allow-list; add only the selected tool while preserving every
+ * explicit forbidden rule and confirmation setting.
+ */
+export function buildQuickCommandToolPolicy(
+  policy: ToolPolicy | undefined,
+  toolName: string,
+): ToolPolicy | undefined {
+  if (!policy) return undefined;
+  if (policy.forbiddenTools.includes('*') || policy.forbiddenTools.includes(toolName)) return policy;
+  if (policy.allowedTools.includes('*') || policy.allowedTools.includes(toolName)) return policy;
+  return {
+    ...policy,
+    allowedTools: [...policy.allowedTools, toolName],
+  };
+}
+
+function normalizeQuickOpenTarget(value: string): string | null {
+  let target = String(value || '').trim().replace(/[。！？.!?]+$/u, '').trim();
+  if (!target) return null;
+
+  // “打开正在运行的微信，不要启动新的微信” means focus the existing
+  // application. desktop_open already focuses a matching running window first,
+  // so reduce the phrase to the real application name.
+  target = target
+    .replace(/^(?:正在运行|当前运行|已经打开|已打开|现有)(?:着)?(?:的)?/u, '') // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    .replace(/[，,；;。]\s*(?:不要|别)(?:再|重新)?(?:启动|打开|新开).+$/u, '') // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    .replace(/\s*(?:不要|别)(?:再|重新)?(?:启动|打开|新开)(?:一个|新的?)?.+$/u, '') // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    .trim();
+
+  if (!target) return null;
+  // Do not let the low-latency app launcher eat a compound task. The full turn
+  // must reach the normal planner so later actions (inspect, count, remember,
+  // message, edit, etc.) remain part of the user's requested outcome.
+  if (/(?:然后|接着|随后|之后|以后|并且|同时|打开后|启动后|运行后|看下|看一下|看看|看一看|查一下|检查一下|统计|数一下|有多少|记住|读取|联系人|画图|绘制|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|发送|发布|播放|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|\b(?:then|after|inspect|count|remember|read|draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(target)) { // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    return null;
+  }
+  return target;
+}
+
 const patterns: QuickPattern[] = [
   // ── Voice connection acknowledgement ──
   {
@@ -60,6 +103,23 @@ const patterns: QuickPattern[] = [
       responseText: CN_VOICE_FAST_PATH_MESSAGES.audible,
       matched: true,
     }),
+  },
+
+  {
+    patterns: [
+      // i18n-allow: direct client-mode status question.
+      /^(?:你)?(?:现在|当前)?(?:是|处于)?(?:什么|哪种|哪个)模式[。！？.!?]*$/u,
+      /^(?:what|which)\s+(?:client\s+)?mode\s+(?:are\s+you|is\s+active)[?!.]*$/i,
+    ],
+    handler: async (_, userId) => {
+      const { getStoredOperationMode } = await import('./operation_mode_store');
+      let mode = 'assistant';
+      try { mode = getStoredOperationMode(userId); } catch {}
+      return {
+        responseText: CN_VOICE_FAST_PATH_MESSAGES.operationModeStatus(mode),
+        matched: true,
+      };
+    },
   },
 
   {
@@ -169,7 +229,7 @@ const patterns: QuickPattern[] = [
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     patterns: [/^(?:(?:请|麻烦|请你|帮我|你帮我|给我|我要|我想)\s*)?(?:打开|启动|运行|开启|launch|open|start|run)\s*(?:程序|应用|app|软件)?\s*(?:一下)?\s*(.+?)[。！？.!?]*$/i],
     handler: (match) => {
-      const target = String(match[1] || '').trim();
+      const target = normalizeQuickOpenTarget(String(match[1] || ''));
       if (
         !target
         // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -377,6 +437,17 @@ const patterns: QuickPattern[] = [
   },
 
   // ── Simple Yes/No ──
+  {
+    patterns: [
+      // i18n-allow: a short affirmative result from the user, not a new open command.
+      /^(?:(?:已经|现在|刚才|它|软件|页面|窗口)\s*)?(?:打开|启动|运行)(?:了|好(?:了)?)[。！!]*$/u,
+      /^(?:it\s+)?(?:opened|launched|started)(?:\s+now)?[.!]*$/i,
+    ],
+    handler: () => ({
+      responseText: CN_VOICE_FAST_PATH_MESSAGES.openConfirmedByUser,
+      matched: true,
+    }),
+  },
   {
     patterns: [/^(好的|ok|okay|好|嗯|知道了|收到|明白了|懂了|got\s*it|alright|fine)[。！？.!?]*$/i],
     handler: () => ({

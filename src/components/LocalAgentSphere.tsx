@@ -113,6 +113,14 @@ export function LocalAgentSphere({
   useEffect(() => { callStateRef.current = callState; }, [callState]);
   useEffect(() => { sentimentRef.current = sentiment; }, [sentiment]);
   useEffect(() => { audioLevelRef.current = audioLevel; }, [audioLevel]);
+  useEffect(() => {
+    const onAudioLevel = (event: Event) => {
+      const level = Number((event as CustomEvent<{ level?: number }>).detail?.level);
+      if (Number.isFinite(level)) audioLevelRef.current = level;
+    };
+    window.addEventListener('lumi:voice-audio-level', onAudioLevel);
+    return () => window.removeEventListener('lumi:voice-audio-level', onAudioLevel);
+  }, []);
   useEffect(() => { highPerfRef.current = highPerformance; }, [highPerformance]);
   const disabledRef = useRef(gesturesDisabled);
   useEffect(() => { disabledRef.current = gesturesDisabled; }, [gesturesDisabled]);

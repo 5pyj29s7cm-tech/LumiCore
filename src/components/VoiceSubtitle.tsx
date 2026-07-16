@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, Volume2 } from 'lucide-react';
 
@@ -11,6 +11,7 @@ interface VoiceSubtitleProps {
 }
 
 export function VoiceSubtitle({ transcript, responseText, callState, audioLevel, t }: VoiceSubtitleProps) {
+  const audioBarsRef = useRef<Array<HTMLDivElement | null>>([]);
   const [visible, setVisible] = useState(false);
   const [displayText, setDisplayText] = useState('');
   const [displayResponse, setDisplayResponse] = useState('');
@@ -34,6 +35,21 @@ export function VoiceSubtitle({ transcript, responseText, callState, audioLevel,
       setVisible(true);
     }
   }, [callState]);
+
+  useEffect(() => {
+    const updateBars = (level: number) => {
+      if (!Number.isFinite(level)) return;
+      audioBarsRef.current.forEach((bar, index) => {
+        if (bar) bar.style.height = `${level > index * 0.1 ? 4 + index * 2 : 2}px`;
+      });
+    };
+    updateBars(audioLevel);
+    const onLevel = (event: Event) => {
+      updateBars(Number((event as CustomEvent<{ level?: number }>).detail?.level));
+    };
+    window.addEventListener('lumi:voice-audio-level', onLevel);
+    return () => window.removeEventListener('lumi:voice-audio-level', onLevel);
+  }, [audioLevel, callState]);
 
   const isSpeaking = callState === 'speaking';
   const isListening = callState === 'listening';
@@ -65,9 +81,9 @@ export function VoiceSubtitle({ transcript, responseText, callState, audioLevel,
                     {[...Array(5)].map((_, i) => (
                       <motion.div
                         key={i}
+                        ref={(node) => { audioBarsRef.current[i] = node; }}
                         className="w-0.5 bg-celestial-saturn/60 rounded-full"
-                        animate={{ height: audioLevel > i * 0.1 ? 4 + i * 2 : 2 }}
-                        style={{ minHeight: 2 }}
+                        style={{ minHeight: 2, height: 2 }}
                       />
                     ))}
                   </div>
