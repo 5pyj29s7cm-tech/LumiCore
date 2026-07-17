@@ -95,10 +95,7 @@ export function KnowledgeBase({ t, isOpen, onClose, domain = 'personal' }: Knowl
 
   const reportLoadError = useCallback((message: string) => {
     setLoadError(message);
-    if (lastLoadErrorRef.current !== message) {
-      toast.error(message);
-      lastLoadErrorRef.current = message;
-    }
+    lastLoadErrorRef.current = message;
   }, []);
 
   const scopedMemoryUrl = useCallback((path: string) => {

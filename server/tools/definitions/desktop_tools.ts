@@ -11,9 +11,19 @@ async function desktopListFiles(args: Record<string, any>, context?: any): Promi
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
   }
+  const routedTaskText = String(context?.routedTaskText || context?.actionIntent || '');
+  const requestedPath = String(args.path || '').trim();
+  const desktopFilesRequested = /(?:\u684c\u9762|\bdesktop\b).{0,24}(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\bfiles?\b|\bfolders?\b)/iu.test(routedTaskText);
+  const desktopCountRequested = /(?:\u6587\u4ef6|\u6761\u76ee|\bfiles?\b|\bentries\b).{0,16}(?:\u6570\u91cf|\u591a\u5c11|\u51e0\u4e2a|\bcount\b|\bhow\s+many\b)|(?:\u6570\u91cf|\u591a\u5c11|\u51e0\u4e2a|\bcount\b|\bhow\s+many\b).{0,16}(?:\u6587\u4ef6|\u6761\u76ee|\bfiles?\b|\bentries\b)/iu.test(routedTaskText);
+  const path = !requestedPath && desktopFilesRequested
+    ? '~/Desktop'
+    : requestedPath;
+  const requestedLimit = Number(args.limit) || 100;
   return context.desktopRelay('desktop_list_files', {
-    path: args.path || '',
-    limit: args.limit || 100,
+    path,
+    limit: desktopFilesRequested && desktopCountRequested
+      ? Math.max(requestedLimit, 1000)
+      : requestedLimit,
   });
 }
 
@@ -94,11 +104,11 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_list_files',
     description:
-      'List files and directories on the user\'s real desktop machine at the given path using the native desktop client. Prefer this for Desktop/Documents folders, Chinese filenames, file discovery, and verifying that a generated file really exists. Defaults to the home directory. Returns name, path, type, size, and modified time.',
+      'List files and directories on the user\'s real desktop machine at the given path using the native desktop client. Prefer this for Desktop/Documents folders, Chinese filenames, file discovery, and verifying that a generated file really exists. Use "~/Desktop" for the user\'s Desktop and limit 1000 for a requested count/inventory; an empty path defaults to the home directory unless the current request explicitly asks for Desktop files. Returns name, path, type, size, and modified time.',
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Directory path to list. Leave empty for home directory.' },
+        path: { type: 'string', description: 'Directory path to list. Use "~/Desktop" for the user Desktop. Leave empty for home directory.' },
         limit: { type: 'number', description: 'Maximum entries to return (default 100).' },
       },
       required: [],

@@ -6,6 +6,11 @@ import {
   requiresVisibleAutoCadExecution,
 } from './action_contract';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn } from './legal_entry';
+import {
+  getRecoveredApplicationContinuationTarget,
+  isRecoveredCurrentAppEditingContinuation,
+} from './action_continuation';
+import { CURRENT_APP_FORBIDDEN_TOOLS } from './current_app_execution';
 
 export type LumiCapabilityLane =
   | 'conversation'
@@ -223,6 +228,19 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
+  if (input.execution.allowToolUse && isRecoveredCurrentAppEditingContinuation(text)) {
+    const appTarget = getRecoveredApplicationContinuationTarget(text);
+    return {
+      lane: 'desktop_control',
+      primary: appTarget ? `visible current-app control (${appTarget})` : 'visible current-app control',
+      reasons: [
+        ...reasons,
+        'a successful desktop_open receipt recovered the target application',
+        'the newest referential instruction edits inside that application and must not be reclassified from its text payload',
+      ],
+    };
+  }
+
   if (flow.executionGovernance.capabilityLearningIntent !== 'none') {
     return {
       lane: 'capability_learning',
@@ -399,6 +417,9 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
       }
       return 'Prefer structured design/CAD tools over raw cursor work; use desktop CAD only when the user asks to operate visible software or a tool needs it.';
     case 'desktop_control':
+      if (isRecoveredCurrentAppEditingContinuation(text)) {
+        return 'Follow the current-app UIA state machine. Observe the active window and UI tree, invoke one precise New/Blank control, re-snapshot, and do not type or paste until the fresh UI tree proves an editable Document/editor control. Focus that control, type through desktop_ui_type, and verify the requested text. Never repeat the same New/Blank selector or fall back to computer_use/raw coordinates.';
+      }
       return 'Use screen/window state as evidence. Move through visible UI deliberately and verify the app/result before claiming completion.';
     case 'web_or_account':
       return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
@@ -415,13 +436,27 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
   const routeText = input.text || input.dispatch.flow.routeText || '';
   const actionContract = buildActionContract(routeText);
   const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
+  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routeText);
+  const currentAppAllowed = new Set(
+    (input.execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*'),
+  );
+  const contractPreferredTools = actionContract.applies
+    ? actionContract.preferredTools.filter(name => (
+        !recoveredCurrentAppEdit
+        || currentAppAllowed.has(name)
+      ))
+    : [];
   const preferredTools = unique([
     ...availablePreferredTools(input, selected.lane),
-    ...(actionContract.applies ? actionContract.preferredTools : []),
-  ]).filter(name => !visibleAutoCad || ![
-    'cad_generate_dxf',
-    'mcp_cad-drafting_cad_renovation_folder_workflow',
-  ].includes(name)).slice(0, 22);
+    ...contractPreferredTools,
+  ]).filter(name => (
+    (!visibleAutoCad || ![
+      'cad_generate_dxf',
+      'mcp_cad-drafting_cad_renovation_folder_workflow',
+    ].includes(name))
+    && (!recoveredCurrentAppEdit
+      || !(CURRENT_APP_FORBIDDEN_TOOLS as readonly string[]).includes(name))
+  )).slice(0, 22);
   const routeCategories = input.execution.toolRoute?.categories || [];
   const promptOverlay = [
     '## Lumi Capability Selection',

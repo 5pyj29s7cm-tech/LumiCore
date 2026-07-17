@@ -4,8 +4,9 @@ import { useT } from '../lib/useT';
 
 export function GlobalNodeMap({ variant = 'default', nodeCount }: { variant?: 'default' | 'subtle'; nodeCount?: number }) {
   const t = useT();
+  const resolvedNodeCount = nodeCount ?? (variant === 'subtle' ? 30 : 60);
   const dots = useMemo(() => {
-    return [...Array(60)].map((_, i) => ({
+    return [...Array(resolvedNodeCount)].map((_, i) => ({
       id: i,
       x: Math.random() * 100,
       y: Math.random() * 100,
@@ -13,7 +14,7 @@ export function GlobalNodeMap({ variant = 'default', nodeCount }: { variant?: 'd
       delay: Math.random() * 5,
       active: Math.random() > 0.7
     }));
-  }, []);
+  }, [resolvedNodeCount]);
 
   return (
     <div className={`w-full h-full transition-all duration-1000 ${
@@ -36,24 +37,37 @@ export function GlobalNodeMap({ variant = 'default', nodeCount }: { variant?: 'd
       </div>
 
       <div className="absolute inset-0 p-12 overflow-hidden">
-        {dots.map(dot => (
-          <motion.div
-            key={dot.id}
-            initial={{ opacity: 0.1 }}
-            animate={{ 
-              opacity: dot.active ? [0.2, 0.8, 0.2] : [0.1, 0.3, 0.1],
-              scale: dot.active ? [1, 1.5, 1] : 1
-            }}
-            transition={{ duration: 3, repeat: Infinity, delay: dot.delay }}
-            className={`absolute rounded-full ${dot.active ? 'bg-celestial-saturn shadow-[0_0_10px_#ffcc00]' : 'bg-white/10'}`}
-            style={{ 
-              left: `${dot.x}%`, 
-              top: `${dot.y}%`, 
-              width: dot.size, 
-              height: dot.size 
-            }}
-          />
-        ))}
+        {dots.map(dot => {
+          const className = `absolute rounded-full ${dot.active ? 'bg-celestial-saturn shadow-[0_0_10px_#ffcc00]' : 'bg-white/10'}`;
+          const style = {
+            left: `${dot.x}%`,
+            top: `${dot.y}%`,
+            width: dot.size,
+            height: dot.size,
+          };
+          if (variant === 'subtle') {
+            return (
+              <div
+                key={dot.id}
+                className={className}
+                style={{ ...style, opacity: dot.active ? 0.35 : 0.16 }}
+              />
+            );
+          }
+          return (
+            <motion.div
+              key={dot.id}
+              initial={{ opacity: 0.1 }}
+              animate={{
+                opacity: dot.active ? [0.2, 0.8, 0.2] : [0.1, 0.3, 0.1],
+                scale: dot.active ? [1, 1.5, 1] : 1
+              }}
+              transition={{ duration: 3, repeat: Infinity, delay: dot.delay }}
+              className={className}
+              style={style}
+            />
+          );
+        })}
         {/* Global Connection Pulses - Only in default */}
         {variant === 'default' && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

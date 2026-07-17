@@ -10,6 +10,17 @@ function getMemoryStore(): Memory[] {
   return db.memories;
 }
 
+/**
+ * Raw orchestrator receipts are operational audit data, not conversational memory.
+ * Keep them stored and explicitly queryable, but exclude them from normal recall.
+ */
+export function isOperationalTraceMemory(
+  memory: Pick<Memory, 'sourceInteractionId' | 'content'>,
+): boolean {
+  return String(memory.sourceInteractionId || '').startsWith('orch_')
+    || String(memory.content || '').trimStart().startsWith('[Orchestrated Workflow]');
+}
+
 // ── Embedding / Vector Search ──
 
 /** LRU cache for embeddings: text → vector. Avoids re-embedding the same content. */
@@ -42,6 +53,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 function matchesMemoryQueryFilters(memory: Memory, query: MemoryQuery): boolean {
+  if (query.includeOperationalTraces !== true && isOperationalTraceMemory(memory)) return false;
   if (query.userId && memory.userId !== query.userId) return false;
   if (query.agentId !== undefined && (memory.agentId || '') !== query.agentId) return false;
   if (query.type && memory.type !== query.type) return false;
@@ -235,6 +247,7 @@ export function getAssociatedMemories(
   threshold: number = ASSOCIATION_THRESHOLD,
   domain?: string,
   orgId?: string,
+  includeOperationalTraces: boolean = false,
 ): Memory[] {
   const userMap = coRetrievalMap.get(userId);
   if (!userMap) return [];
@@ -246,7 +259,13 @@ export function getAssociatedMemories(
   for (const [assocId, strength] of assocMap) {
     if (strength >= threshold) {
       const mem = all.find(m => m.id === assocId);
-      if (mem && matchesMemoryScope(mem, domain, orgId)) result.push(mem);
+      if (
+        mem
+        && matchesMemoryScope(mem, domain, orgId)
+        && (includeOperationalTraces || !isOperationalTraceMemory(mem))
+      ) {
+        result.push(mem);
+      }
     }
   }
   return result;
@@ -411,7 +430,14 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     const resultIdSet = new Set(resultIds);
     const associated: Memory[] = [];
     for (const m of result) {
-      const assoc = getAssociatedMemories(m.id, q.userId, ASSOCIATION_THRESHOLD, q.domain, q.orgId);
+      const assoc = getAssociatedMemories(
+        m.id,
+        q.userId,
+        ASSOCIATION_THRESHOLD,
+        q.domain,
+        q.orgId,
+        q.includeOperationalTraces === true,
+      );
       for (const am of assoc) {
         if (!resultIdSet.has(am.id) && matchesMemoryScope(am, q.domain, q.orgId)) {
           resultIdSet.add(am.id);
@@ -752,12 +778,18 @@ export function decayMemories(userId: string, domain?: string, orgId?: string): 
 }
 
 /** Get episodic memories that are ready for consolidation (unconsolidated, count >= threshold) */
-export function getUnconsolidatedEpisodic(userId: string, domain?: string, orgId?: string): Memory[] {
+export function getUnconsolidatedEpisodic(
+  userId: string,
+  domain?: string,
+  orgId?: string,
+  includeOperationalTraces: boolean = false,
+): Memory[] {
   return getMemoryStore().filter(m =>
     m.userId === userId &&
     m.tier === 'episodic' &&
     !m.parentId &&
     m.confidence >= 0.2 &&
+    (includeOperationalTraces || !isOperationalTraceMemory(m)) &&
     (domain ? (m.domain || 'personal') === domain : true) &&
     (orgId !== undefined ? (m.orgId || '') === orgId : true)
   );
@@ -1107,6 +1139,7 @@ export function borrowAgentMemories(
   topic: string,
   userId: string,
   limit: number = 5,
+  includeOperationalTraces: boolean = false,
 ): Memory[] {
   const all = getMemoryStore();
   const topicTokens = new Set(tokenize(topic.toLowerCase()));
@@ -1114,6 +1147,7 @@ export function borrowAgentMemories(
   const candidates: Array<{ memory: Memory; score: number }> = [];
 
   for (const m of all) {
+    if (!includeOperationalTraces && isOperationalTraceMemory(m)) continue;
     // Skip own memories
     if (m.agentId === requestingAgentId) continue;
     // Skip if not cross-agent shareable

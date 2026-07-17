@@ -1,4 +1,5 @@
 import { CN_VOICE_ACTION_HISTORY_MESSAGES as M } from '../regions/packs/cn/voice_action_history_messages';
+import type { ToolExecutionRecord } from '../tools/types';
 
 function parseMaybeJson(value: unknown): any {
   if (typeof value !== 'string') return value;
@@ -10,6 +11,40 @@ function normalizeToolCalls(value: unknown): any[] {
   if (Array.isArray(parsed)) return parsed;
   if (parsed && typeof parsed === 'object') return [parsed];
   return [];
+}
+
+function hasSuccessfulReceipt(call: any): boolean {
+  if (call?.error) return false;
+  const raw = String(call?.result || '').trim();
+  if (!raw) return false;
+  const result = parseMaybeJson(call?.result);
+  if (result && typeof result === 'object') {
+    if (result.ok === false || result.success === false || result.opened === false) return false;
+    const status = String(result.status || result.verification?.status || '').trim().toLowerCase();
+    if (/^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|pending|partial)$/.test(status)) {
+      return false;
+    }
+  }
+  return !/(?:^|\b)(?:failed|error|blocked|not found|timed out|permission denied|requires confirmation)(?:\b|:)/i.test(raw);
+}
+
+export function collectRecentActionToolRecords(history: any[]): ToolExecutionRecord[] {
+  const records: ToolExecutionRecord[] = [];
+  for (const item of Array.isArray(history) ? history.slice(-30) : []) {
+    if (String(item?.role || '') !== 'assistant') continue;
+    for (const call of normalizeToolCalls(item?.toolCalls ?? item?.tool_calls)) {
+      const name = String(call?.name || call?.toolName || '').trim();
+      if (!name) continue;
+      records.push({
+        id: call?.id,
+        name,
+        arguments: parseMaybeJson(call?.arguments ?? call?.args) || {},
+        result: String(call?.result || ''),
+        error: call?.error ? String(call.error) : undefined,
+      });
+    }
+  }
+  return records;
 }
 
 export function isRecentActionExplanationQuestion(text: string): boolean {
@@ -32,8 +67,11 @@ function describeWeChatCall(call: any): string {
     }
     return M.wechatToolFailed(recipient);
   }
-  if (result.sent === true) return M.wechatVerified(recipient, message);
-  if (result.sendAttempted === true) {
+  if (
+    result.sent === true
+    && String(result.verificationStatus || result.verification?.status || '').toLowerCase() === 'verified'
+  ) return M.wechatVerified(recipient, message);
+  if (result.sendAttempted === true || result.sent === true) {
     return M.wechatAttempted(recipient, message);
   }
   return M.wechatLocatedOnly(recipient);
@@ -75,9 +113,9 @@ export function describeRecentActionsFromHistory(text: string, history: any[]): 
   if (opened) {
     const args = parseMaybeJson(opened?.arguments ?? opened?.args) || {};
     const target = String(args.target || '').trim() || M.targetFallback;
-    return opened?.error
-      ? M.openFailed(target)
-      : M.openSucceeded(target);
+    return hasSuccessfulReceipt(opened)
+      ? M.openSucceeded(target)
+      : M.openFailed(target);
   }
   if (cadCalls.length > 0) {
     const visiblePlayback = cadCalls.some(call => (

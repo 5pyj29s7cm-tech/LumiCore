@@ -74,6 +74,9 @@ const DESKTOP_AI_TERMS = /\b(?:workbuddy|work\s*buddy|codex|chatgpt|chatgpt\.com
 const DESKTOP_AI_ACTION_VERBS = /\b(?:ask|query|send|forward|collect|gather|compare|summari[sz]e|bring\s+back|take\s+back|retrieve|paste\s+into|hand\s+off)\b/i;
 const DESKTOP_CONTROL_TERMS = /(?:\u7535\u8111|\u684c\u9762|\u5c4f\u5e55|\u7a97\u53e3|\u9f20\u6807|\u952e\u76d8|\b(?:computer|desktop|screen|window|mouse|keyboard)\b)/iu;
 const DESKTOP_CONTROL_VERBS = /(?:\u7528|\u4f7f\u7528|\u64cd\u4f5c|\u63a7\u5236|\u63a5\u7ba1|\u70b9\u51fb|\u8f93\u5165|\u6253\u5f00|\u805a\u7126|\b(?:use|operate|control|take\s+over|click|type|open|focus)\b)/iu;
+const EXTERNAL_DESKTOP_OBSERVATION_REQUEST = /(?:(?:(?:\u5f53\u524d)?(?:\u6d3b\u52a8|\u524d\u53f0)|\u6b63\u5728\u4f7f\u7528\u7684).{0,4}\u7a97\u53e3|\u5f53\u524d.{0,4}\u7a97\u53e3(?:\u6807\u9898|\u8fdb\u7a0b|\u5e94\u7528)|(?:\u684c\u9762|desktop).{0,12}(?:\u6587\u4ef6|\u6587\u4ef6\u5939|files?|folders?)|\b(?:current|active|foreground)\s+window\b)/iu;
+const TEAM_EXECUTION_REQUEST = /(?:(?:\u7ec4\u5efa|\u53ec\u96c6|\u521b\u5efa|\u7ec4\u7ec7|\u5b89\u6392|\u5206\u914d|\u8c03\u5ea6).{0,12}(?:\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b)|(?:\u7ec4\u961f|\u7ec4\u4e2a\u961f|\u7ec4\u4e2a\u56e2\u961f)(?:.{0,16}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210|\u4efb\u52a1))?|(?:\u8ba9|\u53eb|\u8bf7|\u4ea4\u7ed9).{0,8}(?:\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b).{0,16}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210|\u505a|\u5206\u6790|\u68c0\u67e5|\bexecute\b|\bhandle\b|\bdelegate\b|\bcollaborate\b)|(?:\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b).{0,16}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210|\bexecute\b|\bhandle\b|\bdelegate\b|\bcollaborate\b)|\b(?:assemble|form|create)\s+(?:a\s+)?team\b|\b(?:multi[-\s]?agent|agent\s+team)\b|(?:\u591a\u4e2a|\u591a\u4e2a\u5b50|\u591a)\s*(?:agent|\u667a\u80fd\u4f53).{0,12}(?:\u6267\u884c|\u5904\u7406|\u5206\u5de5|\u534f\u4f5c|\u5b8c\u6210))/iu;
+const TEAM_EXECUTION_CAPABILITY_QUESTION = /^(?:(?:\u600e\u4e48|\u5982\u4f55|\u80fd\u4e0d\u80fd|\u80fd\u5426|\u53ef\u4e0d\u53ef\u4ee5|\u662f\u5426\u53ef\u4ee5).{0,24}(?:\u7ec4\u961f|\u56e2\u961f|\u667a\u80fd\u4f53|\bagents?\b|\bteam\b)|\b(?:how|can|could|would)\b.{0,40}\b(?:team|agents?|multi[-\s]?agent)\b)/iu;
 const CONTINUE_VERBS = /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b|\b(?:continue|resume)\b)/iu;
 const TASK_TERMS = /(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee|\b(?:task|customer|delivery|takeover|project)\b)/iu;
 const CREATE_OR_DRAW_VERBS = /(?:\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u5236\u4f5c|\u505a|\u753b|\u51fa|\b(?:create|generate|draw|make)\b)/iu;
@@ -254,6 +257,19 @@ function pushRule(out: ToolIntentMatchedRule[], layer: ToolIntentRuleLayer, name
   out.push({ layer, name });
 }
 
+export function hasExplicitTeamExecutionRequest(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  if (TEAM_EXECUTION_CAPABILITY_QUESTION.test(normalized)) return false;
+  if (isInformationOnlyQuestion(normalized)) return false;
+  return TEAM_EXECUTION_REQUEST.test(normalized);
+}
+
+function hasExternalDesktopOrTeamExecutionIntent(text: string): boolean {
+  return EXTERNAL_DESKTOP_OBSERVATION_REQUEST.test(text)
+    || hasExplicitTeamExecutionRequest(text);
+}
+
 export function hasExplicitToolIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
@@ -267,6 +283,7 @@ export function hasClientActionIntent(text: string): boolean {
   if (!normalized) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
+  if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)) return true;
   return CLIENT_ACTION_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
@@ -276,6 +293,7 @@ export function hasClientActionOnlyIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
+  if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)) return true;
@@ -314,6 +332,9 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const informationOnlyQuestion = normalized
     ? correctionOrExplanation || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest)
     : false;
+  const externalDesktopOrTeamExecution = normalized
+    ? hasExternalDesktopOrTeamExecutionIntent(normalized)
+    : false;
   const diagnosticRules = normalized ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern') : [];
   const diagnosticOrRepair = diagnosticRules.length > 0;
   const structuredToolRules = !informationOnlyQuestion && normalized
@@ -322,13 +343,13 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const legacyToolRules = !informationOnlyQuestion && normalized
     ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
     : [];
-  const structuredClientRules = !informationOnlyQuestion && normalized
+  const structuredClientRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_CLIENT_ACTION_RULES)
     : [];
-  const clientActionRules = !informationOnlyQuestion && normalized
+  const clientActionRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && normalized
     ? matchPatternRuleNames(normalized, CLIENT_ACTION_INTENT_PATTERNS, 'client-action-pattern')
     : [];
-  const clientActionOnlyRules = !informationOnlyQuestion && normalized
+  const clientActionOnlyRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && normalized
     ? matchPatternRuleNames(normalized, CLIENT_ACTION_ONLY_PATTERNS, 'client-action-only-pattern')
     : [];
   const autonomousTaskRules = mode === 'autonomous' && normalized
@@ -348,7 +369,8 @@ export function traceToolIntentDecision(text: string, source?: string, operation
 
   const explicitToolIntent = structuredToolRules.length > 0 || legacyToolRules.length > 0;
   const clientActionIntent = Boolean(requestedMode) || structuredClientRules.length > 0 || clientActionRules.length > 0;
-  const clientActionOnlyIntent = Boolean(requestedMode) || structuredClientRules.length > 0 || clientActionOnlyRules.length > 0;
+  const clientActionOnlyIntent = !externalDesktopOrTeamExecution
+    && (Boolean(requestedMode) || structuredClientRules.length > 0 || clientActionOnlyRules.length > 0);
   const autonomousTask = autonomousTaskRules.length > 0;
 
   let allowToolUse = false;
@@ -419,6 +441,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
 export function shouldExposeAgentWork(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
+  if (hasExplicitTeamExecutionRequest(normalized)) return true;
   return [
     /\b(team|teammate|sub-?agent|worker agent|multi-?agent|orchestrator|orchestration|delegate|assign|crew)\b/i,
     /(?:\u56e2\u961f|\u5b50\s*agent|\u5b50\u667a\u80fd\u4f53|\u591a\s*agent|\u591a\u667a\u80fd\u4f53|\u7ec4\u5efa|\u7ec4\u961f|\u7f16\u6392|\u5206\u6d3e|\u5206\u914d|\u4ea4\u7ed9.*(?:\u5904\u7406|\u505a)|\u8c03\u5ea6|\u7ec4\u4ef6\u56e2\u961f)/u,

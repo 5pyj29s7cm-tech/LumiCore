@@ -5,6 +5,10 @@ import { Button } from './ui/button';
 import { GlassCard, IconBox, FeatureItem } from './SharedUI';
 import { socketService } from '@/services/socketService';
 import { useApp } from '@/contexts/AppContext';
+import {
+  shouldDisplayAgentResponse,
+  type AgentResponseDelivery,
+} from '@/lib/agentResponseDelivery';
 
 const iconMap: { [key: string]: React.ReactNode } = {
   Hologram: <Monitor size={100} />,
@@ -39,8 +43,10 @@ export function ProductDetailPage({ t, product, onBack }: ProductDetailPageProps
   useEffect(() => {
     socket.current = socketService.connect();
 
-    const onResponse = (data: { text: string }) => {
-      setMessages(prev => [...prev, { role: 'agent', text: data.text }]);
+    const onResponse = (data: AgentResponseDelivery) => {
+      if (shouldDisplayAgentResponse(data)) {
+        setMessages(prev => [...prev, { role: 'agent', text: data.text! }]);
+      }
       setIsTyping(false);
     };
 

@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig, loadEnv } from 'vite';
+import { createViteWatchIgnored } from './vite.watch-policy';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,11 +50,11 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
+      // Keep frontend source watching while excluding non-HMR runtime trees.
       hmr: process.env.DISABLE_HMR !== 'true',
       allowedHosts: ['lumiai.asia', '.lumiai.asia'],
       watch: {
-        ignored: ['**/gpt-sovits-src/**', '**/data/voice_training/**', '**/*.db', '**/db.json', '**/.keys.json', '**/data/**', '**/server/mcp/config.json'],
+        ignored: createViteWatchIgnored(__dirname),
       },
     },
     build: {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isSpeechClearlyDirectedAwayFromLumi,
   isVoiceCorrectionContinuation,
+  isVoiceCurrentActivityQuestion,
   isVoiceFiller,
   isVoiceReferentialFollowup,
   mergeInterruptedVoiceTurn,
@@ -60,5 +61,12 @@ describe('voice interruption state', () => {
 
   it('recognizes spoken name-spelling corrections as continuations', () => {
     expect(isVoiceCorrectionContinuation('我说的阿路是大陆的陆，不是道路的路。')).toBe(true);
+    expect(isVoiceCorrectionContinuation('大陆的陆不是马路的路。')).toBe(true);
+  });
+
+  it('does not merge a complete repeated command into an unrelated old task', () => {
+    expect(isVoiceCorrectionContinuation('我让你去看桌面上的设计草稿，把它画到 CAD 里。')).toBe(false);
+    expect(isVoiceCurrentActivityQuestion('你在干嘛？')).toBe(true);
+    expect(isVoiceCurrentActivityQuestion('我让你去打开 AutoCAD。')).toBe(false);
   });
 });

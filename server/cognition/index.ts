@@ -20,6 +20,7 @@ import { generateFallback, isLLMDown } from './fallback';
 import { toolRegistry } from '../tools/registry';
 import { getModeConfig, ConversationMode, ModeConfig } from './modes';
 import type { ToolContext, ToolExecutionRecord } from '../tools/types';
+import { hasExplicitTeamExecutionRequest } from './tool_intent';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -79,7 +80,16 @@ export async function processInput(
   }
 
   // ── Path A: Direct tool call (skip LLM entirely) ──
-  if (intent.directToolCall && intent.confidence >= 0.75 && !intent.needsLLM) {
+  // An explicit team request may contain a simple sub-step such as "list the
+  // desktop files". That sub-step must not consume the whole turn before the
+  // orchestrator sees the user's requested decomposition/delegation contract.
+  const explicitTeamExecution = hasExplicitTeamExecutionRequest(input);
+  if (
+    !explicitTeamExecution
+    && intent.directToolCall
+    && intent.confidence >= 0.75
+    && !intent.needsLLM
+  ) {
     try {
       const toolResult = await toolRegistry.execute(
         intent.directToolCall.name,

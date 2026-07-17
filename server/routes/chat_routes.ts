@@ -12,6 +12,13 @@ import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
+import { buildLumiExecutionDecision } from "../cognition/execution_decision";
+import {
+  createPreFinalizationTextGate,
+  shouldDeferModelOutputUntilFinalized,
+} from "../cognition/response_delivery";
+import type { LumiTurnFlow } from "../cognition/turn_flow";
 import type { ToolExecutionRecord } from "../tools/types";
 
 const REST_CHAT_BASE_SYSTEM_INSTRUCTION =
@@ -82,12 +89,14 @@ function finalizeRestChatResponse(input: {
   responseText: string;
   toolRecords?: ToolExecutionRecord[];
   source: string;
+  flow?: LumiTurnFlow;
 }) {
   return finalizeLumiResponse({
     taskText: input.taskText,
     responseText: input.responseText,
     toolRecords: input.toolRecords || [],
     source: input.source,
+    flow: input.flow,
   });
 }
 
@@ -211,14 +220,39 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
     const domain = requestScope.domain;
     const orgId = requestScope.orgId;
+    const routeText = buildRestChatRouteText(messages, prompt);
+    const restTurnDispatch = buildLumiTurnDispatch({
+      userId,
+      text: routeText,
+      channel: 'chat',
+      source: 'rest_chat',
+      category: 'command',
+      domain,
+      orgId,
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const restExecutionDecision = buildLumiExecutionDecision({
+      flow: restTurnDispatch.flow,
+      text: routeText,
+      toolDeclarations: toolRegistry.getToolDeclarations(),
+    });
+    const deferRestStream =
+      restExecutionDecision.allowToolUse
+      || shouldDeferModelOutputUntilFinalized({
+        taskText: routeText,
+        flow: restTurnDispatch.flow,
+      });
     const toolContext = {
       userId,
       domain,
       orgId,
       llmGetters: llm,
       source: 'rest_chat',
+      actionIntent: routeText,
+      routedTaskText: restTurnDispatch.flow.routeText,
+      toolPolicy: restExecutionDecision.toolPolicy,
     };
-    const routeText = buildRestChatRouteText(messages, prompt);
     const systemInstruction = buildRestChatSystemInstruction({
       routeText,
       domain,
@@ -274,11 +308,13 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           taskText: routeText,
           responseText,
           source: 'rest_chat',
+          flow: restTurnDispatch.flow,
         });
         responseText = finalized.text;
         recordLatency('llm', Date.now() - llmStart);
         return res.json({
           text: responseText,
+          finalized: true,
           blocked: finalized.blocked,
           reason: finalized.reason,
           notification: finalized.notification,
@@ -300,6 +336,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
           });
+          const restTextGate = createPreFinalizationTextGate();
 
           const result = await runWithTools(
             normalizedMessages,
@@ -308,10 +345,16 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             undefined, 3,
             llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
             (chunk) => {
-              res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+              if (!deferRestStream) {
+                const safeText = restTextGate.push(chunk);
+                if (safeText) {
+                  res.write(`data: ${JSON.stringify({ chunk: safeText })}\n\n`);
+                }
+              }
             },
             toolContext,
           );
+          restTextGate.finish();
 
           responseText = result.text || '';
           const finalized = finalizeRestChatResponse({
@@ -319,6 +362,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             responseText,
             toolRecords: result.toolCalls,
             source: 'rest_chat_stream',
+            flow: restTurnDispatch.flow,
           });
           responseText = finalized.text;
           const tokens = estimateTokens(
@@ -336,6 +380,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             done: true,
             text: responseText,
             toolCalls: result.toolCalls.length,
+            finalized: true,
             blocked: finalized.blocked,
             reason: finalized.reason,
             notification: finalized.notification,
@@ -359,6 +404,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           responseText,
           toolRecords: result.toolCalls,
           source: 'rest_chat',
+          flow: restTurnDispatch.flow,
         });
         responseText = finalized.text;
         const tokens = estimateTokens(
@@ -376,6 +422,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           text: responseText,
           usage,
           toolCalls: result.toolCalls.length,
+          finalized: true,
           blocked: finalized.blocked,
           reason: finalized.reason,
           notification: finalized.notification,
@@ -386,9 +433,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         taskText: routeText,
         responseText,
         source: 'rest_chat',
+        flow: restTurnDispatch.flow,
       });
       res.json({
         text: finalized.text,
+        finalized: true,
         blocked: finalized.blocked,
         reason: finalized.reason,
         notification: finalized.notification,

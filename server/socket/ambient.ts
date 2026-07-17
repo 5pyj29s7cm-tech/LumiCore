@@ -8,6 +8,28 @@ import { getTaskHistory } from "../autonomy/task_queue";
 
 const ambientNoise = new Map<string, { rms: number; lastUpdate: string }>();
 
+export function isVerifiedAutonomousHistoryItem(task: {
+  status?: string;
+  result?: string;
+  error?: string;
+  toolCallsCount?: number;
+  completedAt?: string;
+  finalized?: boolean;
+  blocked?: boolean;
+  verified?: boolean;
+}): boolean {
+  return (
+    task.status === 'completed'
+    && !task.error
+    && task.finalized === true
+    && task.blocked === false
+    && task.verified === true
+    && Number(task.toolCallsCount || 0) > 0
+    && Boolean(String(task.result || '').trim())
+    && Boolean(task.completedAt && Number.isFinite(new Date(task.completedAt).getTime()))
+  );
+}
+
 export function getAmbientNoise(userId: string): number | null {
   const info = ambientNoise.get(userId);
   if (!info) return null;
@@ -90,7 +112,11 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
       const awayMinutes = Math.round((Date.now() - new Date(idleSince).getTime()) / 60000);
       if (awayMinutes >= 2) {
         const recentTasks = getTaskHistory(20, 0).filter(
-          (t: any) => t.userId === uid && t.status === 'completed' && new Date(t.completedAt!).getTime() > new Date(idleSince).getTime()
+          (t: any) => (
+            t.userId === uid
+            && isVerifiedAutonomousHistoryItem(t)
+            && new Date(t.completedAt!).getTime() > new Date(idleSince).getTime()
+          )
         );
         if (recentTasks.length > 0) {
           const summary = recentTasks.map((t: any) => `- ${t.title}: ${(t.result || '').slice(0, 80)}`).join('\n');

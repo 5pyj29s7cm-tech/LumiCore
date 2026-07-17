@@ -8,6 +8,12 @@ import { useSocket } from '@/hooks/useSocket';
 import { useTTS } from '@/hooks/useTTS';
 import { useApp } from '@/contexts/AppContext';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import {
+  isTerminalAgentStatus,
+  shouldDisplayAgentResponse,
+  shouldSpeakAgentResponse,
+  type AgentResponseDelivery,
+} from '@/lib/agentResponseDelivery';
 import Markdown from 'react-markdown';
 
 export function FloatingAgent({ t }: { t: any }) {
@@ -32,14 +38,22 @@ export function FloatingAgent({ t }: { t: any }) {
   useEffect(() => {
     if (!socket || !isOpen) return;
 
-    const onResponse = (data: { text: string }) => {
-      setMessages(prev => [...prev, { role: 'assistant', content: data.text }]);
-      speak(data.text);
+    const onResponse = (data: AgentResponseDelivery) => {
+      if (shouldDisplayAgentResponse(data)) {
+        setMessages(prev => [...prev, { role: 'assistant', content: data.text! }]);
+      }
+      if (shouldSpeakAgentResponse(data)) {
+        speak(data.text!);
+      }
       setIsLoading(false);
     };
 
     const onStatus = (data: { status: string }) => {
-      setIsLoading(data.status === "thinking");
+      if (data.status === 'thinking' || data.status === 'responding') {
+        setIsLoading(true);
+      } else if (isTerminalAgentStatus(data.status)) {
+        setIsLoading(false);
+      }
     };
 
     socket.on("agent:response", onResponse);

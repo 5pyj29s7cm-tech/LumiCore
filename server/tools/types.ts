@@ -19,6 +19,12 @@ export interface ToolContext {
   requestConfirmation?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** Original user/task intent used to classify semantic risk for low-level actions. */
   actionIntent?: string;
+  /**
+   * Routed execution text, including trusted continuation state recovered for
+   * the current turn. Task-specific guards may use this instead of the shorter
+   * visible user message, but it must not replace actionIntent for risk checks.
+   */
+  routedTaskText?: string;
   /** True only after the registry's confirmation callback approved this tool call. */
   userConfirmed?: boolean;
   /**

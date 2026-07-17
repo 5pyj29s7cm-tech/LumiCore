@@ -127,6 +127,7 @@ async function selectCapability(input: {
   orgId?: string;
   operationMode?: string;
   targetIsLumi?: boolean;
+  continuationContext?: string;
 }) {
   const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
   const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
@@ -141,13 +142,13 @@ async function selectCapability(input: {
   });
   const execution = buildLumiExecutionDecision({
     flow: dispatch.flow,
-    text: input.text,
+    text: input.continuationContext ? dispatch.flow.routeText : input.text,
     toolDeclarations: declarations,
   });
   const selection = buildLumiCapabilitySelection({
     dispatch,
     execution,
-    text: input.text,
+    text: input.continuationContext ? dispatch.flow.routeText : input.text,
   });
 
   return { dispatch, execution, selection };
@@ -369,6 +370,59 @@ describe('Lumi capability selection', () => {
     expect(selection.preferredTools).toContain('mouse_drag');
     expect(selection.preferredTools).toContain('keyboard_press');
     expect(selection.preferredTools).toContain('computer_use');
+  });
+
+  it('forces a recovered WPS editing continuation onto the desktop-control lane', async () => {
+    const text = '在这里面新建一个空白文档并写入：Lumi端到端回归测试。';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: 打开WPS。',
+      '- appTarget: WPS',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_open | status=opened',
+    ].join('\n');
+    const { dispatch, execution, selection } = await selectCapability({
+      userId: 'capability_selection_wps_exact_replay_user',
+      text,
+      continuationContext,
+      operationMode: 'assistant',
+    });
+
+    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
+    expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(false);
+    expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
+    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
+    expect(selection.lane).toBe('desktop_control');
+    expect(selection.primary).toContain('WPS');
+    expect(selection.preferredTools.slice(0, 6)).toEqual(expect.arrayContaining([
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_type',
+    ]));
+    for (const forbiddenCategory of [
+      'code_git',
+      'capability_learning',
+      'artifact_work',
+      'documents',
+    ]) {
+      expect(execution.toolRoute?.categories).not.toContain(forbiddenCategory);
+    }
+    expect(selection.preferredTools).not.toEqual(expect.arrayContaining([
+      'write_file',
+      'create_docx',
+      'capability_learning_list',
+      'self_extension_plan',
+      'work_takeover_task_continue',
+    ]));
+    expect(selection.preferredTools).not.toContain('computer_use');
+    expect(selection.preferredTools).not.toContain('mouse_click');
+    expect(selection.preferredTools).not.toContain('keyboard_type');
+    expect(selection.promptOverlay).toContain('do not type or paste until');
+    expect(selection.promptOverlay).toContain('Never repeat the same New/Blank selector');
   });
 
   it('selects desktop AI collaboration tools for WorkBuddy and Codex delegation', async () => {

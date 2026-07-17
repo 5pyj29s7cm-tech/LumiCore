@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import {
+  shouldDisplayAgentResponse,
+  type AgentResponseDelivery,
+} from '@/lib/agentResponseDelivery';
 
 export type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'queued' | 'passive';
 
@@ -372,11 +376,12 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       }
     };
 
-    const onAgentResponse = (data: { text: string }) => {
+    const onAgentResponse = (data: AgentResponseDelivery) => {
       if (!isCallActive.current) return;
+      if (!shouldDisplayAgentResponse(data)) return;
       setTranscript(''); // Clear user transcript when AI starts responding
-      setResponseText(data.text);
-      onResponse?.(data.text);
+      setResponseText(data.text!);
+      onResponse?.(data.text!);
     };
 
     const onAudioError = (data: { message: string }) => {

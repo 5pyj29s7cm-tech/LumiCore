@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Loader2, Sparkles, GitBranch, TrendingUp, Clock, Target, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
+import { useApp } from '@/contexts/AppContext';
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
@@ -119,6 +120,7 @@ function getGridPoints(cx: number, cy: number, radius: number): string {
 
 export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
   const t = useT();
+  const { addNotification } = useApp();
   const isZh = t.langCode !== 'en';
   const ui = (zh: string, en: string) => (isZh ? zh : en);
   const DIM_LABELS = memoryAvatarCopy(isZh ? 'zh' : 'en').dimensions as Record<string, string>;
@@ -148,8 +150,10 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
     if (!socket) return;
     const handler = (event: { personalityId: string; version: string; narrative: string; mutations: any[]; timestamp: string }) => {
       if (event.personalityId === personalityId) {
-        toast.success(`${t.lumiEvolvedTo || uiMessage('personality-evolution.lumi-evolved-to.08b443c0e5')} ${event.version}!`, {
-          description: event.narrative?.slice(0, 100),
+        addNotification({
+          type: 'system',
+          title: `${t.lumiEvolvedTo || uiMessage('personality-evolution.lumi-evolved-to.08b443c0e5')} ${event.version}!`,
+          message: event.narrative?.slice(0, 100) || event.version,
         });
         // Re-fetch to get the full updated state
         fetchEvolutionData();
@@ -157,7 +161,7 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
     };
     socket.on('personality:evolved', handler);
     return () => { socket.off('personality:evolved', handler); };
-  }, [socket, personalityId, fetchEvolutionData]);
+  }, [socket, personalityId, fetchEvolutionData, addNotification, t.lumiEvolvedTo]);
 
   const triggerEvolution = async () => {
     setEvolving(true);

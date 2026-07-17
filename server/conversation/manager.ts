@@ -1,5 +1,10 @@
 import { readDB, writeDB } from '../../db_layer';
 import { estimateTokenCount } from '../llm/providers';
+import {
+  buildConversationActionContinuationState,
+  needsRecentActionContinuationContext,
+  type ConversationActionContinuationState,
+} from '../cognition/action_continuation';
 
 export interface Conversation {
   id: string;
@@ -22,6 +27,14 @@ export interface Conversation {
   domain?: string;
   /** orgId when in work domain */
   orgId?: string;
+  /** Durable, evidence-backed pointer for ordinary cross-turn actions. */
+  actionContinuationState?: ConversationActionContinuationState;
+  /** Latest user turn waiting for its terminal assistant/tool record. */
+  pendingActionContinuation?: {
+    userText: string;
+    messageId: string;
+    updatedAt: string;
+  };
 }
 
 export interface MessageRecord {
@@ -186,6 +199,7 @@ export function addMessage(msg: {
   const db = readDB();
   const id = 'msg_' + crypto.randomUUID();
   const now = new Date().toISOString();
+  const normalizedToolCalls = normalizeToolCalls(msg.toolCalls);
 
   const interaction: any = {
     id,
@@ -198,7 +212,7 @@ export function addMessage(msg: {
     role: msg.role,
     personality: msg.personality || '',
     mode: msg.mode || '',
-    toolCalls: normalizeToolCalls(msg.toolCalls),
+    toolCalls: normalizedToolCalls,
     domain: msg.domain || 'personal',
     orgId: msg.orgId || '',
     source: msg.source || '',
@@ -221,6 +235,46 @@ export function addMessage(msg: {
       // Auto-title from first user message
       if (!conv.title && msg.role === 'user' && msg.content?.trim()) {
         conv.title = msg.content.trim().slice(0, 80);
+      }
+
+      if (msg.role === 'user') {
+        const userText = String(msg.content || '').trim();
+        if (userText) {
+          // A concrete new turn supersedes the prior ordinary action pointer.
+          // Referential/status turns keep it until terminal evidence advances it.
+          if (!needsRecentActionContinuationContext(userText)) {
+            delete conv.actionContinuationState;
+          }
+          conv.pendingActionContinuation = {
+            userText,
+            messageId: id,
+            updatedAt: now,
+          };
+        }
+      } else if (
+        msg.role === 'assistant'
+        && msg.mode !== 'proactive'
+        && conv.pendingActionContinuation
+      ) {
+        const pending = conv.pendingActionContinuation;
+        const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
+        if (
+          normalizedToolCalls?.length
+          && Number.isFinite(pendingAgeMs)
+          && pendingAgeMs >= 0
+          && pendingAgeMs <= 30 * 60 * 1000
+        ) {
+          const nextState = buildConversationActionContinuationState({
+            previous: conv.actionContinuationState,
+            userText: pending.userText,
+            assistantText: msg.content,
+            toolCalls: normalizedToolCalls,
+            updatedAt: now,
+            evidenceMessageId: id,
+          });
+          if (nextState) conv.actionContinuationState = nextState;
+        }
+        delete conv.pendingActionContinuation;
       }
     }
   }

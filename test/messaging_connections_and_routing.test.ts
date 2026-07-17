@@ -351,6 +351,26 @@ describe('messaging long connections and organization routing', () => {
     expect(routes.buildRemoteRuntimeEvidenceContext([inMemory])).toContain('wechat_send_file');
     expect(routes.buildRemoteRuntimeEvidenceContext([inMemory])).toContain('sent=true');
 
+    const failedContext = routes.buildRemoteRuntimeEvidenceContext([{
+      toolCalls: [{
+        name: 'wechat_send_file',
+        arguments: {},
+        result: 'Message bubble verification failed',
+      }],
+    }]);
+    expect(failedContext).toContain('wechat_send_file: failed or incomplete');
+    expect(failedContext).not.toContain('wechat_send_file: completed');
+
+    const unknownContext = routes.buildRemoteRuntimeEvidenceContext([{
+      toolCalls: [{
+        name: 'desktop_open',
+        arguments: { target: 'WPS' },
+        result: 'relay returned without a structured receipt',
+      }],
+    }]);
+    expect(unknownContext).toContain('desktop_open: result recorded (completion unverified)');
+    expect(unknownContext).not.toContain('desktop_open: completed');
+
     const { flushDB } = await import('../db_layer');
     const { getDataPath } = await import('../server/config/data_path');
     await flushDB();

@@ -1,5 +1,6 @@
 import type { LumiCapabilityLane, LumiCapabilitySelection } from './capability_selection';
 import type { LumiTurnChannel, LumiTurnFlow } from './turn_flow';
+import { isRecoveredCurrentAppEditingContinuation } from './action_continuation';
 
 export interface DesktopExecutionStabilityPolicyInput {
   channel: LumiTurnChannel;
@@ -62,26 +63,40 @@ export function buildDesktopExecutionStabilityPolicy(
     };
   }
 
+  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(
+    input.text || input.flow?.routeText || '',
+  );
   const evidenceTools = unique([
-    'desktop_list_apps',
+    recoveredCurrentAppEdit ? '' : 'desktop_list_apps',
     'desktop_active_window',
     'desktop_ui_snapshot',
+    recoveredCurrentAppEdit ? 'ocr_screen' : '',
     hasPreferred(input, 'mcp_playwright_browser_snapshot') ? 'mcp_playwright_browser_snapshot' : '',
     'desktop_capture_screen',
   ]);
-  const actuationTools = unique([
-    'desktop_ui_focus',
-    'desktop_ui_click',
-    'desktop_ui_invoke',
-    'desktop_ui_type',
-    'write_clipboard',
-    'mouse_move',
-    'mouse_click',
-    'mouse_drag',
-    'keyboard_type',
-    'keyboard_press',
-    'computer_use',
-  ]);
+  const actuationTools = unique(recoveredCurrentAppEdit
+    ? [
+        'desktop_ui_focus',
+        'desktop_ui_click',
+        'desktop_ui_invoke',
+        'desktop_ui_type',
+        'write_clipboard',
+        'keyboard_press',
+        'desktop_keyboard_press',
+      ]
+    : [
+        'desktop_ui_focus',
+        'desktop_ui_click',
+        'desktop_ui_invoke',
+        'desktop_ui_type',
+        'write_clipboard',
+        'mouse_move',
+        'mouse_click',
+        'mouse_drag',
+        'keyboard_type',
+        'keyboard_press',
+        'computer_use',
+      ]);
   const verificationTools = unique([
     'desktop_active_window',
     'desktop_ui_snapshot',
@@ -111,7 +126,15 @@ export function buildDesktopExecutionStabilityPolicy(
       '- If the target local app path is unknown, use desktop_list_apps and then desktop_open; do not guess Program Files paths or generate a one-off launcher skill.',
       '- Prefer UIA/browser/control-tree actions when available; use raw mouse clicks only after locating the target from screen/UI evidence.',
       'While acting:',
-      '- Use the appropriate actuation layer: UIA/browser controls first, clipboard for draft transfer, raw mouse/keyboard for visible targets, and vision computer_use when pixels are the only reliable route.',
+      recoveredCurrentAppEdit
+        ? '- Current-app editing is UIA-only: do not use computer_use, raw coordinate mouse actions, or untargeted keyboard typing.'
+        : '- Use the appropriate actuation layer: UIA/browser controls first, clipboard for draft transfer, raw mouse/keyboard for visible targets, and vision computer_use when pixels are the only reliable route.',
+      recoveredCurrentAppEdit
+        ? '- After each UI invoke/click/Ctrl+N, take a fresh UIA snapshot. Do not repeat the same New/Blank selector.'
+        : '',
+      recoveredCurrentAppEdit
+        ? '- Never type or paste until the fresh UIA tree exposes an editable Document/editor control; focus that exact control first.'
+        : '',
       '- Move/show the visible cursor before click demonstrations when available, then click the resolved target, not a guessed coordinate.',
       '- For input fields, verify focus before typing; if typing does not appear, stop, refocus, and report the recovery attempt.',
       '- Close temporary windows/panels after their explanation in demos unless the user asked to leave them open.',

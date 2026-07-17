@@ -55,6 +55,7 @@ export function mountMemoryRoutes(
       const type = req.query.type as string | undefined;
       const search = req.query.search as string | undefined;
       const limit = parseInt(req.query.limit as string) || 50;
+      const includeOperationalTraces = req.query.includeOperationalTraces === 'true';
       const scope = getMemoryScope(req, decoded);
 
       const memories = queryMemories({
@@ -63,6 +64,7 @@ export function mountMemoryRoutes(
         query: search,
         limit,
         minConfidence: 0,
+        includeOperationalTraces,
         domain: scope.domain,
         orgId: scope.orgId,
       });

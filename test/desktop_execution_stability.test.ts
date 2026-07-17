@@ -96,6 +96,60 @@ describe('desktop execution stability policy', () => {
     expect(policy.promptOverlay).toContain('browser/account work');
   });
 
+  it('keeps recovered current-app editing on an auditable UIA state machine', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const { buildLumiCapabilitySelection } = await import('../server/cognition/capability_selection');
+    const { buildDesktopExecutionStabilityPolicy } = await import('../server/cognition/desktop_execution_stability');
+    const text = '在这里面新建一个空白文档并写入：Lumi端到端回归测试。';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: 打开WPS。',
+      '- appTarget: WPS',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_open | status=opened',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'desktop_policy_current_app_user',
+      channel: 'chat',
+      source: 'chat',
+      text,
+      continuationContext,
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const execution = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text: dispatch.flow.routeText,
+      toolDeclarations: declarations,
+    });
+    const capabilitySelection = buildLumiCapabilitySelection({
+      dispatch,
+      execution,
+      text: dispatch.flow.routeText,
+    });
+    const policy = buildDesktopExecutionStabilityPolicy({
+      channel: 'chat',
+      text: dispatch.flow.routeText,
+      flow: dispatch.flow,
+      capabilitySelection,
+    });
+
+    expect(policy.actuationTools).toEqual(expect.arrayContaining([
+      'desktop_ui_focus',
+      'desktop_ui_invoke',
+      'desktop_ui_type',
+    ]));
+    expect(policy.actuationTools).not.toContain('computer_use');
+    expect(policy.actuationTools).not.toContain('mouse_click');
+    expect(policy.actuationTools).not.toContain('keyboard_type');
+    expect(policy.promptOverlay).toContain('Never type or paste until');
+    expect(policy.promptOverlay).toContain('Do not repeat the same New/Blank selector');
+  });
+
   it('does not apply to ordinary conversation', async () => {
     const { capabilitySelection, policy } = await buildPolicy('just chat with me for a minute', 'chat');
 

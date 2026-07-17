@@ -96,7 +96,7 @@ const patterns: QuickPattern[] = [
   {
     patterns: [
       // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-      /^(?:你)?(?:能不能|能否|可以不可以|可不可以|能)?\s*(?:听见|听到|听清|听得到)\s*(?:我说话|我吗|吗|么)?[。！？.!?]*$/i,
+      /^(?:你)?(?:能不能|能否|可以不可以|可不可以|能)?\s*(?:听见|听到|听清|听得到)\s*(?:我说话(?:吗|么)?|我吗|吗|么)?[。！？.!?]*$/i,
       /^can\s+you\s+hear\s+me[。！？.!?]*$/i,
     ],
     handler: () => ({

@@ -6,7 +6,7 @@ import { dequeue, markRunning, markCompleted, markFailed, markCancelled, getRunn
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
 import { toolRegistry } from '../tools/registry';
-import { ToolContext } from '../tools/types';
+import { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { canAutoApproveAction } from '../tools/action_constitution';
 import { Server as SocketIOServer } from 'socket.io';
 import type { AutonomousTask } from './task_queue';
@@ -16,6 +16,11 @@ import { getPlan, updatePlan, updatePlanStep } from './planner';
 import { createDesktopRelay } from '../socket/desktop_relay';
 import type { PlanScope } from './planner';
 import { isRealtimeUserActive } from './foreground_activity';
+import { finalizeLumiResponse } from '../cognition/result_finalizer';
+import {
+  buildActionContract,
+  hasCoreActionEvidence,
+} from '../cognition/action_contract';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -78,6 +83,138 @@ function clipPlanResult(value: string, max = 1800): string {
   return value.length > max ? `${value.slice(0, max)}...` : value;
 }
 
+const INCOMPLETE_AUTONOMOUS_TOOL_STATUSES = new Set([
+  'blocked',
+  'cancelled',
+  'canceled',
+  'draft',
+  'error',
+  'failed',
+  'in_progress',
+  'partial',
+  'pending',
+  'prepared',
+  'queued',
+  'requires_setup',
+  'submitted_unverified',
+  'timeout',
+  'timed_out',
+  'unknown',
+  'unverified',
+]);
+
+function parseStructuredToolResult(value: string): Record<string, unknown> | null {
+  let parsed: unknown = String(value || '').trim();
+  for (let attempt = 0; attempt < 3 && typeof parsed === 'string'; attempt += 1) {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null;
+}
+
+export function isSuccessfulAutonomousToolRecord(record: ToolExecutionRecord): boolean {
+  if (record.error || !String(record.result || '').trim()) return false;
+  const payload = parseStructuredToolResult(record.result);
+  if (!payload) return true;
+  if (
+    payload.ok === false
+    || payload.success === false
+    || payload.verified === false
+    || payload.completed === false
+    || payload.completionMarkerExists === false
+  ) {
+    return false;
+  }
+  if (typeof payload.error === 'string' && payload.error.trim()) return false;
+  const status = typeof payload.status === 'string' ? payload.status.trim().toLowerCase() : '';
+  return !status || !INCOMPLETE_AUTONOMOUS_TOOL_STATUSES.has(status);
+}
+
+function autonomousResponseReportsIncomplete(value: string): boolean {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  return /(?:\b(?:could\s+not|couldn't|unable\s+to|failed\s+to|not\s+completed|not\s+finished|incomplete|unfinished|blocked|requires?\s+(?:user\s+)?confirmation)\b|(?:\u672a\u5b8c\u6210|\u6ca1\u6709\u5b8c\u6210|\u65e0\u6cd5\u5b8c\u6210|\u4e0d\u80fd\u5b8c\u6210|\u53d7\u963b|\u6267\u884c\u5931\u8d25|\u9700\u8981\u7528\u6237\u786e\u8ba4))/iu.test(text);
+}
+
+export interface AutonomousTaskOutcome {
+  text: string;
+  blocked: boolean;
+  verified: boolean;
+  reason: string;
+  successfulToolRecords: ToolExecutionRecord[];
+}
+
+export function evaluateAutonomousTaskOutcome(
+  taskText: string,
+  responseText: string,
+  toolRecords: ToolExecutionRecord[],
+): AutonomousTaskOutcome {
+  const candidateText = String(responseText || '').trim();
+  const finalized = finalizeLumiResponse({
+    taskText,
+    responseText: candidateText || 'Autonomous task returned no final summary.',
+    toolRecords,
+    source: 'autonomous',
+  });
+  const successfulToolRecords = toolRecords.filter(isSuccessfulAutonomousToolRecord);
+  const actionContract = buildActionContract(taskText);
+  const missingSummary = !candidateText;
+  const reportedIncomplete = autonomousResponseReportsIncomplete(candidateText);
+  const missingEvidence = successfulToolRecords.length === 0;
+  const missingCoreEvidence = actionContract.applies
+    && !hasCoreActionEvidence(actionContract, toolRecords, taskText);
+  const verified = (
+    !finalized.blocked
+    && !missingSummary
+    && !reportedIncomplete
+    && !missingEvidence
+    && !missingCoreEvidence
+  );
+  const reason = finalized.blocked
+    ? finalized.reason || 'Autonomous completion claim was not supported by its tool ledger.'
+    : missingCoreEvidence
+      ? `Missing core evidence for autonomous ${actionContract.kind}.`
+      : missingEvidence
+      ? 'No successful autonomous tool evidence was recorded.'
+      : missingSummary
+        ? 'Autonomous execution returned no final summary.'
+        : reportedIncomplete
+          ? 'Autonomous execution reported that the task was incomplete or blocked.'
+          : finalized.reason || '';
+
+  return {
+    text: finalized.text,
+    blocked: finalized.blocked || !verified,
+    verified,
+    reason,
+    successfulToolRecords,
+  };
+}
+
+function upsertToolLedger(ledger: ToolExecutionRecord[], record: ToolExecutionRecord): void {
+  const id = String(record.id || '').trim();
+  const index = id
+    ? ledger.findIndex(item => item.id === id)
+    : ledger.findIndex(item => (
+        item.name === record.name
+        && JSON.stringify(item.arguments || {}) === JSON.stringify(record.arguments || {})
+      ));
+  const normalized: ToolExecutionRecord = {
+    id: record.id,
+    name: record.name,
+    arguments: record.arguments || {},
+    result: record.result || '',
+    error: record.error,
+  };
+  if (index >= 0) ledger[index] = normalized;
+  else ledger.push(normalized);
+}
+
 function planScopeForTask(task: AutonomousTask): PlanScope {
   return { userId: task.userId, domain: 'personal', orgId: '' };
 }
@@ -103,19 +240,16 @@ function markLinkedPlanCompleted(task: AutonomousTask, summary: string) {
   const plan = getPlan(task.planId, scope);
   if (!plan) return;
   const clipped = clipPlanResult(summary);
-
-  for (const step of plan.steps) {
-    if (step.status === 'pending' || step.status === 'in_progress') {
-      const stepUpdate: Parameters<typeof updatePlanStep>[2] = { status: 'done' };
-      if (step.status === 'in_progress') stepUpdate.result = clipped;
-      updatePlanStep(plan.id, step.id, stepUpdate, scope);
-    }
-  }
-
-  updatePlan(plan.id, {
-    status: 'completed',
+  const step = plan.steps.find(item => item.status === 'in_progress')
+    || plan.steps.find(item => item.status === 'pending');
+  if (!step) return;
+  const updatedPlan = updatePlanStep(plan.id, step.id, {
+    status: 'done',
     result: clipped,
   }, scope);
+  if (updatedPlan?.status === 'completed') {
+    updatePlan(plan.id, { result: clipped }, scope);
+  }
 }
 
 function markLinkedPlanFailed(task: AutonomousTask, error: string) {
@@ -219,11 +353,12 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
+    const toolLedger: ToolExecutionRecord[] = [];
     const result = await runWithTools(
       messages,
       toolRegistry,
       getUserPreferredLLMConfig(task.userId, { maxTokens: 2000 }),
-      undefined, // onToolCall
+      (record) => upsertToolLedger(toolLedger, record),
       maxIterations,
       getters.getDeepSeek, getters.getGemini,
       getters.getOpenAI || (() => null),
@@ -236,7 +371,8 @@ export async function executeNextAutonomousTask(
       getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay,
     );
 
-    const toolCallCount = result.toolCalls.length;
+    for (const record of result.toolCalls) upsertToolLedger(toolLedger, record);
+    const toolCallCount = toolLedger.length;
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
     recordAutonomousTokens(task.userId, tokensUsed);
 
@@ -254,8 +390,42 @@ export async function executeNextAutonomousTask(
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
     }
 
-    const summary = result.text || `Completed with ${toolCallCount} tool calls.`;
-    markCompleted(task.id, summary, toolCallCount, tokensUsed);
+    const outcome = evaluateAutonomousTaskOutcome(
+      `${task.title}\n${task.description}`.trim(),
+      result.text,
+      toolLedger,
+    );
+    if (!outcome.verified) {
+      const failureReason = outcome.reason || 'Autonomous completion could not be verified.';
+      markFailed(task.id, failureReason);
+      markLinkedPlanFailed(task, failureReason);
+      io.to(`user:${task.userId}:personal`).emit('autonomous:task_failed', {
+        taskId: task.id,
+        title: task.title,
+        error: failureReason,
+        result: outcome.text,
+        toolCallsCount: toolCallCount,
+        tokensUsed,
+        finalized: true,
+        blocked: true,
+        verified: false,
+        reason: outcome.reason,
+        timestamp: new Date().toISOString(),
+      });
+      console.warn(
+        `[AutoExecutor] Task "${task.title}" not marked complete: ${outcome.reason} `
+        + `(${outcome.successfulToolRecords.length}/${toolCallCount} successful tools)`,
+      );
+      return { executed: true, taskId: task.id, result: outcome.text || failureReason };
+    }
+
+    const summary = outcome.text;
+    markCompleted(task.id, summary, toolCallCount, tokensUsed, {
+      finalized: true,
+      blocked: false,
+      verified: true,
+      verificationReason: outcome.reason,
+    });
     markLinkedPlanCompleted(task, summary);
 
     io.to(`user:${task.userId}:personal`).emit('autonomous:task_completed', {
@@ -264,6 +434,10 @@ export async function executeNextAutonomousTask(
       result: summary,
       toolCallsCount: toolCallCount,
       tokensUsed,
+      finalized: true,
+      blocked: false,
+      verified: true,
+      reason: outcome.reason,
       timestamp: new Date().toISOString(),
     });
 

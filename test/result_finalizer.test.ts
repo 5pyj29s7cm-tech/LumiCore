@@ -71,6 +71,41 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toBe(responseText);
   });
 
+  it('reports a successful but irrelevant client_get_state receipt instead of claiming zero tool execution', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002',
+      responseText: '\u5df2\u5b8c\u6210\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u5e76\u5217\u51fa\u684c\u9762\u6587\u4ef6\u3002',
+      toolRecords: [{
+        name: 'client_get_state',
+        arguments: {},
+        result: JSON.stringify({
+          selfAwareness: {
+            habits: [
+              'Some external actions require user confirmation.',
+              '\u9700\u8981\u786e\u8ba4\u7684\u662f\u5176\u4ed6\u52a8\u4f5c\uff0c\u4e0d\u662f\u8fd9\u6b21\u72b6\u6001\u8bfb\u53d6\u3002',
+            ],
+          },
+          capabilities: [{
+            id: 'external.action',
+            requiresConfirmation: true,
+            notes: 'This nested capability note is descriptive metadata.',
+          }],
+          state: { mode: 'assistant', activeTab: 'home', runtimeStatus: 'ready' },
+          health: { level: 'attention' },
+        }),
+      }],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177');
+    expect(result.text).toContain('\u5df2\u6210\u529f\u6267\u884c\uff1aclient_get_state');
+    expect(result.text).toContain('\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e');
+    expect(result.text).not.toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
+    expect(result.text).not.toContain('client_get_state: undefined');
+  });
+
   it('does not invent a WeChat desktop limitation from a work-scope routing miss', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -146,6 +181,297 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('cannot honestly mark this complete yet');
     expect(result.notification?.type).toBe('work_product_guard');
+  });
+
+  it('does not bypass the generic guard when no task contract is recognized', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u786e\u8ba4',
+      responseText: '\u5df2\u65b0\u5efa\u5e76\u5199\u597d\u4e86\u3002',
+      toolRecords: [],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('\u8fd9\u4e00\u8f6e\u6ca1\u6709\u6210\u529f\u6267\u884c\u4efb\u4f55\u5de5\u5177');
+    expect(result.notification?.type).toBe('work_product_guard');
+  });
+
+  it('blocks an ungrounded voice execution-status claim without a recognized contract', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u597d',
+      responseText: '\u6b63\u5728\u6267\u884c\u3002',
+      toolRecords: [],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('current-turn tool execution');
+    expect(result.text).toContain('\u8fd8\u4e0d\u80fd\u8bf4\u6b63\u5728\u6267\u884c');
+  });
+
+  it('keeps ordinary knowledge answers outside the execution guard', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '\u201c\u5df2\u5b8c\u6210\u201d\u8868\u793a\u52a8\u4f5c\u7ed3\u675f\uff1b\u201c\u6b63\u5728\u6267\u884c\u201d\u8868\u793a\u52a8\u4f5c\u4ecd\u5728\u8fdb\u884c\u3002';
+
+    const result = finalizeLumiResponse({
+      taskText: '\u201c\u5df2\u5b8c\u6210\u201d\u548c\u201c\u6b63\u5728\u6267\u884c\u201d\u6709\u4ec0\u4e48\u533a\u522b\uff1f',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('does not correct a mismatched desktop-open receipt into success', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00 AutoCAD\u3002',
+      responseText: '\u5df2\u6253\u5f00 AutoCAD\u3002',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: 'mspaint.exe' },
+        result: JSON.stringify({ ok: true, status: 'opened', target: 'mspaint.exe' }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing core evidence for desktop_operation.');
+    expect(result.text).not.toBe('\u5df2\u6253\u5f00 AutoCAD\u3002');
+  });
+
+  it('keeps an exact desktop-open receipt successful even if the model hits its tool limit', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00 AutoCAD\u3002',
+      responseText: '\u8fd9\u8f6e\u5de5\u5177\u5904\u7406\u6b21\u6570\u5230\u4e0a\u9650\u4e86\uff0c\u6211\u8fd8\u6ca1\u6709\u5b8c\u6210\u3002',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: 'AutoCAD' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'opened',
+          target: 'AutoCAD',
+          processName: 'acad.exe',
+          windowTitle: 'Autodesk AutoCAD',
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('AutoCAD');
+    expect(result.text).toContain('\u5df2\u6253\u5f00');
+    expect(result.reason).toContain('exact desktop-open success');
+  });
+
+  it('blocks the real WPS false-success ledger instead of accepting write_file as in-app editing', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- appTarget: WPS Office',
+      '- unfinished: yes',
+    ].join('\n');
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '\u5df2\u5728 WPS \u65b0\u5efa\u7a7a\u767d\u6587\u6863\uff0c\u8f93\u5165\u5185\u5bb9\u5e76\u4fdd\u5b58\u6210\u529f\u3002',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: 'WPS' },
+        result: 'Opened app WPS Office',
+      }, {
+        name: 'desktop_ui_focus',
+        arguments: { nameContains: 'WPS Office' },
+        result: '{"status":"ok","action":"focus","selectedAfter":{"name":"WPS Office"}}',
+      }, {
+        name: 'desktop_ui_snapshot',
+        arguments: { root: 'active' },
+        result: '{"root":{"name":"WPS Office","controls":[{"name":"Home"}]}}',
+      }, {
+        name: 'ocr_screen',
+        arguments: {},
+        result: 'WPS Office \u9996\u9875\uff1a\u7a7a\u767d\u6587\u6863\u672a\u6253\u5f00\u3002',
+      }, {
+        name: 'desktop_keyboard_press',
+        arguments: { key: 'ctrl+n' },
+        result: 'Pressed: ctrl+n',
+      }, {
+        name: 'write_file',
+        arguments: { path: 'D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt' },
+        result: 'File written: D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing verified in-app UI mutation evidence.');
+    expect(result.text).not.toContain('\u4fdd\u5b58\u6210\u529f');
+  });
+
+  it.each([
+    { source: 'voice', taskText: '\u7ee7\u7eed' },
+    { source: 'task', taskText: '\u786e\u8ba4' },
+  ])('uses recovered WPS route context for a $source finalizer mismatch', async ({ source, taskText }) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const routeText = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi \u8fde\u7eed\u4efb\u52a1\u56de\u5f52\u3002',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- appTarget: WPS Office',
+      '- unfinished: yes',
+    ].join('\n');
+
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '\u5df2\u5b8c\u6210\uff0c\u6587\u6863\u5df2\u65b0\u5efa\u5e76\u5199\u597d\u3002',
+      toolRecords: [{
+        name: 'write_file',
+        arguments: { path: 'D:\\lumiOS\\Lumi-continuation.txt' },
+        result: 'File written: D:\\lumiOS\\Lumi-continuation.txt',
+      }],
+      source,
+      flow: { routeText } as any,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing verified in-app UI mutation evidence.');
+    expect(result.text).not.toBe('\u5df2\u5b8c\u6210\uff0c\u6587\u6863\u5df2\u65b0\u5efa\u5e76\u5199\u597d\u3002');
+  });
+
+  it('blocks an extra WPS save claim when create/type passed but save was not verified', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      '- appTarget: WPS Office',
+    ].join('\n');
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '\u5df2\u5728 WPS \u65b0\u5efa\u3001\u5199\u5165\u5e76\u4fdd\u5b58\u6210\u529f\u3002',
+      toolRecords: [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: '{"title":"WPS Office","process_name":"wps.exe"}',
+      }, {
+        name: 'desktop_keyboard_press',
+        arguments: { key: 'ctrl+n' },
+        result: 'Pressed: ctrl+n',
+      }, {
+        name: 'desktop_ui_type',
+        arguments: { name: '\u6b63\u6587', text: 'Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5' },
+        result: '{"status":"ok","action":"type","typedLength":10}',
+      }, {
+        name: 'ocr_screen',
+        arguments: {},
+        result: 'WPS Office \u6587\u6863\u6b63\u6587\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('Missing verified in-app save evidence.');
+    expect(result.text).not.toContain('\u4fdd\u5b58\u6210\u529f');
+  });
+
+  it.each([
+    {
+      responseText: '\u8fd9\u8f6e\u5de5\u5177\u5904\u7406\u6b21\u6570\u5230\u4e0a\u9650\u4e86\uff0c\u6211\u8fd8\u6ca1\u6709\u5b8c\u6210\u3002',
+      expectedReason: 'Tool iteration limit reached',
+    },
+    {
+      responseText: 'WPS \u6587\u6863\u8fd8\u6ca1\u6709\u5b8c\u6210\u3002',
+      expectedReason: 'Execution remained incomplete',
+    },
+  ])('marks an unresolved WPS execution as blocked: $responseText', async ({
+    responseText,
+    expectedReason,
+  }) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const routeText = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- appTarget: WPS',
+      '- unfinished: yes',
+    ].join('\n');
+    const result = finalizeLumiResponse({
+      taskText: routeText,
+      responseText,
+      toolRecords: [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: JSON.stringify({
+          ok: true,
+          processName: 'wps.exe',
+          windowTitle: 'WPS Writer',
+        }),
+      }, {
+        name: 'wps_create_document_with_text',
+        arguments: { text: 'Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5' },
+        result: '',
+        error: 'WPS execution did not produce a verified receipt.',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain(expectedReason);
+    expect(result.text).toBe(responseText);
+    expect(result.notification?.type).toBe('work_product_guard');
+  });
+
+  it('allows a WPS create/type/save claim only after post-save document evidence', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      '- appTarget: WPS Office',
+    ].join('\n');
+    const responseText = '\u5df2\u5728 WPS \u65b0\u5efa\u3001\u5199\u5165\u5e76\u4fdd\u5b58\u6210\u529f\u3002';
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText,
+      toolRecords: [{
+        name: 'desktop_active_window',
+        arguments: {},
+        result: '{"title":"WPS Office","process_name":"wps.exe"}',
+      }, {
+        name: 'desktop_keyboard_press',
+        arguments: { key: 'ctrl+n' },
+        result: 'Pressed: ctrl+n',
+      }, {
+        name: 'desktop_ui_type',
+        arguments: { name: '\u6b63\u6587', text: 'Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5' },
+        result: '{"status":"ok","action":"type","typedLength":10}',
+      }, {
+        name: 'ocr_screen',
+        arguments: {},
+        result: 'WPS Office \u6587\u6863\u6b63\u6587\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5',
+      }, {
+        name: 'desktop_keyboard_press',
+        arguments: { key: 'ctrl+s' },
+        result: 'Pressed: ctrl+s',
+      }, {
+        name: 'desktop_ui_snapshot',
+        arguments: { root: 'active' },
+        result: '{"root":{"name":"Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.docx - WPS Office"}}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
   });
 
   it('allows completion claims when producing tools provide evidence', async () => {
@@ -375,6 +701,60 @@ describe('Lumi result finalizer', () => {
     expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
     expect(result.text).toContain('mcp_cad-drafting_autocad_playback_file');
+  });
+
+  it('calls geometry extraction successful only for a verified server receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const taskText = '\u8bfb\u53d6\u684c\u9762\u4e0a\u7684\u8bbe\u8ba1\u8349\u7a3f.jpg\uff0c\u63d0\u53d6\u51e0\u4f55\u4fe1\u606f\uff0c\u5148\u4e0d\u8981\u7ed8\u5236\uff0c\u53ea\u544a\u8bc9\u6211\u63d0\u53d6\u662f\u5426\u6210\u529f\u3002';
+    const toolRecord = {
+      name: 'floorplan_extract_geometry',
+      arguments: { imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
+      result: JSON.stringify({
+        path: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg',
+        parsed: true,
+        geometryReady: true,
+        geometryVerified: true,
+        executableGeometryAvailable: true,
+        geometryReceiptPath: 'C:\\Users\\Administrator\\LumiOS\\data\\cad\\geometry_receipts\\verified.json',
+        geometryReview: {
+          width: 9000,
+          height: 7600,
+          counts: { outerBoundary: 6, polylines: 8 },
+        },
+      }),
+    };
+
+    const verified = finalizeLumiResponse({
+      taskText,
+      responseText: '\u63d0\u53d6\u597d\u50cf\u5931\u8d25\u4e86\u3002',
+      toolRecords: [toolRecord],
+      source: 'chat',
+    });
+    const unverified = finalizeLumiResponse({
+      taskText,
+      responseText: '\u51e0\u4f55\u63d0\u53d6\u5df2\u6210\u529f\u3002',
+      toolRecords: [{
+        ...toolRecord,
+        result: JSON.stringify({
+          parsed: true,
+          geometryReady: true,
+          geometryVerified: false,
+          executableGeometryAvailable: false,
+          geometryReceiptPath: 'C:\\Users\\Administrator\\LumiOS\\data\\cad\\geometry_receipts\\unverified.json',
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(verified.blocked).toBe(false);
+    expect(verified.text).toContain('\u51e0\u4f55\u63d0\u53d6\u6210\u529f');
+    expect(verified.text).toContain('geometryReady=true');
+    expect(verified.text).toContain('geometryVerified=true');
+    expect(verified.text).toContain('verified.json');
+    expect(verified.text).toContain('\u672a\u6267\u884c\u7ed8\u5236');
+    expect(unverified.blocked).toBe(true);
+    expect(unverified.text).toContain('\u51e0\u4f55\u63d0\u53d6\u672a\u6210\u529f');
+    expect(unverified.text).toContain('geometryVerified=false');
   });
 
   it('rejects unrelated generated charts when a terse continuation belongs to an AutoCAD task', async () => {
@@ -779,7 +1159,8 @@ describe('Lumi result finalizer', () => {
       expect(source).not.toContain('guardCompletionClaims');
     }
     expect(chatSource).toContain('responseText = finalResponse.text;');
-    expect(chatSource).toContain('finalText = finalizedBackground.text;');
+    expect(chatSource).toContain('responseText: completionCandidate');
+    expect(chatSource).toContain('const completionText = finalizedBackground.text;');
     expect(voiceSource).toContain('responseText = finalResponse.text;');
     expect(taskSource).toContain('orchestratedText = finalOrchestrated.text;');
     expect(taskSource).toContain('finalTaskText = finalTaskResponse.text;');

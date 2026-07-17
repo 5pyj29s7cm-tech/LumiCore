@@ -1,7 +1,13 @@
 import { ToolPolicy } from '../personality/types';
 import { ToolRegistry } from '../tools/registry';
 import { mcpManager } from '../mcp/client';
-import { buildActionContract, requiresVisibleAutoCadExecution } from './action_contract';
+import {
+  buildActionContract,
+  requiresCadGeometryExtractionOnly,
+  requiresVisibleAutoCadExecution,
+} from './action_contract';
+import { isRecoveredCurrentAppEditingContinuation } from './action_continuation';
+import { buildDesktopObservationPlan } from './desktop_observation';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -13,6 +19,9 @@ export interface ToolRoute {
   maxTools: number;
   truncated: boolean;
   unavailableMcpServers?: string[];
+  hardAllowlist?: boolean;
+  forbiddenToolNames?: string[];
+  maxIterations?: number;
 }
 
 interface RouteDefinition {
@@ -31,6 +40,21 @@ const BASELINE_TOOLS = [
 ];
 
 const TOOL_GROUPS: Record<string, string[]> = {
+  currentAppControl: [
+    'desktop_active_window',
+    'desktop_ui_snapshot',
+    'desktop_ui_focus',
+    'desktop_ui_click',
+    'desktop_ui_invoke',
+    'desktop_ui_type',
+    'desktop_capture_screen',
+    'ocr_screen',
+    'read_clipboard',
+    'write_clipboard',
+    'keyboard_press',
+    'desktop_keyboard_press',
+    'desktop_open',
+  ],
   files: [
     'desktop_list_files',
     'desktop_path_info',
@@ -587,10 +611,93 @@ function isLocalCadSourceRequest(text: string): boolean {
   const hasSourceReading =
     /\b(?:read|scan|inspect|according\s+to|based\s+on|from)\b/i.test(raw)
     || /(?:\u8bfb\u53d6|\u8bfb|\u626b\u63cf|\u67e5\u770b|\u6574\u7406|\u6309\u7167|\u6839\u636e|\u4f9d\u636e|\u91cc\u9762\u7684|\u5185\u5bb9)/u.test(raw);
+  const hasImageSource =
+    /\.(?:png|jpe?g|webp|bmp)\b/i.test(raw)
+    || /(?:\u56fe\u7247|\u7167\u7247|\u8349\u7a3f\u56fe|\u6237\u578b\u56fe|\u5e73\u9762\u56fe|\u56fe\u7eb8)/u.test(raw);
   const hasCadTarget =
     /\b(?:cad|dxf|dwg|autocad|draw|draft|floor\s*plan)\b/i.test(raw)
     || /(?:\u56fe\u7eb8|\u753b\u56fe|\u753b\u51fa\u6765|\u7ed8\u5236|\u5b9e\u64cd|\u5b9e\u9645\u753b|\u5e73\u9762\u56fe|\u65bd\u5de5\u56fe)/u.test(raw);
-  return hasLocalSource && hasSourceReading && hasCadTarget;
+  return hasLocalSource && (hasSourceReading || hasImageSource) && hasCadTarget;
+}
+
+function isLocalCadImageSourceRequest(text: string): boolean {
+  const raw = String(text || '');
+  const hasLocalSource =
+    /\b(?:desktop|local|path|file)\b/i.test(raw)
+    || /(?:\u684c\u9762|\u672c\u5730|\u4e0b\u8f7d|\u8def\u5f84)/u.test(raw);
+  const hasFolderSource = /\b(?:folder|directory)\b/i.test(raw)
+    || /(?:\u6587\u4ef6\u5939|\u76ee\u5f55)/u.test(raw);
+  const hasExplicitImageFile = /\.(?:png|jpe?g|webp|bmp)\b/i.test(raw);
+  const hasImageNoun = /(?:\u56fe\u7247|\u7167\u7247|\u8349\u7a3f\u56fe|\u6237\u578b\u56fe|\u5e73\u9762\u56fe|\u56fe\u7eb8)/u.test(raw);
+  const hasCadTarget = /\b(?:cad|autocad|dxf|dwg|draw|draft)\b/i.test(raw)
+    || /(?:\u753b\u5230|\u753b\u8fdb|\u7ed8\u5236|\u753b\u56fe|\u5b9e\u9645\u753b)/u.test(raw);
+  return hasLocalSource
+    && hasCadTarget
+    && (hasExplicitImageFile || (hasImageNoun && !hasFolderSource));
+}
+
+function isRecoveredApplicationContinuation(text: string): boolean {
+  return /Recovered structured action state:[\s\S]{0,900}- appTarget:\s*[^\n]+/i.test(String(text || ''));
+}
+
+function hasPersistentTaskCenterEvidence(text: string): boolean {
+  // i18n-allow: Chinese task-center marker recognition; not user-visible copy.
+  return /(?:work_takeover_task_|Latest task id:|任务中心\s+工作接管|task[_ -]?id\s*[:=])/i.test(String(text || ''));
+}
+
+const LOCAL_CAD_SOURCE_FORBIDDEN_TOOL_RE =
+  /^(?:mcp_filesystem_|run_command|desktop_run_command|code_execution|python_exec|powershell|shell_exec|terminal_exec)/i;
+
+const LOCAL_CAD_GENERIC_READER_TOOLS = [
+  'read_file',
+  'read_files_batch',
+  'list_directory',
+  'search_files',
+  'grep_files',
+  'extract_document_text',
+  'read_docx',
+  'read_pdf',
+  'pdf_to_text',
+];
+
+export const CAD_GEOMETRY_EXTRACTION_ALLOWED_TOOLS = [
+  'desktop_list_files',
+  'desktop_path_info',
+  'desktop_system_info',
+  'floorplan_extract_geometry',
+  'ocr_image_file',
+  'desktop_capture_screen',
+  'ocr_screen',
+] as const;
+
+const CAD_GEOMETRY_EXTRACTION_FORBIDDEN_TOOL_RE =
+  /^(?:mcp_filesystem_.*|run_command|desktop_run_command|code_execution|python_exec|powershell|shell_exec|terminal_exec|cad_generate_dxf|cad_prepare_autocad_operations|mcp_cad-drafting_(?:.*autocad.*|.*renovation.*)|write_file|create_(?:docx|pdf|ppt|pptx))$/i;
+
+function isCadGeometryExtractionAllowedTool(name: string): boolean {
+  return (CAD_GEOMETRY_EXTRACTION_ALLOWED_TOOLS as readonly string[]).includes(name);
+}
+
+const STRICT_DESKTOP_OBSERVATION_TOOLS = new Set([
+  'desktop_active_window',
+  'desktop_list_files',
+]);
+
+const DESKTOP_OBSERVATION_ADDITIONAL_WORK_RE =
+  // i18n-allow: Chinese phrases here are input-intent recognizers, not user-visible UI copy.
+  /(?:分析|总结|提取|识别|生成|创建|新建|写入|修改|删除|移动|复制|重命名|搜索|检索|发送|上传|下载|OCR|AutoCAD|\bCAD\b)|(?:读取|阅读).{0,16}(?:内容|正文|文档)|\b(?:analy[sz]e|summari[sz]e|extract|generate|create|write|modify|delete|move|copy|rename|search|grep|send|upload|download|ocr|autocad|cad)\b|\bread\b.{0,20}\b(?:content|document|file)\b/iu;
+
+function strictDesktopObservationToolNames(
+  text: string,
+  actionContractKind: string,
+): string[] {
+  if (actionContractKind !== 'desktop_operation') return [];
+  if (DESKTOP_OBSERVATION_ADDITIONAL_WORK_RE.test(text)) return [];
+  const plan = buildDesktopObservationPlan(text);
+  if (
+    plan.length === 0
+    || plan.some(call => !STRICT_DESKTOP_OBSERVATION_TOOLS.has(call.name))
+  ) return [];
+  return unique(plan.map(call => call.name));
 }
 
 function isDirectAutocadOperationsPlayback(text: string): boolean {
@@ -610,6 +717,25 @@ function requestsExplicitCadFileExport(text: string): boolean {
 
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
+  if (categories.includes('desktop_observation')) {
+    priorities.push(...buildDesktopObservationPlan(text).map(call => call.name));
+  }
+  if (isRecoveredCurrentAppEditingContinuation(text)) {
+    priorities.push(
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_invoke',
+      'desktop_ui_click',
+      'desktop_ui_type',
+      'write_clipboard',
+      'keyboard_press',
+      'desktop_keyboard_press',
+      'desktop_capture_screen',
+      'ocr_screen',
+      'desktop_open',
+    );
+  }
   if (isDirectAutocadOperationsPlayback(text)) {
     priorities.push('mcp_cad-drafting_autocad_playback_file');
   }
@@ -757,21 +883,21 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     if (isLocalCadSourceRequest(text)) {
       const localCadSourceTools = requiresVisibleAutoCadExecution(text)
         ? [
-            'desktop_path_info',
             'desktop_list_files',
-            'desktop_list_apps',
+            'desktop_path_info',
             'floorplan_extract_geometry',
             'ocr_image_file',
+            'desktop_list_apps',
             'cad_prepare_autocad_operations',
             'mcp_cad-drafting_autocad_playback_file',
             'desktop_capture_screen',
           ]
         : [
-            'desktop_path_info',
             'desktop_list_files',
-            'desktop_list_apps',
+            'desktop_path_info',
             'floorplan_extract_geometry',
             'ocr_image_file',
+            'desktop_list_apps',
             'mcp_cad-drafting_cad_renovation_folder_workflow',
             'cad_generate_dxf',
             'desktop_capture_screen',
@@ -941,11 +1067,29 @@ export function routeToolsForTurn(
   const categories: string[] = [];
   const reasons: string[] = [];
   const actionContract = buildActionContract(text);
+  const recoveredApplicationContinuation = isRecoveredApplicationContinuation(text);
+  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(text);
+  const localCadSourceRequest = isLocalCadSourceRequest(text);
+  const localCadImageSourceRequest = isLocalCadImageSourceRequest(text);
+  const cadGeometryExtractionOnly = requiresCadGeometryExtractionOnly(text);
+  const desktopObservationToolNames = recoveredCurrentAppEdit
+    ? []
+    : strictDesktopObservationToolNames(text, actionContract.kind);
+  const desktopObservationOnly = desktopObservationToolNames.length > 0;
+  const forbiddenToolNames = new Set<string>();
 
-  for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
+  if (!recoveredCurrentAppEdit) {
+    for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
+  }
 
   for (const route of ROUTES) {
+    if (recoveredCurrentAppEdit) continue;
     if (!routeMatches(route, text)) continue;
+    if (
+      route.category === 'work_takeover'
+      && recoveredApplicationContinuation
+      && !hasPersistentTaskCenterEvidence(text)
+    ) continue;
     if (
       route.category === 'messaging' &&
       !hasNamedMessagingSurface(text) &&
@@ -968,7 +1112,17 @@ export function routeToolsForTurn(
     for (const pattern of route.namePatterns || []) addNamePattern(selected, availableNames, pattern);
   }
 
-  if (actionContract.kind === 'desktop_operation') {
+  if (recoveredCurrentAppEdit) {
+    categories.push('external_control');
+    reasons.push('the current turn edits inside the application recovered from a successful desktop_open receipt');
+    addGroup(selected, available, 'currentAppControl');
+  } else if (recoveredApplicationContinuation) {
+    categories.push('external_control');
+    reasons.push('the current turn continues inside the application recovered from a successful desktop_open receipt');
+    addGroup(selected, available, 'externalControl');
+  }
+
+  if (actionContract.kind === 'desktop_operation' && !recoveredCurrentAppEdit) {
     addIfAvailable(selected, available, 'desktop_list_apps');
     addIfAvailable(selected, available, 'desktop_open');
     addIfAvailable(selected, available, 'desktop_active_window');
@@ -988,18 +1142,69 @@ export function routeToolsForTurn(
     }
   }
 
-  if (isDirectAutocadOperationsPlayback(text)) {
+  if (!recoveredCurrentAppEdit && isDirectAutocadOperationsPlayback(text)) {
     for (const name of TOOL_GROUPS.documents) selected.delete(name);
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
     reasons.push('existing AutoCAD operations are played only through MCP/COM');
   }
 
-  if (requiresVisibleAutoCadExecution(text)) {
+  if (!recoveredCurrentAppEdit && requiresVisibleAutoCadExecution(text)) {
     if (!requestsExplicitCadFileExport(text)) selected.delete('cad_generate_dxf');
     selected.delete('mcp_cad-drafting_cad_renovation_folder_workflow');
     addIfAvailable(selected, available, 'cad_prepare_autocad_operations');
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
     reasons.push('visible AutoCAD execution requires MCP/COM playback and excludes generated-file or script fallback');
+  }
+
+  if (!recoveredCurrentAppEdit && localCadImageSourceRequest) {
+    for (const name of LOCAL_CAD_GENERIC_READER_TOOLS) selected.delete(name);
+    for (const name of Array.from(selected)) {
+      if (LOCAL_CAD_SOURCE_FORBIDDEN_TOOL_RE.test(name)) selected.delete(name);
+    }
+    addIfAvailable(selected, available, 'desktop_list_files');
+    addIfAvailable(selected, available, 'desktop_path_info');
+    addIfAvailable(selected, available, 'floorplan_extract_geometry');
+    addIfAvailable(selected, available, 'ocr_image_file');
+    reasons.push('local desktop CAD images must use the built-in desktop discovery and image OCR/geometry path; project-scoped MCP filesystem and shell/base64 fallbacks are excluded');
+  }
+
+  if (!recoveredCurrentAppEdit && cadGeometryExtractionOnly) {
+    selected.clear();
+    for (const name of availableNames) {
+      if (isCadGeometryExtractionAllowedTool(name)) {
+        selected.add(name);
+      }
+    }
+    for (const name of availableNames) {
+      if (CAD_GEOMETRY_EXTRACTION_FORBIDDEN_TOOL_RE.test(name)) {
+        forbiddenToolNames.add(name);
+      }
+    }
+    reasons.push('geometry-extraction-only requests use a hard read/observe allowlist and cannot generate files or operate AutoCAD');
+  }
+
+  if (desktopObservationOnly) {
+    selected.clear();
+    for (const name of desktopObservationToolNames) {
+      if (name === 'desktop_active_window') {
+        if (available.has('desktop_active_window')) {
+          selected.add('desktop_active_window');
+        } else {
+          addIfAvailable(selected, available, 'get_active_window_info');
+        }
+        continue;
+      }
+      addIfAvailable(selected, available, name);
+    }
+    categories.splice(0, categories.length, 'desktop_observation');
+    reasons.splice(
+      0,
+      reasons.length,
+      'pure desktop observation uses only the exact read-only window and desktop-directory tools requested',
+    );
+    for (const name of availableNames) {
+      if (!selected.has(name)) forbiddenToolNames.add(name);
+    }
   }
 
   const orderedBeforeHealthGate = applyRoutePriority(
@@ -1031,19 +1236,34 @@ export function routeToolsForTurn(
     maxTools,
     truncated,
     unavailableMcpServers: unique(unavailableMcpServers),
+    hardAllowlist: desktopObservationOnly || cadGeometryExtractionOnly || undefined,
+    forbiddenToolNames: forbiddenToolNames.size > 0
+      ? Array.from(forbiddenToolNames)
+      : undefined,
+    maxIterations: desktopObservationOnly
+      ? desktopObservationToolNames.length + 1
+      : undefined,
   };
 }
 
 export function mergeToolPolicyWithRoute(policy: ToolPolicy, route: ToolRoute): ToolPolicy {
   const routeAllowed = new Set(route.toolNames);
   const baseAllowed = new Set(policy.allowedTools || []);
+  const routeForbidden = new Set(route.forbiddenToolNames || []);
   const allowedTools = baseAllowed.has('*')
-    ? route.toolNames
-    : route.toolNames.filter(name => baseAllowed.has(name));
+    ? route.toolNames.filter(name => !routeForbidden.has(name))
+    : route.toolNames.filter(name => baseAllowed.has(name) && !routeForbidden.has(name));
 
   return {
     ...policy,
     allowedTools,
+    forbiddenTools: unique([
+      ...(policy.forbiddenTools || []),
+      ...routeForbidden,
+    ]),
+    maxIterations: route.maxIterations === undefined
+      ? policy.maxIterations
+      : Math.max(0, Math.min(policy.maxIterations ?? route.maxIterations, route.maxIterations)),
   };
 }
 
@@ -1061,5 +1281,10 @@ export function formatToolRouteForPrompt(route: ToolRoute): string {
     route.toolNames.length > 0
       ? `Use only the exposed tools. Prefer the most specific skill tool when one directly matches the task.`
       : 'No tool matched strongly. Answer naturally or ask one clarification question instead of inventing tool work.',
+    route.hardAllowlist
+      ? route.categories.includes('desktop_observation')
+        ? 'This route is a hard allowlist for read-only desktop observation. Call only the selected window/directory observation tools. Do not write files or substitute list_directory, search_files, grep_files, filesystem MCP, shell, or Python tools.'
+        : 'This route is a hard allowlist. Do not generate files, prepare CAD operations, open or operate AutoCAD, or substitute any filesystem MCP, shell, or Python fallback.'
+      : '',
   ].filter(Boolean).join('\n');
 }

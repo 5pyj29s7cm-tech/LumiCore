@@ -1,6 +1,10 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 import { isInformationOnlyQuestion } from './tool_intent';
+import {
+  requiresActiveWindowObservation,
+  requiresDesktopFileListingObservation,
+} from './desktop_observation';
 
 export type LumiActionContractKind =
   | 'none'
@@ -64,6 +68,62 @@ function extractPrimaryTaskText(input: string): string {
   return raw.slice(0, marker.index).trim();
 }
 
+const CURRENT_APP_REFERENCE_RE =
+  /(?:\u5728|\u5f80|\u7528).{0,16}(?:\u8fd9\u91cc\u9762|\u8fd9\u91cc|\u91cc\u9762|\u8fd9\u4e2a\u8f6f\u4ef6|\u5f53\u524d\u8f6f\u4ef6|\u521a\u6253\u5f00\u7684(?:\u8f6f\u4ef6|\u5e94\u7528|\u91cc\u9762)|(?:WPS(?:\s+Office)?|Word|Excel|PowerPoint|AutoCAD|CAD|\u5fae\u4fe1|WeChat|Chrome|\u753b\u56fe).{0,8}(?:\u91cc|\u91cc\u9762|\u4e2d|\u5185))|\b(?:in|inside)\b.{0,24}\b(?:this|current|opened|WPS|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome)\b.{0,12}\b(?:app|application|document)?/iu;
+
+const CURRENT_APP_MUTATION_INTENT_RE =
+  /(?:\u65b0\u5efa|\u521b\u5efa|\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\u5199|\u7f16\u8f91|\u4fee\u6539|\u4fdd\u5b58)|\b(?:new|create|write|type|paste|edit|modify|save)\b/iu;
+
+export function requiresCurrentAppUiMutation(input: string): boolean {
+  const primary = compact(extractPrimaryTaskText(input));
+  return Boolean(
+    primary
+    && CURRENT_APP_REFERENCE_RE.test(primary)
+    && CURRENT_APP_MUTATION_INTENT_RE.test(primary)
+  );
+}
+
+export function extractCurrentAppTarget(input: string): string {
+  const raw = String(input || '');
+  const recovered = raw.match(/(?:^|\r?\n)\s*-\s*appTarget:\s*([^\r\n]+)/i)?.[1]?.trim() || '';
+  if (recovered && !/^(?:none|null|unknown|n\/a)$/i.test(recovered)) return recovered;
+
+  const primary = compact(extractPrimaryTaskText(raw));
+  const named = primary.match(/\b(WPS(?:\s+Office)?|Microsoft\s+Word|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome)\b/i)?.[1]
+    || primary.match(/(\u5fae\u4fe1|\u753b\u56fe)/u)?.[1];
+  return compact(named);
+}
+
+function currentAppMutationRequirements(input: string) {
+  const primary = compact(extractPrimaryTaskText(input));
+  return {
+    required: requiresCurrentAppUiMutation(input),
+    target: extractCurrentAppTarget(input),
+    wantsCreate: /(?:\u65b0\u5efa|\u521b\u5efa)|\b(?:new|create)\b/iu.test(primary),
+    wantsText: /(?:\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\u5199|\u7f16\u8f91|\u4fee\u6539)|\b(?:write|type|paste|edit|modify)\b/iu.test(primary),
+    wantsSave: /(?:\u4fdd\u5b58)|\b(?:save)\b/iu.test(primary),
+    requestedText: extractRequestedCurrentAppText(primary),
+  };
+}
+
+export function extractRequestedCurrentAppText(primary: string): string {
+  const quoted = primary.match(/(?:\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\b(?:write|type|paste)\b)[^“”"'`\r\n]{0,12}[“"'`]([^”"'`\r\n]{2,240})[”"'`]/iu)?.[1];
+  if (quoted) return compact(quoted);
+  const afterColon = primary.match(/(?:\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\b(?:write|type|paste)\b)\s*(?:\u5185\u5bb9)?\s*[:\uff1a]\s*([^\r\n]{2,240})/iu)?.[1];
+  // Text after an explicit colon is payload, not sentence decoration. Preserve
+  // terminal punctuation so the native application receives exactly what the
+  // user asked to write.
+  return compact(afterColon || '');
+}
+
+export function claimsCurrentAppSaveCompletion(input: string): boolean {
+  const text = String(input || '');
+  const stripped = text
+    .replace(/(?:\u6ca1\u6709|\u6ca1|\u5e76\u672a|\u5c1a\u672a|\u672a|\u4e0d\u80fd|\u4e0d\u4f1a)[^\u3002\uff01\uff1f.!?\n]{0,28}(?:\u4fdd\u5b58|\bsav(?:e|ed)\b)/giu, ' ')
+    .replace(/\b(?:did\s+not|didn't|was\s+not|wasn't|not)\b[^.!?\n]{0,36}\bsav(?:e|ed)\b/giu, ' ');
+  return /(?:\u5df2\u7ecf|\u5df2|\u6210\u529f)?[^。！？!?\n]{0,18}(?:\u4fdd\u5b58\u6210\u529f|\u5df2\u4fdd\u5b58|\u4fdd\u5b58\u597d\u4e86|\u4fdd\u5b58\u5b8c\u6210)|\b(?:saved|save\s+completed|successfully\s+saved)\b/iu.test(stripped);
+}
+
 export function extractSimpleDesktopOpenTarget(input: string): string {
   const text = compact(extractPrimaryTaskText(input));
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -83,17 +143,52 @@ export function isSimpleDesktopOpenRequest(input: string): boolean {
   return Boolean(extractSimpleDesktopOpenTarget(input));
 }
 
+export function requiresCadGeometryExtractionOnly(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  if (!text) return false;
+  const extractionIntent =
+    /(?:\u63d0\u53d6|\u89e3\u6790|\u8bc6\u522b).{0,24}(?:\u51e0\u4f55|\u6237\u578b|\u8f6e\u5ed3|\u62d3\u6251|\u5899\u4f53|\u623f\u95f4|\u95e8\u7a97|\u5750\u6807)|(?:\u51e0\u4f55|\u6237\u578b|\u8f6e\u5ed3|\u62d3\u6251|\u5899\u4f53|\u623f\u95f4|\u95e8\u7a97|\u5750\u6807).{0,24}(?:\u63d0\u53d6|\u89e3\u6790|\u8bc6\u522b)|\b(?:extract|parse|identify|detect)\b.{0,32}\b(?:geometry|floorplan|floor\s+plan|topology|walls?|rooms?|doors?|windows?|coordinates?)\b|\b(?:geometry|floorplan|floor\s+plan|topology)\b.{0,32}\b(?:extract|parse|identify|detect)\b/iu.test(text);
+  if (!extractionIntent) return false;
+
+  const explicitlyNoDrawing =
+    /(?:\u5148|\u6682\u65f6|\u76ee\u524d)?\s*(?:\u4e0d\u8981|\u4e0d\u7528|\u4e0d\u9700\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u5148\u4e0d|\u6682\u4e0d).{0,16}(?:\u7ed8\u5236|\u753b|\u51fa\u56fe|\u751f\u6210.{0,8}(?:CAD|DXF|DWG))|(?:\u53ea|\u4ec5)(?:\u9700\u8981|\u8981)?\s*(?:\u63d0\u53d6|\u89e3\u6790|\u8bc6\u522b).{0,16}(?:\u51e0\u4f55|\u6237\u578b|\u8f6e\u5ed3|\u62d3\u6251)|\b(?:do\s+not|don't|without|no\s+need\s+to)\b.{0,24}\b(?:draw|draft|render|generate\s+(?:cad|dxf|dwg))\b|\b(?:only|just)\b.{0,16}\b(?:extract|parse)\b.{0,16}\b(?:geometry|floorplan|topology)\b/iu.test(text);
+  const drawingIntent =
+    /(?:\u7ed8\u5236|\u753b\u51fa|\u753b\u5230|\u51fa\u56fe|\u751f\u6210|\u521b\u5efa).{0,24}(?:CAD|DXF|DWG|\u56fe\u7eb8|\u65bd\u5de5\u56fe|\u5e73\u9762\u56fe)|(?:AutoCAD|\bCAD\b|\bDXF\b|\bDWG\b|\u56fe\u7eb8|\u65bd\u5de5\u56fe).{0,24}(?:\u7ed8\u5236|\u753b|\u751f\u6210|\u521b\u5efa|\u5bfc\u51fa)|\b(?:draw|draft|render|generate|create|export)\b.{0,24}\b(?:cad|dxf|dwg|drawing)\b/iu.test(text);
+  return explicitlyNoDrawing || !drawingIntent;
+}
+
 function buildSimpleDesktopOpenContract(): LumiActionContract {
   return withDefaults({
     kind: 'desktop_operation',
     label: 'Desktop target launch/open',
     coreAction: 'Open or focus exactly the desktop app, file, folder, or URL named by the user',
     preparationIsNotCompletion: ['only listing installed apps', 'opening a different fallback app', 'planning a larger task inside the app'],
-    requiredEvidence: ['successful desktop_open receipt for the requested target', 'or matching active-window/running-process evidence'],
-    preferredTools: ['desktop_list_apps', 'desktop_open', 'desktop_active_window', 'desktop_running_processes'],
+    requiredEvidence: ['successful desktop_open or browser_open_task receipt for the requested target', 'or matching active-window/running-process evidence'],
+    preferredTools: ['desktop_list_apps', 'desktop_open', 'browser_open_task', 'desktop_active_window', 'desktop_running_processes'],
     verificationTools: ['desktop_active_window', 'desktop_running_processes'],
     nextStep: 'Resolve the exact requested target, open it once, and verify the matching process or active window when needed.',
     caution: 'Do not reinterpret a launch request as content creation, and do not substitute a different application unless the user explicitly asks for a fallback.',
+  });
+}
+
+function buildCadGeometryExtractionContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'cad_drafting',
+    label: 'CAD source-geometry extraction',
+    coreAction: 'Extract verified structured geometry from the requested source image without drawing or generating a CAD deliverable',
+    preparationIsNotCompletion: [
+      'only locating or listing the source image',
+      'OCR or visual description without executable geometry',
+      'partial, truncated, or schema-incomplete model output',
+    ],
+    requiredEvidence: [
+      'floorplan_extract_geometry result with geometryReady=true and geometryVerified=true',
+      'a nonempty server-owned geometryReceiptPath from that same result',
+    ],
+    preferredTools: ['desktop_list_files', 'desktop_system_info', 'floorplan_extract_geometry'],
+    verificationTools: ['floorplan_extract_geometry'],
+    nextStep: 'If extraction is not verified, report failedStage, parseError, and next from the geometry receipt; retry the same source or a clearer crop without inventing partial geometry.',
+    caution: 'Do not require an active application window and do not claim drawing or CAD generation. A listed file, OCR text, or partial geometry is not successful extraction.',
   });
 }
 
@@ -415,6 +510,9 @@ export function buildActionContract(input: string): LumiActionContract {
   if (isInformationOnlyQuestion(text)) return NONE_CONTRACT;
   const negatedMessagingSend = hasNegatedMessagingSendIntent(text);
   const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
+  const activeWindowObservation = requiresActiveWindowObservation(text);
+  const desktopFileObservation = requiresDesktopFileListingObservation(text);
+  const desktopObservationInspection = activeWindowObservation || desktopFileObservation;
   const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
     || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -488,6 +586,10 @@ export function buildActionContract(input: string): LumiActionContract {
 
   if (isSimpleDesktopOpenRequest(text)) {
     return buildSimpleDesktopOpenContract();
+  }
+
+  if (requiresCadGeometryExtractionOnly(text)) {
+    return buildCadGeometryExtractionContract();
   }
 
   const hasPublicPlatformSurface = matches(text, /(?:\u89c6\u9891\u7f51\u7ad9|\u521b\u4f5c\u8005\u5e73\u53f0|\u793e\u4ea4\u5e73\u53f0|\u5546\u5bb6\u540e\u53f0|\u5e97\u94fa\u540e\u53f0|\u7f51\u7ad9|\u7f51\u9875|\u6296\u97f3|\u5feb\u624b|\u5c0f\u7ea2\u4e66|\u6296\u5e97|\u6dd8\u5b9d|\u5929\u732b|\u4eac\u4e1c|\u62fc\u591a\u591a|video\s*site|creator\s*platform|social\s*(?:site|platform)|seller\s*(?:center|platform)|marketplace|website|web\s*page)/iu);
@@ -591,6 +693,72 @@ export function buildActionContract(input: string): LumiActionContract {
     return buildLegalDocumentContract();
   }
 
+  // A request to edit inside the current/recently opened application is a
+  // visible desktop operation, even when it also mentions a document. Keep
+  // this ahead of generic artifact work so a local write_file cannot stand in
+  // for typing into WPS/Word/CAD or another foreground application.
+  if (requiresCurrentAppUiMutation(rawInput)) {
+    return withDefaults({
+      kind: 'desktop_operation',
+      label: '\u5f53\u524d\u5e94\u7528\u5185\u7684\u53ef\u89c1\u7f16\u8f91', // i18n-allow: reviewed internal action-contract prompt copy.
+      coreAction: '\u5728\u6062\u590d\u7684\u76ee\u6807\u5e94\u7528\u524d\u53f0\u6267\u884c\u65b0\u5efa\u3001\u8f93\u5165/\u7c98\u8d34\u548c\u4fdd\u5b58\u7b49\u7528\u6237\u8981\u6c42\u7684\u53ef\u89c1\u64cd\u4f5c', // i18n-allow: reviewed internal action-contract prompt copy.
+      preparationIsNotCompletion: [
+        '\u53ea\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u5e94\u7528', // i18n-allow: reviewed internal action-contract prompt copy.
+        '\u53ea\u6309\u4e0b\u65b0\u5efa\u5feb\u6377\u952e', // i18n-allow: reviewed internal action-contract prompt copy.
+        '\u53ea\u751f\u6210\u9879\u76ee\u76ee\u5f55\u4e0b\u7684\u672c\u5730\u6587\u672c\u6587\u4ef6', // i18n-allow: reviewed internal action-contract prompt copy.
+        '\u64cd\u4f5c\u540e\u6ca1\u6709\u65b0\u7684\u7a97\u53e3/OCR/\u63a7\u4ef6\u5feb\u7167\u9a8c\u8bc1', // i18n-allow: reviewed internal action-contract prompt copy.
+      ],
+      requiredEvidence: [
+        '\u5339\u914d appTarget \u7684\u524d\u53f0\u7a97\u53e3\u8bc1\u636e', // i18n-allow: reviewed internal action-contract prompt copy.
+        '\u5339\u914d\u8bf7\u6c42\u7684 UI \u65b0\u5efa\u4e0e\u8f93\u5165/\u7c98\u8d34\u52a8\u4f5c\u56de\u6267', // i18n-allow: reviewed internal action-contract prompt copy.
+        '\u6838\u5fc3\u52a8\u4f5c\u4e4b\u540e\u7684\u7a97\u53e3/OCR/\u63a7\u4ef6\u5feb\u7167\u9a8c\u8bc1', // i18n-allow: reviewed internal action-contract prompt copy.
+        '\u82e5\u58f0\u79f0\u5df2\u4fdd\u5b58\uff0c\u8fd8\u9700\u8981\u4fdd\u5b58\u52a8\u4f5c\u548c\u4fdd\u5b58\u540e\u7684\u6587\u6863\u8bc1\u636e', // i18n-allow: reviewed internal action-contract prompt copy.
+      ],
+      preferredTools: [
+        'wps_create_document_with_text',
+        'desktop_active_window',
+        'desktop_ui_snapshot',
+        'desktop_ui_focus',
+        'desktop_ui_click',
+        'desktop_ui_invoke',
+        'desktop_ui_type',
+        'desktop_clipboard_write',
+        'desktop_keyboard_press',
+        'ocr_screen',
+        'desktop_capture_screen',
+        'computer_use',
+      ],
+      verificationTools: ['desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen', 'desktop_capture_screen'],
+      nextStep: '\u5148\u786e\u8ba4\u6062\u590d\u7684 appTarget \u6b63\u5728\u524d\u53f0\uff0c\u6267\u884c\u771f\u5b9e UI \u65b0\u5efa\u4e0e\u8f93\u5165\uff0c\u518d\u505a\u4e8b\u540e\u53ef\u89c1\u9a8c\u8bc1\uff1b\u9a8c\u8bc1\u5931\u8d25\u5c31\u5982\u5b9e\u62a5\u544a\u963b\u585e\u3002', // i18n-allow: reviewed internal action-contract prompt copy.
+      caution: '\u9879\u76ee\u76ee\u5f55\u4e0b\u7684 write_file \u4e0d\u80fd\u8bc1\u660e\u5185\u5bb9\u5df2\u5199\u5165\u76ee\u6807\u5e94\u7528\uff1bOCR/\u56de\u6267\u660e\u786e\u8bf4\u672a\u6253\u5f00\u3001\u672a\u65b0\u5efa\u6216\u672a\u8f93\u5165\u65f6\u5fc5\u987b\u89c6\u4e3a\u53cd\u8bc1\u3002', // i18n-allow: reviewed internal action-contract prompt copy.
+    });
+  }
+
+  if (desktopObservationInspection) {
+    const requiredEvidence = [
+      activeWindowObservation ? '\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\u7684\u5b9e\u65f6\u6807\u9898/\u8fdb\u7a0b\u56de\u6267' : '', // i18n-allow: reviewed Chinese desktop observation contract.
+      desktopFileObservation ? '\u7528\u6237\u684c\u9762\u76ee\u5f55\u7684\u5b9e\u65f6\u6587\u4ef6\u5217\u8868\u56de\u6267' : '', // i18n-allow: reviewed Chinese desktop observation contract.
+    ].filter(Boolean);
+    const preferredTools = [
+      activeWindowObservation ? 'desktop_active_window' : '',
+      desktopFileObservation ? 'desktop_list_files' : '',
+    ].filter(Boolean);
+    return withDefaults({
+      kind: 'desktop_operation',
+      label: '\u684c\u9762\u72b6\u6001\u8bfb\u53d6', // i18n-allow: reviewed Chinese desktop observation contract.
+      coreAction: '\u4ece\u5f53\u524d\u684c\u9762\u5ba2\u6237\u7aef\u8bfb\u53d6\u7528\u6237\u8981\u6c42\u7684\u7a97\u53e3\u548c\u684c\u9762\u6587\u4ef6\u72b6\u6001', // i18n-allow: reviewed Chinese desktop observation contract.
+      preparationIsNotCompletion: [
+        '\u53ea\u8bfb\u53d6\u5176\u4e2d\u4e00\u9879\u800c\u9057\u6f0f\u540c\u4e00\u8bf7\u6c42\u4e2d\u7684\u5176\u4ed6\u89c2\u5bdf\u9879', // i18n-allow: reviewed Chinese desktop observation contract.
+        '\u628a\u7528\u6237\u4e3b\u76ee\u5f55\u5f53\u6210\u684c\u9762\u76ee\u5f55', // i18n-allow: reviewed Chinese desktop observation contract.
+      ],
+      requiredEvidence,
+      preferredTools,
+      verificationTools: preferredTools,
+      nextStep: '\u9010\u9879\u6267\u884c\u684c\u9762\u53ea\u8bfb\u5de5\u5177\uff0c\u5e76\u76f4\u63a5\u6839\u636e\u5f53\u524d\u8f6e\u56de\u6267\u6c47\u62a5\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002', // i18n-allow: reviewed Chinese desktop observation contract.
+      caution: '\u4e0d\u80fd\u7528\u5386\u53f2\u8bb0\u5fc6\u3001\u7528\u6237\u4e3b\u76ee\u5f55\u6216\u5355\u4e00\u5de5\u5177\u7ed3\u679c\u4ee3\u66ff\u5f53\u524d\u8bf7\u6c42\u4e2d\u7684\u5168\u90e8\u684c\u9762\u8bc1\u636e\u3002', // i18n-allow: reviewed Chinese desktop observation contract.
+    });
+  }
+
   if (matches(text, /\u6587\u4ef6|\u6587\u6863|PPT|PDF|docx|xlsx|pptx|\u751f\u6210|\u5bfc\u51fa|\u4fdd\u5b58|create|generate|export|save/i)) {
     return withDefaults({
       kind: 'artifact_work',
@@ -643,6 +811,433 @@ function expandSuccessfulRecords(records: ToolExecutionRecord[]): ToolExecutionR
 
 function recordText(record: ToolExecutionRecord): string {
   return `${record.name}\n${JSON.stringify(record.arguments || {})}\n${String(record.result || '')}`;
+}
+
+function normalizeDesktopTarget(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\\/]+/g, ' ')
+    .replace(/\.(?:exe|lnk|appref-ms|url)$/i, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function requestedDesktopTargetAliases(target: string): string[] {
+  const normalized = normalizeDesktopTarget(target);
+  const aliases = new Set<string>([normalized]);
+  const add = (...values: string[]) => values.forEach(value => aliases.add(normalizeDesktopTarget(value)));
+
+  if (/^(?:autocad|acad|cad)$/.test(normalized) || normalized.includes('autocad')) {
+    add('AutoCAD', 'acad', 'acad.exe', 'Autodesk AutoCAD', 'CAD');
+  }
+  if (/(?:wps|\u91d1\u5c71)/u.test(normalized)) {
+    add('WPS', 'WPS Office', 'wps.exe', 'wpp.exe', 'et.exe', 'Kingsoft Office', '\u91d1\u5c71 WPS'); // i18n-allow: Application alias used only for evidence matching.
+  }
+  if (/(?:wechat|weixin|\u5fae\u4fe1)/u.test(normalized)) {
+    add('WeChat', 'Weixin', 'wechat.exe', 'weixin.exe', '\u5fae\u4fe1'); // i18n-allow: Application alias used only for evidence matching.
+  }
+  if (/(?:mspaint|microsoftpaint|paint|\u753b\u56fe)/u.test(normalized)) {
+    add('mspaint', 'mspaint.exe', 'Microsoft Paint', 'Paint', '\u753b\u56fe'); // i18n-allow: Application alias used only for evidence matching.
+  }
+  if (/(?:googlechrome|chrome|\u8c37\u6b4c\u6d4f\u89c8\u5668)/u.test(normalized)) {
+    add('Google Chrome', 'chrome', 'chrome.exe', '\u8c37\u6b4c\u6d4f\u89c8\u5668'); // i18n-allow: Application alias used only for evidence matching.
+  }
+
+  return Array.from(aliases).filter(Boolean);
+}
+
+function matchesRequestedDesktopTarget(value: unknown, aliases: string[]): boolean {
+  const normalized = normalizeDesktopTarget(value);
+  if (!normalized) return false;
+  return aliases.some(alias => alias.length >= 2 && (
+    normalized === alias
+    || normalized.includes(alias)
+    || alias.includes(normalized)
+  ));
+}
+
+function collectStructuredDesktopTargets(
+  value: unknown,
+  output: string[],
+  depth = 0,
+): void {
+  if (!value || typeof value !== 'object' || depth > 3 || output.length >= 16) return;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      typeof nested === 'string'
+      && /^(?:actualTarget|openedTarget|resolvedTarget|appTarget|applicationTarget|appName|applicationName|processName|executable|windowTitle|target|app|application|process|path)$/i.test(key)
+    ) {
+      output.push(nested);
+    }
+    if (nested && typeof nested === 'object') collectStructuredDesktopTargets(nested, output, depth + 1);
+  }
+}
+
+function hasMatchingDesktopOpenEvidence(record: ToolExecutionRecord, requestedTarget: string): boolean {
+  if (record.name !== 'desktop_open' || record.error || !String(record.result || '').trim()) return false;
+  const payload = parseRecordJson(record);
+  const status = compact(payload?.status || payload?.verification?.status).toLowerCase();
+  if (
+    payload?.ok === false
+    || payload?.success === false
+    || /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled)$/.test(status)
+    || /timed out|permission denied|not allowed|forbidden|(?:^|\b)(?:failed|error|blocked)(?:\b|:)/i.test(String(record.result || ''))
+  ) return false;
+
+  const aliases = requestedDesktopTargetAliases(requestedTarget);
+  if (aliases.length === 0) return false;
+  const args = record.arguments || {};
+  const argumentTargets = [
+    args.target,
+    args.appTarget,
+    args.applicationTarget,
+    args.path,
+  ].filter(value => typeof value === 'string' && compact(value));
+  // The invoked target is the strongest evidence of intent. A different
+  // fallback target (for example mspaint.exe for AutoCAD) must never pass.
+  if (argumentTargets.length > 0 && !argumentTargets.some(value => matchesRequestedDesktopTarget(value, aliases))) {
+    return false;
+  }
+
+  const structuredTargets: string[] = [];
+  collectStructuredDesktopTargets(payload, structuredTargets);
+  if (
+    structuredTargets.length > 0
+    && !structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases))
+  ) return false;
+
+  if (argumentTargets.some(value => matchesRequestedDesktopTarget(value, aliases))) return true;
+  if (structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases))) return true;
+  return matchesRequestedDesktopTarget(record.result, aliases);
+}
+
+function requestedBrowserTargetAliases(target: string): string[] {
+  const aliases = new Set(requestedDesktopTargetAliases(target));
+  const add = (...values: string[]) => values.forEach(value => aliases.add(normalizeDesktopTarget(value)));
+  // i18n-allow: Named public-site aliases are used only to match tool evidence.
+  if (/(?:中国)?裁判文书网/u.test(target)) add('wenshu.court.gov.cn');
+  // i18n-allow: Named public-site aliases are used only to match tool evidence.
+  if (/人民法院案例库/u.test(target)) add('rmfyalk.court.gov.cn');
+  // i18n-allow: Named public-site aliases are used only to match tool evidence.
+  if (/人民法院在线服务/u.test(target)) add('zxfw.court.gov.cn');
+  return Array.from(aliases).filter(Boolean);
+}
+
+function hasMatchingBrowserOpenEvidence(record: ToolExecutionRecord, requestedTarget: string): boolean {
+  if (record.name !== 'browser_open_task' || record.error || !String(record.result || '').trim()) return false;
+  const payload = parseRecordJson(record);
+  const status = compact(payload?.status || payload?.verification?.status).toLowerCase();
+  if (
+    payload?.ok === false
+    || payload?.success === false
+    || payload?.opened === false
+    || /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled)$/.test(status)
+    || /timed out|permission denied|not allowed|forbidden|(?:^|\b)(?:failed|error|blocked)(?:\b|:)/i.test(String(record.result || ''))
+  ) return false;
+
+  const normalizedRequested = normalizeDesktopTarget(requestedTarget);
+  // i18n-allow: Generic browser names are input-recognition aliases, not user-visible copy.
+  const genericBrowserRequest = /^(?:browser|webbrowser|浏览器|网页浏览器)$/u.test(normalizedRequested);
+  const args = record.arguments || {};
+  const evidenceValues = [
+    args.url,
+    args.query,
+    args.target,
+    payload?.url,
+    payload?.openedUrl,
+    payload?.finalUrl,
+    payload?.target,
+    payload?.query,
+    record.result,
+  ].filter(value => typeof value === 'string' && compact(value));
+  if (genericBrowserRequest) return evidenceValues.length > 0;
+
+  const aliases = requestedBrowserTargetAliases(requestedTarget);
+  return evidenceValues.some(value => matchesRequestedDesktopTarget(value, aliases));
+}
+
+const CURRENT_APP_FOREGROUND_TOOL_RE =
+  /^(?:desktop_active_window|get_active_window_info|desktop_ui_snapshot|ocr_screen|desktop_capture_screen)$/i;
+
+const CURRENT_APP_POST_VERIFICATION_TOOL_RE =
+  /^(?:desktop_ui_snapshot|ocr_screen|desktop_capture_screen)$/i;
+
+const CURRENT_APP_NEGATIVE_VERIFICATION_RE =
+  /(?:\u7a7a\u767d|\u65b0\u5efa)?\u6587\u6863[^\u3002\uff01\uff1f.!?\n]{0,18}(?:\u672a\u6253\u5f00|\u6ca1\u6709\u6253\u5f00|\u672a\u65b0\u5efa|\u6ca1\u6709\u65b0\u5efa|\u4e0d\u5b58\u5728)|(?:\u672a|\u6ca1\u6709|\u6ca1)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:\u8f93\u5165|\u5199\u5165|\u7c98\u8d34|\u4fdd\u5b58|\u751f\u6548)|\b(?:blank|new)?\s*document\b[^.!?\n]{0,28}\b(?:did\s+not|was\s+not|is\s+not|not)\b[^.!?\n]{0,18}\b(?:open|created|available)\b|\b(?:typing|paste|save)\b[^.!?\n]{0,18}\b(?:failed|not\s+applied|not\s+completed)\b/iu;
+
+const CURRENT_APP_SAVE_VERIFICATION_RE =
+  /(?:\u4fdd\u5b58\u6210\u529f|\u5df2\u4fdd\u5b58|\u6587\u6863\u5df2\u4fdd\u5b58|\u4fdd\u5b58\u5b8c\u6210)|\b(?:saved|save\s+(?:completed|succeeded)|successfully\s+saved)\b|\.(?:docx?|wps|xlsx?|pptx?)\b/iu;
+
+function hasFailedDesktopReceipt(record: ToolExecutionRecord): boolean {
+  if (record.error || !String(record.result || '').trim()) return true;
+  const payload = parseRecordJson(record);
+  const status = compact(payload?.status || payload?.verification?.status).toLowerCase();
+  if (
+    payload?.ok === false
+    || payload?.success === false
+    || /^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|not_found|partial|pending)$/.test(status)
+  ) return true;
+  return /(?:^|\b)(?:failed|error|blocked|not found|timed out|permission denied)(?:\b|:)/i.test(String(record.result || ''));
+}
+
+function recordMatchesCurrentApp(record: ToolExecutionRecord, target: string): boolean {
+  if (!target) return !hasFailedDesktopReceipt(record);
+  const aliases = requestedDesktopTargetAliases(target);
+  return aliases.length > 0 && matchesRequestedDesktopTarget(recordText(record), aliases);
+}
+
+function normalizedEvidenceText(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function evidenceContainsRequestedText(record: ToolExecutionRecord, requestedText: string): boolean {
+  const expected = normalizedEvidenceText(requestedText);
+  if (expected.length < 2) return true;
+  const evidence = normalizedEvidenceText(recordText(record));
+  const probe = expected.slice(0, Math.min(expected.length, 24));
+  return probe.length >= 2 && evidence.includes(probe);
+}
+
+function clipboardTextBefore(records: ToolExecutionRecord[], index: number): string {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const record = records[cursor];
+    if (!/^(?:desktop_clipboard_write|write_clipboard)$/i.test(record.name)) continue;
+    if (hasFailedDesktopReceipt(record)) return '';
+    return compact(record.arguments?.text || parseRecordJson(record)?.text || '');
+  }
+  return '';
+}
+
+function isCreateUiActuation(record: ToolExecutionRecord): boolean {
+  if (hasFailedDesktopReceipt(record)) return false;
+  if (/^(?:desktop_keyboard_press|keyboard_press)$/i.test(record.name)) {
+    return /^ctrl\+n$/i.test(compact(record.arguments?.key));
+  }
+  if (/^(?:desktop_ui_invoke|desktop_ui_click)$/i.test(record.name)) {
+    return /(?:\u65b0\u5efa|\u7a7a\u767d\u6587\u6863|\bnew\b|\bblank\s+document\b)/iu.test(recordText(record));
+  }
+  return false;
+}
+
+function isTextUiActuation(
+  record: ToolExecutionRecord,
+  records: ToolExecutionRecord[],
+  index: number,
+  requestedText: string,
+): boolean {
+  if (hasFailedDesktopReceipt(record)) return false;
+  if (/^(?:desktop_ui_type|desktop_keyboard_type|keyboard_type)$/i.test(record.name)) {
+    const typed = compact(record.arguments?.text);
+    if (!typed) return false;
+    return !requestedText || normalizedEvidenceText(typed).includes(
+      normalizedEvidenceText(requestedText).slice(0, Math.min(normalizedEvidenceText(requestedText).length, 24)),
+    );
+  }
+  if (/^(?:desktop_keyboard_press|keyboard_press)$/i.test(record.name) && /^ctrl\+v$/i.test(compact(record.arguments?.key))) {
+    const pasted = clipboardTextBefore(records, index);
+    if (!pasted) return false;
+    return !requestedText || normalizedEvidenceText(pasted).includes(
+      normalizedEvidenceText(requestedText).slice(0, Math.min(normalizedEvidenceText(requestedText).length, 24)),
+    );
+  }
+  return false;
+}
+
+function isSaveUiActuation(record: ToolExecutionRecord): boolean {
+  if (hasFailedDesktopReceipt(record)) return false;
+  if (/^(?:desktop_keyboard_press|keyboard_press)$/i.test(record.name)) {
+    return /^ctrl\+s$/i.test(compact(record.arguments?.key));
+  }
+  return /^(?:desktop_ui_invoke|desktop_ui_click)$/i.test(record.name)
+    && /(?:\u4fdd\u5b58|\bsave\b)/iu.test(recordText(record));
+}
+
+function verifiedComputerUseReceipt(
+  records: ToolExecutionRecord[],
+  target: string,
+  requestedText: string,
+  requireSave: boolean,
+): boolean {
+  return records.some(record => {
+    if (record.name !== 'computer_use' || hasFailedDesktopReceipt(record)) return false;
+    const payload = parseRecordJson(record);
+    if (
+      payload?.completionVerified !== true
+      || payload?.status !== 'verified'
+      || Number(payload?.observations || 0) < 2
+    ) return false;
+    if (target && !recordMatchesCurrentApp(record, target)) return false;
+    if (requestedText && !evidenceContainsRequestedText(record, requestedText)) return false;
+    return !requireSave || CURRENT_APP_SAVE_VERIFICATION_RE.test(recordText(record));
+  });
+}
+
+function verifiedWpsAutomationReceipt(
+  records: ToolExecutionRecord[],
+  target: string,
+  requestedText: string,
+  requireSave: boolean,
+): boolean {
+  if (target && !/(?:^|\b)wps(?:\s+office|\s+writer)?(?:\b|$)|\u91d1\u5c71/iu.test(target)) {
+    return false;
+  }
+  return records.some(record => {
+    if (record.name !== 'wps_create_document_with_text' || hasFailedDesktopReceipt(record)) {
+      return false;
+    }
+    const payload = parseRecordJson(record);
+    if (
+      payload?.ok !== true
+      || payload?.status !== 'verified'
+      || payload?.automation !== 'KWPS.Application'
+      || payload?.visible !== true
+      || payload?.documentCreated !== true
+      || payload?.exactTextMatch !== true
+      || payload?.processName !== 'wps.exe'
+      || Number(payload?.processId) <= 0
+      || !/^(?:attachedExisting|newVisibleInstance)$/.test(String(payload?.attachmentMode || ''))
+      || (
+        payload?.attachmentMode === 'attachedExisting'
+        ? payload?.attachedExisting !== true || payload?.newVisibleInstance !== false
+        : payload?.attachedExisting !== false || payload?.newVisibleInstance !== true
+      )
+      || !compact(payload?.documentName)
+      || !compact(payload?.windowTitle)
+      || !recordMatchesCurrentApp(record, target || 'WPS')
+    ) return false;
+    if (requireSave) {
+      return payload?.saved === true && Boolean(compact(payload?.savePath));
+    }
+    if (payload?.saved !== false || compact(payload?.savePath)) return false;
+    if (!requestedText) return true;
+    const requested = String(requestedText).trim();
+    const supplied = String(record.arguments?.text || '').trim();
+    const readBack = String(payload?.bodyTextWithoutTerminalParagraph || '');
+    return supplied === requested && readBack === requested;
+  });
+}
+
+function postMutationVerificationMatches(
+  record: ToolExecutionRecord,
+  target: string,
+  requestedText: string,
+  wantsCreate: boolean,
+): boolean {
+  if (
+    !CURRENT_APP_POST_VERIFICATION_TOOL_RE.test(record.name)
+    || hasFailedDesktopReceipt(record)
+    || CURRENT_APP_NEGATIVE_VERIFICATION_RE.test(recordText(record))
+    || !recordMatchesCurrentApp(record, target)
+  ) return false;
+  if (requestedText) return evidenceContainsRequestedText(record, requestedText);
+  if (!wantsCreate) return true;
+  return /(?:\u7a7a\u767d\u6587\u6863|\u65b0\u5efa\u6587\u6863|\u6b63\u6587|\u7f16\u8f91\u533a|\bblank\s+document\b|\bnew\s+document\b|\bdocument\s*\d+\b|\bwriter\b)/iu
+    .test(recordText(record));
+}
+
+export function hasCurrentAppSaveEvidence(
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+): boolean {
+  const requirements = currentAppMutationRequirements(taskText);
+  if (!requirements.required) return false;
+  if (verifiedWpsAutomationReceipt(
+    records,
+    requirements.target,
+    requirements.requestedText,
+    true,
+  )) return true;
+  if (verifiedComputerUseReceipt(records, requirements.target, requirements.requestedText, true)) return true;
+
+  let saveIndex = -1;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    if (!isSaveUiActuation(records[index])) continue;
+    saveIndex = index;
+    break;
+  }
+  if (saveIndex < 0) return false;
+  let lastPositive = -1;
+  let lastNegative = -1;
+  records.slice(saveIndex + 1).forEach((record, offset) => {
+    if (
+      !CURRENT_APP_POST_VERIFICATION_TOOL_RE.test(record.name)
+      || hasFailedDesktopReceipt(record)
+      || !recordMatchesCurrentApp(record, requirements.target)
+    ) return;
+    const index = saveIndex + 1 + offset;
+    if (CURRENT_APP_NEGATIVE_VERIFICATION_RE.test(recordText(record))) {
+      lastNegative = index;
+      return;
+    }
+    if (CURRENT_APP_SAVE_VERIFICATION_RE.test(recordText(record))) lastPositive = index;
+  });
+  return lastPositive > lastNegative;
+}
+
+export function hasCurrentAppUiMutationEvidence(
+  records: ToolExecutionRecord[] = [],
+  taskText = '',
+): boolean {
+  const requirements = currentAppMutationRequirements(taskText);
+  if (!requirements.required) return false;
+  if (verifiedWpsAutomationReceipt(
+    records,
+    requirements.target,
+    requirements.requestedText,
+    requirements.wantsSave,
+  )) return true;
+  if (verifiedComputerUseReceipt(records, requirements.target, requirements.requestedText, requirements.wantsSave)) {
+    return true;
+  }
+
+  const matchingForeground = records.some(record => (
+    CURRENT_APP_FOREGROUND_TOOL_RE.test(record.name)
+    && !hasFailedDesktopReceipt(record)
+    && recordMatchesCurrentApp(record, requirements.target)
+  ));
+  if (!matchingForeground) return false;
+
+  const createIndex = requirements.wantsCreate ? records.findIndex(isCreateUiActuation) : -1;
+  if (requirements.wantsCreate && createIndex < 0) return false;
+
+  const textIndex = requirements.wantsText
+    ? records.findIndex((record, index) => isTextUiActuation(
+        record,
+        records,
+        index,
+        requirements.requestedText,
+      ))
+    : -1;
+  if (requirements.wantsText && textIndex < 0) return false;
+
+  const mutationIndex = Math.max(createIndex, textIndex);
+  if (mutationIndex < 0) return false;
+  let lastPositive = -1;
+  let lastNegative = -1;
+  records.slice(mutationIndex + 1).forEach((record, offset) => {
+    if (
+      !CURRENT_APP_POST_VERIFICATION_TOOL_RE.test(record.name)
+      || hasFailedDesktopReceipt(record)
+      || !recordMatchesCurrentApp(record, requirements.target)
+    ) return;
+    const index = mutationIndex + 1 + offset;
+    if (CURRENT_APP_NEGATIVE_VERIFICATION_RE.test(recordText(record))) {
+      lastNegative = index;
+      return;
+    }
+    if (postMutationVerificationMatches(
+      record,
+      requirements.target,
+      requirements.requestedText,
+      requirements.wantsCreate,
+    )) lastPositive = index;
+  });
+  if (lastPositive <= lastNegative) return false;
+  if (requirements.wantsSave && !hasCurrentAppSaveEvidence(records, taskText)) return false;
+  return true;
 }
 
 function hasMeaningfulArguments(record: ToolExecutionRecord): boolean {
@@ -809,6 +1404,24 @@ function hasGroundedCadGeometryEvidence(records: ToolExecutionRecord[]): boolean
   });
 }
 
+export function hasVerifiedCadGeometryExtractionEvidence(
+  records: ToolExecutionRecord[] = [],
+): boolean {
+  return records.some(record => {
+    if (
+      record.error
+      || record.name !== 'floorplan_extract_geometry'
+      || !String(record.result || '').trim()
+    ) return false;
+    const payload = parseRecordJson(record);
+    return payload?.parsed !== false
+      && payload?.geometryReady === true
+      && payload?.geometryVerified === true
+      && payload?.executableGeometryAvailable !== false
+      && Boolean(String(payload?.geometryReceiptPath || '').trim());
+  });
+}
+
 function hasDesignDeliveryEvidence(records: ToolExecutionRecord[], taskText: string): boolean {
   const sourceRequired = requiresSourceGrounding(taskText);
   const wantsCompositePackage = /(?:\u5168\u5957\u8bbe\u8ba1|\u5168\u6848\u8bbe\u8ba1|\u5b8c\u6574\u4ea4\u4ed8\u5305|\u8bbe\u8ba1\u4ea4\u4ed8|\u88c5\u4fee\u4ea4\u4ed8|full\s+(?:design|renovation|interior)|design\s+(?:delivery|package|handoff))/iu.test(taskText);
@@ -878,6 +1491,9 @@ export function hasCoreActionEvidence(
     return hasAuthenticatedWebResultEvidence(successful, taskText);
   }
   if (contract.kind === 'cad_drafting') {
+    if (requiresCadGeometryExtractionOnly(taskText)) {
+      return hasVerifiedCadGeometryExtractionEvidence(successful);
+    }
     if (requiresVisibleAutoCadExecution(taskText) || requiresAutoCadMcpPlayback(taskText)) {
       return hasVisibleAutoCadExecutionEvidence(successful, taskText);
     }
@@ -910,13 +1526,29 @@ export function hasCoreActionEvidence(
     return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name));
   }
   if (contract.kind === 'desktop_operation') {
+    const needsActiveWindow = requiresActiveWindowObservation(taskText);
+    const needsDesktopFiles = requiresDesktopFileListingObservation(taskText);
+    if (needsActiveWindow || needsDesktopFiles) {
+      const hasActiveWindow = successful.some(record =>
+        /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name)
+      );
+      const hasDesktopFiles = successful.some(record =>
+        /^desktop_list_files$/i.test(record.name)
+      );
+      return (!needsActiveWindow || hasActiveWindow)
+        && (!needsDesktopFiles || hasDesktopFiles);
+    }
+    if (requiresCurrentAppUiMutation(taskText)) {
+      return hasCurrentAppUiMutationEvidence(records, taskText);
+    }
     if (isSimpleDesktopOpenRequest(taskText)) {
       const target = extractSimpleDesktopOpenTarget(taskText).toLowerCase();
       const targetTerms = target.includes('autocad') || /\bacad(?:\.exe)?\b/i.test(target)
         ? ['autocad', 'acad']
         : [target.replace(/\.exe$/i, '').trim()].filter(Boolean);
       return successful.some(record => {
-        if (record.name === 'desktop_open') return true;
+        if (record.name === 'desktop_open') return hasMatchingDesktopOpenEvidence(record, target);
+        if (record.name === 'browser_open_task') return hasMatchingBrowserOpenEvidence(record, target);
         if (!/^(?:desktop_active_window|desktop_running_processes|get_active_window_info|get_running_processes)$/i.test(record.name)) return false;
         const evidence = recordText(record).toLowerCase();
         return targetTerms.some(term => term.length >= 2 && evidence.includes(term));

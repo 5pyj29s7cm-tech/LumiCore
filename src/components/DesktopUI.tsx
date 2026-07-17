@@ -80,7 +80,15 @@ import { setMusicLayerVisible, useMusicPlayerRuntime, useMusicPlayerSnapshot, us
 import { useVoiceprint } from '../hooks/useVoiceprint';
 import { useFaceRecognition } from '../hooks/useFaceRecognition';
 import { usePresence } from '../hooks/usePresence';
-import { getSensorPermissionSnapshot, SENSOR_PERMISSIONS_CHANGED } from '@/services/sensorPermissionService';
+import {
+  BACKGROUND_FACE_PRESENCE_CHANGED,
+  BACKGROUND_FACE_PRESENCE_ENABLED_KEY,
+  getSensorPermissionSnapshot,
+  isBackgroundFacePresenceEnabled,
+  isSensorEnabled,
+  SENSOR_ACCESS_CHANGED,
+  SENSOR_PERMISSIONS_CHANGED,
+} from '@/services/sensorPermissionService';
 import {
   archiveLegalMeetingToConsultationCase,
   clearLegalConsultationCaseId,
@@ -1641,12 +1649,10 @@ export function DesktopUI({
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
   const [isDesktopWidgetMode, setIsDesktopWidgetMode] = useState(false);
   const isWallpaperModeRef = useRef(false);
-  const chatOpenRef = useRef(false);
   const closeToBackgroundSyncRef = useRef(false);
   const desktopWidgetFallbackRef = useRef<DesktopWidgetFallbackState | null>(null);
   const wallpaperAutomationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wallpaperWasEnabledBeforeAutomationRef = useRef(false);
-  const wallpaperWorkPromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewport = useViewportSize();
   const [wallpaperWorkPromptVisible, setWallpaperWorkPromptVisible] = useState(false);
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
@@ -1660,7 +1666,6 @@ export function DesktopUI({
   }, [isWallpaperMode]);
 
   useEffect(() => {
-    chatOpenRef.current = chatOpen;
     if (chatOpen) setWallpaperWorkPromptVisible(false);
   }, [chatOpen]);
 
@@ -1776,6 +1781,33 @@ export function DesktopUI({
   const [sensorPrimerSeen, setSensorPrimerSeen] = useState(() => {
     return localStorage.getItem('lumi_sensor_primer_seen') === 'true';
   });
+  const [backgroundFaceRecognitionOptedIn, setBackgroundFaceRecognitionOptedIn] = useState(() => (
+    isBackgroundFacePresenceEnabled(localStorage)
+  ));
+  const [cameraAccessEnabled, setCameraAccessEnabled] = useState(() => isSensorEnabled('camera'));
+  useEffect(() => {
+    const refreshFacePresenceAccess = () => {
+      setBackgroundFaceRecognitionOptedIn(isBackgroundFacePresenceEnabled(localStorage));
+      setCameraAccessEnabled(isSensorEnabled('camera'));
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (
+        !event.key ||
+        event.key === BACKGROUND_FACE_PRESENCE_ENABLED_KEY ||
+        event.key === 'lumi_camera_enabled'
+      ) {
+        refreshFacePresenceAccess();
+      }
+    };
+    window.addEventListener(BACKGROUND_FACE_PRESENCE_CHANGED, refreshFacePresenceAccess);
+    window.addEventListener(SENSOR_ACCESS_CHANGED, refreshFacePresenceAccess);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(BACKGROUND_FACE_PRESENCE_CHANGED, refreshFacePresenceAccess);
+      window.removeEventListener(SENSOR_ACCESS_CHANGED, refreshFacePresenceAccess);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
   const finishSensorPrimer = useCallback(() => {
     localStorage.setItem('lumi_sensor_primer_seen', 'true');
     setSensorPrimerSeen(true);
@@ -1785,7 +1817,7 @@ export function DesktopUI({
     message?: string; title?: string; path?: string; slidesCount?: number; toolCalls?: number; error?: string;
     time: number;
   }>>([]);
-  const [showMcpPanel, setShowMcpPanel] = useState(false);
+  const showMcpPanel = false;
   const [agentStatus, setAgentStatus] = useState<'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'done' | 'error'>('idle');
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [backgroundWorkflowTasks, setBackgroundWorkflowTasks] = useState<BackgroundWorkflowTask[]>([]);
@@ -2231,8 +2263,17 @@ export function DesktopUI({
   });
 
   // ── Biometrics: voiceprint + face recognition + presence ──
-  const faceRecognition = useFaceRecognition({ enabled: sensorPrimerSeen && workDomain === 'personal', socket });
+  const facePresenceRequested = (
+    backgroundFaceRecognitionOptedIn &&
+    cameraAccessEnabled &&
+    workDomain === 'personal'
+  );
+  const faceRecognition = useFaceRecognition({
+    enabled: facePresenceRequested && callState === 'idle',
+    socket,
+  });
   const presence = usePresence({
+    enabled: facePresenceRequested && faceRecognition.hasTemplates,
     socket,
     faceResult: faceRecognition.result,
     voiceprintResult: voiceprint.result,
@@ -2810,8 +2851,10 @@ export function DesktopUI({
         }
         wallpaperWasEnabledBeforeAutomationRef.current = false;
         wallpaperAutomationTimerRef.current = null;
-        toast(t.wallpaperAutoRestored || 'Wallpaper mode restored after desktop control timeout', {
-          icon: <Box className="text-white/40" />,
+        addNotification({
+          type: 'system',
+          title: 'Lumi',
+          message: t.wallpaperAutoRestored || 'Wallpaper mode restored after desktop control timeout',
         });
       }, Math.max(15_000, options.timeoutMs));
     }
@@ -2821,45 +2864,20 @@ export function DesktopUI({
         icon: enabled ? <Sparkles className="text-celestial-saturn" /> : <Box className="text-white/40" />
       });
     }
-  }, [t]);
+  }, [t, addNotification]);
 
   const toggleWallpaperMode = useCallback(() => {
     applyWallpaperMode(!isWallpaperMode);
   }, [applyWallpaperMode, isWallpaperMode]);
 
   const dismissWallpaperWorkPrompt = useCallback(() => {
-    if (wallpaperWorkPromptTimerRef.current) {
-      clearTimeout(wallpaperWorkPromptTimerRef.current);
-      wallpaperWorkPromptTimerRef.current = null;
-    }
     setWallpaperWorkPromptVisible(false);
-  }, []);
-
-  const showWallpaperWorkPrompt = useCallback(() => {
-    if (isWallpaperModeRef.current || chatOpenRef.current) return;
-    setWallpaperWorkPromptVisible(true);
-    if (wallpaperWorkPromptTimerRef.current) {
-      clearTimeout(wallpaperWorkPromptTimerRef.current);
-    }
-    wallpaperWorkPromptTimerRef.current = setTimeout(() => {
-      setWallpaperWorkPromptVisible(false);
-      wallpaperWorkPromptTimerRef.current = null;
-    }, 14000);
   }, []);
 
   const enterWallpaperFromWorkPrompt = useCallback(() => {
     dismissWallpaperWorkPrompt();
     applyWallpaperMode(true);
   }, [applyWallpaperMode, dismissWallpaperWorkPrompt]);
-
-  useEffect(() => {
-    return () => {
-      if (wallpaperWorkPromptTimerRef.current) {
-        clearTimeout(wallpaperWorkPromptTimerRef.current);
-        wallpaperWorkPromptTimerRef.current = null;
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -2899,17 +2917,18 @@ export function DesktopUI({
     const handler = (data: any) => {
       const activity = { ...data, id: Date.now().toString(), time: Date.now() };
       setMcpActivities(prev => [activity, ...prev].slice(0, 20));
-      setShowMcpPanel(true);
-      setTimeout(() => {
-        setMcpActivities(prev => {
-          if (prev.length === 0 || Date.now() - prev[0].time > 8000) setShowMcpPanel(false);
-          return prev;
+      const status = String(data?.status || '').toLowerCase();
+      if (['completed', 'failed', 'cancelled', 'canceled'].includes(status)) {
+        addNotification({
+          type: status === 'completed' ? 'success' : 'warning',
+          title: data?.title || data?.action || 'MCP',
+          message: data?.error || data?.message || data?.path || status,
         });
-      }, 8000);
+      }
     };
     socket.on('mcp:activity', handler);
     return () => { socket.off('mcp:activity', handler); };
-  }, [socket]);
+  }, [socket, addNotification]);
 
   const upsertBackgroundWorkflowTask = useCallback((task: BackgroundWorkflowTask) => {
     if (!task?.id) return;
@@ -2951,13 +2970,19 @@ export function DesktopUI({
   useEffect(() => {
     if (!socket) return;
 
+    let terminalResponseSeen = false;
+    let terminalResetTimer: ReturnType<typeof setTimeout> | null = null;
     const workflowStepId = (prefix: string, seed?: string) =>
       `${prefix}-${seed || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const onStatus = (data: { status: string; agentName?: string; phase?: string; detail?: string; source?: string }) => {
       if (data.status === 'thinking') {
+        terminalResponseSeen = false;
+        if (terminalResetTimer) {
+          clearTimeout(terminalResetTimer);
+          terminalResetTimer = null;
+        }
         const isBackground = data.phase === 'background';
-        if (isBackground && data.source !== 'chat') showWallpaperWorkPrompt();
         setAgentStatus(isBackground ? 'background' : 'thinking');
         setWorkflowSteps(prev => [...prev, {
           id: workflowStepId('thinking'),
@@ -2969,22 +2994,17 @@ export function DesktopUI({
           time: Date.now(),
         }]);
       } else if (data.status === 'idle') {
-        setAgentStatus('done');
-        setWorkflowSteps(prev => [...prev, {
-          id: workflowStepId('done'),
-          type: 'response',
-          text: t.workflowCompleted || 'Completed',
-          time: Date.now(),
-        }]);
-        setTimeout(() => {
-          setAgentStatus('idle');
-          setWorkflowSteps([]);
-        }, 5000);
+        // "idle" is a transport/pipeline state, not evidence that user work completed.
+        // A finalized agent:response event owns the semantic done/blocked state.
+        if (!terminalResponseSeen) setAgentStatus('idle');
       } else if (data.status === 'error') {
+        terminalResponseSeen = true;
         setAgentStatus('error');
-        setTimeout(() => {
+        if (terminalResetTimer) clearTimeout(terminalResetTimer);
+        terminalResetTimer = setTimeout(() => {
           setAgentStatus('idle');
           setWorkflowSteps([]);
+          terminalResetTimer = null;
         }, 5000);
       }
     };
@@ -2997,18 +3017,7 @@ export function DesktopUI({
         if (seenWorkflowToolEvents.current.has(eventKey)) return;
         seenWorkflowToolEvents.current.add(eventKey);
       }
-      if (data.source !== 'chat') showWallpaperWorkPrompt();
-      if (data.result !== undefined) {
-        setAgentStatus('executing');
-        triggerPetReaction('jump', 1200);
-        setWorkflowSteps(prev => [...prev, {
-          id: `tool-ok-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: 'tool_result',
-          text: `${data.name} ${t.workflowToolDone || 'done'}`,
-          detail: data.result?.slice(0, 100),
-          time: Date.now(),
-        }]);
-      } else if (data.error !== undefined) {
+      if (data.error !== undefined) {
         setAgentStatus('executing');
         triggerPetReaction('failed', 2000);
         setWorkflowSteps(prev => [...prev, {
@@ -3016,6 +3025,39 @@ export function DesktopUI({
           type: 'error',
           text: `${data.name} ${t.workflowToolFailed || 'failed'}`,
           detail: data.error?.slice(0, 100),
+          time: Date.now(),
+        }]);
+      } else if (data.result !== undefined) {
+        let structured: Record<string, unknown> | null = null;
+        let parsed: unknown = String(data.result || '').trim();
+        for (let attempt = 0; attempt < 3 && typeof parsed === 'string' && parsed; attempt += 1) {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch {
+            parsed = null;
+          }
+        }
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          structured = parsed as Record<string, unknown>;
+        }
+        const status = typeof structured?.status === 'string'
+          ? structured.status.trim().toLowerCase()
+          : '';
+        const resultFailed = (
+          structured?.ok === false
+          || structured?.success === false
+          || structured?.verified === false
+          || ['blocked', 'cancelled', 'canceled', 'error', 'failed', 'timeout', 'timed_out'].includes(status)
+        );
+        setAgentStatus('executing');
+        triggerPetReaction(resultFailed ? 'failed' : 'jump', resultFailed ? 2000 : 1200);
+        setWorkflowSteps(prev => [...prev, {
+          id: `tool-result-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          type: resultFailed ? 'error' : 'tool_result',
+          text: resultFailed
+            ? `${data.name} returned a blocked or failed result`
+            : `${data.name} returned a result`,
+          detail: data.result?.slice(0, 100),
           time: Date.now(),
         }]);
       } else {
@@ -3037,14 +3079,37 @@ export function DesktopUI({
       console.warn(`[DesktopUI] Tool confirmation event suppressed without popup: ${data.name}`);
     };
 
-    const onResponse = (data: { text: string; agentName?: string; source?: string; requestId?: string }) => {
+    const onResponse = (data: {
+      text: string;
+      agentName?: string;
+      source?: string;
+      requestId?: string;
+      finalized?: boolean;
+      blocked?: boolean;
+      reason?: string;
+    }) => {
+      const terminalReason = String(data.reason || '').trim().toLowerCase();
+      const responseBlocked = (
+        data.finalized !== true
+        || data.blocked === true
+        || !String(data.text || '').trim()
+        || ['cancelled', 'canceled', 'voiceprint_rejected'].includes(terminalReason)
+      );
+      terminalResponseSeen = true;
+      setAgentStatus(responseBlocked ? 'error' : 'done');
       setWorkflowSteps(prev => [...prev, {
         id: workflowStepId('resp', data.requestId),
-        type: 'response',
-        text: t.workflowResponseReady || 'Response ready',
-        detail: data.text?.slice(0, 100),
+        type: responseBlocked ? 'error' : 'response',
+        text: responseBlocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
+        detail: (data.reason || (data.finalized === true ? data.text : 'Response was not finalized'))?.slice(0, 100),
         time: Date.now(),
       }]);
+      if (terminalResetTimer) clearTimeout(terminalResetTimer);
+      terminalResetTimer = setTimeout(() => {
+        setAgentStatus('idle');
+        setWorkflowSteps([]);
+        terminalResetTimer = null;
+      }, 5000);
     };
 
     const onError = (data: { message: string; source?: string; requestId?: string }) => {
@@ -3104,7 +3169,6 @@ export function DesktopUI({
       const isActive = task.status === 'queued' || task.status === 'running' || task.status === 'cancelling';
       const isFailed = task.status === 'failed';
       setAgentStatus(isActive ? 'background' : isFailed ? 'error' : 'done');
-      if (isActive) showWallpaperWorkPrompt();
       setWorkflowSteps(prev => [...prev, {
         id: `background-task-${task.id}-${task.status}-${Date.now()}`,
         type: isFailed ? 'error' : task.status === 'completed' ? 'response' : 'background',
@@ -3157,7 +3221,11 @@ export function DesktopUI({
           setEquippedAccessories(accessories);
           localStorage.setItem(petStorageKeys.accessories, JSON.stringify(accessories));
         }
-        toast.info(uiMessage('desktop-ui.desktop-avatar-synced-from-another.6c2486fffe', (lang === 'zh') ? 'zh' : 'en'));
+        addNotification({
+          type: 'system',
+          title: 'Lumi',
+          message: uiMessage('desktop-ui.desktop-avatar-synced-from-another.6c2486fffe', (lang === 'zh') ? 'zh' : 'en'),
+        });
       }
     };
     const onAgentPromoted = (data: { agentName: string; skillName?: string }) => {
@@ -3165,17 +3233,9 @@ export function DesktopUI({
         ? `Agent "${data.agentName}" auto-promoted with skill "${data.skillName}"`
         : `Agent "${data.agentName}" has been auto-created`;
       addNotification({ type: 'system', title: 'Agent Promoted', message: msg });
-      toast.info(msg, { duration: 5000 });
     };
     const onAgentNotification = (data: { type: string; level: string; message: string }) => {
       addNotification({ type: data.level === 'critical' ? 'warning' : data.level === 'warning' ? 'warning' : 'info', title: data.type || 'Lumi', message: data.message });
-      if (data.level === 'critical') {
-        toast.error(data.message, { duration: 10000 });
-      } else if (data.level === 'warning') {
-        toast.warning(data.message, { duration: 5000 });
-      } else {
-        toast(data.message, { duration: 5000 });
-      }
     };
 
     const onWakeDetected = (data: { keyword: string }) => {
@@ -3237,6 +3297,7 @@ export function DesktopUI({
       socket.off('wake:started', onWakeStarted);
       socket.off('token:usage_update', onTokenUsageUpdate);
       socket.off('token:quota_update', onTokenQuotaUpdate);
+      if (terminalResetTimer) clearTimeout(terminalResetTimer);
     };
   }, [socket, workDomain, orgConnection?.orgId, petStorageKeys]);
 
@@ -4803,7 +4864,7 @@ export function DesktopUI({
             ) : (
               <>
               {/* Biometrics presence indicator — above particle sphere */}
-            {workDomain === 'personal' && (
+            {facePresenceRequested && faceRecognition.hasTemplates && (
               <div className="absolute -top-10 left-1/2 -translate-x-1/2 z-30">
                 <PresenceIndicator
                   status={presence.status}

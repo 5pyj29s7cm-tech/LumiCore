@@ -22,6 +22,18 @@ describe('chat and voice tool-call stability', () => {
     }
   });
 
+  it('feeds the same persisted action pointer into text and voice continuation routing', () => {
+    const root = process.cwd();
+    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+
+    expect(chat).toContain('conversation?.actionContinuationState');
+    expect(voice).toContain('conversation.actionContinuationState');
+    for (const source of [chat, voice]) {
+      expect(source).toContain('buildRecentActionContinuationBridge');
+    }
+  });
+
   it('keeps legal entry prompts in the shared execution decision instead of per-channel scripts', () => {
     const executionDecision = readFileSync(path.join(process.cwd(), 'server/cognition/execution_decision.ts'), 'utf8');
     const legalEntry = readFileSync(path.join(process.cwd(), 'server/cognition/legal_entry.ts'), 'utf8');
@@ -205,6 +217,19 @@ describe('chat and voice tool-call stability', () => {
       '打开微信，问一下阿路在干嘛。',
       'User correction to the interrupted request: 我说的阿路是大陆的陆，不是道路的路。',
     ].join('\n\n'))).toMatchObject({
+      contact: '阿陆',
+      message: '在干嘛？',
+    });
+
+    expect(buildForegroundWeChatSendArgs([
+      '打开微信，问一下阿路在干嘛。',
+      'User correction to the interrupted request: 大陆的陆不是马路的路。',
+    ].join('\n\n'))).toMatchObject({
+      contact: '阿陆',
+      message: '在干嘛？',
+    });
+
+    expect(buildForegroundWeChatSendArgs('给阿陆发消息，问他在干嘛。')).toMatchObject({
       contact: '阿陆',
       message: '在干嘛？',
     });

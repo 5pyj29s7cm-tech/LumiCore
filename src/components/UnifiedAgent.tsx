@@ -13,6 +13,12 @@ import { useVoiceCall } from '@/hooks/useVoiceCall';
 import { useSocket } from '@/hooks/useSocket';
 import { toast } from 'sonner';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
+import {
+  isTerminalAgentStatus,
+  shouldDisplayAgentResponse,
+  shouldSpeakAgentResponse,
+  type AgentResponseDelivery,
+} from '@/lib/agentResponseDelivery';
 
 export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any; onEnterSanctuary?: () => void }) {
   const isZh = t?.langCode !== 'en';
@@ -64,24 +70,30 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
   useEffect(() => {
     if (!socket) return;
 
-    const handleAgentResponse = (data: { text: string; agentName: string }) => {
-      const agentMsg = {
-        id: Date.now().toString(),
-        text: data.text,
-        userName: data.agentName,
-        timestamp: new Date().toISOString(),
-        type: 'agent'
-      };
-      setMessages(prev => [...prev, agentMsg]);
+    const handleAgentResponse = (data: AgentResponseDelivery & { agentName?: string }) => {
+      if (shouldDisplayAgentResponse(data)) {
+        const agentMsg = {
+          id: Date.now().toString(),
+          text: data.text,
+          userName: data.agentName || 'Lumi',
+          timestamp: new Date().toISOString(),
+          type: 'agent'
+        };
+        setMessages(prev => [...prev, agentMsg]);
+      }
       
       // Only speak if we are in voice mode or it was a voice trigger
-      if (isVoiceMode) {
-        speak(data.text);
+      if (isVoiceMode && shouldSpeakAgentResponse(data)) {
+        speak(data.text!);
       }
     };
 
     const handleStatus = (data: { status: string }) => {
-      setIsTyping(data.status === "thinking");
+      if (data.status === 'thinking' || data.status === 'responding') {
+        setIsTyping(true);
+      } else if (isTerminalAgentStatus(data.status)) {
+        setIsTyping(false);
+      }
     };
 
     const handleError = (data: { message: string }) => {
@@ -89,8 +101,18 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
       setIsTyping(false);
     };
 
-    const handleProactive = (data: { type: string; message: string; agentName?: string; timestamp: string }) => {
+    const handleProactive = (data: {
+      type: string;
+      message: string;
+      agentName?: string;
+      timestamp: string;
+      finalized?: boolean;
+      blocked?: boolean;
+      reason?: string;
+    }) => {
       if (data.type === 'greeting') {
+        const delivery: AgentResponseDelivery = { ...data, text: data.message };
+        if (!shouldDisplayAgentResponse(delivery)) return;
         const greetingMsg = {
           id: `greeting-${data.timestamp}`,
           text: data.message,
@@ -99,7 +121,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
           type: 'agent'
         };
         setMessages(prev => [...prev, greetingMsg]);
-        if (isVoiceMode) speak(data.message);
+        if (isVoiceMode && shouldSpeakAgentResponse(delivery)) speak(data.message);
       }
     };
 

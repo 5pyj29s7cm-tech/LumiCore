@@ -1,4 +1,12 @@
 import { ToolPolicy } from '../personality/types';
+import {
+  getRecoveredApplicationContinuationTarget,
+  isRecoveredCurrentAppEditingContinuation,
+} from './action_continuation';
+import {
+  CURRENT_APP_FORBIDDEN_TOOLS,
+  CURRENT_APP_MAX_ITERATIONS,
+} from './current_app_execution';
 
 export interface WorkSurfaceRoute {
   artifactFirst: boolean;
@@ -60,11 +68,25 @@ export function wantsDirectDesktopControl(text: string): boolean {
 }
 
 export function resolveWorkSurfaceRoute(text: string): WorkSurfaceRoute {
-  const artifactFirst = isArtifactFirstTask(text);
-  const directDesktop = wantsDirectDesktopControl(text);
-  const forbidComputerUse = artifactFirst && !directDesktop;
+  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(text);
+  const recoveredAppTarget = recoveredCurrentAppEdit
+    ? getRecoveredApplicationContinuationTarget(text)
+    : '';
+  const artifactFirst = recoveredCurrentAppEdit ? false : isArtifactFirstTask(text);
+  const directDesktop = recoveredCurrentAppEdit || wantsDirectDesktopControl(text);
+  const forbidComputerUse = recoveredCurrentAppEdit || (artifactFirst && !directDesktop);
 
-  const promptOverlay = artifactFirst
+  const promptOverlay = recoveredCurrentAppEdit
+    ? [
+        '## Current Application Continuation Routing',
+        `- Continue inside the successfully opened application${recoveredAppTarget ? ` (${recoveredAppTarget})` : ''}.`,
+        '- Use the auditable UI Automation state machine: active window -> UI tree -> one precise navigation action -> fresh UI tree -> confirmed editor -> focused UIA typing -> fresh verification.',
+        '- Never type or paste until a fresh desktop_ui_snapshot exposes an editable Document/editor control. A start page, template gallery, New button, window title, or successful shortcut is not editor evidence.',
+        '- Do not repeat the same New/Blank selector. Re-observe after every UI invoke/click/shortcut and stop with the blocker if the state does not change.',
+        '- Treat text after write/type/paste as payload for the current app. Do not reinterpret payload words as coding, capability learning, artifact generation, or a different application task.',
+        '- computer_use, raw coordinate mouse tools, and untargeted keyboard typing are disabled because they can steal focus and hide state transitions.',
+      ].join('\n')
+    : artifactFirst
     ? [
         '## Work Surface Routing',
         '- This looks like a file/image/CAD/design/document task. Default to an artifact-first workflow: inspect inputs, extract/OCR/vision as needed, generate structured outputs and files, verify paths, then summarize results.',
@@ -81,7 +103,14 @@ export function resolveWorkSurfaceRoute(text: string): WorkSurfaceRoute {
     directDesktop,
     forbidComputerUse,
     promptOverlay,
-    toolPolicy: forbidComputerUse
+    toolPolicy: recoveredCurrentAppEdit
+      ? {
+          allowedTools: ['*'],
+          requireConfirmation: [],
+          forbiddenTools: [...CURRENT_APP_FORBIDDEN_TOOLS],
+          maxIterations: CURRENT_APP_MAX_ITERATIONS,
+        }
+      : forbidComputerUse
       ? {
           allowedTools: ['*'],
           requireConfirmation: [

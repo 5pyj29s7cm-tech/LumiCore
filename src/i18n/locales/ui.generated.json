@@ -1,4 +1,16 @@
 {
+  "settings.background-face-presence.c07ac0f5cb": {
+    "en": "Background face presence",
+    "zh": "\u540e\u53f0\u4eba\u8138\u5728\u573a\u8bc6\u522b"
+  },
+  "settings.when-enabled-lumi-may-use.25f7da1264": {
+    "en": "When enabled, Lumi may use the camera in the background only after a face is enrolled. This is off by default.",
+    "zh": "\u5f00\u542f\u540e\uff0cLumi \u4ec5\u4f1a\u5728\u5df2\u5f55\u5165\u4eba\u8138\u4e14\u9700\u8981\u5728\u573a\u5224\u65ad\u65f6\u4e8e\u540e\u53f0\u4f7f\u7528\u6444\u50cf\u5934\uff1b\u9ed8\u8ba4\u5173\u95ed\u3002"
+  },
+  "settings.enable-camera-access-before-turning.fbd6cf6197": {
+    "en": "Enable camera access before turning on background face presence.",
+    "zh": "\u8bf7\u5148\u542f\u7528\u6444\u50cf\u5934\uff0c\u518d\u5f00\u542f\u540e\u53f0\u4eba\u8138\u5728\u573a\u8bc6\u522b\u3002"
+  },
   "settings.no-models-configured.0c98ec7051": {
     "en": "No configured models",
     "zh": "\u6682\u65e0\u5df2\u914d\u7f6e\u6a21\u578b"
@@ -1482,6 +1494,10 @@
   "chat-progress.reply-sent.5f1b4522d2": {
     "en": "Reply sent.",
     "zh": "已回复。"
+  },
+  "chat-progress.tool-returned-result-awaiting-task-verification.4f8d02cb71": {
+    "en": "The tool returned a result. I am still verifying the overall task.",
+    "zh": "\u5de5\u5177\u5df2\u8fd4\u56de\u7ed3\u679c\uff0c\u6574\u9879\u4efb\u52a1\u4ecd\u5728\u6838\u9a8c\u4e2d\u3002"
   },
   "chat-progress.that-step-hit-a-problem.1fcf172ada": {
     "en": "That step hit a problem. I am checking the cause and next move.",

@@ -1,11 +1,18 @@
 import fs from 'fs';
 import path from 'path';
 import { ToolExecutionRecord } from '../tools/types';
+import {
+  claimsCurrentAppSaveCompletion,
+  hasCurrentAppSaveEvidence,
+  hasCurrentAppUiMutationEvidence,
+  requiresCurrentAppUiMutation,
+} from '../cognition/action_contract';
 
 export interface CompletionGuardResult {
   text: string;
   blocked: boolean;
   reason?: string;
+  reasonCode?: 'successful_irrelevant_evidence';
 }
 
 function buildActionPromiseGuardedResponse(
@@ -16,9 +23,9 @@ function buildActionPromiseGuardedResponse(
   const isZh = /[\u3400-\u9fff]/.test(task);
   const clientSurfaceTask = isClientSurfaceTask(task);
   const desktopActionTask = isDesktopActionTask(task);
-  const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
+  const lastFailure = summarizeFailedToolCalls(failed);
   const confirmationBlocked = failed.some(call =>
-    /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
+    /requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(toolFailureDetail(call))
   );
 
   if (!isZh) {
@@ -92,13 +99,30 @@ const EXTERNAL_WORK_TASK_RE =
   /\b(cad|dxf|dwg|pptx?|powerpoint|freecad|autocad|file|folder|desktop|browser|search|open|launch|save|export|install|run|execute|play|music|ocr)\b|(?:文件|路径|桌面|图纸|户型|平面图|装修|图片|照片|识别|提取|打开|加载|保存|导出|输出|安装|运行|执行|播放|音乐|生成|创建|方案|PPT|CAD|DXF)/i;
 
 const COMPLETION_CLAIM_RE =
-  /(?:任务|工作|全部|都)?(?:已经|已)?[^。！？\n]{0,18}(?:完成|搞定|做好|做完)|(?:已经|已)[^。！？\n]{0,18}(?:生成|创建|保存|输出|写入|打开|加载|导出)|(?:生成好了|创建好了|保存好了|输出好了|打开了|加载好了|搞定了)|\b(?:task complete|completed successfully|created|saved|opened|exported|generated)\b/i;
+  // i18n-allow: Chinese execution-claim recognition pattern; not user-visible copy.
+  /(?:任务|工作|全部|都)?(?:已经|已)?[^。！？\n]{0,18}(?:完成|搞定|做好|做完)|(?:已经|已)[^。！？\n]{0,18}(?:生成|新建|创建|保存|输出|写入|写好|写完|打开|加载|导出)|(?:生成好了|新建好了|创建好了|保存好了|输出好了|写好了|写完了|打开了|加载好了|搞定了)|\b(?:task complete|completed successfully|created|saved|opened|exported|generated)\b/i;
+
+const SELF_COMPLETION_CLAIM_RE =
+  // i18n-allow: Chinese self-completion recognition pattern; not user-visible copy.
+  /(?:^|[\n。！？!?；;])\s*(?:(?:好|好的|可以|行)[，,\s]*)?(?:(?:(?:我|我们|这边)\s*(?:(?:已经|已)[^。！？!?\n]{0,28}(?:完成|做完|做好|搞定|生成|新建|创建|保存|输出|写入|写好|写完|打开|加载|导出|发送|处理完|执行完)|[^。！？!?\n]{0,28}(?:完成了|做完了|做好了|搞定了|生成好了|新建好了|创建好了|保存好了|输出好了|写好了|写完了|打开了|加载好了|导出了|发送了|处理完了|执行完了)))|(?:(?:任务|工作|操作|处理|这件事)(?:已经|已)?|已经|已)[^。！？!?\n]{0,28}(?:完成|做完|做好|搞定|生成|新建|创建|保存|输出|写入|写好|写完|打开|加载|导出|发送|处理完|执行完)|(?:生成|新建|创建|保存|输出|写|打开|加载|发送|处理|执行|搞定|完成)(?:好|完)?了)[^。！？!?\n]{0,16}(?=$|[，,。！？!?；;：:\n])/iu;
+
+const SELF_COMPLETION_CLAIM_EN_RE =
+  /(?:^|[\n.!?;])\s*(?:(?:I|we)(?:'ve| have| already)?[^.!?\n]{0,36}(?:completed|finished|created|saved|opened|generated|sent|written)|(?:done|completed|finished|created|saved|opened|generated|sent)(?:\s+successfully)?)(?=$|[,.:;!?\n])/iu;
+
+const SELF_EXECUTION_STATUS_RE =
+  // i18n-allow: Chinese immediate-execution recognition pattern; not user-visible copy.
+  /(?:(?:我|我们|这边)\s*(?:(?:现在(?:就|马上)?|马上|立即)\s*(?:就\s*)?(?:做|动手|开始|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续)|正在\s*(?:做|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续))|(?:^|[\n。！？!?；;])\s*(?:(?:好|好的|可以|行)[，,\s]*)?(?:现在就做(?:这件事|这个任务)?|马上(?:就)?动手(?:处理)?|正在(?:执行|处理|操作)(?:中|这个任务|该任务)?)(?=$|[，,。！？!?；;：:\n])|\b(?:I(?:'m| am)\s+(?:doing|executing|working on)\s+(?:it|this)(?:\s+now)?|I(?:'ll| will)\s+(?:do|start|execute|handle)\s+(?:it|this)\s+now)\b)/iu;
+
+const SELF_CLAIM_EXPLANATION_RE =
+  // i18n-allow: Chinese explanatory-use filter; not user-visible copy.
+  /^(?:已完成|写好了|写完了|已新建|正在执行|现在就做|马上动手)\s*(?:是|表示|意味着|属于|这个词|这句话|这种说法)/u;
 
 const OPEN_CLAIM_RE =
   /(?:已经|已|都)?[^。！？\n]{0,12}(?:打开|加载)|(?:打开了|加载好了)|\b(?:opened|launched)\b/i;
 
 const FILE_CREATION_CLAIM_RE =
-  /(?:已经|已|都)?[^。！？\n]{0,18}(?:生成|创建|保存|输出|写入|导出)|(?:生成好了|创建好了|保存好了|输出好了)|\b(?:created|saved|exported|generated)\b/i;
+  // i18n-allow: Chinese file-production claim recognition pattern; not user-visible copy.
+  /(?:已经|已|都)?[^。！？\n]{0,18}(?:生成|新建|创建|保存|输出|写入|写好|写完|导出)|(?:生成好了|新建好了|创建好了|保存好了|输出好了|写好了|写完了)|\b(?:created|saved|exported|generated)\b/i;
 
 const INSPECTION_ONLY_TOOL_RE =
   /^(read_|list_|search_|grep_|desktop_path_info|desktop_list_files|client_get_state|adapter_health_check|usage_get_summary|calendar_|lumi_constitution|agent_list|get_|path_info)/i;
@@ -133,7 +157,8 @@ const ACTION_EVIDENCE_TASK_RE =
   /\b(?:file|document|docx|pdf|attachment|desktop|screen|open|read|review|inspect|analy[sz]e|contract|agreement)\b|(?:文件|文档|资料|附件|合同|协议|打开|读取|查看|看看|审查|分析|检查|桌面|屏幕|生成|保存|导出)/iu;
 
 const ACTION_PROMISE_RE =
-  /(?:\b(?:i(?:'ll| will| am going to|'m going to)|let me|i need to|i'll first|let me first)\b[^.\n]{0,120}\b(?:read|open|check|review|analy[sz]e|inspect|process|search|generate|create|export)\b)|(?:(?:我|让我|我先|让我先|先|现在|马上|接下来)[^。\n]{0,80}(?:读取|读|打开|查看|看看|审查|分析|检查|处理|调用|搜索|查找|生成|导出|保存))/iu;
+  // i18n-allow: Chinese action-promise recognition pattern; not user-visible copy.
+  /(?:\b(?:i(?:'ll| will| am going to|'m going to)|let me|i need to|i'll first|let me first)\b[^.\n]{0,120}\b(?:read|open|check|review|analy[sz]e|inspect|process|search|generate|create|export)\b)|(?:(?:我|让我|我先|让我先|先|现在|马上|接下来)[^。\n]{0,80}(?:做|动手|开始|执行|读取|读|打开|查看|看看|审查|分析|检查|处理|调用|搜索|查找|生成|新建|创建|写|导出|保存))/iu;
 
 const CLIENT_SURFACE_TASK_RE =
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -145,19 +170,189 @@ function isClientSurfaceTask(task: string): boolean {
 
 function isDesktopActionTask(task: string): boolean {
   const text = task || '';
+  if (requiresCurrentAppUiMutation(text)) return true;
   return DESKTOP_ACTION_TASK_RE.test(text) && !CONTENT_WORK_TASK_RE.test(text);
 }
 
 function stripNegatedClaimClauses(value: string): string {
   return String(value || '')
     .replace(
-      /(?:\u6ca1\u6709|\u5e76\u672a|\u672a\u66fe|\u4e0d\u4f1a|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u8981|\u7981\u6b62|\u672a)(?=[^\u3002\uFF1B\uFF01\uFF1F\n\r]{0,48}(?:\u5b8c\u6210|\u6253\u5f00|\u542f\u52a8|\u53d1\u9001|\u751f\u6210|\u521b\u5efa|\u4fdd\u5b58|\u5bfc\u51fa|\u8bfb\u53d6|\u67e5\u770b))[^\u3002\uFF1B\uFF01\uFF1F\n\r]*/gu,
+      /[\u201c\u201d\u2018\u2019"'`](?:\u5df2\u5b8c\u6210|\u6b63\u5728\u6267\u884c|\u73b0\u5728\u5c31\u505a|\u9a6c\u4e0a\u52a8\u624b|\u5199\u597d\u4e86|\u5df2\u65b0\u5efa)[\u201c\u201d\u2018\u2019"'`]/gu,
+      ' ',
+    )
+    .replace(
+      /(?:\u6ca1\u6709|\u6ca1|\u5e76\u672a|\u5c1a\u672a|\u672a\u66fe|\u4e0d\u4f1a|\u4e0d\u80fd|\u4e0d\u5e94|\u4e0d\u8981|\u7981\u6b62|\u672a)(?=[^\u3002\uFF1B\uFF01\uFF1F\n\r]{0,48}(?:\u5b8c\u6210|\u505a\u5b8c|\u505a\u597d|\u641e\u5b9a|\u6253\u5f00|\u542f\u52a8|\u53d1\u9001|\u751f\u6210|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5bfc\u51fa|\u5199\u5165|\u5199\u597d|\u5199\u5b8c|\u8bfb\u53d6|\u67e5\u770b|\u6267\u884c|\u5904\u7406))[^\u3002\uFF1B\uFF01\uFF1F\n\r]*/gu,
       ' ',
     )
     .replace(
       /\b(?:did\s+not|didn't|does\s+not|doesn't|have\s+not|haven't|has\s+not|hasn't|will\s+not|won't|cannot|can't|must\s+not|do\s+not|don't|never)\b(?=[^.;!?\n\r]{0,64}\b(?:complete|open|launch|send|create|generate|save|export|read|view)\b)[^.;!?\n\r]*/giu,
       ' ',
     );
+}
+
+function hasSelfCompletionClaim(value: string): boolean {
+  const text = String(value || '').trim();
+  if (!text || SELF_CLAIM_EXPLANATION_RE.test(text)) return false;
+  return SELF_COMPLETION_CLAIM_RE.test(text) || SELF_COMPLETION_CLAIM_EN_RE.test(text);
+}
+
+interface ParsedJsonToolResult {
+  parsed: boolean;
+  payload: Record<string, unknown> | null;
+}
+
+function parseStructuredToolResult(value: string): ParsedJsonToolResult {
+  let parsed: unknown = String(value || '').trim();
+  let parsedAtLeastOnce = false;
+  for (let attempt = 0; attempt < 3 && typeof parsed === 'string'; attempt += 1) {
+    try {
+      parsed = JSON.parse(parsed);
+      parsedAtLeastOnce = true;
+    } catch {
+      break;
+    }
+  }
+  return {
+    parsed: parsedAtLeastOnce,
+    payload: parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null,
+  };
+}
+
+const INCOMPLETE_TOOL_STATUSES = new Set([
+  'blocked',
+  'cancelled',
+  'canceled',
+  'confirmation_required',
+  'error',
+  'failed',
+  'in_progress',
+  'needs_confirmation',
+  'not_ready',
+  'partial',
+  'pending',
+  'queued',
+  'requires_confirmation',
+  'requires_setup',
+  'submitted_unverified',
+  'timeout',
+  'timed_out',
+  'unverified',
+]);
+
+function normalizedFailureText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const text = typeof value === 'string'
+    ? value.trim()
+    : (() => {
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return String(value);
+        }
+      })().trim();
+  if (!text || /^(?:undefined|null)$/i.test(text)) return '';
+  return text.length > 320 ? `${text.slice(0, 317)}...` : text;
+}
+
+function structuredToolFailureDetail(payload: Record<string, unknown>): string {
+  const status = typeof payload.status === 'string'
+    ? payload.status.trim().toLowerCase()
+    : '';
+  const verification = payload.verification && typeof payload.verification === 'object' && !Array.isArray(payload.verification)
+    ? payload.verification as Record<string, unknown>
+    : null;
+  const verificationStatus = typeof verification?.status === 'string'
+    ? verification.status.trim().toLowerCase()
+    : '';
+  const explicitFailure =
+    payload.ok === false
+    || payload.success === false
+    || payload.failed === true
+    || payload.completionMarkerExists === false
+    || payload.requiresConfirmation === true
+    || payload.confirmationRequired === true
+    || INCOMPLETE_TOOL_STATUSES.has(status)
+    || INCOMPLETE_TOOL_STATUSES.has(verificationStatus)
+    || Boolean(normalizedFailureText(payload.error))
+    || Boolean(normalizedFailureText(verification?.error));
+  if (!explicitFailure) return '';
+
+  const detail = [
+    payload.error,
+    payload.reason,
+    payload.blocker,
+    verification?.error,
+    verification?.reason,
+    verification?.message,
+    payload.message,
+  ].map(normalizedFailureText).find(Boolean);
+  if (detail) return detail;
+  if (status && INCOMPLETE_TOOL_STATUSES.has(status)) return `status=${status}`;
+  if (verificationStatus && INCOMPLETE_TOOL_STATUSES.has(verificationStatus)) {
+    return `verification.status=${verificationStatus}`;
+  }
+  if (payload.completionMarkerExists === false) return 'completion marker was not found';
+  if (payload.requiresConfirmation === true || payload.confirmationRequired === true) {
+    return 'user confirmation is required';
+  }
+  if (payload.success === false) return 'tool reported success=false';
+  if (payload.ok === false) return 'tool reported ok=false';
+  if (payload.failed === true) return 'tool reported failed=true';
+  return 'tool returned an incomplete result without an explicit error';
+}
+
+function toolFailureDetail(call: ToolExecutionRecord): string {
+  const directError = normalizedFailureText(call.error);
+  if (directError) return directError;
+
+  const result = String(call.result || '').trim();
+  if (!result) return '';
+  const parsed = parseStructuredToolResult(result);
+  if (parsed.payload) return structuredToolFailureDetail(parsed.payload);
+  if (parsed.parsed) return '';
+  if (/requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(result)) {
+    return normalizedFailureText(result);
+  }
+  return '';
+}
+
+function summarizeFailedToolCalls(failed: ToolExecutionRecord[]): string {
+  return failed.slice(-2).map(call => {
+    const name = String(call.name || 'tool').trim() || 'tool';
+    const detail = toolFailureDetail(call);
+    return detail ? `${name}: ${detail}` : name;
+  }).join('; ');
+}
+
+function isSuccessfulToolCall(call: ToolExecutionRecord): boolean {
+  if (call.error || !String(call.result || '').trim()) return false;
+  const parsed = parseStructuredToolResult(call.result || '');
+  if (parsed.payload) return !structuredToolFailureDetail(parsed.payload);
+  if (parsed.parsed) return true;
+  return !/requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(String(call.result || ''));
+}
+
+function buildExecutionStatusGuardedResponse(
+  task: string,
+  reason: string,
+  failed: ToolExecutionRecord[],
+): string {
+  const isZh = /[\u3400-\u9fff]/.test(task);
+  const lastFailure = summarizeFailedToolCalls(failed);
+  if (!isZh) {
+    return [
+      `I cannot honestly say I am executing this yet: ${reason}`,
+      lastFailure ? `Latest blocker: ${lastFailure}.` : 'No successful current-turn tool execution was recorded.',
+      'I need to run the real tool first, then report the verified progress.',
+    ].filter(Boolean).join('\n');
+  }
+  return [
+    `\u6211\u8fd8\u4e0d\u80fd\u8bf4\u6b63\u5728\u6267\u884c\uff1a${reason}\u3002`, // i18n-allow: reviewed Chinese execution-guard response.
+    lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '\u8fd9\u4e00\u8f6e\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u771f\u5b9e\u5de5\u5177\u6267\u884c\u3002', // i18n-allow: reviewed Chinese execution-guard response.
+    '\u6211\u9700\u8981\u5148\u771f\u6b63\u8c03\u7528\u5bf9\u5e94\u5de5\u5177\uff0c\u518d\u6309\u5f53\u524d\u8f6e\u56de\u6267\u6c47\u62a5\u8fdb\u5ea6\u3002', // i18n-allow: reviewed Chinese execution-guard response.
+  ].filter(Boolean).join('\n');
 }
 
 export function needsCompletionEvidence(task: string): boolean {
@@ -170,14 +365,26 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   if (!response.trim()) return { text: response, blocked: false };
   const claimText = stripNegatedClaimClauses(response);
 
-  const needsEvidence = needsCompletionEvidence(task) || EXTERNAL_WORK_TASK_RE.test(response);
   const toolCalls = input.toolCalls || [];
-  const successful = toolCalls.filter(call => !call.error && String(call.result || '').trim());
-  const failed = toolCalls.filter(call => call.error);
+  const toolOutcomes = toolCalls.map(call => ({ call, successful: isSuccessfulToolCall(call) }));
+  const successful = toolOutcomes.filter(outcome => outcome.successful).map(outcome => outcome.call);
+  const failed = toolOutcomes
+    .filter(outcome => !outcome.successful && Boolean(outcome.call.error || String(outcome.call.result || '').trim()))
+    .map(outcome => outcome.call);
+  const claimsSelfCompletion = hasSelfCompletionClaim(claimText);
+  const claimsExecutionStatus = SELF_EXECUTION_STATUS_RE.test(claimText);
+  const needsEvidence =
+    needsCompletionEvidence(task) ||
+    EXTERNAL_WORK_TASK_RE.test(response) ||
+    claimsSelfCompletion ||
+    claimsExecutionStatus;
   const desktopActionTask = isDesktopActionTask(task);
-  const hasDesktopActionEvidence = toolCalls.some(call =>
-    DESKTOP_ACTION_EVIDENCE_TOOL_RE.test(call.name) &&
-    (Boolean(call.error) || Boolean(String(call.result || '').trim()))
+  const hasSuccessfulDesktopActionEvidence = successful.some(call =>
+    DESKTOP_ACTION_EVIDENCE_TOOL_RE.test(call.name)
+  );
+  const hasDesktopActionAttempt = toolCalls.some(call =>
+    DESKTOP_ACTION_EVIDENCE_TOOL_RE.test(call.name)
+    && (Boolean(call.error) || Boolean(String(call.result || '').trim()))
   );
   const promisesReadReviewAction = READ_REVIEW_PROMISE_RE.test(claimText) && !desktopActionTask;
   const hasPromiseEvidence = successful.some(call =>
@@ -185,33 +392,70 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     (!INSPECTION_ONLY_TOOL_RE.test(call.name) && Boolean(call.result || call.name))
   );
   const hasReadReviewEvidence = successful.some(call => READ_REVIEW_EVIDENCE_TOOL_RE.test(call.name));
-  const missingPromisedEvidence = desktopActionTask
-    ? !hasDesktopActionEvidence
+  const missingPromisedEvidence = claimsExecutionStatus && desktopActionTask
+    ? !hasSuccessfulDesktopActionEvidence
+    : desktopActionTask
+    ? !hasDesktopActionAttempt
     : (successful.length === 0 || (promisesReadReviewAction ? !hasReadReviewEvidence : !hasPromiseEvidence));
   const promisesActionWithoutEvidence =
-    ACTION_PROMISE_RE.test(claimText) &&
-    (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(claimText)) &&
+    (
+      claimsExecutionStatus ||
+      (
+        ACTION_PROMISE_RE.test(claimText) &&
+        (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(claimText))
+      )
+    ) &&
     missingPromisedEvidence;
 
   if (promisesActionWithoutEvidence) {
-    const reason = promisesReadReviewAction
+    const reason = claimsExecutionStatus
+      ? 'No successful current-turn tool execution was recorded for that execution-status claim.'
+      : promisesReadReviewAction
       ? 'No successful content-read/open/review tool execution was recorded for the promised action.'
       : 'No successful tool execution was recorded for the promised action.';
     return {
-      text: buildActionPromiseGuardedResponse(task, reason, failed),
+      text: claimsExecutionStatus
+        ? buildExecutionStatusGuardedResponse(task, reason, failed)
+        : buildActionPromiseGuardedResponse(task, reason, failed),
       blocked: true,
       reason,
     };
   }
 
-  const claimsCompletion = COMPLETION_CLAIM_RE.test(claimText);
+  const claimsCompletion = COMPLETION_CLAIM_RE.test(claimText) || claimsSelfCompletion;
   if (!needsEvidence || !claimsCompletion) return { text: response, blocked: false };
+
+  const currentAppMutationTask = requiresCurrentAppUiMutation(task);
+  if (currentAppMutationTask && !hasCurrentAppUiMutationEvidence(toolCalls, task)) {
+    const reason = 'Missing verified in-app UI mutation evidence.';
+    return {
+      text: buildGuardedResponse(task, reason, successful, failed),
+      blocked: true,
+      reason,
+    };
+  }
+
+  if (
+    currentAppMutationTask
+    && claimsCurrentAppSaveCompletion(claimText)
+    && !hasCurrentAppSaveEvidence(toolCalls, task)
+  ) {
+    const reason = 'Missing verified in-app save evidence.';
+    return {
+      text: buildGuardedResponse(task, reason, successful, failed),
+      blocked: true,
+      reason,
+    };
+  }
 
   const hasAnySuccess = successful.length > 0;
   const hasActionTool = successful.some(call => !INSPECTION_ONLY_TOOL_RE.test(call.name));
   const hasFileProducer = successful.some(call =>
     FILE_PRODUCER_TOOL_RE.test(call.name) ||
-    /File written:|Text file:|Output file:|Saved to:|written:|created:|saved:|exported:|\.dxf|\.pptx|\.docx|\.pdf|\.md|\.txt/i.test(call.result || '')
+    (
+      !INSPECTION_ONLY_TOOL_RE.test(call.name) &&
+      /File written:|Text file:|Output file:|Saved to:|written:|created:|saved:|exported:|\.dxf|\.pptx|\.docx|\.pdf|\.md|\.txt/i.test(call.result || '')
+    )
   );
   const hasOpenTool = successful.some(call => OPEN_TOOL_RE.test(call.name));
   const hasPassingVerification = successful.some(call => /work_product_verify/i.test(call.name) && VERIFY_PASS_RE.test(call.result || ''));
@@ -226,20 +470,32 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     });
 
   let reason = '';
+  let reasonCode: CompletionGuardResult['reasonCode'];
   if (!hasAnySuccess) {
     reason = '这一轮没有成功执行任何工具';
   } else if (OPEN_CLAIM_RE.test(claimText) && !hasOpenTool) {
     reason = '回复声称已经打开或加载，但没有成功的打开/客户端动作记录';
-  } else if (FILE_CREATION_CLAIM_RE.test(claimText) && !hasFileProducer && !hasPassingVerification) {
+  } else if (
+    FILE_CREATION_CLAIM_RE.test(claimText)
+    && !currentAppMutationTask
+    && !hasFileProducer
+    && !hasPassingVerification
+  ) {
     reason = '回复声称已经生成或保存产物，但没有成功的写入/生成/验收记录';
   } else if (!hasActionTool && !hasPassingVerification && !pathsExist) {
-    reason = '只有查询或检查记录，没有实际执行、生成、打开或验收证据';
+    reason = '\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177\uff0c\u4f46\u8fd9\u4e9b\u7ed3\u679c\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e'; // i18n-allow: reviewed Chinese evidence-accuracy reason.
+    reasonCode = 'successful_irrelevant_evidence';
   }
 
   if (!reason) return { text: response, blocked: false };
 
   const guardedText = buildGuardedResponse(task, reason, successful, failed);
-  return { text: guardedText, blocked: true, reason };
+  return {
+    text: guardedText,
+    blocked: true,
+    reason,
+    reasonCode,
+  };
 }
 
 function extractLocalPaths(text: string): string[] {
@@ -259,15 +515,15 @@ function buildGuardedResponse(
   const clientSurfaceTask = isClientSurfaceTask(task);
   const desktopActionTask = isDesktopActionTask(task);
   const lastSuccess = successful.slice(-3).map(call => call.name).join(', ');
-  const lastFailure = failed.slice(-2).map(call => `${call.name}: ${call.error}`).join('; ');
+  const lastFailure = summarizeFailedToolCalls(failed);
   const confirmationBlocked = failed.some(call =>
-    /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i.test(String(call.error || ''))
+    /requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(toolFailureDetail(call))
   );
 
   if (isZh && desktopActionTask && !clientSurfaceTask) {
     return [
       `\u6211\u5df2\u7ecf\u5c1d\u8bd5\u4e86\u684c\u9762\u52a8\u4f5c\uff0c\u4f46\u8fd8\u4e0d\u80fd\u786e\u8ba4\u5b8c\u6210\uff1a${reason}\u3002`,
-      lastSuccess ? `\u76ee\u524d\u80fd\u786e\u8ba4\u7684\u6210\u529f\u6b65\u9aa4\uff1a${lastSuccess}\u3002` : '\u76ee\u524d\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u684c\u9762\u6253\u5f00\u3001\u805a\u7126\u6216\u8fdb\u7a0b\u9a8c\u8bc1\u3002',
+      lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u56de\u6267\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u684c\u9762\u8bc1\u636e\u3002` : '\u76ee\u524d\u6ca1\u6709\u8bb0\u5f55\u5230\u6210\u529f\u7684\u684c\u9762\u6253\u5f00\u3001\u805a\u7126\u6216\u8fdb\u7a0b\u9a8c\u8bc1\u3002', // i18n-allow: reviewed Chinese evidence-accuracy response.
       lastFailure ? `\u6700\u8fd1\u7684\u963b\u585e\u70b9\uff1a${lastFailure}\u3002` : '',
       '\u4e0b\u4e00\u6b65\u5e94\u8be5\u7ee7\u7eed\u5b9a\u4f4d\u3001\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\uff0c\u5e76\u5728\u771f\u5b9e\u7a97\u53e3\u6216\u8fdb\u7a0b\u786e\u8ba4\u540e\u518d\u6c47\u62a5\u5b8c\u6210\u3002',
     ].filter(Boolean).join('\n');
@@ -277,7 +533,7 @@ function buildGuardedResponse(
     if (clientSurfaceTask) {
       return [
         `I cannot honestly say the Lumi client action is complete yet: ${reason}.`,
-        lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful client state/action evidence was recorded.',
+        lastSuccess ? `Successfully executed: ${lastSuccess}; those receipts do not prove the requested client action completed.` : 'Verified so far: no successful client state/action evidence was recorded.',
         lastFailure ? `Latest blocker: ${lastFailure}.` : '',
         'Next step: run or retry the real client_get_state/client_action path, then report the verified state.',
       ].filter(Boolean).join('\n');
@@ -285,7 +541,7 @@ function buildGuardedResponse(
     if (desktopActionTask) {
       return [
         `I tried the desktop action, but cannot mark it complete yet: ${reason}.`,
-        lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful desktop action was recorded.',
+        lastSuccess ? `Successfully executed: ${lastSuccess}; those receipts are not the desktop evidence required to complete this request.` : 'Verified so far: no successful desktop action was recorded.',
         lastFailure ? `Latest blocker: ${lastFailure}.` : '',
         'Next step: keep locating/opening/focusing the target and verify the real window or process before reporting completion.',
       ].filter(Boolean).join('\n');
@@ -300,7 +556,7 @@ function buildGuardedResponse(
     }
     return [
       `I cannot honestly mark this complete yet: ${reason}.`,
-      lastSuccess ? `Verified so far: successful tools: ${lastSuccess}.` : 'Verified so far: no successful tool execution was recorded.',
+      lastSuccess ? `Successfully executed: ${lastSuccess}; those results are not the evidence required to complete the current request.` : 'Verified so far: no successful tool execution was recorded.',
       lastFailure ? `Latest blocker: ${lastFailure}.` : '',
       'Next step: continue the actual tool workflow, then verify the produced file/action before reporting completion.',
     ].filter(Boolean).join('\n');
@@ -309,7 +565,7 @@ function buildGuardedResponse(
   if (clientSurfaceTask) {
     return [
       `我还不能说客户端动作已经完成：${reason}。`,
-      lastSuccess ? `目前能确认的成功步骤：${lastSuccess}。` : '目前没有记录到成功的客户端状态读取或界面动作。',
+      lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u56de\u6267\u4e0d\u80fd\u8bc1\u660e\u8bf7\u6c42\u7684\u5ba2\u6237\u7aef\u52a8\u4f5c\u5df2\u7ecf\u5b8c\u6210\u3002` : '目前没有记录到成功的客户端状态读取或界面动作。', // i18n-allow: reviewed Chinese evidence-accuracy response.
       lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
       '下一步应该继续真实执行 client_get_state / client_action，并在状态验证后再汇报完成。',
     ].filter(Boolean).join('\n');
@@ -326,7 +582,7 @@ function buildGuardedResponse(
 
   return [
     `我还不能说这件事已经完成：${reason}。`,
-    lastSuccess ? `目前能确认的成功步骤：${lastSuccess}。` : '目前没有记录到成功的工具执行。',
+    lastSuccess ? `\u5df2\u6210\u529f\u6267\u884c\uff1a${lastSuccess}\uff1b\u4f46\u8fd9\u4e9b\u7ed3\u679c\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e\u3002` : '目前没有记录到成功的工具执行。', // i18n-allow: reviewed Chinese evidence-accuracy response.
     lastFailure ? `最近的阻塞点：${lastFailure}。` : '',
     '下一步应该继续真实执行工具，并在文件路径、桌面动作或验收结果确认后再汇报完成。',
   ].filter(Boolean).join('\n');

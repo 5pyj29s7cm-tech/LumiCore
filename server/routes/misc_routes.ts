@@ -8,6 +8,7 @@ import { makeLLMCall, NormalizedMessage } from "../llm/providers";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
+import { finalizeLumiResponse } from "../cognition/result_finalizer";
 
 export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
   getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
@@ -129,7 +130,19 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
         },
       );
 
-      const responseText = result.text || '';
+      const taskText = messages
+        .filter((item: any) => item?.role !== 'assistant')
+        .map((item: any) => String(item?.content || item?.message || item?.text || '').trim())
+        .filter(Boolean)
+        .join('\n')
+        .slice(-12000);
+      const finalized = finalizeLumiResponse({
+        taskText,
+        responseText: result.text || '',
+        toolRecords: result.toolCalls,
+        source: 'misc_chat',
+      });
+      const responseText = finalized.text;
       const tokens = estimateTokens(messages.map((m: any) => m.content || '').join(' ') + ' ' + responseText);
       for (const u of result.usageRecords || []) {
         recordTokenUsage(userId, u.provider, u.model, {
@@ -139,7 +152,13 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
         }, `misc_chat_${Date.now()}`, 'chat');
       }
       recordUsage(userId, tokens);
-      res.json({ text: responseText, toolCalls: result.toolCalls.length });
+      res.json({
+        text: responseText,
+        toolCalls: result.toolCalls.length,
+        finalized: true,
+        blocked: finalized.blocked,
+        reason: finalized.reason || '',
+      });
     } catch (error: any) {
       console.error("Chat Error:", error);
       res.status(500).json({ error: error.message });

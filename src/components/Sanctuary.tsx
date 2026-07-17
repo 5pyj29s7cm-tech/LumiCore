@@ -1,13 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Heart, Users, Briefcase, GraduationCap, User, Send, Loader2, Sparkles, AlertTriangle, Castle } from 'lucide-react';
-import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { useT } from '../lib/useT';
 import { useApp } from '@/contexts/AppContext';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
 import { CN_DEPENDENCY_SIGNALS } from '../i18n/regions/cn/recognition';
+import {
+  isTerminalAgentStatus,
+  shouldDisplayAgentResponse,
+  type AgentResponseDelivery,
+} from '@/lib/agentResponseDelivery';
 
 interface SanctuaryAgent {
   id: string;
@@ -110,21 +114,35 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
       }
     };
 
-    const onResponse = (data: { text: string; agentName: string }) => {
+    const onResponse = (data: AgentResponseDelivery & { agentName?: string }) => {
       setIsTyping(false);
+      if (!shouldDisplayAgentResponse(data)) {
+        if (streamingMsgId.current) {
+          const streamingId = streamingMsgId.current;
+          setMessages(prev => prev.filter(m => m.id !== streamingId));
+          streamingMsgId.current = null;
+        }
+        return;
+      }
       if (streamingMsgId.current) {
         setMessages(prev => prev.map(m =>
-          m.id === streamingMsgId.current ? { ...m, text: data.text } : m
+          m.id === streamingMsgId.current ? { ...m, text: data.text! } : m
         ));
         streamingMsgId.current = null;
       } else {
-        setMessages(prev => [...prev, { id: Date.now().toString(), text: data.text, userName: data.agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: data.text!, userName: data.agentName || agentName, timestamp: new Date().toISOString(), type: 'agent' }]);
       }
     };
 
     const onStatus = (data: { status: string }) => {
-      setIsTyping(data.status === 'thinking');
-      if (data.status === 'idle' || data.status === 'error') {
+      if (data.status === 'thinking' || data.status === 'responding') {
+        setIsTyping(true);
+      } else if (isTerminalAgentStatus(data.status)) {
+        setIsTyping(false);
+        if (streamingMsgId.current) {
+          const streamingId = streamingMsgId.current;
+          setMessages(prev => prev.filter(m => m.id !== streamingId));
+        }
         streamingMsgId.current = null;
       }
     };
@@ -132,29 +150,27 @@ export function Sanctuary({ agent, isOpen, onClose }: { agent: SanctuaryAgent | 
     const onError = (data: { message: string }) => {
       setIsTyping(false);
       streamingMsgId.current = null;
-      toast.error(data.message);
-    };
-
-    const onProactive = (data: { type: string; message: string }) => {
-      if (data.type === 'greeting' || data.type === 'distill_hint') {
-        toast(data.message, { duration: 8000 });
-      }
+      setMessages(prev => [...prev, {
+        id: `error-${Date.now()}`,
+        text: data.message,
+        userName: agentName,
+        timestamp: new Date().toISOString(),
+        type: 'error',
+      }]);
     };
 
     socket.on('agent:chunk', onChunk);
     socket.on('agent:response', onResponse);
     socket.on('agent:status', onStatus);
     socket.on('agent:error', onError);
-    socket.on('agent:proactive', onProactive);
 
     return () => {
       socket.off('agent:chunk', onChunk);
       socket.off('agent:response', onResponse);
       socket.off('agent:status', onStatus);
       socket.off('agent:error', onError);
-      socket.off('agent:proactive', onProactive);
     };
-  }, [socket]);
+  }, [socket, agentName]);
 
   // Auto-scroll
   useEffect(() => {

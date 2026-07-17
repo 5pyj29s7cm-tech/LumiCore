@@ -10,13 +10,79 @@ let faceDetector: FaceDetector | null = null;
 let faceLandmarker: FaceLandmarker | null = null;
 let initialized = false;
 let initPromise: Promise<void> | null = null;
+let faceLandmarkerInitPromise: Promise<void> | null = null;
+let visionPromise: ReturnType<typeof FilesetResolver.forVisionTasks> | null = null;
+let faceLandmarkerReferences = 0;
+
+function getVisionFileset() {
+  visionPromise ||= FilesetResolver.forVisionTasks(WASM_URL);
+  return visionPromise;
+}
+
+async function initFaceLandmarker(): Promise<void> {
+  if (faceLandmarker) return;
+  if (faceLandmarkerInitPromise) return faceLandmarkerInitPromise;
+
+  faceLandmarkerInitPromise = (async () => {
+    const vision = await getVisionFileset();
+    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: FACE_LANDMARK_MODEL,
+        delegate: 'GPU',
+      },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+      minFaceDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      outputFaceBlendshapes: false,
+    });
+  })().catch((error) => {
+    faceLandmarkerInitPromise = null;
+    throw error;
+  });
+
+  return faceLandmarkerInitPromise;
+}
+
+function closeFaceLandmarkerIfUnused() {
+  if (faceLandmarkerReferences > 0 || !faceLandmarker) return;
+  const landmarker = faceLandmarker;
+  faceLandmarker = null;
+  faceLandmarkerInitPromise = null;
+  try {
+    landmarker.close();
+  } catch (error) {
+    console.warn('[MediaPipe] Failed to close FaceLandmarker:', error);
+  }
+}
+
+export async function acquireFaceLandmarker(): Promise<() => void> {
+  // Reserve before awaiting initialization so a concurrent release cannot close
+  // the shared task between initialization and this consumer becoming active.
+  faceLandmarkerReferences += 1;
+  try {
+    await initFaceLandmarker();
+  } catch (error) {
+    faceLandmarkerReferences = Math.max(0, faceLandmarkerReferences - 1);
+    closeFaceLandmarkerIfUnused();
+    throw error;
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    faceLandmarkerReferences = Math.max(0, faceLandmarkerReferences - 1);
+    closeFaceLandmarkerIfUnused();
+  };
+}
 
 export async function initMediaPipe(): Promise<void> {
   if (initialized) return;
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+    const vision = await getVisionFileset();
 
     handLandmarker = await HandLandmarker.createFromOptions(vision, {
       baseOptions: {
@@ -38,20 +104,11 @@ export async function initMediaPipe(): Promise<void> {
       minDetectionConfidence: 0.6,
     });
 
-    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: FACE_LANDMARK_MODEL,
-        delegate: 'GPU',
-      },
-      runningMode: 'VIDEO',
-      numFaces: 3,
-      minFaceDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-      outputFaceBlendshapes: false,
-    });
-
     initialized = true;
-  })();
+  })().catch((error) => {
+    initPromise = null;
+    throw error;
+  });
 
   return initPromise;
 }
@@ -110,14 +167,23 @@ export function detectFaceLandmarks(video: HTMLVideoElement): FaceLandmarkResult
   const result = faceLandmarker.detectForVideo(video, now);
   if (!result.faceLandmarks) return [];
   return result.faceLandmarks.map((lm) => {
-    const xs = lm.map(l => l.x), ys = lm.map(l => l.y);
+    let minX = 1;
+    let minY = 1;
+    let maxX = 0;
+    let maxY = 0;
+    for (const landmark of lm) {
+      minX = Math.min(minX, landmark.x);
+      minY = Math.min(minY, landmark.y);
+      maxX = Math.max(maxX, landmark.x);
+      maxY = Math.max(maxY, landmark.y);
+    }
     return {
       landmarks: lm.map(l => ({ x: l.x, y: l.y, z: l.z })),
       boundingBox: {
-        x: Math.min(...xs),
-        y: Math.min(...ys),
-        width: Math.max(...xs) - Math.min(...xs),
-        height: Math.max(...ys) - Math.min(...ys),
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY,
       },
       score: 0.9, // FaceLandmarker doesn't return per-face scores
     };
@@ -178,4 +244,8 @@ export function extractFaceEmbedding(landmarks: Array<{ x: number; y: number; z:
 
 export function isMediaPipeReady(): boolean {
   return initialized;
+}
+
+export function isFaceLandmarkerReady(): boolean {
+  return Boolean(faceLandmarker);
 }

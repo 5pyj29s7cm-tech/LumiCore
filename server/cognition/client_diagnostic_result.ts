@@ -16,7 +16,7 @@ function parseJson(value: unknown): any {
 }
 
 function clientDiagnosticIntent(text: string): boolean {
-  return /(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5|\u8eab\u4f53\u72b6\u51b5|\u662f\u5426\u901a\u7545|\u80fd\u4e0d\u80fd\u4fee\u590d|\u80fd\u5426\u4fee\u590d|self[ -]?check|health\s+check|runtime\s+health|diagnos)/iu.test(text || '');
+  return /(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5|\u8eab\u4f53\u72b6\u51b5|\u662f\u5426\u901a\u7545|\u80fd(?:\u4e0d\u80fd|\u5426|\u591f)\u4fee\u590d|self[ -]?check|health\s+check|runtime\s+health|diagnos)/iu.test(text || '');
 }
 
 function unique(values: string[]): string[] {
@@ -58,10 +58,16 @@ function englishDiagnosticFacts(facts: ClientDiagnosticFacts): string {
 export function formatClientDiagnosticResult(
   records: ToolExecutionRecord[],
   taskText: string,
+  responseText = '',
 ): string | null {
   const diagnosticRecords = records.filter(record => CLIENT_DIAGNOSTIC_TOOL_RE.test(String(record.name || '')));
-  const hasClientDiagnosticRecord = diagnosticRecords.some(record => /^client_/i.test(String(record.name || '')));
-  if (!clientDiagnosticIntent(taskText) && !hasClientDiagnosticRecord) return null;
+  // Tool presence alone must not turn an unrelated action into a self-check
+  // report. This is especially important when an old continuation bridge
+  // contains client diagnostic wording.
+  const confirmationOfRecordedDiagnostic = /^(?:\u786e\u8ba4|\u786e\u5b9a|\u662f|\u597d|\u597d\u7684|\u53ef\u4ee5|\u7ee7\u7eed|confirm|yes|ok|okay)[\u3002\uFF01\uFF1F.!?]*$/iu.test(String(taskText || '').trim())
+    && diagnosticRecords.some(record => /^client_/i.test(String(record.name || '')))
+    && /(?:client_get_state|client_health_check|client_self_repair|client_repair_skill)/i.test(responseText);
+  if (!clientDiagnosticIntent(taskText) && !confirmationOfRecordedDiagnostic) return null;
   if (diagnosticRecords.length === 0) {
     return /[\u3400-\u9fff]/u.test(taskText || '')
       ? formatCnMissingClientDiagnosticReceipts()

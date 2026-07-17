@@ -1,16 +1,194 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildActionContract,
+  claimsCurrentAppSaveCompletion,
+  extractCurrentAppTarget,
   formatActionContractPrompt,
   hasCoreActionEvidence,
   hasAuthenticatedWebResultEvidence,
+  hasCurrentAppSaveEvidence,
+  hasCurrentAppUiMutationEvidence,
+  hasVerifiedCadGeometryExtractionEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresCadGeometryExtractionOnly,
+  requiresCurrentAppUiMutation,
   requiresAutoCadMcpPlayback,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
 } from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
+  it('treats editing inside the current app as a desktop action contract', () => {
+    const contract = buildActionContract('\u5728\u8fd9\u91cc\u9762\u5199\u4e00\u7bc7\u68c0\u8ba8\u4e66\u7ed9\u6211');
+
+    expect(contract.kind).toBe('desktop_operation');
+    expect(contract.preferredTools).toContain('desktop_ui_snapshot');
+    expect(contract.preferredTools).toContain('computer_use');
+  });
+
+  it('keeps the exact recovered-WPS create-and-type phrase on the strong desktop contract', () => {
+    const task = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- appTarget: WPS Office',
+      '- unfinished: yes',
+    ].join('\n');
+
+    const contract = buildActionContract(task);
+    expect(requiresCurrentAppUiMutation(task)).toBe(true);
+    expect(extractCurrentAppTarget(task)).toBe('WPS Office');
+    expect(contract.kind).toBe('desktop_operation');
+    expect(contract.preferredTools).toContain('desktop_ui_type');
+    expect(contract.preferredTools).not.toContain('write_file');
+  });
+
+  it('rejects the real WPS failure ledger even when write_file created a project text file', () => {
+    const task = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- appTarget: WPS Office',
+      '- unfinished: yes',
+    ].join('\n');
+    const records = [{
+      name: 'desktop_open',
+      arguments: { target: 'WPS' },
+      result: 'Opened app WPS Office',
+    }, {
+      name: 'desktop_ui_focus',
+      arguments: { nameContains: 'WPS Office' },
+      result: '{"status":"ok","action":"focus","selectedAfter":{"name":"WPS Office"}}',
+    }, {
+      name: 'desktop_ui_snapshot',
+      arguments: { root: 'active' },
+      result: '{"root":{"name":"WPS Office","controls":[{"name":"Home"}]}}',
+    }, {
+      name: 'ocr_screen',
+      arguments: {},
+      result: 'WPS Office \u9996\u9875\uff1a\u7a7a\u767d\u6587\u6863\u672a\u6253\u5f00\u3002',
+    }, {
+      name: 'desktop_keyboard_press',
+      arguments: { key: 'ctrl+n' },
+      result: 'Pressed: ctrl+n',
+    }, {
+      name: 'write_file',
+      arguments: { path: 'D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt' },
+      result: 'File written: D:\\lumiOS\\Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.txt',
+    }];
+
+    const contract = buildActionContract(task);
+    expect(hasCurrentAppUiMutationEvidence(records, task)).toBe(false);
+    expect(hasCoreActionEvidence(contract, records, task)).toBe(false);
+  });
+
+  it('accepts recovered-WPS editing only after foreground UI actuation and post-action verification', () => {
+    const task = [
+      '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- appTarget: WPS Office',
+    ].join('\n');
+    const records = [{
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"WPS Office","process_name":"wps.exe"}',
+    }, {
+      name: 'desktop_keyboard_press',
+      arguments: { key: 'ctrl+n' },
+      result: 'Pressed: ctrl+n',
+    }, {
+      name: 'desktop_clipboard_write',
+      arguments: { text: 'Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5' },
+      result: 'Clipboard updated',
+    }, {
+      name: 'desktop_keyboard_press',
+      arguments: { key: 'ctrl+v' },
+      result: 'Pressed: ctrl+v',
+    }, {
+      name: 'ocr_screen',
+      arguments: {},
+      result: 'WPS Office \u6587\u6863\u6b63\u6587\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5',
+    }];
+
+    expect(hasCurrentAppUiMutationEvidence(records, task)).toBe(true);
+    expect(hasCoreActionEvidence(buildActionContract(task), records, task)).toBe(true);
+  });
+
+  it('requires an in-app save action and save-state verification for a save claim', () => {
+    const task = [
+      '\u5728\u8fd9\u91cc\u9762\u8f93\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
+      '## Recent action continuation context',
+      '- appTarget: WPS Office',
+    ].join('\n');
+    const typed = [{
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"WPS Office","process_name":"wps.exe"}',
+    }, {
+      name: 'desktop_ui_type',
+      arguments: { name: '\u6b63\u6587', text: 'Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5' },
+      result: '{"status":"ok","action":"type","typedLength":10}',
+    }, {
+      name: 'ocr_screen',
+      arguments: {},
+      result: 'WPS Office \u6587\u6863\u6b63\u6587\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5',
+    }];
+
+    expect(claimsCurrentAppSaveCompletion('\u5df2\u5728 WPS \u8f93\u5165\u5e76\u4fdd\u5b58\u6210\u529f\u3002')).toBe(true);
+    expect(hasCurrentAppSaveEvidence(typed, task)).toBe(false);
+    expect(hasCurrentAppSaveEvidence([
+      ...typed,
+      {
+        name: 'desktop_keyboard_press',
+        arguments: { key: 'ctrl+s' },
+        result: 'Pressed: ctrl+s',
+      },
+      {
+        name: 'desktop_ui_snapshot',
+        arguments: { root: 'active' },
+        result: '{"root":{"name":"Lumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5.docx - WPS Office"}}',
+      },
+    ], task)).toBe(true);
+  });
+
+  it('uses a geometry-receipt contract for extraction-only desktop images', () => {
+    const task = '\u8bfb\u53d6\u684c\u9762\u4e0a\u7684\u8bbe\u8ba1\u8349\u7a3f.jpg\uff0c\u63d0\u53d6\u51e0\u4f55\u4fe1\u606f\uff0c\u5148\u4e0d\u8981\u7ed8\u5236\uff0c\u53ea\u544a\u8bc9\u6211\u63d0\u53d6\u662f\u5426\u6210\u529f\u3002';
+    const contract = buildActionContract(task);
+    const failed = [{
+      name: 'floorplan_extract_geometry',
+      arguments: { imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
+      result: JSON.stringify({
+        parsed: false,
+        failedStage: 'topology',
+        geometryReady: false,
+        geometryVerified: false,
+        geometryReceiptPath: '',
+      }),
+    }];
+    const verified = [{
+      name: 'floorplan_extract_geometry',
+      arguments: { imagePath: 'C:\\Users\\Administrator\\Desktop\\\u8bbe\u8ba1\u8349\u7a3f.jpg' },
+      result: JSON.stringify({
+        parsed: true,
+        geometryReady: true,
+        geometryVerified: true,
+        executableGeometryAvailable: true,
+        geometryReceiptPath: 'C:\\Users\\Administrator\\LumiOS\\data\\cad\\geometry_receipts\\verified.json',
+      }),
+    }];
+
+    expect(requiresCadGeometryExtractionOnly(task)).toBe(true);
+    expect(contract.kind).toBe('cad_drafting');
+    expect(contract.label).toBe('CAD source-geometry extraction');
+    expect(contract.preferredTools).toContain('floorplan_extract_geometry');
+    expect(contract.requiredEvidence.join(' ')).not.toMatch(/active window|process|screen state/i);
+    expect(hasVerifiedCadGeometryExtractionEvidence(failed)).toBe(false);
+    expect(hasCoreActionEvidence(contract, failed, task)).toBe(false);
+    expect(hasVerifiedCadGeometryExtractionEvidence(verified)).toBe(true);
+    expect(hasCoreActionEvidence(contract, verified, task)).toBe(true);
+  });
+
   it('keeps a plain AutoCAD launch as a desktop-open contract', () => {
     const task = '打开AutoCAD。';
     const contract = buildActionContract(task);
@@ -25,6 +203,84 @@ describe('Lumi action contract', () => {
       arguments: { target: 'AutoCAD' },
       result: 'Opened app AutoCAD via public desktop shortcut',
     }], task)).toBe(true);
+  });
+
+  it('requires a desktop-open receipt to match the requested application', () => {
+    const autoCadTask = '\u6253\u5f00 AutoCAD\u3002';
+    const autoCadContract = buildActionContract(autoCadTask);
+
+    expect(hasCoreActionEvidence(autoCadContract, [{
+      id: 'wrong-autocad-open',
+      name: 'desktop_open',
+      arguments: { target: 'mspaint.exe' },
+      result: JSON.stringify({ ok: true, status: 'opened', target: 'mspaint.exe' }),
+    }], autoCadTask)).toBe(false);
+    expect(hasCoreActionEvidence(autoCadContract, [{
+      id: 'correct-autocad-open',
+      name: 'desktop_open',
+      arguments: { target: 'acad.exe' },
+      result: 'Opened app Autodesk AutoCAD via Start Menu shortcut',
+    }], autoCadTask)).toBe(true);
+
+    const wpsTask = '\u6253\u5f00 WPS\u3002';
+    const wpsContract = buildActionContract(wpsTask);
+    expect(hasCoreActionEvidence(wpsContract, [{
+      id: 'correct-wps-open',
+      name: 'desktop_open',
+      arguments: { target: 'Kingsoft Office' },
+      result: 'Opened app WPS Office',
+    }], wpsTask)).toBe(true);
+    expect(hasCoreActionEvidence(wpsContract, [{
+      id: 'wrong-wps-open',
+      name: 'desktop_open',
+      arguments: { target: 'mspaint.exe' },
+      result: 'Opened app Microsoft Paint',
+    }], wpsTask)).toBe(false);
+
+    const weChatTask = '\u6253\u5f00\u5fae\u4fe1\u3002';
+    const weChatContract = buildActionContract(weChatTask);
+    expect(hasCoreActionEvidence(weChatContract, [{
+      id: 'correct-wechat-open',
+      name: 'desktop_open',
+      arguments: { target: 'Weixin.exe' },
+      result: 'Focused running app WeChat',
+    }], weChatTask)).toBe(true);
+  });
+
+  it('accepts a successful browser-open receipt for a requested website', () => {
+    const task = '打开中国裁判文书网。';
+    const contract = buildActionContract(task);
+
+    expect(contract.kind).toBe('desktop_operation');
+    expect(hasCoreActionEvidence(contract, [{
+      id: 'open-wenshu',
+      name: 'browser_open_task',
+      arguments: { url: 'https://wenshu.court.gov.cn/', open: true },
+      result: JSON.stringify({ opened: true, result: 'Opened: https://wenshu.court.gov.cn/' }),
+    }], task)).toBe(true);
+  });
+
+  it('rejects a browser receipt for the wrong application or website target', () => {
+    const autoCadTask = '\u6253\u5f00 AutoCAD\u3002';
+    expect(hasCoreActionEvidence(buildActionContract(autoCadTask), [{
+      name: 'browser_open_task',
+      arguments: { url: 'https://www.google.com', open: true },
+      result: JSON.stringify({ opened: true, url: 'https://www.google.com' }),
+    }], autoCadTask)).toBe(false);
+
+    const courtTask = '\u6253\u5f00\u4e2d\u56fd\u88c1\u5224\u6587\u4e66\u7f51\u3002';
+    expect(hasCoreActionEvidence(buildActionContract(courtTask), [{
+      name: 'browser_open_task',
+      arguments: { url: 'https://example.com/', open: true },
+      result: JSON.stringify({ opened: true, url: 'https://example.com/' }),
+    }], courtTask)).toBe(false);
+
+    const browserTask = '\u6253\u5f00\u6d4f\u89c8\u5668\u3002';
+    expect(hasCoreActionEvidence(buildActionContract(browserTask), [{
+      name: 'browser_open_task',
+      arguments: { url: 'https://www.google.com', open: true },
+      result: JSON.stringify({ opened: true, url: 'https://www.google.com' }),
+    }], browserTask)).toBe(true);
   });
 
   it('does not treat a complaint containing app/action words as a new action contract', () => {
@@ -405,6 +661,30 @@ describe('Lumi action contract', () => {
     );
 
     expect(contract.kind).toBe('desktop_operation');
+  });
+
+  it('treats desktop file listing plus active-window inspection as observation, not artifact delivery', () => {
+    const text = '\u7ec4\u5efa\u56e2\u961f\uff0c\u5206\u4e24\u6b65\u6267\u884c\uff1a\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u6839\u636e\u771f\u5b9e\u5de5\u5177\u7ed3\u679c\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002';
+    const contract = buildActionContract(text);
+    const activeOnly = [{
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"WPS Writer","process_name":"wps.exe"}',
+    }];
+    const complete = [...activeOnly, {
+      name: 'desktop_list_files',
+      arguments: { path: '~/Desktop' },
+      result: '[]',
+    }];
+
+    expect(contract.kind).toBe('desktop_operation');
+    expect(contract.label).toBe('\u684c\u9762\u72b6\u6001\u8bfb\u53d6');
+    expect(contract.preferredTools).toEqual([
+      'desktop_active_window',
+      'desktop_list_files',
+    ]);
+    expect(hasCoreActionEvidence(contract, activeOnly, text)).toBe(false);
+    expect(hasCoreActionEvidence(contract, complete, text)).toBe(true);
   });
 
   it('requires authenticated result evidence for login-then-search browser work', () => {

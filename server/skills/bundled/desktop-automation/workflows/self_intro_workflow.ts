@@ -92,7 +92,7 @@ const SELF_INTRO_PATTERNS = [
   /demo\s*(yourself|lumi)/i,
 ];
 
-const OFFICE_DEMO_TEXT = [
+export const OFFICE_DEMO_TEXT = [
   'Lumi 自我介绍',
   '',
   '定位：Lumi 是一个私有化部署在本机的个人 AI 助理和伙伴。',
@@ -157,6 +157,58 @@ function activeWindowMatches(info: ActiveWindowInfo | null, patterns: RegExp[]):
   if (!info) return false;
   const haystack = `${info.title} ${info.process_name}`;
   return patterns.some(pattern => pattern.test(haystack));
+}
+
+const OFFICE_EDITOR_PATTERNS = [
+  /wps/i,
+  /winword/i,
+  /\bword\b/i,
+  /writer/i,
+  /notepad/i,
+  /\u8bb0\u4e8b\u672c/i,
+];
+
+export function verifyOfficePasteEvidence(input: {
+  activeWindowRaw: string;
+  uiSnapshotRaw: string;
+  clipboardWriteResult: string;
+  clipboardReadResult: string;
+  selectAllResult: string;
+  pasteResult: string;
+}): { ok: boolean; reason: string } {
+  const active = parseActiveWindow(input.activeWindowRaw);
+  if (!activeWindowMatches(active, OFFICE_EDITOR_PATTERNS)) {
+    return { ok: false, reason: 'active_editor_not_verified' };
+  }
+  if (!/clipboard updated/i.test(input.clipboardWriteResult) || /failed/i.test(input.clipboardWriteResult)) {
+    return { ok: false, reason: 'clipboard_write_not_verified' };
+  }
+  if (
+    input.clipboardReadResult.replace(/\r\n/g, '\n')
+    !== OFFICE_DEMO_TEXT.replace(/\r\n/g, '\n')
+  ) {
+    return { ok: false, reason: 'clipboard_readback_mismatch' };
+  }
+  if (!/pressed:\s*ctrl\+a/i.test(input.selectAllResult)) {
+    return { ok: false, reason: 'select_all_not_verified' };
+  }
+  if (!/pressed:\s*ctrl\+v/i.test(input.pasteResult)) {
+    return { ok: false, reason: 'paste_not_verified' };
+  }
+  try {
+    const snapshot = JSON.parse(input.uiSnapshotRaw);
+    const capturedNodes = Number(snapshot?.capturedNodes || 0);
+    if (
+      snapshot?.status !== 'ok'
+      || capturedNodes < 1
+      || !OFFICE_EDITOR_PATTERNS.some(pattern => pattern.test(input.uiSnapshotRaw))
+    ) {
+      return { ok: false, reason: 'editor_ui_not_verified' };
+    }
+  } catch {
+    return { ok: false, reason: 'editor_ui_not_verified' };
+  }
+  return { ok: true, reason: 'verified' };
 }
 
 function parseNativeFiles(raw: string): NativeFileEntry[] {
@@ -230,12 +282,17 @@ export async function runSelfIntroDemo({
   speak,
   voiceScope,
   isCancelled,
-}: SelfIntroDemoOptions): Promise<{ responseText: string; toolCalls: ToolExecutionRecord[] }> {
+}: SelfIntroDemoOptions): Promise<{
+  responseText: string;
+  toolCalls: ToolExecutionRecord[];
+  speechSummary: string;
+}> {
   const address = getUserAddress(userId);
   const greeting = address ? `好的，${address}。` : '好的。';
   const opening = `${greeting}我是 Lumi，一个私有化的个人 AI 助理和伙伴。我会边介绍边操作，让你直接看到我能做什么。`;
   const spokenLines: string[] = [];
   const toolCalls: ToolExecutionRecord[] = [];
+  let officeOutcomeLine = '';
 
   const emitTool = (
     id: string,
@@ -753,7 +810,7 @@ exit 2
 
     await enterWallpaperMode();
 
-    const officePatterns = [/wps/i, /winword/i, /word/i, /writer/i, /notepad/i, /记事本/i];
+    const officePatterns = OFFICE_EDITOR_PATTERNS;
     const wpsShortcut = await findDesktopShortcut([/wps/i, /金山/i, /文字/i, /writer/i]);
     const officeDemoFile = createOfficeDemoFile();
     let active: ActiveWindowInfo | null = null;
@@ -771,21 +828,66 @@ exit 2
     if (!active) active = await tryOpenAndMatch('notepad.exe', officePatterns, 1400);
 
     if (!active) {
-      await say('这台机器上没有找到可用的文档编辑器，所以我跳过写作窗口，继续演示浏览器和 AI 协作。', 4200);
+      officeOutcomeLine = '这台机器上没有找到可用的文档编辑器，所以我跳过写作窗口，继续演示浏览器和 AI 协作。';
+      await say(officeOutcomeLine, 4200);
       return;
     }
 
     await enterWallpaperMode();
     await runTool('desktop_run_command', { command: buildAppActivateCommand('WPS') }, true);
     await wait(400);
-    await runTool('desktop_clipboard_write', { text: OFFICE_DEMO_TEXT }, true);
-    await pointActiveWindowRatio(officePatterns, 0.48, 0.52, true, { xRatio: 0.5, yRatio: 0.46 });
-    await wait(400);
-    await runTool('desktop_keyboard_press', { key: 'ctrl+a' }, true);
-    await wait(220);
-    await runTool('desktop_keyboard_press', { key: 'ctrl+v' }, true);
-    await wait(1200);
-    await say('你看到的不是预录动画。我已经在真实应用里输入了一份演示文档草稿。', 4800);
+    try {
+      const clipboardWriteResult = await runTool(
+        'desktop_clipboard_write',
+        { text: OFFICE_DEMO_TEXT },
+        false,
+      );
+      const clipboardReadResult = await runTool('desktop_clipboard_read', {}, false);
+      await pointActiveWindowRatio(
+        officePatterns,
+        0.48,
+        0.52,
+        true,
+        { xRatio: 0.5, yRatio: 0.46 },
+      );
+      await wait(400);
+      const selectAllResult = await runTool(
+        'desktop_keyboard_press',
+        { key: 'ctrl+a' },
+        false,
+      );
+      await wait(220);
+      const pasteResult = await runTool(
+        'desktop_keyboard_press',
+        { key: 'ctrl+v' },
+        false,
+      );
+      await wait(1200);
+      const activeWindowRaw = await runTool('desktop_active_window', {}, false);
+      const uiSnapshotRaw = await runTool(
+        'desktop_ui_snapshot',
+        { root: 'active', maxDepth: 4, maxNodes: 120 },
+        false,
+      );
+      const verification = verifyOfficePasteEvidence({
+        activeWindowRaw,
+        uiSnapshotRaw,
+        clipboardWriteResult,
+        clipboardReadResult,
+        selectAllResult,
+        pasteResult,
+      });
+      if (!verification.ok) {
+        officeOutcomeLine = `办公文档这一步没有完成：粘贴后的编辑器状态未通过验证（${verification.reason}），所以我不会说已经写好了。`; // i18n-allow: reviewed CN workflow result copy.
+        await say(officeOutcomeLine, 5200);
+        return;
+      }
+      officeOutcomeLine = '你看到的不是预录动画。我已经在真实应用里输入了一份演示文档草稿，并核对了编辑器窗口和界面状态。'; // i18n-allow: reviewed CN workflow result copy.
+      await say(officeOutcomeLine, 5200);
+    } catch (error: any) {
+      officeOutcomeLine = `办公文档这一步没有完成：${error?.message || String(error)}。我已跳过完成宣告，继续后面的演示。`; // i18n-allow: reviewed CN workflow result copy.
+      await say(officeOutcomeLine, 5200);
+    }
   };
 
   const runBrowserDemo = async () => {
@@ -927,5 +1029,6 @@ exit 2
   return {
     responseText: spokenLines.join('\n'),
     toolCalls,
+    speechSummary: [officeOutcomeLine, ...spokenLines.slice(-2)].filter(Boolean).join('\n'),
   };
 }

@@ -6,6 +6,11 @@ import { useApp } from '../../contexts/AppContext';
 import { useSocket } from '../../hooks/useSocket';
 import { useT } from '../../lib/useT';
 import { uiMessage } from '../../i18n/uiMessages';
+import {
+  isTerminalAgentStatus,
+  shouldDisplayAgentResponse,
+  type AgentResponseDelivery,
+} from '../../lib/agentResponseDelivery';
 
 type ChatAttachment = {
   id: string;
@@ -333,10 +338,18 @@ export function CentralLumiChat() {
       });
     };
 
-    const onResponse = (data: { text?: string; requestId?: string }) => {
+    const onResponse = (data: AgentResponseDelivery & { requestId?: string }) => {
       if (!isCurrent(data)) return;
       setRequestNotice('');
       const finalText = (data.text || '').trim();
+      if (!shouldDisplayAgentResponse(data)) {
+        const streamingId = streamingMessageIdRef.current;
+        if (streamingId) {
+          setMessages(prev => prev.filter(message => message.id !== streamingId));
+        }
+        clearActiveRequest();
+        return;
+      }
       setMessages(prev => {
         const streamingId = streamingMessageIdRef.current;
         if (streamingId) {
@@ -364,7 +377,11 @@ export function CentralLumiChat() {
         setLoading(true);
         setRequestNotice('');
       }
-      if (data.status === 'idle' || data.status === 'error') {
+      if (data.status && isTerminalAgentStatus(data.status)) {
+        const streamingId = streamingMessageIdRef.current;
+        if (streamingId) {
+          setMessages(prev => prev.filter(message => message.id !== streamingId));
+        }
         clearActiveRequest();
       }
     };

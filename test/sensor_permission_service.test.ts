@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  BACKGROUND_FACE_PRESENCE_CHANGED,
+  BACKGROUND_FACE_PRESENCE_ENABLED_KEY,
   isSensorEnabled,
   requestMicrophoneStream,
+  setBackgroundFacePresenceEnabled,
   setSensorEnabled,
 } from '@/services/sensorPermissionService';
 
@@ -83,5 +86,32 @@ describe('sensor permission access toggles', () => {
     setSensorEnabled('microphone', false);
 
     expect(fake.track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the strong active-stream reference when a caller stops a track directly', async () => {
+    const fake = createFakeStream();
+    const originalStop = fake.track.stop;
+    const getUserMedia = vi.fn().mockResolvedValue(fake.stream);
+    installBrowserGlobals(getUserMedia);
+
+    setSensorEnabled('microphone', true);
+    const stream = await requestMicrophoneStream(true);
+    stream.getTracks()[0].stop();
+
+    // Disabling afterward must not revisit an already released stream.
+    setSensorEnabled('microphone', false);
+    expect(originalStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('broadcasts a dedicated same-window event for background face presence', () => {
+    const { localStorage } = installBrowserGlobals();
+
+    setBackgroundFacePresenceEnabled(true);
+
+    expect(localStorage.setItem).toHaveBeenCalledWith(BACKGROUND_FACE_PRESENCE_ENABLED_KEY, 'true');
+    expect(window.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: BACKGROUND_FACE_PRESENCE_CHANGED,
+      detail: expect.objectContaining({ enabled: true }),
+    }));
   });
 });

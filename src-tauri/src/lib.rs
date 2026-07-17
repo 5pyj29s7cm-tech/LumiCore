@@ -372,23 +372,42 @@ fn list_home_files() -> Vec<NativeFile> {
     read_native_files(&home, None)
 }
 
+fn resolve_user_path(value: &str) -> PathBuf {
+    let trimmed = value.trim();
+    let home = dirs_next::home_dir().unwrap_or_default();
+    if trimmed.is_empty() || trimmed == "~" {
+        return home;
+    }
+    if let Some(relative) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        return home.join(relative);
+    }
+    PathBuf::from(trimmed)
+}
+
+#[cfg(test)]
+mod user_path_tests {
+    use super::resolve_user_path;
+
+    #[test]
+    fn expands_home_relative_desktop_paths() {
+        let home = dirs_next::home_dir().unwrap_or_default();
+        assert_eq!(resolve_user_path("~/Desktop"), home.join("Desktop"));
+        assert_eq!(resolve_user_path("~\\Desktop"), home.join("Desktop"));
+    }
+}
+
 #[tauri::command]
 fn list_directory(path: String, limit: Option<usize>) -> Vec<NativeFile> {
-    let dir = if path.trim().is_empty() {
-        dirs_next::home_dir().unwrap_or_default()
-    } else {
-        PathBuf::from(path)
-    };
+    let dir = resolve_user_path(&path);
     read_native_files(&dir, limit)
 }
 
 #[tauri::command]
 fn path_info(target: String) -> NativePathInfo {
-    let path = if target.trim().is_empty() {
-        dirs_next::home_dir().unwrap_or_default()
-    } else {
-        PathBuf::from(target)
-    };
+    let path = resolve_user_path(&target);
     let metadata = std::fs::metadata(&path).ok();
     let is_directory = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
     NativePathInfo {

@@ -22,6 +22,7 @@ import {
   describeTurnCompletionProgress,
   needsVisibleToolEvidence,
   type ChatProgressLine,
+  type ChatResponseFinalization,
   type ChatProgressTone,
 } from '@/lib/chatProgress';
 import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
@@ -38,6 +39,11 @@ import {
   type ChatAttachmentReference,
   type ChatAttachmentRequest,
 } from '@/lib/chatAttachmentReferences';
+import {
+  isFinalizedSuccessfulResponse,
+  isTerminalAgentStatus,
+  shouldDisplayAgentResponse,
+} from '@/lib/agentResponseDelivery';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -539,6 +545,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentRequestHadToolRef = useRef(false);
   const currentRequestNeedsEvidenceRef = useRef(false);
+  const currentResponseFinalizationRef = useRef<ChatResponseFinalization | null>(null);
   const messagesRef = useRef<any[]>([]);
   const recentAttachmentContextRef = useRef<ChatAttachment[]>([]);
   const recentAttachmentContextSinceRef = useRef(0);
@@ -1141,10 +1148,21 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       return textChatActiveRef.current;
     };
 
-    const onProactive = (data: { message: string; timestamp: string; requestId?: string; source?: string; type?: string; taskId?: string }) => {
+    const onProactive = (data: {
+      message: string;
+      timestamp: string;
+      requestId?: string;
+      source?: string;
+      type?: string;
+      taskId?: string;
+      finalized?: boolean;
+      blocked?: boolean;
+      reason?: string;
+    }) => {
       const proactiveType = data.type || data.taskId;
       if (proactiveType === 'greeting' && localStorage.getItem('lumi_allow_proactive_voice') !== 'true') return;
       if ((data.requestId || data.source) && !isCurrentChatEvent(data)) return;
+      if (!shouldDisplayAgentResponse({ ...data, text: data.message })) return;
       setMessages(prev => {
         if (prev.some(m => m.text === data.message && m.type === 'agent')) return prev;
         return [...prev, {
@@ -1194,7 +1212,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         setWorkflowSteps(prev => [...prev, {
           id: `chat-tool-ok-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: 'tool_result',
-          text: `${data.name} ${t.workflowToolDone || 'done'}`,
+          text: `${data.name}: ${uiMessage('chat-progress.tool-returned-result-awaiting-task-verification.4f8d02cb71', (isZh) ? 'zh' : 'en')}`,
           detail: data.result?.slice(0, 100),
           time: Date.now(),
         }]);
@@ -1230,24 +1248,74 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       currentRequestHadToolRef.current = true;
     };
 
-    const onResponse = (data: { text: string; agentName: string; source?: string; requestId?: string }) => {
+    const onResponse = (data: {
+      text: string;
+      agentName: string;
+      source?: string;
+      requestId?: string;
+      finalized?: boolean;
+      blocked?: boolean;
+      reason?: string;
+    }) => {
       if (!isCurrentChatEvent(data)) return;
+      const finalization: ChatResponseFinalization = {
+        finalized: data.finalized,
+        blocked: data.blocked,
+        reason: data.reason,
+      };
+      currentResponseFinalizationRef.current = finalization;
       setIsTyping(false);
-      setWorkflowStatus('done');
-      const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+      if (!shouldDisplayAgentResponse(data)) {
+        setWorkflowStatus('error');
+        const rejected = describeTurnCompletionProgress(
+          isZh,
+          currentRequestHadToolRef.current,
+          true,
+          { finalized: false, blocked: true, reason: data.reason },
+        );
+        finishChatProgress(rejected.text, rejected.tone);
+        setWorkflowSteps(prev => [...prev, {
+          id: makeChatMessageId('chat-rejected'),
+          type: 'error',
+          text: t.workflowError || 'Processing blocked',
+          detail: data.reason,
+          time: Date.now(),
+        }]);
+        if (streamingMsgId.current) {
+          const sid = streamingMsgId.current;
+          setMessages(prev => prev.filter(m => m.id !== sid));
+          streamingMsgId.current = null;
+        }
+        setTimeout(() => {
+          setWorkflowStatus('idle');
+          setWorkflowSteps([]);
+          seenWorkflowToolEvents.current.clear();
+        }, 5000);
+        return;
+      }
+      const finalizedSuccess = isFinalizedSuccessfulResponse(data);
+      setWorkflowStatus(data.blocked ? 'error' : finalizedSuccess ? 'done' : 'idle');
+      const completion = describeTurnCompletionProgress(
+        isZh,
+        currentRequestHadToolRef.current,
+        currentRequestNeedsEvidenceRef.current,
+        finalization,
+      );
       finishChatProgress(completion.text, completion.tone);
-      setWorkflowSteps(prev => [...prev, {
-        id: makeChatMessageId('chat-resp'),
-        type: 'response',
-        text: t.workflowResponseReady || 'Response ready',
-        detail: data.text?.slice(0, 100),
-        time: Date.now(),
-      }]);
-      setTimeout(() => {
-        setWorkflowStatus('idle');
-        setWorkflowSteps([]);
-        seenWorkflowToolEvents.current.clear();
-      }, 5000);
+      if (data.blocked || finalizedSuccess) {
+        setWorkflowSteps(prev => [...prev, {
+          id: makeChatMessageId('chat-resp'),
+          type: data.blocked ? 'error' : 'response',
+          text: data.blocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
+          detail: (data.reason || data.text)?.slice(0, 100),
+          time: Date.now(),
+        }]);
+        setTimeout(() => {
+          setWorkflowStatus('idle');
+          setWorkflowSteps([]);
+          seenWorkflowToolEvents.current.clear();
+        }, 5000);
+      }
       if (streamingMsgId.current) {
         // Finalize streamed message; keep chunked text if response text is empty.
         const finalText = (data.text && data.text.trim()) ? data.text : null;
@@ -1287,21 +1355,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           }];
         });
       } else if (data.status === 'idle') {
-        setWorkflowStatus('done');
-        const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
-        finishChatProgress(completion.text, completion.tone);
-        setWorkflowSteps(prev => [...prev, {
-          id: `chat-done-${Date.now()}`,
-          type: 'response',
-          text: t.workflowCompleted || 'Completed',
-          time: Date.now(),
-        }]);
-        setTimeout(() => {
-          setWorkflowStatus('idle');
-          setWorkflowSteps([]);
-          seenWorkflowToolEvents.current.clear();
-        }, 5000);
-      } else if (data.status === 'error') {
+        setIsTyping(false);
+        if (currentResponseFinalizationRef.current) return;
+        setWorkflowStatus('idle');
+        clearChatProgress();
+        setWorkflowSteps([]);
+        seenWorkflowToolEvents.current.clear();
+      } else if (isTerminalAgentStatus(data.status)) {
+        setIsTyping(false);
         setWorkflowStatus('error');
         finishChatProgress(
           uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
@@ -1313,7 +1374,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           seenWorkflowToolEvents.current.clear();
         }, 5000);
       }
-      if (data.status === "idle" || data.status === "error") {
+      if (isTerminalAgentStatus(data.status)) {
         // Drop partial streaming chunks that were never finalized
         if (streamingMsgId.current) {
           const sid = streamingMsgId.current;
@@ -1361,7 +1422,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           source: 'error',
         }];
       });
-      toast.error(message);
     };
 
     // conversation_updated: only reload for non-text-chat channels (voice, etc.)
@@ -1492,6 +1552,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     clearChatProgress();
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = false;
+    currentResponseFinalizationRef.current = null;
     seenWorkflowToolEvents.current.clear();
   }, [clearChatProgress, isOpen]);
 
@@ -1536,6 +1597,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     seenWorkflowToolEvents.current.clear();
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0);
+    currentResponseFinalizationRef.current = null;
     clearChatProgress();
     pushChatProgress(
       reusedRecentAttachmentContext

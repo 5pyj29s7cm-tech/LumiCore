@@ -1,4 +1,4 @@
-import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
+import { guardCompletionClaims } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import { formatDesktopObservationResult } from './desktop_observation';
@@ -12,10 +12,18 @@ import {
 } from '../regions/packs/cn/messaging_messages';
 import {
   buildActionContract,
+  claimsCurrentAppSaveCompletion,
   extractSimpleDesktopOpenTarget,
+  extractCurrentAppTarget,
+  extractRequestedCurrentAppText,
   hasAuthenticatedWebResultEvidence,
   hasCoreActionEvidence,
+  hasCurrentAppSaveEvidence,
+  hasCurrentAppUiMutationEvidence,
+  hasVerifiedCadGeometryExtractionEvidence,
   hasVisibleAutoCadExecutionEvidence,
+  requiresCadGeometryExtractionOnly,
+  requiresCurrentAppUiMutation,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
   summarizeActionContractBlocker,
@@ -41,8 +49,12 @@ export interface LumiResultFinalizerResult {
   };
 }
 
-function hasToolEvidence(records: ToolExecutionRecord[]): boolean {
-  return records.some(record => Boolean(record.error) || Boolean(String(record.result || '').trim()));
+const TOOL_ITERATION_LIMIT_RESPONSE_RE =
+  /The tool loop reached its limit|Maximum tool call iterations reached|before Lumi could write the final answer|\u8fd9\u8f6e\u5de5\u5177(?:\u5904\u7406|\u8c03\u7528)\u6b21\u6570(?:\u5df2)?(?:\u5230\u8fbe|\u8fbe\u5230|\u5230)\u4e0a\u9650/iu;
+
+function resultTaskText(input: LumiResultFinalizerInput): string {
+  const routed = String(input.flow?.routeText || '').trim();
+  return routed || String(input.taskText || '').trim();
 }
 
 function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
@@ -50,7 +62,7 @@ function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFi
   if (!/<(?:function_calls|tool_calls|invoke)\b/i.test(raw)) return null;
   const names = Array.from(raw.matchAll(/<invoke\s+name=["']([^"']+)["']/gi), match => match[1]);
   const clientStateRequested = names.includes('client_get_state');
-  const chinese = isChineseText(input.taskText);
+  const chinese = isChineseText(resultTaskText(input));
   const text = chinese
     ? clientStateRequested
       ? CN_RESULT_GROUNDING_MESSAGES.clientStateProtocolBlocked
@@ -98,7 +110,7 @@ function unsupportedToolExecutionClaim(input: LumiResultFinalizerInput): string 
     ? claim.toolNames.filter(name => !actualNames.has(name))
     : (actualNames.size === 0 ? ['tool execution evidence'] : []);
   if (missing.length === 0) return null;
-  if (isChineseText(input.taskText) || isChineseText(input.responseText)) {
+  if (isChineseText(resultTaskText(input)) || isChineseText(input.responseText)) {
     return formatCnUnsupportedToolExecutionClaim(missing[0] === 'tool execution evidence' ? [] : missing);
   }
   return [
@@ -125,27 +137,13 @@ function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): strin
   );
   if (diagnosticEvidence) return null;
 
-  return isChineseText(input.taskText) || isChineseText(response)
+  return isChineseText(resultTaskText(input)) || isChineseText(response)
     ? CN_RESULT_GROUNDING_MESSAGES.priorDiagnosticUnsupported
     : 'There is no verifiable client-diagnostic receipt for the prior turn. I cannot explain the delay as a self-check when no such check was recorded.';
 }
 
 function taskActionContract(input: LumiResultFinalizerInput) {
-  return buildActionContract(input.taskText);
-}
-
-function shouldRunCompletionGuard(input: LumiResultFinalizerInput): boolean {
-  const toolRecords = input.toolRecords || [];
-  if (hasToolEvidence(toolRecords)) return true;
-  if (input.flow?.completionEvidenceNeeded) return true;
-  if (needsCompletionEvidence(input.taskText)) return true;
-  const actionContract = taskActionContract(input);
-  if (actionContract.applies && actionContract.kind !== 'none') return true;
-
-  const source = String(input.source || '').toLowerCase();
-  if (['task', 'workflow', 'background_delegation', 'autonomous'].includes(source)) return true;
-
-  return false;
+  return buildActionContract(resultTaskText(input));
 }
 
 function isChineseText(value: string): boolean {
@@ -194,13 +192,14 @@ function summarizeWebAccountBlocker(records: ToolExecutionRecord[]): string {
 function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput): boolean {
   const records = input.toolRecords || [];
   if (String(input.source || '').toLowerCase() === 'background_delegation') return true;
+  const actionText = resultTaskText(input);
   const contract = taskActionContract(input);
-  if (shouldEnforceCoreActionContract(contract, input.taskText)) return true;
+  if (shouldEnforceCoreActionContract(contract, actionText)) return true;
   const hasDesktopOrMessagingTool = records.some(record =>
     /^(desktop_|wechat_(?:send_message|send_file|read_recent_chat)|computer_use|keyboard_|mouse_|cursor_|get_active_window_info|capture_screen|ocr_screen)/i.test(String(record.name || ''))
   );
   if (!hasDesktopOrMessagingTool) return false;
-  const text = `${input.taskText}\n${input.responseText}`;
+  const text = `${actionText}\n${input.responseText}`;
   return /wechat|weixin|\u5fae\u4fe1|\u53d1\u9001|\u53d1\u7ed9|\u665a\u5b89|\u684c\u9762|\u6253\u5f00|\u805a\u7126|\u6700\u540e\u4e00\u6b65/i.test(text);
 }
 
@@ -341,7 +340,7 @@ function hasLegalExternalPlatformResultEvidence(records: ToolExecutionRecord[]):
 }
 
 function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: string): string {
-  const zh = isChineseText(input.taskText) || isChineseText(input.responseText);
+  const zh = isChineseText(resultTaskText(input)) || isChineseText(input.responseText);
   const failure = summarizeToolFailure(input.toolRecords || []);
   const contract = taskActionContract(input);
   const contractBlocker = zh && contract.kind === 'messaging_send'
@@ -443,7 +442,275 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
 }
 
 function formatGroundedDesktopEvidence(input: LumiResultFinalizerInput): string | null {
-  return formatDesktopObservationResult(input.toolRecords || [], input.taskText);
+  return formatDesktopObservationResult(input.toolRecords || [], resultTaskText(input));
+}
+
+function formatGroundedSimpleDesktopOpenResult(
+  input: LumiResultFinalizerInput,
+): string | null {
+  const actionText = resultTaskText(input);
+  const requestedTarget = extractSimpleDesktopOpenTarget(actionText);
+  if (!requestedTarget) return null;
+  const contract = buildActionContract(actionText);
+  if (
+    contract.kind !== 'desktop_operation'
+    || !hasCoreActionEvidence(contract, input.toolRecords || [], actionText)
+  ) {
+    return null;
+  }
+  const successfulOpen = [...(input.toolRecords || [])].reverse().find(record => (
+    /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
+    && !record.error
+    && String(record.result || '').trim()
+  ));
+  if (!successfulOpen) return null;
+  return isChineseText(actionText)
+    ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
+    : `Opened ${requestedTarget}.`;
+}
+
+const CAD_GEOMETRY_ZH = {
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  failed: '\u51e0\u4f55\u63d0\u53d6\u672a\u6210\u529f\uff0c\u672a\u6267\u884c\u7ed8\u5236\u3002',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  succeeded: '\u51e0\u4f55\u63d0\u53d6\u6210\u529f\uff0c\u672a\u6267\u884c\u7ed8\u5236\u3002',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  reason: '\u539f\u56e0\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  source: '\u6765\u6e90\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  verificationState: '\u9a8c\u8bc1\u72b6\u6001\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  receipt: '\u51e0\u4f55\u56de\u6267\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  dimensions: '\u51e0\u4f55\u5c3a\u5bf8\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  counts: '\u51e0\u4f55\u8ba1\u6570\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  failedStage: '\u5931\u8d25\u9636\u6bb5\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  receiptState: '\u56de\u6267\u72b6\u6001\uff1a',
+  // i18n-allow: Reviewed Chinese CAD geometry receipt result copy.
+  next: '\u4e0b\u4e00\u6b65\uff1a',
+} as const;
+
+function formatGroundedCadGeometryExtractionResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const actionText = resultTaskText(input);
+  if (!requiresCadGeometryExtractionOnly(actionText)) return null;
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    /^floorplan_extract_geometry$/i.test(String(item.name || ''))
+  ));
+  if (!record) return null;
+
+  const zh = isChineseText(actionText);
+  if (record.error) {
+    const blocker = String(record.error || '').trim() || 'floorplan_extract_geometry failed.';
+    return {
+      text: zh
+        ? [
+            CAD_GEOMETRY_ZH.failed,
+            `${CAD_GEOMETRY_ZH.reason}${blocker}`,
+          ].join('\n')
+        : [
+            'Geometry extraction did not succeed; no drawing was executed.',
+            `Reason: ${blocker}`,
+          ].join('\n'),
+      blocked: true,
+      reason: `Geometry extraction tool failed: ${blocker}`,
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: blocker,
+      },
+    };
+  }
+
+  let parsed: Record<string, any>;
+  try {
+    const value = JSON.parse(String(record.result || ''));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('non-object receipt');
+    parsed = value as Record<string, any>;
+  } catch {
+    const blocker = 'floorplan_extract_geometry returned malformed structured JSON.';
+    return {
+      text: zh
+        ? [
+            CAD_GEOMETRY_ZH.failed,
+            `${CAD_GEOMETRY_ZH.reason}${blocker}`,
+          ].join('\n')
+        : [
+            'Geometry extraction did not succeed; no drawing was executed.',
+            `Reason: ${blocker}`,
+          ].join('\n'),
+      blocked: true,
+      reason: blocker,
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: blocker,
+      },
+    };
+  }
+
+  const sourcePath = String(parsed.path || record.arguments?.imagePath || '').trim();
+  const receiptPath = String(parsed.geometryReceiptPath || '').trim();
+  const flag = (value: unknown) => value === true ? 'true' : value === false ? 'false' : 'unknown';
+  const state = `parsed=${flag(parsed.parsed)}, geometryReady=${flag(parsed.geometryReady)}, geometryVerified=${flag(parsed.geometryVerified)}`;
+  const verified = hasVerifiedCadGeometryExtractionEvidence([record]);
+  if (verified) {
+    const width = Number(parsed?.geometryReview?.width || 0);
+    const height = Number(parsed?.geometryReview?.height || 0);
+    const countEntries = Object.entries(parsed?.geometryReview?.counts || {})
+      .filter(([, value]) => Number(value) > 0)
+      .map(([key, value]) => `${key}=${Number(value)}`);
+    const lines = zh
+      ? [
+          CAD_GEOMETRY_ZH.succeeded,
+          sourcePath ? `${CAD_GEOMETRY_ZH.source}${sourcePath}` : '',
+          `${CAD_GEOMETRY_ZH.verificationState}${state}\u3002`,
+          receiptPath ? `${CAD_GEOMETRY_ZH.receipt}${receiptPath}` : '',
+          width > 0 && height > 0 ? `${CAD_GEOMETRY_ZH.dimensions}${width} x ${height}\u3002` : '',
+          countEntries.length > 0 ? `${CAD_GEOMETRY_ZH.counts}${countEntries.join(', ')}\u3002` : '',
+        ]
+      : [
+          'Geometry extraction succeeded; no drawing was executed.',
+          sourcePath ? `Source: ${sourcePath}` : '',
+          `Verification state: ${state}.`,
+          receiptPath ? `Geometry receipt: ${receiptPath}` : '',
+          width > 0 && height > 0 ? `Geometry dimensions: ${width} x ${height}.` : '',
+          countEntries.length > 0 ? `Geometry counts: ${countEntries.join(', ')}.` : '',
+        ];
+    return {
+      text: lines.filter(Boolean).join('\n'),
+      blocked: false,
+      reason: 'Grounded geometry-extraction success from a verified floorplan_extract_geometry receipt.',
+    };
+  }
+
+  const failedStage = String(parsed.failedStage || 'verification').trim();
+  const parseError = String(
+    parsed.parseError
+    || parsed?.geometryReview?.validation?.errors?.[0]
+    || parsed?.geometryReview?.visualVerification?.criticalMismatches?.[0]
+    || 'The geometry receipt did not pass readiness and verification.',
+  ).trim();
+  const next = String(parsed.next || '').trim();
+  const lines = zh
+    ? [
+        CAD_GEOMETRY_ZH.failed,
+        `${CAD_GEOMETRY_ZH.failedStage}${failedStage}\u3002`,
+        `${CAD_GEOMETRY_ZH.receiptState}${state}\u3002`,
+        `${CAD_GEOMETRY_ZH.reason}${parseError}`,
+        next ? `${CAD_GEOMETRY_ZH.next}${next}` : '',
+      ]
+    : [
+        'Geometry extraction did not succeed; no drawing was executed.',
+        `Failed stage: ${failedStage}.`,
+        `Receipt state: ${state}.`,
+        `Reason: ${parseError}`,
+        next ? `Next: ${next}` : '',
+      ];
+  const blocker = `Geometry extraction receipt reported ${failedStage}: ${parseError}`;
+  return {
+    text: lines.filter(Boolean).join('\n'),
+    blocked: true,
+    reason: blocker,
+    notification: {
+      type: 'work_product_guard',
+      level: 'warning',
+      message: blocker,
+    },
+  };
+}
+
+function formatGroundedWpsMutationResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const actionText = resultTaskText(input);
+  if (!requiresCurrentAppUiMutation(actionText)) return null;
+  const target = extractCurrentAppTarget(actionText);
+  if (!/(?:^|\b)wps(?:\s+office|\s+writer)?(?:\b|$)|\u91d1\u5c71/iu.test(target)) return null;
+
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    item.name === 'wps_create_document_with_text'
+    && !item.error
+    && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+
+  let receipt: Record<string, any>;
+  try {
+    const parsed = JSON.parse(String(record.result || ''));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    receipt = parsed as Record<string, any>;
+  } catch {
+    return null;
+  }
+
+  const primaryText = String(actionText || '').split(/\n## Recent action continuation context\b/i, 1)[0].trim();
+  const requestedText = extractRequestedCurrentAppText(primaryText);
+  const suppliedText = String(record.arguments?.text || '');
+  const readBack = String(receipt.bodyTextWithoutTerminalParagraph || '');
+  const attachmentMode = String(receipt.attachmentMode || '');
+  const attachmentFlagsMatch = attachmentMode === 'attachedExisting'
+    ? receipt.attachedExisting === true && receipt.newVisibleInstance === false
+    : attachmentMode === 'newVisibleInstance'
+      ? receipt.attachedExisting === false && receipt.newVisibleInstance === true
+      : false;
+  const verified = (
+    receipt.ok === true
+    && receipt.status === 'verified'
+    && receipt.automation === 'KWPS.Application'
+    && receipt.visible === true
+    && receipt.documentCreated === true
+    && receipt.exactTextMatch === true
+    && receipt.processName === 'wps.exe'
+    && Number(receipt.processId) > 0
+    && attachmentFlagsMatch
+    && Boolean(String(receipt.documentName || '').trim())
+    && Boolean(String(receipt.windowTitle || '').trim())
+    && receipt.saved === false
+    && !String(receipt.savePath || '').trim()
+    && Boolean(requestedText)
+    && suppliedText === requestedText
+    && readBack === requestedText
+  );
+  if (!verified) return null;
+
+  const zh = isChineseText(actionText);
+  const userRequestedSave = /(?:\u4fdd\u5b58)|\b(?:save)\b/iu.test(primaryText);
+  const documentName = String(receipt.documentName).trim();
+  const windowTitle = String(receipt.windowTitle).trim();
+  const processId = Number(receipt.processId);
+  const lines = zh
+    ? [
+        `\u5df2\u5728\u53ef\u89c1 WPS \u6587\u6863\u201c${documentName}\u201d\u4e2d\u7cbe\u786e\u5199\u5165\uff1a${requestedText}`, // i18n-allow: reviewed Chinese grounded WPS receipt.
+        `\u7a97\u53e3\uff1a${windowTitle}`, // i18n-allow: reviewed Chinese grounded WPS receipt.
+        `\u8fdb\u7a0b\uff1awps.exe (PID ${processId})`, // i18n-allow: reviewed Chinese grounded WPS receipt.
+        '\u5f53\u524d\u672a\u4fdd\u5b58\u3002', // i18n-allow: reviewed Chinese grounded WPS receipt.
+      ]
+    : [
+        `Created visible WPS document "${documentName}" and wrote the exact requested text: ${requestedText}`,
+        `Window: ${windowTitle}`,
+        `Process: wps.exe (PID ${processId})`,
+        'The document is currently unsaved.',
+      ];
+  return {
+    text: lines.join('\n'),
+    blocked: userRequestedSave,
+    reason: userRequestedSave
+      ? 'WPS document creation and exact text entry were verified, but the requested save action was not completed.'
+      : 'Grounded WPS document creation and exact text entry from a verified KWPS.Application receipt.',
+    notification: userRequestedSave
+      ? {
+          type: 'work_product_guard',
+          level: 'warning',
+          message: 'The WPS document was created and populated, but it is not saved.',
+        }
+      : undefined,
+  };
 }
 
 function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
@@ -462,7 +729,8 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
     return null;
   }
 
-  const zh = isChineseText(input.taskText);
+  const actionText = resultTaskText(input);
+  const zh = isChineseText(actionText);
   const markerPath = String(parsed?.completionMarkerPath || '').trim();
   const operationsPath = String(parsed?.operationsPath || parsed?.manifest?.operationsPath || '').trim();
   const executable = String(parsed?.autocadExecutable || parsed?.manifest?.autocadExecutable || '').trim();
@@ -510,7 +778,7 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
     };
   }
 
-  if (!requiresVisibleAutoCadExecution(input.taskText)) return null;
+  if (!requiresVisibleAutoCadExecution(actionText)) return null;
   const blocker = String(parsed?.note || (
     parsed?.geometryVerified !== true
       ? 'AutoCAD geometry did not pass source verification.'
@@ -555,7 +823,7 @@ function formatDesktopAiRoundtableResult(input: LumiResultFinalizerInput): strin
   }
   if (!Array.isArray(parsed?.targets) || !parsed?.ask || !Array.isArray(parsed?.answers)) return null;
 
-  const zh = isChineseText(input.taskText);
+  const zh = isChineseText(resultTaskText(input));
   const askByTarget = new Map((parsed.ask.results || []).map((item: any) => [String(item?.target || ''), item]));
   const answerByTarget = new Map((parsed.answers || []).map((item: any) => [String(item?.target || ''), item]));
   const lines: string[] = [zh ? '桌面 AI 协同实执行结果：' : 'Desktop AI collaboration result:'];
@@ -625,20 +893,21 @@ function correctCurrentTurnContractDrift(
   input: LumiResultFinalizerInput,
   taskContract: ReturnType<typeof buildActionContract>,
 ): string | null {
+  const actionText = resultTaskText(input);
   if (!taskContract.applies || taskContract.kind !== 'desktop_operation') return null;
   const responseContract = buildActionContract(input.responseText);
   if (!responseContract.applies || responseContract.kind === taskContract.kind) return null;
   if (hasCoreActionEvidence(responseContract, input.toolRecords || [], input.responseText)) return null;
-  if (!hasCoreActionEvidence(taskContract, input.toolRecords || [], input.taskText)) return null;
+  if (!hasCoreActionEvidence(taskContract, input.toolRecords || [], actionText)) return null;
 
-  const requestedTarget = extractSimpleDesktopOpenTarget(input.taskText);
+  const requestedTarget = extractSimpleDesktopOpenTarget(actionText);
   const successfulOpen = [...(input.toolRecords || [])].reverse().find(record => (
     /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
     && !record.error
     && String(record.result || '').trim()
   ));
   if (requestedTarget && successfulOpen) {
-    return isChineseText(input.taskText)
+    return isChineseText(actionText)
       ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
       : `Opened ${requestedTarget}.`;
   }
@@ -651,9 +920,16 @@ function correctCurrentTurnContractDrift(
 }
 
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
+  const actionText = resultTaskText(input);
   const protocolLeak = leakedLegacyToolProtocol(input);
   if (protocolLeak) return protocolLeak;
-  const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], input.taskText);
+  const guard = guardCompletionClaims({
+    task: actionText,
+    response: input.responseText,
+    toolCalls: input.toolRecords || [],
+    source: input.source,
+  });
+  const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
   if (diagnosticResult) {
     return {
       text: diagnosticResult,
@@ -687,11 +963,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-  if (!shouldRunCompletionGuard(input)) {
-    return { text: input.responseText, blocked: false };
-  }
-
   const actionContract = taskActionContract(input);
+  const groundedWpsMutation = formatGroundedWpsMutationResult(input);
+  if (groundedWpsMutation) return groundedWpsMutation;
+  const groundedCadGeometry = formatGroundedCadGeometryExtractionResult(input);
+  if (groundedCadGeometry) return groundedCadGeometry;
   const groundedCadRun = formatGroundedCadRunResult(input);
   if (groundedCadRun) return groundedCadRun;
   const groundedDesktopAi = formatDesktopAiRoundtableResult(input);
@@ -702,6 +978,38 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       reason: 'Grounded desktop AI collaboration summary from structured tool evidence.',
     };
   }
+  const groundedSimpleOpen = formatGroundedSimpleDesktopOpenResult(input);
+  if (groundedSimpleOpen) {
+    return {
+      text: groundedSimpleOpen,
+      blocked: false,
+      reason: 'Grounded exact desktop-open success from the requested target receipt.',
+    };
+  }
+  const responseClaimsIncomplete = /(?:\u8fd8|\u5c1a|\u4ecd)?(?:\u6ca1\u6709|\u6ca1|\u672a|\u5e76\u672a|\u4e0d\u7b97|\u4e0d\u80fd\u8bf4)[^\u3002\uFF01\uFF1F.!?\n]{0,18}(?:\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00|\u8bfb\u53d6|\u751f\u6210)|\b(?:not|isn'?t|wasn'?t|didn'?t|incomplete|unfinished)\b[^.!?\n]{0,40}\b(?:complete|completed|sent|opened|read|created|generated)\b/iu
+    .test(input.responseText || '');
+  const reportsToolIterationLimit = TOOL_ITERATION_LIMIT_RESPONSE_RE.test(input.responseText || '');
+  const failedToolRecord = [...(input.toolRecords || [])].reverse().find(record => Boolean(record.error));
+  const reportsFailedExecutionIncomplete = Boolean(
+    responseClaimsIncomplete
+    && failedToolRecord
+    && (actionContract.applies || input.flow?.completionEvidenceNeeded),
+  );
+  if (reportsToolIterationLimit || reportsFailedExecutionIncomplete) {
+    const reason = reportsToolIterationLimit
+      ? 'Tool iteration limit reached before a verified final response.'
+      : `Execution remained incomplete after ${String(failedToolRecord?.name || 'a tool')} failed.`;
+    return {
+      text: input.responseText,
+      blocked: true,
+      reason,
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: reason,
+      },
+    };
+  }
   const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
   if (groundedDriftCorrection) {
     return {
@@ -710,11 +1018,19 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       reason: 'Corrected current-turn action-contract drift using fresh desktop evidence.',
     };
   }
-  const claimsActionDone = /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|complete|completed|success|sent|opened|read|viewed|created|generated)/iu
+  const groundedDesktopObservation = formatGroundedDesktopEvidence(input);
+  if (groundedDesktopObservation) {
+    return {
+      text: groundedDesktopObservation,
+      blocked: false,
+      reason: 'Grounded desktop observation from current-turn tool receipts.',
+    };
+  }
+  const claimsActionDone = !responseClaimsIncomplete && /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|complete|completed|success|sent|opened|read|viewed|created|generated)/iu
     .test(input.responseText || '');
   const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
     .test(input.responseText || '');
-  const actionText = input.taskText;
+  const currentAppMutationTask = requiresCurrentAppUiMutation(actionText);
   const legalExternalHandoffOnly =
     hasLegalExternalPlatformSignal(actionText) &&
     describesAuthorizedLegalExternalHandoff(input.responseText || '') &&
@@ -748,6 +1064,40 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         type: 'work_product_guard',
         level: 'warning',
         message: 'Missing external legal platform result evidence.',
+      },
+    };
+  }
+  if (
+    actionContract.kind === 'desktop_operation'
+    && currentAppMutationTask
+    && claimsActionDone
+    && !hasCurrentAppUiMutationEvidence(input.toolRecords || [], actionText)
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing verified in-app UI mutation evidence.'),
+      blocked: true,
+      reason: 'Missing verified in-app UI mutation evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing verified in-app UI mutation evidence.',
+      },
+    };
+  }
+  if (
+    actionContract.kind === 'desktop_operation'
+    && currentAppMutationTask
+    && claimsCurrentAppSaveCompletion(input.responseText || '')
+    && !hasCurrentAppSaveEvidence(input.toolRecords || [], actionText)
+  ) {
+    return {
+      text: formatCompactBlockedResponse(input, 'Missing verified in-app save evidence.'),
+      blocked: true,
+      reason: 'Missing verified in-app save evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Missing verified in-app save evidence.',
       },
     };
   }
@@ -790,7 +1140,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     claimsActionDone &&
     requiresAuthenticatedWebResult(actionText) &&
     !legalExternalHandoffOnly &&
-    !hasAuthenticatedWebResultEvidence(input.toolRecords || [], input.taskText)
+    !hasAuthenticatedWebResultEvidence(input.toolRecords || [], actionText)
   ) {
     return {
       text: formatCompactBlockedResponse(input, 'Missing authenticated browser result evidence.'),
@@ -855,6 +1205,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     };
   }
   if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !legalExternalHandoffOnly && !hasCoreActionEvidence(actionContract, input.toolRecords || [], actionText)) {
+    if (guard.blocked && guard.reasonCode === 'successful_irrelevant_evidence') {
+      return {
+        text: guard.text,
+        blocked: true,
+        reason: guard.reason,
+        notification: {
+          type: 'work_product_guard',
+          level: 'warning',
+          message: guard.reason || 'Current-turn tool evidence does not prove the requested action.',
+        },
+      };
+    }
     return {
       text: formatCompactBlockedResponse(input, `Missing core evidence for ${actionContract.kind}.`),
       blocked: true,
@@ -866,13 +1228,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
-
-  const guard = guardCompletionClaims({
-    task: input.taskText,
-    response: input.responseText,
-    toolCalls: input.toolRecords || [],
-    source: input.source,
-  });
 
   if (!guard.blocked) {
     return { text: input.responseText, blocked: false };

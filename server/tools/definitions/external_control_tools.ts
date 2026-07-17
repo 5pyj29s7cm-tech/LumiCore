@@ -1,5 +1,9 @@
 import { getExternalControlCandidate, listExternalControlCandidates } from '../../external_control/candidates';
 import { captureWindowsUiSnapshot, runWindowsUiAction } from '../../external_control/windows_uia';
+import {
+  createVisibleWpsDocumentWithText,
+  WPS_CREATE_DOCUMENT_TOOL,
+} from '../../external_control/wps_automation';
 import { mcpManager, recoverServerTools } from '../../mcp';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
@@ -23,6 +27,25 @@ const UI_TARGET_PROPERTIES = {
 };
 
 export function registerExternalControlTools(registry: ToolRegistry): void {
+  registry.register({
+    name: WPS_CREATE_DOCUMENT_TOOL,
+    description: 'Create exactly one real blank WPS Writer document in a visible WPS instance and type the requested text through the registered KWPS COM automation interface. Use only for a recovered current-WPS continuation that explicitly asks to create a document and write text. The receipt verifies attachedExisting versus newVisibleInstance, Visible=true, a real wps.exe PID/window/document, and exact body-text readback. This tool does not save the document.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Exact text to write into the new visible WPS document.' },
+      },
+      required: ['text'],
+    },
+    handler: async (args) => JSON.stringify(
+      await createVisibleWpsDocumentWithText(String(args.text || '')),
+      null,
+      2,
+    ),
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
   registry.register({
     name: 'external_control_candidates',
     description: 'List curated general-purpose external-control upgrades for Lumi, such as Playwright MCP for browser DOM control and Windows UI Automation for native desktop apps.',

@@ -9,8 +9,13 @@ import {
   describeTurnCompletionProgress,
   needsVisibleToolEvidence,
   type ChatProgressLine,
+  type ChatResponseFinalization,
   type ChatProgressTone,
 } from '@/lib/chatProgress';
+import {
+  isTerminalAgentStatus,
+  shouldDisplayAgentResponse,
+} from '@/lib/agentResponseDelivery';
 import { uiMessage } from '../i18n/uiMessages';
 
 export interface ChatMessage {
@@ -64,6 +69,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentRequestHadToolRef = useRef(false);
   const currentRequestNeedsEvidenceRef = useRef(false);
+  const currentResponseFinalizationRef = useRef<ChatResponseFinalization | null>(null);
   activeConvIdRef.current = activeConvId;
 
   const scrollToBottom = useCallback(() => {
@@ -185,11 +191,38 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   useEffect(() => {
     if (!socket) return;
 
-    const onResponse = (data: { text: string; agentName?: string }) => {
+    const onResponse = (data: {
+      text: string;
+      agentName?: string;
+      finalized?: boolean;
+      blocked?: boolean;
+      reason?: string;
+    }) => {
+      const finalization: ChatResponseFinalization = {
+        finalized: data.finalized,
+        blocked: data.blocked,
+        reason: data.reason,
+      };
+      currentResponseFinalizationRef.current = finalization;
       setIsTyping(false);
       setIsStreaming(false);
       setStreamingText('');
-      const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+      if (!shouldDisplayAgentResponse(data)) {
+        const rejected = describeTurnCompletionProgress(
+          isZh,
+          currentRequestHadToolRef.current,
+          true,
+          { finalized: false, blocked: true, reason: data.reason },
+        );
+        finishChatProgress(rejected.text, rejected.tone);
+        return;
+      }
+      const completion = describeTurnCompletionProgress(
+        isZh,
+        currentRequestHadToolRef.current,
+        currentRequestNeedsEvidenceRef.current,
+        finalization,
+      );
       finishChatProgress(completion.text, completion.tone);
       setMessages(prev => [...prev, {
         id: crypto.randomUUID().slice(0, 9),
@@ -214,16 +247,17 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
         setIsTyping(true);
         pushChatProgress(uiMessage('chat-panel.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
       }
-      else if (data.status === 'idle' || data.status === 'error') {
+      else if (isTerminalAgentStatus(data.status)) {
         setIsTyping(false);
         setIsStreaming(false);
         setStreamingText('');
-        const completion = describeTurnCompletionProgress(isZh, currentRequestHadToolRef.current, currentRequestNeedsEvidenceRef.current);
+        if (data.status === 'idle') {
+          if (!currentResponseFinalizationRef.current) clearChatProgress();
+          return;
+        }
         finishChatProgress(
-          data.status === 'error'
-            ? (uiMessage('chat-panel.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'))
-            : completion.text,
-          data.status === 'error' ? 'error' : completion.tone
+          uiMessage('chat-panel.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
+          'error',
         );
       }
     };
@@ -289,13 +323,14 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       socket.off('agent:tool', onToolCall);
       socket.off('audio:transcript', onTranscript);
     };
-  }, [finishChatProgress, isZh, pushChatProgress, refreshConversations, socket, t?.requestFailed]);
+  }, [clearChatProgress, finishChatProgress, isZh, pushChatProgress, refreshConversations, socket, t?.requestFailed]);
 
   const selectConversation = useCallback((convId: string) => {
     setActiveConvId(convId);
     setMessages([]);
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = false;
+    currentResponseFinalizationRef.current = null;
     clearChatProgress();
     socket.emit('chat:messages', { conversationId: convId });
   }, [clearChatProgress, socket]);
@@ -305,6 +340,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     setMessages([]);
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = false;
+    currentResponseFinalizationRef.current = null;
     clearChatProgress();
   }, [clearChatProgress]);
 
@@ -314,6 +350,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     if (!textOverride) setInput('');
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(text);
+    currentResponseFinalizationRef.current = null;
     clearChatProgress();
     pushChatProgress(uiMessage('chat-panel.i-am-checking-your-request.05a5e81231', (isZh) ? 'zh' : 'en'), 'thinking');
 

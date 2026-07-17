@@ -189,4 +189,103 @@ describe('Lumi turn flow', () => {
     expect(flow.executionGovernance.delegationIntent).toBe('explicit_background');
     expect(flow.promptOverlay).toContain('Lumi remains the owner');
   });
+
+  it('uses continuation context for parameters without letting it replace the current intent', async () => {
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const resultDemand = buildLumiTurnFlow({
+      userId: 'turn_flow_desktop_result_demand_user',
+      text: '\u6211\u8ba9\u4f60\u5e2e\u6211\u770b\u4e0b\u684c\u9762\u4e0a\u591a\u5c11\u8f6f\u4ef6\u4f60\u5012\u662f\u8ddf\u6211\u8bf4\u5440',
+      continuationContext: [
+        '## Recent action continuation context',
+        'Recovered structured action state:',
+        '- followupIntent: status',
+        '- originalGoal: \u5e2e\u6211\u770b\u4e0b\u684c\u9762\u4e0a\u6709\u591a\u5c11\u8f6f\u4ef6',
+        '- unfinished: no',
+        'Recent tool evidence:',
+        '- desktop_list_apps | items=2 | sample=AutoCAD | WPS Office',
+      ].join('\n'),
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+    });
+
+    expect(resultDemand.allowToolUseForTurn).toBe(false);
+    expect(resultDemand.routeText).toContain('desktop_list_apps | items=2');
+    expect(resultDemand.routeText).not.toContain('work_takeover');
+
+    const statusQuestion = buildLumiTurnFlow({
+      userId: 'turn_flow_current_intent_user',
+      text: '你在干嘛',
+      continuationContext: [
+        '## Recent action continuation context',
+        '- 打开微信问阿陆在干嘛',
+        '- client_get_state status=failed',
+      ].join('\n'),
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+    });
+
+    expect(statusQuestion.selfRepairTurn).toBe(false);
+    expect(statusQuestion.clientActionOnlyTurn).toBe(false);
+    expect(statusQuestion.allowToolUseForTurn).toBe(false);
+    expect(statusQuestion.routeText).toContain('打开微信问阿陆在干嘛');
+
+    const whyUnfinished = buildLumiTurnFlow({
+      userId: 'turn_flow_status_cad_user',
+      text: '\u6211\u95ee\u4f60\u4e3a\u4ec0\u4e48\u6ca1\u6709\u5b8c\u6210\uff1f\u4f60\u4e3a\u4ec0\u4e48\u4e0d\u53bb\u6267\u884c\uff1f',
+      continuationContext: [
+        '## Recent action continuation context',
+        'Recovered structured action state:',
+        '- followupIntent: status',
+        '- originalGoal: 把桌面的设计草稿.jpg画到 AutoCAD 里',
+        '- latestBlocker: image read failed',
+        '- unfinished: yes',
+      ].join('\n'),
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+    });
+
+    expect(whyUnfinished.allowToolUseForTurn).toBe(false);
+    expect(whyUnfinished.routeText).toContain('设计草稿.jpg');
+    expect(whyUnfinished.routeText).toContain('followupIntent: status');
+
+    const executionPressure = buildLumiTurnFlow({
+      userId: 'turn_flow_execution_pressure_user',
+      text: '\u6162\u4e2a\u5c41',
+      continuationContext: [
+        '## Recent action continuation context',
+        'Recovered structured action state:',
+        '- followupIntent: execute',
+        '- originalGoal: \u628a\u684c\u9762\u7684\u8bbe\u8ba1\u8349\u7a3f.jpg\u753b\u5230 AutoCAD \u91cc',
+        '- latestBlocker: image decoder failed',
+        '- unfinished: yes',
+      ].join('\n'),
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+    });
+
+    expect(executionPressure.allowToolUseForTurn).toBe(true);
+    expect(executionPressure.routeText).toContain('\u8bbe\u8ba1\u8349\u7a3f.jpg');
+    expect(executionPressure.routeText).toContain('followupIntent: execute');
+
+    const cadContinuation = buildLumiTurnFlow({
+      userId: 'turn_flow_contextual_cad_user',
+      text: '继续',
+      continuationContext: [
+        '## Recent action continuation context',
+        '- 读取桌面设计草稿并在 AutoCAD 里画出来',
+        '- cad_prepare_autocad_operations status=prepared',
+      ].join('\n'),
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+    });
+
+    expect(cadContinuation.allowToolUseForTurn).toBe(true);
+    expect(cadContinuation.clientActionOnlyTurn).toBe(false);
+    expect(cadContinuation.routeText).toContain('AutoCAD');
+  });
 });

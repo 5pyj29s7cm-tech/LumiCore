@@ -127,6 +127,37 @@ describe('live voice regression cases', () => {
     expect(response).toContain('不能算发送成功');
   });
 
+  it('does not call an unverified sent flag a successful WeChat send', () => {
+    const response = describeRecentActionsFromHistory('我问你刚刚干了什么？微信发出去了吗。', [{
+      role: 'assistant',
+      toolCalls: [{
+        name: 'wechat_send_message',
+        arguments: { contact: '阿路', message: '在干嘛？' },
+        result: JSON.stringify({
+          sent: true,
+          sendAttempted: true,
+          verificationStatus: 'uncertain',
+        }),
+      }],
+    }]);
+
+    expect(response).toContain('不能算发送成功');
+  });
+
+  it('does not describe an empty or failed desktop_open receipt as opened', () => {
+    for (const result of ['', '{"status":"failed","error":"not found"}']) {
+      const response = describeRecentActionsFromHistory('我问你刚刚打开微信干了什么。', [{
+        role: 'assistant',
+        toolCalls: [{
+          name: 'desktop_open',
+          arguments: { target: '微信' },
+          result,
+        }],
+      }]);
+      expect(response).not.toContain('已经打开');
+    }
+  });
+
   it('keeps AutoCAD status questions aligned to CAD receipts instead of newer WeChat receipts', () => {
     const response = describeRecentActionsFromHistory('刚刚那个 AutoCAD 任务执行得怎么样？', [
       {
@@ -163,5 +194,71 @@ describe('live voice regression cases', () => {
     });
     expect(result.text).toBe('已打开AutoCAD。');
     expect(result.text).not.toContain('桌面状态读取');
+  });
+
+  it('keeps a successful website open out of the completion blocker', () => {
+    const result = finalizeLumiResponse({
+      taskText: '打开中国裁判文书网。',
+      responseText: '已打开中国裁判文书网。',
+      toolRecords: [{
+        name: 'browser_open_task',
+        arguments: { url: 'https://wenshu.court.gov.cn/', open: true },
+        result: JSON.stringify({ opened: true, result: 'Opened: https://wenshu.court.gov.cn/' }),
+      }],
+      source: 'voice',
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('已打开');
+  });
+
+  it('does not replace an unrelated action answer with a client self-check dump', () => {
+    const result = finalizeLumiResponse({
+      taskText: '桌面上有一张叫设计草稿的图片，把它画到 AutoCAD 里。',
+      responseText: '还没有完成 AutoCAD 绘制。',
+      toolRecords: [{
+        name: 'client_get_state',
+        arguments: {},
+        result: JSON.stringify({ state: { mode: 'assistant' }, health: { level: 'healthy' } }),
+      }],
+      source: 'voice',
+    });
+    expect(result.text).toBe('还没有完成 AutoCAD 绘制。');
+    expect(result.text).not.toContain('自检');
+  });
+
+  it('keeps the real voice tool ledger factual when client_get_state succeeds but desktop tools never ran', () => {
+    const result = finalizeLumiResponse({
+      taskText: '组建团队，分两步执行，先查看当前活动窗口，再列出桌面文件，最后根据真实工具结果告诉我窗口标题和文件数量。',
+      responseText: '已完成查看当前活动窗口并列出桌面文件。',
+      toolRecords: [{
+        name: 'client_get_state',
+        arguments: {},
+        result: JSON.stringify({
+          selfAwareness: {
+            level: 'live',
+            habits: [
+              'Some external actions require user confirmation.',
+              '其他受控动作需要确认；本次 client_get_state 已成功返回。',
+            ],
+          },
+          capabilities: Array.from({ length: 80 }, (_, index) => ({
+            id: `voice-capability-${index}`,
+            requiresConfirmation: index % 2 === 0,
+            notes: `Nested capability ${index} may require confirmation for writes.`,
+          })),
+          state: { mode: 'assistant', activeTab: 'home', runtimeStatus: 'ready' },
+          health: { level: 'attention' },
+          scope: { domain: 'personal' },
+        }),
+      }],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('已成功执行：client_get_state');
+    expect(result.text).toContain('不是完成当前请求所需的执行证据');
+    expect(result.text).not.toContain('这一轮没有成功执行任何工具');
+    expect(result.text).not.toContain('没有记录到成功的工具执行');
+    expect(result.text).not.toContain('undefined');
   });
 });

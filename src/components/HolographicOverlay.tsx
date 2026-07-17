@@ -1,6 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
+import {
+  isAgentResponseBlocked,
+  isUnverifiedActionClaim,
+  type AgentResponseDelivery,
+} from '@/lib/agentResponseDelivery';
 
 interface HoloPosition { x: number; y: number; z: number }
 interface HoloAnimation { type: string; durationMs: number; easing: string }
@@ -39,7 +44,8 @@ export function HolographicOverlay({ socket }: { socket: any }) {
   useEffect(() => {
     if (!socket) return;
 
-    const onResponse = (data: { text: string; agentName: string; holographic?: HoloOutput }) => {
+    const onResponse = (data: AgentResponseDelivery & { agentName?: string; holographic?: HoloOutput }) => {
+      if (isAgentResponseBlocked(data) || isUnverifiedActionClaim(data)) return;
       if (data.holographic && data.holographic.contentType === 'holographic') {
         const item: HoloItem = {
           ...data.holographic,

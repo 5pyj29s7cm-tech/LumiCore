@@ -4,6 +4,7 @@ import { isQuickCommand, matchQuickCommand } from '../server/cognition/quick_com
 describe('voice/chat deterministic fast paths', () => {
   it('answers microphone audibility checks without an LLM or tool', async () => {
     expect(isQuickCommand('能不能听见我说话？')).toBe(true);
+    expect(isQuickCommand('你能听见我说话吗？')).toBe(true);
     const result = await matchQuickCommand('能不能听见我说话？', 'test-user', { surface: 'voice' });
     expect(result).toMatchObject({
       matched: true,

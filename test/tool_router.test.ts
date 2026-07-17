@@ -17,6 +17,8 @@ const DECLARATIONS = [
   'work_product_verify',
   'read_file',
   'read_files_batch',
+  'mcp_filesystem_read_media_file',
+  'mcp_filesystem_read_file',
   'list_directory',
   'search_files',
   'grep_files',
@@ -26,6 +28,8 @@ const DECLARATIONS = [
   'read_pdf',
   'ocr_image_file',
   'create_docx',
+  'create_pdf',
+  'create_ppt',
   'write_file',
   'web_search',
   'url_fetch',
@@ -43,6 +47,7 @@ const DECLARATIONS = [
   'desktop_list_files',
   'desktop_path_info',
   'desktop_list_apps',
+  'desktop_system_info',
   'desktop_open',
   'desktop_active_window',
   'desktop_running_processes',
@@ -66,6 +71,13 @@ const DECLARATIONS = [
   'desktop_cursor_glow_hide',
   'desktop_keyboard_press',
   'computer_use',
+  'run_command',
+  'desktop_run_command',
+  'code_execution',
+  'python_exec',
+  'powershell',
+  'shell_exec',
+  'terminal_exec',
   'wechat_read_recent_chat',
   'wechat_send_message',
   'wechat_prepare_reply',
@@ -711,6 +723,163 @@ describe('tool router', () => {
     expect(route.toolNames.indexOf('desktop_list_apps')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
     expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
     expect(route.toolNames.indexOf('cad_prepare_autocad_operations')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_autocad_playback_file'));
+  });
+
+  it('routes a desktop image-to-AutoCAD sequence through built-in OCR/geometry without filesystem or shell fallbacks', () => {
+    const route = routeToolsForTurn(
+      '桌面上有一张叫设计草稿.jpg的图片，把它画到 AutoCAD 里。',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('cad_design');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_list_files',
+      'desktop_path_info',
+      'floorplan_extract_geometry',
+      'ocr_image_file',
+      'cad_prepare_autocad_operations',
+      'mcp_cad-drafting_autocad_playback_file',
+    ]));
+    expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('floorplan_extract_geometry'));
+    expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
+    for (const forbidden of [
+      'mcp_filesystem_read_media_file',
+      'read_file',
+      'run_command',
+      'desktop_run_command',
+      'code_execution',
+      'python_exec',
+    ]) {
+      expect(route.toolNames).not.toContain(forbidden);
+    }
+    expect(route.reasons.join(' ')).toContain('shell/base64 fallbacks are excluded');
+  });
+
+  it('hard-limits extraction-only desktop images to geometry read and observation tools', () => {
+    const route = routeToolsForTurn(
+      '读取桌面上的设计草稿.jpg，提取几何信息，先不要绘制，只告诉我提取是否成功。',
+      DECLARATIONS,
+      { enableMcpHealthGate: false },
+    );
+    const expectedAllowed = [
+      'desktop_list_files',
+      'desktop_path_info',
+      'desktop_system_info',
+      'floorplan_extract_geometry',
+      'ocr_image_file',
+      'desktop_capture_screen',
+      'ocr_screen',
+    ];
+    const forbidden = [
+      'cad_generate_dxf',
+      'cad_prepare_autocad_operations',
+      'mcp_cad-drafting_autocad_playback_file',
+      'mcp_cad-drafting_cad_renovation_folder_workflow',
+      'write_file',
+      'create_docx',
+      'create_pdf',
+      'create_ppt',
+      'mcp_filesystem_read_media_file',
+      'mcp_filesystem_read_file',
+      'run_command',
+      'desktop_run_command',
+      'code_execution',
+      'python_exec',
+      'powershell',
+      'shell_exec',
+      'terminal_exec',
+    ];
+
+    expect(route.hardAllowlist).toBe(true);
+    expect(new Set(route.toolNames)).toEqual(new Set(expectedAllowed));
+    expect(route.reasons.join(' ')).toContain('hard read/observe allowlist');
+    expect(route.forbiddenToolNames).toEqual(expect.arrayContaining(forbidden));
+
+    const policy = mergeToolPolicyWithRoute({
+      allowedTools: ['*'],
+      requireConfirmation: [],
+      forbiddenTools: [],
+      maxIterations: 80,
+    }, route);
+    expect(new Set(policy.allowedTools)).toEqual(new Set(expectedAllowed));
+    expect(policy.forbiddenTools).toEqual(expect.arrayContaining(forbidden));
+    for (const name of forbidden) {
+      expect(policy.allowedTools).not.toContain(name);
+    }
+  });
+
+  it('continues inside the recovered WPS app with UI controls and does not enter task center', () => {
+    const route = routeToolsForTurn([
+      '在这里面写“我好想你”。',
+      '',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: 打开 WPS。',
+      '- appTarget: WPS',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_open | status=opened',
+    ].join('\n'), DECLARATIONS);
+
+    expect(route.categories).toContain('external_control');
+    expect(route.categories).not.toContain('work_takeover');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_type',
+    ]));
+    expect(route.toolNames).not.toContain('work_takeover_task_continue');
+  });
+
+  it('treats regression-test wording as WPS text payload instead of code or capability work', () => {
+    const route = routeToolsForTurn([
+      '在这里面新建一个空白文档并写入：Lumi端到端回归测试。',
+      '',
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: 打开WPS。',
+      '- appTarget: WPS',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_open | status=opened',
+    ].join('\n'), DECLARATIONS);
+
+    expect(route.categories).toEqual(['external_control']);
+    expect(route.toolNames.slice(0, 6)).toEqual([
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_invoke',
+      'desktop_ui_click',
+      'desktop_ui_type',
+    ]);
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_capture_screen',
+      'desktop_open',
+    ]));
+    for (const forbidden of [
+      'work_product_plan',
+      'work_product_verify',
+      'write_file',
+      'create_docx',
+      'git_status',
+      'git_commit',
+      'list_skills',
+      'capability_learning_list',
+      'self_extension_plan',
+      'capability_gap_autofix',
+      'work_takeover_task_continue',
+      'computer_use',
+      'mouse_move',
+      'mouse_click',
+      'mouse_drag',
+      'keyboard_type',
+    ]) {
+      expect(route.toolNames).not.toContain(forbidden);
+    }
   });
 
   it('routes court website login searches through saved web login profiles before browser clicks', () => {

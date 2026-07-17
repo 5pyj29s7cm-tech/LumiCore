@@ -21,6 +21,10 @@ export interface AutonomousTask {
   error?: string;
   toolCallsCount?: number;
   tokensUsed?: number;
+  finalized?: boolean;
+  blocked?: boolean;
+  verified?: boolean;
+  verificationReason?: string;
   cancelRequestedAt?: string;
   recoveryCount?: number;
   lastRecoveredAt?: string;
@@ -107,7 +111,13 @@ export function markRunning(id: string): AutonomousTask | null {
   return task;
 }
 
-export function markCompleted(id: string, result: string, toolCallsCount: number, tokensUsed: number): AutonomousTask | null {
+export function markCompleted(
+  id: string,
+  result: string,
+  toolCallsCount: number,
+  tokensUsed: number,
+  verification: Pick<AutonomousTask, 'finalized' | 'blocked' | 'verified' | 'verificationReason'> = {},
+): AutonomousTask | null {
   const task = findTask(id);
   if (!task) return null;
   if (isTaskCancellationRequested(id)) return markCancelled(id);
@@ -116,6 +126,10 @@ export function markCompleted(id: string, result: string, toolCallsCount: number
   task.result = result;
   task.toolCallsCount = toolCallsCount;
   task.tokensUsed = tokensUsed;
+  task.finalized = verification.finalized === true;
+  task.blocked = verification.blocked === true;
+  task.verified = verification.verified === true;
+  task.verificationReason = verification.verificationReason;
   moveToHistory(task);
   persist();
   return task;

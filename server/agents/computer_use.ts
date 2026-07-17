@@ -263,7 +263,9 @@ function validateAction(action: ComputerUseAction): ComputerUseAction {
 
 function progressForAction(action: ComputerUseAction, step: number, total: number): string {
   const prefix = `[${step}/${total}]`;
-  if (action.action === 'done') return `${prefix} 完成`;
+  if (action.action === 'done') {
+    return `${prefix} \u89c6\u89c9\u6a21\u578b\u7ed9\u51fa\u5b8c\u6210\u5019\u9009\uff0c\u6b63\u5728\u7528\u65b0\u622a\u56fe\u590d\u6838`; // i18n-allow: reviewed Chinese computer-control progress copy.
+  }
   if (action.action === 'wait') return `${prefix} 等待界面响应`;
   if (action.action === 'type') return `${prefix} 输入内容`;
   if (action.action === 'key_press') return `${prefix} 使用键盘`;
@@ -273,8 +275,13 @@ function progressForAction(action: ComputerUseAction, step: number, total: numbe
 
 function historyForAction(action: ComputerUseAction, step: number, total: number): string {
   return action.action === 'done'
-    ? `[${step}/${total}] DONE: ${action.message || ''}`
+    ? `[${step}/${total}] DONE_CANDIDATE: ${action.message || ''}`
     : `[${step}/${total}] ${action.action} ${action.x !== undefined ? `(${action.x},${action.y})` : action.text || action.key || ''} - ${action.reason || ''}`;
+}
+
+function doneMessageDescribesBlocker(message: string): boolean {
+  return /(?:could not|couldn't|cannot|can't|unable|failed|failure|blocked|stuck|impossible|not complete|incomplete|\u65e0\u6cd5|\u4e0d\u80fd|\u5931\u8d25|\u672a\u5b8c\u6210|\u6ca1\u6709\u5b8c\u6210|\u53d7\u963b|\u5361\u4f4f)/iu
+    .test(String(message || ''));
 }
 
 // ── Main loop ──
@@ -294,6 +301,7 @@ export async function computerUseLoop(
   const actionHistory: string[] = [];
   let consecutiveErrors = 0;
   let wallpaperModeEnabled = false;
+  let doneCandidate: { iteration: number; message: string } | null = null;
 
   // ── Enter desktop control: show cursor glow so user sees where Lumi is clicking ──
   try {
@@ -377,8 +385,31 @@ export async function computerUseLoop(
 
     // ── 5. Execute ──
     if (action.action === 'done') {
-      return action.message ? `完成：${action.message}` : '完成：桌面任务已处理。';
+      if (doneCandidate && doneCandidate.iteration < i) {
+        options.onProgress?.(
+          `[${i + 1}/${maxIter}] \u65b0\u622a\u56fe\u590d\u6838\u5b8c\u6210\uff0c\u6b63\u5728\u751f\u6210\u53ef\u9a8c\u8bc1\u7ed3\u679c`, // i18n-allow: reviewed Chinese computer-control progress copy.
+        );
+        const message = action.message || doneCandidate.message || 'The requested desktop state is visible.';
+        const blocked = doneMessageDescribesBlocker(message);
+        return JSON.stringify({
+          ok: !blocked,
+          status: blocked ? 'blocked' : 'verified',
+          completionVerified: !blocked,
+          observations: 2,
+          message,
+        });
+      }
+      doneCandidate = {
+        iteration: i,
+        message: action.message || '',
+      };
+      await sleep(600);
+      continue;
     }
+
+    // A fresh screenshot contradicted the earlier completion candidate. Keep
+    // operating and require a new two-observation candidate before accepting it.
+    doneCandidate = null;
 
     if (action.action === 'error') {
       // Vision model returned invalid action — treat as non-fatal, let it retry

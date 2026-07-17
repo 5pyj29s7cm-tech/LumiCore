@@ -8,6 +8,7 @@ import { recordWorkflow, WorkflowStep } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
 import { hasVisibleAutoCadExecutionEvidence, requiresVisibleAutoCadExecution } from '../cognition/action_contract';
+import { guardCurrentAppToolCall } from '../cognition/current_app_execution';
 
 export interface LLMConfig {
   provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
@@ -478,6 +479,9 @@ function filterToolDeclarationsForPolicy(
   context?: ToolContext,
 ): ReturnType<ToolRegistry['getToolDeclarations']> {
   const policy = context?.toolPolicy;
+  // Orchestrated workers must always receive an explicit routed/fail-closed
+  // policy from the orchestrator. Never silently expose the full registry.
+  if (!policy && context?.source === 'orchestrator') return [];
   if (!policy) return declarations;
   if (policy.forbiddenTools?.includes('*')) return [];
 
@@ -489,6 +493,30 @@ function filterToolDeclarationsForPolicy(
     if (allowed.has('*')) return true;
     return allowed.has(name);
   });
+}
+
+function isLocalDesktopCadImageTask(task: string): boolean {
+  const raw = String(task || '');
+  const hasLocalSource = /(?:[A-Za-z]:[\\/]|desktop|local|\u684c\u9762|\u672c\u5730|\u4e0b\u8f7d)/i.test(raw);
+  const hasImage = /\.(?:png|jpe?g|webp|bmp)\b/i.test(raw)
+    || /(?:\u56fe\u7247|\u7167\u7247|\u8349\u7a3f\u56fe|\u6237\u578b\u56fe|\u5e73\u9762\u56fe|\u56fe\u7eb8)/u.test(raw);
+  const hasCad = /\b(?:autocad|cad|dxf|dwg)\b/i.test(raw)
+    || /(?:\u753b\u5230|\u753b\u8fdb|\u7ed8\u5236|\u753b\u56fe|\u65bd\u5de5\u56fe)/u.test(raw);
+  return hasLocalSource && hasImage && hasCad;
+}
+
+export function isForbiddenLocalCadImageFallback(
+  task: string,
+  toolName: string,
+  args: Record<string, any>,
+): boolean {
+  if (!isLocalDesktopCadImageTask(task)) return false;
+  if (/^mcp_filesystem_/i.test(toolName)) return true;
+  if (!/^(?:run_command|desktop_run_command|code_execution|python_exec|powershell|shell_exec|terminal_exec)$/i.test(toolName)) {
+    return false;
+  }
+  const payload = JSON.stringify(args || {});
+  return /certutil(?:\.exe)?\s+-(?:encode|decode)|(?:to|from)base64|stringfrombase64|base64string|convert\.?tobase64|base64\s+(?:encode|decode)|\[\s*convert\s*\]\s*::\s*(?:to|from)base64/i.test(payload);
 }
 
 export async function runWithTools(
@@ -527,6 +555,8 @@ export async function runWithTools(
     },
     ...messages,
   ];
+  const primaryTask = String(context?.routedTaskText || '').trim()
+    || getPrimaryUserText(messages);
 
   // Auto-detect hybrid mode: if provider is 'auto' and Ollama is available, use local→cloud dispatch
   const effectiveProvider = config.provider === 'auto' && getOllama?.()
@@ -665,12 +695,59 @@ export async function runWithTools(
         continue;
       }
 
+      const currentAppGuard = guardCurrentAppToolCall({
+        taskText: primaryTask,
+        toolName: tc.name,
+        arguments: tc.arguments || {},
+        toolRecords: executionLog,
+      });
+      const executionArguments = currentAppGuard.normalizedArguments
+        || tc.arguments
+        || {};
+      if (!currentAppGuard.allowed) {
+        const record: ToolExecutionRecord = {
+          id: tc.id,
+          name: tc.name,
+          arguments: executionArguments,
+          result: '',
+          error: currentAppGuard.reason,
+        };
+        executionLog.push(record);
+        onToolCall?.(record);
+        conversationHistory.push({
+          role: 'tool',
+          content: `Error: ${currentAppGuard.reason}`,
+          toolCallId: tc.id,
+          name: tc.name,
+        });
+        continue;
+      }
+
+      if (isForbiddenLocalCadImageFallback(primaryTask, tc.name, tc.arguments || {})) {
+        const record: ToolExecutionRecord = {
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
+          result: '',
+          error: 'Blocked unsafe CAD image fallback. Use desktop_list_files/desktop_path_info followed by floorplan_extract_geometry or ocr_image_file; do not use project-scoped MCP filesystem or certutil/base64 shell conversion.',
+        };
+        executionLog.push(record);
+        onToolCall?.(record);
+        conversationHistory.push({
+          role: 'tool',
+          content: `Error: ${record.error}`,
+          toolCallId: tc.id,
+          name: tc.name,
+        });
+        continue;
+      }
+
       try {
-        context?.onToolStart?.({ id: tc.id, name: tc.name, arguments: tc.arguments });
+        context?.onToolStart?.({ id: tc.id, name: tc.name, arguments: executionArguments });
       } catch {}
 
       try {
-        result = await toolRegistry.execute(tc.name, tc.arguments, context);
+        result = await toolRegistry.execute(tc.name, executionArguments, context);
       } catch (e: any) {
         result = '';
         error = e.message;
@@ -679,7 +756,7 @@ export async function runWithTools(
       const record: ToolExecutionRecord = {
         id: tc.id,
         name: tc.name,
-        arguments: tc.arguments,
+        arguments: executionArguments,
         result,
         error,
       };

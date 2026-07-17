@@ -226,9 +226,12 @@ function summarizeRemoteToolRecord(record: any): string {
     'sent',
     'read',
     'ok',
+    'success',
+    'verified',
     'status',
     'verificationStatus',
     'verificationMethod',
+    'completionMarkerExists',
     'fileName',
     'messageId',
     'contact',
@@ -242,7 +245,20 @@ function summarizeRemoteToolRecord(record: any): string {
   if (facts.length === 0 && /"sent"\s*:\s*true|sent:\s*true/i.test(String(record?.result || ''))) {
     facts.push('sent=true');
   }
-  return `${name}: ${facts.length > 0 ? facts.join(', ') : 'completed'}`;
+  if (facts.length > 0) return `${name}: ${facts.join(', ')}`;
+
+  const rawResult = String(record?.result || '').trim();
+  const explicitlyFailed =
+    payload?.ok === false
+    || payload?.success === false
+    || /^(?:blocked|cancelled|canceled|error|failed|partial|pending|queued|requires_setup|submitted_unverified|timeout|timed_out)$/i.test(String(payload?.status || ''))
+    || /(?:^|\b)(?:failed|error|blocked|timed?\s*out|not\s+completed|manual_required)(?:\b|$)|(?:失败|错误|受阻|超时|未完成|需要人工|需要确认)/iu.test(rawResult);
+  if (explicitlyFailed) return `${name}: failed or incomplete`;
+
+  // A tool record without an error is not, by itself, completion evidence.
+  // Keep unknown/plain results available as chronology without teaching the
+  // next model turn that the external action definitely succeeded.
+  return `${name}: result recorded (completion unverified)`;
 }
 
 export function buildRemoteRuntimeEvidenceContext(messages: any[]): string {

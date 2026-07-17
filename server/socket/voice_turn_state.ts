@@ -5,17 +5,28 @@ export interface PendingInterruptedVoiceTurn {
 
 const CORRECTION_CONTINUATION_PATTERNS: RegExp[] = [
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
-  /(?:\u4e0d\u662f|\u4e0d\u5bf9|\u9519\u4e86|\u641e\u9519\u4e86|\u5f04\u9519\u4e86|\u542c\u9519\u4e86|\u8bc6\u522b\u9519\u4e86|\u5bf9\u8c61\u9519\u4e86|\u4eba\u540d\u9519\u4e86|\u540d\u5b57\u9519\u4e86|\u5e94\u8be5\u662f|\u6539\u6210|\u66f4\u6b63\u4e3a|\u6211\u8bf4\u7684\u662f|\u6211\u8ba9\u4f60|\u8ba9\u4f60|\u53ea\u662f).{0,80}(?:\u4e0d\u662f|\u800c\u662f|\u662f|\u95ee|\u53d1|\u6253\u5f00|\u641c\u7d22|\u8054\u7cfb\u4eba|\u5bf9\u8c61|\u4eba\u540d|\u540d\u5b57)/u,
+  /(?:\u4e0d\u662f|\u4e0d\u5bf9|\u9519\u4e86|\u641e\u9519\u4e86|\u5f04\u9519\u4e86|\u542c\u9519\u4e86|\u8bc6\u522b\u9519\u4e86|\u5bf9\u8c61\u9519\u4e86|\u4eba\u540d\u9519\u4e86|\u540d\u5b57\u9519\u4e86|\u5e94\u8be5\u662f|\u6539\u6210|\u66f4\u6b63\u4e3a|\u6211\u8bf4\u7684\u662f).{0,80}(?:\u4e0d\u662f|\u800c\u662f|\u662f|\u95ee|\u53d1|\u6253\u5f00|\u641c\u7d22|\u8054\u7cfb\u4eba|\u5bf9\u8c61|\u4eba\u540d|\u540d\u5b57)/u,
   // Spoken spelling correction: "the Lu I said is the Lu in mainland, not road".
   /\u6211\u8bf4\u7684.{1,16}\u662f.{0,12}\u7684.{1,2}.{0,12}\u4e0d\u662f.{0,12}\u7684.{1,2}/u,
+  /[^\s\uff0c\u3002\uff01\uff1f,.!?]{1,16}\u7684[\u3400-\u9fff]\s*\u4e0d\u662f[^\s\uff0c\u3002\uff01\uff1f,.!?]{1,16}\u7684[\u3400-\u9fff]/u,
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
-  /^(?:\u4e0d\u662f|\u4e0d\u5bf9|\u9519\u4e86|\u5e94\u8be5\u662f|\u6539\u6210|\u66f4\u6b63\u4e3a|\u6211\u8bf4\u7684\u662f|\u6211\u8ba9\u4f60)/u,
+  /^(?:\u4e0d\u662f|\u4e0d\u5bf9|\u9519\u4e86|\u5e94\u8be5\u662f|\u6539\u6210|\u66f4\u6b63\u4e3a|\u6211\u8bf4\u7684\u662f)/u,
   /\b(?:no|not that|wrong|I said|I meant|change (?:it )?to|correct (?:it )?to)\b/i,
 ];
 
 export function isVoiceCorrectionContinuation(text: string): boolean {
   const normalized = String(text || '').trim();
   return Boolean(normalized) && CORRECTION_CONTINUATION_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+export function isVoiceCurrentActivityQuestion(text: string): boolean {
+  const normalized = String(text || '')
+    .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001]+/gu, '')
+    .trim()
+    .toLowerCase();
+  if (!normalized || normalized.length > 28) return false;
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  return /^(?:你)?(?:刚才|刚刚|现在)?(?:在)?(?:干嘛|干什么|做什么|忙什么|处理什么|跑什么|弄什么|搞什么|what(?:are|were)youdoing)$/iu.test(normalized);
 }
 
 export function isVoiceFiller(text: string): boolean {

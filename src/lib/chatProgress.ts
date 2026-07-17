@@ -1,5 +1,7 @@
 
-import { uiMessage } from '../i18n/uiMessages';export type ChatProgressTone = 'thinking' | 'tool' | 'done' | 'error' | 'confirmation';
+import { uiMessage } from '../i18n/uiMessages';
+
+export type ChatProgressTone = 'thinking' | 'tool' | 'done' | 'error' | 'confirmation';
 
 export type ChatProgressLine = {
   id: string;
@@ -10,6 +12,12 @@ export type ChatProgressLine = {
 
 export type ToolProgressPhase = 'start' | 'result' | 'error';
 
+export type ChatResponseFinalization = {
+  finalized?: boolean;
+  blocked?: boolean;
+  reason?: string;
+};
+
 const VISIBLE_TOOL_EVIDENCE_RE =
   /\b(?:file|document|docx|pdf|attachment|desktop|screen|open|read|review|inspect|analy[sz]e|contract|agreement|transcribe|audio)\b|(?:文件|文档|资料|附件|合同|协议|打开|读取|查看|看看|审查|分析|检查|桌面|屏幕|录音|音频|转写|生成|保存|导出)/iu;
 
@@ -18,13 +26,27 @@ export function needsVisibleToolEvidence(text: string, hasAttachments = false): 
   return VISIBLE_TOOL_EVIDENCE_RE.test(String(text || ''));
 }
 
-export function describeTurnCompletionProgress(isZh: boolean, usedTool: boolean, needsEvidence: boolean): {
+export function describeTurnCompletionProgress(
+  isZh: boolean,
+  _usedTool: boolean,
+  needsEvidence: boolean,
+  finalization?: ChatResponseFinalization | null,
+): {
   text: string;
   tone: ChatProgressTone;
 } {
-  if (usedTool) {
+  if (finalization?.blocked) {
     return {
-      text: uiMessage('chat-progress.done-i-have-put-the.8b045ed872', (isZh) ? 'zh' : 'en'),
+      text: uiMessage('chat-progress.no-actual-tool-execution-was.c2d57b608a', (isZh) ? 'zh' : 'en'),
+      tone: 'error',
+    };
+  }
+  // A tool event only proves that a step was attempted. It does not prove the
+  // user's task completed. Once the backend finalizer has accepted the answer,
+  // describe delivery of that answer rather than inventing a completion claim.
+  if (finalization?.finalized) {
+    return {
+      text: uiMessage('chat-progress.reply-sent.5f1b4522d2', (isZh) ? 'zh' : 'en'),
       tone: 'done',
     };
   }
@@ -36,7 +58,7 @@ export function describeTurnCompletionProgress(isZh: boolean, usedTool: boolean,
   }
   return {
     text: uiMessage('chat-progress.reply-sent.5f1b4522d2', (isZh) ? 'zh' : 'en'),
-    tone: 'done',
+    tone: 'tool',
   };
 }
 
@@ -51,22 +73,10 @@ export function describeToolProgress(toolName: string, phase: ToolProgressPhase,
   }
 
   if (phase === 'result') {
-    if (/wechat_send_message/.test(name)) {
-      return uiMessage('chat-progress.the-foreground-wechat-send-action.a062a37bfd', (isZh) ? 'zh' : 'en');
-    }
-    if (/(desktop_list_files|list_directory|search_files|grep_files)/.test(name)) {
-      return uiMessage('chat-progress.i-have-checked-the-relevant.ae99e9e603', (isZh) ? 'zh' : 'en');
-    }
-    if (/(audio|speech|voice|transcri|stt)/.test(name)) {
-      return uiMessage('chat-progress.the-audio-is-transcribed-i.494afcbe58', (isZh) ? 'zh' : 'en');
-    }
-    if (/(extract_document_text|read_docx|read_pdf|pdf_to_text|read_file|ocr_image_file)/.test(name)) {
-      return uiMessage('chat-progress.i-have-read-the-file.6c0fe3a527', (isZh) ? 'zh' : 'en');
-    }
-    if (/(create|generate|docx|document|pdf|ppt|sheet|excel|export|write|save)/.test(name)) {
-      return uiMessage('chat-progress.the-file-is-generated-i.f9db1cbfa0', (isZh) ? 'zh' : 'en');
-    }
-    return uiMessage('chat-progress.that-step-is-done-i.6e0238d277', (isZh) ? 'zh' : 'en');
+    return uiMessage(
+      'chat-progress.tool-returned-result-awaiting-task-verification.4f8d02cb71',
+      (isZh) ? 'zh' : 'en',
+    );
   }
 
   if (/wechat_send_message/.test(name)) {

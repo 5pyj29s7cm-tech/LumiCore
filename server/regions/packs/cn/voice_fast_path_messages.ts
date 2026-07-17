@@ -21,6 +21,7 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
   openFailed: (target: string, error: string) => `这次没能打开${target}：${formatCnToolFailureDetail(error)}`,
   openReceiptMissing: (target: string) => `这次没有拿到${target}的启动回执。`,
   openConfirmedByUser: '好，已经打开了。',
+  interruptedActivity: (task: string) => `刚才在处理“${task}”，被你打断后还没有完成。`,
   operationModeStatus: (mode: string) => {
     const labels: Record<string, string> = {
       chat: '聊天模式',
@@ -57,4 +58,5 @@ export const CN_RESULT_GROUNDING_MESSAGES = {
   priorDiagnosticUnsupported: '刚才没有可核实的客户端自检工具回执。我不能把延迟解释成“在跑自检”；只能确认那一轮没有记录到客户端自检。',
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',
   toolProtocolBlocked: '这轮工具请求没有被执行，内部协议文本已拦截。',
+  desktopSoftwareShortcutCount: (count: number) => `桌面上有 ${count} 个软件快捷方式。`,
 } as const;

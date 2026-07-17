@@ -44,6 +44,94 @@ describe('desktop observation routing', () => {
     ]);
   });
 
+  it('routes the real team desktop request to both required observation tools', () => {
+    const plan = buildDesktopObservationPlan(
+      '\u7ec4\u5efa\u56e2\u961f\uff0c\u5206\u4e24\u6b65\u6267\u884c\uff1a\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u6839\u636e\u771f\u5b9e\u5de5\u5177\u7ed3\u679c\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002',
+    );
+
+    expect(plan).toEqual([{
+      name: 'desktop_active_window',
+      arguments: {},
+    }, {
+      name: 'desktop_list_files',
+      arguments: { path: '~/Desktop', limit: 1000 },
+    }]);
+  });
+
+  it('formats an active window and desktop file count from fresh receipts', () => {
+    const taskText = '\u5148\u67e5\u770b\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff0c\u518d\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u6700\u540e\u544a\u8bc9\u6211\u7a97\u53e3\u6807\u9898\u548c\u6587\u4ef6\u6570\u91cf\u3002';
+    const records = [{
+      name: 'desktop_active_window',
+      arguments: {},
+      result: '{"title":"WPS Writer","process_name":"wps.exe","pid":9988}',
+    }, {
+      name: 'desktop_list_files',
+      arguments: { path: '~/Desktop', limit: 100 },
+      result: JSON.stringify([
+        { name: 'a.txt', path: 'C:\\Users\\tester\\Desktop\\a.txt', type: 'file' },
+        { name: 'b.lnk', path: 'C:\\Users\\tester\\Desktop\\b.lnk', type: 'file' },
+        { name: 'folder', path: 'C:\\Users\\tester\\Desktop\\folder', type: 'directory' },
+      ]),
+    }];
+
+    const text = formatDesktopObservationResult(records, taskText);
+    expect(text).toContain('\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3\uff1aWPS Writer');
+    expect(text).toContain('\u672c\u6b21\u8bfb\u53d6\u5230 3 \u4e2a');
+    expect(text).toContain('\u6587\u4ef6 2 \u4e2a');
+    expect(text).toContain('\u6587\u4ef6\u5939 1 \u4e2a');
+
+    const finalized = finalizeLumiResponse({
+      taskText,
+      responseText: text || '',
+      toolRecords: records,
+      source: 'voice',
+    });
+    expect(finalized.blocked).toBe(false);
+    expect(finalized.text).toBe(text);
+  });
+
+  it('maps an omitted path to the user Desktop only when the routed task asks for it', async () => {
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { registerDesktopTools } = await import('../server/tools/definitions/desktop_tools');
+    const registry = new ToolRegistry();
+    registerDesktopTools(registry);
+    const relayed: Array<{ name: string; args: Record<string, any> }> = [];
+    const desktopRelay = async (name: string, args: Record<string, any>) => {
+      relayed.push({ name, args });
+      return '[]';
+    };
+
+    await registry.execute('desktop_list_files', {}, {
+      userId: 'desktop-path-test',
+      source: 'voice',
+      routedTaskText: '\u5217\u51fa\u684c\u9762\u6587\u4ef6\uff0c\u5e76\u544a\u8bc9\u6211\u6587\u4ef6\u6570\u91cf',
+      desktopRelay,
+    } as any);
+    await registry.execute('desktop_list_files', {}, {
+      userId: 'desktop-list-test',
+      source: 'voice',
+      routedTaskText: '\u5217\u51fa\u684c\u9762\u6587\u4ef6',
+      desktopRelay,
+    } as any);
+    await registry.execute('desktop_list_files', {}, {
+      userId: 'home-path-test',
+      source: 'chat',
+      routedTaskText: '\u5217\u51fa\u7528\u6237\u4e3b\u76ee\u5f55',
+      desktopRelay,
+    } as any);
+
+    expect(relayed).toEqual([{
+      name: 'desktop_list_files',
+      args: { path: '~/Desktop', limit: 1000 },
+    }, {
+      name: 'desktop_list_files',
+      args: { path: '~/Desktop', limit: 100 },
+    }, {
+      name: 'desktop_list_files',
+      args: { path: '', limit: 100 },
+    }]);
+  });
+
   it('formats only fresh desktop evidence into the answer', () => {
     const records = [{
       name: 'desktop_active_window',
@@ -119,5 +207,30 @@ describe('desktop observation routing', () => {
     expect(text).toContain('Running desktop AI evidence: claude.exe, codex.exe.');
     expect(text).toContain('Launchable desktop AI evidence: Claude, LM Studio.');
     expect(text).not.toContain('Visual Studio Code');
+  });
+
+  it('answers a desktop software-count question from shortcut evidence directly', () => {
+    const records = [{
+      name: 'desktop_list_files',
+      arguments: { path: 'C:\\Users\\tester\\Desktop', limit: 200 },
+      result: JSON.stringify([
+        { name: 'AutoCAD.lnk', path: 'C:\\Users\\tester\\Desktop\\AutoCAD.lnk', type: 'file' },
+        { name: '微信.lnk', path: 'C:\\Users\\tester\\Desktop\\微信.lnk', type: 'file' },
+        { name: '说明.txt', path: 'C:\\Users\\tester\\Desktop\\说明.txt', type: 'file' },
+        { name: '项目', path: 'C:\\Users\\tester\\Desktop\\项目', type: 'directory' },
+      ]),
+    }];
+
+    const text = formatDesktopObservationResult(records, '你看一下，我现在桌面上有多少个软件。');
+    expect(text).toBe('桌面上有 2 个软件快捷方式。');
+
+    const finalized = finalizeLumiResponse({
+      taskText: '你看一下，我现在桌面上有多少个软件。',
+      responseText: '本轮桌面状态读取已完成。',
+      toolRecords: records,
+      source: 'voice',
+    });
+    expect(finalized.text).toBe('桌面上有 2 个软件快捷方式。');
+    expect(finalized.blocked).toBe(false);
   });
 });

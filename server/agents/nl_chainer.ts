@@ -8,6 +8,7 @@ import { NormalizedMessage, makeLLMCall } from '../llm/providers';
 import { toolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext } from '../tools/types';
 import { routeToolsForTurn } from '../cognition/tool_router';
+import type { ToolPolicy } from '../personality/types';
 
 export interface ChainerPlan {
   goal: string;
@@ -91,6 +92,19 @@ const DIRECT_DESKTOP_RELAY_TOOLS = new Set([
   'desktop_cursor_glow_click',
   'desktop_cursor_glow_hide',
 ]);
+
+export function filterChainerToolNamesByPolicy(
+  toolNames: string[],
+  policy?: ToolPolicy,
+): string[] {
+  if (!policy || policy.forbiddenTools?.includes('*')) return [];
+  const allowed = new Set(policy.allowedTools || []);
+  const forbidden = new Set(policy.forbiddenTools || []);
+  return toolNames.filter(name =>
+    !forbidden.has(name)
+    && (allowed.has('*') || allowed.has(name))
+  );
+}
 
 function compactChainerOutput(value: string, limit = 5000): string {
   const text = value || '';
@@ -233,6 +247,19 @@ function extractWeChatInquiry(userTask: string): { contact: string; message: str
   if (spokenName && correctedCharacter && (contact === spokenName || String(latestInquiry[1] || '').trim() === spokenName)) {
     contact = `${spokenName.slice(0, -1)}${correctedCharacter}`;
   }
+  const shortSpellingCorrections = Array.from(text.matchAll(
+    /[^\s\uFF0C\u3002\uFF01\uFF1F,.!?]{1,16}\u7684([\u3400-\u9fff])\s*\u4e0d\u662f[^\s\uFF0C\u3002\uFF01\uFF1F,.!?]{1,16}\u7684([\u3400-\u9fff])/gu,
+  ));
+  const latestShortSpellingCorrection = shortSpellingCorrections[shortSpellingCorrections.length - 1];
+  const shortCorrectedCharacter = String(latestShortSpellingCorrection?.[1] || '').trim();
+  const shortRejectedCharacter = String(latestShortSpellingCorrection?.[2] || '').trim();
+  if (
+    shortCorrectedCharacter
+    && shortRejectedCharacter
+    && contact.endsWith(shortRejectedCharacter)
+  ) {
+    contact = `${contact.slice(0, -1)}${shortCorrectedCharacter}`;
+  }
   const message = String(latestInquiry[2] || '').trim().replace(/[\u3002\uFF01\uFF1F.!?]+$/u, '');
   if (!contact || !message) return null;
   return { contact, message: `${message}\uFF1F` };
@@ -260,9 +287,13 @@ function extractWeChatReadContact(userTask: string): string {
 }
 
 function extractWeChatContact(userTask: string): string {
-  const inquiry = extractWeChatInquiry(userTask);
-  if (inquiry?.contact) return inquiry.contact;
   const directedContact = extractDirectedWeChatContact(userTask);
+  const inquiry = extractWeChatInquiry(userTask);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (directedContact && /^(?:他|她|它|对方|那个人)$/u.test(String(inquiry?.contact || '').trim())) {
+    return directedContact;
+  }
+  if (inquiry?.contact) return inquiry.contact;
   if (directedContact) return directedContact;
   const text = String(userTask || '');
   const patterns = [
@@ -560,7 +591,12 @@ export async function runNLChainer(
   llmGetters: LlmGetters,
   onStep?: (step: number, total: number, description: string) => void,
 ): Promise<ChainerResult> {
-  const allTools = toolRegistry.getToolDeclarations();
+  const registeredTools = toolRegistry.getToolDeclarations();
+  const policyAllowedNames = new Set(filterChainerToolNamesByPolicy(
+    registeredTools.map(tool => tool.function.name),
+    config.context?.toolPolicy,
+  ));
+  const allTools = registeredTools.filter(tool => policyAllowedNames.has(tool.function.name));
   const domainHints = getDomainHints(userTask);
   const routed = routeToolsForTurn(userTask, allTools);
 
@@ -590,7 +626,7 @@ export async function runNLChainer(
 
   // Dev-only ghost tool detection
   if (process.env.NODE_ENV !== 'production') {
-    const registeredNames = new Set(allTools.map(d => d.function.name));
+    const registeredNames = new Set(registeredTools.map(d => d.function.name));
     for (const [domain, hints] of Object.entries(DOMAIN_TOOL_HINTS)) {
       const ghosts = hints.filter(h => !registeredNames.has(h));
       if (ghosts.length > 0) {
@@ -605,6 +641,7 @@ export async function runNLChainer(
     description: d.function.description,
     parameters: d.function.parameters,
   }));
+  const availableToolNames = new Set(availableTools.map(tool => tool.name));
 
   // Phase 1: Plan
   const plan = buildDeterministicPlan(userTask, availableTools) ||
@@ -643,7 +680,7 @@ If no suitable alternative exists, output: { "toolName": "" }`;
       const jsonMatch = result.text?.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const alt = JSON.parse(jsonMatch[0]);
-        if (alt.toolName) return alt;
+        if (alt.toolName && availableToolNames.has(String(alt.toolName))) return alt;
       }
     } catch {
       // LLM replan failed — fall through to null
@@ -652,6 +689,9 @@ If no suitable alternative exists, output: { "toolName": "" }`;
   };
 
   const executeTool = async (name: string, args: Record<string, any>): Promise<string> => {
+    if (!availableToolNames.has(name)) {
+      throw new Error(`Tool "${name}" is outside the inherited execution policy for this task.`);
+    }
     const id = `chain_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     config.onTool?.({ id, name, arguments: args, result: '' });
     // Handle desktop relay tools

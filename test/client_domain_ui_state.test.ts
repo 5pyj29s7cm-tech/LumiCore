@@ -45,7 +45,7 @@ describe('personal and organization client state boundaries', () => {
     expect(normalizePresenceStatus('unavailable_in_organization')).toBe('away');
     expect(normalizePresenceStatus('present')).toBe('present');
     expect(desktop).toContain("userId: workDomain === 'personal' ? user?.uid : undefined");
-    expect(desktop).toContain("workDomain === 'personal' && (");
+    expect(desktop).toContain('facePresenceRequested && faceRecognition.hasTemplates && (');
     expect(indicator).toContain('colors[status] || colors.away');
   });
 });

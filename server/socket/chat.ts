@@ -25,6 +25,11 @@ import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execu
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildActionContract, summarizeActionContractBlocker } from "../cognition/action_contract";
+import {
+  createPreFinalizationTextGate,
+  shouldDeferModelOutputUntilFinalized,
+  shouldForwardPreFinalizationProgress,
+} from "../cognition/response_delivery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -51,11 +56,19 @@ import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
 import { buildRecentActionContinuationBridge } from "../cognition/action_continuation";
+import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
 import { checkLLMAccess, recordUsage, estimateTokens } from "../subscription/proxy";
 import { recordTokenUsage } from "../llm/token_tracker";
-import { runOrchestratedTask, shouldDistillSkill, buildSkillDescription, classifyComplexity } from "../agents/orchestrator";
+import {
+  runOrchestratedTask,
+  shouldDistillSkill,
+  buildSkillDescription,
+  classifyComplexity,
+  isTerminalOrchestrationToolEvent,
+  shouldAttemptOrchestration,
+} from "../agents/orchestrator";
 import { buildDelegationAck, shouldDelegateWorkInBackground } from "../agents/background_delegation";
 import {
   cancelBackgroundTask,
@@ -80,7 +93,6 @@ import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messag
 import { CN_MESSAGING_MESSAGES } from "../regions/packs/cn/messaging_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
-import { estimateSkillWorkflowChatSpeechMs } from "../skills/workflow_registry";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 
@@ -750,7 +762,14 @@ export function registerChatHandler(
     }
     if (aborted) {
       socket.emit("agent:status", { status: "idle", source: "chat" });
-      socket.emit("agent:response", { text: "[Cancelled]", agentName: "Lumi", source: "chat" });
+      socket.emit("agent:response", {
+        text: "[Cancelled]",
+        agentName: "Lumi",
+        source: "chat",
+        finalized: true,
+        blocked: false,
+        reason: 'cancelled',
+      });
     }
   });
 
@@ -942,12 +961,13 @@ export function registerChatHandler(
       actionContinuationBridge = buildRecentActionContinuationBridge(
         visibleUserText,
         [...historyItems, ...persistedConversationHistory],
+        conversation?.actionContinuationState,
       );
 
       if (shouldBlockDetachedAttachmentFollowup(visibleUserText, attachments, history)) {
         const responseText = buildDetachedAttachmentFollowupResponse(visibleUserText);
         emitAgent("agent:status", { status: "responding", agentName: "Lumi" });
-        emitAgent("agent:response", { text: responseText, agentName: "Lumi" });
+        emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId });
@@ -1026,13 +1046,20 @@ export function registerChatHandler(
       const routingText = attachments.length > 0
         ? [effectiveRoutedVisibleUserText, attachmentContext].filter(Boolean).join('\n\n')
         : (effectiveRoutedVisibleUserText || text);
+      const currentTurnDecisionText = attachments.length > 0
+        ? [visibleUserText || text, attachmentContext].filter(Boolean).join('\n\n')
+        : (visibleUserText || text);
+      const continuationContext = [chatContextBridge, actionContinuationBridge, pendingConfirmationPrompt]
+        .filter(Boolean)
+        .join('\n\n');
       const executionTaskText = actionContinuationBridge
         ? [text, actionContinuationBridge].filter(Boolean).join('\n\n')
         : text;
 
       const turnDispatch = buildLumiTurnDispatch({
         userId: uid,
-        text: routingText,
+        text: currentTurnDecisionText,
+        continuationContext,
         channel: 'chat',
         source: eventSource,
         category,
@@ -1042,7 +1069,7 @@ export function registerChatHandler(
         targetIsLumi:
           personality.id === 'lumi' ||
           conversationAgentId === 'lumi' ||
-          /lumi/i.test(routingText),
+          /lumi/i.test(currentTurnDecisionText),
       });
       const turnFlow = turnDispatch.flow;
       const turnSurface = turnDispatch.surface;
@@ -1050,7 +1077,7 @@ export function registerChatHandler(
       effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
       effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
         userId: uid,
-        text: routingText,
+        text: turnFlow.routeText,
         flow: turnFlow,
         toolRegistry,
         domain: resolvedDomain,
@@ -1159,7 +1186,7 @@ export function registerChatHandler(
         : '';
       if (recentFailureExplanation) {
         emitAgent("agent:status", { status: "responding", agentName: personality.name });
-        emitAgent("agent:response", { text: recentFailureExplanation, agentName: personality.name });
+        emitAgent("agent:response", { text: recentFailureExplanation, agentName: personality.name, finalized: true, blocked: false, reason: '' });
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: recentFailureExplanation, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
@@ -1206,14 +1233,22 @@ export function registerChatHandler(
         : turnFlow.requestedMode;
       if (directlyAppliedMode) {
         let modeSynced = true;
-        try {
-          await desktopRelay('client_action', {
+        const modeToolRecord: ToolExecutionRecord = {
+          id: `chat-mode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: 'client_action',
+          arguments: {
             action: 'set_client_mode',
             mode: directlyAppliedMode,
             confirmed: directlyAppliedMode === 'meeting' || directlyAppliedMode === 'autonomous',
-          });
+          },
+          result: '',
+        };
+        try {
+          modeToolRecord.result = await desktopRelay('client_action', modeToolRecord.arguments)
+            || JSON.stringify({ ok: true, mode: directlyAppliedMode });
         } catch (err: any) {
           modeSynced = false;
+          modeToolRecord.error = err?.message || String(err);
           emitAgent('agent:notification', {
             type: 'client_action',
             level: 'warning',
@@ -1223,14 +1258,32 @@ export function registerChatHandler(
         if (modeSynced) saveStoredOperationMode(uid, directlyAppliedMode);
 
         if (isPureOperationModeSwitchRequest(visibleUserText || text, turnFlow.requestedMode)) {
-          const responseText = formatOperationModeSwitchResponse(
+          let responseText = formatOperationModeSwitchResponse(
             directlyAppliedMode,
             modeSynced,
             visibleUserText || text,
           );
+          const finalizedMode = finalizeLumiResponse({
+            taskText: executionTaskText,
+            responseText,
+            toolRecords: [modeToolRecord],
+            source: 'chat',
+            flow: turnFlow,
+          });
+          responseText = finalizedMode.text;
+          if (finalizedMode.notification) {
+            emitAgent('agent:notification', finalizedMode.notification);
+          }
 
           emitAgent('agent:status', { status: 'responding', agentName: personality.name });
-          emitAgent('agent:response', { text: responseText, agentName: personality.name, source: 'chat_mode' });
+          emitAgent('agent:response', {
+            text: responseText,
+            agentName: personality.name,
+            source: 'chat_mode',
+            finalized: true,
+            blocked: finalizedMode.blocked,
+            reason: finalizedMode.reason || '',
+          });
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
@@ -1286,7 +1339,9 @@ export function registerChatHandler(
           status: "thinking",
           agentName: personality.name,
           phase: specialWorkflow.phase,
-          detail: specialWorkflow.statusDetail,
+          ...(shouldForwardPreFinalizationProgress(specialWorkflow.statusDetail)
+            ? { detail: specialWorkflow.statusDetail }
+            : {}),
         });
 
         let workflowResponseText = '';
@@ -1297,14 +1352,9 @@ export function registerChatHandler(
             userText: specialWorkflowText,
             userId: uid,
             desktopRelay: workflowDesktopRelay,
-            speak: async (line) => {
-              emitAgent("agent:chunk", {
-                text: `${line}\n`,
-                agentName: personality.name,
-                source: specialWorkflow.source,
-              });
-              return estimateSkillWorkflowChatSpeechMs(specialWorkflow, line);
-            },
+            // Narration is returned as responseText. Do not expose it before
+            // the shared result finalizer has inspected the tool ledger.
+            speak: async () => 0,
             voiceScope: {
               domain: resolvedDomain === 'work' ? 'work' : 'personal',
               orgId: resolvedOrgId,
@@ -1316,6 +1366,18 @@ export function registerChatHandler(
         } catch (err: any) {
           console.warn(`[ChatHandler] ${specialWorkflow.logLabel} failed:`, err?.message || err);
           workflowResponseText = specialWorkflow.fallbackText;
+        }
+
+        const finalizedWorkflow = finalizeLumiResponse({
+          taskText: specialWorkflowText,
+          responseText: workflowResponseText,
+          toolRecords: workflowToolCalls,
+          source: specialWorkflow.source,
+          flow: turnFlow,
+        });
+        workflowResponseText = finalizedWorkflow.text;
+        if (finalizedWorkflow.notification) {
+          emitAgent('agent:notification', finalizedWorkflow.notification);
         }
 
         if (conversationId) {
@@ -1349,7 +1411,14 @@ export function registerChatHandler(
           console.warn(`[ChatHandler] ${specialWorkflow.logLabel} interaction persistence failed:`, persistErr?.message || persistErr);
         }
 
-        emitAgent("agent:response", { text: workflowResponseText, agentName: personality.name, source: specialWorkflow.source });
+        emitAgent("agent:response", {
+          text: workflowResponseText,
+          agentName: personality.name,
+          source: specialWorkflow.source,
+          finalized: true,
+          blocked: finalizedWorkflow.blocked,
+          reason: finalizedWorkflow.reason || '',
+        });
         if (conversationId) {
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: specialWorkflow.source });
         }
@@ -1373,9 +1442,10 @@ export function registerChatHandler(
       const clientActionOnlyTurn = turnFlow.clientActionOnlyTurn;
       const workSurfaceRoute = turnFlow.workSurfaceRoute;
       const visionIntent = turnFlow.visionIntent;
+      const explicitTeamOrchestration = hasExplicitTeamExecutionRequest(turnFlow.routeText);
       const executionDecision = buildLumiExecutionDecision({
         flow: turnFlow,
-        text,
+        text: turnFlow.routeText,
         toolDeclarations: toolRegistry.getToolDeclarations(),
         personalityToolPolicy: personality.toolPolicy,
         isSanctuary,
@@ -1383,17 +1453,17 @@ export function registerChatHandler(
       const intentTrace = buildLumiIntentTrace({
         dispatch: turnDispatch,
         execution: executionDecision,
-        text: routingText,
+        text: currentTurnDecisionText,
         source: eventSource,
       });
       const capabilitySelection = buildLumiCapabilitySelection({
         dispatch: turnDispatch,
         execution: executionDecision,
-        text: routingText,
+        text: turnFlow.routeText,
       });
       const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
         channel: 'chat',
-        text: routingText,
+        text: turnFlow.routeText,
         flow: turnFlow,
         capabilitySelection,
       });
@@ -1484,6 +1554,7 @@ export function registerChatHandler(
       // ── Named Workflow Quick-Path: "run my X" / "跑XX流程" ──
       const runWorkflowMatch = text.match(/(?:run|执行|跑|运行)\s+(?:my\s+)?(.+?)(?:\s*(?:routine|workflow|流程|工作流))?\s*$/i);
       let workflowQuickResult: string | null = null;
+      const workflowQuickToolRecords: ToolExecutionRecord[] = [];
       if (runWorkflowMatch && executionDecision.allowToolUse) {
         const wfName = runWorkflowMatch[1].trim().toLowerCase();
         const workflowScope = { domain: resolvedDomain, orgId: resolvedOrgId };
@@ -1495,6 +1566,12 @@ export function registerChatHandler(
           for (let i = 0; i < matched.steps.length; i++) {
             const step = matched.steps[i];
             if (step.tool) {
+              const toolRecord: ToolExecutionRecord = {
+                id: `workflow-quick-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+                name: step.tool,
+                arguments: step.args || {},
+                result: '',
+              };
               try {
                 const result = await toolRegistry.execute(step.tool, step.args || {}, {
                   userId: uid,
@@ -1510,8 +1587,12 @@ export function registerChatHandler(
                   actionIntent: visibleUserText,
                   ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
                 });
+                toolRecord.result = result || '';
+                workflowQuickToolRecords.push(toolRecord);
                 steps.push(`Step ${i + 1} (${step.tool}): ${(result || 'OK').slice(0, 200)}`);
               } catch (e: any) {
+                toolRecord.error = e.message || String(e);
+                workflowQuickToolRecords.push(toolRecord);
                 steps.push(`Step ${i + 1} (${step.tool}): Error - ${e.message}`);
                 break;
               }
@@ -1525,10 +1606,28 @@ export function registerChatHandler(
       }
 
       if (workflowQuickResult) {
+        const finalizedWorkflowQuick = finalizeLumiResponse({
+          taskText: executionTaskText,
+          responseText: workflowQuickResult,
+          toolRecords: workflowQuickToolRecords,
+          source: 'workflow',
+          flow: turnFlow,
+        });
+        workflowQuickResult = finalizedWorkflowQuick.text;
+        if (finalizedWorkflowQuick.notification) {
+          emitAgent('agent:notification', finalizedWorkflowQuick.notification);
+        }
         emitAgent("agent:status", { status: "responding" });
-        emitAgent("agent:response", { text: workflowQuickResult, agentName: personality.name });
+        emitAgent("agent:response", {
+          text: workflowQuickResult,
+          agentName: personality.name,
+          finalized: true,
+          blocked: finalizedWorkflowQuick.blocked,
+          reason: finalizedWorkflowQuick.reason || '',
+        });
         persistChatLearning(workflowQuickResult, {
           channel: 'workflow',
+          toolRecords: workflowQuickToolRecords,
           sourceInteractionId: `${interactionId}_workflow_quick`,
           logLabel: 'workflow quick path',
         });
@@ -1618,7 +1717,13 @@ export function registerChatHandler(
           });
           quickResponseText = quickFinalized.text;
           if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
-          emitAgent("agent:response", { text: quickResponseText, agentName: personality.name });
+          emitAgent("agent:response", {
+            text: quickResponseText,
+            agentName: personality.name,
+            finalized: true,
+            blocked: quickFinalized.blocked,
+            reason: quickFinalized.reason || '',
+          });
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
             if (quickResult.toolCall) {
@@ -1650,21 +1755,53 @@ export function registerChatHandler(
       if (isMusicProfileAnalysisRequest(text)) {
         emitAgent("agent:status", { status: "thinking", agentName: personality.name, detail: "Analyzing music profile" });
         let profileResponse = '';
+        const profileRecord: ToolExecutionRecord = {
+          id: `chat-music-profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: 'music_profile_analysis',
+          arguments: { maxSongs: 3000 },
+          result: '',
+        };
         try {
           const profile = await analyzeLikedMusicProfile(uid, { maxSongs: 3000 });
           profileResponse = formatMusicProfileReport(profile);
+          profileRecord.result = JSON.stringify({
+            ok: true,
+            source: profile.source,
+            playlistName: profile.playlistName,
+            analyzedTracks: profile.analyzedTracks,
+            summary: profile.summaryCn,
+          });
         } catch (profileErr: any) {
+          profileRecord.error = profileErr?.message || String(profileErr);
           profileResponse = `我现在还没能完成网易云喜欢歌单分析。\n\n${profileErr?.message || '请确认网易云已经登录，再试一次。'}`;
           socket.emit('music:error', { message: profileResponse });
         }
 
-        emitAgent("agent:response", { text: profileResponse, agentName: personality.name });
+        const profileFinalized = finalizeLumiResponse({
+          taskText: executionTaskText,
+          responseText: profileResponse,
+          toolRecords: [profileRecord],
+          source: 'chat',
+          flow: turnFlow,
+        });
+        profileResponse = profileFinalized.text;
+        if (profileFinalized.notification) {
+          emitAgent('agent:notification', profileFinalized.notification);
+        }
+        emitAgent("agent:response", {
+          text: profileResponse,
+          agentName: personality.name,
+          finalized: true,
+          blocked: profileFinalized.blocked,
+          reason: profileFinalized.reason || '',
+        });
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: profileResponse, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: profileResponse, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: [profileRecord] });
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
         }
         persistChatLearning(profileResponse, {
+          toolRecords: [profileRecord],
           sourceInteractionId: `${interactionId}_music_profile`,
           logLabel: 'music profile',
         });
@@ -1787,6 +1924,7 @@ export function registerChatHandler(
       const preflightSearchText = [visibleUserText, attachmentContext].filter(Boolean).join('\n');
       const shouldPreflightLocalAction =
         !cognition.directToolExecuted &&
+        !explicitTeamOrchestration &&
         executionDecision.allowToolUse &&
         !clientActionOnlyTurn &&
         !selfRepairTurn &&
@@ -1880,6 +2018,7 @@ export function registerChatHandler(
       const desktopObservationPlan = buildDesktopObservationPlan(visibleUserText);
       if (
         !responseText &&
+        !explicitTeamOrchestration &&
         desktopObservationPlan.length > 0 &&
         executionDecision.allowToolUse &&
         !clientActionOnlyTurn &&
@@ -1903,7 +2042,12 @@ export function registerChatHandler(
         llmWasCalled = false;
       }
 
-      const deferCompletionStream = turnFlow.completionEvidenceNeeded;
+      const deferCompletionStream = shouldDeferModelOutputUntilFinalized({
+        taskText: executionTaskText,
+        allowToolUse: executionDecision.allowToolUse,
+        flow: turnFlow,
+      });
+      const chatTextGate = createPreFinalizationTextGate();
       const prefersSequentialWorkflow =
         shouldChainTask(executionTaskText) &&
         workSurfaceRoute.artifactFirst &&
@@ -1940,10 +2084,17 @@ export function registerChatHandler(
       // does not wander into unrelated tools or report raw provider errors.
       const isMusicAdjustment = isMusicAdjustmentRequest(text);
       if (!responseText && (isMusicPlaybackRequest(text) || isMusicAdjustment)) {
+        const musicRecord: ToolExecutionRecord = {
+          id: `chat-music-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: isMusicAdjustment ? 'music_runtime_adjust' : 'music_runtime_playback',
+          arguments: { text },
+          result: '',
+        };
         try {
           const result = isMusicAdjustment
             ? await adjustMusicPlayback(uid, socket, text)
             : await searchAndPlay(uid, socket, text);
+          musicRecord.result = JSON.stringify(result);
           if (result.success && result.text) {
             responseText = result.text;
             llmWasCalled = true;
@@ -1952,10 +2103,12 @@ export function registerChatHandler(
             socket.emit('music:error', { message: responseText });
           }
         } catch (musicErr: any) {
+          musicRecord.error = musicErr?.message || String(musicErr);
           console.warn('[Music Intent] Failed:', musicErr.message);
           responseText = getMusicFailureMessage(musicErr?.message);
           socket.emit('music:error', { message: responseText });
         }
+        allToolRecords.push(musicRecord);
       }
 
       const foregroundWeChatReadArgs = buildForegroundWeChatReadArgs(text);
@@ -1993,7 +2146,9 @@ export function registerChatHandler(
             actionIntent: visibleUserText,
             toolPolicy: routedToolPolicy || personality.toolPolicy,
             onProgress: (step: string) => {
-              emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+              if (shouldForwardPreFinalizationProgress(step)) {
+                emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+              }
             },
           });
           toolRecord.result = toolResult || '';
@@ -2067,7 +2222,9 @@ export function registerChatHandler(
             actionIntent: visibleUserText,
             toolPolicy: routedToolPolicy || personality.toolPolicy,
             onProgress: (step: string) => {
-              emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+              if (shouldForwardPreFinalizationProgress(step)) {
+                emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+              }
             },
           });
           toolRecord.result = toolResult || '';
@@ -2232,23 +2389,28 @@ export function registerChatHandler(
                     domain: resolvedDomain,
                     orgId: resolvedOrgId,
                     desktopRelay,
+                    toolPolicy: routedToolPolicy,
                     isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId),
                   },
                   { provider: activeProvider as any, model: activeModel },
                   llmGetters,
-                  (message) => emitBackground("agent:chunk", { text: message, agentName: "Lumi Orchestrator" }),
+                  undefined,
                   (record, meta) => {
-                    backgroundToolRecords.push({
-                      id: record.id,
-                      name: record.name,
-                      arguments: record.arguments || {},
-                      result: record.result || '',
-                      error: record.error,
-                    });
+                    if (isTerminalOrchestrationToolEvent(record)) {
+                      backgroundToolRecords.push({
+                        id: record.id,
+                        name: record.name,
+                        arguments: record.arguments || {},
+                        result: record.result || '',
+                        error: record.error,
+                      });
+                    }
                     if (record.result !== undefined || record.error !== undefined) {
                       const updatedTask = incrementBackgroundTaskToolCalls(backgroundTaskId);
                       if (updatedTask) emitTaskUpdate(updatedTask);
                     }
+                    // Direct desktop relays already emit their own start/result lifecycle.
+                    if (isDirectDesktopTool(record.name)) return;
                     const payload: Record<string, any> = {
                       correlationId: record.id,
                       toolCallId: record.id,
@@ -2273,37 +2435,55 @@ export function registerChatHandler(
                   throw new Error('Workflow cancelled');
                 }
 
-                let finalText = orchResult.responseText || '后台子 agent 已完成任务，但没有返回详细文本。';
+                const taskPreview = text.slice(0, 80);
+                // i18n-allow: reviewed Chinese background-result fallback; this is finalized before delivery.
+                const workerText = orchResult.responseText || '\u540e\u53f0\u5b50 agent \u6ca1\u6709\u8fd4\u56de\u8be6\u7ec6\u7ed3\u679c\u3002';
+                const completionCandidate = `\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210\uff1a${taskPreview}\n\n${workerText}`;
                 const finalizedBackground = finalizeLumiResponse({
                   taskText: executionTaskText,
-                  responseText: finalText,
+                  responseText: completionCandidate,
                   toolRecords: backgroundToolRecords,
                   source: 'background_delegation',
                   flow: turnFlow,
                 });
                 const backgroundBlocked = finalizedBackground.blocked;
-                finalText = finalizedBackground.text;
-
-                const taskPreview = text.slice(0, 80);
-                const completionText = backgroundBlocked
-                  ? `\u8fd9\u6b21\u6ca1\u5b8c\u6210\uff1a${taskPreview}\n\n${finalText}`
-                  : `\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210\uff1a${taskPreview}\n\n${finalText}`;
-                const completedTask = completeBackgroundTask(backgroundTaskId, completionText);
-                if (completedTask) emitTaskUpdate(completedTask);
-                if (completedTask?.status === 'cancelled') {
+                const completionText = finalizedBackground.text;
+                const terminalTask = backgroundBlocked
+                  ? failBackgroundTask(
+                      backgroundTaskId,
+                      finalizedBackground.reason || 'Missing verified background-task completion evidence.',
+                    )
+                  : completeBackgroundTask(backgroundTaskId, completionText);
+                if (terminalTask) emitTaskUpdate(terminalTask);
+                if (terminalTask?.status === 'cancelled') {
                   const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
                   persistBackgroundResult(cancelText, backgroundToolRecords);
-                  emitBackground("agent:response", { text: cancelText, agentName: personality.name });
+                  emitBackground("agent:response", {
+                    text: cancelText,
+                    agentName: personality.name,
+                    finalized: true,
+                    blocked: true,
+                    reason: 'cancelled',
+                  });
                   emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
                   return;
                 }
                 persistBackgroundResult(completionText, backgroundToolRecords);
-                emitBackground("agent:response", { text: completionText, agentName: personality.name });
+                emitBackground("agent:response", {
+                  text: completionText,
+                  agentName: personality.name,
+                  finalized: true,
+                  blocked: finalizedBackground.blocked,
+                  reason: finalizedBackground.reason || '',
+                });
                 emitBackground("agent:proactive", {
                   type: 'background_result',
                   message: completionText.slice(0, 1200),
                   agentName: personality.name,
                   timestamp: new Date().toISOString(),
+                  finalized: true,
+                  blocked: finalizedBackground.blocked,
+                  reason: finalizedBackground.reason || '',
                 });
                 emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
                 pushNotification(uid, {
@@ -2312,7 +2492,7 @@ export function registerChatHandler(
                   message: completionText.slice(0, 180),
                 });
 
-                if (shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
+                if (!backgroundBlocked && shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
                   const skillDesc = buildSkillDescription(executionTaskText, orchResult.workflowResult);
                   emitBackground("agent:proactive", {
                     type: 'distill_hint',
@@ -2328,7 +2508,13 @@ export function registerChatHandler(
                   if (cancelledTask) emitTaskUpdate(cancelledTask);
                   const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
                   persistBackgroundResult(cancelText, backgroundToolRecords);
-                  emitBackground("agent:response", { text: cancelText, agentName: personality.name });
+                  emitBackground("agent:response", {
+                    text: cancelText,
+                    agentName: personality.name,
+                    finalized: true,
+                    blocked: true,
+                    reason: 'cancelled',
+                  });
                   emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
                   pushNotification(uid, {
                     type: 'background_cancelled',
@@ -2341,7 +2527,13 @@ export function registerChatHandler(
                 if (failedTask) emitTaskUpdate(failedTask);
                 const errorText = `后台子 agent 处理受阻：${bgErr?.message || String(bgErr)}`;
                 persistBackgroundResult(errorText, backgroundToolRecords);
-                emitBackground("agent:response", { text: errorText, agentName: personality.name });
+                emitBackground("agent:response", {
+                  text: errorText,
+                  agentName: personality.name,
+                  finalized: true,
+                  blocked: true,
+                  reason: bgMessage,
+                });
                 emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
                 pushNotification(uid, {
                   type: 'background_error',
@@ -2356,25 +2548,51 @@ export function registerChatHandler(
         }
       }
 
-      if (!responseText && !actionPreflightContext && !prefersSequentialWorkflow && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && capabilitySelection.lane !== 'desktop_control' && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
+      const shouldOrchestrateForeground = shouldAttemptOrchestration({
+        channel: 'chat',
+        text: turnFlow.routeText,
+        complexity: backgroundComplexity,
+        allowToolUse: executionDecision.allowToolUse,
+        clientActionOnly: clientActionOnlyTurn,
+        selfRepair: selfRepairTurn,
+        responseReady: Boolean(responseText),
+        hasPreflightContext: Boolean(actionPreflightContext),
+        prefersSequentialWorkflow,
+        capabilityLane: capabilitySelection.lane,
+        cognitionCategory: cognition.intent.category,
+      });
+      if (shouldOrchestrateForeground) {
         // Path B: Orchestrator — decompose tasks into sub-tasks for worker agents
         // (Skipped for sanctuary agents — they stay in their territory)
         try {
           emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
           const orchResult = await runOrchestratedTask(
             executionTaskText,
-            { userId: uid, personalityId, domain: resolvedDomain, orgId: resolvedOrgId, desktopRelay },
+            {
+              userId: uid,
+              personalityId,
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+              desktopRelay,
+              toolPolicy: routedToolPolicy,
+            },
             { provider: activeProvider, model: activeModel },
             llmGetters,
-            exposeAgentWork ? (msg) => emitAgent("agent:chunk", { text: msg, agentName: "Lumi" }) : undefined,
+            exposeAgentWork && !deferCompletionStream
+              ? (msg) => emitAgent("agent:chunk", { text: msg, agentName: "Lumi" })
+              : undefined,
             (record, meta) => {
-              allToolRecords.push({
-                id: record.id,
-                name: record.name,
-                arguments: record.arguments || {},
-                result: record.result || '',
-                error: record.error,
-              });
+              if (isTerminalOrchestrationToolEvent(record)) {
+                allToolRecords.push({
+                  id: record.id,
+                  name: record.name,
+                  arguments: record.arguments || {},
+                  result: record.result || '',
+                  error: record.error,
+                });
+              }
+              // Direct desktop relays already emit their own start/result lifecycle.
+              if (isDirectDesktopTool(record.name)) return;
               const payload: Record<string, any> = {
                 correlationId: record.id,
                 toolCallId: record.id,
@@ -2393,7 +2611,7 @@ export function registerChatHandler(
           );
           if (orchResult) {
             responseText = orchResult.responseText;
-            llmWasCalled = true;
+            llmWasCalled = orchResult.llmWasCalled;
 
             // Check if this pattern should be auto-distilled into a skill
             if (shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
@@ -2451,7 +2669,9 @@ export function registerChatHandler(
                 actionIntent: visibleUserText,
                 toolPolicy: routedToolPolicy || personality.toolPolicy,
                 onProgress: (step: string) => {
-                  emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+                  if (shouldForwardPreFinalizationProgress(step)) {
+                    emitAgent("agent:progress", { text: step, tone: 'tool', agentName: personality.name });
+                  }
                 },
               },
               onTool: (record) => {
@@ -2471,12 +2691,15 @@ export function registerChatHandler(
             },
             llmGetters,
             (step, total, desc) => {
-              emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background', detail: `Step ${step}/${total}: ${desc}` });
-              emitAgent("agent:progress", {
-                text: `Step ${step}/${total}: ${desc}`,
-                tone: 'tool',
-                agentName: personality.name,
-              });
+              const progressText = `Step ${step}/${total}: ${desc}`;
+              if (shouldForwardPreFinalizationProgress(progressText)) {
+                emitAgent("agent:status", { status: "thinking", agentName: personality.name, phase: 'background', detail: progressText });
+                emitAgent("agent:progress", {
+                  text: progressText,
+                  tone: 'tool',
+                  agentName: personality.name,
+                });
+              }
             },
           );
           if (chainerResult.finalResponse) {
@@ -2520,7 +2743,10 @@ export function registerChatHandler(
           const onChunk: StreamCallback = (chunk) => {
             streamChunks.push(chunk);
             if (!deferCompletionStream) {
-              emitAgent("agent:chunk", { text: chunk, agentName: personality.name });
+              const safeText = chatTextGate.push(chunk);
+              if (safeText) {
+                emitAgent("agent:chunk", { text: safeText, agentName: personality.name });
+              }
             }
           };
 
@@ -2611,10 +2837,13 @@ export function registerChatHandler(
                 });
               },
               onProgress: (step: string) => {
-                emitAgent("agent:progress", { text: step, agentName: "Lumi" });
+                if (shouldForwardPreFinalizationProgress(step)) {
+                  emitAgent("agent:progress", { text: step, agentName: "Lumi" });
+                }
               },
               ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
               actionIntent: visibleUserText,
+              routedTaskText: turnFlow.routeText,
               ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
             },
             llmGetters.getOllama,
@@ -2672,7 +2901,12 @@ export function registerChatHandler(
                   { provider: 'gemini', model: DEFAULT_MODELS.gemini, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal },
                   (chunk) => {
                     fallbackChunks.push(chunk);
-                    emitAgent("agent:chunk", { text: chunk, agentName: personality.name });
+                    if (!deferCompletionStream) {
+                      const safeText = chatTextGate.push(chunk);
+                      if (safeText) {
+                        emitAgent("agent:chunk", { text: safeText, agentName: personality.name });
+                      }
+                    }
                   },
                   llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
                   llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
@@ -2725,6 +2959,7 @@ export function registerChatHandler(
                   },
                   ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
                   actionIntent: visibleUserText,
+                  routedTaskText: turnFlow.routeText,
                   ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
                 },
                 llmGetters.getOllama,
@@ -2754,6 +2989,7 @@ export function registerChatHandler(
         }
       }
 
+      chatTextGate.finish();
       const finalResponse = finalizeLumiResponse({
         taskText: executionTaskText,
         responseText,
@@ -2812,7 +3048,13 @@ export function registerChatHandler(
       }
 
       // Emit response BEFORE conversation_updated so the client finalizes streaming first
-      emitAgent("agent:response", { text: responseText, agentName: personality.name });
+      emitAgent("agent:response", {
+        text: responseText,
+        agentName: personality.name,
+        finalized: true,
+        blocked: finalResponse.blocked,
+        reason: finalResponse.reason || '',
+      });
       // Re-emit conversation_updated AFTER response so the client syncs from API with complete data
       if (conversationId) {
         socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });

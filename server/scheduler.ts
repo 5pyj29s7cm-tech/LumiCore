@@ -25,15 +25,63 @@ import { getGateConfig } from './autonomy/safety_gate';
 import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
 import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
+import { finalizeLumiResponse } from './cognition/result_finalizer';
 
 export interface ScheduledDelivery {
   userId: string;
   message: string;
   domain?: 'personal' | 'work';
   orgId?: string;
+  /** Model-authored user-visible text must pass the shared output finalizer. */
+  modelGenerated?: boolean;
 }
 
 type ScheduledTaskResult = string | ScheduledDelivery[] | null;
+
+export interface ScheduledDeliveryFinalization {
+  delivery: ScheduledDelivery | null;
+  finalized: boolean;
+  blocked: boolean;
+  reason: string;
+}
+
+export function finalizeScheduledDelivery(
+  taskId: string,
+  delivery: ScheduledDelivery,
+): ScheduledDeliveryFinalization {
+  if (!delivery.modelGenerated) {
+    return {
+      delivery,
+      finalized: false,
+      blocked: false,
+      reason: '',
+    };
+  }
+
+  const finalized = finalizeLumiResponse({
+    taskText: `Scheduled proactive message (${taskId}): ${delivery.message}`,
+    responseText: delivery.message,
+    toolRecords: [],
+    source: `scheduler_${taskId}`,
+  });
+  if (finalized.blocked) {
+    return {
+      delivery: null,
+      finalized: true,
+      blocked: true,
+      reason: finalized.reason || 'Scheduled model output failed final verification.',
+    };
+  }
+  return {
+    delivery: {
+      ...delivery,
+      message: finalized.text,
+    },
+    finalized: true,
+    blocked: false,
+    reason: finalized.reason || '',
+  };
+}
 
 interface ScheduledTask {
   id: string;
@@ -263,11 +311,20 @@ export class Scheduler {
 
     for (const delivery of result) {
       if (!delivery?.userId || !delivery.message?.trim()) continue;
+      const deliveryFinalization = finalizeScheduledDelivery(task.id, delivery);
+      if (!deliveryFinalization.delivery) {
+        console.warn(
+          `[Scheduler] Withheld unverified model-authored proactive message from "${task.id}": `
+          + deliveryFinalization.reason,
+        );
+        continue;
+      }
+      const safeDelivery = deliveryFinalization.delivery;
       const normalized: ScheduledDelivery = {
-        userId: delivery.userId,
-        message: delivery.message.trim(),
-        domain: delivery.domain === 'work' && delivery.orgId ? 'work' : 'personal',
-        orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
+        userId: safeDelivery.userId,
+        message: safeDelivery.message.trim(),
+        domain: safeDelivery.domain === 'work' && safeDelivery.orgId ? 'work' : 'personal',
+        orgId: safeDelivery.domain === 'work' ? safeDelivery.orgId || '' : '',
       };
       this.saveProactiveMessage(task.id, normalized, timestamp);
       if (!task.quiet && this.io) {
@@ -280,6 +337,9 @@ export class Scheduler {
           domain: normalized.domain,
           orgId: normalized.orgId,
           timestamp,
+          finalized: deliveryFinalization.finalized,
+          blocked: false,
+          reason: deliveryFinalization.reason,
         });
       }
     }
@@ -675,7 +735,7 @@ Output ONLY the greeting — no preamble, no labels.`;
             );
             const llmGreeting = result.text?.trim();
             if (llmGreeting && llmGreeting.length > 3) {
-              messages.push({ userId, message: llmGreeting, domain: 'personal' });
+              messages.push({ userId, message: llmGreeting, domain: 'personal', modelGenerated: true });
             } else {
               // Fallback to template
               const parts: string[] = [`${greeting}!`];
@@ -736,7 +796,7 @@ Output ONLY the reflection — no preamble, no labels.`;
             );
             const llmReflection = result.text?.trim();
             if (llmReflection && llmReflection.length > 3) {
-              messages.push({ userId, message: llmReflection, domain: 'personal' });
+              messages.push({ userId, message: llmReflection, domain: 'personal', modelGenerated: true });
             }
           } catch {
             // Simple fallback
@@ -1177,6 +1237,9 @@ Rules:
                 message: `我发现了你的 ${created} 个操作习惯模式，已自动创建为工作流。你可以说"运行[名称]"来快速复用。`,
                 count: created,
                 timestamp: new Date().toISOString(),
+                finalized: true,
+                blocked: false,
+                reason: 'Workflow creation count returned by autoGenerateWorkflows.',
               });
             }
           }
@@ -1309,7 +1372,8 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
 
-            const narrative = narrativeResult.text?.trim() || `${summaryData.newMemories} 条新记忆，${summaryData.newInteractions} 次对话 — Lumi 在成长。`;
+            const generatedNarrative = narrativeResult.text?.trim();
+            const narrative = generatedNarrative || `${summaryData.newMemories} 条新记忆，${summaryData.newInteractions} 次对话 — Lumi 在成长。`;
 
             // Store as a special memory
             const { addMemory } = await import('./memory');
@@ -1335,7 +1399,12 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
             } as any, { tier: 'episodic', perspective: 'lumi_self', importance: 0.5, domain: 'personal', orgId: '', source: 'system' });
 
             console.log(`[GrowthJournal] Generated for ${userId}: ${narrative.slice(0, 100)}`);
-            messages.push({ userId, message: narrative.slice(0, 200), domain: 'personal' });
+            messages.push({
+              userId,
+              message: narrative.slice(0, 200),
+              domain: 'personal',
+              modelGenerated: Boolean(generatedNarrative),
+            });
           } catch (llmErr: any) {
             console.warn(`[GrowthJournal] LLM generation failed for ${userId}:`, llmErr.message);
             // Fallback: simple stats summary

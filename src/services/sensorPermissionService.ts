@@ -22,6 +22,8 @@ interface SnapshotOptions {
 
 export const SENSOR_PERMISSIONS_CHANGED = 'lumi:sensor-permissions-changed';
 export const SENSOR_ACCESS_CHANGED = 'lumi:sensor-access-changed';
+export const BACKGROUND_FACE_PRESENCE_CHANGED = 'lumi:background-face-presence-changed';
+export const BACKGROUND_FACE_PRESENCE_ENABLED_KEY = 'lumi_background_face_presence_enabled';
 
 const SENSOR_ENABLED_KEYS: Record<SensorKind, string> = {
   microphone: 'lumi_mic_enabled',
@@ -32,6 +34,7 @@ const activeStreams: Record<SensorKind, Set<MediaStream>> = {
   microphone: new Set(),
   camera: new Set(),
 };
+const activeStreamReleases = new WeakMap<MediaStream, () => void>();
 
 function hasNavigator() {
   return typeof navigator !== 'undefined';
@@ -39,6 +42,28 @@ function hasNavigator() {
 
 function hasWindow() {
   return typeof window !== 'undefined';
+}
+
+export function isBackgroundFacePresenceEnabled(
+  storage?: Pick<Storage, 'getItem'> | null,
+): boolean {
+  const source = storage ?? (hasWindow() ? window.localStorage : null);
+  if (!source) return false;
+  try {
+    return source.getItem(BACKGROUND_FACE_PRESENCE_ENABLED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function setBackgroundFacePresenceEnabled(enabled: boolean) {
+  if (!hasWindow()) return;
+  try {
+    window.localStorage.setItem(BACKGROUND_FACE_PRESENCE_ENABLED_KEY, String(enabled));
+  } catch {}
+  window.dispatchEvent(new CustomEvent(BACKGROUND_FACE_PRESENCE_CHANGED, {
+    detail: { enabled, updatedAt: Date.now() },
+  }));
 }
 
 function readSensorEnabled(kind: SensorKind) {
@@ -51,22 +76,65 @@ function readSensorEnabled(kind: SensorKind) {
 }
 
 function stopActiveStreams(kind: SensorKind) {
-  for (const stream of activeStreams[kind]) {
-    stream.getTracks().forEach(track => track.stop());
-  }
-  activeStreams[kind].clear();
+  for (const stream of [...activeStreams[kind]]) releaseSensorStream(kind, stream);
 }
 
 function trackActiveStream(kind: SensorKind, stream: MediaStream) {
   activeStreams[kind].add(stream);
-  const removeWhenEnded = () => {
-    if (stream.getTracks().every(track => track.readyState === 'ended')) {
-      activeStreams[kind].delete(stream);
+  const tracks = stream.getTracks();
+  const wrappedStops = new Map<MediaStreamTrack, {
+    original: MediaStreamTrack['stop'];
+    wrapped: MediaStreamTrack['stop'];
+  }>();
+  let released = false;
+
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeStreams[kind].delete(stream);
+    activeStreamReleases.delete(stream);
+    stream.removeEventListener?.('inactive', release);
+    for (const track of tracks) {
+      track.removeEventListener?.('ended', releaseIfInactive);
+      const methods = wrappedStops.get(track);
+      if (methods && track.stop === methods.wrapped) {
+        try {
+          track.stop = methods.original;
+        } catch {}
+      }
     }
   };
-  stream.getTracks().forEach(track => {
-    track.addEventListener('ended', removeWhenEnded);
+
+  function releaseIfInactive() {
+    if (tracks.every(track => track.readyState === 'ended')) release();
+  }
+
+  activeStreamReleases.set(stream, release);
+  stream.addEventListener?.('inactive', release);
+  tracks.forEach(track => {
+    track.addEventListener?.('ended', releaseIfInactive);
+    const original = track.stop;
+    const wrapped = (() => {
+      try {
+        original.call(track);
+      } finally {
+        // MediaStreamTrack.stop() changes readyState but does not reliably fire
+        // "ended", so release our strong Set reference synchronously.
+        releaseIfInactive();
+      }
+    }) as MediaStreamTrack['stop'];
+    try {
+      track.stop = wrapped;
+      wrappedStops.set(track, { original, wrapped });
+    } catch {}
   });
+}
+
+export function releaseSensorStream(kind: SensorKind, stream: MediaStream | null | undefined) {
+  if (!stream) return;
+  activeStreamReleases.get(stream)?.();
+  activeStreams[kind].delete(stream);
+  stream.getTracks().forEach(track => track.stop());
 }
 
 export function isSensorEnabled(kind: SensorKind): boolean {

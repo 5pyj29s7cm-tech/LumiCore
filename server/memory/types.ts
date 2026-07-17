@@ -84,6 +84,11 @@ export interface MemoryQuery {
   userId?: string;
   /** Free-text search — matched against keywords and content */
   query?: string;
+  /**
+   * Include raw operational workflow traces in retrieval results.
+   * Defaults to false so execution receipts do not leak into conversational memory.
+   */
+  includeOperationalTraces?: boolean;
   type?: MemoryType;
   limit?: number;
   minConfidence?: number;

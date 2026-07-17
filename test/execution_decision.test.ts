@@ -11,11 +11,17 @@ const declarations = [
   'web_search',
   'url_fetch',
   'create_ppt',
+  'create_pdf',
   'write_file',
+  'desktop_list_files',
+  'desktop_path_info',
   'desktop_list_apps',
+  'desktop_system_info',
   'desktop_open',
   'desktop_active_window',
   'desktop_ui_snapshot',
+  'desktop_ui_focus',
+  'desktop_ui_type',
   'desktop_mouse_click_at',
   'desktop_cursor_glow_show',
   'desktop_cursor_glow_update',
@@ -23,7 +29,22 @@ const declarations = [
   'desktop_cursor_glow_hide',
   'desktop_keyboard_press',
   'desktop_capture_screen',
+  'ocr_image_file',
   'ocr_screen',
+  'floorplan_extract_geometry',
+  'cad_generate_dxf',
+  'cad_prepare_autocad_operations',
+  'mcp_cad-drafting_autocad_playback_file',
+  'mcp_cad-drafting_cad_renovation_folder_workflow',
+  'mcp_filesystem_read_media_file',
+  'mcp_filesystem_read_file',
+  'run_command',
+  'desktop_run_command',
+  'code_execution',
+  'python_exec',
+  'powershell',
+  'shell_exec',
+  'terminal_exec',
   'client_health_check',
   'list_skills',
   'install_skill',
@@ -208,6 +229,66 @@ describe('Lumi execution decision', () => {
     expect(decision.promptOverlay).toContain('Lumi Execution Decision');
   });
 
+  it.each(['chat', 'voice'] as const)(
+    'keeps extraction-only desktop geometry on the same hard policy in %s',
+    async (channel) => {
+      const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+      const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+      const text = '读取桌面上的设计草稿.jpg，提取几何信息，先不要绘制，只告诉我提取是否成功。';
+      const dispatch = buildLumiTurnDispatch({
+        userId: `execution_decision_geometry_only_${channel}`,
+        text,
+        channel,
+        source: channel,
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      });
+      const decision = buildLumiExecutionDecision({
+        flow: dispatch.flow,
+        text: dispatch.flow.routeText,
+        toolDeclarations: declarations,
+      });
+      const expectedAllowed = [
+        'desktop_list_files',
+        'desktop_path_info',
+        'desktop_system_info',
+        'floorplan_extract_geometry',
+        'ocr_image_file',
+        'desktop_capture_screen',
+        'ocr_screen',
+      ];
+      const forbidden = [
+        'cad_generate_dxf',
+        'cad_prepare_autocad_operations',
+        'mcp_cad-drafting_autocad_playback_file',
+        'mcp_cad-drafting_cad_renovation_folder_workflow',
+        'write_file',
+        'create_docx',
+        'create_pdf',
+        'create_ppt',
+        'mcp_filesystem_read_media_file',
+        'mcp_filesystem_read_file',
+        'run_command',
+        'desktop_run_command',
+        'code_execution',
+        'python_exec',
+        'powershell',
+        'shell_exec',
+        'terminal_exec',
+      ];
+
+      expect(decision.allowToolUse).toBe(true);
+      expect(decision.toolRoute?.hardAllowlist).toBe(true);
+      expect(new Set(decision.toolRoute?.toolNames)).toEqual(new Set(expectedAllowed));
+      expect(new Set(decision.toolPolicy.allowedTools)).toEqual(new Set(expectedAllowed));
+      expect(decision.toolPolicy.forbiddenTools).toEqual(expect.arrayContaining(forbidden));
+      expect(decision.promptOverlay).toContain('hard allowlist');
+      for (const name of forbidden) {
+        expect(decision.toolPolicy.allowedTools).not.toContain(name);
+      }
+    },
+  );
+
   it('adds the unified legal entry overlay for company legal chat', async () => {
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
     const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
@@ -275,6 +356,222 @@ describe('Lumi execution decision', () => {
       expect(source).toContain('agent:intent_trace');
       expect(source).not.toContain('routeToolsForTurn');
       expect(source).not.toContain('mergeToolPolicyWithRoute');
+    }
+  });
+
+  it('restores status follow-ups without restarting the unfinished task or entering task center', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: status',
+      '- originalGoal: 把桌面的设计草稿.jpg画到 AutoCAD 里。',
+      '- appTarget: AutoCAD',
+      '- latestBlocker: mcp_filesystem_read_media_file: Path is outside allowed directories',
+      '- unfinished: yes',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_status_followup_user',
+      text: '\u6211\u95ee\u4f60\u4e3a\u4ec0\u4e48\u6ca1\u6709\u5b8c\u6210\uff1f\u4f60\u4e3a\u4ec0\u4e48\u4e0d\u53bb\u6267\u884c\uff1f',
+      continuationContext,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text: '\u6211\u95ee\u4f60\u4e3a\u4ec0\u4e48\u6ca1\u6709\u5b8c\u6210\uff1f\u4f60\u4e3a\u4ec0\u4e48\u4e0d\u53bb\u6267\u884c\uff1f',
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.flow.routeText).toContain('AutoCAD');
+    expect(dispatch.flow.routeText).toContain('Path is outside allowed directories');
+    expect(decision.allowToolUse).toBe(false);
+    expect(decision.toolRoute).toBeNull();
+    expect(decision.toolPolicy.forbiddenTools).toContain('*');
+    expect(decision.promptOverlay).toContain('Do not restart execution');
+    expect(decision.promptOverlay).toContain('Do not restart execution, create a task-center item');
+  });
+
+  it('answers a desktop result demand from saved evidence without rerunning tools', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '\u6211\u8ba9\u4f60\u5e2e\u6211\u770b\u4e0b\u684c\u9762\u4e0a\u591a\u5c11\u8f6f\u4ef6\u4f60\u5012\u662f\u8ddf\u6211\u8bf4\u5440';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: status',
+      '- originalGoal: \u5e2e\u6211\u770b\u4e0b\u684c\u9762\u4e0a\u6709\u591a\u5c11\u8f6f\u4ef6',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_list_apps | items=2 | sample=AutoCAD | WPS Office',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_desktop_result_demand_user',
+      text,
+      continuationContext,
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.flow.routeText).toContain('desktop_list_apps | items=2');
+    expect(decision.allowToolUse).toBe(false);
+    expect(decision.toolRoute).toBeNull();
+    expect(decision.toolPolicy.forbiddenTools).toContain('*');
+    expect(decision.promptOverlay).toContain('actual tool evidence');
+  });
+
+  it('routes direct pressure back to the unfinished action instead of task center', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '\u522b\u5149\u8bf4\uff0c\u5feb\u505a';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: \u628a\u684c\u9762\u7684\u8bbe\u8ba1\u8349\u7a3f.jpg\u753b\u5230 AutoCAD \u91cc',
+      '- latestBlocker: image decoder failed',
+      '- unfinished: yes',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_pressure_user',
+      text,
+      continuationContext,
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.flow.routeText).toContain('\u8bbe\u8ba1\u8349\u7a3f.jpg');
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolRoute?.categories).not.toContain('task_center');
+    expect(decision.toolRoute?.categories).not.toContain('work_takeover');
+  });
+
+  it('continues an in-app WPS command with the recovered app route', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: 打开 WPS。',
+      '- appTarget: WPS',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_open | status=opened',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_wps_followup_user',
+      text: '在这里面写“我好想你”。',
+      continuationContext,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text: '在这里面写“我好想你”。',
+      toolDeclarations: declarations,
+    });
+
+    expect(decision.allowToolUse).toBe(true);
+    expect(decision.toolRoute?.categories).toContain('external_control');
+    expect(decision.toolRoute?.categories).not.toContain('work_takeover');
+    expect(decision.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_type',
+    ]));
+  });
+
+  it('keeps an exact WPS new-document replay on foreground UI controls', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '在这里面新建一个空白文档并写入：Lumi端到端回归测试。';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      '- originalGoal: 打开WPS。',
+      '- appTarget: WPS',
+      '- unfinished: no',
+      'Recent tool evidence:',
+      '- desktop_open | status=opened',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_wps_exact_replay_user',
+      text,
+      continuationContext,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text: dispatch.flow.routeText,
+      toolDeclarations: declarations,
+    });
+
+    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
+    expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(false);
+    expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('none');
+    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
+    expect(dispatch.flow.specialWorkflow).toBeNull();
+    expect(decision.toolRoute?.categories).toEqual(expect.arrayContaining([
+      'external_control',
+      'desktop_control',
+    ]));
+    for (const forbiddenCategory of [
+      'code_git',
+      'capability_learning',
+      'artifact_work',
+      'documents',
+    ]) {
+      expect(decision.toolRoute?.categories).not.toContain(forbiddenCategory);
+    }
+    expect(decision.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_type',
+      'desktop_capture_screen',
+      'desktop_open',
+    ]));
+    expect(decision.maxIterations).toBeLessThanOrEqual(10);
+    expect(decision.toolPolicy.forbiddenTools).toContain('computer_use');
+    expect(decision.promptOverlay).toContain('Editor-ready gate');
+    expect(decision.promptOverlay).toContain('Never repeat the same New/Blank selector');
+    for (const forbidden of [
+      'work_product_plan',
+      'work_product_verify',
+      'write_file',
+      'create_docx',
+      'list_skills',
+      'work_takeover_task_continue',
+      'work_takeover_task_orchestrate',
+      'computer_use',
+      'mouse_click',
+      'keyboard_type',
+    ]) {
+      expect(decision.toolPolicy.allowedTools).not.toContain(forbidden);
     }
   });
 

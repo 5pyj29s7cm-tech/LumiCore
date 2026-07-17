@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { requestCameraStream } from '@/services/sensorPermissionService';
+import { releaseSensorStream, requestCameraStream } from '@/services/sensorPermissionService';
 
 type MediaPipeLoader = typeof import('../lib/mediapipe/loader');
 let mediaPipeLoaderPromise: Promise<MediaPipeLoader> | null = null;
@@ -48,8 +48,36 @@ interface FaceTemplate {
   embedding: number[];
 }
 
-const FACE_RECOGNITION_INTERVAL_MS = 700;
-const FACE_LOST_GRACE_FRAMES = Math.ceil(3000 / FACE_RECOGNITION_INTERVAL_MS);
+const FACE_RECOGNITION_INTERVAL_MS = 3000;
+const FACE_LOST_GRACE_FRAMES = Math.ceil(6000 / FACE_RECOGNITION_INTERVAL_MS);
+
+function emptyFaceRecognitionResult(): FaceRecognitionResult {
+  return {
+    facePresent: false,
+    ownerPresent: false,
+    confidence: 0,
+    bestMatch: null,
+    allMatches: [],
+    threshold: 'reject',
+    faceCount: 0,
+  };
+}
+
+function stopCameraStream(stream: MediaStream | null) {
+  releaseSensorStream('camera', stream);
+}
+
+function releaseVideoElement(video: HTMLVideoElement | null) {
+  if (!video) return;
+  video.pause();
+  video.srcObject = null;
+  video.removeAttribute('src');
+  video.load();
+}
+
+function waitForNextCapture(delayMs: number) {
+  return new Promise<void>(resolve => window.setTimeout(resolve, delayMs));
+}
 
 function faceResultKey(result: FaceRecognitionResult): string {
   return [
@@ -75,21 +103,13 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
 
   useEffect(() => { socketRef.current = options?.socket; }, [options?.socket]);
 
-  const [result, setResult] = useState<FaceRecognitionResult>({
-    facePresent: false,
-    ownerPresent: false,
-    confidence: 0,
-    bestMatch: null,
-    allMatches: [],
-    threshold: 'reject',
-    faceCount: 0,
-  });
+  const [result, setResult] = useState<FaceRecognitionResult>(() => emptyFaceRecognitionResult());
+  const [hasTemplates, setHasTemplates] = useState(false);
+  const [templateRevision, setTemplateRevision] = useState(0);
 
   const templatesRef = useRef<FaceTemplate[]>([]);
-  const animRef = useRef(0);
   const faceLostRef = useRef(0);           // consecutive frames without face
   const lastKnownFaceResult = useRef<FaceRecognitionResult | null>(null);
-  const lastProcessTimeRef = useRef(0);
   const lastResultKeyRef = useRef('');
   const isEnrollingRef = useRef(false);
 
@@ -99,221 +119,266 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
       const res = await fetch('/api/auth/biometric/list', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        templatesRef.current = (data.faces || []) as FaceTemplate[];
+        const templates = (data.faces || []) as FaceTemplate[];
+        templatesRef.current = templates;
+        return templates;
       }
     } catch {}
+    templatesRef.current = [];
+    return [];
   }, []);
+
+  useEffect(() => {
+    const handleBiometricsUpdated = (event: Event) => {
+      const type = String((event as CustomEvent<{ type?: string }>).detail?.type || '');
+      if (!type || type === 'face') setTemplateRevision(revision => revision + 1);
+    };
+    window.addEventListener('lumi:biometrics-updated', handleBiometricsUpdated);
+    return () => window.removeEventListener('lumi:biometrics-updated', handleBiometricsUpdated);
+  }, []);
+
+  useEffect(() => {
+    if (enabled) return;
+    faceLostRef.current = 0;
+    lastKnownFaceResult.current = null;
+    lastResultKeyRef.current = '';
+    setResult(current => current.facePresent || current.ownerPresent
+      ? emptyFaceRecognitionResult()
+      : current);
+  }, [enabled]);
 
   // ── Face recognition loop ──
   useEffect(() => {
     if (!enabled) return;
     let stream: MediaStream | null = null;
+    let video: HTMLVideoElement | null = null;
+    let releaseFaceLandmarker: (() => void) | null = null;
+    let detectionTimer: number | null = null;
     let running = true;
+
+    const disposeResources = () => {
+      if (detectionTimer !== null) {
+        window.clearTimeout(detectionTimer);
+        detectionTimer = null;
+      }
+      stopCameraStream(stream);
+      stream = null;
+      releaseVideoElement(video);
+      video = null;
+      releaseFaceLandmarker?.();
+      releaseFaceLandmarker = null;
+    };
+
+    const publishFaceResult = (nextResult: FaceRecognitionResult) => {
+      if (!running) return;
+      const nextKey = faceResultKey(nextResult);
+      if (nextKey === lastResultKeyRef.current) return;
+      lastResultKeyRef.current = nextKey;
+      lastKnownFaceResult.current = nextResult;
+      setResult(nextResult);
+      socketRef.current?.emit('face:result', {
+        facePresent: nextResult.facePresent,
+        ownerPresent: nextResult.ownerPresent,
+        confidence: nextResult.confidence,
+        faceCount: nextResult.faceCount,
+      });
+    };
 
     const start = async () => {
       try {
-        const mediaPipe = await loadMediaPipeLoader();
-        await mediaPipe.initMediaPipe();
-        await loadTemplates();
+        // Camera permission alone is not enough for permanent background capture:
+        // recognition only starts after the owner has enrolled a face template.
+        const templates = await loadTemplates();
         if (!running) return;
+        setHasTemplates(templates.length > 0);
+        if (templates.length === 0) return;
 
-        const video = document.createElement('video');
+        const mediaPipe = await loadMediaPipeLoader();
+        const acquiredRelease = await mediaPipe.acquireFaceLandmarker();
+        if (!running) {
+          acquiredRelease();
+          return;
+        }
+        releaseFaceLandmarker = acquiredRelease;
+
+        video = document.createElement('video');
         video.setAttribute('playsinline', '');
         video.setAttribute('autoplay', '');
         video.muted = true;
 
-        stream = await requestCameraStream({
+        const requestedStream = await requestCameraStream({
           width: 320,
           height: 240,
           facingMode: 'user',
         });
+        // Cleanup may have run while getUserMedia awaited user/system input.
+        if (!running) {
+          stopCameraStream(requestedStream);
+          return;
+        }
+        stream = requestedStream;
         video.srcObject = stream;
         await video.play();
+        if (!running) return;
 
-        const publishFaceResult = (nextResult: FaceRecognitionResult) => {
-          const nextKey = faceResultKey(nextResult);
-          if (nextKey === lastResultKeyRef.current) return;
-          lastResultKeyRef.current = nextKey;
-          lastKnownFaceResult.current = nextResult;
-          setResult(nextResult);
-          socketRef.current?.emit('face:result', {
-            facePresent: nextResult.facePresent,
-            ownerPresent: nextResult.ownerPresent,
-            confidence: nextResult.confidence,
-            faceCount: nextResult.faceCount,
-          });
+        const scheduleNextDetection = (delay = FACE_RECOGNITION_INTERVAL_MS) => {
+          if (!running) return;
+          detectionTimer = window.setTimeout(runDetection, delay);
         };
 
-        const loop = () => {
+        const runDetection = () => {
           if (!running) return;
+          try {
+            if (
+              video &&
+              video.readyState >= 2 &&
+              mediaPipe.isFaceLandmarkerReady() &&
+              !document.hidden
+            ) {
+              const faces = mediaPipe.detectFaceLandmarks(video);
 
-          const now = performance.now();
-          if (
-            now - lastProcessTimeRef.current >= FACE_RECOGNITION_INTERVAL_MS &&
-            video.readyState >= 2 &&
-            mediaPipe.isMediaPipeReady()
-          ) {
-            lastProcessTimeRef.current = now;
-            const faces = mediaPipe.detectFaceLandmarks(video);
+              if (faces.length > 0) {
+                faceLostRef.current = 0;
+                const bestMatches: FaceMatch[] = [];
 
-            if (faces.length > 0) {
-              faceLostRef.current = 0;
-              const bestMatches: FaceMatch[] = [];
+                for (const face of faces) {
+                  const embedding = mediaPipe.extractFaceEmbedding(face.landmarks);
+                  if (embedding.length === 0) continue;
 
-              for (const face of faces) {
-                const embedding = mediaPipe.extractFaceEmbedding(face.landmarks);
-                if (embedding.length === 0) continue;
+                  for (const tpl of templatesRef.current) {
+                    if (!tpl.embedding || tpl.embedding.length === 0) continue;
+                    const sim = cosineSimilarity(embedding, tpl.embedding);
+                    bestMatches.push({
+                      faceId: tpl.faceId,
+                      uid: tpl.uid,
+                      label: tpl.label,
+                      confidence: Math.round(sim * 100) / 100,
+                    });
+                  }
+                }
 
-                // Compare against all stored templates
-                for (const tpl of templatesRef.current) {
-                  if (!tpl.embedding || tpl.embedding.length === 0) continue;
-                  const sim = cosineSimilarity(embedding, tpl.embedding);
-                  bestMatches.push({
-                    faceId: tpl.faceId,
-                    uid: tpl.uid,
-                    label: tpl.label,
-                    confidence: Math.round(sim * 100) / 100,
-                  });
+                bestMatches.sort((a, b) => b.confidence - a.confidence);
+                const best = bestMatches[0] || null;
+                const bestConf = best?.confidence ?? 0;
+
+                let threshold: FaceRecognitionResult['threshold'] = 'reject';
+                if (bestConf >= 0.80) threshold = 'high';
+                else if (bestConf >= 0.60) threshold = 'medium';
+                else if (bestConf >= 0.45) threshold = 'low';
+
+                publishFaceResult({
+                  facePresent: true,
+                  ownerPresent: bestConf >= 0.60,
+                  confidence: bestConf,
+                  bestMatch: best,
+                  allMatches: bestMatches.slice(0, 5),
+                  threshold,
+                  faceCount: faces.length,
+                });
+              } else {
+                faceLostRef.current++;
+                const stillPresent = faceLostRef.current < FACE_LOST_GRACE_FRAMES;
+                const lastKnown = lastKnownFaceResult.current;
+
+                if (stillPresent && lastKnown) {
+                  publishFaceResult({ ...lastKnown, facePresent: true });
+                } else {
+                  publishFaceResult(emptyFaceRecognitionResult());
                 }
               }
-
-              bestMatches.sort((a, b) => b.confidence - a.confidence);
-              const best = bestMatches[0] || null;
-              const bestConf = best?.confidence ?? 0;
-
-              let threshold: FaceRecognitionResult['threshold'] = 'reject';
-              if (bestConf >= 0.80) threshold = 'high';
-              else if (bestConf >= 0.60) threshold = 'medium';
-              else if (bestConf >= 0.45) threshold = 'low';
-
-              const faceResult: FaceRecognitionResult = {
-                facePresent: true,
-                ownerPresent: bestConf >= 0.60,
-                confidence: bestConf,
-                bestMatch: best,
-                allMatches: bestMatches.slice(0, 5),
-                threshold,
-                faceCount: faces.length,
-              };
-
-              publishFaceResult(faceResult);
-            } else {
-              // Face lost counting
-              faceLostRef.current++;
-              const stillPresent = faceLostRef.current < FACE_LOST_GRACE_FRAMES;
-              const lastKnown = lastKnownFaceResult.current;
-
-              if (stillPresent && lastKnown) {
-                // Grace period: keep last known state but mark facePresent as fading
-                publishFaceResult({ ...lastKnown, facePresent: true });
-              } else {
-                // Face definitely gone
-                const goneResult: FaceRecognitionResult = {
-                  facePresent: false,
-                  ownerPresent: false,
-                  confidence: 0,
-                  bestMatch: null,
-                  allMatches: [],
-                  threshold: 'reject',
-                  faceCount: 0,
-                };
-                publishFaceResult(goneResult);
-              }
             }
+          } catch (error) {
+            console.warn('[FaceRecognition] Detection failed:', error);
+          } finally {
+            scheduleNextDetection();
           }
-
-          animRef.current = requestAnimationFrame(loop);
         };
 
-        animRef.current = requestAnimationFrame(loop);
+        scheduleNextDetection(0);
       } catch (err) {
-        console.warn('[FaceRecognition] Camera or MediaPipe init failed:', err);
+        disposeResources();
+        if (running) {
+          console.warn('[FaceRecognition] Camera or MediaPipe init failed:', err);
+        }
       }
     };
 
-    start();
+    void start();
 
     return () => {
       running = false;
-      cancelAnimationFrame(animRef.current);
-      if (stream) stream.getTracks().forEach(t => t.stop());
+      disposeResources();
     };
-  }, [enabled, loadTemplates]);
+  }, [enabled, loadTemplates, templateRevision]);
 
   // ── Enrollment ──
   const enrollFace = useCallback(async (label: string): Promise<{ success: boolean; faceId?: string }> => {
-    // Use the last known face detection
-    // In practice, this should capture a fresh embedding from the next detection tick
-    return new Promise(async (resolve) => {
-      try {
-        const mediaPipe = await loadMediaPipeLoader();
-        await mediaPipe.initMediaPipe();
+    let stream: MediaStream | null = null;
+    let video: HTMLVideoElement | null = null;
+    let releaseFaceLandmarker: (() => void) | null = null;
+    isEnrollingRef.current = true;
 
-        const video = document.createElement('video');
-        video.setAttribute('playsinline', '');
-        video.setAttribute('autoplay', '');
-        video.muted = true;
+    try {
+      const mediaPipe = await loadMediaPipeLoader();
+      releaseFaceLandmarker = await mediaPipe.acquireFaceLandmarker();
 
-        const stream = await requestCameraStream({
-          width: 480,
-          height: 360,
-          facingMode: 'user',
-        });
-        video.srcObject = stream;
-        await video.play();
+      video = document.createElement('video');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('autoplay', '');
+      video.muted = true;
 
-        // Wait for a good face detection
-        let attempts = 0;
-        const captureInterval = setInterval(() => {
-          attempts++;
-          if (attempts > 60 || !mediaPipe.isMediaPipeReady()) {
-            clearInterval(captureInterval);
-            stream.getTracks().forEach(t => t.stop());
-            resolve({ success: false });
-            return;
-          }
+      stream = await requestCameraStream({
+        width: 480,
+        height: 360,
+        facingMode: 'user',
+      });
+      video.srcObject = stream;
+      await video.play();
 
+      for (let attempts = 0; attempts < 60; attempts++) {
+        if (video.readyState >= 2 && mediaPipe.isFaceLandmarkerReady()) {
           const faces = mediaPipe.detectFaceLandmarks(video);
           if (faces.length > 0) {
-            clearInterval(captureInterval);
             const embedding = mediaPipe.extractFaceEmbedding(faces[0].landmarks);
-            stream.getTracks().forEach(t => t.stop());
+            if (embedding.length === 0) return { success: false };
 
-            if (embedding.length === 0) {
-              resolve({ success: false });
-              return;
-            }
-
-            // Submit to server
-            fetch('/api/auth/biometric/face/enroll', {
+            const res = await fetch('/api/auth/biometric/face/enroll', {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               credentials: 'include',
               body: JSON.stringify({ label, embedding }),
-            }).then(async (res) => {
-              if (res.ok) {
-                const data = await res.json();
-                templatesRef.current.push({
-                  uid: 'owner',
-                  label,
-                  faceId: data.face.id,
-                  embedding,
-                });
-                resolve({ success: true, faceId: data.face.id });
-              } else {
-                resolve({ success: false });
-              }
-            }).catch(() => resolve({ success: false }));
+            });
+            if (!res.ok) return { success: false };
+
+            const data = await res.json();
+            const faceId = String(data.face?.id || '');
+            if (!faceId) return { success: false };
+            templatesRef.current = [...templatesRef.current, {
+              uid: 'owner',
+              label,
+              faceId,
+              embedding,
+            }];
+            setHasTemplates(true);
+            return { success: true, faceId };
           }
-        }, 300);
-      } catch {
-        resolve({ success: false });
+        }
+        await waitForNextCapture(300);
       }
-    });
+      return { success: false };
+    } catch {
+      return { success: false };
+    } finally {
+      stopCameraStream(stream);
+      releaseVideoElement(video);
+      releaseFaceLandmarker?.();
+      isEnrollingRef.current = false;
+    }
   }, []);
 
   return {
     result,
+    hasTemplates,
     loadTemplates,
     enrollFace,
     isEnrolling: isEnrollingRef.current,

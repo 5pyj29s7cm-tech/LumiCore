@@ -6,6 +6,7 @@ import {
 } from './operation_modes';
 import {
   hasClientActionOnlyIntent,
+  hasExplicitTeamExecutionRequest,
   hasExplicitToolIntent,
   isDiagnosticOrRepairRequest,
   shouldAllowToolUseForTurn,
@@ -22,15 +23,22 @@ import {
   type WorkTakeoverTurnSurface,
 } from '../work_takeover/continuity';
 import { buildActionContract } from './action_contract';
+import {
+  classifyRecentActionFollowupIntent,
+  isRecoveredCurrentAppEditingContinuation,
+  needsRecentActionContinuationContext,
+} from './action_continuation';
 
 export type LumiTurnChannel = 'chat' | 'voice' | 'task';
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
-export type LumiDelegationIntent = 'none' | 'explicit_background' | 'consider_background' | 'foreground_owned';
+export type LumiDelegationIntent = 'none' | 'explicit_team' | 'explicit_background' | 'consider_background' | 'foreground_owned';
 export type LumiCapabilityLearningIntent = 'none' | 'inspect_reuse' | 'learn_missing' | 'stabilize_existing';
 
 export interface LumiTurnFlowInput {
   userId: string;
   text: string;
+  /** Prior-turn detail used only to fill a genuinely underspecified action. */
+  continuationContext?: string;
   channel: LumiTurnChannel;
   source?: string;
   category?: string;
@@ -176,6 +184,13 @@ function classifyCapabilityLearningIntent(
   text: string,
   input: Pick<LumiTurnFlowInput, 'targetIsLumi'>,
 ): Pick<LumiExecutionGovernance, 'capabilityLearningIntent' | 'capabilityLearningReason' | 'shouldInspectCapabilitiesFirst'> {
+  if (isRecoveredCurrentAppEditingContinuation(text)) {
+    return {
+      capabilityLearningIntent: 'none',
+      capabilityLearningReason: 'current-app editing continues through visible UI controls instead of capability learning',
+      shouldInspectCapabilitiesFirst: false,
+    };
+  }
   const englishCapabilityContext = /\b(lumi|capabilit(?:y|ies)|skill|tool|adapter|workflow|mcp|agent|desktop|browser|login|client|task\s*center)\b/i.test(text);
   const englishReuseAudit = /\b(duplicate|reuse|reusable|hard-?coded|script|built-?in|demo|already|existing|fragmented|same\s+path)\b/i.test(text);
   const englishCapabilityAction = /\b(learn|stabili[sz]e|remember|optimi[sz]e|improve|wire|integrate|make\s+real|make\s+reusable|fix|repair)\b/i.test(text);
@@ -246,14 +261,17 @@ function classifyDelegationIntent(input: {
   if (input.selfRepairTurn) {
     return { delegationIntent: 'none', delegationReason: 'self-repair should stay foreground and inspect client state directly' };
   }
+  if (hasExplicitBackgroundDelegationPreference(input.text)) {
+    return { delegationIntent: 'explicit_background', delegationReason: 'user explicitly asked for background/parallel delegation' };
+  }
+  if (hasExplicitTeamExecutionRequest(input.text)) {
+    return { delegationIntent: 'explicit_team', delegationReason: 'user explicitly requested team or multi-agent execution' };
+  }
   if (input.workSurfaceRoute.directDesktop) {
     return { delegationIntent: 'foreground_owned', delegationReason: 'visible desktop/software work should be controlled and verified in foreground' };
   }
   if (input.workSurfaceRoute.artifactFirst) {
     return { delegationIntent: 'foreground_owned', delegationReason: 'artifact-first work should proceed sequentially with local output checks' };
-  }
-  if (hasExplicitBackgroundDelegationPreference(input.text)) {
-    return { delegationIntent: 'explicit_background', delegationReason: 'user explicitly asked for background/parallel delegation' };
   }
   if (input.workTakeover.shouldResumeTask || MULTI_STEP_WORK_RE.test(input.text)) {
     return { delegationIntent: 'consider_background', delegationReason: 'multi-step work may use agents after Lumi keeps ownership of the plan' };
@@ -322,6 +340,26 @@ function buildExecutionGovernance(input: {
 }
 
 export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
+  const continuationContext = compact(input.continuationContext);
+  const hasContinuationContext = Boolean(continuationContext);
+  const actionFollowupIntent = classifyRecentActionFollowupIntent(input.text);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const explicitContinuationConfirmation =
+    /^(?:确认|确定|嗯|好|好的|可以|行|开始|yes|ok|okay|confirm|go)[。！？.!?]*$/iu.test(input.text.trim()); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const currentAcceptsContinuationContext = needsRecentActionContinuationContext(input.text)
+    || explicitContinuationConfirmation;
+  const continuationMayDriveAction = hasContinuationContext
+    && (actionFollowupIntent === 'execute' || explicitContinuationConfirmation);
+  const statusOnlyContinuation = hasContinuationContext && actionFollowupIntent === 'status';
+  const contextualText = hasContinuationContext
+    ? `${input.text}\n\n${continuationContext}`
+    : input.text;
+  // Status/why/recall follow-ups still need the recovered evidence in the model
+  // context, but only execute/confirmation follow-ups may turn it into tool work.
+  const routingText = hasContinuationContext && currentAcceptsContinuationContext
+    ? contextualText
+    : input.text;
+  const explicitTeamExecution = hasExplicitTeamExecutionRequest(routingText);
   const operationMode = normalizeOperationMode(input.operationMode);
   const requestedMode = input.requestedMode || detectRequestedOperationMode(input.text);
   const surface = resolveTurnSurface({
@@ -336,14 +374,30 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     orgId: input.orgId,
     surface,
   });
-  const clientActionIntent = hasClientActionOnlyIntent(input.text);
-  const actionContract = buildActionContract(input.text);
+  const rawClientActionIntent = hasClientActionOnlyIntent(input.text);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const continuationNamesExternalTarget = continuationMayDriveAction
+    && /(?:desktop_|wechat_|browser_|mcp_|AutoCAD|\bCAD\b|微信|浏览器)/iu.test(continuationContext); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const clientActionIntent = rawClientActionIntent && !continuationNamesExternalTarget;
+  const currentActionContract = buildActionContract(input.text);
+  const actionContract = currentActionContract.applies || !continuationMayDriveAction
+    ? currentActionContract
+    : buildActionContract(routingText);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
   const autoPromoteToAssistant = shouldAutoPromoteWorkTurn(
     input.text,
     operationMode,
     requestedMode,
     input.channel,
+  ) || Boolean(
+    explicitTeamExecution
+    && operationMode === 'chat'
+    && !requestedMode
+  ) || Boolean(
+    continuationMayDriveAction
+    && operationMode === 'chat'
+    && !requestedMode
+    && actionContractRequiresTools
   );
   const taskEntryTurn = input.channel === 'task';
   const chatModePureConversation = operationMode === 'chat' && !requestedMode && !taskEntryTurn && !autoPromoteToAssistant;
@@ -353,24 +407,33 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     !chatModePureConversation &&
     (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools);
   const effectiveOperationMode = requestedMode || (shouldPromoteForAction ? 'assistant' : operationMode);
-  const selfRepairTurn = !chatModePureConversation && isDiagnosticOrRepairRequest(input.text);
+  const selfRepairTurn = !statusOnlyContinuation
+    && !chatModePureConversation
+    && isDiagnosticOrRepairRequest(input.text);
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
-  const visionIntent = hasVisionIntent(input.text);
-  const workSurfaceRoute = resolveWorkSurfaceRoute(input.text);
+  const visionIntent = hasVisionIntent(routingText);
+  const workSurfaceRoute = resolveWorkSurfaceRoute(routingText);
+  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routingText);
   const explicitBackgroundDelegation = hasExplicitBackgroundDelegationPreference(input.text);
-  const allowToolUseForTurn = chatModePureConversation
+  const allowToolUseForTurn = statusOnlyContinuation
+    ? false
+    : chatModePureConversation
     ? clientActionOnlyTurn
     : clientActionOnlyTurn ||
       taskEntryTurn ||
       autoPromoteToAssistant ||
       actionContractRequiresTools ||
+      continuationMayDriveAction ||
       workTakeover.shouldResumeTask ||
+      explicitTeamExecution ||
       explicitBackgroundDelegation ||
       shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
-  const specialWorkflow = matchSkillWorkflow(input.text, { targetIsLumi: input.targetIsLumi });
-  const exposeAgentWork = shouldExposeAgentWork(input.text);
+  const specialWorkflow = recoveredCurrentAppEdit
+    ? null
+    : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
+  const exposeAgentWork = explicitTeamExecution || shouldExposeAgentWork(input.text);
   const execution = buildExecutionGovernance({
-    text: input.text,
+    text: routingText,
     flowInput: input,
     allowToolUseForTurn,
     clientActionOnlyTurn,
@@ -399,7 +462,9 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     specialWorkflow,
     executionGovernance: execution.governance,
     completionEvidenceNeeded: execution.completionEvidenceNeeded,
-    routeText: workTakeover.routeText || input.text,
+    routeText: !statusOnlyContinuation && workTakeover.shouldResumeTask && workTakeover.routeText
+      ? workTakeover.routeText
+      : routingText,
   };
 
   return {

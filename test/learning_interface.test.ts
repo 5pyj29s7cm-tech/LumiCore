@@ -146,7 +146,8 @@ describe('Lumi learning interface', () => {
     expect(voiceSource).toContain("channel: 'workflow'");
     expect(voiceSource).toContain('voice quick command');
     expect(voiceSource).toContain('voice cognition direct');
-    expect(voiceSource).toContain('voice music shortcut');
+    expect(voiceSource).toContain('voice music execution');
+    expect(voiceSource).not.toContain('voice music shortcut');
     expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
 
     expect(taskSource).toContain('const persistTaskLearning');

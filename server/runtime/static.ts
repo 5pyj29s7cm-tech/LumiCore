@@ -2,6 +2,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { createViteWatchIgnored } from "../../vite.watch-policy";
 
 export async function setupStatic(app: express.Express, __filename: string, __dirname: string) {
   const isBundledServer = path.basename(process.cwd()).toLowerCase() === "dist-server" ||
@@ -20,7 +21,14 @@ export async function setupStatic(app: express.Express, __filename: string, __di
     console.log(`Starting in DEVELOPMENT mode (Vite)...`);
     const { createServer: createViteServer } = await import("vite");
     const hmrPort = Number.parseInt(process.env.LUMI_HMR_PORT || '', 10);
-    const serverOptions: Record<string, any> = { middlewareMode: true };
+    const serverOptions: Record<string, any> = {
+      middlewareMode: true,
+      // Apply this inline as well as in vite.config.ts so the middleware
+      // server excludes large runtime/model trees before its initial crawl.
+      watch: {
+        ignored: createViteWatchIgnored(__dirname),
+      },
+    };
     if (process.env.DISABLE_HMR === 'true') {
       serverOptions.hmr = false;
     } else if (Number.isFinite(hmrPort) && hmrPort > 0) {

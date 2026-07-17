@@ -41,9 +41,13 @@ import { MCPSettings } from './MCPSettings';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
 import { apiFetch } from '@/services/apiClient';
 import {
+  BACKGROUND_FACE_PRESENCE_CHANGED,
+  BACKGROUND_FACE_PRESENCE_ENABLED_KEY,
   getSensorPermissionSnapshot,
+  isBackgroundFacePresenceEnabled,
   isSensorEnabled,
   requestSensorPermission,
+  setBackgroundFacePresenceEnabled,
   setSensorEnabled,
   SENSOR_ACCESS_CHANGED,
   SENSOR_PERMISSIONS_CHANGED,
@@ -385,6 +389,9 @@ function HardwareSettings({ t }: { t: any }) {
   const [camStatus, setCamStatus] = useState<SensorPermissionState>('unknown');
   const [micEnabled, setMicEnabled] = useState(() => isSensorEnabled('microphone'));
   const [camEnabled, setCamEnabled] = useState(() => isSensorEnabled('camera'));
+  const [backgroundFacePresenceEnabled, setBackgroundFacePresenceState] = useState(() => (
+    isBackgroundFacePresenceEnabled()
+  ));
   const [isRequesting, setIsRequesting] = useState(false);
 
   useEffect(() => {
@@ -407,6 +414,7 @@ function HardwareSettings({ t }: { t: any }) {
     const refreshAccess = () => {
       setMicEnabled(isSensorEnabled('microphone'));
       setCamEnabled(isSensorEnabled('camera'));
+      setBackgroundFacePresenceState(isBackgroundFacePresenceEnabled());
     };
 
     const onSensorAccessChange = (event: Event) => {
@@ -417,13 +425,20 @@ function HardwareSettings({ t }: { t: any }) {
     };
 
     const onStorageChange = (event: StorageEvent) => {
-      if (event.key === 'lumi_mic_enabled' || event.key === 'lumi_camera_enabled') refreshAccess();
+      if (
+        event.key === 'lumi_mic_enabled' ||
+        event.key === 'lumi_camera_enabled' ||
+        event.key === BACKGROUND_FACE_PRESENCE_ENABLED_KEY
+      ) {
+        refreshAccess();
+      }
     };
 
     void refresh();
     refreshAccess();
     window.addEventListener(SENSOR_PERMISSIONS_CHANGED, onSensorChange);
     window.addEventListener(SENSOR_ACCESS_CHANGED, onSensorAccessChange);
+    window.addEventListener(BACKGROUND_FACE_PRESENCE_CHANGED, refreshAccess);
     window.addEventListener('storage', onStorageChange);
     window.addEventListener('visibilitychange', refresh);
     window.addEventListener('visibilitychange', refreshAccess);
@@ -431,6 +446,7 @@ function HardwareSettings({ t }: { t: any }) {
       disposed = true;
       window.removeEventListener(SENSOR_PERMISSIONS_CHANGED, onSensorChange);
       window.removeEventListener(SENSOR_ACCESS_CHANGED, onSensorAccessChange);
+      window.removeEventListener(BACKGROUND_FACE_PRESENCE_CHANGED, refreshAccess);
       window.removeEventListener('storage', onStorageChange);
       window.removeEventListener('visibilitychange', refresh);
       window.removeEventListener('visibilitychange', refreshAccess);
@@ -479,6 +495,19 @@ function HardwareSettings({ t }: { t: any }) {
     }
   };
 
+  const handleBackgroundFacePresenceToggle = async (enabled: boolean) => {
+    if (enabled && !camEnabled) {
+      toast.error(uiMessage('settings.enable-camera-access-before-turning.fbd6cf6197'));
+      return;
+    }
+    if (enabled && camStatus !== 'granted') {
+      const cameraReady = await requestPermissions('camera');
+      if (!cameraReady) return;
+    }
+    setBackgroundFacePresenceEnabled(enabled);
+    setBackgroundFacePresenceState(enabled);
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <SettingsSection title={t.hardwareSensorNetwork || uiMessage('settings.hardware-sensor-network.5ac24401d0')} icon={<Camera size={18} className="text-celestial-saturn" />}>
@@ -507,6 +536,44 @@ function HardwareSettings({ t }: { t: any }) {
             disabled={isRequesting}
             t={t}
           />
+        </div>
+
+        <div className="mt-6 flex items-center justify-between gap-6 rounded-2xl border border-white/5 bg-white/[0.035] p-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+              backgroundFacePresenceEnabled && camEnabled
+                ? 'bg-celestial-saturn/20 text-celestial-saturn'
+                : 'bg-white/5 text-white/35'
+            }`}>
+              <Camera size={17} />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white/90">
+                {uiMessage('settings.background-face-presence.c07ac0f5cb')}
+              </div>
+              <div className="mt-1 max-w-2xl text-xs leading-relaxed text-white/45">
+                {uiMessage('settings.when-enabled-lumi-may-use.25f7da1264')}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleBackgroundFacePresenceToggle(!backgroundFacePresenceEnabled)}
+            disabled={isRequesting || (camStatus === 'unavailable' && !backgroundFacePresenceEnabled)}
+            aria-pressed={backgroundFacePresenceEnabled}
+            aria-label={uiMessage('settings.background-face-presence.c07ac0f5cb')}
+            className={`relative h-7 w-12 shrink-0 rounded-full border transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+              backgroundFacePresenceEnabled
+                ? 'border-celestial-saturn/40 bg-celestial-saturn/25'
+                : 'border-white/10 bg-white/5'
+            }`}
+          >
+            <span className={`absolute top-1 h-5 w-5 rounded-full transition-all ${
+              backgroundFacePresenceEnabled
+                ? 'left-6 bg-celestial-saturn'
+                : 'left-1 bg-white/35'
+            }`} />
+          </button>
         </div>
 
         <div className="mt-12 p-6 glass-dark rounded-[2rem] border border-white/5 space-y-4">

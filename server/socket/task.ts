@@ -25,6 +25,10 @@ import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import {
+  createPreFinalizationTextGate,
+  shouldDeferModelOutputUntilFinalized,
+} from "../cognition/response_delivery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
@@ -138,6 +142,13 @@ export function registerTaskHandler(
       toolDeclarations: toolRegistry.getToolDeclarations(),
       personalityToolPolicy: personality.toolPolicy,
     });
+    const deferTaskModelOutput =
+      executionDecision.allowToolUse
+      || shouldDeferModelOutputUntilFinalized({
+        taskText: routedTaskText,
+        flow: turnFlow,
+      });
+    const taskTextGate = createPreFinalizationTextGate();
     const intentTrace = buildLumiIntentTrace({
       dispatch: turnDispatch,
       execution: executionDecision,
@@ -325,16 +336,24 @@ export function registerTaskHandler(
 
       if (cognition.directToolExecuted && cognition.responseText) {
         console.log(`[Cognition] Task handled directly: ${cognition.intent.category}/${cognition.intent.subIntent}`);
+        const directToolRecords = cognition.toolRecord ? [cognition.toolRecord] : [];
         const finalDirect = finalizeLumiResponse({
           taskText: data.text,
           responseText: cognition.responseText,
-          toolRecords: cognition.toolRecord ? [cognition.toolRecord] : [],
+          toolRecords: directToolRecords,
           source: 'task',
           flow: turnFlow,
         });
         const directResponseText = finalDirect.text;
         if (finalDirect.blocked && finalDirect.notification) socket.emit("agent:notification", finalDirect.notification);
-        socket.emit("agent:response", { text: directResponseText, agentName: personality.name });
+        socket.emit("agent:response", {
+          text: directResponseText,
+          agentName: personality.name,
+          source: 'task',
+          finalized: true,
+          blocked: finalDirect.blocked,
+          reason: finalDirect.reason,
+        });
         socket.emit("agent:status", { status: "idle" });
 
         // Still log the interaction
@@ -355,8 +374,11 @@ export function registerTaskHandler(
           orgId: taskScope.orgId,
         } as any);
         writeDB(db);
-        persistTaskExecutionWriteback(directResponseText, [], `${interactionId}_direct`);
-        persistTaskLearning(directResponseText, { logLabel: 'task direct cognition' });
+        persistTaskExecutionWriteback(directResponseText, directToolRecords, `${interactionId}_direct`);
+        persistTaskLearning(directResponseText, {
+          toolRecords: directToolRecords,
+          logLabel: 'task direct cognition',
+        });
         socket.off('agent:task_cancel', onCancel);
         return;
       }
@@ -374,12 +396,15 @@ export function registerTaskHandler(
 
       // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
       let orchestratedText = '';
+      const orchestratedToolRecords: ToolExecutionRecord[] = [];
       if (!pendingConfirmation && (cognition.intent.category === 'command' || cognition.intent.category === 'code' || cognition.intent.category === 'question')) {
         const orchestrationContext = {
           userId: uid,
           personalityId: data.personalityId || 'lumi',
           domain: taskScope.domain,
           orgId: taskScope.orgId,
+          toolPolicy: executionDecision.toolPolicy,
+          rootTaskText: routedTaskText,
         };
         const complexity = classifyComplexity(routedTaskText, orchestrationContext);
         if (!workSurfaceRoute.forbidComputerUse && (complexity === 'complex' || complexity === 'moderate')) {
@@ -396,12 +421,38 @@ export function registerTaskHandler(
               socket.emit("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
               const scopedLlmConfig = { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId };
               const subTasks = await decomposeTask(data.text, scopedLlmConfig, orchestrationContext, llmGetters);
-              if (exposeAgentWork) socket.emit("task:chunk", { text: `[Orchestrator] Decomposed into ${subTasks.length} sub-tasks\n`, agentName: "Lumi" });
+              if (exposeAgentWork && !deferTaskModelOutput) socket.emit("task:chunk", { text: `[Orchestrator] Decomposed into ${subTasks.length} sub-tasks\n`, agentName: "Lumi" });
 
               const assignments = matchWorkers(subTasks, availableAgents);
-              if (exposeAgentWork) socket.emit("task:chunk", { text: `[Orchestrator] Assigned to ${assignments.length} worker(s)\n`, agentName: "Lumi" });
+              if (exposeAgentWork && !deferTaskModelOutput) socket.emit("task:chunk", { text: `[Orchestrator] Assigned to ${assignments.length} worker(s)\n`, agentName: "Lumi" });
 
-              const workflowResult = await executeWorkflow(assignments, { ...orchestrationContext, desktopRelay }, scopedLlmConfig, llmGetters);
+              const workflowResult = await executeWorkflow(
+                assignments,
+                { ...orchestrationContext, desktopRelay },
+                scopedLlmConfig,
+                llmGetters,
+                availableAgents,
+                (record, meta) => {
+                  socket.emit("agent:tool_call", {
+                    correlationId: record.id,
+                    name: record.name,
+                    arguments: record.arguments,
+                    result: record.result?.slice(0, 500),
+                    error: record.error,
+                    source: 'task',
+                    worker: meta,
+                  });
+                  if (record.result !== undefined || record.error !== undefined) {
+                    orchestratedToolRecords.push({
+                      id: record.id,
+                      name: record.name,
+                      arguments: record.arguments,
+                      result: record.result || '',
+                      error: record.error,
+                    });
+                  }
+                },
+              );
               const aggregated = await aggregateWithLLM(workflowResult, data.text, scopedLlmConfig, llmGetters, uid, taskScope);
               orchestratedText = aggregated;
 
@@ -417,8 +468,8 @@ export function registerTaskHandler(
                   timestamp: new Date().toISOString(),
                 });
               }
-              if (exposeAgentWork) {
-              socket.emit("task:chunk", { text: `\n[Orchestrator] Workflow complete — ${workflowResult.totalAgentsUsed} agent(s) used\n`, agentName: "Lumi" });
+              if (exposeAgentWork && !deferTaskModelOutput) {
+              socket.emit("task:chunk", { text: `\n[Orchestrator] Workflow result ready for final validation — ${workflowResult.totalAgentsUsed} agent(s) used\n`, agentName: "Lumi" });
               }
             } catch (orchErr: any) {
               console.error('[Orchestrator] Task workflow failed, falling back to normal execution:', orchErr.message);
@@ -431,7 +482,7 @@ export function registerTaskHandler(
         const finalOrchestrated = finalizeLumiResponse({
           taskText: data.text,
           responseText: orchestratedText,
-          toolRecords: [],
+          toolRecords: orchestratedToolRecords,
           source: 'task',
           flow: turnFlow,
         });
@@ -440,7 +491,14 @@ export function registerTaskHandler(
           if (finalOrchestrated.notification) socket.emit("agent:notification", finalOrchestrated.notification);
         }
         // Orchestrator handled the task — emit result and skip normal LLM path
-        socket.emit("agent:response", { text: orchestratedText, agentName: personality.name });
+        socket.emit("agent:response", {
+          text: orchestratedText,
+          agentName: personality.name,
+          source: 'task',
+          finalized: true,
+          blocked: finalOrchestrated.blocked,
+          reason: finalOrchestrated.reason,
+        });
         socket.emit("agent:status", { status: "idle" });
         socket.off('agent:task_cancel', onCancel);
 
@@ -460,8 +518,11 @@ export function registerTaskHandler(
           updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
         }
         saveEmotionalState(taskStateKey, updatedState);
-        persistTaskExecutionWriteback(orchestratedText, [], `${interactionId}_orchestrated`);
-        persistTaskLearning(orchestratedText, { logLabel: 'task orchestrated' });
+        persistTaskExecutionWriteback(orchestratedText, orchestratedToolRecords, `${interactionId}_orchestrated`);
+        persistTaskLearning(orchestratedText, {
+          toolRecords: orchestratedToolRecords,
+          logLabel: 'task orchestrated',
+        });
         return;
       }
 
@@ -494,12 +555,15 @@ export function registerTaskHandler(
         executionDecision.maxIterations || 25,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         (chunk) => {
-          if (!cancelled) {
-            socket.emit("task:chunk", { text: chunk, agentName: personality.name });
-            socket.emit("agent:chunk", { text: chunk, agentName: personality.name });
+          if (!cancelled && !deferTaskModelOutput) {
+            const safeText = taskTextGate.push(chunk);
+            if (safeText) {
+              socket.emit("task:chunk", { text: safeText, agentName: personality.name });
+              socket.emit("agent:chunk", { text: safeText, agentName: personality.name });
+            }
           }
         },
-        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -513,12 +577,27 @@ export function registerTaskHandler(
       for (const u of result.usageRecords) {
         recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId, 'task');
       }
+      taskTextGate.finish();
 
       if (cancelled) {
-        socket.emit("agent:response", { text: result.text || '任务已取消。', agentName: personality.name });
+        const cancelledResponse = finalizeLumiResponse({
+          taskText: data.text,
+          responseText: '任务已取消。',
+          toolRecords: result.toolCalls,
+          source: 'task',
+          flow: turnFlow,
+        });
+        socket.emit("agent:response", {
+          text: cancelledResponse.text,
+          agentName: personality.name,
+          source: 'task',
+          finalized: true,
+          blocked: cancelledResponse.blocked,
+          reason: cancelledResponse.reason,
+        });
         socket.emit("agent:status", { status: "idle" });
-        persistTaskExecutionWriteback(result.text || 'Task cancelled.', result.toolCalls, `${interactionId}_cancelled`);
-        persistTaskLearning(result.text || 'Task cancelled.', {
+        persistTaskExecutionWriteback(cancelledResponse.text, result.toolCalls, `${interactionId}_cancelled`);
+        persistTaskLearning(cancelledResponse.text, {
           toolRecords: result.toolCalls,
           sourceInteractionId: `${interactionId}_cancelled`,
           logLabel: 'task cancelled',
@@ -541,7 +620,15 @@ export function registerTaskHandler(
       const holoTask = canOutputHolographic(sensory)
         ? textToHolographicOutput(finalTaskText)
         : undefined;
-      socket.emit("agent:response", { text: finalTaskText, agentName: personality.name, holographic: holoTask });
+      socket.emit("agent:response", {
+        text: finalTaskText,
+        agentName: personality.name,
+        holographic: holoTask,
+        source: 'task',
+        finalized: true,
+        blocked: finalTaskResponse.blocked,
+        reason: finalTaskResponse.reason,
+      });
       socket.emit("agent:status", { status: "idle" });
 
       // Log with conversation linkage
@@ -655,7 +742,21 @@ export function registerTaskHandler(
     } catch (err: any) {
       console.error("[Agent Task Error]:", err);
       const cf = handleLLMFailure(cognition?.intent || { category: 'unknown', confidence: 0, entities: {}, needsLLM: true }, err);
-      socket.emit("agent:response", { text: cf.responseText, agentName: personality.name });
+      const finalFailure = finalizeLumiResponse({
+        taskText: data.text,
+        responseText: cf.responseText,
+        toolRecords: cognition?.toolRecord ? [cognition.toolRecord] : [],
+        source: 'task',
+        flow: turnFlow,
+      });
+      socket.emit("agent:response", {
+        text: finalFailure.text,
+        agentName: personality.name,
+        source: 'task',
+        finalized: true,
+        blocked: finalFailure.blocked,
+        reason: finalFailure.reason,
+      });
       socket.emit("agent:status", { status: "error" });
     } finally {
       socket.off('agent:task_cancel', onCancel);
