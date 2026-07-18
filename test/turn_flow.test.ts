@@ -2,6 +2,113 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 
 describe('Lumi turn flow', () => {
+  it('keeps a missing-reply complaint conversational in assistant mode', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_missing_reply_user',
+      text: '为什么不回我',
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.selfRepairTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(false);
+    expect(flow.completionEvidenceNeeded).toBe(false);
+    expect(flow.routeText).toBe('为什么不回我');
+  });
+
+  it('keeps artifact inspection and repair on ordinary work routes', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const tasks = [
+      '检查一下这个文件',
+      '检查合同',
+      '检查桌面图片',
+      '你自己检查一下这份合同',
+      '检查微信新消息',
+      '检查股票',
+      '检查日程',
+      '这段代码报错了，帮我修复',
+      '合同有问题，帮我改一下',
+    ];
+
+    for (const [index, text] of tasks.entries()) {
+      const flow = buildLumiTurnFlow({
+        userId: `turn_flow_artifact_work_${index}`,
+        text,
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      });
+
+      expect(flow.selfRepairTurn, text).toBe(false);
+      expect(flow.allowToolUseForTurn, text).toBe(true);
+    }
+  });
+
+  it.each([
+    '检查一下你自己有没有问题',
+    '检查一下客户端',
+    '你自己检查一下',
+  ])('keeps explicit current client checks on self-repair: %s', async (text) => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_explicit_self_check',
+      text,
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+
+    expect(flow.selfRepairTurn).toBe(true);
+    expect(flow.allowToolUseForTurn).toBe(true);
+  });
+
+  it('keeps guard-polluted conversational follow-ups chat-only in text and voice', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildRecentActionContinuationBridge } = await import('../server/cognition/action_continuation');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const history = [
+      { role: 'user', message: '你对目前自己的能力是否满意' },
+      {
+        role: 'assistant',
+        message: '我还没有真正开始读取或审查：这一轮没有记录到成功的工具执行。',
+        cognitiveIntent: 'work_product_guard',
+      },
+    ];
+
+    for (const [channel, text] of [['chat', '继续'], ['voice', '回答我']] as const) {
+      const continuationContext = buildRecentActionContinuationBridge(text, history);
+      const flow = buildLumiTurnFlow({
+        userId: `turn-flow-guard-${channel}`,
+        text,
+        continuationContext,
+        channel,
+        source: channel,
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      });
+
+      expect(continuationContext).toBe('');
+      expect(flow.allowToolUseForTurn).toBe(false);
+      expect(flow.routeText).toBe(text);
+    }
+  });
+
   it('keeps ordinary chat soft even when an active task exists', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');

@@ -170,6 +170,10 @@ export function classifyActionRisk(toolName: string, args: Record<string, any> =
   const actionText = buildActionText(toolName, args, context);
   const externalStateChanging = isExternalStateChangingDomain(domain);
 
+  // Skill repair may delete/reinstall a package, refresh dependencies, mutate
+  // MCP configuration, and restart a process. Its built-in confirmation must
+  // never be auto-approved as a generic low-risk "observe" action.
+  if (name === 'client_repair_skill') return 'high';
   if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'high';
   if (name.includes('install') || name.includes('uninstall') || name.includes('delete') || name.includes('remove')) return 'high';
   if (GIT_MUTATION_PATTERN.test(argText) || PACKAGE_INSTALL_PATTERN.test(argText) || SHELL_DOWNLOAD_EXEC_PATTERN.test(argText)) return 'high';
@@ -196,6 +200,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
 
   if (name === 'legal_message_intake_to_case') return 'observe';
   if (name === 'client_action') return getSensitiveClientAction(args) ? 'desktop_control' : 'observe';
+  if (name === 'client_repair_skill') return 'local_write';
   if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
   if (name === 'desktop_ai_list_targets' || name === 'desktop_ai_discovery_plan') return 'observe';
   if (name === 'desktop_ai_register_target') return 'local_write';

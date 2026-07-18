@@ -346,6 +346,7 @@ describe('Action Constitution', () => {
     expect(canAutoApproveAction('desktop_run_command', { command: 'git commit -m test' })).toBe(false);
     expect(canAutoApproveAction('wechat_copy_reply_draft', { openWechat: true })).toBe(true);
     expect(canAutoApproveAction('install_skill', { directory: 'D:\\tmp\\skill' })).toBe(false);
+    expect(canAutoApproveAction('client_repair_skill', { skillName: 'demo' })).toBe(false);
   });
 
   it('does not execute constitution-upgraded tools without confirmation callback', async () => {

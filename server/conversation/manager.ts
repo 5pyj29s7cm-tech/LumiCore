@@ -5,6 +5,11 @@ import {
   needsRecentActionContinuationContext,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
+import {
+  isolateLegacyGuardSummaryState,
+  isGuardGeneratedAssistantText,
+  isGuardGeneratedConversationRecord,
+} from './guard_history';
 
 export interface Conversation {
   id: string;
@@ -16,6 +21,8 @@ export interface Conversation {
   summary: string;
   /** Multi-level summary chain: [oldest, middle, newest]. Max 3 entries. */
   summaryChain?: string[];
+  /** Number of stored messages covered by the newest successfully persisted summary. */
+  lastSummaryMessageCount?: number;
   messageCount: number;
   lastActiveAt: string;
   createdAt: string;
@@ -53,6 +60,7 @@ export interface MessageRecord {
   orgId?: string;
   source?: string;
   channel?: string;
+  cognitiveIntent?: string;
   /** Provider message identity used to keep asynchronous remote turns ordered. */
   externalMessageId?: string;
   /** Monotonic sequence within one external conversation. */
@@ -60,6 +68,19 @@ export interface MessageRecord {
   /** Time the remote transport received the message. */
   receivedAt?: string;
   timestamp: string;
+}
+
+function isolateConversationSummaryForUse(conv: Conversation): boolean {
+  const isolated = isolateLegacyGuardSummaryState({
+    summary: conv.summary,
+    summaryChain: conv.summaryChain,
+    lastSummaryMessageCount: conv.lastSummaryMessageCount,
+  });
+  if (!isolated.changed) return false;
+  conv.summary = isolated.summary;
+  conv.summaryChain = isolated.summaryChain;
+  conv.lastSummaryMessageCount = isolated.lastSummaryMessageCount;
+  return true;
 }
 
 function resolveConversationScope(domainOrOrgId?: string, orgIdMaybe?: string): { domain: string; orgId: string } {
@@ -88,7 +109,9 @@ export function getConversationForScope(
   const db = readDB();
   const conversation = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
   if (!conversation || conversation.userId !== userId) return null;
-  return conversationMatchesScope(conversation, domain, orgId) ? conversation : null;
+  if (!conversationMatchesScope(conversation, domain, orgId)) return null;
+  if (isolateConversationSummaryForUse(conversation)) writeDB(db);
+  return conversation;
 }
 
 export function getOrCreateActiveConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
@@ -106,7 +129,10 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
     .sort((a: Conversation, b: Conversation) =>
       new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
     )[0];
-  if (active) return active;
+  if (active) {
+    if (isolateConversationSummaryForUse(active)) writeDB(db);
+    return active;
+  }
 
   const id = 'conv_' + crypto.randomUUID();
   const now = new Date().toISOString();
@@ -117,6 +143,8 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
     title: '',
     status: 'active',
     summary: '',
+    summaryChain: [],
+    lastSummaryMessageCount: 0,
     messageCount: 0,
     lastActiveAt: now,
     createdAt: now,
@@ -144,7 +172,7 @@ export function closeConversation(conversationId: string, summary?: string, user
 export function getActiveConversation(userId: string, agentId?: string, domainOrOrgId?: string, orgIdMaybe?: string): Conversation | null {
   const db = readDB();
   if (!db.conversations) return null;
-  return db.conversations
+  const active = db.conversations
     .filter((c: Conversation) => {
       if (c.userId !== userId) return false;
       if (agentId && c.agentId !== agentId) return false;
@@ -154,6 +182,8 @@ export function getActiveConversation(userId: string, agentId?: string, domainOr
     .sort((a: Conversation, b: Conversation) =>
       new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
     )[0] || null;
+  if (active && isolateConversationSummaryForUse(active)) writeDB(db);
+  return active;
 }
 
 export function setConversationMode(conversationId: string, mode: string): void {
@@ -169,13 +199,19 @@ export function setConversationMode(conversationId: string, mode: string): void 
 export function getUserConversations(userId: string, limit = 20, offset = 0, domainOrOrgId?: string, orgIdMaybe?: string): Conversation[] {
   const db = readDB();
   if (!db.conversations) return [];
-  return db.conversations
+  const conversations = db.conversations
     .filter((c: Conversation) => {
       if (c.userId !== userId) return false;
       return conversationMatchesScope(c, domainOrOrgId, orgIdMaybe);
     })
     .sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime())
     .slice(offset, offset + limit);
+  let summaryWasIsolated = false;
+  for (const conversation of conversations) {
+    if (isolateConversationSummaryForUse(conversation)) summaryWasIsolated = true;
+  }
+  if (summaryWasIsolated) writeDB(db);
+  return conversations;
 }
 
 export function addMessage(msg: {
@@ -192,6 +228,7 @@ export function addMessage(msg: {
   orgId?: string;
   source?: string;
   channel?: string;
+  cognitiveIntent?: string;
   externalMessageId?: string;
   routeSequence?: number;
   receivedAt?: string;
@@ -217,6 +254,7 @@ export function addMessage(msg: {
     orgId: msg.orgId || '',
     source: msg.source || '',
     channel: msg.channel || '',
+    cognitiveIntent: msg.cognitiveIntent || '',
     externalMessageId: msg.externalMessageId || '',
     routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : undefined,
     receivedAt: msg.receivedAt || '',
@@ -315,14 +353,26 @@ function normalizeToolCalls(value: unknown): any[] | undefined {
 function isPromptEligibleMessage(m: MessageRecord): boolean {
   if (!m) return false;
   if (m.role === 'tool' || m.mode === 'proactive') return false;
+  if (isGuardGeneratedConversationRecord(m)) return false;
   return Boolean((m.message || '').trim() || (m.response || '').trim());
 }
 
 function compactRecordForPrompt(m: MessageRecord): MessageRecord {
+  const legacyCombinedGuardResponse = m.role === 'user'
+    && Boolean(String(m.response || '').trim())
+    && (
+      String(m.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
+      || isGuardGeneratedAssistantText(m.response)
+    );
   return {
     ...m,
     message: compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT),
-    response: compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT),
+    // Older interaction rows stored the assistant reply in `response` while
+    // keeping role=user. Preserve the user's side, but never reconstruct a
+    // marked/legacy guard reply as conversational assistant truth.
+    response: legacyCombinedGuardResponse
+      ? ''
+      : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT),
     toolCalls: undefined,
   };
 }
@@ -434,6 +484,50 @@ export function getMessagesForAgent(userId: string, agentId: string, limit = 500
 
 /** Messages threshold for auto-summarization */
 const AUTO_SUMMARY_THRESHOLD = 20;
+const AUTO_SUMMARY_RESERVATION_TTL_MS = 5 * 60 * 1000;
+
+interface AutoSummaryReservation {
+  summarizedThroughMessageCount: number;
+  startedAt: number;
+}
+
+const autoSummaryReservations = new Map<string, AutoSummaryReservation>();
+
+export interface AutoSummaryCheckResult {
+  needed: boolean;
+  conversation: Conversation | null;
+  recentMessages: MessageRecord[];
+  summarizedThroughMessageCount: number;
+}
+
+function isStandaloneGuardOutput(value: unknown): boolean {
+  const text = String(value || '').trim();
+  return isGuardGeneratedAssistantText(text)
+    && /^(?:我|I\b|Completion claim blocked)/i.test(text); // i18n-allow: guard-output prefix, not user-visible copy.
+}
+
+function normalizedLastSummaryMessageCount(conv: Conversation): number {
+  const stored = Number(conv.lastSummaryMessageCount);
+  if (Number.isFinite(stored) && stored >= 0) return Math.floor(stored);
+
+  // Existing databases predate this marker. A stored summary is the durable
+  // baseline; without one, the whole conversation is eligible for its first
+  // summary. Persist the inferred value so restarts preserve the cadence.
+  const storedSummary = String(conv.summary || '').trim();
+  const inferred = storedSummary
+    ? Math.max(0, conv.messageCount || 0)
+    : 0;
+  conv.lastSummaryMessageCount = inferred;
+  return inferred;
+}
+
+function activeAutoSummaryReservation(conversationId: string): AutoSummaryReservation | null {
+  const reservation = autoSummaryReservations.get(conversationId);
+  if (!reservation) return null;
+  if (Date.now() - reservation.startedAt <= AUTO_SUMMARY_RESERVATION_TTL_MS) return reservation;
+  autoSummaryReservations.delete(conversationId);
+  return null;
+}
 
 /**
  * Check if a conversation needs auto-summarization.
@@ -441,41 +535,151 @@ const AUTO_SUMMARY_THRESHOLD = 20;
  */
 export function checkAutoSummary(
   conversationId: string,
-): { needed: boolean; conversation: Conversation | null; recentMessages: MessageRecord[] } {
+): AutoSummaryCheckResult {
   const db = readDB();
-  if (!db.conversations) return { needed: false, conversation: null, recentMessages: [] };
+  const emptyResult = (conversation: Conversation | null = null): AutoSummaryCheckResult => ({
+    needed: false,
+    conversation,
+    recentMessages: [],
+    summarizedThroughMessageCount: 0,
+  });
+  if (!db.conversations) return emptyResult();
   const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv || conv.messageCount < AUTO_SUMMARY_THRESHOLD) {
-    return { needed: false, conversation: conv || null, recentMessages: [] };
+  if (!conv) return emptyResult();
+
+  const summaryWasIsolated = isolateConversationSummaryForUse(conv);
+  if (conv.messageCount < AUTO_SUMMARY_THRESHOLD) {
+    if (summaryWasIsolated) writeDB(db);
+    return emptyResult(conv);
   }
-  // Only summarize if last summary was more than 20 messages ago (avoid re-summarizing every message)
-  const recentMessages = getMessages(conversationId, 40);
-  return { needed: true, conversation: conv, recentMessages };
+  const hadPersistedMarker = Number.isFinite(Number(conv.lastSummaryMessageCount))
+    && Number(conv.lastSummaryMessageCount) >= 0;
+  const lastCount = normalizedLastSummaryMessageCount(conv);
+  if (summaryWasIsolated || !hadPersistedMarker) writeDB(db);
+  if (conv.messageCount - lastCount < AUTO_SUMMARY_THRESHOLD) {
+    return emptyResult(conv);
+  }
+
+  const summarizedThroughMessageCount = Math.max(0, Math.floor(conv.messageCount));
+  const recentMessages = getMessages(conversationId, 40)
+    .filter(message => !isGuardGeneratedConversationRecord(message));
+  return {
+    needed: recentMessages.length > 0,
+    conversation: conv,
+    recentMessages,
+    summarizedThroughMessageCount,
+  };
+}
+
+/**
+ * Atomically reserve one eligible summary interval before starting async LLM
+ * work. `checkAutoSummary` deliberately stays side-effect free for callers
+ * such as idle diagnostics that only inspect eligibility.
+ */
+export function beginConversationSummary(
+  conversationId: string,
+  summarizedThroughMessageCount: number,
+): boolean {
+  const through = Math.max(0, Math.floor(Number(summarizedThroughMessageCount)));
+  if (!Number.isFinite(through) || through < AUTO_SUMMARY_THRESHOLD) return false;
+  if (activeAutoSummaryReservation(conversationId)) return false;
+
+  const db = readDB();
+  const conv = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
+  if (!conv || through > conv.messageCount) return false;
+  const summaryWasIsolated = isolateConversationSummaryForUse(conv);
+  const markerBeforeNormalization = Number(conv.lastSummaryMessageCount);
+  const lastCount = normalizedLastSummaryMessageCount(conv);
+  if (
+    summaryWasIsolated
+    || !Number.isFinite(markerBeforeNormalization)
+    || markerBeforeNormalization < 0
+  ) writeDB(db);
+  if (through - lastCount < AUTO_SUMMARY_THRESHOLD) return false;
+
+  autoSummaryReservations.set(conversationId, {
+    summarizedThroughMessageCount: through,
+    startedAt: Date.now(),
+  });
+  return true;
+}
+
+/** Release a failed/empty async summary so the same interval can retry. */
+export function cancelConversationSummary(
+  conversationId: string,
+  summarizedThroughMessageCount?: number,
+): void {
+  const reservation = autoSummaryReservations.get(conversationId);
+  if (!reservation) return;
+  if (
+    summarizedThroughMessageCount !== undefined
+    && reservation.summarizedThroughMessageCount !== Math.floor(Number(summarizedThroughMessageCount))
+  ) return;
+  autoSummaryReservations.delete(conversationId);
 }
 
 /**
  * Store a conversation summary. Maintains a multi-level chain (max 3).
  * Newest summary becomes conv.summary; older ones move into summaryChain.
  */
-export function setConversationSummary(conversationId: string, summary: string): void {
+export function setConversationSummary(
+  conversationId: string,
+  summary: string,
+  summarizedThroughMessageCount?: number,
+): boolean {
   const db = readDB();
-  if (!db.conversations) return;
+  if (!db.conversations) return false;
   const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return;
+  if (!conv) return false;
+  const priorSummaryWasIsolated = isolateConversationSummaryForUse(conv);
+  const cleanSummary = String(summary || '').trim();
+  // The source transcript is filtered by record metadata before summarization.
+  // Keep a final defense against a verbatim guard response, but do not reject a
+  // legitimate mixed summary merely because it describes a historical error.
+  if (!cleanSummary || isStandaloneGuardOutput(cleanSummary)) {
+    if (priorSummaryWasIsolated) writeDB(db);
+    cancelConversationSummary(conversationId, summarizedThroughMessageCount);
+    return false;
+  }
 
-  // Push current summary into chain before overwriting
-  if (conv.summary && conv.summary !== summary) {
+  let summarizedThrough = Math.max(0, Math.floor(conv.messageCount || 0));
+  if (summarizedThroughMessageCount !== undefined) {
+    summarizedThrough = Math.max(0, Math.floor(Number(summarizedThroughMessageCount)));
+    const reservation = activeAutoSummaryReservation(conversationId);
+    if (!reservation || reservation.summarizedThroughMessageCount !== summarizedThrough) return false;
+    if (summarizedThrough > conv.messageCount) {
+      cancelConversationSummary(conversationId, summarizedThrough);
+      return false;
+    }
+  }
+
+  // Push the current clean summary into the chain before overwriting. Legacy
+  // guard contamination has already been isolated above.
+  if (
+    conv.summary
+    && conv.summary !== cleanSummary
+    && !isStandaloneGuardOutput(conv.summary)
+  ) {
     if (!conv.summaryChain) conv.summaryChain = [];
     conv.summaryChain.push(conv.summary);
     // Keep max 2 in chain (plus current summary = 3 total layers)
     if (conv.summaryChain.length > 2) {
-      // Merge oldest two into one to keep chain bounded
-      conv.summaryChain = [conv.summaryChain.slice(0, 2).join(' | ')];
+      const newestPriorSummary = conv.summaryChain[conv.summaryChain.length - 1];
+      conv.summaryChain = [
+        conv.summaryChain.slice(0, -1).join(' | '),
+        newestPriorSummary,
+      ];
     }
   }
 
-  conv.summary = summary;
+  conv.summary = cleanSummary;
+  conv.lastSummaryMessageCount = Math.max(
+    normalizedLastSummaryMessageCount(conv),
+    summarizedThrough,
+  );
+  cancelConversationSummary(conversationId, summarizedThroughMessageCount);
   writeDB(db);
+  return true;
 }
 
 /**
@@ -486,13 +690,18 @@ export function getConversationSummary(conversationId: string): string | null {
   const db = readDB();
   if (!db.conversations) return null;
   const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv || !conv.summary) return null;
+  if (!conv) return null;
+  if (isolateConversationSummaryForUse(conv)) writeDB(db);
 
-  const parts: string[] = [conv.summary];
-  if (conv.summaryChain && conv.summaryChain.length > 0) {
-    parts.push('Earlier: ' + conv.summaryChain.join(' | '));
+  const parts: string[] = [];
+  if (conv.summary && !isStandaloneGuardOutput(conv.summary)) {
+    parts.push(conv.summary);
   }
-  return parts.join('\n');
+  if (conv.summaryChain && conv.summaryChain.length > 0) {
+    const cleanChain = conv.summaryChain.filter(summary => !isStandaloneGuardOutput(summary));
+    if (cleanChain.length) parts.push('Earlier: ' + cleanChain.join(' | '));
+  }
+  return parts.length ? parts.join('\n') : null;
 }
 
 /**
@@ -601,7 +810,9 @@ export function getUnclosedConversation(userId: string, orgId?: string): Convers
     }
   );
   if (convs.length === 0) return null;
-  return convs.reduce((a: Conversation, b: Conversation) =>
+  const conversation = convs.reduce((a: Conversation, b: Conversation) =>
     new Date(a.lastActiveAt).getTime() > new Date(b.lastActiveAt).getTime() ? a : b
   );
+  if (isolateConversationSummaryForUse(conversation)) writeDB(db);
+  return conversation;
 }

@@ -8,6 +8,7 @@ import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getActionConstitutionPolicy } from '../tools/action_constitution';
 import { formatDesktopAwarenessForPrompt } from './desktop_awareness';
 import { listCapabilityLearningRecords } from '../self_extension/capability_memory';
+import { safeRuntimeError, sanitizeDiagnosticValue } from './diagnostic_sanitizer';
 import {
   normalizeOrganizationWorkspaceView,
   type OrganizationWorkspaceView,
@@ -541,8 +542,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Local self-governance and self-repair',
     kind: 'system',
     actions: ['client_health_check', 'client_self_repair', 'client_repair_skill', 'client_get_state', 'client_action(refresh_client_state)'],
-    notes: 'Lumi is not a voice-only assistant. She can inspect her own client body, diagnose client failures, refresh state, open recovery surfaces, and repair skills without per-tool permission popups; third-party installs, credential changes, destructive repairs, and other hard boundaries stop for explicit confirmation or handoff.',
-    requiresConfirmation: false,
+    notes: 'Lumi is not a voice-only assistant. She can inspect her own client body, diagnose client failures, refresh state, and open recovery surfaces. Skill package repair can reinstall dependencies, update configuration, or restart a process and therefore requires explicit confirmation.',
+    requiresConfirmation: true,
     stateKeys: ['mode', 'windows', 'surfaces', 'music', 'meeting', 'runtimeLog', 'permissions', 'runtime', 'errors'],
   },
   {
@@ -558,8 +559,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Self extension pipeline',
     kind: 'system',
     actions: ['self_extension_plan', 'capability_gap_autofix', 'capability_learning_list', 'capability_research', 'generate_skill', 'install_skill', 'client_repair_skill'],
-    notes: 'When a capability seems missing, Lumi should first inspect learned routes, adapters, tools, installed skills, and marketplace skills. Skill calls, route planning, safe local skill generation, and capability probes run without per-tool permission popups. Use capability_gap_autofix only when there is no sufficient coverage or when a brittle/manual path has real failure evidence; then prepare or run a minimal verification experiment and persist one reusable route. Installing or executing untrusted third-party code remains a hard boundary.',
-    requiresConfirmation: false,
+    notes: 'When a capability seems missing, Lumi should first inspect learned routes, adapters, tools, installed skills, and marketplace skills. Skill calls and route planning are read-only; installing or repairing packages and executing untrusted third-party code remain confirmation boundaries.',
+    requiresConfirmation: true,
     stateKeys: ['tools', 'permissions', 'runtime'],
   },
   {
@@ -990,7 +991,7 @@ export function getClientHealthReport(
       id: 'runtime.last_error',
       level: 'degraded',
       area: 'runtime',
-      message: state.runtime.lastError,
+      message: safeRuntimeError(state.runtime.lastError) || 'Native runtime reported an error.',
       safeActions: ['client_self_repair(open_recovery_surface:kernel)'],
       confirmationActions: ['Restart Lumi desktop runtime only after user confirmation.'],
     });
@@ -1001,7 +1002,7 @@ export function getClientHealthReport(
       id: 'music.last_error',
       level: 'degraded',
       area: 'music',
-      message: state.music.lastError,
+      message: safeRuntimeError(state.music.lastError) || 'Music runtime reported an error.',
       evidence: state.music.trackName ? `track=${state.music.trackName}` : undefined,
       safeActions: ['client_self_repair(open_recovery_surface:music-center)', 'client_action(open_music_center)'],
     });
@@ -1023,7 +1024,7 @@ export function getClientHealthReport(
       level: 'attention',
       area: 'runtime',
       message: 'Runtime log reports a client/runtime issue.',
-      evidence: state.runtimeLog.lastError,
+      evidence: safeRuntimeError(state.runtimeLog.lastError),
       safeActions: ['client_self_repair(open_recovery_surface:runtime-log)'],
     });
   }
@@ -1034,7 +1035,7 @@ export function getClientHealthReport(
       level: 'attention',
       area: 'knowledge',
       message: 'The current workspace knowledge inventory could not be fully refreshed.',
-      evidence: state.knowledge.lastError,
+      evidence: safeRuntimeError(state.knowledge.lastError),
       safeActions: ['client_action(show_knowledge_base)', 'client_self_repair(refresh_client_state)'],
     });
   }
@@ -1068,8 +1069,8 @@ export function getClientHealthReport(
       id: `recent_error.${err.source}.${err.code || 'runtime'}`,
       level: 'attention',
       area: err.source || 'client',
-      message: err.message,
-      evidence: err.code,
+      message: safeRuntimeError(err.message) || 'Client reported an error.',
+      evidence: safeRuntimeError(err.code),
       safeActions: ['client_health_check'],
     });
   }
@@ -1574,7 +1575,7 @@ export function getClientSelfAwarenessReport(
   const gaps: string[] = [];
   if (!state) gaps.push('No live client state has arrived yet.');
   if (stale) gaps.push(`Client state is ${health.stateAgeSeconds}s old; refresh before acting.`);
-  if (state?.knowledge?.lastError) gaps.push(`Knowledge inventory: ${state.knowledge.lastError}`);
+  if (state?.knowledge?.lastError) gaps.push(`Knowledge inventory: ${safeRuntimeError(state.knowledge.lastError)}`);
   if (Number(state?.knowledge?.failedFiles || 0) || Number(state?.knowledge?.unsupportedFiles || 0)) {
     gaps.push(`Knowledge ingestion needs attention: failed=${state?.knowledge?.failedFiles || 0}, unsupported=${state?.knowledge?.unsupportedFiles || 0}.`);
   }
@@ -1742,10 +1743,10 @@ export function formatClientSelfPrompt(
   scope: { domain?: 'personal' | 'work'; orgId?: string } = { domain: 'personal', orgId: '' },
 ): string {
   const isWork = scope.domain === 'work' && Boolean(scope.orgId);
-  const state = getClientStateForScope(userId, {
+  const state = sanitizeDiagnosticValue(getClientStateForScope(userId, {
     domain: isWork ? 'work' : 'personal',
     orgId: isWork ? scope.orgId : '',
-  });
+  }));
   const health = state ? getClientHealthReport(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }) : {
     level: 'unknown' as const,
     stateAgeSeconds: null,

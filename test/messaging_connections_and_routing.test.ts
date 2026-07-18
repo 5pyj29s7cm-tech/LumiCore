@@ -436,8 +436,15 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(clientCheck.dispatch.flow.selfRepairTurn).toBe(true);
-    expect(clientCheck.execution.toolPolicy.allowedTools).toEqual(['*']);
-    expect(clientCheck.execution.maxIterations).toBe(8);
+    expect(clientCheck.execution.toolPolicy.allowedTools).toEqual([
+      'client_get_state',
+      'client_health_check',
+    ]);
+    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('*');
+    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('open_runtime_log');
+    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('write_file');
+    expect(clientCheck.execution.toolPolicy.allowedTools).not.toContain('desktop_open');
+    expect(clientCheck.execution.maxIterations).toBe(3);
 
     const modeSwitch = routes.buildRemoteLumiExecutionPlan({
       ...base,

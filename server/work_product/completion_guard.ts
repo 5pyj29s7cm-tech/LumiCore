@@ -113,6 +113,18 @@ const SELF_EXECUTION_STATUS_RE =
   // i18n-allow: Chinese immediate-execution recognition pattern; not user-visible copy.
   /(?:(?:我|我们|这边)\s*(?:(?:现在(?:就|马上)?|马上|立即)\s*(?:就\s*)?(?:做|动手|开始|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续)|正在\s*(?:做|执行|处理|操作|写|新建|创建|保存|生成|发送|打开|继续))|(?:^|[\n。！？!?；;])\s*(?:(?:好|好的|可以|行)[，,\s]*)?(?:现在就做(?:这件事|这个任务)?|马上(?:就)?动手(?:处理)?|正在(?:执行|处理|操作)(?:中|这个任务|该任务)?)(?=$|[，,。！？!?；;：:\n])|\b(?:I(?:'m| am)\s+(?:doing|executing|working on)\s+(?:it|this)(?:\s+now)?|I(?:'ll| will)\s+(?:do|start|execute|handle)\s+(?:it|this)\s+now)\b)/iu;
 
+const REFLECTIVE_SELF_IMPROVEMENT_ACTION_RE =
+  // i18n-allow: Chinese reflective-action recognition pattern; not user-visible copy.
+  /(?:改进|改善|提升|优化|反思|复盘|审视|检查|评估|梳理|发现|找出|纠正)/u;
+
+const REFLECTIVE_SELF_IMPROVEMENT_TARGET_RE =
+  // i18n-allow: Chinese self-improvement target recognition pattern; not user-visible copy.
+  /(?:能力|理解|判断|表现|回答|回复|沟通|自然度|效率|不足|短板|改进空间|成长|学习|认知|自我建设)/u;
+
+const REFLECTIVE_SELF_DEVELOPMENT_COMPLETION_RE =
+  // i18n-allow: Chinese reflective self-development recognition pattern; not user-visible copy.
+  /(?:我|自己|自身|自我|个人)[^。！？!?；;，,\n]{0,36}(?:已经|已|完成|形成|具备|掌握|提升|建立|建设)|(?:能力|理解|判断|表现|成长|学习|认知|自我建设)[^。！？!?；;，,\n]{0,24}(?:已经|已|完成|形成|具备|掌握|提升|建立|建设)/u;
+
 const SELF_CLAIM_EXPLANATION_RE =
   // i18n-allow: Chinese explanatory-use filter; not user-visible copy.
   /^(?:已完成|写好了|写完了|已新建|正在执行|现在就做|马上动手)\s*(?:是|表示|意味着|属于|这个词|这句话|这种说法)/u;
@@ -194,6 +206,51 @@ function hasSelfCompletionClaim(value: string): boolean {
   const text = String(value || '').trim();
   if (!text || SELF_CLAIM_EXPLANATION_RE.test(text)) return false;
   return SELF_COMPLETION_CLAIM_RE.test(text) || SELF_COMPLETION_CLAIM_EN_RE.test(text);
+}
+
+/**
+ * Immediate-execution wording is also natural in a reflective answer, such as
+ * "I am continuing to improve my task understanding".  Only remove a status
+ * clause when the user did not ask for external work and that same clause is
+ * explicitly about introspection/self-improvement.  Splitting by clause keeps
+ * a separate "now I will open the file" claim enforceable in a mixed answer.
+ */
+function stripReflectiveSelfImprovementStatusClauses(task: string, value: string): string {
+  if (needsCompletionEvidence(task) || ACTION_EVIDENCE_TASK_RE.test(task)) return value;
+
+  return String(value || '').replace(
+    /(^|[\n。！？!?；;，,])([^\n。！？!?；;，,]+)/gu,
+    (segment, boundary: string, clause: string) => {
+      const isReflectiveStatus =
+        SELF_EXECUTION_STATUS_RE.test(clause)
+        && REFLECTIVE_SELF_IMPROVEMENT_ACTION_RE.test(clause)
+        && REFLECTIVE_SELF_IMPROVEMENT_TARGET_RE.test(clause);
+      return isReflectiveStatus ? boundary : segment;
+    },
+  );
+}
+
+/**
+ * A reflective answer can truthfully describe Lumi's own development with
+ * completion grammar (for example, "I have completed the basic capability
+ * foundation") without claiming that a user-requested external action ran.
+ * Remove only self-development clauses that contain no external-work signal;
+ * a neighbouring or mixed "I opened the desktop file" clause remains guarded.
+ */
+function stripReflectiveSelfDevelopmentCompletionClauses(task: string, value: string): string {
+  if (needsCompletionEvidence(task) || ACTION_EVIDENCE_TASK_RE.test(task)) return value;
+
+  return String(value || '').replace(
+    /(^|[\n。！？!?；;，,])([^\n。！？!?；;，,]+)/gu,
+    (segment, boundary: string, clause: string) => {
+      const reflectiveCompletion =
+        REFLECTIVE_SELF_DEVELOPMENT_COMPLETION_RE.test(clause)
+        && REFLECTIVE_SELF_IMPROVEMENT_TARGET_RE.test(clause)
+        && !ACTION_EVIDENCE_TASK_RE.test(clause)
+        && !EXTERNAL_WORK_TASK_RE.test(clause);
+      return reflectiveCompletion ? boundary : segment;
+    },
+  );
 }
 
 interface ParsedJsonToolResult {
@@ -371,8 +428,10 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const failed = toolOutcomes
     .filter(outcome => !outcome.successful && Boolean(outcome.call.error || String(outcome.call.result || '').trim()))
     .map(outcome => outcome.call);
-  const claimsSelfCompletion = hasSelfCompletionClaim(claimText);
-  const claimsExecutionStatus = SELF_EXECUTION_STATUS_RE.test(claimText);
+  const completionClaimText = stripReflectiveSelfDevelopmentCompletionClauses(task, claimText);
+  const claimsSelfCompletion = hasSelfCompletionClaim(completionClaimText);
+  const executionStatusClaimText = stripReflectiveSelfImprovementStatusClauses(task, claimText);
+  const claimsExecutionStatus = SELF_EXECUTION_STATUS_RE.test(executionStatusClaimText);
   const needsEvidence =
     needsCompletionEvidence(task) ||
     EXTERNAL_WORK_TASK_RE.test(response) ||
@@ -402,7 +461,12 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
       claimsExecutionStatus ||
       (
         ACTION_PROMISE_RE.test(claimText) &&
-        (ACTION_EVIDENCE_TASK_RE.test(task) || ACTION_EVIDENCE_TASK_RE.test(claimText))
+        // A future-looking phrase in Lumi's answer (for example, "I will
+        // keep reviewing and improving my abilities") is not evidence that
+        // the user asked for external work.  Promise enforcement must be
+        // anchored to the current user task/continuation contract; otherwise
+        // ordinary reflection is replaced by an unrelated file-read guard.
+        ACTION_EVIDENCE_TASK_RE.test(task)
       )
     ) &&
     missingPromisedEvidence;
@@ -422,7 +486,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     };
   }
 
-  const claimsCompletion = COMPLETION_CLAIM_RE.test(claimText) || claimsSelfCompletion;
+  const claimsCompletion = COMPLETION_CLAIM_RE.test(completionClaimText) || claimsSelfCompletion;
   if (!needsEvidence || !claimsCompletion) return { text: response, blocked: false };
 
   const currentAppMutationTask = requiresCurrentAppUiMutation(task);

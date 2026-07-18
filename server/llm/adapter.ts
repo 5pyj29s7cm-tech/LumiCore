@@ -9,6 +9,9 @@ import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/completion_guard';
 import { hasVisibleAutoCadExecutionEvidence, requiresVisibleAutoCadExecution } from '../cognition/action_contract';
 import { guardCurrentAppToolCall } from '../cognition/current_app_execution';
+import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
+
+export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
 export interface LLMConfig {
   provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
@@ -215,17 +218,6 @@ export function localizeInternalStatusLeak(text: string, userText: string): stri
     return '这一步被本地安全边界拦住了，需要你确认后才能继续。我不会把需要确认的动作说成已经完成。';
   }
   return raw;
-}
-
-const CONFIRMATION_REQUIRED_ERROR_RE =
-  /requires user confirmation|requires confirmation|user confirmation|用户确认|需要确认/i;
-const CONFIRMATION_BLOCK_RESULT_RE =
-  /^Tool\s+"[^"]+"\s+requires user confirmation(?:\s+and was not approved\.|:\s*[^\n]+)$/i;
-
-export function isConfirmationBlockedToolRecord(record: ToolExecutionRecord): boolean {
-  const error = String(record.error || '').trim();
-  if (error && CONFIRMATION_REQUIRED_ERROR_RE.test(error)) return true;
-  return CONFIRMATION_BLOCK_RESULT_RE.test(String(record.result || '').trim());
 }
 
 function humanToolLabel(name: string): string {

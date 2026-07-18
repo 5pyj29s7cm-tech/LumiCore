@@ -48,8 +48,10 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
       );
       if (activeConv && activeConv.messageCount >= 10 && !activeConv.summary) {
         const { checkAutoSummary } = await import('../conversation/manager');
-        checkAutoSummary(activeConv.id);
-        console.log(`[IdleProcessing] Triggered auto-summary for conversation ${activeConv.id}`);
+        const eligibility = checkAutoSummary(activeConv.id);
+        if (eligibility.needed) {
+          console.log(`[IdleProcessing] Auto-summary eligible for conversation ${activeConv.id}; waiting for the next chat/voice turn scheduler.`);
+        }
       }
     } catch (err: any) {
       console.warn(`[IdleProcessing] Summarize failed: ${err.message}`);

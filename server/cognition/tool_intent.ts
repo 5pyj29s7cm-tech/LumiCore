@@ -64,7 +64,7 @@ const SEARCH_VERBS = /(?:\u641c\u4e00\u4e0b|\u641c\u4e00\u641c|\u641c\u7d22|\u67
 const SEARCH_OBJECTS = /(?:\u65b0\u95fb|\u8d44\u6599|\u7f51\u9875|\u7f51\u7ad9|\u4fe1\u606f|\u6765\u6e90|\u5b98\u65b9|\b(?:news|source|official|openai|github|mcp)\b)/iu;
 const MARKET_TERMS = /(?:\u770b\u76d8|\u76ef\u76d8|\u884c\u60c5|\u80a1\u7968|\u7f8e\u80a1|\u6e2f\u80a1|\u7092\u80a1|\u80a1\u4ef7|\u6a21\u62df\u76d8|\u4ea4\u6613\u8ba1\u5212|\u81ea\u9009\u80a1|\u80a1\u7968\u6c60|\u76d8\u4e2d\u63d0\u9192|\u4ef7\u683c\u9884\u8b66|\u5f02\u52a8\u76d1\u63a7|\b(?:stock|quote|watchlist|market watch|stock watch|price alert|market alert|paper trade|trading plan)\b)/iu;
 const LEGAL_TERMS = /(?:\u6848\u4ef6|\u6848\u53f7|\u8bc1\u636e|\u6750\u6599|\u8d77\u8bc9\u72b6|\u4ee3\u7406\u8bcd|\u8d28\u8bc1|\u6cd5\u9662|\u5f8b\u5e08|\b(?:case|complaint|pleading|evidence|legal)\b)/iu;
-const WORK_PRODUCT_VERBS = /(?:\u6574\u7406|\u751f\u6210|\u8d77\u8349|\u64b0\u5199|\u63d0\u70bc|\u5206\u6790|\b(?:draft|generate|prepare|analy[sz]e)\b)/iu;
+const WORK_PRODUCT_VERBS = /(?:\u6574\u7406|\u751f\u6210|\u8d77\u8349|\u64b0\u5199|\u63d0\u70bc|\u5206\u6790|\u4fee\u590d|\u4fee\u6539|\u7f16\u8f91|\u6539(?:\u4e00\u4e0b|\u597d|\u5b8c)?|\b(?:draft|generate|prepare|analy[sz]e|fix|repair|edit|revise)\b)/iu;
 const MESSAGE_TERMS = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4e66|\u6d88\u606f|\u5ba2\u6237|\b(?:wechat|wecom|feishu|lark|message|customer)\b)/iu;
 const REPLY_VERBS = /(?:\u56de\u4e00\u4e0b|\u56de\u590d|\u56de|\u8349\u7a3f|\b(?:reply|respond|draft)\b)/iu;
 const MESSAGE_SEND_VERBS = /(?:\u53d1\u4e00\u4e0b|\u53d1\u4e00\u6761|\u53d1\u7ed9|\u53d1\u9001|\u8f6c\u53d1|\u7c98\u8d34|\u8d34\u5230|\u53d1|\b(?:send|forward|paste)\b)/iu;
@@ -81,7 +81,7 @@ const CONTINUE_VERBS = /(?:\u7ee7\u7eed|\u63a5\u7740|\u5f80\u4e0b|\b(?:continue|
 const TASK_TERMS = /(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de5\u4f5c|\u9879\u76ee|\b(?:task|customer|delivery|takeover|project)\b)/iu;
 const CREATE_OR_DRAW_VERBS = /(?:\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u5236\u4f5c|\u505a|\u753b|\u51fa|\b(?:create|generate|draw|make)\b)/iu;
 const VISUAL_OUTPUT_TERMS = /(?:\u6d77\u62a5|\u56fe\u7247|\u89c6\u89c9\u56fe|\u54c1\u724c\u56fe|\u5e73\u9762\u56fe|\u56fe\u7eb8|\u8bbe\u8ba1\u56fe|cad|CAD|DXF|dxf|\b(?:poster|image|visual|floor plan|drawing|cad|dxf)\b)/iu;
-const WORK_PRODUCT_TERMS = /(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6587\u6863|\u62a5\u544a|\u6c47\u62a5|\u8868\u683c|PPT|ppt|\u5e7b\u706f\u7247|\u4ee3\u7801|\u9879\u76ee|\u5e94\u7528|\u7a0b\u5e8f|\u7f51\u9875|\u7f51\u7ad9|\u94fe\u63a5|\u8fd0\u884c\u65e5\u5fd7|\u65e5\u5fd7|\u5de5\u4f5c\u6d41|\u811a\u672c|\u7ec8\u7aef|\u547d\u4ee4|\u4ed3\u5e93|github|\u6570\u636e\u5e93|\u77e5\u8bc6\u5e93|\u6a21\u677f|\u7ec4\u7ec7|\u8bbe\u7f6e|\u8bbe\u5907|\u5c4f\u5e55|\b(?:file|document|report|ppt|presentation|code|project|app|website|workflow|script|repo|database)\b)/iu;
+const WORK_PRODUCT_TERMS = /(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6587\u6863|\u5408\u540c|\u62a5\u544a|\u6c47\u62a5|\u8868\u683c|PPT|ppt|\u5e7b\u706f\u7247|\u4ee3\u7801|\u9879\u76ee|\u5e94\u7528|\u7a0b\u5e8f|\u7f51\u9875|\u7f51\u7ad9|\u94fe\u63a5|\u8fd0\u884c\u65e5\u5fd7|\u65e5\u5fd7|\u5de5\u4f5c\u6d41|\u811a\u672c|\u7ec8\u7aef|\u547d\u4ee4|\u4ed3\u5e93|github|\u6570\u636e\u5e93|\u77e5\u8bc6\u5e93|\u6a21\u677f|\u7ec4\u7ec7|\u8bbe\u7f6e|\u8bbe\u5907|\u5c4f\u5e55|\b(?:file|document|contract|report|ppt|presentation|code|project|app|website|workflow|script|repo|database)\b)/iu;
 
 const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
   { name: 'web-search', all: [SEARCH_VERBS, SEARCH_OBJECTS] },
@@ -162,9 +162,50 @@ const DIAGNOSTIC_OR_REPAIR_PATTERNS: RegExp[] = [
   /\b(what happened|what went wrong|diagnose|debug|fix|repair|recover|self[-\s]?check|self[-\s]?heal|not working|doesn'?t work|broken|failed|failure|error|crash(?:ed)?|stuck|hang(?:ing)?|blank screen|white screen|no sound|silent|cannot|can'?t)\b/i,
   /\bwhy\b.*\b(not|can'?t|cannot|failed?|failure|error|broken|wrong|crash(?:ed)?|stuck|hang(?:ing)?|blank|silent|doesn'?t\s+work|not\s+working)\b/i,
   /(?:\u4e0d\u4f1a|\u4e0d\u80fd|\u65e0\u6cd5).*(?:\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u6267\u884c|\u5b89\u88c5|\u63a8\u9001|\u90e8\u7f72|\u751f\u6210|\u8bfb|\u8fde\u63a5|\u63a5\u5165|\u767b\u5f55|\u767b\u9646|\u64ad\u653e|\u5b8c\u6210|\u751f\u6548|\u5de5\u4f5c|\u8c03\u7528|\u4f7f\u7528)/u,
-  /(?:(?:\u4e3a\u4ec0\u4e48|\u4e3a\u5565).*(?:\u6ca1|\u4e0d|\u65e0\u6cd5|\u5931\u8d25|\u9519|\u62a5\u9519|\u5d29|\u5361|\u95ee\u9898|\u6545\u969c|\u5b8c\u6210|\u751f\u6548|\u6253\u5f00|\u653e\u51fa|\u58f0\u97f3|\u542c\u89c1)|\u600e\u4e48\u56de\u4e8b|\u54ea\u91cc.*(?:\u95ee\u9898|\u574f|\u6ca1\u8dd1\u901a)|\u68c0\u67e5|\u8bca\u65ad|\u6392\u67e5|\u4fee\u590d|\u5904\u7406.*(?:\u95ee\u9898|\u6545\u969c|\u9519\u8bef)|\u81ea\u68c0|\u81ea\u4fee\u590d|\u6062\u590d|\u62a5\u9519|\u9519\u8bef|\u5931\u8d25|\u5d29\u4e86|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u767d\u5c4f|\u6ca1\u53cd\u5e94|\u4e0d\u751f\u6548|\u4e0d\u8d77\u4f5c\u7528|\u6253\u4e0d\u5f00|\u653e\u4e0d\u51fa|\u6ca1\u58f0\u97f3|\u542c\u4e0d\u89c1|\u4e0d\u5bf9|\u6709\u95ee\u9898|\u88ab\u9650\u5236|\u9650\u5236)/u,
+  /(?:(?:\u4e3a\u4ec0\u4e48|\u4e3a\u5565).*(?:\u6ca1|\u4e0d|\u65e0\u6cd5|\u5931\u8d25|\u9519|\u62a5\u9519|\u5d29|\u5361|\u95ee\u9898|\u6545\u969c|\u5b8c\u6210|\u751f\u6548|\u6253\u5f00|\u653e\u51fa|\u58f0\u97f3|\u542c\u89c1)|\u600e\u4e48\u56de\u4e8b|\u54ea\u91cc.*(?:\u95ee\u9898|\u574f|\u6ca1\u8dd1\u901a)|\u8bca\u65ad|\u6392\u67e5|\u4fee\u590d|\u5904\u7406.*(?:\u95ee\u9898|\u6545\u969c|\u9519\u8bef)|\u81ea\u68c0|\u81ea\u4fee\u590d|\u6062\u590d|\u62a5\u9519|\u9519\u8bef|\u5931\u8d25|\u5d29\u4e86|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u767d\u5c4f|\u6ca1\u53cd\u5e94|\u4e0d\u751f\u6548|\u4e0d\u8d77\u4f5c\u7528|\u6253\u4e0d\u5f00|\u653e\u4e0d\u51fa|\u6ca1\u58f0\u97f3|\u542c\u4e0d\u89c1|\u4e0d\u5bf9|\u6709\u95ee\u9898|\u88ab\u9650\u5236|\u9650\u5236)/u,
   /\b(?:HTTP\s*)?(?:400|404|500)\b/i,
 ];
+
+const CLIENT_SELF_DIAGNOSTIC_ARTIFACT_RE =
+  /(?:\u6587\u4ef6|\u6587\u6863|\u5408\u540c|\u8d44\u6599|\u56fe\u7247|\u56fe\u50cf|\u7167\u7247|\u56fe\u7eb8|\u62a5\u544a|\u8868\u683c|\u4ee3\u7801|\u9879\u76ee|\u4ed3\u5e93|\u7f51\u9875|\u7f51\u7ad9|\u804a\u5929\u8bb0\u5f55|\u804a\u5929|\u6d88\u606f|\u90ae\u4ef6|\u65e5\u7a0b|\u80a1\u7968|\u884c\u60c5|\u8054\u7cfb\u4eba|\u684c\u9762.{0,8}(?:\u56fe\u7247|\u6587\u4ef6|\u56fe\u6807)|\b(?:file|document|contract|image|photo|drawing|report|spreadsheet|code|project|repository|webpage|website|chat\s+history|message|email|calendar|stock|market|contact)\b)/iu;
+const EXPLICIT_CLIENT_SELF_DIAGNOSTIC_RE =
+  /(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5|\u8fd0\u884c\u65f6\u5065\u5eb7|\bself[-\s]?check\b|\bhealth\s+check\b|\bruntime\s+health\b)/iu;
+const CLIENT_SELF_DIAGNOSTIC_SUBJECT_RE =
+  /(?:(?:\u4f60)?\u81ea\u5df1|\u4f60\u81ea\u8eab|\u4f60\u8fd9\u8fb9|\u81ea\u8eab|Lumi(?:\s*\u5ba2\u6237\u7aef|\s*\u7cfb\u7edf)?|\u5ba2\u6237\u7aef|\u8fd0\u884c\u65f6|\byourself\b|\b(?:lumi\s+)?client\b|\bruntime\b)/iu;
+const CLIENT_SELF_DIAGNOSTIC_VERB_RE =
+  /(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\u770b\u770b|\u67e5\u67e5|\u68c0\u89c6|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b)/iu;
+const CLIENT_SELF_REPAIR_OR_HEALTH_RE =
+  /(?:\u80fd(?:\u4e0d\u80fd|\u5426|\u591f)?\u4fee\u590d|\u6709\u6ca1\u6709\u95ee\u9898|\u6709\u65e0\u95ee\u9898|\u662f\u5426(?:\u6b63\u5e38|\u901a\u7545|\u5065\u5eb7)|\u8eab\u4f53\u72b6\u51b5|\b(?:repair|recover)\b|\b(?:healthy|working\s+normally)\b)/iu;
+const DIRECT_CLIENT_SELF_HEALTH_RE =
+  /(?:(?:\u4f60)?\u81ea\u5df1|\u4f60\u81ea\u8eab|\u81ea\u8eab|Lumi(?:\s*\u5ba2\u6237\u7aef|\s*\u7cfb\u7edf)?|\u5ba2\u6237\u7aef|\u8fd0\u884c\u65f6|\byourself\b|\b(?:lumi\s+)?client\b|\bruntime\b)(?:\u672c\u8eab|\u8fd9\u8fb9)?[\s\uff0c,]*(?:\u6709\u6ca1\u6709\u95ee\u9898|\u6709\u65e0\u95ee\u9898|\u662f\u4e0d\u662f\u6709\u95ee\u9898|\u662f\u5426(?:\u6b63\u5e38|\u901a\u7545|\u5065\u5eb7)|\u80fd(?:\u4e0d\u80fd|\u5426|\u591f)?\u4fee\u590d|\u8eab\u4f53\u72b6\u51b5|\b(?:healthy|working\s+normally)\b|\b(?:can|could)\b.{0,12}\b(?:repair|recover)\b)/iu;
+const EXPLICIT_SELF_DIAGNOSTIC_RUN_RE =
+  /(?:\u505a|\u8dd1|\u8fdb\u884c|\u6267\u884c|\u5f00\u59cb).{0,16}(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5)|\b(?:run|perform|start)\b.{0,24}\b(?:self[-\s]?check|health\s+check)\b/iu;
+const CLIENT_INTEGRATION_DIAGNOSTIC_RE =
+  /(?:(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b).{0,24}(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b).{0,16}(?:\u72b6\u6001|\u5065\u5eb7|\u8fde\u63a5|\u63a5\u5165|\u5f02\u5e38|\u95ee\u9898|\b(?:status|health|connection|integration|problem)\b)|(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b).{0,16}(?:\u72b6\u6001|\u5065\u5eb7|\u8fde\u63a5|\u63a5\u5165|\u5f02\u5e38|\u95ee\u9898|\b(?:status|health|connection|integration|problem)\b).{0,24}(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b))/iu;
+const CLIENT_OR_APP_RUNTIME_FAILURE_RE =
+  /(?:(?:Lumi|\u5ba2\u6237\u7aef|\u8fd0\u884c\u65f6).{0,40}(?:\u6545\u969c|\u62a5\u9519|\u9519\u8bef|\u5931\u8d25|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u767d\u5c4f|\u9ed1\u5c4f|\u6ca1\u53cd\u5e94|\u4e0d\u751f\u6548|\u6253\u4e0d\u5f00|\u6ca1\u58f0\u97f3|\u6709\u95ee\u9898)|(?:AutoCAD|CAD|WPS|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|WeChat|Weixin|Chrome|Edge|Revit).{0,40}(?:\u6253\u4e0d\u5f00|\u542f\u52a8\u5931\u8d25|\u8fd0\u884c\u5931\u8d25|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u6ca1\u53cd\u5e94|\u767d\u5c4f|\u9ed1\u5c4f|\u6ca1\u58f0\u97f3)|\b(?:lumi|client|runtime)\b.{0,50}\b(?:error|failed|failure|broken|crash(?:ed)?|stuck|hang(?:ing)?|not\s+responding|blank|not\s+working)\b|\b(?:autocad|cad|wps|wechat|weixin|chrome|edge|revit)\b.{0,50}\b(?:failed\s+to\s+(?:open|start|run)|crash(?:ed)?|stuck|hang(?:ing)?|not\s+responding)\b)/iu;
+
+/**
+ * Identifies a current-turn request to inspect Lumi's own client/runtime.
+ * Keep this narrower than the general diagnostic lane: checking a file,
+ * contract, or desktop image is work on that artifact, not a client self-check.
+ */
+export function isCurrentClientDiagnosticRequest(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+
+  if (CLIENT_INTEGRATION_DIAGNOSTIC_RE.test(normalized)) return true;
+  if (DIRECT_CLIENT_SELF_HEALTH_RE.test(normalized)) return true;
+  const namesArtifact = CLIENT_SELF_DIAGNOSTIC_ARTIFACT_RE.test(normalized);
+  if (namesArtifact && !EXPLICIT_SELF_DIAGNOSTIC_RUN_RE.test(normalized)) return false;
+  if (EXPLICIT_CLIENT_SELF_DIAGNOSTIC_RE.test(normalized)) return true;
+
+  return CLIENT_SELF_DIAGNOSTIC_SUBJECT_RE.test(normalized)
+    && (
+      CLIENT_SELF_DIAGNOSTIC_VERB_RE.test(normalized)
+      || CLIENT_SELF_REPAIR_OR_HEALTH_RE.test(normalized)
+    );
+}
 
 function hasExplicitActionRequest(text: string): boolean {
   const normalized = text.trim();
@@ -190,6 +231,12 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   if (/(?:微信|企业微信|wechat|weixin).{0,40}(?:问一下|问问|询问|发给|发送).{0,40}(?:在干嘛|在做什么|忙什么|做什么)/iu.test(normalized)) return false;
 
   return [
+    // A complaint about Lumi not answering is a conversational repair turn,
+    // not a request to diagnose the client/runtime. Keep it scoped to replies
+    // directed back to the user so real app/task failures can still self-repair.
+    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    /^(?:(?:你|lumi)[，,\s]*)?(?:(?:刚才|刚刚|之前|上一轮|上一次)[，,\s]*)?(?:为什么|怎么|为何)(?:还)?(?:不|没(?:有)?)(?:(?:回|回复|回答|回应|理)(?:我|我的(?:问题|消息|话)|我刚才(?:的问题|的消息|说的话))|跟我说话)[啊呀吧嘛呢，,。！？?!\s]*$/iu,
+    /^(?:why|how come)\s+(?:did(?:n'?t| not)|do(?:n'?t| not)|are(?:n'?t| not)|have(?:n'?t| not)|won'?t)\s+(?:you|lumi)\s+(?:reply|answer|respond)(?:\s+to)?\s+(?:me|my\s+(?:question|message))\s*[.!?\s]*$/iu,
     // Product-behaviour corrections such as “不要动不动就进入介绍客户端的界面”
     // are feedback, not requests to navigate the client right now.
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -303,6 +350,12 @@ export function hasClientActionOnlyIntent(text: string): boolean {
 export function isDiagnosticOrRepairRequest(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (isUserCorrectionOrExplanationQuestion(normalized)) return false;
+  if (isCurrentClientDiagnosticRequest(normalized)) return true;
+  if (
+    CLIENT_SELF_DIAGNOSTIC_ARTIFACT_RE.test(normalized)
+    && !CLIENT_OR_APP_RUNTIME_FAILURE_RE.test(normalized)
+  ) return false;
   return DIAGNOSTIC_OR_REPAIR_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
@@ -335,8 +388,12 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const externalDesktopOrTeamExecution = normalized
     ? hasExternalDesktopOrTeamExecutionIntent(normalized)
     : false;
-  const diagnosticRules = normalized ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern') : [];
-  const diagnosticOrRepair = diagnosticRules.length > 0;
+  const diagnosticOrRepair = normalized && !informationOnlyQuestion
+    ? isDiagnosticOrRepairRequest(normalized)
+    : false;
+  const diagnosticRules = diagnosticOrRepair
+    ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern')
+    : [];
   const structuredToolRules = !informationOnlyQuestion && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_TOOL_INTENT_RULES)
     : [];

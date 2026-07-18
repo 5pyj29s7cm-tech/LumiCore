@@ -6,6 +6,7 @@ import {
   PERSONAL_CLIENT_SURFACES,
   PERSONAL_CLIENT_SURFACE_ACTIONS,
 } from '../../shared/client_surfaces';
+import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 
 export type AdapterStatus =
   | 'ready'
@@ -115,7 +116,7 @@ const CATEGORY_ORDER: AdapterCategory[] = [
 
 export function getAdapterRegistry(options: AdapterRegistryOptions = {}): AdapterRegistryReport {
   const userId = options.userId || 'anonymous';
-  const state = options.clientState || null;
+  const state = sanitizeDiagnosticValue(options.clientState || null);
   const gate = getGateConfig(userId);
   const skillStats = getSkillStats();
   const externalToolbox = getExternalToolboxStatus();
@@ -349,7 +350,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
           : 'requires_setup',
       actions: ['open_skills', 'client_health_check', 'client_repair_skill'],
       surfaces: ['skill hall', 'MCP servers', 'GitHub MCP discovery'],
-      requiresConfirmation: false,
+      requiresConfirmation: true,
       setup: skillStats.total ? [] : ['Install or enable skills/MCP servers in the Skill Hall.'],
       diagnostics: [
         `skills=${skillStats.total}`,
@@ -360,7 +361,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         skillStats.unavailableEnabled ? `unavailableEnabled=${skillStats.unavailableEnabled}` : '',
         skillStats.issueNames.length ? `issues=${skillStats.issueNames.slice(0, 5).join(', ')}` : '',
       ].filter(Boolean),
-      notes: 'Skills are Lumi expansion points. Calling connected skills, inspecting skill health, and safe skill repair run without per-tool permission popups. Installing or executing untrusted third-party code remains a hard boundary.',
+      notes: 'Skills are Lumi expansion points. Calling connected skills and inspecting health are read-only. Package repair can reinstall dependencies, update MCP configuration, or restart a process, so client_repair_skill requires explicit confirmation.',
     },
     {
       id: 'workspace.knowledge_files',
@@ -453,8 +454,8 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       status: 'ready',
       actions: ['self_extension_plan', 'capability_gap_autofix', 'capability_learning_list', 'adapter_registry_list', 'capability_research', 'generate_skill', 'install_skill', 'client_repair_skill'],
       surfaces: ['Skill Hall', 'Adapter Registry', 'MCP runtime', 'capability research', 'capability learning memory'],
-      requiresConfirmation: false,
-      safety: 'Planning and listing learned routes are safe. Capability autofix is only for absent or failed/brittle coverage and may write local experiment files or run hard-boundary-gated tool probes without ordinary permission popups. Generating safe local skills, repairing connected skills, and capability probes may proceed; installing or executing untrusted third-party code and modifying Lumi core remain hard boundaries.',
+      requiresConfirmation: true,
+      safety: 'Planning and listing learned routes are safe. Capability autofix is only for absent or failed/brittle coverage. Package installation or repair, untrusted third-party execution, and Lumi core changes remain explicit confirmation boundaries.',
       notes: 'Use when Lumi notices a missing capability or brittle raw mouse/script fallback: first inspect learned routes, adapters, tools, installed skills, and marketplace skills through self_extension_plan. Reuse existing coverage when it exists. Run capability_gap_autofix only when the unified plan says a new route is needed or real failure evidence exists, then prepare or run one minimal verification experiment and persist one reusable route instead of creating parallel wrappers.',
     },
     {

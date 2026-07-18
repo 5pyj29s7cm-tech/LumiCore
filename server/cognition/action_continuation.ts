@@ -1,4 +1,6 @@
 import { matchesCnActionContinuation } from '../regions/packs/cn/action_continuation';
+import { isGuardGeneratedConversationRecord } from '../conversation/guard_history';
+import { buildActionContract } from './action_contract';
 
 export interface ActionContinuationHistoryItem {
   role?: string;
@@ -8,6 +10,7 @@ export interface ActionContinuationHistoryItem {
   text?: string;
   response?: string;
   toolCalls?: unknown;
+  cognitiveIntent?: string;
 }
 
 export interface RecentActionContinuationState {
@@ -69,6 +72,7 @@ function recordRole(item: ActionContinuationHistoryItem): string {
 }
 
 function recordText(item: ActionContinuationHistoryItem): string {
+  if (isGuardGeneratedConversationRecord(item)) return '';
   const role = recordRole(item);
   if (role === 'assistant' || role === 'agent') {
     return compact(item.response || item.message || item.content || item.text);
@@ -89,6 +93,7 @@ function parseNestedJson(value: unknown): unknown {
 }
 
 function parseToolCalls(item: ActionContinuationHistoryItem): any[] {
+  if (isGuardGeneratedConversationRecord(item)) return [];
   const parsed = parseNestedJson(item.toolCalls);
   return Array.isArray(parsed) ? parsed : [];
 }
@@ -318,7 +323,31 @@ function findTaskAnchorIndex(history: ActionContinuationHistoryItem[]): number {
     const text = recordText(history[index]);
     if (text && !isContinuationOrPressureText(text)) return index;
   }
+
+  // A complete task can still contain a referential pronoun (for example,
+  // "read the desktop image and draw it in AutoCAD") and therefore look like
+  // a continuation to the terse-language classifier. Recover that task only
+  // when the same history contains a terminal tool receipt after it. This
+  // preserves evidence-backed CAD/status continuity without promoting an
+  // ordinary reflective chat followed by "continue" into executable work.
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (recordRole(history[index]) !== 'user') continue;
+    const text = recordText(history[index]);
+    if (!text || !isActionBearingGoal(text)) continue;
+    const hasTerminalEvidence = history.slice(index + 1).some(item =>
+      parseToolCalls(item).some(call => Boolean(
+        toolCallName(call)
+        && (toolCallFailure(call) || compact(call?.result, 240)),
+      )),
+    );
+    if (hasTerminalEvidence) return index;
+  }
   return -1;
+}
+
+function isActionBearingGoal(goal: string): boolean {
+  const contract = buildActionContract(goal);
+  return contract.applies && contract.kind !== 'none';
 }
 
 export function extractRecentActionContinuationState(
@@ -555,6 +584,13 @@ export function buildRecentActionContinuationBridge(
     ? durableState.toolSummaries
     : summarizeToolCalls(executionTail);
   const state = durableState || extractRecentActionContinuationState(executionTail);
+
+  // A terse conversational follow-up must not promote an ordinary prior
+  // exchange into executable work. Guard output is excluded above, and a
+  // history-only bridge is allowed only when its actual user goal carries an
+  // external-action contract. Durable state remains safe because it can only
+  // be created from terminal tool evidence.
+  if (!durableState && !isActionBearingGoal(state.goal)) return '';
 
   if (
     userTurns.length === 0

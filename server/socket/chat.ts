@@ -50,7 +50,8 @@ import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmo
 import { buildModeOverlay } from "../personality/engine";
 import { personalityRegistry } from "../personality";
 import { lightweightEvolve } from "../personality/evolution";
-import { getOrCreateActiveConversation, addMessage, getMessages, getMessagesByTokenBudget, checkAutoSummary, setConversationSummary, getConversationSummary, setConversationMode, getUnclosedConversation, extractTopics, trackTopic, getTopicContext } from "../conversation/manager";
+import { getOrCreateActiveConversation, addMessage, getMessages, getMessagesByTokenBudget, getConversationSummary, setConversationMode, getUnclosedConversation, extractTopics, trackTopic, getTopicContext } from "../conversation/manager";
+import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
@@ -95,6 +96,10 @@ import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
+import {
+  isGuardGeneratedAssistantText,
+  isGuardGeneratedConversationRecord,
+} from "../conversation/guard_history";
 
 function stripHistoricalAttachmentBlocks(value: string): string {
   const text = String(value || '').trim();
@@ -108,7 +113,7 @@ const ASSISTANT_HISTORY_NOISE_RE =
   /我还没有真正开始读取或审查|我还没有真正操作客户端|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|I have not actually started|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
 
 function isNoisyAssistantHistory(value: string): boolean {
-  return ASSISTANT_HISTORY_NOISE_RE.test(String(value || ''));
+  return isGuardGeneratedAssistantText(value) || ASSISTANT_HISTORY_NOISE_RE.test(String(value || ''));
 }
 
 function normalizeChatHistoryRecord(m: any): NormalizedMessage[] {
@@ -428,7 +433,12 @@ function isShortClientContinuation(userText: string): boolean {
 }
 
 function hasRecentClientSurfaceContext(history: any[] | undefined): boolean {
-  const recent = getRecentHistoryText(history, 5000);
+  const recent = getRecentHistoryText(
+    Array.isArray(history)
+      ? history.filter(item => !isGuardGeneratedConversationRecord(item))
+      : history,
+    5000,
+  );
   return CLIENT_SURFACE_CONTEXT_RE.test(recent);
 }
 
@@ -438,7 +448,7 @@ function isClientSurfaceRequestText(userText: string): boolean {
   return CLIENT_SURFACE_CONTEXT_RE.test(clean) && CLIENT_SURFACE_ACTION_RE.test(clean);
 }
 
-function buildClientSurfaceContinuationBridge(userText: string, history: any[] | undefined): string {
+export function buildClientSurfaceContinuationBridge(userText: string, history: any[] | undefined): string {
   const clean = String(userText || '').trim();
   const directClientSurfaceRequest = isClientSurfaceRequestText(clean);
   const shortContinuation = isShortClientContinuation(clean) && hasRecentClientSurfaceContext(history);
@@ -1154,6 +1164,30 @@ export function registerChatHandler(
         'desktop_cursor_glow_hide',
       ]);
       const isDirectDesktopTool = (toolName: string) => directDesktopRelayTools.has(toolName);
+      let cachedExecutionDecision: ReturnType<typeof buildLumiExecutionDecision> | null = null;
+      let cachedCapabilitySelection: ReturnType<typeof buildLumiCapabilitySelection> | null = null;
+      const getTurnExecutionDecision = () => {
+        if (!cachedExecutionDecision) {
+          cachedExecutionDecision = buildLumiExecutionDecision({
+            flow: turnFlow,
+            text: turnFlow.routeText,
+            toolDeclarations: toolRegistry.getToolDeclarations(),
+            personalityToolPolicy: personality.toolPolicy,
+            isSanctuary,
+          });
+        }
+        return cachedExecutionDecision;
+      };
+      const getTurnCapabilitySelection = () => {
+        if (!cachedCapabilitySelection) {
+          cachedCapabilitySelection = buildLumiCapabilitySelection({
+            dispatch: turnDispatch,
+            execution: getTurnExecutionDecision(),
+            text: turnFlow.routeText,
+          });
+        }
+        return cachedCapabilitySelection;
+      };
       const persistChatLearning = (
         assistantText: string,
         options: {
@@ -1179,6 +1213,43 @@ export function registerChatHandler(
           assistantText,
           options,
         );
+      };
+      const persistChatTakeoverExecution = (
+        assistantText: string,
+        options: {
+          toolRecords?: ToolExecutionRecord[];
+          source?: string;
+          sourceInteractionId?: string;
+          capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>;
+          finalizationBlocked?: boolean;
+          assistantTextTrusted?: boolean;
+          finalizationReason?: string;
+        } = {},
+      ) => {
+        const currentToolRecords = options.toolRecords || [];
+        // Historical/status-only responses have no current-turn execution
+        // ledger and must not replay old receipts into task state.
+        if (currentToolRecords.length === 0) return null;
+        const executionWriteback = persistWorkTakeoverTurnExecution({
+          userId: uid,
+          userText: text,
+          assistantText,
+          source: options.source || 'chat',
+          interactionId: options.sourceInteractionId || interactionId,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          flow: turnFlow,
+          capabilitySelection: options.capabilitySelection || getTurnCapabilitySelection(),
+          toolRecords: currentToolRecords,
+          finalizationBlocked: options.finalizationBlocked === true,
+          assistantTextTrusted: options.assistantTextTrusted
+            ?? options.finalizationBlocked !== true,
+          finalizationReason: options.finalizationReason,
+        });
+        if (executionWriteback.recorded) {
+          emitAgent('agent:task_execution_writeback', executionWriteback);
+        }
+        return executionWriteback;
       };
 
       const recentFailureExplanation = conversationId && !pendingConfirmation
@@ -1274,6 +1345,14 @@ export function registerChatHandler(
           if (finalizedMode.notification) {
             emitAgent('agent:notification', finalizedMode.notification);
           }
+          persistChatTakeoverExecution(responseText, {
+            toolRecords: [modeToolRecord],
+            source: 'chat_mode',
+            sourceInteractionId: `${interactionId}_mode`,
+            finalizationBlocked: finalizedMode.blocked,
+            assistantTextTrusted: !finalizedMode.blocked,
+            finalizationReason: finalizedMode.reason,
+          });
 
           emitAgent('agent:status', { status: 'responding', agentName: personality.name });
           emitAgent('agent:response', {
@@ -1286,13 +1365,15 @@ export function registerChatHandler(
           });
           if (conversationId) {
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, domain: resolvedDomain, orgId: resolvedOrgId });
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, mode: directlyAppliedMode, cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : undefined, domain: resolvedDomain, orgId: resolvedOrgId });
             socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat_mode' });
           }
-          persistChatLearning(responseText, {
-            sourceInteractionId: `${interactionId}_mode`,
-            logLabel: 'chat mode switch',
-          });
+          if (!finalizedMode.blocked) {
+            persistChatLearning(responseText, {
+              sourceInteractionId: `${interactionId}_mode`,
+              logLabel: 'chat mode switch',
+            });
+          }
           emitAgent('agent:status', { status: 'idle', agentName: personality.name });
           chatSessionMap.delete(sessionKey);
           return;
@@ -1379,6 +1460,19 @@ export function registerChatHandler(
         if (finalizedWorkflow.notification) {
           emitAgent('agent:notification', finalizedWorkflow.notification);
         }
+        persistChatTakeoverExecution(workflowResponseText, {
+          toolRecords: workflowToolCalls,
+          source: specialWorkflow.source,
+          sourceInteractionId: `${interactionId}_workflow`,
+          capabilitySelection: buildLumiCapabilitySelection({
+            dispatch: turnDispatch,
+            execution: workflowExecutionDecision,
+            text: specialWorkflowText,
+          }),
+          finalizationBlocked: finalizedWorkflow.blocked,
+          assistantTextTrusted: !finalizedWorkflow.blocked,
+          finalizationReason: finalizedWorkflow.reason,
+        });
 
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
@@ -1386,7 +1480,7 @@ export function registerChatHandler(
             const tcSummary = summarizeToolRecordForPersistence(tc);
             addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
           }
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: workflowResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: workflowToolCalls.length ? workflowToolCalls : undefined, cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : undefined });
         }
 
         try {
@@ -1401,7 +1495,7 @@ export function registerChatHandler(
             role: "user",
             personality: personality.id,
             timestamp: new Date().toISOString(),
-            cognitiveIntent: specialWorkflow.id,
+            cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : specialWorkflow.id,
             llmWasCalled: false,
             domain: resolvedDomain,
             orgId: resolvedOrgId,
@@ -1422,12 +1516,14 @@ export function registerChatHandler(
         if (conversationId) {
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: specialWorkflow.source });
         }
-        persistChatLearning(workflowResponseText, {
-          channel: 'workflow',
-          toolRecords: workflowToolCalls,
-          sourceInteractionId: `${interactionId}_workflow`,
-          logLabel: specialWorkflow.source,
-        });
+        if (!finalizedWorkflow.blocked) {
+          persistChatLearning(workflowResponseText, {
+            channel: 'workflow',
+            toolRecords: workflowToolCalls,
+            sourceInteractionId: `${interactionId}_workflow`,
+            logLabel: specialWorkflow.source,
+          });
+        }
         emitAgent("agent:status", { status: "idle", agentName: personality.name });
         chatSessionMap.delete(sessionKey);
         return;
@@ -1443,24 +1539,14 @@ export function registerChatHandler(
       const workSurfaceRoute = turnFlow.workSurfaceRoute;
       const visionIntent = turnFlow.visionIntent;
       const explicitTeamOrchestration = hasExplicitTeamExecutionRequest(turnFlow.routeText);
-      const executionDecision = buildLumiExecutionDecision({
-        flow: turnFlow,
-        text: turnFlow.routeText,
-        toolDeclarations: toolRegistry.getToolDeclarations(),
-        personalityToolPolicy: personality.toolPolicy,
-        isSanctuary,
-      });
+      const executionDecision = getTurnExecutionDecision();
       const intentTrace = buildLumiIntentTrace({
         dispatch: turnDispatch,
         execution: executionDecision,
         text: currentTurnDecisionText,
         source: eventSource,
       });
-      const capabilitySelection = buildLumiCapabilitySelection({
-        dispatch: turnDispatch,
-        execution: executionDecision,
-        text: turnFlow.routeText,
-      });
+      const capabilitySelection = getTurnCapabilitySelection();
       const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
         channel: 'chat',
         text: turnFlow.routeText,
@@ -1550,6 +1636,18 @@ export function registerChatHandler(
         emitAgent("agent:status", { status: "error" });
         return;
       }
+      const scheduleChatSummary = (targetConversationId: string) => {
+        scheduleConversationSummary({
+          conversationId: targetConversationId,
+          userId: uid,
+          provider: activeProvider,
+          model: activeModel,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          llmGetters,
+          log: { info: console.log, warn: console.warn },
+        });
+      };
 
       // ── Named Workflow Quick-Path: "run my X" / "跑XX流程" ──
       const runWorkflowMatch = text.match(/(?:run|执行|跑|运行)\s+(?:my\s+)?(.+?)(?:\s*(?:routine|workflow|流程|工作流))?\s*$/i);
@@ -1617,7 +1715,52 @@ export function registerChatHandler(
         if (finalizedWorkflowQuick.notification) {
           emitAgent('agent:notification', finalizedWorkflowQuick.notification);
         }
+        persistChatTakeoverExecution(workflowQuickResult, {
+          toolRecords: workflowQuickToolRecords,
+          source: 'workflow',
+          sourceInteractionId: `${interactionId}_workflow_quick`,
+          capabilitySelection,
+          finalizationBlocked: finalizedWorkflowQuick.blocked,
+          assistantTextTrusted: !finalizedWorkflowQuick.blocked,
+          finalizationReason: finalizedWorkflowQuick.reason,
+        });
         emitAgent("agent:status", { status: "responding" });
+        if (conversationId) {
+          addMessage({
+            userId: uid,
+            agentId: conversationAgentId,
+            conversationId,
+            role: 'user',
+            content: storedUserContent,
+            personality: personality.id,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          });
+          for (const record of workflowQuickToolRecords) {
+            addMessage({
+              userId: uid,
+              agentId: conversationAgentId,
+              conversationId,
+              role: 'tool',
+              content: summarizeToolRecordForPersistence(record),
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+            });
+          }
+          addMessage({
+            userId: uid,
+            agentId: conversationAgentId,
+            conversationId,
+            role: 'assistant',
+            content: workflowQuickResult,
+            personality: personality.id,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+            toolCalls: workflowQuickToolRecords.length ? workflowQuickToolRecords : undefined,
+            cognitiveIntent: finalizedWorkflowQuick.blocked ? 'work_product_guard' : undefined,
+          });
+          scheduleChatSummary(conversationId);
+        }
         emitAgent("agent:response", {
           text: workflowQuickResult,
           agentName: personality.name,
@@ -1625,13 +1768,29 @@ export function registerChatHandler(
           blocked: finalizedWorkflowQuick.blocked,
           reason: finalizedWorkflowQuick.reason || '',
         });
-        persistChatLearning(workflowQuickResult, {
-          channel: 'workflow',
-          toolRecords: workflowQuickToolRecords,
-          sourceInteractionId: `${interactionId}_workflow_quick`,
-          logLabel: 'workflow quick path',
-        });
+        if (conversationId) {
+          socket.emit('chat:conversation_updated', {
+            conversationId,
+            agentId: conversationAgentId,
+            source: 'workflow',
+          });
+        }
+        if (!finalizedWorkflowQuick.blocked) {
+          persistChatLearning(workflowQuickResult, {
+            channel: 'workflow',
+            toolRecords: workflowQuickToolRecords,
+            sourceInteractionId: `${interactionId}_workflow_quick`,
+            logLabel: 'workflow quick path',
+          });
+          if (conversationId) {
+            try {
+              const topics = extractTopics(text);
+              for (const topic of topics) trackTopic(conversationId, topic);
+            } catch {}
+          }
+        }
         emitAgent("agent:status", { status: "idle" });
+        chatSessionMap.delete(sessionKey);
         return;
       }
 
@@ -1717,6 +1876,15 @@ export function registerChatHandler(
           });
           quickResponseText = quickFinalized.text;
           if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
+          persistChatTakeoverExecution(quickResponseText, {
+            toolRecords: quickToolRecords,
+            source: 'chat_quick_command',
+            sourceInteractionId: `${interactionId}_quick`,
+            capabilitySelection,
+            finalizationBlocked: quickFinalized.blocked,
+            assistantTextTrusted: !quickFinalized.blocked,
+            finalizationReason: quickFinalized.reason,
+          });
           emitAgent("agent:response", {
             text: quickResponseText,
             agentName: personality.name,
@@ -1729,17 +1897,20 @@ export function registerChatHandler(
             if (quickResult.toolCall) {
               addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: `[Tool: ${quickResult.toolCall.name}] Called`, domain: resolvedDomain, orgId: resolvedOrgId });
             }
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: quickToolRecords.length ? quickToolRecords : undefined });
+            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: quickResponseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: quickToolRecords.length ? quickToolRecords : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : undefined });
+            scheduleChatSummary(conversationId);
             socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
           }
-          persistChatLearning(quickResponseText, {
-            toolRecords: quickToolRecords,
-            sourceInteractionId: `${interactionId}_quick`,
-            logLabel: 'chat quick command',
-          });
+          if (!quickFinalized.blocked) {
+            persistChatLearning(quickResponseText, {
+              toolRecords: quickToolRecords,
+              sourceInteractionId: `${interactionId}_quick`,
+              logLabel: 'chat quick command',
+            });
+          }
           emitAgent("agent:status", { status: "idle" });
           // Track topics for quick commands too
-          if (conversationId) {
+          if (conversationId && !quickFinalized.blocked) {
             try {
               const topics = extractTopics(text);
               for (const topic of topics) trackTopic(conversationId, topic);
@@ -1788,6 +1959,15 @@ export function registerChatHandler(
         if (profileFinalized.notification) {
           emitAgent('agent:notification', profileFinalized.notification);
         }
+        persistChatTakeoverExecution(profileResponse, {
+          toolRecords: [profileRecord],
+          source: 'chat_music_profile',
+          sourceInteractionId: `${interactionId}_music_profile`,
+          capabilitySelection,
+          finalizationBlocked: profileFinalized.blocked,
+          assistantTextTrusted: !profileFinalized.blocked,
+          finalizationReason: profileFinalized.reason,
+        });
         emitAgent("agent:response", {
           text: profileResponse,
           agentName: personality.name,
@@ -1797,14 +1977,17 @@ export function registerChatHandler(
         });
         if (conversationId) {
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: profileResponse, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: [profileRecord] });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: profileResponse, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: [profileRecord], cognitiveIntent: profileFinalized.blocked ? 'work_product_guard' : undefined });
+          scheduleChatSummary(conversationId);
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
         }
-        persistChatLearning(profileResponse, {
-          toolRecords: [profileRecord],
-          sourceInteractionId: `${interactionId}_music_profile`,
-          logLabel: 'music profile',
-        });
+        if (!profileFinalized.blocked) {
+          persistChatLearning(profileResponse, {
+            toolRecords: [profileRecord],
+            sourceInteractionId: `${interactionId}_music_profile`,
+            logLabel: 'music profile',
+          });
+        }
         emitAgent("agent:status", { status: "idle" });
         chatSessionMap.delete(sessionKey);
         return;
@@ -2327,7 +2510,11 @@ export function registerChatHandler(
                 task,
               });
             };
-            const persistBackgroundResult = (content: string, toolCalls?: ToolExecutionRecord[]) => {
+            const persistBackgroundResult = (
+              content: string,
+              toolCalls?: ToolExecutionRecord[],
+              guarded = false,
+            ) => {
               try {
                 if (conversationId) {
                   addMessage({
@@ -2340,6 +2527,7 @@ export function registerChatHandler(
                     domain: resolvedDomain,
                     orgId: resolvedOrgId,
                     toolCalls: toolCalls?.length ? toolCalls : undefined,
+                    cognitiveIntent: guarded ? 'work_product_guard' : undefined,
                   });
                   socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'background_delegation' });
                 }
@@ -2355,17 +2543,19 @@ export function registerChatHandler(
                   personality: personality.id,
                   timestamp: new Date().toISOString(),
                   mode: 'background_delegation',
-                  cognitiveIntent: cognition.intent.category,
+                  cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category,
                   llmWasCalled: true,
                   domain: resolvedDomain,
                   orgId: resolvedOrgId,
                 } as any);
                 writeDB(db);
-                persistChatLearning(content, {
-                  toolRecords: toolCalls || [],
-                  sourceInteractionId: `bg-${interactionId}`,
-                  logLabel: 'background delegation',
-                });
+                if (!guarded) {
+                  persistChatLearning(content, {
+                    toolRecords: toolCalls || [],
+                    sourceInteractionId: `bg-${interactionId}`,
+                    logLabel: 'background delegation',
+                  });
+                }
               } catch (persistErr: any) {
                 console.warn('[BackgroundDelegation] Persist failed:', persistErr?.message || persistErr);
               }
@@ -2468,7 +2658,16 @@ export function registerChatHandler(
                   emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
                   return;
                 }
-                persistBackgroundResult(completionText, backgroundToolRecords);
+                persistChatTakeoverExecution(completionText, {
+                  toolRecords: backgroundToolRecords,
+                  source: 'background_delegation',
+                  sourceInteractionId: `bg-${interactionId}`,
+                  capabilitySelection,
+                  finalizationBlocked: finalizedBackground.blocked,
+                  assistantTextTrusted: !finalizedBackground.blocked,
+                  finalizationReason: finalizedBackground.reason,
+                });
+                persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked);
                 emitBackground("agent:response", {
                   text: completionText,
                   agentName: personality.name,
@@ -2526,6 +2725,24 @@ export function registerChatHandler(
                 const failedTask = failBackgroundTask(backgroundTaskId, bgMessage);
                 if (failedTask) emitTaskUpdate(failedTask);
                 const errorText = `后台子 agent 处理受阻：${bgErr?.message || String(bgErr)}`;
+                const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0
+                  ? backgroundToolRecords
+                  : [{
+                      id: `background-terminal-${backgroundTaskId}`,
+                      name: 'background_delegation',
+                      arguments: { backgroundTaskId },
+                      result: '',
+                      error: bgMessage,
+                    }];
+                persistChatTakeoverExecution(errorText, {
+                  toolRecords: terminalBackgroundRecords,
+                  source: 'background_delegation',
+                  sourceInteractionId: `bg-${interactionId}`,
+                  capabilitySelection,
+                  finalizationBlocked: true,
+                  assistantTextTrusted: false,
+                  finalizationReason: bgMessage,
+                });
                 persistBackgroundResult(errorText, backgroundToolRecords);
                 emitBackground("agent:response", {
                   text: errorText,
@@ -3003,21 +3220,15 @@ export function registerChatHandler(
         if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
       }
 
-      const executionWriteback = persistWorkTakeoverTurnExecution({
-        userId: uid,
-        userText: text,
-        assistantText: responseText,
-        source: 'chat',
-        interactionId,
-        domain: resolvedDomain,
-        orgId: resolvedOrgId,
-        flow: turnFlow,
-        capabilitySelection,
+      persistChatTakeoverExecution(responseText, {
         toolRecords: allToolRecords,
+        source: 'chat',
+        sourceInteractionId: interactionId,
+        capabilitySelection,
+        finalizationBlocked: finalResponse.blocked,
+        assistantTextTrusted: !finalResponse.blocked,
+        finalizationReason: finalResponse.reason,
       });
-      if (executionWriteback.recorded) {
-        emitAgent('agent:task_execution_writeback', executionWriteback);
-      }
 
       // Save to conversation via conversation manager (reuse conversationId from setup)
 
@@ -3029,22 +3240,31 @@ export function registerChatHandler(
           const tcSummary = summarizeToolRecordForPersistence(tc);
           addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
         }
-        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: allToolRecords.length ? allToolRecords : undefined });
+        addMessage({
+          userId: uid,
+          agentId: conversationAgentId,
+          conversationId,
+          role: 'assistant',
+          content: responseText,
+          personality: personality.id,
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          toolCalls: allToolRecords.length ? allToolRecords : undefined,
+          cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : undefined,
+        });
         // (conversation_updated NOW emitted AFTER agent:response — see below)
 
         // Topic tracking — extract and record topics for cross-session continuity
-        try {
-          const topics = extractTopics(text + ' ' + responseText);
-          for (const topic of topics) trackTopic(conversationId, topic);
-        } catch {}
-
-        // Auto-summarize long conversations (anti-entropy: prevents context overflow)
-        const { needed, recentMessages } = checkAutoSummary(conversationId);
-        if (needed && recentMessages.length > 0) {
-          summarizeConversationAsync(conversationId, recentMessages, llmGetters, activeProvider, activeModel, uid, resolvedDomain, resolvedOrgId).catch(
-            () => {} // Non-critical
-          );
+        if (!finalResponse.blocked) {
+          try {
+            const topics = extractTopics(text + ' ' + responseText);
+            for (const topic of topics) trackTopic(conversationId, topic);
+          } catch {}
         }
+
+        // Shared chat/voice scheduler owns cadence, reservation, guard
+        // filtering, and captured-count persistence.
+        scheduleChatSummary(conversationId);
       }
 
       // Emit response BEFORE conversation_updated so the client finalizes streaming first
@@ -3061,7 +3281,9 @@ export function registerChatHandler(
       }
       emitAgent("agent:status", { status: "idle" });
 
-      persistChatLearning(responseText, { toolRecords: allToolRecords, logLabel: 'chat' });
+      if (!finalResponse.blocked) {
+        persistChatLearning(responseText, { toolRecords: allToolRecords, logLabel: 'chat' });
+      }
 
       // Clean up abort session
       chatSessionMap.delete(sessionKey);
@@ -3069,7 +3291,7 @@ export function registerChatHandler(
       // Auto-learn from corrections: when user corrects Lumi, extract high-confidence memories
       const correctionPatterns = [/不是/, /不对/, /错了/, /wrong/i, /incorrect/i, /actually/i, /no,?\s/i, /你弄错了/, /不是这样的/];
       const isCorrection = correctionPatterns.some(p => p.test(text));
-      if (resolvedDomain === 'personal' && isCorrection && responseText) {
+      if (resolvedDomain === 'personal' && isCorrection && responseText && !finalResponse.blocked) {
         try {
           const corrected = await extractMemories(
             { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches: [] },
@@ -3119,7 +3341,7 @@ export function registerChatHandler(
 
       // Lightweight per-conversation evolution — micro-shifts after meaningful chats
       // Fires if enough owner_trait memories have accumulated, no 7-day wait needed
-      if (resolvedDomain === 'personal' && !isSanctuary && responseText && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
+      if (resolvedDomain === 'personal' && !isSanctuary && responseText && !finalResponse.blocked && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
         try {
           const evolutionConfig = personalityRegistry.getEvolutionConfig(personalityId, uid);
           const step = await lightweightEvolve(
@@ -3143,7 +3365,7 @@ export function registerChatHandler(
 
       // Async memory extraction — skip trivial/command messages to reduce noise
       const skipExtractionCategories = ['command', 'file', 'unknown'];
-      if (text.length >= 10 && !skipExtractionCategories.includes(cognition.intent.category)) {
+      if (text.length >= 10 && !finalResponse.blocked && !skipExtractionCategories.includes(cognition.intent.category)) {
       const branchNodes = queryMemories({ userId: uid, nodeType: 'branch', limit: 50, domain: resolvedDomain, orgId: resolvedOrgId });
       const treeBranches = branchNodes.map(b => b.content);
       const locationTag = sensory.locationTag || undefined;
@@ -3241,38 +3463,4 @@ export function registerChatHandler(
     }
   });
 }
-
-async function summarizeConversationAsync(
-  conversationId: string,
-  recentMessages: any[],
-  llmGetters: any,
-  provider: string,
-  model: string,
-  userId: string,
-  domain: string,
-  orgId?: string,
-) {
-  try {
-    const transcript = recentMessages.slice(-30)
-      .map((m: any) => `${m.role || 'user'}: ${(m.message || m.content || '').slice(0, 200)}`)
-      .join('\n');
-    const summaryPrompt = `Summarize this conversation in 2-3 concise sentences. Focus on key decisions, topics discussed, and user preferences revealed. Output only the summary — no preamble.\n\n${transcript}`;
-    const result = await makeLLMCall(
-      [{ role: 'user', content: summaryPrompt }],
-      [],
-      { provider: provider as any, model, maxTokens: 300, userId, domain, orgId },
-      llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-      llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-    );
-    const summary = result.text.trim();
-    if (summary) {
-      setConversationSummary(conversationId, summary);
-      console.log(`[Conversation] Auto-summary generated for ${conversationId}`);
-    }
-  } catch (err) {
-    // Non-critical — conversation continues without summary
-  }
-}
-
-
 

@@ -1,6 +1,7 @@
 import type { LumiCapabilitySelection } from '../cognition/capability_selection';
 import type { LumiTurnFlow } from '../cognition/turn_flow';
 import type { ToolExecutionRecord } from '../tools/types';
+import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import {
   getWorkTakeoverTask,
   listWorkTakeoverTasks,
@@ -28,6 +29,17 @@ export interface WorkTakeoverTurnExecutionWritebackInput {
   flow: LumiTurnFlow;
   capabilitySelection?: LumiCapabilitySelection;
   toolRecords?: ToolExecutionRecord[];
+  /**
+   * True when the shared result finalizer replaced the assistant candidate.
+   * A guard response is delivery metadata, not a trustworthy task result.
+   */
+  finalizationBlocked?: boolean;
+  /**
+   * Whether assistantText may be persisted as the task result/turn preview.
+   * Defaults to false for blocked finalization and true otherwise.
+   */
+  assistantTextTrusted?: boolean;
+  finalizationReason?: string;
 }
 
 export interface WorkTakeoverTurnExecutionWritebackResult {
@@ -43,13 +55,20 @@ interface ToolSummary {
   status: 'ok' | 'error';
   error?: string;
   resultPreview?: string;
+  confirmationBlocked?: boolean;
 }
+
+const SEMANTIC_FAILURE_STATUS_RE = /^(?:error|failed|failure|blocked|denied|rejected|forbidden|timeout|timed_out|cancelled|canceled|incomplete|partial|pending|queued|in_progress|not_ready|not_supported|unsupported|unavailable|requires_confirmation|needs_confirmation|waiting_confirmation|requires_setup|submitted_unverified|unverified|not_verified)$/i;
+const CONFIRMATION_STATUS_RE = /^(?:requires_confirmation|needs_confirmation|waiting_confirmation)$/i;
 
 interface TurnExecutionRecord {
   id: string;
   source: string;
   userText: string;
   assistantTextPreview: string;
+  assistantTextTrusted: boolean;
+  finalizationBlocked: boolean;
+  finalizationReason?: string;
   capabilityLane: string;
   primaryCapability: string;
   boundary: string;
@@ -73,57 +92,95 @@ function unique(values: string[]): string[] {
 }
 
 function parseJsonObject(value: string): any | null {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
+  let parsed: unknown = value;
+  for (let attempt = 0; attempt < 3 && typeof parsed === 'string'; attempt += 1) {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
   }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
 }
 
-function findTaskIdInValue(value: unknown): string | null {
+const TASK_QUERY_TOOL_NAMES = new Set([
+  'work_takeover_task_list',
+  'work_takeover_task_get',
+]);
+
+const TASK_BINDING_TOOL_NAMES = new Set([
+  'work_takeover_task_create',
+  'work_takeover_task_from_wechat',
+  'work_takeover_task_from_clipboard',
+  'work_takeover_task_update',
+  'work_takeover_task_continue',
+  'work_takeover_task_orchestrate',
+  'work_takeover_task_execute_step',
+  'work_takeover_task_advance',
+  'work_takeover_task_export_packet',
+  'work_takeover_task_verify_result',
+  'work_takeover_task_autorun',
+  'work_takeover_capability_reuse_probe',
+  'work_takeover_task_run_suggested_tool',
+]);
+
+function asStructuredObject(value: unknown): Record<string, any> | null {
   if (!value) return null;
-  if (typeof value === 'string') {
-    const parsed = parseJsonObject(value);
-    if (parsed) return findTaskIdInValue(parsed);
-    const match = value.match(/\bwt_task_\d+_[a-z0-9]+\b/i);
-    return match?.[0] || null;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findTaskIdInValue(item);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof value === 'object') {
-    const obj = value as Record<string, any>;
-    if (typeof obj.id === 'string' && obj.id.startsWith('wt_task_')) return obj.id;
-    if (typeof obj.taskId === 'string' && obj.taskId.startsWith('wt_task_')) return obj.taskId;
-    if (obj.task) {
-      const found = findTaskIdInValue(obj.task);
-      if (found) return found;
-    }
-    for (const nested of Object.values(obj)) {
-      const found = findTaskIdInValue(nested);
-      if (found) return found;
-    }
-  }
-  return null;
+  if (typeof value === 'string') return parseJsonObject(value);
+  return typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : null;
+}
+
+function validTaskId(value: unknown): string | null {
+  const taskId = typeof value === 'string' ? value.trim() : '';
+  return /^wt_task_\d+_[a-z0-9]+$/i.test(taskId) ? taskId : null;
+}
+
+/**
+ * Read only the direct identity fields of one structured task-operation
+ * envelope. Never search arrays, arbitrary nested values, or free text: a
+ * task-list/read result may legitimately mention many task ids without
+ * addressing any of them for execution.
+ */
+function directStructuredTaskId(value: unknown): string | null {
+  const obj = asStructuredObject(value);
+  if (!obj) return null;
+  const direct = validTaskId(obj.taskId) || validTaskId(obj.id);
+  if (direct) return direct;
+  const task = asStructuredObject(obj.task);
+  return task ? validTaskId(task.taskId) || validTaskId(task.id) : null;
 }
 
 function findTaskIdFromTools(toolRecords: ToolExecutionRecord[] = []): string | null {
   for (const record of toolRecords) {
-    const fromArgs = findTaskIdInValue(record.arguments);
+    const toolName = String(record.name || '').toLowerCase();
+    if (!TASK_BINDING_TOOL_NAMES.has(toolName)) continue;
+    const fromArgs = directStructuredTaskId(record.arguments);
     if (fromArgs) return fromArgs;
-    const fromResult = findTaskIdInValue(record.result);
+    const fromResult = directStructuredTaskId(record.result);
     if (fromResult) return fromResult;
   }
   return null;
 }
 
+function isPureTaskQuery(input: WorkTakeoverTurnExecutionWritebackInput): boolean {
+  const toolNames = (input.toolRecords || [])
+    .map(record => String(record.name || '').toLowerCase())
+    .filter(Boolean);
+  if (toolNames.length === 0) return false;
+  if (toolNames.every(name => TASK_QUERY_TOOL_NAMES.has(name))) return true;
+  return input.flow.workTakeover.intent === 'status'
+    && toolNames.every(name => TASK_QUERY_TOOL_NAMES.has(name) || name === 'work_takeover_task_continue');
+}
+
 function resolveTask(input: WorkTakeoverTurnExecutionWritebackInput): WorkTakeoverTask | null {
-  const fromFlow = input.flow.workTakeover.latestTask?.id;
+  // Merely having an unfinished task in the user's task center does not bind
+  // every later tool action to it. Only a direct continuation may use the
+  // flow pointer; task-id-bearing tool receipts remain an explicit binding.
+  const fromFlow = input.flow.workTakeover.shouldResumeTask
+    ? input.flow.workTakeover.latestTask?.id
+    : undefined;
   if (fromFlow) {
     const task = getWorkTakeoverTask(input.userId, fromFlow);
     if (task) return task;
@@ -148,23 +205,81 @@ function resolveTask(input: WorkTakeoverTurnExecutionWritebackInput): WorkTakeov
   return null;
 }
 
+function summarizeToolFailure(record: ToolExecutionRecord): {
+  error?: string;
+  confirmationBlocked: boolean;
+} {
+  const explicitError = compact(record.error, 220);
+  const sharedConfirmationBlock = isConfirmationBlockedToolRecord(record);
+  if (explicitError) {
+    return {
+      error: explicitError,
+      confirmationBlocked: sharedConfirmationBlock || isConfirmationError(explicitError),
+    };
+  }
+  if (sharedConfirmationBlock) {
+    return {
+      error: compact(record.result, 220) || 'Tool requires user confirmation.',
+      confirmationBlocked: true,
+    };
+  }
+
+  const payload = parseJsonObject(String(record.result || '').trim());
+  if (!payload) return { confirmationBlocked: false };
+
+  const verification = payload.verification && typeof payload.verification === 'object'
+    ? payload.verification
+    : {};
+  const status = compact(payload.status || verification.status, 120).toLowerCase();
+  const confirmationBlocked = CONFIRMATION_STATUS_RE.test(status)
+    || payload.requiresConfirmation === true
+    || payload.confirmationRequired === true;
+  const semanticFailure = payload.ok === false
+    || payload.success === false
+    || payload.verified === false
+    || payload.completed === false
+    || SEMANTIC_FAILURE_STATUS_RE.test(status);
+  if (!semanticFailure && !confirmationBlocked) return { confirmationBlocked: false };
+
+  return {
+    error: compact(
+      payload.error
+      || payload.reason
+      || payload.message
+      || verification.error
+      || verification.reason
+      || verification.message
+      || status
+      || 'Tool did not complete successfully.',
+      220,
+    ),
+    confirmationBlocked,
+  };
+}
+
 function summarizeTools(toolRecords: ToolExecutionRecord[] = []): ToolSummary[] {
-  return toolRecords.slice(-10).map(record => ({
-    name: record.name,
-    status: record.error ? 'error' : 'ok',
-    error: record.error ? compact(record.error, 220) : undefined,
-    resultPreview: record.error ? undefined : compact(record.result, 260),
-  }));
+  return toolRecords.slice(-10).map(record => {
+    const failure = summarizeToolFailure(record);
+    const error = failure.error;
+    return {
+      name: record.name,
+      status: error ? 'error' : 'ok',
+      error,
+      resultPreview: error ? undefined : compact(record.result, 260),
+      confirmationBlocked: failure.confirmationBlocked || undefined,
+    };
+  });
 }
 
 function isConfirmationError(error: string): boolean {
-  return /\b(confirm|confirmation|denied|timeout|permission|approval|captcha|2fa|otp|login|required)\b/i.test(error);
+  return /\b(?:confirm(?:ation)?|approval|captcha|2fa|otp)\b|\b(?:login|credential)\s+required\b|\buser\s+denied\b/i.test(error);
 }
 
-function inferStatus(toolRecords: ToolExecutionRecord[], failedTool?: ToolSummary): WorkTakeoverTurnExecutionStatus {
-  if (failedTool?.error && isConfirmationError(failedTool.error)) return 'waiting_confirmation';
-  if (failedTool) return toolRecords.some(record => !record.error) ? 'failed' : 'blocked';
-  return toolRecords.length > 0 ? 'ran' : 'no_execution';
+function inferStatus(tools: ToolSummary[]): WorkTakeoverTurnExecutionStatus {
+  if (tools.some(tool => tool.confirmationBlocked)) return 'waiting_confirmation';
+  const hasFailure = tools.some(tool => tool.status === 'error');
+  if (hasFailure) return tools.some(tool => tool.status === 'ok') ? 'failed' : 'blocked';
+  return tools.length > 0 ? 'ran' : 'no_execution';
 }
 
 function buildResumeHint(input: {
@@ -174,11 +289,11 @@ function buildResumeHint(input: {
   selection?: LumiCapabilitySelection;
   flow: LumiTurnFlow;
 }): string {
-  if (input.failedTool) {
-    return `Resume task ${input.task.id} from failed tool ${input.failedTool.name}: inspect the error, retry only the failed step or choose an alternate capability, then verify before claiming completion.`;
-  }
   if (input.status === 'waiting_confirmation') {
     return `Resume task ${input.task.id} at the confirmation boundary. Ask for the missing confirmation or credential step, then continue without restarting.`;
+  }
+  if (input.failedTool) {
+    return `Resume task ${input.task.id} from failed tool ${input.failedTool.name}: inspect the error, retry only the failed step or choose an alternate capability, then verify before claiming completion.`;
   }
   if (input.flow.workTakeover.intent === 'status') {
     return `Use work_takeover_task_continue or work_takeover_task_verify_result for task ${input.task.id}, then report current result, blocker, and next confirmation.`;
@@ -204,8 +319,12 @@ function buildTurnRecord(
   task: WorkTakeoverTask,
 ): TurnExecutionRecord {
   const tools = summarizeTools(input.toolRecords || []);
-  const failedTool = [...tools].reverse().find(tool => tool.status === 'error');
-  const status = inferStatus(input.toolRecords || [], failedTool);
+  const status = inferStatus(tools);
+  const failedTool = status === 'waiting_confirmation'
+    ? [...tools].reverse().find(tool => tool.confirmationBlocked)
+    : [...tools].reverse().find(tool => tool.status === 'error');
+  const finalizationBlocked = input.finalizationBlocked === true;
+  const assistantTextTrusted = !finalizationBlocked && input.assistantTextTrusted !== false;
   const resumeHint = buildResumeHint({
     task,
     status,
@@ -218,7 +337,10 @@ function buildTurnRecord(
     id: input.interactionId || `turn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     source: input.source,
     userText: compact(input.userText, 800),
-    assistantTextPreview: compact(input.assistantText, 1000),
+    assistantTextPreview: assistantTextTrusted ? compact(input.assistantText, 1000) : '',
+    assistantTextTrusted,
+    finalizationBlocked,
+    finalizationReason: finalizationBlocked ? compact(input.finalizationReason, 300) || undefined : undefined,
     capabilityLane: input.capabilitySelection?.lane || 'unknown',
     primaryCapability: input.capabilitySelection?.primary || '',
     boundary: input.flow.channel + '/' + input.flow.surface,
@@ -236,12 +358,29 @@ function buildTurnRecord(
 export function persistWorkTakeoverTurnExecution(
   input: WorkTakeoverTurnExecutionWritebackInput,
 ): WorkTakeoverTurnExecutionWritebackResult {
+  if (isPureTaskQuery(input)) {
+    return {
+      recorded: false,
+      reason: 'task query/status lookup has no execution evidence to write back',
+      status: 'no_execution',
+    };
+  }
+
   const task = resolveTask(input);
   if (!task) {
     return {
       recorded: false,
       reason: 'no active or tool-referenced work takeover task',
       status: 'no_task',
+    };
+  }
+
+  if (input.finalizationBlocked && (input.toolRecords?.length || 0) === 0) {
+    return {
+      recorded: false,
+      reason: 'finalization blocked without tool execution evidence',
+      taskId: task.id,
+      status: 'no_execution',
     };
   }
 
@@ -275,7 +414,9 @@ export function persistWorkTakeoverTurnExecution(
   const updated = updateWorkTakeoverTask(input.userId, task.id, {
     status: nextStatus(task.status, turn.status),
     blockedBy,
-    result: turn.assistantTextPreview || task.result,
+    result: turn.assistantTextTrusted && turn.assistantTextPreview
+      ? turn.assistantTextPreview
+      : task.result,
     metadata: {
       workTakeoverExecution: {
         ...existingExecution,

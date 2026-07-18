@@ -33,6 +33,105 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('没有可核实的客户端自检工具回执');
   });
 
+  it.each([
+    { name: 'desktop_capture_screen', arguments: {}, result: '{"width":1280,"height":720}' },
+    { name: 'client_health_check', arguments: {}, result: '{"report":{"level":"ready"}}' },
+  ])('does not let current-turn receipts prove a claimed prior self-check', async (toolRecord) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '你刚才为什么那么久才回复？',
+      responseText: '刚才在跑自检，检查了客户端和运行时。',
+      toolRecords: [toolRecord],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('prior diagnostic run');
+  });
+
+  it('does not let a current receipt prove a prior self-check when the question itself names self-check', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '你刚才是不是在跑自检？',
+      responseText: '是的，刚才在跑自检，检查了客户端和运行时。',
+      toolRecords: [{
+        name: 'client_health_check',
+        arguments: {},
+        result: '{"report":{"level":"ready"}}',
+      }],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('prior diagnostic run');
+    expect(result.text).not.toContain('自检完成');
+  });
+
+  it('still grounds an explicitly requested current self-check from current receipts', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '请现在做一次客户端自检',
+      responseText: '刚刚已经完成自检。',
+      toolRecords: [{
+        name: 'client_health_check',
+        arguments: {},
+        result: '{"report":{"level":"ready"}}',
+      }],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('Grounded client diagnostic summary');
+    expect(result.text).toContain('自检完成');
+  });
+
+  it.each([
+    '检查一下你自己有没有问题',
+    '检查一下客户端',
+    '你自己检查一下',
+  ])('grounds the entry-classified current self-check instead of treating it as prior: %s', async (taskText) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '刚刚已经完成自检。',
+      toolRecords: [{
+        name: 'client_health_check',
+        arguments: {},
+        result: '{"report":{"level":"ready"}}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('Grounded client diagnostic summary');
+    expect(result.text).toContain('自检完成');
+    expect(result.reason).not.toContain('prior diagnostic run');
+  });
+
+  it.each([
+    '检查一下你自己有没有问题',
+    '检查一下客户端',
+    '你自己检查一下',
+  ])('blocks a failed client health receipt for current self-check wording: %s', async (taskText) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText,
+      responseText: '刚刚已经完成自检。',
+      toolRecords: [{
+        name: 'client_health_check',
+        arguments: {},
+        result: '{"ok":false,"error":"health probe failed"}',
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('did not produce a successful substantive receipt');
+    expect(result.text).toContain('自检未完成');
+    expect(result.text).toContain('health probe failed');
+    expect(result.reason).not.toContain('prior diagnostic run');
+  });
+
   it('blocks a claimed diagnostic tool run when the current turn has no matching records', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -168,6 +267,93 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('45/47');
   });
 
+  it.each([
+    ['adapter_health_check', '{"checkedCount":2,"needsAttention":[]}'],
+    ['model_configuration_test', '{"ok":true,"role":"reasoning"}'],
+  ])('accepts %s as a real self-check receipt', async (name, receipt) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '请做一次客户端自检',
+      responseText: `已检查 ${name}。`,
+      toolRecords: [{ name, arguments: {}, result: receipt }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('自检完成');
+    expect(result.text).toContain(name);
+    expect(result.text).not.toContain('没有取得任何客户端自检工具回执');
+  });
+
+  it.each([
+    ['desktop_ui_snapshot', '{"window":"LumiOS","nodes":[]}'],
+    ['desktop_capture_screen', '{"width":1280,"height":720}'],
+    ['desktop_running_processes', '{"processes":[]}'],
+  ])('does not treat supporting desktop evidence as a complete self-check: %s', async (name, receipt) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '请做一次客户端自检',
+      responseText: `已检查 ${name}。`,
+      toolRecords: [{ name, arguments: {}, result: receipt }],
+      source: 'chat',
+    });
+
+    expect(result.text).toContain('没有取得任何客户端自检工具回执');
+    expect(result.text).not.toContain('自检完成');
+  });
+
+  it.each([
+    ['model_configuration_test', '{"ok":false,"role":"reasoning","error":"HTTP 500"}', 'HTTP 500'],
+    ['desktop_ui_snapshot', '{"status":"not_supported"}', 'not_supported'],
+    ['client_repair_skill', 'Tool "client_repair_skill" requires user confirmation and was not approved.', 'user confirmation was not approved'],
+  ])('records semantic diagnostic failure instead of success: %s', async (name, receipt, expectedFailure) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '请做一次客户端自检',
+      responseText: `已检查 ${name}。`,
+      toolRecords: [
+        { name: 'client_health_check', arguments: {}, result: '{"report":{"level":"attention"}}' },
+        { name, arguments: {}, result: receipt },
+      ],
+      source: 'chat',
+    });
+
+    expect(result.text).toContain(`未完成的检查：${name}: ${expectedFailure}`);
+    expect(result.text).not.toContain(`本轮有回执的检查：${name}`);
+    if (name === 'client_repair_skill') {
+      expect(result.text).not.toContain('client_repair_skill: completed');
+    }
+  });
+
+  it.each([
+    ['client_health_check', '', 'Timeout', 'Timeout'],
+    ['model_configuration_test', '{"ok":false,"role":"reasoning","error":"HTTP 500"}', undefined, 'HTTP 500'],
+    ['client_repair_skill', 'Tool "client_repair_skill" requires user confirmation and was not approved.', undefined, 'user confirmation was not approved'],
+  ])('blocks an all-failed diagnostic turn instead of claiming self-check completion: %s', async (
+    name,
+    receipt,
+    error,
+    expectedFailure,
+  ) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '请做一次客户端自检',
+      responseText: `已检查 ${name}。`,
+      toolRecords: [
+        { name: 'desktop_capture_screen', arguments: {}, result: '{"width":1280,"height":720}' },
+        { name, arguments: {}, result: receipt, ...(error ? { error } : {}) },
+      ],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('did not produce a successful substantive receipt');
+    expect(result.text).toContain('自检未完成');
+    expect(result.text).toContain(expectedFailure);
+    expect(result.text).not.toContain('自检完成');
+    expect(result.text).not.toContain(`本轮有回执的检查：${name}`);
+  });
+
   it('blocks unverified completion claims for concrete work', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -219,6 +405,53 @@ describe('Lumi result finalizer', () => {
 
     const result = finalizeLumiResponse({
       taskText: '\u201c\u5df2\u5b8c\u6210\u201d\u548c\u201c\u6b63\u5728\u6267\u884c\u201d\u6709\u4ec0\u4e48\u533a\u522b\uff1f',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it.each([
+    '我正在继续改进自己的任务理解和执行能力。',
+    '我现在就开始检查自己哪些能力还需要提升。',
+  ])('keeps a reflective ability self-assessment outside the execution guard: %s', async (responseText) => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '你对目前自己的能力是否满意',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('keeps reflective capability-building completion conversational for the original typoed question', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '我已经完成了基础能力建设，但还不够满意。';
+
+    const result = finalizeLumiResponse({
+      taskText: '你对目前自己的能提是否满意',
+      responseText,
+      toolRecords: [],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(responseText);
+  });
+
+  it('does not replace a missing-reply explanation with a file-reading guard', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const responseText = '抱歉，我先检查一下刚才的对话和响应状态，再给你明确答复。';
+
+    const result = finalizeLumiResponse({
+      taskText: '为什么不回我',
       responseText,
       toolRecords: [],
       source: 'chat',

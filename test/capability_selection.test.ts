@@ -181,6 +181,7 @@ describe('Lumi capability selection', () => {
     });
 
     expect(dispatch.flow.executionGovernance.capabilityLearningIntent).toBe('inspect_reuse');
+    expect(dispatch.flow.selfRepairTurn).toBe(false);
     expect(selection.lane).toBe('capability_learning');
     expect(selection.preferredTools).toContain('capability_learning_list');
     expect(selection.promptOverlay).toContain('Do not hard-code an industry demo into Lumi core');

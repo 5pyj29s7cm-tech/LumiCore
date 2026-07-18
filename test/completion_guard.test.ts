@@ -106,6 +106,7 @@ describe('completion guard generic execution claims', () => {
     '\u73b0\u5728\u5c31\u505a\u3002',
     '\u9a6c\u4e0a\u52a8\u624b\u3002',
     '\u6b63\u5728\u6267\u884c\u3002',
+    '\u6211\u73b0\u5728\u5c31\u5f00\u59cb\u68c0\u67e5\u81ea\u5df1\u7684\u6587\u4ef6\u3002',
   ])('blocks an ungrounded immediate-execution status: %s', (response) => {
     const result = guardCompletionClaims({
       task: '\u786e\u8ba4',
@@ -286,6 +287,89 @@ describe('completion guard generic execution claims', () => {
     });
     expect(explanation.blocked).toBe(false);
     expect(fact.blocked).toBe(false);
+  });
+
+  it.each([
+    '我正在继续改进自己的任务理解和执行能力。',
+    '我现在就开始检查自己哪些能力还需要提升。',
+  ])('does not turn a reflective self-improvement status into an external-work guard: %s', (response) => {
+    const result = guardCompletionClaims({
+      task: '你对目前自己的能力是否满意',
+      response,
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+  });
+
+  it('does not treat reflective capability-building completion as external execution', () => {
+    const response = '我已经完成了基础能力建设，但还不够满意。';
+    const result = guardCompletionClaims({
+      task: '你对目前自己的能提是否满意',
+      response,
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+  });
+
+  it('does not let reflective capability completion hide a separate external action claim', () => {
+    const result = guardCompletionClaims({
+      task: '你对目前自己的能提是否满意',
+      response: '我已经完成了基础能力建设，但我已经打开桌面文件。',
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('工具');
+  });
+
+  it('does not mistake an external project construction claim for self-development reflection', () => {
+    const result = guardCompletionClaims({
+      task: '项目建设做好了吗',
+      response: '我已经完成了项目建设。',
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+  });
+
+  it('does not let a reflective clause hide a separate external execution claim', () => {
+    const result = guardCompletionClaims({
+      task: '你对目前自己的能力是否满意',
+      response: '我正在继续改进自己的任务理解和执行能力，我现在就打开桌面文件。',
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('current-turn tool execution');
+  });
+
+  it.each([
+    '现在就做。',
+    '正在执行。',
+  ])('still blocks immediate-execution status for an explicit external task: %s', (response) => {
+    const result = guardCompletionClaims({
+      task: '打开并检查桌面上的合同文件',
+      response,
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('current-turn tool execution');
+  });
+
+  it('still blocks a promised review when the user task actually requests external work', () => {
+    const result = guardCompletionClaims({
+      task: '打开并审查这份合同文件',
+      response: '好的，接下来我会先读取文件，再逐条审查。',
+      toolCalls: [],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('content-read/open/review');
   });
 });
 

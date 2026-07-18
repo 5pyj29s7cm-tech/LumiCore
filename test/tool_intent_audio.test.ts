@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasClientActionOnlyIntent,
+  isCurrentClientDiagnosticRequest,
+  isDiagnosticOrRepairRequest,
+  isInformationOnlyQuestion,
   isUserCorrectionOrExplanationQuestion,
   shouldAllowToolUseForTurn,
+  traceToolIntentDecision,
 } from '../server/cognition/tool_intent';
 
 describe('audio transcription tool intent', () => {
@@ -22,5 +26,71 @@ describe('audio transcription tool intent', () => {
     expect(isUserCorrectionOrExplanationQuestion(correction)).toBe(true);
     expect(hasClientActionOnlyIntent(correction)).toBe(false);
     expect(shouldAllowToolUseForTurn(correction, 'voice', 'autonomous')).toBe(false);
+  });
+
+  it('keeps a missing-reply complaint in conversation instead of client self-repair', () => {
+    for (const text of [
+      '为什么不回我',
+      '你怎么没有回答我？',
+      '为什么没有回答我刚才的问题？',
+      "Why didn't you answer my question?",
+    ]) {
+      expect(isUserCorrectionOrExplanationQuestion(text), text).toBe(true);
+      expect(isInformationOnlyQuestion(text), text).toBe(true);
+      expect(isDiagnosticOrRepairRequest(text), text).toBe(false);
+      expect(shouldAllowToolUseForTurn(text, 'chat', 'assistant'), text).toBe(false);
+      const trace = traceToolIntentDecision(text, 'chat', 'assistant');
+      expect(trace.allowToolUse, text).toBe(false);
+      expect(trace.signals.diagnosticOrRepair, text).toBe(false);
+      expect(trace.blockedBy, text).toContain('information-only-question');
+    }
+  });
+
+  it('still enables diagnostics for a concrete client failure', () => {
+    const text = '为什么客户端打不开了？';
+    expect(isUserCorrectionOrExplanationQuestion(text)).toBe(false);
+    expect(isDiagnosticOrRepairRequest(text)).toBe(true);
+    expect(shouldAllowToolUseForTurn(text, 'chat', 'assistant')).toBe(true);
+  });
+
+  it.each([
+    '检查一下你自己有没有问题',
+    '检查一下你自己有没有问题，然后给我一份报告',
+    '检查一下客户端',
+    '你自己检查一下',
+    '帮我检查 MCP 状态',
+  ])('recognizes a current client self-diagnostic request: %s', (text) => {
+    expect(isCurrentClientDiagnosticRequest(text)).toBe(true);
+    expect(isDiagnosticOrRepairRequest(text)).toBe(true);
+  });
+
+  it.each([
+    '检查一下这个文件',
+    '检查合同',
+    '检查桌面图片',
+    '你自己检查一下这份合同',
+    '检查你自己的合同有没有问题',
+    '检查微信新消息',
+    '检查股票',
+    '检查日程',
+    '这段代码报错了，帮我修复',
+    '合同有问题，帮我改一下',
+  ])('routes artifact work outside client self-repair: %s', (text) => {
+    expect(isCurrentClientDiagnosticRequest(text)).toBe(false);
+    expect(isDiagnosticOrRepairRequest(text)).toBe(false);
+
+    const trace = traceToolIntentDecision(text, 'chat', 'assistant');
+    expect(trace.signals.diagnosticOrRepair).toBe(false);
+    expect(trace.allowToolUse).toBe(true);
+    expect(trace.decisionReason).not.toContain('self-inspection');
+  });
+
+  it.each([
+    'AutoCAD 打不开了',
+    '微信没反应',
+    'Lumi 客户端有问题',
+  ])('keeps client and external-app runtime failures diagnostic: %s', (text) => {
+    expect(isDiagnosticOrRepairRequest(text)).toBe(true);
+    expect(traceToolIntentDecision(text, 'chat', 'assistant').signals.diagnosticOrRepair).toBe(true);
   });
 });

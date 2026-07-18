@@ -1,11 +1,21 @@
 import type { ToolExecutionRecord } from '../tools/types';
+import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import {
   formatCnClientDiagnosticFacts,
   formatCnMissingClientDiagnosticReceipts,
   type ClientDiagnosticFacts,
 } from '../regions/packs/cn/client_diagnostic_messages';
+import { isCurrentClientDiagnosticRequest } from './tool_intent';
 
-const CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|desktop_active_window|get_active_window_info|desktop_running_processes)$/i;
+const SUBSTANTIVE_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|adapter_registry_list|adapter_health_check|model_configuration_get|model_configuration_test)$/i;
+const SUPPORTING_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:desktop_active_window|get_active_window_info|desktop_running_processes|desktop_ui_snapshot|desktop_capture_screen)$/i;
+const FAILED_DIAGNOSTIC_STATUS_RE = /^(?:error|failed|failure|blocked|denied|rejected|pending|not_verified|unverified|requires_confirmation|not_supported|unsupported|unavailable|timed_out|timeout)$/i;
+
+export function isClientDiagnosticToolName(value: unknown): boolean {
+  const name = String(value || '');
+  return SUBSTANTIVE_CLIENT_DIAGNOSTIC_TOOL_RE.test(name)
+    || SUPPORTING_CLIENT_DIAGNOSTIC_TOOL_RE.test(name);
+}
 
 function parseJson(value: unknown): any {
   try {
@@ -15,8 +25,48 @@ function parseJson(value: unknown): any {
   }
 }
 
-function clientDiagnosticIntent(text: string): boolean {
-  return /(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5|\u8eab\u4f53\u72b6\u51b5|\u662f\u5426\u901a\u7545|\u80fd(?:\u4e0d\u80fd|\u5426|\u591f)\u4fee\u590d|self[ -]?check|health\s+check|runtime\s+health|diagnos)/iu.test(text || '');
+function isSubstantiveClientDiagnosticToolName(value: unknown): boolean {
+  return SUBSTANTIVE_CLIENT_DIAGNOSTIC_TOOL_RE.test(String(value || ''));
+}
+
+function diagnosticRecordFailure(record: ToolExecutionRecord): string {
+  const explicitError = String(record.error || '').trim();
+  if (explicitError) return explicitError;
+
+  const raw = String(record.result || '').trim();
+  if (!raw) return 'no result returned';
+  if (isConfirmationBlockedToolRecord(record)) return 'user confirmation was not approved';
+
+  const payload = parseJson(raw);
+  if (!payload || typeof payload !== 'object') return '';
+  const status = String(payload.status || payload.verification?.status || '').trim();
+  const semanticFailure = payload.ok === false
+    || payload.success === false
+    || payload.verified === false
+    || FAILED_DIAGNOSTIC_STATUS_RE.test(status);
+  if (!semanticFailure) return '';
+
+  return String(
+    payload.error
+    || payload.reason
+    || payload.message
+    || payload.verification?.message
+    || status
+    || 'diagnostic check failed',
+  ).trim();
+}
+
+function isSuccessfulDiagnosticRecord(record: ToolExecutionRecord): boolean {
+  return !diagnosticRecordFailure(record);
+}
+
+export function hasSuccessfulSubstantiveClientDiagnosticReceipt(
+  records: ToolExecutionRecord[],
+): boolean {
+  return records.some(record => (
+    isSubstantiveClientDiagnosticToolName(record.name)
+    && isSuccessfulDiagnosticRecord(record)
+  ));
 }
 
 function unique(values: string[]): string[] {
@@ -28,7 +78,9 @@ function englishDiagnosticFacts(facts: ClientDiagnosticFacts): string {
     ? `organization work scope${facts.scopeOrgId ? ` (${facts.scopeOrgId})` : ''}`
     : 'personal scope';
   const lines = [
-    'Self-check completed. This summary uses only tool receipts from the current turn.',
+    facts.hasSuccessfulSubstantiveCheck
+      ? 'Self-check completed. This summary uses only tool receipts from the current turn.'
+      : 'Self-check did not complete. No substantive client diagnostic produced a successful receipt in this turn.',
     `Scope: ${scope}.`,
   ];
   if (facts.hasLiveState) {
@@ -60,22 +112,27 @@ export function formatClientDiagnosticResult(
   taskText: string,
   responseText = '',
 ): string | null {
-  const diagnosticRecords = records.filter(record => CLIENT_DIAGNOSTIC_TOOL_RE.test(String(record.name || '')));
+  const diagnosticRecords = records.filter(record => isClientDiagnosticToolName(record.name));
+  const substantiveRecords = diagnosticRecords.filter(record => (
+    isSubstantiveClientDiagnosticToolName(record.name)
+  ));
   // Tool presence alone must not turn an unrelated action into a self-check
   // report. This is especially important when an old continuation bridge
   // contains client diagnostic wording.
   const confirmationOfRecordedDiagnostic = /^(?:\u786e\u8ba4|\u786e\u5b9a|\u662f|\u597d|\u597d\u7684|\u53ef\u4ee5|\u7ee7\u7eed|confirm|yes|ok|okay)[\u3002\uFF01\uFF1F.!?]*$/iu.test(String(taskText || '').trim())
     && diagnosticRecords.some(record => /^client_/i.test(String(record.name || '')))
     && /(?:client_get_state|client_health_check|client_self_repair|client_repair_skill)/i.test(responseText);
-  if (!clientDiagnosticIntent(taskText) && !confirmationOfRecordedDiagnostic) return null;
-  if (diagnosticRecords.length === 0) {
+  if (!isCurrentClientDiagnosticRequest(taskText) && !confirmationOfRecordedDiagnostic) return null;
+  // A window title, UIA tree, process list, or screenshot can supplement a
+  // client self-check, but cannot establish one by itself.
+  if (substantiveRecords.length === 0) {
     return /[\u3400-\u9fff]/u.test(taskText || '')
       ? formatCnMissingClientDiagnosticReceipts()
       : 'No client diagnostic tool receipt was produced in this turn, so desktop, skill, and runtime status cannot be determined.';
   }
 
-  const stateRecord = [...diagnosticRecords].reverse().find(record => /^client_get_state$/i.test(record.name) && !record.error);
-  const healthRecord = [...diagnosticRecords].reverse().find(record => /^client_health_check$/i.test(record.name) && !record.error);
+  const stateRecord = [...diagnosticRecords].reverse().find(record => /^client_get_state$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
+  const healthRecord = [...diagnosticRecords].reverse().find(record => /^client_health_check$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
   const statePayload = parseJson(stateRecord?.result);
   const healthPayload = parseJson(healthRecord?.result);
   const health = statePayload?.health || healthPayload?.report || healthPayload || null;
@@ -83,13 +140,14 @@ export function formatClientDiagnosticResult(
   const stateDigest = statePayload?.stateDigest || null;
   const scope = statePayload?.scope || healthPayload?.scope || {};
   const skillFindings = statePayload?.skillRuntimeFindings || healthPayload?.skillRuntimeFindings || [];
-  const activeRecord = [...diagnosticRecords].reverse().find(record => /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name) && !record.error);
-  const processRecord = [...diagnosticRecords].reverse().find(record => /^desktop_running_processes$/i.test(record.name) && !record.error);
+  const activeRecord = [...diagnosticRecords].reverse().find(record => /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
+  const processRecord = [...diagnosticRecords].reverse().find(record => /^desktop_running_processes$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
   const active = parseJson(activeRecord?.result);
   const processes = parseJson(processRecord?.result);
   const repairRecords = diagnosticRecords.filter(record => /^(?:client_self_repair|client_repair_skill)$/i.test(record.name));
 
   const facts: ClientDiagnosticFacts = {
+    hasSuccessfulSubstantiveCheck: hasSuccessfulSubstantiveClientDiagnosticReceipt(diagnosticRecords),
     hasLiveState: Boolean(state),
     healthLevel: String(health?.level || 'unknown'),
     stateAgeSeconds: health?.stateAgeSeconds != null && Number.isFinite(Number(health.stateAgeSeconds))
@@ -103,13 +161,15 @@ export function formatClientDiagnosticResult(
       .filter((finding: any) => finding?.connected === false)
       .map((finding: any) => String(finding?.name || ''))),
     successfulChecks: unique(diagnosticRecords
-      .filter(record => !record.error && String(record.result || '').trim())
+      .filter(record => isSuccessfulDiagnosticRecord(record))
       .map(record => String(record.name || ''))),
     failedChecks: unique(diagnosticRecords
-      .filter(record => Boolean(record.error))
-      .map(record => `${record.name}: ${record.error}`)),
+      .map(record => ({ record, failure: diagnosticRecordFailure(record) }))
+      .filter(item => Boolean(item.failure))
+      .map(item => `${item.record.name}: ${item.failure}`)),
     repairResults: unique(repairRecords.map(record => {
-      if (record.error) return `${record.name}: ${record.error}`;
+      const failure = diagnosticRecordFailure(record);
+      if (failure) return `${record.name}: ${failure}`;
       const payload = parseJson(record.result);
       return `${record.name}: ${String(payload?.say || payload?.status || 'completed')}`;
     })),

@@ -51,6 +51,16 @@ describe('finalized output delivery gate', () => {
     })).toBe(false);
   });
 
+  it.each([
+    '\u4f60\u5bf9\u76ee\u524d\u81ea\u5df1\u7684\u80fd\u529b\u662f\u5426\u6ee1\u610f',
+    '\u4e3a\u4ec0\u4e48\u4e0d\u56de\u6211',
+  ])('keeps conversational repair text streamable: %s', (taskText) => {
+    expect(shouldDeferModelOutputUntilFinalized({
+      taskText,
+      flow: flow({ routeText: taskText }),
+    })).toBe(false);
+  });
+
   it('buffers current-app editing until tool evidence is finalized', () => {
     const taskText = '\u5728\u8fd9\u91cc\u9762\u5199\u4e00\u7bc7\u68c0\u8ba8\u4e66\u7ed9\u6211';
     expect(shouldDeferModelOutputUntilFinalized({

@@ -239,6 +239,56 @@ describe('recent action continuation', () => {
     expect(buildRecentActionContinuationBridge('继续', [])).toBe('');
   });
 
+  it('does not turn a guard-blocked conversational exchange into executable continuation', () => {
+    const guardText = [
+      '我还没有真正开始读取或审查：这一轮没有记录到成功的工具执行。',
+      '现在能确认的是：这次只是生成了文字回复，没有实际读到文件内容。',
+      '下一步需要先拿到可读取的文件或位置。',
+    ].join('\n');
+    const markedHistory = [
+      { role: 'user', message: '你对目前自己的能力是否满意' },
+      {
+        role: 'assistant',
+        message: guardText,
+        cognitiveIntent: 'work_product_guard',
+        toolCalls: [{
+          name: 'desktop_open',
+          result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+        }],
+      },
+    ];
+    const legacyHistory = markedHistory.map(({ cognitiveIntent: _ignored, ...item }) => item);
+
+    for (const history of [markedHistory, legacyHistory]) {
+      expect(buildRecentActionContinuationBridge('继续', history)).toBe('');
+      expect(buildRecentActionContinuationBridge('回答我', history)).toBe('');
+      const state = extractRecentActionContinuationState(history);
+      expect(state.evidenceTools).toEqual([]);
+      expect(state.appTarget).toBe('');
+      expect(state.unfinished).toBe(false);
+    }
+  });
+
+  it('still continues a real external action goal while excluding its guard response', () => {
+    const guardText = [
+      '我还没有拿到可确认的桌面动作结果：这一轮没有成功执行任何工具。',
+      '现在能确认的是：这一轮还没有成功的桌面打开、聚焦或进程验证记录。',
+    ].join('\n');
+    const bridge = buildRecentActionContinuationBridge('继续', [
+      { role: 'user', message: '打开 AutoCAD' },
+      {
+        role: 'assistant',
+        message: guardText,
+        cognitiveIntent: 'work_product_guard',
+      },
+    ]);
+
+    expect(bridge).toContain('- followupIntent: execute');
+    expect(bridge).toContain('- originalGoal: 打开 AutoCAD');
+    expect(bridge).not.toContain(guardText);
+    expect(bridge).not.toContain('还没有成功的桌面打开');
+  });
+
   it('restores an evidence-backed task from persisted conversation state without recent history', () => {
     const opened = buildConversationActionContinuationState({
       userText: '打开 WPS。',

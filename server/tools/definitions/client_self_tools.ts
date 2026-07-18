@@ -16,6 +16,11 @@ import { listAutonomousWorkflows } from '../../autonomy/workflows';
 import { mcpManager } from '../../mcp';
 import { isExplicitSensitiveClientActionRequest } from '../action_constitution';
 import { PERSONAL_CLIENT_SURFACE_ACTIONS } from '../../../shared/client_surfaces';
+import {
+  redactDiagnosticSecrets,
+  safeRuntimeError,
+  sanitizeDiagnosticValue,
+} from '../../client/diagnostic_sanitizer';
 
 const ACTIONS = Array.from(new Set([
   'open_app',
@@ -73,6 +78,13 @@ function parseRelayOutput(output: string): any {
   }
 }
 
+function sanitizeRelayOutput(output: string): string {
+  const parsed = parseRelayOutput(output);
+  return typeof parsed === 'string'
+    ? redactDiagnosticSecrets(parsed)
+    : JSON.stringify(sanitizeDiagnosticValue(parsed));
+}
+
 async function waitForClientStateAfter(userId: string, previousUpdatedAt: number, timeoutMs = 1200) {
   const start = Date.now();
   let latest = getClientState(userId);
@@ -105,6 +117,10 @@ function getSkillRuntimeFindings() {
         connected: isConnected,
         broken,
         status,
+        consecutiveCrashes: Number(serverHealth?.consecutiveCrashes || 0),
+        lastError: safeRuntimeError(serverHealth?.lastError),
+        lastCrashTime: serverHealth?.lastCrashTime || undefined,
+        lastSuccessfulConnect: serverHealth?.lastSuccessfulConnect || undefined,
         source: serverConfig.source || localSkill?.source || 'unknown',
         description: serverConfig.description || localSkill?.description || name,
         repairTool: `client_repair_skill(skillName="${name}")`,
@@ -127,19 +143,19 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       const scope = { domain: context?.domain, orgId: context?.orgId };
       const isWork = context?.domain === 'work' && Boolean(context?.orgId);
       const state = getClientStateForScope(userId, scope);
-      return JSON.stringify({
+      return JSON.stringify(sanitizeDiagnosticValue({
         selfAwareness: getClientSelfAwarenessReport(userId, scope),
         capabilities: getClientCapabilities(),
         interfaceSurfaces: getClientInterfaceSurfaces(),
         visibleExecutionHabits: getVisibleExecutionHabits(),
-        state,
+        state: sanitizeDiagnosticValue(state),
         stateDigest: getClientStateDigest(state),
         health: getClientHealthReport(userId, scope),
         skillRuntimeFindings: getSkillRuntimeFindings(),
         autonomyGate: isWork ? null : getGateConfig(userId),
         autonomyWorkflows: isWork ? [] : listAutonomousWorkflows(userId),
         scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
-      }, null, 2);
+      }), null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
@@ -241,7 +257,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
 
       const after = await waitForClientStateAfter(userId, previousUpdatedAt);
       const verification = verifyClientActionResult(payload, before, after, relayResult);
-      return JSON.stringify({
+      return JSON.stringify(sanitizeDiagnosticValue({
         ok: verification.status === 'verified' || verification.status === 'not_applicable',
         action: payload.action,
         target: payload.target || expectation.target || '',
@@ -254,7 +270,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         before: getClientStateDigest(before),
         after: getClientStateDigest(after),
         say: verification.message,
-      }, null, 2);
+      }), null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
@@ -272,13 +288,13 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       const userId = context?.userId || 'anonymous';
       const scope = { domain: context?.domain, orgId: context?.orgId };
       const isWork = context?.domain === 'work' && Boolean(context?.orgId);
-      return JSON.stringify({
+      return JSON.stringify(sanitizeDiagnosticValue({
         report: getClientHealthReport(userId, scope),
         skillRuntimeFindings: getSkillRuntimeFindings(),
         autonomyGate: isWork ? null : getGateConfig(userId),
         autonomyWorkflows: isWork ? [] : listAutonomousWorkflows(userId),
         scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
-      }, null, 2);
+      }), null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
@@ -312,12 +328,14 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         throw new Error('Client self-repair requires the Lumi desktop client relay.');
       }
       if (args.action === 'refresh_client_state') {
-        return context.desktopRelay('client_action', { action: 'refresh_client_state' });
+        const result = await context.desktopRelay('client_action', { action: 'refresh_client_state' });
+        return sanitizeRelayOutput(result);
       }
       if (args.action === 'open_recovery_surface') {
         const surface = String(args.surface || 'settings').toLowerCase();
         const target = RECOVERY_SURFACE_TARGETS[surface] || surface;
-        return context.desktopRelay('client_action', { action: 'open_app', target });
+        const result = await context.desktopRelay('client_action', { action: 'open_app', target });
+        return sanitizeRelayOutput(result);
       }
       throw new Error(`Unsupported client_self_repair action: ${args.action}`);
     },
@@ -343,9 +361,9 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       if (!skillName) throw new Error('skillName is required.');
       const result = await mcpManager.repairSkill(skillName);
       if (!result.success) {
-        throw new Error(result.reason || `Skill "${skillName}" repair failed.`);
+        throw new Error(safeRuntimeError(result.reason) || `Skill "${skillName}" repair failed.`);
       }
-      return JSON.stringify(result, null, 2);
+      return JSON.stringify(sanitizeDiagnosticValue(result), null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',

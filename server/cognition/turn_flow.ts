@@ -407,8 +407,13 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     !chatModePureConversation &&
     (taskEntryTurn || autoPromoteToAssistant || workTakeover.shouldResumeTask || actionContractRequiresTools);
   const effectiveOperationMode = requestedMode || (shouldPromoteForAction ? 'assistant' : operationMode);
+  const capabilityLearningPreview = classifyCapabilityLearningIntent(input.text, input);
+  const explicitCapabilityMaintenance =
+    capabilityLearningPreview.capabilityLearningIntent === 'inspect_reuse'
+    || capabilityLearningPreview.capabilityLearningIntent === 'stabilize_existing';
   const selfRepairTurn = !statusOnlyContinuation
     && !chatModePureConversation
+    && !explicitCapabilityMaintenance
     && isDiagnosticOrRepairRequest(input.text);
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
   const visionIntent = hasVisionIntent(routingText);

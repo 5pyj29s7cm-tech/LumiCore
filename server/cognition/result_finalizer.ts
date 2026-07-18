@@ -2,7 +2,11 @@ import { guardCompletionClaims } from '../work_product/completion_guard';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 import { formatDesktopObservationResult } from './desktop_observation';
-import { formatClientDiagnosticResult } from './client_diagnostic_result';
+import {
+  formatClientDiagnosticResult,
+  hasSuccessfulSubstantiveClientDiagnosticReceipt,
+} from './client_diagnostic_result';
+import { isCurrentClientDiagnosticRequest } from './tool_intent';
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
 import { CN_VOICE_FAST_PATH_MESSAGES, formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import {
@@ -122,6 +126,7 @@ function unsupportedToolExecutionClaim(input: LumiResultFinalizerInput): string 
 }
 
 function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): string | null {
+  const task = resultTaskText(input);
   const response = String(input.responseText || '');
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const deniesDiagnostic = /(?:没有|没|并未|不是|不在|未曾|无法确认|不能确认)[^。！？!?\n]{0,32}(?:自检|健康检查|扫描|检查)|\b(?:did\s+not|didn't|wasn'?t|cannot\s+confirm)\b[^.!?\n]{0,80}\b(?:self[- ]?check|scan|diagnostic)/iu.test(response);
@@ -130,13 +135,21 @@ function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): strin
   const claimsDiagnostic = /(?:刚才|刚刚|之前|上一轮|上一次)?[^。！？!?\n]{0,20}(?:在|已经|刚刚|跑了|执行了|进行了|做了)[^。！？!?\n]{0,48}(?:自检|健康检查|扫描\s*MCP|扫描.*技能|检查.*运行时)|\b(?:I|Lumi|we)\s+(?:was|were|have\s+been|had\s+been)?\s*(?:running|performing|doing)[^.!?\n]{0,80}\b(?:self[- ]?check|diagnostic|MCP\s+scan)/iu.test(response);
   if (!claimsDiagnostic) return null;
 
-  const diagnosticEvidence = (input.toolRecords || []).some(record =>
-    /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|desktop_active_window|desktop_running_processes|open_runtime_log)$/i.test(String(record.name || ''))
-    && !record.error
-    && Boolean(String(record.result || '').trim())
-  );
-  if (diagnosticEvidence) return null;
+  // Only apply the prior-run guard when the task or answer actually points
+  // backward in time. A current request such as "please run a self-check"
+  // must still be allowed to summarize receipts produced in this turn.
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const priorTaskContext = /(?:刚才|刚刚|之前|上一轮|上一次|上轮)|(?:为什么|怎么|为何)[^。！？!?\n]{0,48}(?:这么久|那么久|半天|延迟|才[^。！？!?\n]{0,12}(?:回|答|回复|回应))|\b(?:earlier|previously|last\s+(?:turn|time)|prior\s+turn|why[^.!?]{0,60}(?:delay|took?\s+so\s+long))\b/iu.test(task);
+  const currentDiagnosticRequest = !priorTaskContext
+    && isCurrentClientDiagnosticRequest(task);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const priorResponseContext = /(?:刚才|刚刚|之前|上一轮|上一次|上轮)|\b(?:earlier|previously|last\s+(?:turn|time)|was|were|had\s+been)\b/iu.test(response);
+  if (!priorTaskContext && (!priorResponseContext || currentDiagnosticRequest)) return null;
 
+  // Current-turn tool records cannot prove a claim about "just now" or a
+  // previous turn: ToolExecutionRecord has no prior-turn identity/timestamp.
+  // Explicit current self-check requests are grounded earlier by
+  // formatClientDiagnosticResult; any remaining prior-run narrative is blocked.
   return isChineseText(resultTaskText(input)) || isChineseText(response)
     ? CN_RESULT_GROUNDING_MESSAGES.priorDiagnosticUnsupported
     : 'There is no verifiable client-diagnostic receipt for the prior turn. I cannot explain the delay as a self-check when no such check was recorded.';
@@ -929,14 +942,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     toolCalls: input.toolRecords || [],
     source: input.source,
   });
-  const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
-  if (diagnosticResult) {
-    return {
-      text: diagnosticResult,
-      blocked: false,
-      reason: 'Grounded client diagnostic summary from current-turn tool receipts.',
-    };
-  }
   const unsupportedDiagnostic = unsupportedPriorDiagnosticClaim(input);
   if (unsupportedDiagnostic) {
     return {
@@ -948,6 +953,24 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         level: 'warning',
         message: 'Response claimed a prior diagnostic run without matching diagnostic receipts.',
       },
+    };
+  }
+  const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
+  if (diagnosticResult) {
+    const diagnosticCompleted = hasSuccessfulSubstantiveClientDiagnosticReceipt(input.toolRecords || []);
+    return {
+      text: diagnosticResult,
+      blocked: !diagnosticCompleted,
+      reason: diagnosticCompleted
+        ? 'Grounded client diagnostic summary from current-turn tool receipts.'
+        : 'Client diagnostic did not produce a successful substantive receipt.',
+      ...(!diagnosticCompleted ? {
+        notification: {
+          type: 'work_product_guard' as const,
+          level: 'warning' as const,
+          message: 'Client diagnostic did not produce a successful substantive receipt.',
+        },
+      } : {}),
     };
   }
   const unsupportedExecution = unsupportedToolExecutionClaim(input);

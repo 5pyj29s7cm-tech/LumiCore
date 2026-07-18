@@ -1,4 +1,5 @@
 export interface ClientDiagnosticFacts {
+  hasSuccessfulSubstantiveCheck: boolean;
   hasLiveState: boolean;
   healthLevel: string;
   stateAgeSeconds: number | null;
@@ -19,7 +20,9 @@ export function formatCnMissingClientDiagnosticReceipts(): string {
 }
 
 export function formatCnClientDiagnosticFacts(facts: ClientDiagnosticFacts): string {
-  const lines = ['自检完成。以下只采用本轮真实工具回执，不沿用此前聊天里的状态说法。'];
+  const lines = [facts.hasSuccessfulSubstantiveCheck
+    ? '自检完成。以下只采用本轮真实工具回执，不沿用此前聊天里的状态说法。'
+    : '自检未完成。本轮没有任何成功的实质性客户端自检回执。'];
   const scope = facts.scopeDomain === 'work'
     ? `组织工作域${facts.scopeOrgId ? `（${facts.scopeOrgId}）` : ''}`
     : '个人域';

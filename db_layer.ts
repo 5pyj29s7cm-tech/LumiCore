@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { getDataPath, getDataRoot } from './server/config/data_path';
+import { isolateLegacyGuardSummaryState } from './server/conversation/guard_history';
 
 // Auto-migrate data from old location (project directory) to user directory on first run
 function migrateDataFromOldLocation() {
@@ -65,6 +66,18 @@ let memoryDB: any = null;
 const SYSTEM_FLAGS_SETTING = '__lumi_system_flags';
 const SYSTEM_SNAPSHOTS_SETTING = '__lumi_system_snapshots';
 
+export interface LegacySummaryPersistenceRepair {
+  id: string;
+  summary: string;
+  summaryChain: string[];
+  lastSummaryMessageCount: number;
+}
+
+type LegacySummaryRepairWriter = (
+  repair: LegacySummaryPersistenceRepair,
+  complete: (error?: Error | null) => void,
+) => void;
+
 function parseStoredToolCalls(value: unknown): any[] | undefined {
   let current = value;
   for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
@@ -80,6 +93,71 @@ function parseStoredToolCalls(value: unknown): any[] | undefined {
 function serializeStoredToolCalls(value: unknown): string {
   const records = parseStoredToolCalls(value);
   return records?.length ? JSON.stringify(records) : '';
+}
+
+function compactStoredContinuationValue(value: unknown, limit: number): string {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+/**
+ * Only evidence-backed continuation pointers are durable. The in-flight
+ * pending user turn intentionally remains memory-only: after a restart there
+ * is no live execution to pair it with, and persisting it could attach an
+ * unrelated later assistant message to stale intent.
+ */
+function parseStoredActionContinuationState(value: unknown): Record<string, any> | undefined {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    if (!parsed.trim()) return undefined;
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+
+  const raw = parsed as Record<string, any>;
+  const goal = compactStoredContinuationValue(raw.goal, 700);
+  const evidenceTools = Array.from(new Set(
+    (Array.isArray(raw.evidenceTools) ? raw.evidenceTools : [])
+      .map((name: unknown) => compactStoredContinuationValue(name, 120))
+      .filter(Boolean),
+  )).slice(-10);
+  if (Number(raw.version) !== 1 || !goal || evidenceTools.length === 0) return undefined;
+
+  const sourcePaths = Array.from(new Set(
+    (Array.isArray(raw.sourcePaths) ? raw.sourcePaths : [])
+      .map((item: unknown) => compactStoredContinuationValue(item, 500))
+      .filter(Boolean),
+  )).slice(0, 8);
+  const toolSummaries = Array.from(new Set(
+    (Array.isArray(raw.toolSummaries) ? raw.toolSummaries : [])
+      .map((item: unknown) => compactStoredContinuationValue(item, 700))
+      .filter(Boolean),
+  )).slice(-10);
+
+  return {
+    version: 1,
+    goal,
+    latestInstruction: compactStoredContinuationValue(raw.latestInstruction || goal, 700),
+    appTarget: compactStoredContinuationValue(raw.appTarget, 160),
+    sourcePaths,
+    latestBlocker: compactStoredContinuationValue(raw.latestBlocker, 380),
+    unfinished: Boolean(raw.unfinished),
+    evidenceTools,
+    assistantState: compactStoredContinuationValue(raw.assistantState, 700),
+    toolSummaries,
+    updatedAt: compactStoredContinuationValue(raw.updatedAt, 80) || new Date(0).toISOString(),
+    ...(compactStoredContinuationValue(raw.evidenceMessageId, 160)
+      ? { evidenceMessageId: compactStoredContinuationValue(raw.evidenceMessageId, 160) }
+      : {}),
+  };
+}
+
+function serializeStoredActionContinuationState(value: unknown): string {
+  const state = parseStoredActionContinuationState(value);
+  return state ? JSON.stringify(state) : '{}';
 }
 
 function parseJsonSetting<T>(settings: any[], key: string, fallback: T): T {
@@ -109,16 +187,71 @@ function settingsRowsWithSystemState(): any[][] {
   return rows;
 }
 
+/**
+ * Persistence is cleanup, not a prerequisite for safe conversation reads.
+ * The in-memory row has already been isolated before this is called, so a
+ * read-only/closing database must never reject or delay initialization.
+ * Exported for a focused failure-boundary regression test.
+ */
+export function persistLegacySummaryRepairsBestEffort(
+  repairs: LegacySummaryPersistenceRepair[],
+  injectedWriter?: LegacySummaryRepairWriter,
+): void {
+  if (!repairs.length) return;
+  const targetDb = db;
+  let warned = false;
+  const reportFailure = (error: unknown) => {
+    if (warned) return;
+    warned = true;
+    console.warn('[DB] Legacy guard-summary cleanup could not be persisted; in-memory isolation remains active:', error);
+  };
+  const writer: LegacySummaryRepairWriter = injectedWriter || ((repair, complete) => {
+    if (!targetDb) {
+      complete(new Error('Database is unavailable.'));
+      return;
+    }
+    targetDb.run(
+      `UPDATE conversations
+       SET summary = ?, summaryChain = ?, lastSummaryMessageCount = ?
+       WHERE id = ? AND lastSummaryMessageCount < 0`,
+      [
+        repair.summary,
+        JSON.stringify(repair.summaryChain),
+        repair.lastSummaryMessageCount,
+        repair.id,
+      ],
+      complete,
+    );
+  });
+
+  for (const repair of repairs) {
+    try {
+      writer(repair, error => {
+        if (error) reportFailure(error);
+      });
+    } catch (error) {
+      reportFailure(error);
+    }
+  }
+}
+
 export async function initDatabase(): Promise<void> {
   return new Promise((resolve, reject) => {
     db = new sqlite3.Database(DB_PATH, (err) => {
       if (err) { reject(err); return; }
       db!.run('PRAGMA foreign_keys = ON', async (err) => {
         if (err) { reject(err); return; }
-        await createTables();
-        await migrateSchema();
-        await loadMemoryDB();
-        resolve();
+        try {
+          await createTables();
+          await migrateSchema();
+          await loadMemoryDB();
+          resolve();
+        } catch (error) {
+          // sqlite callbacks do not observe rejected async callback promises.
+          // Always settle the outer initialization promise instead of leaving
+          // callers hanging until their own timeout with an unhandled rejection.
+          reject(error);
+        }
       });
     });
   });
@@ -181,6 +314,11 @@ function migrateSchema(): Promise<void> {
     // Add domain + orgId to conversations for personal/work isolation
     db!.run("ALTER TABLE conversations ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     db!.run("ALTER TABLE conversations ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
+    // Durable auto-summary cadence and bounded summary history. -1 marks rows
+    // created before this migration so the manager can infer a safe baseline.
+    db!.run("ALTER TABLE conversations ADD COLUMN summaryChain TEXT DEFAULT '[]'", onAlter);
+    db!.run("ALTER TABLE conversations ADD COLUMN lastSummaryMessageCount INTEGER DEFAULT -1", onAlter);
+    db!.run("ALTER TABLE conversations ADD COLUMN actionContinuationState TEXT DEFAULT '{}'", onAlter);
     // Canvas sessions: persisted workbench state with personal/work isolation
     db!.run(`CREATE TABLE IF NOT EXISTS canvas_sessions (
       id TEXT PRIMARY KEY,
@@ -347,6 +485,9 @@ function createTables(): Promise<void> {
         title TEXT DEFAULT '',
         status TEXT DEFAULT 'active',
         summary TEXT DEFAULT '',
+        summaryChain TEXT DEFAULT '[]',
+        lastSummaryMessageCount INTEGER DEFAULT -1,
+        actionContinuationState TEXT DEFAULT '{}',
         messageCount INTEGER DEFAULT 0,
         lastActiveAt TEXT NOT NULL,
         createdAt TEXT NOT NULL,
@@ -650,6 +791,43 @@ async function loadMemoryDB(): Promise<void> {
     receivedAt: i.receivedAt || '',
   }));
 
+  const legacySummaryRepairs: LegacySummaryPersistenceRepair[] = [];
+  const conversations = (conversationsRaw || []).map((c: any) => {
+    let summaryChain: string[] = [];
+    if (Array.isArray(c.summaryChain)) {
+      summaryChain = c.summaryChain.map((item: unknown) => String(item || '').trim()).filter(Boolean);
+    } else if (typeof c.summaryChain === 'string' && c.summaryChain.trim()) {
+      try {
+        const parsed = JSON.parse(c.summaryChain);
+        if (Array.isArray(parsed)) {
+          summaryChain = parsed.map((item: unknown) => String(item || '').trim()).filter(Boolean);
+        }
+      } catch { /* Invalid legacy data is treated as an empty chain. */ }
+    }
+    const isolatedSummary = isolateLegacyGuardSummaryState({
+      summary: c.summary,
+      summaryChain,
+      lastSummaryMessageCount: c.lastSummaryMessageCount,
+    });
+    if (isolatedSummary.changed) {
+      legacySummaryRepairs.push({
+        id: String(c.id || ''),
+        summary: isolatedSummary.summary,
+        summaryChain: isolatedSummary.summaryChain,
+        lastSummaryMessageCount: isolatedSummary.lastSummaryMessageCount,
+      });
+    }
+    return {
+      ...c,
+      summary: isolatedSummary.summary,
+      summaryChain: isolatedSummary.summaryChain,
+      lastSummaryMessageCount: isolatedSummary.lastSummaryMessageCount,
+      actionContinuationState: parseStoredActionContinuationState(c.actionContinuationState),
+      domain: c.domain || 'personal',
+      orgId: c.orgId || '',
+    };
+  });
+
   memoryDB = {
     users,
     agents,
@@ -659,7 +837,7 @@ async function loadMemoryDB(): Promise<void> {
     founderVision,
     memories: (memories || []).map((m: any) => ({ ...m, domain: m.domain || 'personal', orgId: m.orgId || '' })),
     reminders: remindersRaw || [],
-    conversations: (conversationsRaw || []).map((c: any) => ({ ...c, domain: c.domain || 'personal', orgId: c.orgId || '' })),
+    conversations,
     canvas_sessions: (canvasSessionsRaw || []).map((s: any) => ({ ...s, edges: s.edges || '[]', domain: s.domain || 'personal', orgId: s.orgId || '' })),
     settings: settings || [],
     systemFlags: systemFlags || {},
@@ -676,6 +854,12 @@ async function loadMemoryDB(): Promise<void> {
     notifications: notifications || [],
     auditLog: auditLogEntries || [],
   };
+
+  // Prompt safety is already guaranteed by the sanitized in-memory rows.
+  // Persist the cleanup opportunistically without making a writable database
+  // a startup dependency (tests, shutdown races, and recovery mounts may be
+  // temporarily read-only).
+  persistLegacySummaryRepairsBestEffort(legacySummaryRepairs);
 }
 
 function run(sql: string, params: any[] = []): Promise<void> {
@@ -825,9 +1009,9 @@ async function persistMemoryDB(): Promise<void> {
     },
     {
       name: 'conversations',
-      createSQL: `CREATE TABLE _temp_conversations (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, title TEXT DEFAULT '', status TEXT DEFAULT 'active', summary TEXT DEFAULT '', messageCount INTEGER DEFAULT 0, lastActiveAt TEXT NOT NULL, createdAt TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_conversations (id, userId, agentId, title, status, summary, messageCount, lastActiveAt, createdAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversations || []).map((c: any) => [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']),
+      createSQL: `CREATE TABLE _temp_conversations (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, title TEXT DEFAULT '', status TEXT DEFAULT 'active', summary TEXT DEFAULT '', summaryChain TEXT DEFAULT '[]', lastSummaryMessageCount INTEGER DEFAULT -1, actionContinuationState TEXT DEFAULT '{}', messageCount INTEGER DEFAULT 0, lastActiveAt TEXT NOT NULL, createdAt TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
+      insertSQL: `INSERT INTO _temp_conversations (id, userId, agentId, title, status, summary, summaryChain, lastSummaryMessageCount, actionContinuationState, messageCount, lastActiveAt, createdAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.conversations || []).map((c: any) => [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', JSON.stringify(Array.isArray(c.summaryChain) ? c.summaryChain : []), Number.isFinite(Number(c.lastSummaryMessageCount)) ? Math.floor(Number(c.lastSummaryMessageCount)) : -1, serializeStoredActionContinuationState(c.actionContinuationState), c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']),
     },
     {
       name: 'canvas_sessions',

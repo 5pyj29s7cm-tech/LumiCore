@@ -46,9 +46,15 @@ const declarations = [
   'shell_exec',
   'terminal_exec',
   'client_health_check',
+  'client_self_repair',
+  'client_repair_skill',
   'list_skills',
   'install_skill',
   'adapter_registry_list',
+  'adapter_health_check',
+  'model_configuration_get',
+  'model_configuration_test',
+  'desktop_running_processes',
   'web_login_run',
   'url_fetch_logged_in',
   'wechat_read_recent_chat',
@@ -177,6 +183,76 @@ describe('Lumi execution decision', () => {
     expect(dispatch.boundary).toBe('client_action');
     expect(decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(decision.maxIterations).toBe(4);
+  });
+
+  it('keeps generic self-checks on the minimal read-only diagnostic set', async () => {
+    const { buildSelfRepairToolPolicy } = await import('../server/cognition/execution_decision');
+    const policy = buildSelfRepairToolPolicy('给客户端做个自检');
+
+    expect(policy.allowedTools).toEqual([
+      'client_get_state',
+      'client_health_check',
+    ]);
+    expect(policy.requireConfirmation).toEqual([]);
+    expect(policy.maxIterations).toBe(3);
+  });
+
+  it('adds only the explicitly diagnosed self-repair sub-domain tools', async () => {
+    const { buildSelfRepairToolPolicy } = await import('../server/cognition/execution_decision');
+
+    const desktop = buildSelfRepairToolPolicy('AutoCAD 白屏了，帮我检查原因');
+    expect(desktop.allowedTools).toEqual([
+      'client_get_state',
+      'client_health_check',
+      'adapter_registry_list',
+      'adapter_health_check',
+      'desktop_active_window',
+      'desktop_running_processes',
+      'desktop_ui_snapshot',
+      'desktop_capture_screen',
+    ]);
+    expect(desktop.allowedTools).not.toContain('model_configuration_test');
+
+    const model = buildSelfRepairToolPolicy('检查 DeepSeek 推理模型为什么失败');
+    expect(model.allowedTools).toEqual([
+      'client_get_state',
+      'client_health_check',
+      'model_configuration_get',
+      'model_configuration_test',
+    ]);
+    expect(model.allowedTools).not.toContain('desktop_capture_screen');
+
+    const skillRepair = buildSelfRepairToolPolicy('修复并重启这个 MCP 技能');
+    expect(skillRepair.allowedTools).toEqual([
+      'client_get_state',
+      'client_health_check',
+      'adapter_registry_list',
+      'adapter_health_check',
+      'client_self_repair',
+      'client_repair_skill',
+    ]);
+    expect(skillRepair.requireConfirmation).toEqual(['client_repair_skill']);
+    expect(skillRepair.maxIterations).toBe(5);
+  });
+
+  it('keeps every diagnostic-lane tool registered with the intended security level', async () => {
+    const { buildSelfRepairToolPolicy } = await import('../server/cognition/execution_decision');
+    const { ToolRegistry } = await import('../server/tools/registry');
+    const { registerAllTools } = await import('../server/tools/definitions');
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+
+    const names = new Set([
+      ...buildSelfRepairToolPolicy('给客户端做个自检').allowedTools,
+      ...buildSelfRepairToolPolicy('AutoCAD 白屏了，帮我检查原因').allowedTools,
+      ...buildSelfRepairToolPolicy('检查 DeepSeek 推理模型为什么失败').allowedTools,
+      ...buildSelfRepairToolPolicy('修复并重启这个 MCP 技能').allowedTools,
+    ]);
+    for (const name of names) {
+      const tool = registry.get(name);
+      expect(tool, name).toBeDefined();
+      expect(tool?.securityLevel, name).toBe(name === 'client_repair_skill' ? 'confirm' : 'safe');
+    }
   });
 
   it('treats task center as executable persistent work', async () => {

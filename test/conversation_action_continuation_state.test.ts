@@ -1,3 +1,4 @@
+import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import {
