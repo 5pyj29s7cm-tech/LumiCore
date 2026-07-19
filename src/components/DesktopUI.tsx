@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
+import { motion, AnimatePresence, useDragControls, useMotionValue, useTransform } from 'motion/react';
 import { GlobalNodeMap } from './GlobalNodeMap';
 import { sounds } from '../services/soundService';
 import {
@@ -73,7 +73,6 @@ const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.Ink
 import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
-import { ToolConfirmDialog } from './ToolConfirmDialog';
 import { appConfirm } from '@/lib/appConfirm';
 import { designVoice, listVoices, synthesizeSpeech } from '@/services/voiceService';
 import { setMusicLayerVisible, useMusicPlayerRuntime, useMusicPlayerSnapshot, useMusicVisible } from '../hooks/useMusicPlayer';
@@ -382,6 +381,7 @@ function OSWindow({
   const [isMaximized, setIsMaximized] = useState(false);
   const [snapZone, setSnapZone] = useState<'none' | 'left' | 'right'>('none');
   const [isDragging, setIsDragging] = useState(false);
+  const dragControls = useDragControls();
   const constrainRef = React.useRef<HTMLDivElement>(null);
   const viewport = useViewportSize();
 
@@ -414,6 +414,8 @@ function OSWindow({
       <div ref={constrainRef} className="fixed inset-0 pointer-events-none z-0" />
       <motion.div
         drag={!isMaximized && !isMinimized}
+        dragListener={false}
+        dragControls={dragControls}
         dragElastic={0.1}
         dragTransition={{ bounceStiffness: 400, bounceDamping: 25 }}
         dragConstraints={constrainRef}
@@ -464,7 +466,17 @@ function OSWindow({
         className={`os-window pointer-events-auto overflow-hidden ${isMaximized ? 'rounded-2xl' : 'rounded-3xl'} ${isActive ? 'ring-1 ring-white/15' : ''} ${isMinimized ? 'pointer-events-none' : ''} ${isDragging ? 'is-dragging' : ''}`}
       >
         <div
-          className="os-window-header"
+          className="os-window-header cursor-move"
+          onPointerDown={(event) => {
+            if (isMaximized || isMinimized) return;
+            if ((event.target as HTMLElement).closest('button')) return;
+            dragControls.start(event);
+          }}
+          onDoubleClick={(event) => {
+            if ((event.target as HTMLElement).closest('button')) return;
+            setSnapZone('none');
+            setIsMaximized(prev => !prev);
+          }}
         >
           <div className="flex min-w-0 items-center gap-3 select-none">
             <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${colorClass} p-1.5 shadow-lg ring-1 ring-white/15 transition-transform`}>
@@ -477,6 +489,24 @@ function OSWindow({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); onMinimize(id); }}
+              className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white"
+              title={t.minimize || 'Minimize'}
+            >
+              <Minus size={15} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setSnapZone('none');
+                setIsMaximized(prev => !prev);
+              }}
+              className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white"
+              title={isMaximized ? (t.restore || 'Restore') : (t.maximize || 'Maximize')}
+            >
+              {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); onClose(id); }}
               className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-white/45 transition-colors hover:border-red-400/30 hover:bg-red-500/15 hover:text-red-100"
@@ -2971,12 +3001,41 @@ export function DesktopUI({
     if (!socket) return;
 
     let terminalResponseSeen = false;
+    let activeForegroundRequestId: string | null = null;
+    let activeForegroundSource: string | null = null;
     let terminalResetTimer: ReturnType<typeof setTimeout> | null = null;
     const workflowStepId = (prefix: string, seed?: string) =>
       `${prefix}-${seed || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const isDetachedBackgroundEvent = (data: { source?: string }) =>
+      /^(?:background|background_delegation|proactive|scheduler)/i.test(String(data.source || ''));
+    const acceptsForegroundEvent = (data: { requestId?: string; source?: string }, claim = false) => {
+      if (isDetachedBackgroundEvent(data)) return false;
+      const requestId = String(data.requestId || '').trim();
+      const source = String(data.source || '').trim() || null;
+      if (!requestId) {
+        if (activeForegroundRequestId && source && activeForegroundSource && source !== activeForegroundSource) return false;
+        if (claim && !activeForegroundSource) activeForegroundSource = source;
+        return true;
+      }
+      if (!activeForegroundRequestId) {
+        if (claim) {
+          activeForegroundRequestId = requestId;
+          activeForegroundSource = source;
+        }
+        return claim;
+      }
+      return activeForegroundRequestId === requestId;
+    };
 
-    const onStatus = (data: { status: string; agentName?: string; phase?: string; detail?: string; source?: string }) => {
+    const onStatus = (data: { status: string; agentName?: string; phase?: string; detail?: string; source?: string; requestId?: string }) => {
       if (data.status === 'thinking') {
+        if (isDetachedBackgroundEvent(data)) return;
+        if (data.requestId && activeForegroundRequestId !== data.requestId) {
+          activeForegroundRequestId = data.requestId;
+          activeForegroundSource = data.source || null;
+          setWorkflowSteps([]);
+          seenWorkflowToolEvents.current.clear();
+        } else if (!acceptsForegroundEvent(data, true)) return;
         terminalResponseSeen = false;
         if (terminalResetTimer) {
           clearTimeout(terminalResetTimer);
@@ -2994,22 +3053,29 @@ export function DesktopUI({
           time: Date.now(),
         }]);
       } else if (data.status === 'idle') {
+        if (!acceptsForegroundEvent(data)) return;
         // "idle" is a transport/pipeline state, not evidence that user work completed.
         // A finalized agent:response event owns the semantic done/blocked state.
         if (!terminalResponseSeen) setAgentStatus('idle');
       } else if (data.status === 'error') {
+        if (!acceptsForegroundEvent(data, true)) return;
         terminalResponseSeen = true;
+        const terminalRequestId = data.requestId || activeForegroundRequestId;
         setAgentStatus('error');
         if (terminalResetTimer) clearTimeout(terminalResetTimer);
         terminalResetTimer = setTimeout(() => {
+          if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
           setAgentStatus('idle');
           setWorkflowSteps([]);
+          activeForegroundRequestId = null;
+          activeForegroundSource = null;
           terminalResetTimer = null;
         }, 5000);
       }
     };
 
-    const onToolCall = (data: { correlationId?: string; name: string; arguments?: any; args?: any; result?: string; error?: string; source?: string }) => {
+    const onToolCall = (data: { correlationId?: string; name: string; arguments?: any; args?: any; result?: string; error?: string; source?: string; requestId?: string }) => {
+      if (!acceptsForegroundEvent(data, true)) return;
       const toolArgs = data.arguments ?? data.args;
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
       if (data.correlationId) {
@@ -3075,10 +3141,6 @@ export function DesktopUI({
       }
     };
 
-    const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; source?: string }) => {
-      console.warn(`[DesktopUI] Tool confirmation event suppressed without popup: ${data.name}`);
-    };
-
     const onResponse = (data: {
       text: string;
       agentName?: string;
@@ -3088,6 +3150,7 @@ export function DesktopUI({
       blocked?: boolean;
       reason?: string;
     }) => {
+      if (!acceptsForegroundEvent(data, true)) return;
       const terminalReason = String(data.reason || '').trim().toLowerCase();
       const responseBlocked = (
         data.finalized !== true
@@ -3096,6 +3159,7 @@ export function DesktopUI({
         || ['cancelled', 'canceled', 'voiceprint_rejected'].includes(terminalReason)
       );
       terminalResponseSeen = true;
+      const terminalRequestId = data.requestId || activeForegroundRequestId;
       setAgentStatus(responseBlocked ? 'error' : 'done');
       setWorkflowSteps(prev => [...prev, {
         id: workflowStepId('resp', data.requestId),
@@ -3106,13 +3170,18 @@ export function DesktopUI({
       }]);
       if (terminalResetTimer) clearTimeout(terminalResetTimer);
       terminalResetTimer = setTimeout(() => {
+        if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
         setAgentStatus('idle');
         setWorkflowSteps([]);
+        activeForegroundRequestId = null;
+        activeForegroundSource = null;
         terminalResetTimer = null;
       }, 5000);
     };
 
     const onError = (data: { message: string; source?: string; requestId?: string }) => {
+      if (!acceptsForegroundEvent(data, true)) return;
+      const terminalRequestId = data.requestId || activeForegroundRequestId;
       setAgentStatus('error');
       setWorkflowSteps(prev => [...prev, {
         id: workflowStepId('err', data.requestId),
@@ -3121,9 +3190,14 @@ export function DesktopUI({
         detail: data.message,
         time: Date.now(),
       }]);
-      setTimeout(() => {
+      if (terminalResetTimer) clearTimeout(terminalResetTimer);
+      terminalResetTimer = setTimeout(() => {
+        if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
         setAgentStatus('idle');
         setWorkflowSteps([]);
+        activeForegroundRequestId = null;
+        activeForegroundSource = null;
+        terminalResetTimer = null;
       }, 5000);
     };
 
@@ -3197,7 +3271,6 @@ export function DesktopUI({
     socket.on('agent:background_task_update', onBackgroundTaskUpdate);
     socket.on('agent:tool_call', onToolCall);
     socket.on('agent:tool', onToolCall);
-    socket.on('agent:confirm_tool', onConfirmTool);
     socket.on('agent:response', onResponse);
     socket.on('agent:error', onError);
     socket.on('agent:proactive', onProactive);
@@ -3285,7 +3358,6 @@ export function DesktopUI({
       socket.off('agent:background_task_update', onBackgroundTaskUpdate);
       socket.off('agent:tool_call', onToolCall);
       socket.off('agent:tool', onToolCall);
-      socket.off('agent:confirm_tool', onConfirmTool);
       socket.off('agent:response', onResponse);
       socket.off('agent:error', onError);
       socket.off('agent:proactive', onProactive);
@@ -3465,7 +3537,7 @@ export function DesktopUI({
       setFocusedWindow(tab);
       setWindowOrder(prev => [...prev.filter(w => w !== tab), tab]);
     } else {
-      setOpenWindows([...openWindows, tab]);
+      setOpenWindows(prev => prev.includes(tab) ? prev : [...prev, tab]);
       setFocusedWindow(tab);
       setWindowOrder(prev => [...prev, tab]);
     }
@@ -3474,13 +3546,22 @@ export function DesktopUI({
 
   const closeWindow = (tab: string) => {
     try { sounds.playClick(); } catch {}
-    const nextWindows = openWindows.filter(w => w !== tab);
-    setOpenWindows(nextWindows);
+    const remainingOrder = windowOrder.filter(w => w !== tab);
+    const nextFocusedWindow = remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null;
+    setOpenWindows(prev => prev.filter(w => w !== tab));
     setMinimizedWindows(prev => prev.filter(w => w !== tab));
-    setWindowOrder(prev => prev.filter(w => w !== tab));
+    setWindowOrder(remainingOrder);
     if (focusedWindow === tab) {
-      setFocusedWindow(nextWindows.length > 0 ? nextWindows[nextWindows.length - 1] : null);
-      if (nextWindows.length === 0) setActiveTab('home');
+      setFocusedWindow(nextFocusedWindow);
+      if (!nextFocusedWindow) setActiveTab('home');
+    }
+  };
+
+  const minimizeOsWindow = (tab: string) => {
+    const remainingOrder = windowOrder.filter(w => w !== tab && !minimizedWindows.includes(w));
+    setMinimizedWindows(prev => prev.includes(tab) ? prev : [...prev, tab]);
+    if (focusedWindow === tab) {
+      setFocusedWindow(remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null);
     }
   };
 
@@ -5410,7 +5491,7 @@ export function DesktopUI({
                   setFocusedWindow(id);
                   setWindowOrder(prev => [...prev.filter(w => w !== id), id]);
                 }}
-                onMinimize={(id) => setMinimizedWindows(prev => [...prev, id])}
+                onMinimize={minimizeOsWindow}
                 onMinimizeComplete={(id) => {
                   // Window stays in DOM, just mark animation complete
                 }}
@@ -5677,7 +5758,6 @@ export function DesktopUI({
         )}
       </AnimatePresence>
 
-      <ToolConfirmDialog socket={socket} isWallpaperMode={isWallpaperMode} />
       {musicLayerLoaded && (
         <Suspense fallback={null}>
           <MusicMoodLayer />

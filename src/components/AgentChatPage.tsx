@@ -48,7 +48,27 @@ import {
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
-type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'done' | 'error';
+type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'cancelled' | 'done' | 'error';
+
+type ChatExecutionSnapshot = {
+  requestId: string;
+  source: string;
+  status: 'acknowledged' | 'planning' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'completed' | 'cancelled' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  terminal: boolean;
+  terminalEvent?: { event: string; payload: Record<string, any> };
+};
+
+type PersistedChatExecution = {
+  requestId: string;
+  source: 'chat';
+  domain: 'personal' | 'work';
+  orgId?: string;
+  startedAt: string;
+};
+
+const ACTIVE_CHAT_EXECUTION_TTL_MS = 24 * 60 * 60 * 1000;
 
 function makeChatMessageId(prefix = 'msg'): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1134,8 +1154,31 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const streamingMsgId = useRef<string | null>(null);
   const textChatActiveRef = useRef(false);
   const activeChatRequestIdRef = useRef<string | null>(null);
+  const lastResumedRequestIdRef = useRef<string | null>(null);
   const initialLoadDoneRef = useRef(false);
   const lastConversationScopeRef = useRef<string>('');
+  const activeExecutionStorageKey = `lumi_active_chat_execution:${agentId}:${activeDomain}:${activeOrgId || ''}`;
+  const persistActiveExecution = useCallback((requestId: string) => {
+    try {
+      const execution: PersistedChatExecution = {
+        requestId,
+        source: 'chat',
+        domain: activeDomain,
+        orgId: activeOrgId || undefined,
+        startedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(activeExecutionStorageKey, JSON.stringify(execution));
+    } catch {}
+  }, [activeDomain, activeExecutionStorageKey, activeOrgId]);
+  const clearPersistedExecution = useCallback((requestId?: string) => {
+    try {
+      if (requestId) {
+        const current = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null') as PersistedChatExecution | null;
+        if (current?.requestId && current.requestId !== requestId) return;
+      }
+      localStorage.removeItem(activeExecutionStorageKey);
+    } catch {}
+  }, [activeExecutionStorageKey]);
 
   useEffect(() => {
     if (isFounder || !socket) return;
@@ -1243,11 +1286,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       pushChatProgress(data.text || '', data.tone || 'tool');
     };
 
-    const onConfirmTool = (data: { correlationId: string; name: string; arguments?: any; requestId?: string; source?: string }) => {
-      if (!isCurrentChatEvent(data)) return;
-      currentRequestHadToolRef.current = true;
-    };
-
     const onResponse = (data: {
       text: string;
       agentName: string;
@@ -1258,6 +1296,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       reason?: string;
     }) => {
       if (!isCurrentChatEvent(data)) return;
+      clearPersistedExecution(data.requestId);
+      if (!data.requestId || activeChatRequestIdRef.current === data.requestId) {
+        activeChatRequestIdRef.current = null;
+        textChatActiveRef.current = false;
+      }
       const finalization: ChatResponseFinalization = {
         finalized: data.finalized,
         blocked: data.blocked,
@@ -1294,7 +1337,13 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         return;
       }
       const finalizedSuccess = isFinalizedSuccessfulResponse(data);
-      setWorkflowStatus(data.blocked ? 'error' : finalizedSuccess ? 'done' : 'idle');
+      const terminalReason = String(data.reason || '').trim().toLowerCase();
+      const wasCancelled = terminalReason === 'cancelled' || terminalReason === 'canceled';
+      setWorkflowStatus(
+        wasCancelled
+          ? 'cancelled'
+          : data.blocked ? 'error' : finalizedSuccess ? 'done' : 'idle'
+      );
       const completion = describeTurnCompletionProgress(
         isZh,
         currentRequestHadToolRef.current,
@@ -1305,8 +1354,10 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (data.blocked || finalizedSuccess) {
         setWorkflowSteps(prev => [...prev, {
           id: makeChatMessageId('chat-resp'),
-          type: data.blocked ? 'error' : 'response',
-          text: data.blocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
+          type: data.blocked && !wasCancelled ? 'error' : 'response',
+          text: wasCancelled
+            ? uiMessage('agent-chat-page.execution-cancelled.4ec843f670', isZh ? 'zh' : 'en')
+            : data.blocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
           detail: (data.reason || data.text)?.slice(0, 100),
           time: Date.now(),
         }]);
@@ -1340,7 +1391,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
     const onStatus = (data: { status: string; requestId?: string; source?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      setIsTyping(data.status === "thinking");
+      const activeStatus = ['thinking', 'responding', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status);
+      setIsTyping(activeStatus);
       if (data.status === 'thinking') {
         setWorkflowStatus('thinking');
         pushChatProgress(uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
@@ -1354,6 +1406,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             time: Date.now(),
           }];
         });
+      } else if (data.status === 'responding' || data.status === 'executing') {
+        setWorkflowStatus('executing');
+      } else if (data.status === 'waiting_confirmation') {
+        setWorkflowStatus('waiting_confirmation');
+      } else if (data.status === 'cancelling') {
+        setWorkflowStatus('cancelling');
       } else if (data.status === 'idle') {
         setIsTyping(false);
         if (currentResponseFinalizationRef.current) return;
@@ -1386,6 +1444,11 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
 
     const onError = (data: { message: string; code?: string; requestId?: string; source?: string }) => {
       if (!isCurrentChatEvent(data)) return;
+      clearPersistedExecution(data.requestId);
+      if (!data.requestId || activeChatRequestIdRef.current === data.requestId) {
+        activeChatRequestIdRef.current = null;
+        textChatActiveRef.current = false;
+      }
       setIsTyping(false);
       setWorkflowStatus('error');
       finishChatProgress(
@@ -1500,7 +1563,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     socket.on("agent:progress", onProgress);
     socket.on("agent:tool", onTool);
     socket.on("agent:tool_call", onTool);
-    socket.on("agent:confirm_tool", onConfirmTool);
     socket.on("agent:response", onResponse);
     socket.on("agent:status", onStatus);
     socket.on("agent:error", onError);
@@ -1514,7 +1576,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       socket.off("agent:progress", onProgress);
       socket.off("agent:tool", onTool);
       socket.off("agent:tool_call", onTool);
-      socket.off("agent:confirm_tool", onConfirmTool);
       socket.off("agent:response", onResponse);
       socket.off("agent:status", onStatus);
       socket.off("agent:error", onError);
@@ -1522,6 +1583,66 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       stop();
     };
   }, [speak, stop, isFounder, socket, normalizePersistedMessages, scopedConversationUrl]);
+
+  useEffect(() => {
+    if (isFounder || !socket) return;
+
+    const resumeActiveExecution = () => {
+      let persisted: PersistedChatExecution | null = null;
+      try {
+        persisted = JSON.parse(localStorage.getItem(activeExecutionStorageKey) || 'null');
+      } catch {
+        localStorage.removeItem(activeExecutionStorageKey);
+      }
+      if (!persisted?.requestId) return;
+
+      const startedAt = Date.parse(persisted.startedAt);
+      if (!Number.isFinite(startedAt) || Date.now() - startedAt > ACTIVE_CHAT_EXECUTION_TTL_MS) {
+        clearPersistedExecution(persisted.requestId);
+        return;
+      }
+
+      activeChatRequestIdRef.current = persisted.requestId;
+      textChatActiveRef.current = true;
+      setIsTyping(true);
+      if (lastResumedRequestIdRef.current !== persisted.requestId) {
+        lastResumedRequestIdRef.current = persisted.requestId;
+        pushChatProgress(uiMessage('agent-chat-page.restoring-task-state.0fb759a4dc', isZh ? 'zh' : 'en'), 'thinking');
+      }
+
+      socket.emit('agent:execution_resume', {
+        requestId: persisted.requestId,
+        source: 'chat',
+        domain: persisted.domain,
+        orgId: persisted.orgId || null,
+      }, (result?: { ok?: boolean; snapshot?: ChatExecutionSnapshot; error?: string }) => {
+        if (activeChatRequestIdRef.current !== persisted?.requestId) return;
+        const snapshot = result?.snapshot;
+        if (!result?.ok || !snapshot) {
+          clearPersistedExecution(persisted?.requestId);
+          activeChatRequestIdRef.current = null;
+          textChatActiveRef.current = false;
+          setIsTyping(false);
+          setWorkflowStatus('error');
+          pushChatProgress(
+            result?.error || uiMessage('agent-chat-page.previous-task-not-recoverable.17e6ad375c', isZh ? 'zh' : 'en'),
+            'error',
+          );
+          return;
+        }
+
+        if (snapshot.terminal) return; // The server replays the terminal event.
+        if (snapshot.status === 'waiting_confirmation') setWorkflowStatus('waiting_confirmation');
+        else if (snapshot.status === 'cancelling') setWorkflowStatus('cancelling');
+        else if (snapshot.status === 'executing') setWorkflowStatus('executing');
+        else setWorkflowStatus('thinking');
+      });
+    };
+
+    socket.on('connect', resumeActiveExecution);
+    if (socket.connected) resumeActiveExecution();
+    return () => { socket.off('connect', resumeActiveExecution); };
+  }, [activeExecutionStorageKey, clearPersistedExecution, isFounder, isZh, pushChatProgress, socket]);
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -1632,11 +1753,14 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     setIsTyping(true);
     const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     activeChatRequestIdRef.current = requestId;
+    persistActiveExecution(requestId);
 
     let resolved = false;
     let safetyTimer: ReturnType<typeof setTimeout>;
+    let resumeProbeTimer: ReturnType<typeof setTimeout> | null = null;
     let socketAckTimer: ReturnType<typeof setTimeout> | null = null;
     let socketAcknowledged = false;
+    let lastProbeStatus = '';
     const isCurrentResponse = (data?: { requestId?: string; source?: string }) => {
       if (data?.requestId) return data.requestId === requestId;
       if (activeChatRequestIdRef.current) return false;
@@ -1652,10 +1776,12 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (resolved) return;
       resolved = true;
       clearTimeout(safetyTimer);
+      if (resumeProbeTimer) clearTimeout(resumeProbeTimer);
       if (socketAckTimer) clearTimeout(socketAckTimer);
       cleanupSocketWaiters();
       setIsTyping(false);
       textChatActiveRef.current = false;
+      clearPersistedExecution(requestId);
       if (activeChatRequestIdRef.current === requestId) activeChatRequestIdRef.current = null;
     };
     const onResponse = (data?: { requestId?: string; source?: string }) => { if (isCurrentResponse(data)) resolve(); };
@@ -1664,19 +1790,64 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       if (!isCurrentResponse(data)) return;
       if (data.status === 'idle' || data.status === 'error') resolve();
     };
-    safetyTimer = setTimeout(() => {
-      if (!resolved) {
-        if (socketAcknowledged) {
-          pushChatProgress(
-            uiMessage('agent-chat-page.the-backend-has-accepted-this.aa53249e15', (isZh) ? 'zh' : 'en'),
-            'thinking'
-          );
+    const scheduleExecutionProbe = (delayMs: number) => {
+      clearTimeout(safetyTimer);
+      safetyTimer = setTimeout(() => {
+        if (resolved) return;
+        if (!socketAcknowledged) {
+          streamingMsgId.current = null;
+          resolve();
           return;
         }
-        streamingMsgId.current = null;
-        resolve();
-      }
-    }, outgoingAttachments.length > 0 ? 180000 : 120000);
+
+        let probeSettled = false;
+        resumeProbeTimer = setTimeout(() => {
+          if (probeSettled || resolved) return;
+          probeSettled = true;
+          pushChatProgress(
+            socket.connected
+              ? uiMessage('agent-chat-page.rechecking-task-state.7d8729d39f', isZh ? 'zh' : 'en')
+              : uiMessage('agent-chat-page.connection-lost-task-will-resume.52cd95319f', isZh ? 'zh' : 'en'),
+            'thinking',
+          );
+          scheduleExecutionProbe(30000);
+        }, 10000);
+
+        socket.emit('agent:execution_resume', {
+          requestId,
+          source: 'chat',
+          domain: activeDomain,
+          orgId: activeOrgId || null,
+        }, (result?: { ok?: boolean; snapshot?: ChatExecutionSnapshot; error?: string }) => {
+          if (probeSettled || resolved) return;
+          probeSettled = true;
+          if (resumeProbeTimer) {
+            clearTimeout(resumeProbeTimer);
+            resumeProbeTimer = null;
+          }
+          if (!result?.ok || !result.snapshot) {
+            setWorkflowStatus('error');
+            pushChatProgress(
+              result?.error || uiMessage('agent-chat-page.backend-lost-task.8bbc4d5800', isZh ? 'zh' : 'en'),
+              'error',
+            );
+            streamingMsgId.current = null;
+            resolve();
+            return;
+          }
+          if (result.snapshot.terminal) return; // Terminal event is replayed by the server.
+          if (result.snapshot.status !== lastProbeStatus) {
+            lastProbeStatus = result.snapshot.status;
+            pushChatProgress(
+              uiMessage('agent-chat-page.the-backend-has-accepted-this.aa53249e15', (isZh) ? 'zh' : 'en'),
+              'thinking',
+            );
+          }
+          scheduleExecutionProbe(30000);
+        });
+      }, delayMs);
+    };
+    scheduleExecutionProbe(outgoingAttachments.length > 0 ? 180000 : 120000);
 
     socket.on('agent:response', onResponse);
     socket.on('agent:error', onError);
@@ -1729,11 +1900,47 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           ack?.error || (uiMessage('agent-chat-page.the-backend-did-not-accept.44d78fa21a', (isZh) ? 'zh' : 'en')),
           'error'
         );
+        resolve();
       }
     });
 
     // No frontend AI fallback here. If the realtime backend is down, show the
     // connection problem instead of generating a second, inconsistent answer.
+  };
+
+  const cancelActiveChat = () => {
+    const requestId = activeChatRequestIdRef.current;
+    if (!socket || !requestId) return;
+    setWorkflowStatus('cancelling');
+    pushChatProgress(uiMessage('agent-chat-page.cancelling-task.18c33c6327', isZh ? 'zh' : 'en'), 'thinking');
+    let acknowledged = false;
+    const ackTimer = window.setTimeout(() => {
+      if (acknowledged || activeChatRequestIdRef.current !== requestId) return;
+      setWorkflowStatus('error');
+      pushChatProgress(
+        socket.connected
+          ? uiMessage('agent-chat-page.cancellation-not-confirmed.990f6802e1', isZh ? 'zh' : 'en')
+          : uiMessage('agent-chat-page.connection-lost-recheck-task.6c0952c278', isZh ? 'zh' : 'en'),
+        'error',
+      );
+    }, 8000);
+    socket.emit('agent:abort_chat', {
+      requestId,
+      source: 'chat',
+      domain: activeDomain,
+      orgId: activeOrgId || null,
+    }, (result?: { ok?: boolean; error?: string }) => {
+      acknowledged = true;
+      window.clearTimeout(ackTimer);
+      if (activeChatRequestIdRef.current !== requestId) return;
+      if (!result?.ok) {
+        setWorkflowStatus('error');
+        pushChatProgress(
+          result?.error || uiMessage('agent-chat-page.unable-to-cancel-task.08547685ab', isZh ? 'zh' : 'en'),
+          'error',
+        );
+      }
+    });
   };
 
   // When prefillMessage comes from notification center, show it as a Lumi message
@@ -2014,6 +2221,8 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     workflowStatus === 'thinking' ? (t.workflowAnalyzing || 'Analyzing') :
     workflowStatus === 'executing' ? (t.workflowExecuting || 'Executing tools') :
     workflowStatus === 'waiting_confirmation' ? (t.workflowWaitingConfirm || 'Waiting for approval') :
+    workflowStatus === 'cancelling' ? uiMessage('agent-chat-page.cancelling.7163e20e93', isZh ? 'zh' : 'en') :
+    workflowStatus === 'cancelled' ? uiMessage('agent-chat-page.execution-cancelled.4ec843f670', isZh ? 'zh' : 'en') :
     workflowStatus === 'background' ? (t.workflowBackground || 'Working in background') :
     workflowStatus === 'done' ? (t.workflowDone || 'Done') :
     workflowStatus === 'error' ? (t.workflowError || 'Error') :
@@ -2708,7 +2917,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
               {isTyping ? (
                 <Button
                   type="button"
-                  onClick={() => { socket?.emit('agent:abort_chat'); setIsTyping(false); }}
+                  onClick={cancelActiveChat}
                   className="bg-red-500 text-white rounded-2xl px-6 hover:scale-105 transition-transform"
                 >
                   <Square size={20} />

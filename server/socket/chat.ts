@@ -97,9 +97,27 @@ import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 import {
+  beginChatExecution,
+  getChatExecution,
+  markChatExecutionCancelling,
+  recordChatExecutionEvent,
+  type ChatExecutionScope,
+} from "./chat_execution_registry";
+import {
   isGuardGeneratedAssistantText,
   isGuardGeneratedConversationRecord,
 } from "../conversation/guard_history";
+
+// Foreground executions outlive an individual Socket.IO connection. Keeping the
+// controllers at module scope lets a reconnected client query or cancel the same
+// execution instead of creating an orphan tied to the old socket instance.
+const chatSessionMap = new Map<string, AbortController>();
+
+function chatExecutionRoom(scope: ChatExecutionScope): string {
+  return scope.domain === 'work' && scope.orgId
+    ? `user:${scope.userId}:org:${scope.orgId}`
+    : `user:${scope.userId}:personal`;
+}
 
 function stripHistoricalAttachmentBlocks(value: string): string {
   const text = String(value || '').trim();
@@ -758,29 +776,95 @@ export function registerChatHandler(
   userIdFn: (s: Socket) => string,
   io: Server,
 ) {
-  const chatSessionMap = new Map<string, AbortController>();
-
-  // Handle abort requests
-  socket.on("agent:abort_chat", () => {
+  socket.on("agent:execution_resume", (
+    data: { requestId?: string; source?: string; domain?: string; orgId?: string | null } = {},
+    ack?: (payload: { ok: boolean; snapshot?: ReturnType<typeof getChatExecution>; error?: string }) => void,
+  ) => {
     const uid = userIdFn(socket);
-    let aborted = false;
-    for (const [key, controller] of chatSessionMap.entries()) {
-      if (!key.startsWith(`${uid}:`)) continue;
-      controller.abort();
-      chatSessionMap.delete(key);
-      aborted = true;
-    }
-    if (aborted) {
-      socket.emit("agent:status", { status: "idle", source: "chat" });
-      socket.emit("agent:response", {
-        text: "[Cancelled]",
-        agentName: "Lumi",
-        source: "chat",
-        finalized: true,
-        blocked: false,
-        reason: 'cancelled',
+    const requestScope = resolveSocketScope(socket, uid, {
+      domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
+      orgId: data.orgId,
+    });
+    const scope: ChatExecutionScope = {
+      userId: uid,
+      domain: requestScope.domain,
+      orgId: requestScope.orgId,
+      source: data.source || 'chat',
+    };
+    const snapshot = getChatExecution(scope, data.requestId);
+    try {
+      ack?.(snapshot
+        ? { ok: true, snapshot }
+        : { ok: false, error: 'Execution not found or no longer recoverable' });
+    } catch {}
+    if (snapshot?.terminalEvent) {
+      socket.emit(snapshot.terminalEvent.event, {
+        ...snapshot.terminalEvent.payload,
+        replayed: true,
       });
     }
+  });
+
+  // Abort is request-scoped and acknowledged. The UI stays in "cancelling"
+  // until this handler confirms that the server owns and cancelled the task.
+  socket.on("agent:abort_chat", (
+    data: { requestId?: string; source?: string; domain?: string; orgId?: string | null } = {},
+    ack?: (payload: { ok: boolean; requestId?: string; status?: string; error?: string }) => void,
+  ) => {
+    const uid = userIdFn(socket);
+    const requestScope = resolveSocketScope(socket, uid, {
+      domain: data.domain === 'work' ? 'work' : data.domain === 'personal' ? 'personal' : undefined,
+      orgId: data.orgId,
+    });
+    const scope: ChatExecutionScope = {
+      userId: uid,
+      domain: requestScope.domain,
+      orgId: requestScope.orgId,
+      source: data.source || 'chat',
+    };
+    const snapshot = getChatExecution(scope, data.requestId);
+    if (!snapshot || snapshot.terminal) {
+      try {
+        ack?.({
+          ok: Boolean(snapshot?.terminal),
+          requestId: snapshot?.requestId || data.requestId,
+          status: snapshot?.status,
+          error: snapshot ? undefined : 'Active execution not found',
+        });
+      } catch {}
+      return;
+    }
+
+    const sessionKey = `${uid}:${scope.domain}:${scope.orgId || ''}:${scope.source}`;
+    const controller = chatSessionMap.get(sessionKey);
+    if (!controller) {
+      try { ack?.({ ok: false, requestId: snapshot.requestId, error: 'Execution controller is unavailable' }); } catch {}
+      return;
+    }
+    markChatExecutionCancelling(scope, snapshot.requestId);
+    const room = chatExecutionRoom(scope);
+    const cancellingPayload = {
+      status: 'cancelling',
+      source: scope.source,
+      requestId: snapshot.requestId,
+    };
+    io.to(room).emit('agent:status', cancellingPayload);
+    controller.abort();
+    chatSessionMap.delete(sessionKey);
+
+    const responsePayload = {
+      text: '[Cancelled]',
+      agentName: 'Lumi',
+      source: scope.source,
+      requestId: snapshot.requestId,
+      finalized: true,
+      blocked: true,
+      reason: 'cancelled',
+    };
+    if (recordChatExecutionEvent(scope, snapshot.requestId, 'agent:response', responsePayload)) {
+      io.to(room).emit('agent:response', responsePayload);
+    }
+    try { ack?.({ ok: true, requestId: snapshot.requestId, status: 'cancelled' }); } catch {}
   });
 
   socket.on("agent:background_cancel", (data: { taskId?: string }) => {
@@ -831,21 +915,14 @@ export function registerChatHandler(
     const localWriteIntentReason = allowLocalFileWrites
       ? `Current chat request explicitly asked Lumi to generate/export a local deliverable: "${visibleUserText.slice(0, 120)}"`
       : undefined;
-    const requestId = typeof data.requestId === 'string' ? data.requestId.slice(0, 120) : undefined;
-    try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+    const requestId = typeof data.requestId === 'string' && data.requestId.trim()
+      ? data.requestId.trim().slice(0, 120)
+      : `chat_${crypto.randomUUID()}`;
     const eventSource = source || 'chat';
     const toolResultPreviewLimit = 500;
     const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
-    const emitAgent = (event: string, payload: Record<string, any> = {}) => {
-      socket.emit(event, {
-        ...payload,
-        source: payload.source || eventSource,
-        ...(requestId ? { requestId } : {}),
-      });
-    };
     const conversationAgentId = agentId || 'lumi';
     const uid = userIdFn(socket);
-    const sessionKey = `${uid}:${eventSource}`;
     if (isConfirmationCancellation(visibleUserText)) clearPendingConfirmation(uid);
     const pendingConfirmation = isExplicitConfirmationReply(visibleUserText)
       ? getPendingConfirmation(uid)
@@ -864,13 +941,63 @@ export function registerChatHandler(
     });
     const resolvedDomain = requestScope.domain;
     const resolvedOrgId = requestScope.orgId;
+    const executionScope: ChatExecutionScope = {
+      userId: uid,
+      domain: resolvedDomain,
+      orgId: resolvedOrgId,
+      source: eventSource,
+    };
+    const executionRoom = chatExecutionRoom(executionScope);
+    const sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}`;
+    const emitAgent = (event: string, payload: Record<string, any> = {}) => {
+      const normalizedPayload = {
+        ...payload,
+        source: payload.source || eventSource,
+        requestId,
+      };
+      if (!recordChatExecutionEvent(executionScope, requestId, event, normalizedPayload)) return;
+      io.to(executionRoom).emit(event, normalizedPayload);
+    };
     console.log('[ChatHandler] domain:', resolvedDomain, 'orgId:', resolvedOrgId);
+
+    // Request ids are idempotency keys. Socket.IO may deliver a buffered emit
+    // after reconnect; acknowledging the existing execution avoids running the
+    // same user action twice.
+    const existingExecution = getChatExecution(executionScope, requestId);
+    if (existingExecution) {
+      try { ack?.({ ok: true, requestId, receivedAt: existingExecution.createdAt }); } catch {}
+      if (existingExecution.terminalEvent) {
+        socket.emit(existingExecution.terminalEvent.event, {
+          ...existingExecution.terminalEvent.payload,
+          replayed: true,
+        });
+      } else {
+        const resumableStatus = existingExecution.status === 'planning' || existingExecution.status === 'acknowledged'
+          ? 'thinking'
+          : existingExecution.status;
+        socket.emit('agent:status', {
+          status: resumableStatus,
+          source: eventSource,
+          requestId,
+          resumed: true,
+        });
+      }
+      return;
+    }
 
     // Abort any previous chat session for this user
     const prevController = chatSessionMap.get(sessionKey);
     if (prevController) prevController.abort();
+    const superseded = beginChatExecution(executionScope, requestId);
+    if (superseded?.terminalEvent) {
+      io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
+    }
     const abortController = new AbortController();
     chatSessionMap.set(sessionKey, abortController);
+    const releaseChatSession = () => {
+      if (chatSessionMap.get(sessionKey) === abortController) chatSessionMap.delete(sessionKey);
+    };
+    try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
 
     try {
       // Look up agent record for memory/emotion isolation
@@ -984,7 +1111,7 @@ export function registerChatHandler(
           socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
         }
         emitAgent("agent:status", { status: "idle" });
-        chatSessionMap.delete(sessionKey);
+        releaseChatSession();
         return;
       }
 
@@ -1268,7 +1395,7 @@ export function registerChatHandler(
           logLabel: 'recent failure explanation',
         });
         emitAgent("agent:status", { status: "idle" });
-        chatSessionMap.delete(sessionKey);
+        releaseChatSession();
         return;
       }
 
@@ -1282,7 +1409,9 @@ export function registerChatHandler(
         requestSocket: socket,
         emitToolLifecycle,
         formatResultForLifecycle: formatToolResultForUi,
-        cancelOnRequestSocketDisconnect: true,
+        // The foreground execution belongs to the user task, not to this
+        // transport connection. The relay still has its own bounded timeout.
+        cancelOnRequestSocketDisconnect: false,
       });
 
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
@@ -1375,7 +1504,7 @@ export function registerChatHandler(
             });
           }
           emitAgent('agent:status', { status: 'idle', agentName: personality.name });
-          chatSessionMap.delete(sessionKey);
+          releaseChatSession();
           return;
         }
       }
@@ -1525,7 +1654,7 @@ export function registerChatHandler(
           });
         }
         emitAgent("agent:status", { status: "idle", agentName: personality.name });
-        chatSessionMap.delete(sessionKey);
+        releaseChatSession();
         return;
       }
 
@@ -1790,7 +1919,7 @@ export function registerChatHandler(
           }
         }
         emitAgent("agent:status", { status: "idle" });
-        chatSessionMap.delete(sessionKey);
+        releaseChatSession();
         return;
       }
 
@@ -1916,7 +2045,7 @@ export function registerChatHandler(
               for (const topic of topics) trackTopic(conversationId, topic);
             } catch {}
           }
-          chatSessionMap.delete(sessionKey);
+          releaseChatSession();
           return;
         }
       } catch (qcErr: any) {
@@ -1989,7 +2118,7 @@ export function registerChatHandler(
           });
         }
         emitAgent("agent:status", { status: "idle" });
-        chatSessionMap.delete(sessionKey);
+        releaseChatSession();
         return;
       }
 
@@ -3286,7 +3415,7 @@ export function registerChatHandler(
       }
 
       // Clean up abort session
-      chatSessionMap.delete(sessionKey);
+      releaseChatSession();
 
       // Auto-learn from corrections: when user corrects Lumi, extract high-confidence memories
       const correctionPatterns = [/不是/, /不对/, /错了/, /wrong/i, /incorrect/i, /actually/i, /no,?\s/i, /你弄错了/, /不是这样的/];
@@ -3459,7 +3588,7 @@ export function registerChatHandler(
       emitAgent("agent:error", { message: error.message });
       emitAgent("agent:status", { status: "error" });
     } finally {
-      chatSessionMap.delete(sessionKey);
+      releaseChatSession();
     }
   });
 }

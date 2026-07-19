@@ -2,11 +2,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::io::Read;
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -583,8 +584,39 @@ fn delete_item(target: String) -> CommandResult {
     }
 }
 
+const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
+const MAX_COMMAND_TIMEOUT_MS: u64 = 10 * 60_000;
+const MAX_COMMAND_OUTPUT_BYTES: u64 = 1024 * 1024;
+
+fn read_command_output(path: &Path) -> (String, bool) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return (String::new(), false);
+    };
+    let mut bytes = Vec::new();
+    let mut limited = file.take(MAX_COMMAND_OUTPUT_BYTES + 1);
+    let _ = limited.read_to_end(&mut bytes);
+    let truncated = bytes.len() as u64 > MAX_COMMAND_OUTPUT_BYTES;
+    if truncated {
+        bytes.truncate(MAX_COMMAND_OUTPUT_BYTES as usize);
+    }
+    (String::from_utf8_lossy(&bytes).to_string(), truncated)
+}
+
+fn terminate_command_tree(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let pid = child.id().to_string();
+        let mut taskkill = Command::new("taskkill");
+        taskkill.args(["/PID", &pid, "/T", "/F"]);
+        taskkill.creation_flags(0x08000000u32);
+        let _ = taskkill.stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[tauri::command]
-fn run_command(command: String, cwd: Option<String>) -> CommandResult {
+fn run_command(command: String, cwd: Option<String>, timeout_ms: Option<u64>) -> CommandResult {
     let now = SystemTime::now();
     let truncated: String = if command.chars().count() > 500 {
         let head: String = command.chars().take(500).collect();
@@ -597,34 +629,102 @@ fn run_command(command: String, cwd: Option<String>) -> CommandResult {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
+    if let Some(path) = cwd_path.as_ref() {
+        if !path.is_dir() {
+            return CommandResult {
+                success: false,
+                output: format!("Working directory does not exist: {}", path.display()),
+            };
+        }
+    }
 
-    let output = if cfg!(target_os = "windows") {
+    let timeout = Duration::from_millis(
+        timeout_ms
+            .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS)
+            .clamp(1_000, MAX_COMMAND_TIMEOUT_MS),
+    );
+    let unique = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let output_base = std::env::temp_dir().join(format!("lumi-command-{}-{}", std::process::id(), unique));
+    let stdout_path = output_base.with_extension("stdout");
+    let stderr_path = output_base.with_extension("stderr");
+    let stdout_file = match std::fs::File::create(&stdout_path) {
+        Ok(file) => file,
+        Err(error) => return CommandResult { success: false, output: error.to_string() },
+    };
+    let stderr_file = match std::fs::File::create(&stderr_path) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = std::fs::remove_file(&stdout_path);
+            return CommandResult { success: false, output: error.to_string() };
+        }
+    };
+
+    let mut cmd = if cfg!(target_os = "windows") {
         let mut cmd = Command::new("cmd");
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::process::CommandExt;
             cmd.args(["/D", "/S", "/C"]);
             cmd.raw_arg(&command);
             cmd.creation_flags(0x08000000u32);
         }
-        if let Some(path) = cwd_path.as_ref() {
-            cmd.current_dir(path);
-        }
-        cmd.output()
+        cmd
     } else {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", &command]);
-        if let Some(path) = cwd_path.as_ref() {
-            cmd.current_dir(path);
-        }
-        cmd.output()
+        cmd
     };
+    if let Some(path) = cwd_path.as_ref() {
+        cmd.current_dir(path);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
 
-    match output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            let success = out.status.success();
+    let result = match cmd.spawn() {
+        Ok(mut child) => {
+            let deadline = Instant::now() + timeout;
+            let mut timed_out = false;
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                    Ok(None) => {
+                        timed_out = true;
+                        terminate_command_tree(&mut child);
+                        break child.try_wait().and_then(|status| {
+                            status.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "command timed out"))
+                        });
+                    }
+                    Err(error) => break Err(error),
+                }
+            };
+            let (stdout, stdout_truncated) = read_command_output(&stdout_path);
+            let (stderr, stderr_truncated) = read_command_output(&stderr_path);
+            let mut combined = if stderr.is_empty() {
+                stdout
+            } else if stdout.is_empty() {
+                stderr
+            } else {
+                format!("{}\n{}", stdout, stderr)
+            };
+            if stdout_truncated || stderr_truncated {
+                combined.push_str("\n[Output truncated at 1 MiB per stream]");
+            }
+            if timed_out {
+                combined.push_str(&format!("\n[Command timed out after {} ms and was terminated]", timeout.as_millis()));
+            }
+            status.map(|status| (status.success() && !timed_out, combined))
+        }
+        Err(error) => Err(error),
+    };
+    let _ = std::fs::remove_file(&stdout_path);
+    let _ = std::fs::remove_file(&stderr_path);
+
+    match result {
+        Ok((success, output)) => {
             eprintln!(
                 "[LumiOS Audit] ts={:?} ok={} cwd={} cmd={}",
                 now,
@@ -635,16 +735,7 @@ fn run_command(command: String, cwd: Option<String>) -> CommandResult {
                     .unwrap_or_default(),
                 truncated
             );
-            CommandResult {
-                success,
-                output: if stderr.is_empty() {
-                    stdout
-                } else if stdout.is_empty() {
-                    stderr
-                } else {
-                    format!("{}\n{}", stdout, stderr)
-                },
-            }
+            CommandResult { success, output }
         }
         Err(e) => {
             eprintln!(
@@ -3135,6 +3226,13 @@ pub fn run() {
         .any(|arg| arg == "--background" || arg == "--hidden" || arg == "--minimized");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())

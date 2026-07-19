@@ -9134,5 +9134,49 @@
   "work-mode-switch.switched-to-personal.378022176b": {
     "en": "Switched to personal",
     "zh": "已切换到个人"
+  },
+  "agent-chat-page.execution-cancelled.4ec843f670": {
+    "en": "Cancelled",
+    "zh": "\u5df2\u53d6\u6d88"
+  },
+  "agent-chat-page.restoring-task-state.0fb759a4dc": {
+    "en": "Reconnected. Restoring task state\u2026",
+    "zh": "\u5df2\u91cd\u65b0\u8fde\u63a5\uff0c\u6b63\u5728\u6062\u590d\u4efb\u52a1\u72b6\u6001\u2026"
+  },
+  "agent-chat-page.previous-task-not-recoverable.17e6ad375c": {
+    "en": "The previous task could not be recovered.",
+    "zh": "\u65e0\u6cd5\u6062\u590d\u4e0a\u4e00\u6b21\u4efb\u52a1\u3002"
+  },
+  "agent-chat-page.rechecking-task-state.7d8729d39f": {
+    "en": "Rechecking task status\u2026",
+    "zh": "\u6b63\u5728\u91cd\u65b0\u786e\u8ba4\u4efb\u52a1\u72b6\u6001\u2026"
+  },
+  "agent-chat-page.connection-lost-task-will-resume.52cd95319f": {
+    "en": "Connection lost. This task will resume after reconnecting.",
+    "zh": "\u8fde\u63a5\u5df2\u4e2d\u65ad\uff0c\u6062\u590d\u8fde\u63a5\u540e\u4f1a\u7ee7\u7eed\u6b64\u4efb\u52a1\u3002"
+  },
+  "agent-chat-page.backend-lost-task.8bbc4d5800": {
+    "en": "The backend can no longer find this task.",
+    "zh": "\u540e\u7aef\u5df2\u65e0\u6cd5\u627e\u5230\u6b64\u4efb\u52a1\u3002"
+  },
+  "agent-chat-page.cancelling-task.18c33c6327": {
+    "en": "Cancelling task\u2026",
+    "zh": "\u6b63\u5728\u53d6\u6d88\u4efb\u52a1\u2026"
+  },
+  "agent-chat-page.cancellation-not-confirmed.990f6802e1": {
+    "en": "Cancellation is not confirmed yet; still waiting.",
+    "zh": "\u53d6\u6d88\u8bf7\u6c42\u5c1a\u672a\u5f97\u5230\u786e\u8ba4\uff0c\u6b63\u5728\u7ee7\u7eed\u7b49\u5f85\u3002"
+  },
+  "agent-chat-page.connection-lost-recheck-task.6c0952c278": {
+    "en": "Connection lost; task state will be checked after reconnecting.",
+    "zh": "\u8fde\u63a5\u5df2\u4e2d\u65ad\uff0c\u6062\u590d\u8fde\u63a5\u540e\u4f1a\u518d\u6b21\u786e\u8ba4\u4efb\u52a1\u72b6\u6001\u3002"
+  },
+  "agent-chat-page.unable-to-cancel-task.08547685ab": {
+    "en": "The current task could not be cancelled.",
+    "zh": "\u65e0\u6cd5\u53d6\u6d88\u5f53\u524d\u4efb\u52a1\u3002"
+  },
+  "agent-chat-page.cancelling.7163e20e93": {
+    "en": "Cancelling",
+    "zh": "\u6b63\u5728\u53d6\u6d88"
   }
 }

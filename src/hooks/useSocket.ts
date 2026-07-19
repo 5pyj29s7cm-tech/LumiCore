@@ -164,11 +164,16 @@ async function handleDesktopExec(socket: Socket, data: {
       case 'desktop_run_command': {
         const cmd: string = args.command || '';
         const cwd: string = args.cwd || '';
+        const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 120000, 1000), 600000);
         if (!cmd.trim()) {
           socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No command provided' });
           return;
         }
-        const result: { success: boolean; output: string } = await invoke('run_command', { command: cmd, cwd: cwd.trim() || null });
+        const result: { success: boolean; output: string } = await invoke('run_command', {
+          command: cmd,
+          cwd: cwd.trim() || null,
+          timeoutMs,
+        });
         if (!result.success) {
           throw new Error(result.output || `Command failed: ${cmd}`);
         }
