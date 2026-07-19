@@ -5,6 +5,7 @@ import {
   desktopRelayRoomForUser,
   getPendingDesktopRelayCount,
   handleDesktopRelayResult,
+  isCoLocatedWindowsDesktopRuntime,
   joinDesktopRelayRoom,
 } from '../server/socket/desktop_relay';
 
@@ -32,6 +33,13 @@ function mockIo(sockets: Record<string, any> = {}, rooms: Record<string, string[
 }
 
 describe('desktop relay routing', () => {
+  it('only allows server-side UI Automation in a proven co-located desktop runtime', () => {
+    expect(isCoLocatedWindowsDesktopRuntime('win32', { LUMI_DESKTOP: '1' })).toBe(true);
+    expect(isCoLocatedWindowsDesktopRuntime('win32', { LUMI_LOCAL_DESKTOP_UIA: '1' })).toBe(true);
+    expect(isCoLocatedWindowsDesktopRuntime('win32', {})).toBe(false);
+    expect(isCoLocatedWindowsDesktopRuntime('linux', { LUMI_DESKTOP: '1' })).toBe(false);
+  });
+
   it('joins desktop clients to a user-scoped desktop relay room', () => {
     const joined: string[] = [];
     const socket = {

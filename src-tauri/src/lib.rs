@@ -2447,6 +2447,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ActiveWindowInfo {
+    pub window_id: String,
     pub title: String,
     pub process_name: String,
     pub pid: u32,
@@ -2468,12 +2469,15 @@ pub struct ProcessInfo {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CaptureResult {
     pub image_base64: String,
+    pub screen_x: i32,
+    pub screen_y: i32,
     pub width: u32,
     pub height: u32,
 }
 
 #[tauri::command]
 fn get_active_window_info() -> ActiveWindowInfo {
+    let mut window_id = String::new();
     let mut title = String::new();
     let mut process_name = String::new();
     #[allow(unused_mut)]
@@ -2505,6 +2509,7 @@ fn get_active_window_info() -> ActiveWindowInfo {
         unsafe {
             let hwnd = GetForegroundWindow();
             if hwnd != 0 {
+                window_id = hwnd.to_string();
                 let mut buf: [u16; 512] = [0; 512];
                 let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 512);
                 title = String::from_utf16_lossy(&buf[..len as usize]);
@@ -2554,7 +2559,7 @@ fn get_active_window_info() -> ActiveWindowInfo {
             }
         }
     }
-    ActiveWindowInfo { title, process_name, pid, x, y, width, height }
+    ActiveWindowInfo { window_id, title, process_name, pid, x, y, width, height }
 }
 
 #[tauri::command]
@@ -2936,15 +2941,15 @@ fn capture_screen() -> CaptureResult {
         let ps = format!(
             r#"Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-$s = [System.Windows.Forms.Screen]::PrimaryScreen
-$w = $s.Bounds.Width; $h = $s.Bounds.Height
+$s = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$x = $s.X; $y = $s.Y; $w = $s.Width; $h = $s.Height
 $b = New-Object System.Drawing.Bitmap($w, $h)
 $g = [System.Drawing.Graphics]::FromImage($b)
-$g.CopyFromScreen(0, 0, 0, 0, $b.Size)
+$g.CopyFromScreen($x, $y, 0, 0, $b.Size)
 $g.Dispose()
 $b.Save('{}', [System.Drawing.Imaging.ImageFormat]::Png)
 $b.Dispose()
-Write-Output "OK|$w|$h""#,
+Write-Output "OK|$x|$y|$w|$h""#,
             temp_file
         );
         let output = cmd
@@ -2954,15 +2959,17 @@ Write-Output "OK|$w|$h""#,
         if let Ok(out) = output {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             let parts: Vec<&str> = text.split('|').collect();
-            if parts.len() >= 3 && parts[0] == "OK" {
+            if parts.len() >= 5 && parts[0] == "OK" {
                 if let Ok(png) = std::fs::read(&temp_path) {
                     let _ = std::fs::remove_file(&temp_path);
                     if !png.is_empty() {
                         let b64 = base64_encode(&png);
                         return CaptureResult {
                             image_base64: b64,
-                            width: parts[1].parse().unwrap_or(0),
-                            height: parts[2].parse().unwrap_or(0),
+                            screen_x: parts[1].parse().unwrap_or(0),
+                            screen_y: parts[2].parse().unwrap_or(0),
+                            width: parts[3].parse().unwrap_or(0),
+                            height: parts[4].parse().unwrap_or(0),
                         };
                     }
                 }
@@ -2990,6 +2997,8 @@ Write-Output "OK|$w|$h""#,
                         .unwrap_or_default();
                     return CaptureResult {
                         image_base64: b64_str,
+                        screen_x: 0,
+                        screen_y: 0,
                         width: 0,
                         height: 0,
                     };
@@ -3006,6 +3015,8 @@ Write-Output "OK|$w|$h""#,
                         if parts.len() == 2 {
                             return CaptureResult {
                                 image_base64: String::new(),
+                                screen_x: 0,
+                                screen_y: 0,
                                 width: parts[0].parse().unwrap_or(0),
                                 height: parts[1].parse().unwrap_or(0),
                             };
@@ -3015,7 +3026,7 @@ Write-Output "OK|$w|$h""#,
             }
         }
     }
-    CaptureResult { image_base64: String::new(), width: 0, height: 0 }
+    CaptureResult { image_base64: String::new(), screen_x: 0, screen_y: 0, width: 0, height: 0 }
 }
 
 /// Simple base64 encoder — avoids pulling in a crate for one function.

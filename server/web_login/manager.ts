@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright-core';
 import { getDataPath } from '../config/data_path';
 
@@ -99,10 +100,12 @@ type AcquiredBrowserContext = {
   context: BrowserContext;
   key: string;
   shared: boolean;
+  reused: boolean;
   headless: boolean;
 };
 
 const activeVisibleContexts = new Map<string, ActiveVisibleContext>();
+const activeWebLoginOperations = new Set<string>();
 
 function removeSessionDirectory(dir: string): void {
   try {
@@ -181,12 +184,12 @@ const LOGIN_TEXT_PATTERN = /(?:\blog\s*in\b|\bsign\s*in\b|账号登录|密码登
 const VERIFICATION_TEXT_PATTERN = /(?:captcha|verification code|one[- ]time code|two[- ]factor|\b2fa\b|passkey|scan (?:the )?qr|security check|验证码|人机验证|滑块验证|扫码登录|短信验证|二次验证|安全验证)/i;
 
 export function classifyLoginPageSnapshot(snapshot: LoginPageSnapshot): LoginPageAssessment {
-  if (snapshot.explicitSuccess) {
-    return { state: 'authenticated', reason: 'The configured success URL pattern matched.' };
-  }
   const visibleText = `${snapshot.title || ''}\n${snapshot.leadingText || ''}`;
   if (snapshot.hasChallengeControl || VERIFICATION_TEXT_PATTERN.test(visibleText)) {
     return { state: 'verification_required', reason: 'The page is waiting for captcha, QR, OTP, passkey, or another verification step.' };
+  }
+  if (snapshot.explicitSuccess) {
+    return { state: 'authenticated', reason: 'The configured success URL pattern matched.' };
   }
   if (snapshot.hasPasswordField || (snapshot.hasUsernameField && snapshot.hasSubmitControl)) {
     return { state: 'login_required', reason: 'A visible login form is still present.' };
@@ -195,7 +198,7 @@ export function classifyLoginPageSnapshot(snapshot: LoginPageSnapshot): LoginPag
     return { state: 'authenticated', reason: 'A visible account, profile, or sign-out control was found.' };
   }
   if (snapshot.navigatedAwayFromLogin && !LOGIN_URL_PATTERN.test(snapshot.url)) {
-    return { state: 'authenticated', reason: 'The browser left the login flow without a remaining login or verification control.' };
+    return { state: 'uncertain', reason: 'The browser left the login flow, but no positive authenticated-session signal was found.' };
   }
   if (LOGIN_URL_PATTERN.test(snapshot.url) || LOGIN_TEXT_PATTERN.test(visibleText)) {
     return { state: 'login_required', reason: 'The current page still looks like a login flow.' };
@@ -251,11 +254,47 @@ function normalizeUrl(value: string): URL {
   return new URL(raw);
 }
 
+function normalizeMatchHost(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return parsed.hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return '';
+  }
+}
+
+export function webLoginProfileAllowsUrl(
+  profile: Pick<WebLoginProfile, 'matchHosts'>,
+  targetUrl: string,
+): boolean {
+  const host = normalizeUrl(targetUrl).hostname.toLowerCase().replace(/\.$/, '');
+  return profile.matchHosts.some((candidate) => {
+    const match = normalizeMatchHost(candidate);
+    return Boolean(match) && (host === match || host.endsWith(`.${match}`));
+  });
+}
+
+function assertWebLoginProfileAllowsUrl(profile: WebLoginProfile, targetUrl: string): void {
+  if (webLoginProfileAllowsUrl(profile, targetUrl)) return;
+  const host = normalizeUrl(targetUrl).hostname;
+  throw new Error(
+    `Web login profile "${profile.id}" is not authorized for ${host}. Add that exact host to matchHosts before using saved credentials or session data there.`,
+  );
+}
+
+async function navigateWithinWebLoginProfile(page: Page, profile: WebLoginProfile, targetUrl: string): Promise<void> {
+  assertWebLoginProfileAllowsUrl(profile, targetUrl);
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  assertWebLoginProfileAllowsUrl(profile, page.url());
+}
+
 function inferHosts(loginUrl: string, matchHosts?: string[]): string[] {
   const url = normalizeUrl(loginUrl);
   const hosts = new Set([url.hostname.toLowerCase()]);
   for (const host of matchHosts || []) {
-    const normalized = String(host || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    const normalized = normalizeMatchHost(host);
     if (normalized) hosts.add(normalized);
   }
   return [...hosts];
@@ -264,11 +303,63 @@ function inferHosts(loginUrl: string, matchHosts?: string[]): string[] {
 function getSecret(): Buffer {
   fs.mkdirSync(path.dirname(SECRET_FILE), { recursive: true });
   if (fs.existsSync(SECRET_FILE)) {
-    return Buffer.from(fs.readFileSync(SECRET_FILE, 'utf-8').trim(), 'base64');
+    const stored = fs.readFileSync(SECRET_FILE, 'utf-8').trim();
+    if (stored.startsWith('dpapi:')) {
+      const protectedKey = stored.slice('dpapi:'.length);
+      try {
+        const script = [
+          "$ErrorActionPreference='Stop'",
+          'Add-Type -AssemblyName System.Security',
+          '$raw=[Convert]::FromBase64String($env:LUMI_DPAPI_INPUT)',
+          '$plain=[Security.Cryptography.ProtectedData]::Unprotect($raw,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
+          '[Console]::Out.Write([Convert]::ToBase64String($plain))',
+        ].join(';');
+        const plain = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf-8',
+          windowsHide: true,
+          timeout: 10_000,
+          env: { ...process.env, LUMI_DPAPI_INPUT: protectedKey },
+        }).trim();
+        return Buffer.from(plain, 'base64');
+      } catch (error) {
+        throw new Error(`Could not unlock the web-login credential key for this Windows user: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const encoded = stored.startsWith('plain:') ? stored.slice('plain:'.length) : stored;
+    const legacyKey = Buffer.from(encoded, 'base64');
+    if (process.platform === 'win32' && legacyKey.length === 32) {
+      writeSecretKey(legacyKey);
+    }
+    return legacyKey;
   }
   const key = crypto.randomBytes(32);
-  fs.writeFileSync(SECRET_FILE, key.toString('base64'), { encoding: 'utf-8', mode: 0o600 });
+  writeSecretKey(key);
   return key;
+}
+
+function writeSecretKey(key: Buffer): void {
+  let serialized = `plain:${key.toString('base64')}`;
+  if (process.platform === 'win32') {
+    try {
+      const script = [
+        "$ErrorActionPreference='Stop'",
+        'Add-Type -AssemblyName System.Security',
+        '$raw=[Convert]::FromBase64String($env:LUMI_DPAPI_INPUT)',
+        '$protected=[Security.Cryptography.ProtectedData]::Protect($raw,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
+        '[Console]::Out.Write([Convert]::ToBase64String($protected))',
+      ].join(';');
+      const protectedKey = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf-8',
+        windowsHide: true,
+        timeout: 10_000,
+        env: { ...process.env, LUMI_DPAPI_INPUT: key.toString('base64') },
+      }).trim();
+      if (protectedKey) serialized = `dpapi:${protectedKey}`;
+    } catch (error) {
+      console.warn('[WebLogin] Windows credential-key protection unavailable; using the file-permission fallback.', error);
+    }
+  }
+  fs.writeFileSync(SECRET_FILE, serialized, { encoding: 'utf-8', mode: 0o600 });
 }
 
 function encryptSecret(value: string): string {
@@ -398,6 +489,23 @@ function sessionDir(profile: WebLoginProfile, scope?: WebLoginScope): string {
   return dir;
 }
 
+async function withWebLoginSessionLease<T>(
+  profile: WebLoginProfile,
+  scope: WebLoginScope | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = sessionDirectoryPath(profile, scope);
+  if (activeWebLoginOperations.has(key)) {
+    throw new Error(`Web login profile "${profile.id}" is already in use. Wait for that login operation to finish before reusing its browser session.`);
+  }
+  activeWebLoginOperations.add(key);
+  try {
+    return await operation();
+  } finally {
+    activeWebLoginOperations.delete(key);
+  }
+}
+
 function scheduleVisibleContextClose(key: string, keepOpenMs: number): void {
   const active = activeVisibleContexts.get(key);
   if (!active) return;
@@ -417,7 +525,7 @@ async function openContext(profile: WebLoginProfile, scope?: WebLoginScope, head
   if (existing) {
     try {
       existing.context.pages();
-      return { context: existing.context, key: dir, shared: true, headless: false };
+      return { context: existing.context, key: dir, shared: true, reused: true, headless: false };
     } catch {
       if (existing.closeTimer) clearTimeout(existing.closeTimer);
       activeVisibleContexts.delete(dir);
@@ -441,7 +549,7 @@ async function openContext(profile: WebLoginProfile, scope?: WebLoginScope, head
     });
     scheduleVisibleContextClose(dir, DEFAULT_VISIBLE_SESSION_MS);
   }
-  return { context, key: dir, shared: !headless, headless };
+  return { context, key: dir, shared: !headless, reused: false, headless };
 }
 
 async function firstVisibleMatch(page: Page, selectors: string[]): Promise<{ locator: Locator; selector: string } | null> {
@@ -537,20 +645,31 @@ async function hasAutofilledValue(locator: Locator | null): Promise<boolean> {
   }
 }
 
+export function shouldAutoSubmitLoginForm(
+  autoSubmit: boolean,
+  hasFilledCredential: boolean,
+  assessment: LoginPageAssessment,
+): boolean {
+  return autoSubmit && hasFilledCredential && assessment.state !== 'verification_required';
+}
+
 async function fillLoginForm(page: Page, profile: WebLoginProfile, autoSubmit: boolean): Promise<{
   filledUsername: boolean;
   filledPassword: boolean;
   submitted: boolean;
   usedBrowserAutofill: boolean;
+  challengeDetected: boolean;
   usernameSelector?: string;
   passwordSelector?: string;
   submitSelector?: string;
 }> {
+  assertWebLoginProfileAllowsUrl(profile, page.url());
   const password = decryptSecret(profile.passwordCipher);
   let filledUsername = false;
   let filledPassword = false;
   let submitted = false;
   let usedBrowserAutofill = false;
+  let challengeDetected = false;
   let usernameSelector: string | undefined;
   let passwordSelector: string | undefined;
   let submitSelector: string | undefined;
@@ -580,21 +699,66 @@ async function fillLoginForm(page: Page, profile: WebLoginProfile, autoSubmit: b
   }
 
   if (autoSubmit && (filledUsername || filledPassword)) {
-    const submitMatch = await visibleMatch(page, profile.submitSelector, COMMON_SUBMIT_SELECTORS);
-    submitSelector = submitMatch?.selector;
-    if (submitMatch) {
-      await Promise.allSettled([
-        page.waitForLoadState('domcontentloaded', { timeout: 12000 }),
-        submitMatch.locator.click({ timeout: 5000 }),
-      ]);
-      submitted = true;
-    } else if (passwordMatch) {
-      await passwordMatch.locator.press('Enter');
-      submitted = true;
+    const preSubmitAssessment = await assessLoginPage(page, profile);
+    challengeDetected = preSubmitAssessment.state === 'verification_required';
+    if (shouldAutoSubmitLoginForm(autoSubmit, filledUsername || filledPassword, preSubmitAssessment)) {
+      const submitMatch = await visibleMatch(page, profile.submitSelector, COMMON_SUBMIT_SELECTORS);
+      submitSelector = submitMatch?.selector;
+      if (submitMatch) {
+        await Promise.allSettled([
+          page.waitForLoadState('domcontentloaded', { timeout: 12000 }),
+          submitMatch.locator.click({ timeout: 5000 }),
+        ]);
+        submitted = true;
+      } else if (passwordMatch) {
+        await passwordMatch.locator.press('Enter');
+        submitted = true;
+      }
     }
   }
 
-  return { filledUsername, filledPassword, submitted, usedBrowserAutofill, usernameSelector, passwordSelector, submitSelector };
+  return {
+    filledUsername,
+    filledPassword,
+    submitted,
+    usedBrowserAutofill,
+    challengeDetected,
+    usernameSelector,
+    passwordSelector,
+    submitSelector,
+  };
+}
+
+type LoginFillResult = Awaited<ReturnType<typeof fillLoginForm>> & { stages: number };
+
+async function fillLoginFlow(page: Page, profile: WebLoginProfile, autoSubmit: boolean): Promise<LoginFillResult> {
+  const first = await fillLoginForm(page, profile, autoSubmit);
+  const combined: LoginFillResult = { ...first, stages: 1 };
+
+  // Common username-first login flows reveal the password field only after the
+  // first submit. Make one bounded second pass, but never retry a full failed
+  // credential form or cross a captcha/OTP/passkey boundary.
+  if (!autoSubmit || !first.submitted || !first.filledUsername || first.filledPassword || first.challengeDetected) {
+    return combined;
+  }
+
+  await page.waitForTimeout(500);
+  assertWebLoginProfileAllowsUrl(profile, page.url());
+  const assessment = await assessLoginPage(page, profile);
+  if (assessment.state !== 'login_required') return combined;
+
+  const second = await fillLoginForm(page, profile, true);
+  return {
+    filledUsername: first.filledUsername || second.filledUsername,
+    filledPassword: first.filledPassword || second.filledPassword,
+    submitted: first.submitted || second.submitted,
+    usedBrowserAutofill: first.usedBrowserAutofill || second.usedBrowserAutofill,
+    challengeDetected: first.challengeDetected || second.challengeDetected,
+    usernameSelector: first.usernameSelector || second.usernameSelector,
+    passwordSelector: first.passwordSelector || second.passwordSelector,
+    submitSelector: first.submitSelector || second.submitSelector,
+    stages: 2,
+  };
 }
 
 function updateProfileLoginStatus(
@@ -622,50 +786,56 @@ export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScop
     ? getProfile(options.profileId, scope)
     : findWebLoginProfileForUrl(target, scope);
   if (!profile) throw new Error('No matching web login profile found. Save one first.');
+  const navigationTarget = target || profile.loginUrl;
+  assertWebLoginProfileAllowsUrl(profile, navigationTarget);
 
-  const opened = await openContext(profile, scope, options.headless === true);
-  const { context } = opened;
-  const page = context.pages()[0] || await context.newPage();
-  const waitMs = Math.min(Math.max(Number(options.waitForManualMs) || 45000, 3000), 180000);
-  const keepOpenMs = Math.min(Math.max(Number(options.keepOpenMs) || DEFAULT_VISIBLE_SESSION_MS, 60_000), 24 * 60 * 60 * 1000);
-  try {
-    await page.goto(target || profile.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    const fill = await fillLoginForm(page, profile, options.autoSubmit !== false);
-    const assessment = await waitForLoginCompletion(page, profile, waitMs);
-    const status = assessment.state === 'authenticated' ? 'logged_in' : 'manual_required';
-    const updatedProfile = updateProfileLoginStatus(profile, status, {
-      usernameSelector: profile.usernameSelector || fill.usernameSelector || '',
-      passwordSelector: profile.passwordSelector || fill.passwordSelector || '',
-      submitSelector: profile.submitSelector || fill.submitSelector || '',
-    }) || profile;
-    return {
-      status,
-      loginState: assessment.state,
-      loginEvidence: assessment.reason,
-      profile: publicProfile(updatedProfile),
-      url: page.url(),
-      filledUsername: fill.filledUsername,
-      filledPassword: fill.filledPassword,
-      submitted: fill.submitted,
-      usedBrowserAutofill: fill.usedBrowserAutofill,
-      browserOpen: !opened.headless,
-      keepOpenMs: !opened.headless ? keepOpenMs : 0,
-      learnedSelectors: {
-        usernameSelector: updatedProfile.usernameSelector || '',
-        passwordSelector: updatedProfile.passwordSelector || '',
-        submitSelector: updatedProfile.submitSelector || '',
-      },
-      note: status === 'logged_in'
-        ? `Login/session is available in the persistent browser profile.${opened.headless ? '' : ' The visible browser remains open for continued viewing and work.'}`
-        : `${assessment.reason} Complete any required login or verification in the opened browser and run again.`,
-    };
-  } finally {
-    if (opened.headless) {
-      await context.close();
-    } else {
-      scheduleVisibleContextClose(opened.key, keepOpenMs);
+  return withWebLoginSessionLease(profile, scope, async () => {
+    const opened = await openContext(profile, scope, options.headless === true);
+    const { context } = opened;
+    const page = opened.reused ? await context.newPage() : (context.pages()[0] || await context.newPage());
+    const waitMs = Math.min(Math.max(Number(options.waitForManualMs) || 45000, 3000), 180000);
+    const keepOpenMs = Math.min(Math.max(Number(options.keepOpenMs) || DEFAULT_VISIBLE_SESSION_MS, 60_000), 24 * 60 * 60 * 1000);
+    try {
+      await navigateWithinWebLoginProfile(page, profile, navigationTarget);
+      const fill = await fillLoginFlow(page, profile, options.autoSubmit !== false);
+      const assessment = await waitForLoginCompletion(page, profile, waitMs);
+      const status = assessment.state === 'authenticated' ? 'logged_in' : 'manual_required';
+      const updatedProfile = updateProfileLoginStatus(profile, status, {
+        usernameSelector: profile.usernameSelector || fill.usernameSelector || '',
+        passwordSelector: profile.passwordSelector || fill.passwordSelector || '',
+        submitSelector: profile.submitSelector || fill.submitSelector || '',
+      }) || profile;
+      return {
+        status,
+        loginState: assessment.state,
+        loginEvidence: assessment.reason,
+        profile: publicProfile(updatedProfile),
+        url: page.url(),
+        filledUsername: fill.filledUsername,
+        filledPassword: fill.filledPassword,
+        submitted: fill.submitted,
+        usedBrowserAutofill: fill.usedBrowserAutofill,
+        challengeDetectedBeforeSubmit: fill.challengeDetected,
+        loginStagesHandled: fill.stages,
+        browserOpen: !opened.headless,
+        keepOpenMs: !opened.headless ? keepOpenMs : 0,
+        learnedSelectors: {
+          usernameSelector: updatedProfile.usernameSelector || '',
+          passwordSelector: updatedProfile.passwordSelector || '',
+          submitSelector: updatedProfile.submitSelector || '',
+        },
+        note: status === 'logged_in'
+          ? `Login/session is available in the persistent browser profile.${opened.headless ? '' : ' The visible browser remains open for continued viewing and work.'}`
+          : `${assessment.reason} Complete any required login or verification in the opened browser and run again.`,
+      };
+    } finally {
+      if (opened.headless) {
+        await context.close();
+      } else {
+        scheduleVisibleContextClose(opened.key, keepOpenMs);
+      }
     }
-  }
+  });
 }
 
 export async function learnWebLoginSite(options: WebLoginLearnOptions, scope?: WebLoginScope) {
@@ -730,54 +900,57 @@ export async function fetchWithWebLogin(url: string, scope?: WebLoginScope, prof
   const target = normalizeUrl(url).toString();
   const profile = profileId ? getProfile(profileId, scope) : findWebLoginProfileForUrl(target, scope);
   if (!profile) throw new Error('No matching web login profile found for this URL.');
+  assertWebLoginProfileAllowsUrl(profile, target);
 
-  const opened = await openContext(profile, scope, true);
-  const { context } = opened;
-  const page = opened.shared ? await context.newPage() : (context.pages()[0] || await context.newPage());
-  try {
-    await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    let assessment = await assessLoginPage(page, profile);
-    if (assessment.state === 'login_required' && profile.passwordCipher) {
-      await page.goto(profile.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await fillLoginForm(page, profile, true);
-      await waitForLoginCompletion(page, profile, 20000);
-      await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      assessment = await assessLoginPage(page, profile);
-    }
-    if (assessment.state === 'login_required' || assessment.state === 'verification_required') {
+  return withWebLoginSessionLease(profile, scope, async () => {
+    const opened = await openContext(profile, scope, true);
+    const { context } = opened;
+    const page = opened.shared ? await context.newPage() : (context.pages()[0] || await context.newPage());
+    try {
+      await navigateWithinWebLoginProfile(page, profile, target);
+      let assessment = await assessLoginPage(page, profile);
+      if (assessment.state === 'login_required' && profile.passwordCipher) {
+        await navigateWithinWebLoginProfile(page, profile, profile.loginUrl);
+        await fillLoginFlow(page, profile, true);
+        await waitForLoginCompletion(page, profile, 20000);
+        await navigateWithinWebLoginProfile(page, profile, target);
+        assessment = await assessLoginPage(page, profile);
+      }
+      if (assessment.state === 'login_required' || assessment.state === 'verification_required') {
+        return {
+          status: 'manual_required',
+          loginState: assessment.state,
+          loginEvidence: assessment.reason,
+          profile: publicProfile(profile),
+          title: await page.title().catch(() => ''),
+          url: page.url(),
+          text: '',
+          note: 'The target content was not extracted because the browser is still on a login or verification step. Run web_login_run visibly and complete that step first.',
+        };
+      }
+      const html = await page.content();
+      const title = await page.title().catch(() => '');
+      const authenticationVerified = assessment.state === 'authenticated';
       return {
-        status: 'manual_required',
+        status: authenticationVerified ? 'authenticated_content' : 'content_accessible',
+        authenticationVerified,
         loginState: assessment.state,
         loginEvidence: assessment.reason,
         profile: publicProfile(profile),
-        title: await page.title().catch(() => ''),
+        title,
         url: page.url(),
-        text: '',
-        note: 'The target content was not extracted because the browser is still on a login or verification step. Run web_login_run visibly and complete that step first.',
+        text: extractPlainText(html, Math.min(Math.max(maxChars, 500), 50000)),
+        note: authenticationVerified
+          ? 'The page was read with positive authenticated-session evidence.'
+          : 'The page was accessible through the saved browser profile, but the site did not expose a reliable signal proving which account is active.',
       };
+    } finally {
+      if (opened.shared) {
+        await page.close().catch(() => undefined);
+        scheduleVisibleContextClose(opened.key, DEFAULT_VISIBLE_SESSION_MS);
+      } else {
+        await context.close();
+      }
     }
-    const html = await page.content();
-    const title = await page.title().catch(() => '');
-    const authenticationVerified = assessment.state === 'authenticated';
-    return {
-      status: authenticationVerified ? 'authenticated_content' : 'content_accessible',
-      authenticationVerified,
-      loginState: assessment.state,
-      loginEvidence: assessment.reason,
-      profile: publicProfile(profile),
-      title,
-      url: page.url(),
-      text: extractPlainText(html, Math.min(Math.max(maxChars, 500), 50000)),
-      note: authenticationVerified
-        ? 'The page was read with positive authenticated-session evidence.'
-        : 'The page was accessible through the saved browser profile, but the site did not expose a reliable signal proving which account is active.',
-    };
-  } finally {
-    if (opened.shared) {
-      await page.close().catch(() => undefined);
-      scheduleVisibleContextClose(opened.key, DEFAULT_VISIBLE_SESSION_MS);
-    } else {
-      await context.close();
-    }
-  }
+  });
 }

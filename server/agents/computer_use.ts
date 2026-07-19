@@ -41,6 +41,24 @@ export interface ComputerUseOptions {
   isCancelled?: () => boolean;
 }
 
+export type DesktopWindowFingerprint = {
+  windowId: string;
+  title: string;
+  processName: string;
+  pid: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type DesktopScreenGeometry = {
+  screenX: number;
+  screenY: number;
+  width: number;
+  height: number;
+};
+
 const DEFAULT_COMPUTER_USE_ITERATIONS = 12;
 const MAX_COMPUTER_USE_ITERATIONS = 50;
 
@@ -54,7 +72,7 @@ function clampIterations(value: unknown): number {
 
 const SYSTEM_PROMPT = `You are a computer control AI. You see a screenshot of the user's desktop and need to complete a task step by step.
 
-The screen resolution is typically 1920×1080 pixels. The top-left corner is coordinate (0, 0). The bottom-right is approximately (1920, 1080).
+Use screenshot-local pixel coordinates. The screenshot's top-left corner is (0, 0); its exact width and height are supplied with each image. The runtime translates those local pixels to the operating system's virtual-desktop coordinates.
 
 For EACH step, output EXACTLY ONE action as a JSON object:
 
@@ -86,22 +104,26 @@ CRITICAL RULES:
 async function executeAction(
   action: ComputerUseAction,
   desktopRelay: ComputerUseOptions['desktopRelay'],
+  screen: DesktopScreenGeometry,
 ): Promise<void> {
+  const screenAction = action.x === undefined || action.y === undefined
+    ? action
+    : { ...action, x: Math.round(action.x + screen.screenX), y: Math.round(action.y + screen.screenY) };
   switch (action.action) {
     case 'click':
-      await moveVisibleCursor(action, desktopRelay);
-      await desktopRelay('desktop_mouse_click_at', { x: action.x!, y: action.y!, button: 'left' });
-      desktopRelay('desktop_cursor_glow_click', { x: action.x!, y: action.y! }).catch(() => {});
+      await moveVisibleCursor(screenAction, desktopRelay);
+      await desktopRelay('desktop_mouse_click_at', { x: screenAction.x!, y: screenAction.y!, button: 'left' });
+      desktopRelay('desktop_cursor_glow_click', { x: screenAction.x!, y: screenAction.y! }).catch(() => {});
       break;
     case 'double_click':
-      await moveVisibleCursor(action, desktopRelay);
-      await desktopRelay('desktop_mouse_double_click_at', { x: action.x!, y: action.y! });
-      desktopRelay('desktop_cursor_glow_click', { x: action.x!, y: action.y! }).catch(() => {});
+      await moveVisibleCursor(screenAction, desktopRelay);
+      await desktopRelay('desktop_mouse_double_click_at', { x: screenAction.x!, y: screenAction.y! });
+      desktopRelay('desktop_cursor_glow_click', { x: screenAction.x!, y: screenAction.y! }).catch(() => {});
       break;
     case 'right_click':
-      await moveVisibleCursor(action, desktopRelay);
-      await desktopRelay('desktop_mouse_right_click_at', { x: action.x!, y: action.y! });
-      desktopRelay('desktop_cursor_glow_click', { x: action.x!, y: action.y! }).catch(() => {});
+      await moveVisibleCursor(screenAction, desktopRelay);
+      await desktopRelay('desktop_mouse_right_click_at', { x: screenAction.x!, y: screenAction.y! });
+      desktopRelay('desktop_cursor_glow_click', { x: screenAction.x!, y: screenAction.y! }).catch(() => {});
       break;
     case 'type':
       await desktopRelay('desktop_keyboard_type', { text: action.text! });
@@ -134,11 +156,80 @@ function isCancelled(options: Pick<ComputerUseOptions, 'isCancelled'>): boolean 
   return options.isCancelled?.() === true;
 }
 
+export function parseDesktopWindowFingerprint(raw: string): DesktopWindowFingerprint | null {
+  try {
+    const parsed = JSON.parse(raw);
+    const fingerprint = {
+      windowId: String(parsed.window_id || parsed.windowId || ''),
+      title: String(parsed.title || '').trim(),
+      processName: String(parsed.process_name || parsed.processName || '').trim().toLowerCase(),
+      pid: Number(parsed.pid) || 0,
+      x: Number(parsed.x) || 0,
+      y: Number(parsed.y) || 0,
+      width: Number(parsed.width) || 0,
+      height: Number(parsed.height) || 0,
+    };
+    if (!fingerprint.windowId && !fingerprint.title && !fingerprint.processName && !fingerprint.pid) return null;
+    return fingerprint;
+  } catch {
+    return null;
+  }
+}
+
+export function sameDesktopWindow(
+  observed: DesktopWindowFingerprint,
+  current: DesktopWindowFingerprint,
+): boolean {
+  if (observed.windowId && current.windowId) return observed.windowId === current.windowId;
+  if (observed.pid > 0 && current.pid > 0) {
+    if (observed.pid !== current.pid) return false;
+    const hasGeometry = observed.width > 0 && observed.height > 0 && current.width > 0 && current.height > 0;
+    return !hasGeometry || (
+      observed.x === current.x
+      && observed.y === current.y
+      && observed.width === current.width
+      && observed.height === current.height
+    );
+  }
+  return Boolean(observed.processName && observed.title)
+    && observed.processName === current.processName
+    && observed.title === current.title;
+}
+
+async function readDesktopWindowFingerprint(
+  desktopRelay: ComputerUseOptions['desktopRelay'],
+): Promise<DesktopWindowFingerprint | null> {
+  try {
+    return parseDesktopWindowFingerprint(await desktopRelay('desktop_active_window', {}));
+  } catch {
+    return null;
+  }
+}
+
+function actionRequiresStableForeground(action: ComputerUseAction): boolean {
+  return ['click', 'double_click', 'right_click', 'type', 'key_press'].includes(action.action);
+}
+
+export function parseDesktopScreenGeometry(raw: string): DesktopScreenGeometry {
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      screenX: Number(parsed.screen_x ?? parsed.screenX) || 0,
+      screenY: Number(parsed.screen_y ?? parsed.screenY) || 0,
+      width: Math.max(0, Number(parsed.width) || 0),
+      height: Math.max(0, Number(parsed.height) || 0),
+    };
+  } catch {
+    return { screenX: 0, screenY: 0, width: 0, height: 0 };
+  }
+}
+
 // World-model action planning
 
 async function callWorldModel(
   screenshotBase64: string,
   screenshotMime: string,
+  screen: DesktopScreenGeometry,
   task: string,
   actionHistory: string[],
   llmGetters: Record<string, () => any>,
@@ -165,9 +256,12 @@ async function callWorldModel(
   const historyContext = actionHistory.length > 0
     ? `Previous actions taken:\n${actionHistory.slice(-8).join('\n')}\n\n`
     : '';
+  const geometryContext = screen.width > 0 && screen.height > 0
+    ? `Screenshot size: ${screen.width}x${screen.height} pixels. Return screenshot-local x/y coordinates within that image. Virtual desktop origin: (${screen.screenX}, ${screen.screenY}); do not add this origin yourself.\n\n`
+    : '';
 
   const userContent: NormalizedMessage['content'] = [
-    { type: 'text', text: `${historyContext}Task: ${task}\n\nWhat is the SINGLE next action? Output ONLY the JSON.` },
+    { type: 'text', text: `${historyContext}${geometryContext}Task: ${task}\n\nWhat is the SINGLE next action? Output ONLY the JSON.` },
     { type: 'image_url', image_url: { url: `data:${screenshotMime};base64,${screenshotBase64}`, detail: 'auto' as const } },
   ];
 
@@ -233,7 +327,7 @@ function extractActionJSON(text: string): ComputerUseAction | null {
   return null;
 }
 
-function validateAction(action: ComputerUseAction): ComputerUseAction {
+function validateAction(action: ComputerUseAction, screen?: DesktopScreenGeometry): ComputerUseAction {
   const validActions = ['click', 'double_click', 'right_click', 'type', 'key_press', 'wait', 'done'];
   if (!validActions.includes(action.action)) {
     return { action: 'error', message: `Unknown action type: ${action.action}`, reason: 'Invalid action' };
@@ -244,8 +338,11 @@ function validateAction(action: ComputerUseAction): ComputerUseAction {
     if (typeof action.x !== 'number' || typeof action.y !== 'number') {
       return { action: 'error', message: 'Missing x,y coordinates for mouse action', reason: 'Missing coords' };
     }
-    // Sanity check: screen coordinates should be within 0..7680 range (supports multi-monitor up to 8K)
-    if (action.x < -1000 || action.x > 8000 || action.y < -1000 || action.y > 5000) {
+    const outsideCapturedScreen = Boolean(screen?.width && screen?.height)
+      && (action.x < 0 || action.x >= screen!.width || action.y < 0 || action.y >= screen!.height);
+    // The model returns screenshot-local pixels. Keep a generous legacy bound
+    // when older clients cannot report screenshot dimensions.
+    if (outsideCapturedScreen || action.x < 0 || action.x > 8000 || action.y < 0 || action.y > 5000) {
       return { action: 'error', message: `Coordinates (${action.x}, ${action.y}) out of reasonable bounds`, reason: 'Out of bounds' };
     }
   }
@@ -332,11 +429,22 @@ export async function computerUseLoop(
     // ── 1. Capture screenshot ──
     let screenshotBase64: string;
     let screenshotMime = 'image/jpeg';
+    let screenGeometry: DesktopScreenGeometry = { screenX: 0, screenY: 0, width: 0, height: 0 };
+    const windowBeforeCapture = await readDesktopWindowFingerprint(options.desktopRelay);
+    let observedWindow: DesktopWindowFingerprint | null = null;
     try {
       const relayResult = await options.desktopRelay('desktop_capture_screen', { quality: 50 });
       const parsed = parseScreenshotBase64(relayResult);
       screenshotBase64 = parsed.base64;
       screenshotMime = parsed.mime;
+      screenGeometry = parseDesktopScreenGeometry(relayResult);
+      observedWindow = await readDesktopWindowFingerprint(options.desktopRelay);
+      if (windowBeforeCapture && observedWindow && !sameDesktopWindow(windowBeforeCapture, observedWindow)) {
+        options.onProgress?.(`[${i + 1}/${maxIter}] Foreground changed during screenshot capture; refreshing before planning an action.`);
+        await sleep(200);
+        continue;
+      }
+      observedWindow ||= windowBeforeCapture;
     } catch (err: any) {
       options.onProgress?.(`[${i + 1}/${maxIter}] Screenshot failed: ${err.message}`);
       consecutiveErrors++;
@@ -352,7 +460,7 @@ export async function computerUseLoop(
 
     let responseText: string;
     try {
-      responseText = await callWorldModel(screenshotBase64, screenshotMime, task, actionHistory, options.llmGetters, options.userId);
+      responseText = await callWorldModel(screenshotBase64, screenshotMime, screenGeometry, task, actionHistory, options.llmGetters, options.userId);
     } catch (err: any) {
       options.onProgress?.(`[${i + 1}/${maxIter}] World model call failed: ${err.message}`);
       consecutiveErrors++;
@@ -376,7 +484,7 @@ export async function computerUseLoop(
       continue;
     }
 
-    action = validateAction(action);
+    action = validateAction(action, screenGeometry);
     consecutiveErrors = 0; // Reset on successful parse
 
     // ── 4. Report progress ──
@@ -421,7 +529,16 @@ export async function computerUseLoop(
       if (isCancelled(options)) {
         return `Task cancelled before desktop action. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
       }
-      await executeAction(action, options.desktopRelay);
+      if (actionRequiresStableForeground(action)) {
+        const currentWindow = await readDesktopWindowFingerprint(options.desktopRelay);
+        if (!observedWindow || !currentWindow || !sameDesktopWindow(observedWindow, currentWindow)) {
+          options.onProgress?.(`[${i + 1}/${maxIter}] Foreground changed while Lumi was planning; skipped the stale action and refreshed the screen.`);
+          actionHistory.push(`[${i + 1}/${maxIter}] SKIPPED_STALE_FOREGROUND`);
+          await sleep(200);
+          continue;
+        }
+      }
+      await executeAction(action, options.desktopRelay, screenGeometry);
       // Brief pause to let UI respond before next screenshot
       await sleep(400);
     } catch (err: any) {
@@ -433,12 +550,12 @@ export async function computerUseLoop(
 
   return `需要复核：已执行 ${maxIter} 步，还没有稳定完成。最后动作：${actionHistory.slice(-2).join('；') || '无'}`;
   } finally {
-    options.desktopRelay('desktop_cursor_glow_hide', {}).catch(() => {});
+    await options.desktopRelay('desktop_cursor_glow_hide', {}).catch(() => undefined);
     if (wallpaperModeEnabled) {
-      options.desktopRelay('desktop_set_wallpaper_mode', {
+      await options.desktopRelay('desktop_set_wallpaper_mode', {
         enabled: false,
         source: 'computer_use',
-      }).catch(() => {});
+      }).catch(() => undefined);
     }
     options.onProgress?.('光标光效已关闭');
   }

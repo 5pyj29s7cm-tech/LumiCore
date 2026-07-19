@@ -53,6 +53,13 @@ const LOCAL_DESKTOP_UI_TOOLS = new Set([
   'desktop_ui_type',
 ]);
 
+export function isCoLocatedWindowsDesktopRuntime(
+  platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return platform === 'win32' && (env.LUMI_DESKTOP === '1' || env.LUMI_LOCAL_DESKTOP_UIA === '1');
+}
+
 async function runLocalDesktopUiTool(
   toolName: string,
   args: Record<string, any>,
@@ -138,7 +145,12 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
   const scope = normalizeDesktopScope(options.domain, options.orgId);
 
   return async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
-    if (process.platform === 'win32' && LOCAL_DESKTOP_UI_TOOLS.has(toolName)) {
+    if (LOCAL_DESKTOP_UI_TOOLS.has(toolName) && !isCoLocatedWindowsDesktopRuntime()) {
+      throw new Error(
+        `Desktop UI Automation tool "${toolName}" is blocked because the server is not proven to share the selected desktop's Windows session. Use computer_use on the connected desktop instead.`,
+      );
+    }
+    if (isCoLocatedWindowsDesktopRuntime() && LOCAL_DESKTOP_UI_TOOLS.has(toolName)) {
       const localUiCorrelationId = `desktop-${options.source}_${randomUUID()}`;
       try {
         const localUiResult = await runLocalDesktopUiTool(toolName, args);

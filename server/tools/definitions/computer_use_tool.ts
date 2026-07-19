@@ -3,6 +3,7 @@ import { computerUseLoop } from '../../agents/computer_use';
 
 const DEFAULT_COMPUTER_USE_STEPS = 12;
 const MAX_COMPUTER_USE_STEPS = 50;
+const activeDesktopControlLeases = new Set<string>();
 
 function positiveInt(value: unknown): number | null {
   const n = Number(value);
@@ -17,6 +18,12 @@ export function resolveComputerUseSteps(args: Record<string, any>, context?: any
     ?? DEFAULT_COMPUTER_USE_STEPS;
   const policyLimit = positiveInt(context?.toolPolicy?.maxIterations) ?? MAX_COMPUTER_USE_STEPS;
   return Math.max(1, Math.min(requested, policyLimit, MAX_COMPUTER_USE_STEPS));
+}
+
+export function computerUseLeaseKey(context?: any): string {
+  const domain = context?.domain === 'work' ? 'work' : 'personal';
+  if (domain === 'work') return `work:${String(context?.orgId || context?.userId || 'anonymous')}`;
+  return `personal:${String(context?.userId || 'anonymous')}`;
 }
 
 async function computerUse(args: Record<string, any>, context?: any): Promise<string> {
@@ -34,17 +41,26 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
   }
 
   const maxIterations = resolveComputerUseSteps(args, context);
+  const leaseKey = computerUseLeaseKey(context);
+  if (activeDesktopControlLeases.has(leaseKey)) {
+    throw new Error('Desktop control is already active for this desktop session. Wait for it to finish or cancel it before starting another desktop task.');
+  }
 
-  return computerUseLoop(task, {
-    userId: context.userId,
-    desktopRelay: context.desktopRelay,
-    llmGetters: context.llmGetters,
-    maxIterations,
-    onProgress: context.onProgress || ((step: string) => {
-      console.log(`[ComputerUse] ${step}`);
-    }),
-    isCancelled: context.isCancelled,
-  });
+  activeDesktopControlLeases.add(leaseKey);
+  try {
+    return await computerUseLoop(task, {
+      userId: context.userId,
+      desktopRelay: context.desktopRelay,
+      llmGetters: context.llmGetters,
+      maxIterations,
+      onProgress: context.onProgress || ((step: string) => {
+        console.log(`[ComputerUse] ${step}`);
+      }),
+      isCancelled: context.isCancelled,
+    });
+  } finally {
+    activeDesktopControlLeases.delete(leaseKey);
+  }
 }
 
 export function registerComputerUseTool(registry: ToolRegistry): void {

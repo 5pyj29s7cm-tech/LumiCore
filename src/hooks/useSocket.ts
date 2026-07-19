@@ -193,6 +193,8 @@ async function handleDesktopExec(socket: Socket, data: {
       case 'desktop_capture_screen': {
         const capture = await invoke('capture_screen');
         const pngBase64: string = (capture as any).image_base64 || '';
+        const screenX: number = Number((capture as any).screen_x) || 0;
+        const screenY: number = Number((capture as any).screen_y) || 0;
         const width: number = (capture as any).width || 1920;
         const height: number = (capture as any).height || 1080;
         const quality = args.quality || 60;
@@ -211,10 +213,10 @@ async function handleDesktopExec(socket: Socket, data: {
           ctx.drawImage(img, 0, 0, width, height);
           const jpegDataUrl = canvas.toDataURL('image/jpeg', quality / 100);
           const jpegBase64 = jpegDataUrl.split(',')[1];
-          output = JSON.stringify({ image_base64: jpegBase64, width, height, format: 'jpeg' });
+          output = JSON.stringify({ image_base64: jpegBase64, screen_x: screenX, screen_y: screenY, width, height, format: 'jpeg' });
         } catch {
           // Fallback: return full PNG base64 if canvas conversion fails
-          output = JSON.stringify({ image_base64: pngBase64, width, height, format: 'png' });
+          output = JSON.stringify({ image_base64: pngBase64, screen_x: screenX, screen_y: screenY, width, height, format: 'png' });
         }
         break;
       }

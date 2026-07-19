@@ -26,7 +26,14 @@ vi.mock('../server/llm/token_tracker', () => ({
   recordTokenUsage: vi.fn(),
 }));
 
-import { computerUseLoop } from '../server/agents/computer_use';
+import {
+  computerUseLoop,
+  parseDesktopScreenGeometry,
+  parseDesktopWindowFingerprint,
+  sameDesktopWindow,
+} from '../server/agents/computer_use';
+import { ToolRegistry } from '../server/tools/registry';
+import { registerComputerUseTool } from '../server/tools/definitions/computer_use_tool';
 
 function modelResult(text: string) {
   return {
@@ -138,5 +145,109 @@ describe('computer use completion verification', () => {
       completionVerified: false,
       observations: 2,
     });
+  });
+
+  it('compares native window ids before weaker process and geometry evidence', () => {
+    const first = parseDesktopWindowFingerprint(JSON.stringify({
+      window_id: '101', title: 'Document A', process_name: 'editor.exe', pid: 44, x: 0, y: 0, width: 800, height: 600,
+    }));
+    const renamed = parseDesktopWindowFingerprint(JSON.stringify({
+      window_id: '101', title: 'Document A *', process_name: 'editor.exe', pid: 44, x: 0, y: 0, width: 800, height: 600,
+    }));
+    const other = parseDesktopWindowFingerprint(JSON.stringify({
+      window_id: '202', title: 'Document B', process_name: 'editor.exe', pid: 44, x: 0, y: 0, width: 800, height: 600,
+    }));
+
+    expect(first).not.toBeNull();
+    expect(renamed).not.toBeNull();
+    expect(other).not.toBeNull();
+    expect(sameDesktopWindow(first!, renamed!)).toBe(true);
+    expect(sameDesktopWindow(first!, other!)).toBe(false);
+  });
+
+  it('preserves virtual-desktop origins for multi-monitor screenshots', async () => {
+    expect(parseDesktopScreenGeometry(JSON.stringify({
+      screen_x: -1920, screen_y: -200, width: 3840, height: 1280,
+    }))).toEqual({ screenX: -1920, screenY: -200, width: 3840, height: 1280 });
+
+    mocks.makeLLMCall.mockResolvedValueOnce(modelResult(JSON.stringify({
+      action: 'click', x: 100, y: 250,
+    })));
+    const clickArgs: Array<Record<string, any>> = [];
+    const relay = vi.fn(async (toolName: string, args: Record<string, any>) => {
+      if (toolName === 'desktop_capture_screen') {
+        return JSON.stringify({
+          image_base64: 'screen', format: 'png', screen_x: -1920, screen_y: -200, width: 3840, height: 1280,
+        });
+      }
+      if (toolName === 'desktop_active_window') {
+        return JSON.stringify({ window_id: 'stable-window', title: 'Editor', process_name: 'editor.exe', pid: 10 });
+      }
+      if (toolName === 'desktop_mouse_click_at') clickArgs.push(args);
+      return '';
+    });
+
+    await computerUseLoop('Click the visible target', {
+      desktopRelay: relay,
+      llmGetters: { getOpenAI: () => ({}) },
+      maxIterations: 1,
+    });
+
+    expect(clickArgs).toEqual([{ x: -1820, y: 50, button: 'left' }]);
+  });
+
+  it('skips a planned input action when the foreground window changes during model latency', async () => {
+    mocks.makeLLMCall.mockResolvedValueOnce(modelResult(JSON.stringify({
+      action: 'type',
+      text: 'must-not-land-in-another-window',
+    })));
+    let activeChecks = 0;
+    const calls: string[] = [];
+    const relay = vi.fn(async (toolName: string) => {
+      calls.push(toolName);
+      if (toolName === 'desktop_capture_screen') {
+        return JSON.stringify({ image_base64: 'screen', format: 'png' });
+      }
+      if (toolName === 'desktop_active_window') {
+        activeChecks += 1;
+        return JSON.stringify(activeChecks < 3
+          ? { window_id: 'window-a', title: 'Editor', process_name: 'editor.exe', pid: 10 }
+          : { window_id: 'window-b', title: 'Chat', process_name: 'chat.exe', pid: 20 });
+      }
+      return '';
+    });
+
+    await computerUseLoop('Type into the editor', {
+      desktopRelay: relay,
+      llmGetters: { getOpenAI: () => ({}) },
+      maxIterations: 1,
+    });
+
+    expect(calls).not.toContain('desktop_keyboard_type');
+    expect(calls).toContain('desktop_active_window');
+  });
+
+  it('prevents two computer-use loops from controlling the same desktop concurrently', async () => {
+    let releaseModel!: (value: ReturnType<typeof modelResult>) => void;
+    mocks.makeLLMCall.mockImplementationOnce(() => new Promise(resolve => {
+      releaseModel = resolve;
+    }));
+    const registry = new ToolRegistry();
+    registerComputerUseTool(registry);
+    const desktop = createDesktopRelay();
+    const context = {
+      userId: 'desktop-lease-user',
+      desktopRelay: desktop.relay,
+      llmGetters: { getDeepSeek: () => null, getGemini: () => null, getOpenAI: () => ({}) },
+    };
+
+    const first = registry.execute('computer_use', { task: 'First task', max_steps: 1 }, context);
+    await vi.waitFor(() => expect(mocks.makeLLMCall).toHaveBeenCalledTimes(1));
+
+    await expect(registry.execute('computer_use', { task: 'Second task', max_steps: 1 }, context))
+      .rejects.toThrow(/already active/);
+
+    releaseModel(modelResult(JSON.stringify({ action: 'done', message: 'First observation.' })));
+    await first;
   });
 });
