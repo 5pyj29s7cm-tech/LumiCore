@@ -5,6 +5,7 @@
 import { Server, Socket } from "socket.io";
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "node:crypto";
 import { readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
@@ -126,6 +127,8 @@ interface AudioSession {
   pipelineAbortController: AbortController | null;
   /** User-visible text for the pipeline that currently owns the session. */
   activeTurnText: string;
+  /** Stable identity for the voice turn that currently owns agent events. */
+  activeTurnRequestId: string | null;
   /** Action text used for routing, including a just-in-time correction when applicable. */
   activeRoutingText: string;
   /** Last action interrupted by real user speech; consumed only by an explicit correction. */
@@ -257,6 +260,7 @@ function cancelActiveVoiceTurn(session: AudioSession, preserveInterruptedTurn = 
     session.pipelineAbortController.abort();
     session.pipelineAbortController = null;
   }
+  session.activeTurnRequestId = null;
   const pendingDecayCount = session.ttsDecayTimers.length;
   for (const t of session.ttsDecayTimers) clearTimeout(t);
   session.ttsDecayTimers = [];
@@ -360,6 +364,7 @@ function getAudioSession(socket: Socket): AudioSession {
       bgGeneration: 0,
       pipelineAbortController: null,
       activeTurnText: '',
+      activeTurnRequestId: null,
       activeRoutingText: '',
       pendingInterruptedTurn: null,
       inputQueue: [],
@@ -582,15 +587,36 @@ async function processVoiceInput(
 
   session.isSpeaking = false;
   session.isProcessing = true;
+  const requestId = `voice_${randomUUID()}`;
   const pipelineAbort = new AbortController();
   const ttsAbort = new AbortController();
   session.pipelineAbortController = pipelineAbort;
   session.ttsAbortController = ttsAbort;
   session.activeTurnText = userText;
+  session.activeTurnRequestId = requestId;
   session.activeRoutingText = actionIntentText;
   const isCurrentTurn = () => session.pipelineAbortController === pipelineAbort && !pipelineAbort.signal.aborted;
-  socket.emit("agent:status", { status: "thinking", agentName: "Lumi" });
-  socket.emit("audio:status", { status: "thinking" });
+  let finalAgentResponseDelivered = false;
+  const emitAgent = (event: string, payload: any = {}) => {
+    if (session.activeTurnRequestId !== requestId) return;
+    socket.emit(event, {
+      ...payload,
+      source: payload.source || 'voice',
+      channel: payload.channel || 'voice',
+      requestId,
+    });
+    if (event === 'agent:response' && payload.finalized === true) {
+      finalAgentResponseDelivered = true;
+    }
+    if (
+      session.pipelineAbortController !== pipelineAbort
+      && (event === 'agent:error' || (event === 'agent:response' && payload.finalized === true))
+    ) {
+      session.activeTurnRequestId = null;
+    }
+  };
+  emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
+  socket.emit("audio:status", { status: "thinking", requestId });
   const voiceScope = { domain: session.domain, orgId: session.orgId };
   const voiceStateKey = getVoiceStateKey(session);
   if (isConfirmationCancellation(userText)) clearPendingConfirmation(session.userId);
@@ -641,7 +667,7 @@ async function processVoiceInput(
     : undefined;
   if (proactiveContextPrompt) {
     logger.info(`[Audio] Using recent proactive context for voice follow-up: type=${recentProactiveSuggestion?.type} action=${recentProactiveSuggestion?.action || 'none'}`);
-    socket.emit('agent:proactive_context', {
+    emitAgent('agent:proactive_context', {
       source: 'voice',
       type: recentProactiveSuggestion?.type,
       action: recentProactiveSuggestion?.action,
@@ -809,9 +835,9 @@ async function processVoiceInput(
   });
   const routedToolPolicy = executionDecision.toolPolicy;
   logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'enabled' : 'chat-only'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} trace=${intentTrace.summary} route=${executionDecision.toolRoute ? `${executionDecision.toolRoute.toolNames.length}/${executionDecision.toolRoute.totalAvailable}` : 'none'}`);
-  socket.emit('agent:intent_trace', intentTrace);
+  emitAgent('agent:intent_trace', intentTrace);
   if (executionDecision.toolRoute) {
-    socket.emit('agent:tool_route', {
+    emitAgent('agent:tool_route', {
       categories: executionDecision.toolRoute.categories,
       reasons: executionDecision.toolRoute.reasons,
       toolNames: executionDecision.toolRoute.toolNames,
@@ -821,7 +847,7 @@ async function processVoiceInput(
       trace: intentTrace,
     });
   }
-  socket.emit('agent:capability_selection', {
+  emitAgent('agent:capability_selection', {
     lane: capabilitySelection.lane,
     primary: capabilitySelection.primary,
     reasons: capabilitySelection.reasons,
@@ -829,7 +855,7 @@ async function processVoiceInput(
     source: 'voice',
   });
   if (desktopExecutionPolicy.applies) {
-    socket.emit('agent:desktop_execution_policy', {
+    emitAgent('agent:desktop_execution_policy', {
       reason: desktopExecutionPolicy.reason,
       evidenceTools: desktopExecutionPolicy.evidenceTools,
       actuationTools: desktopExecutionPolicy.actuationTools,
@@ -904,8 +930,8 @@ async function processVoiceInput(
     error?: string;
   }) => {
     const normalized = { ...payload, args: payload.arguments, source: 'voice' };
-    socket.emit("agent:tool_call", normalized);
-    socket.emit("agent:tool", normalized);
+    emitAgent("agent:tool_call", normalized);
+    emitAgent("agent:tool", normalized);
   };
   const directDesktopRelayTools = new Set([
     'client_action',
@@ -981,7 +1007,7 @@ async function processVoiceInput(
     isCancelled: () => pipelineAbort?.signal.aborted ?? false,
     onProgress: (step: string) => {
       if (shouldForwardPreFinalizationProgress(step)) {
-        socket.emit("agent:progress", { text: step, agentName: "Lumi", source: "voice" });
+        emitAgent("agent:progress", { text: step, agentName: "Lumi" });
       }
     },
     toolPolicy: routedToolPolicy,
@@ -1055,7 +1081,7 @@ async function processVoiceInput(
       finalizationReason: options.finalizationReason,
     });
     if (executionWriteback.recorded) {
-      socket.emit('agent:task_execution_writeback', {
+      emitAgent('agent:task_execution_writeback', {
         ...executionWriteback,
         source: options.source || 'voice',
       });
@@ -1186,7 +1212,7 @@ async function processVoiceInput(
     });
     responseText = finalizedRecentAction.text;
     if (finalizedRecentAction.notification) {
-      socket.emit('agent:notification', finalizedRecentAction.notification);
+      emitAgent('agent:notification', finalizedRecentAction.notification);
     }
     queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
@@ -1203,8 +1229,8 @@ async function processVoiceInput(
     session.activeRoutingText = '';
     socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening' });
-    socket.emit('agent:status', { status: 'idle' });
-    socket.emit('agent:response', {
+    emitAgent('agent:status', { status: 'idle' });
+    emitAgent('agent:response', {
       text: responseText,
       agentName: 'Lumi',
       source: 'voice_action_history',
@@ -1255,7 +1281,7 @@ async function processVoiceInput(
     });
     responseText = finalizedWorkflow.text;
     if (finalizedWorkflow.notification) {
-      socket.emit('agent:notification', finalizedWorkflow.notification);
+      emitAgent('agent:notification', finalizedWorkflow.notification);
     }
     persistVoiceTakeoverExecution(responseText, {
       toolRecords: toolResults,
@@ -1291,8 +1317,8 @@ async function processVoiceInput(
     session.pipelineAbortController = null;
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit("audio:status", { status: "listening" });
-    socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", {
+    emitAgent("agent:status", { status: "idle" });
+    emitAgent("agent:response", {
       text: responseText,
       agentName: "Lumi",
       source: specialWorkflow.source,
@@ -1334,7 +1360,7 @@ async function processVoiceInput(
     } catch (err: any) {
       modeSynced = false;
       modeToolRecord.error = err?.message || String(err);
-      socket.emit('agent:notification', {
+      emitAgent('agent:notification', {
         type: 'client_action',
         level: 'warning',
         message: `Mode switch did not reach the client: ${err?.message || err}`,
@@ -1356,7 +1382,7 @@ async function processVoiceInput(
       });
       responseText = finalizedMode.text;
       if (finalizedMode.notification) {
-        socket.emit('agent:notification', finalizedMode.notification);
+        emitAgent('agent:notification', finalizedMode.notification);
       }
       persistVoiceTakeoverExecution(responseText, {
         toolRecords: [modeToolRecord],
@@ -1378,8 +1404,8 @@ async function processVoiceInput(
       session.pipelineAbortController = null;
       socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening" });
-      socket.emit("agent:status", { status: "idle" });
-      socket.emit("agent:response", {
+      emitAgent("agent:status", { status: "idle" });
+      emitAgent("agent:response", {
         text: responseText,
         agentName: "Lumi",
         source: "voice_mode",
@@ -1425,14 +1451,14 @@ async function processVoiceInput(
             toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
           });
           quickToolResult = tcResult || '';
-          socket.emit("agent:tool_call", {
+          emitAgent("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,
             arguments: quickResult.toolCall.arguments,
             result: tcResult?.slice(0, 500) || '',
           });
         } catch (toolErr: any) {
-          socket.emit("agent:tool_call", {
+          emitAgent("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,
             arguments: quickResult.toolCall.arguments,
@@ -1461,7 +1487,7 @@ async function processVoiceInput(
         flow: turnFlow,
       });
       quickResponseText = quickFinalized.text;
-      if (quickFinalized.notification) socket.emit('agent:notification', quickFinalized.notification);
+      if (quickFinalized.notification) emitAgent('agent:notification', quickFinalized.notification);
       persistVoiceTakeoverExecution(quickResponseText, {
         toolRecords: quickToolRecord ? [quickToolRecord] : [],
         source: 'voice_quick_command',
@@ -1483,8 +1509,8 @@ async function processVoiceInput(
       session.pipelineAbortController = null;
       socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening" });
-      socket.emit("agent:status", { status: "idle" });
-      socket.emit("agent:response", {
+      emitAgent("agent:status", { status: "idle" });
+      emitAgent("agent:response", {
         text: responseText,
         agentName: "Lumi",
         source: "quick_command",
@@ -1553,7 +1579,7 @@ async function processVoiceInput(
     });
     responseText = directFinal.text;
     if (directFinal.notification) {
-      socket.emit('agent:notification', directFinal.notification);
+      emitAgent('agent:notification', directFinal.notification);
     }
     persistVoiceTakeoverExecution(responseText, {
       toolRecords: [toolRecord],
@@ -1578,8 +1604,8 @@ async function processVoiceInput(
     session.activeRoutingText = '';
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit('audio:status', { status: 'listening' });
-    socket.emit('agent:status', { status: 'idle' });
-    socket.emit('agent:response', {
+    emitAgent('agent:status', { status: 'idle' });
+    emitAgent('agent:response', {
       text: responseText,
       agentName: 'Lumi',
       source: 'voice_foreground_messaging',
@@ -1628,7 +1654,7 @@ async function processVoiceInput(
     });
     responseText = profileFinalized.text;
     if (profileFinalized.notification) {
-      socket.emit('agent:notification', profileFinalized.notification);
+      emitAgent('agent:notification', profileFinalized.notification);
     }
     persistVoiceTakeoverExecution(responseText, {
       toolRecords: [profileRecord],
@@ -1650,8 +1676,8 @@ async function processVoiceInput(
     session.pipelineAbortController = null;
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit("audio:status", { status: "listening" });
-    socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", {
+    emitAgent("agent:status", { status: "idle" });
+    emitAgent("agent:response", {
       text: responseText,
       agentName: "Lumi",
       source: "music_profile",
@@ -1701,7 +1727,7 @@ async function processVoiceInput(
     });
     responseText = musicFinalized.text;
     if (musicFinalized.notification) {
-      socket.emit('agent:notification', musicFinalized.notification);
+      emitAgent('agent:notification', musicFinalized.notification);
     }
     persistVoiceTakeoverExecution(responseText, {
       toolRecords: [musicRecord],
@@ -1724,8 +1750,8 @@ async function processVoiceInput(
     session.pipelineAbortController = null;
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
     socket.emit("audio:status", { status: "listening" });
-    socket.emit("agent:status", { status: "idle" });
-    socket.emit("agent:response", {
+    emitAgent("agent:status", { status: "idle" });
+    emitAgent("agent:response", {
       text: responseText,
       agentName: "Lumi",
       source: "music_voice_ack",
@@ -1803,8 +1829,8 @@ async function processVoiceInput(
       session.pipelineAbortController = null;
       socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
       socket.emit("audio:status", { status: "listening" });
-      socket.emit("agent:status", { status: "idle" });
-      socket.emit("agent:response", {
+      emitAgent("agent:status", { status: "idle" });
+      emitAgent("agent:response", {
         text: responseText,
         agentName: "Lumi",
         source: "voice_cognition_direct",
@@ -1846,7 +1872,7 @@ async function processVoiceInput(
     });
     if (shouldOrchestrate) {
       try {
-        socket.emit("agent:status", { status: "thinking", agentName: "Lumi", phase: exposeAgentWork ? 'orchestrator' : 'background' });
+        emitAgent("agent:status", { status: "thinking", agentName: "Lumi", phase: exposeAgentWork ? 'orchestrator' : 'background' });
         // This is a fixed acknowledgement, not model-generated result text.
         // Keep it explicitly non-terminal if low-latency spoken feedback is allowed.
         const voiceLeadIn = "\u6536\u5230\u3002"; // i18n-allow: reviewed neutral pre-finalization voice acknowledgement.
@@ -1871,7 +1897,7 @@ async function processVoiceInput(
           exposeAgentWork && !deferCompletionSpeech
             ? (msg) => {
                 if (shouldForwardPreFinalizationProgress(msg)) {
-                  socket.emit("agent:chunk", { text: msg, agentName: "Lumi" });
+                  emitAgent("agent:chunk", { text: msg, agentName: "Lumi" });
                 }
               }
             : undefined,
@@ -1888,7 +1914,7 @@ async function processVoiceInput(
             // Direct desktop relays already emit their own start/result lifecycle.
             // Re-emitting here would duplicate every visible tool event.
             if (isDirectDesktopTool(record.name)) return;
-            socket.emit("agent:tool_call", {
+            emitAgent("agent:tool_call", {
               correlationId: record.id,
               toolCallId: record.id,
               name: record.name,
@@ -1956,7 +1982,7 @@ async function processVoiceInput(
           if (!deferCompletionSpeech) {
             const safeText = modelTextGate.push(chunk);
             if (safeText) {
-              socket.emit("agent:chunk", { text: safeText, agentName: "Lumi" });
+              emitAgent("agent:chunk", { text: safeText, agentName: "Lumi" });
             }
           }
         },
@@ -2052,7 +2078,7 @@ async function processVoiceInput(
     responseText = finalResponse.text;
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
-      if (finalResponse.notification) socket.emit("agent:notification", finalResponse.notification);
+      if (finalResponse.notification) emitAgent("agent:notification", finalResponse.notification);
     }
 
     persistVoiceTakeoverExecution(responseText, {
@@ -2072,7 +2098,7 @@ async function processVoiceInput(
 
     if (responseText) {
       logger.info(`[Audio] Response: "${responseText.slice(0, 80)}" (${sentenceIdx} sentences, ${toolResults.length} tool calls)`);
-      socket.emit("agent:response", {
+      emitAgent("agent:response", {
         text: responseText,
         agentName: "Lumi",
         source: "voice",
@@ -2132,7 +2158,11 @@ async function processVoiceInput(
       logger.info('[Audio] Pipeline aborted (barge-in or stop)');
     } else {
       logger.error("[Audio Error]:", err);
-      socket.emit("agent:error", { message: "Voice processing failed" });
+      if (finalAgentResponseDelivered) {
+        logger.warn('[Audio] Post-response persistence failed; suppressing a contradictory UI error');
+      } else {
+        emitAgent("agent:error", { message: "Voice processing failed" });
+      }
     }
   } finally {
     // An older aborted pipeline must never clear the state/controllers that
@@ -2148,9 +2178,10 @@ async function processVoiceInput(
 
       if (session.isActive) {
         resetSilenceTimer(session, socket);
-        socket.emit("audio:status", { status: "listening" });
-        socket.emit("agent:status", { status: "idle" });
+        socket.emit("audio:status", { status: "listening", requestId });
+        emitAgent("agent:status", { status: "idle" });
       }
+      session.activeTurnRequestId = null;
     }
   }
 }

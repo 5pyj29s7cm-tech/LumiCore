@@ -56,7 +56,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
-import { LocalAgentSphere } from './LocalAgentSphere';
 import { VoicePicker } from './VoicePicker';
 import { CursorGlow } from './CursorGlow';
 import { DesktopOnboarding } from './DesktopOnboarding';
@@ -68,6 +67,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
+const LocalAgentSphere = lazy(() => import('./LocalAgentSphere').then(m => ({ default: m.LocalAgentSphere })));
 const NexusGlobe = lazy(() => import('./NexusGlobe/NexusGlobe').then(m => ({ default: m.NexusGlobe })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
 import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
@@ -4954,7 +4954,8 @@ export function DesktopUI({
                 />
               </div>
             )}
-            <LocalAgentSphere
+            <Suspense fallback={<div className="h-[210px] w-[210px] rounded-full border border-white/10 bg-white/[0.02] animate-pulse" />}>
+              <LocalAgentSphere
                 t={t}
                 sentiment={sphereSentiment}
                 callState={callState}
@@ -4971,6 +4972,7 @@ export function DesktopUI({
                 gesturesDisabled={false}
                 isLightMode={resolvedAppearanceMode === 'light'}
               />
+            </Suspense>
               <div className="mt-2">
                 <MeetingModeButton
                   t={t}

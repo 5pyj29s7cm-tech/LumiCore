@@ -39,6 +39,14 @@ interface ConvSummary {
   preview: string;
 }
 
+type TaskExecutionSnapshot = {
+  requestId: string;
+  status: 'acknowledged' | 'planning' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'completed' | 'cancelled' | 'failed';
+  terminal: boolean;
+};
+
+const ACTIVE_TASK_STORAGE_KEY = 'lumi_active_task_execution';
+
 interface ChatPanelProps {
   socket: any;
   t?: any;
@@ -50,6 +58,7 @@ interface ChatPanelProps {
 export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript }: ChatPanelProps) {
   const isZh = t?.langCode !== 'en';
   const ui = (zh: string, en: string) => isZh ? zh : en;
+  const toolFailureHint = t?.toolFailureHint || 'Check permission, adjust the request, or ask Lumi to retry.';
   const [conversations, setConversations] = useState<ConvSummary[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -65,12 +74,27 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeConvIdRef = useRef<string | null>(null);
+  const activeTaskRequestIdRef = useRef<string | null>(null);
   const lastChatProgressTextRef = useRef('');
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentRequestHadToolRef = useRef(false);
   const currentRequestNeedsEvidenceRef = useRef(false);
   const currentResponseFinalizationRef = useRef<ChatResponseFinalization | null>(null);
   activeConvIdRef.current = activeConvId;
+
+  const persistActiveTask = useCallback((requestId: string) => {
+    try {
+      localStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({ requestId, startedAt: new Date().toISOString() }));
+    } catch {}
+  }, []);
+
+  const clearActiveTask = useCallback((requestId?: string) => {
+    try {
+      const persisted = JSON.parse(localStorage.getItem(ACTIVE_TASK_STORAGE_KEY) || 'null');
+      if (requestId && persisted?.requestId && persisted.requestId !== requestId) return;
+      localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
+    } catch {}
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -191,13 +215,25 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   useEffect(() => {
     if (!socket) return;
 
+    const isCurrentTaskEvent = (data?: { requestId?: string; source?: string }) => {
+      const activeRequestId = activeTaskRequestIdRef.current;
+      if (activeRequestId) return data?.requestId === activeRequestId;
+      if (data?.requestId) return false;
+      return data?.source === 'task';
+    };
+
     const onResponse = (data: {
       text: string;
       agentName?: string;
       finalized?: boolean;
       blocked?: boolean;
       reason?: string;
+      requestId?: string;
+      source?: string;
     }) => {
+      if (!isCurrentTaskEvent(data)) return;
+      clearActiveTask(data.requestId);
+      activeTaskRequestIdRef.current = null;
       const finalization: ChatResponseFinalization = {
         finalized: data.finalized,
         blocked: data.blocked,
@@ -233,17 +269,20 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       refreshConversations();
     };
 
-    const onChunk = (data: { text: string; agentName?: string }) => {
+    const onChunk = (data: { text: string; agentName?: string; requestId?: string; source?: string }) => {
+      if (!isCurrentTaskEvent(data)) return;
       setIsStreaming(true);
       setStreamingText(prev => prev + data.text);
     };
 
-    const onProgress = (data: { text?: string; tone?: ChatProgressTone }) => {
+    const onProgress = (data: { text?: string; tone?: ChatProgressTone; requestId?: string; source?: string }) => {
+      if (!isCurrentTaskEvent(data)) return;
       pushChatProgress(data.text || '', data.tone || 'tool');
     };
 
-    const onStatus = (data: { status: string }) => {
-      if (data.status === 'thinking') {
+    const onStatus = (data: { status: string; requestId?: string; source?: string }) => {
+      if (!isCurrentTaskEvent(data)) return;
+      if (['thinking', 'planning', 'acknowledged', 'executing', 'waiting_confirmation', 'cancelling'].includes(data.status)) {
         setIsTyping(true);
         pushChatProgress(uiMessage('chat-panel.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
       }
@@ -262,7 +301,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       }
     };
 
-    const onError = (data: { message?: string }) => {
+    const onError = (data: { message?: string; requestId?: string; source?: string }) => {
+      if (!isCurrentTaskEvent(data)) return;
+      clearActiveTask(data.requestId);
+      activeTaskRequestIdRef.current = null;
       setIsTyping(false);
       setIsStreaming(false);
       setStreamingText('');
@@ -286,7 +328,10 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       arguments: Record<string, any>;
       result?: string;
       error?: string;
+      requestId?: string;
+      source?: string;
     }) => {
+      if (!isCurrentTaskEvent(data)) return;
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
       currentRequestHadToolRef.current = true;
       pushChatProgress(describeToolProgress(data.name, phase, isZh), phase === 'error' ? 'error' : 'tool');
@@ -323,7 +368,45 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       socket.off('agent:tool', onToolCall);
       socket.off('audio:transcript', onTranscript);
     };
-  }, [clearChatProgress, finishChatProgress, isZh, pushChatProgress, refreshConversations, socket, t?.requestFailed]);
+  }, [clearActiveTask, clearChatProgress, finishChatProgress, isZh, pushChatProgress, refreshConversations, socket, t?.requestFailed, toolFailureHint]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const resumeTask = () => {
+      let persisted: { requestId?: string; startedAt?: string } | null = null;
+      try {
+        persisted = JSON.parse(localStorage.getItem(ACTIVE_TASK_STORAGE_KEY) || 'null');
+      } catch {
+        localStorage.removeItem(ACTIVE_TASK_STORAGE_KEY);
+      }
+      if (!persisted?.requestId) return;
+      const startedAt = Date.parse(persisted.startedAt || '');
+      if (!Number.isFinite(startedAt) || Date.now() - startedAt > 24 * 60 * 60 * 1000) {
+        clearActiveTask(persisted.requestId);
+        return;
+      }
+      activeTaskRequestIdRef.current = persisted.requestId;
+      setIsTyping(true);
+      socket.emit('agent:execution_resume', {
+        requestId: persisted.requestId,
+        source: 'task',
+      }, (result?: { ok?: boolean; snapshot?: TaskExecutionSnapshot; error?: string }) => {
+        if (activeTaskRequestIdRef.current !== persisted?.requestId) return;
+        if (!result?.ok || !result.snapshot) {
+          clearActiveTask(persisted?.requestId);
+          activeTaskRequestIdRef.current = null;
+          setIsTyping(false);
+          finishChatProgress(result?.error || 'The previous task could not be recovered.', 'error');
+          return;
+        }
+        if (result.snapshot.terminal) return;
+        pushChatProgress(uiMessage('agent-chat-page.restoring-task-state.0fb759a4dc', isZh ? 'zh' : 'en'), 'thinking');
+      });
+    };
+    socket.on('connect', resumeTask);
+    if (socket.connected) resumeTask();
+    return () => { socket.off('connect', resumeTask); };
+  }, [clearActiveTask, finishChatProgress, isZh, pushChatProgress, socket]);
 
   const selectConversation = useCallback((convId: string) => {
     setActiveConvId(convId);
@@ -346,7 +429,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
 
   const handleSend = useCallback((textOverride?: string) => {
     const text = (textOverride || input).trim();
-    if (!text || !socket) return;
+    if (!text || !socket || activeTaskRequestIdRef.current) return;
     if (!textOverride) setInput('');
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(text);
@@ -361,9 +444,19 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       timestamp: new Date().toISOString(),
     }]);
 
-    socket.emit('agent:task', { text, conversationId: activeConvIdRef.current });
+    const requestId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    activeTaskRequestIdRef.current = requestId;
+    persistActiveTask(requestId);
+    setIsTyping(true);
+    socket.emit('agent:task', { text, conversationId: activeConvIdRef.current, requestId }, (ack?: { ok?: boolean; error?: string }) => {
+      if (ack?.ok || activeTaskRequestIdRef.current !== requestId) return;
+      clearActiveTask(requestId);
+      activeTaskRequestIdRef.current = null;
+      setIsTyping(false);
+      finishChatProgress(ack?.error || (t?.requestFailed || 'Request failed'), 'error');
+    });
     refreshConversations();
-  }, [clearChatProgress, input, isZh, pushChatProgress, refreshConversations, socket]);
+  }, [clearActiveTask, clearChatProgress, finishChatProgress, input, isZh, persistActiveTask, pushChatProgress, refreshConversations, socket, t?.requestFailed]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -373,8 +466,14 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   }, [handleSend]);
 
   const handleCancelTask = useCallback(() => {
-    socket?.emit('agent:task_cancel');
-  }, [socket]);
+    const requestId = activeTaskRequestIdRef.current;
+    if (!socket || !requestId) return;
+    pushChatProgress(uiMessage('agent-chat-page.cancelling-task.18c33c6327', isZh ? 'zh' : 'en'), 'thinking');
+    socket.emit('agent:task_cancel', { requestId }, (result?: { ok?: boolean; error?: string }) => {
+      if (result?.ok || activeTaskRequestIdRef.current !== requestId) return;
+      finishChatProgress(result?.error || 'Unable to cancel the current task.', 'error');
+    });
+  }, [finishChatProgress, isZh, pushChatProgress, socket]);
 
   const handleVoiceToggle = useCallback(() => {
     onVoiceToggle?.(!isVoiceActive);
@@ -418,7 +517,6 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
     } catch { return ''; }
   };
 
-  const toolFailureHint = t?.toolFailureHint || 'Check permission, adjust the request, or ask Lumi to retry.';
 
   const activeConv = conversations.find(c => c.id === activeConvId);
 

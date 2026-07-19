@@ -21,6 +21,7 @@ export interface LLMConfig {
   domain?: string;
   orgId?: string;
   responseFormat?: LLMResponseFormat;
+  signal?: AbortSignal;
 }
 
 export interface LLMResult {

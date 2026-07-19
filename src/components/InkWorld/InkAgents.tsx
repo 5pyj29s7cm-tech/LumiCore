@@ -129,6 +129,7 @@ export function InkAgents({ nodes, connections, syncRate, theme }: InkAgentsProp
 
   // Pre-build agent marker meshes
   const markerGroupRef = useRef<THREE.Group>(null);
+  const showDemoMarkers = (!nodes || nodes.length === 0) && (!connections || connections.length === 0);
 
   useFrame((_, delta) => {
     const dt = delta * syncRate;
@@ -152,32 +153,21 @@ export function InkAgents({ nodes, connections, syncRate, theme }: InkAgentsProp
     const group = markerGroupRef.current;
     if (!group) return;
     group.clear();
+    if (showDemoMarkers) {
+      for (const [x, z] of [[-8, -5], [5, 3], [-3, 8], [10, -2], [-10, 2], [2, -8]]) {
+        const marker = createAgentMarker(true);
+        marker.position.set(x, terrainHeight(x, z) + 0.5, z);
+        group.add(marker);
+      }
+      return () => { group.clear(); };
+    }
     for (const np of nodePositions) {
       const marker = createAgentMarker(np.active);
       marker.position.copy(np.position);
       group.add(marker);
     }
     return () => { group.clear(); };
-  }, [nodePositions]);
-
-  if ((!nodes || nodes.length === 0) && (!connections || connections.length === 0)) {
-    // Fallback: show demo markers
-    const demoPositions = [
-      [-8, -5], [5, 3], [-3, 8], [10, -2], [-10, 2], [2, -8],
-    ];
-    React.useEffect(() => {
-      const group = markerGroupRef.current;
-      if (!group) return;
-      group.clear();
-      for (const [x, z] of demoPositions) {
-        const y = terrainHeight(x, z) + 0.5;
-        const marker = createAgentMarker(true);
-        marker.position.set(x, y, z);
-        group.add(marker);
-      }
-      return () => { group.clear(); };
-    }, []);
-  }
+  }, [nodePositions, showDemoMarkers]);
 
   return (
     <group renderOrder={3}>

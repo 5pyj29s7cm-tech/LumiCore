@@ -91,7 +91,7 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
         className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-white/80 text-sm transition-all"
       >
         <Volume2 size={14} className="text-white/40" />
-        <span className="max-w-[120px] truncate">{currentVoice?.name || 'Select Voice'}</span>
+        <span className="max-w-[120px] truncate">{currentVoice?.name || t.selectVoice || 'Select Voice'}</span>
         <ChevronDown size={14} className={`text-white/40 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 

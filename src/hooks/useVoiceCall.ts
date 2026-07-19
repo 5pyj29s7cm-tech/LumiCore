@@ -109,6 +109,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   const callStateRef = useRef<CallState>('idle');
   const lastPassiveSilenceKeepAlive = useRef(0);
   const activeStartPayload = useRef<VoiceStartPayload | null>(null);
+  const activeVoiceRequestIdRef = useRef<string | null>(null);
   const socketRef = useRef(socket);
   const callGenerationRef = useRef(0);
   const playbackGenerationRef = useRef(0);
@@ -229,8 +230,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   useEffect(() => {
     if (!socket) return;
 
-    const onAudioStatus = (data: { status: string }) => {
+    const onAudioStatus = (data: { status: string; requestId?: string }) => {
       if (!isCallActive.current) return;
+      if (data.status === 'thinking' && data.requestId) {
+        activeVoiceRequestIdRef.current = data.requestId;
+      }
       const map: Record<string, CallState> = {
         listening: 'listening',
         thinking: 'thinking',
@@ -376,8 +380,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       }
     };
 
-    const onAgentResponse = (data: AgentResponseDelivery) => {
+    const onAgentResponse = (data: AgentResponseDelivery & { channel?: string; requestId?: string }) => {
       if (!isCallActive.current) return;
+      if (data.channel !== 'voice') return;
+      if (!activeVoiceRequestIdRef.current || data.requestId !== activeVoiceRequestIdRef.current) return;
+      if (data.finalized === true) activeVoiceRequestIdRef.current = null;
       if (!shouldDisplayAgentResponse(data)) return;
       setTranscript(''); // Clear user transcript when AI starts responding
       setResponseText(data.text!);
@@ -389,6 +396,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       callGenerationRef.current++;
       isCallActive.current = false;
       activeStartPayload.current = null;
+      activeVoiceRequestIdRef.current = null;
       setError(data.message);
       clearThinkingWatchdog();
       cleanupCapture();
@@ -398,6 +406,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     };
 
     const onAudioInterruptAck = () => {
+      activeVoiceRequestIdRef.current = null;
       clearThinkingWatchdog();
       stopAllPlayback();
       setCallState('listening');
@@ -477,6 +486,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     if (!socket) return;
     const onDisconnect = () => {
       if (!isCallActive.current) return;
+      activeVoiceRequestIdRef.current = null;
       setConnectionQuality('poor');
       setCallState('connecting');
       clearThinkingWatchdog();
@@ -556,6 +566,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     const generation = ++callGenerationRef.current;
     startInFlightRef.current = true;
     try {
+      activeVoiceRequestIdRef.current = null;
       setError(null);
       setCallState('connecting');
       transcriptionOnlyRef.current = options.transcriptionOnly === true;
@@ -662,6 +673,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       if (generation !== callGenerationRef.current) return;
       cleanupCapture();
       activeStartPayload.current = null;
+      activeVoiceRequestIdRef.current = null;
       isCallActive.current = false;
       transcriptionOnlyRef.current = false;
       setError(err.message || 'Failed to start voice call');
@@ -713,6 +725,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       sessionId: activeStartPayload.current?.sessionId,
     });
     activeStartPayload.current = null;
+    activeVoiceRequestIdRef.current = null;
     disposePlaybackContexts();
     cleanupCapture();
 
@@ -734,6 +747,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     }
     isCallActive.current = false;
     activeStartPayload.current = null;
+    activeVoiceRequestIdRef.current = null;
     cleanupCapture();
     disposePlaybackContexts();
   }, [cleanupCapture, disposePlaybackContexts]);
