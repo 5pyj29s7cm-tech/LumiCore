@@ -508,7 +508,7 @@ export function useWakeWord({
   // Cleanup on unmount
   useEffect(() => {
     return () => { disable(); };
-  }, []);
+  }, [disable]);
 
   return { isListening, isSupported, lastDetection, error, enable, disable };
 }

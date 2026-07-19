@@ -243,6 +243,10 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   const onVoiceprintResultRef = useRef<((r: VoiceprintResult) => void) | null>(null);
   const verifyingRef = useRef(false);
   const verifySeqRef = useRef(0);
+  const verifyRecentSpeechRef = useRef<(mfccFrames: number[][], rms: number) => Promise<void>>(async () => {});
+  const submitEnrollmentRef = useRef<(label: string) => Promise<{ success: boolean; voiceprintId?: string }>>(
+    async () => ({ success: false }),
+  );
 
   // ── Load enrolled templates from server ──
   const loadTemplates = useCallback(async () => {
@@ -317,7 +321,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
             lastCheckTimeRef.current = now;
             const mfccFrames = getRecentMFCCFrames();
             if (mfccFrames.length >= 5) {
-              void verifyRecentSpeech(mfccFrames, rms);
+              void verifyRecentSpeechRef.current(mfccFrames, rms);
             }
           }
         }
@@ -449,6 +453,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       reason: matchResult.reason,
     });
   }
+  verifyRecentSpeechRef.current = verifyRecentSpeech;
 
   // ── Compare against stored templates ──
   function compareWithTemplates(mfcc: number[]): VoiceprintResult {
@@ -507,7 +512,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
           return;
         }
 
-        submitEnrollment(label).then(resolve);
+        submitEnrollmentRef.current(label).then(resolve);
       };
 
       collectInterval = setInterval(() => {
@@ -575,6 +580,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       return { success: false };
     }
   }
+  submitEnrollmentRef.current = submitEnrollment;
 
   // ── Callback registration ──
   const onResult = useCallback((cb: (r: VoiceprintResult) => void) => {

@@ -150,6 +150,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   const ttsGainNode = useRef<GainNode | null>(null);
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const nextStartTime = useRef(0);  // When the next chunk should start playing
+  const ttsStartedAt = useRef(0);
 
   const ensureTtsContext = useCallback(() => {
     if (!ttsContext.current || ttsContext.current.state === 'closed') {
@@ -224,6 +225,34 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     }
     rawAudioLevelRef.current = 0;
   }, []);
+
+  const clearPassiveTimers = useCallback(() => {
+    if (passiveTimer.current) { clearTimeout(passiveTimer.current); passiveTimer.current = null; }
+    if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
+  }, []);
+
+  const endCall = useCallback((options: EndCallOptions = {}) => {
+    callGenerationRef.current++;
+    isCallActive.current = false;
+    clearPassiveTimers();
+    clearThinkingWatchdog();
+    const activeSocket = socketRef.current;
+    activeSocket?.emit('audio:stop', {
+      refineTranscript: options.refineTranscript === true,
+      sessionId: activeStartPayload.current?.sessionId,
+    });
+    activeStartPayload.current = null;
+    activeVoiceRequestIdRef.current = null;
+    disposePlaybackContexts();
+    cleanupCapture();
+
+    isTtsPlaying.current = false;
+    transcriptionOnlyRef.current = false;
+    ttsStartedAt.current = 0;
+    setIsMuted(false);
+
+    setCallState('idle');
+  }, [cleanupCapture, disposePlaybackContexts, clearPassiveTimers, clearThinkingWatchdog]);
 
   const audioQueue = useRef<Array<ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number }>>([]);
 
@@ -480,7 +509,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
       clearThinkingWatchdog();
     };
-  }, [socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, scheduleThinkingWatchdog]);
+  }, [socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, endCall, ensureTtsContext, scheduleThinkingWatchdog]);
 
   useEffect(() => {
     if (!socket) return;
@@ -709,34 +738,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     });
   }, []);
 
-  const clearPassiveTimers = useCallback(() => {
-    if (passiveTimer.current) { clearTimeout(passiveTimer.current); passiveTimer.current = null; }
-    if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
-  }, []);
-
-  const endCall = useCallback((options: EndCallOptions = {}) => {
-    callGenerationRef.current++;
-    isCallActive.current = false;
-    clearPassiveTimers();
-    clearThinkingWatchdog();
-    const activeSocket = socketRef.current;
-    activeSocket?.emit('audio:stop', {
-      refineTranscript: options.refineTranscript === true,
-      sessionId: activeStartPayload.current?.sessionId,
-    });
-    activeStartPayload.current = null;
-    activeVoiceRequestIdRef.current = null;
-    disposePlaybackContexts();
-    cleanupCapture();
-
-    isTtsPlaying.current = false;
-    transcriptionOnlyRef.current = false;
-    ttsStartedAt.current = 0;
-    setIsMuted(false);
-
-    setCallState('idle');
-  }, [cleanupCapture, disposePlaybackContexts, clearPassiveTimers, clearThinkingWatchdog]);
-
   useEffect(() => () => {
     callGenerationRef.current++;
     if (isCallActive.current && activeStartPayload.current) {
@@ -755,7 +756,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   // Barge-in: detect user speaking over TTS via audio level.
   // After TTS starts, wait 400ms before enabling barge-in so Lumi's own
   // voice from external speakers doesn't trigger a self-interrupt.
-  const ttsStartedAt = useRef(0);
   useEffect(() => {
     if (isTtsPlaying.current && ttsStartedAt.current === 0) {
       ttsStartedAt.current = Date.now();

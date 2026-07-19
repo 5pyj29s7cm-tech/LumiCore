@@ -44,6 +44,7 @@ import {
   isTerminalAgentStatus,
   shouldDisplayAgentResponse,
 } from '@/lib/agentResponseDelivery';
+import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
 
 const CHAT_HISTORY_LIMIT = 300;
 const CHAT_RENDER_LIMIT = 80;
@@ -507,7 +508,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         setSelectedVoiceId(all[0].voiceId);
       }
     }).catch(err => toast.error(t.failedToLoadVoices || 'Failed to load voices'));
-  }, [selectedVoiceId]);
+  }, [selectedVoiceId, t.failedToLoadVoices]);
 
   useEffect(() => {
     if (callError) toast.error(callError);
@@ -752,7 +753,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (kind === 'audio') return uiMessage('agent-chat-page.audio.2fd1cbe8ae');
     if (kind === 'document') return uiMessage('agent-chat-page.document.c4e0476ce2');
     return uiMessage('agent-chat-page.file.9588151a85');
-  }, [isZh]);
+  }, []);
   const generatedChatFiles = useMemo(() => {
     const collected: GeneratedFileLink[] = [];
     for (const message of messages) {
@@ -832,7 +833,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         toast.error(err?.message || uiMessage('agent-chat-page.could-not-open-preview-link.99248ef9e6'));
       }
     }
-  }, [isZh, openNativeFilePath, scopedFileUrl]);
+  }, [openNativeFilePath, scopedFileUrl]);
 
   const chatFileSections = useMemo(() => {
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
@@ -885,7 +886,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     });
 
     return { pending, generated, knowledge };
-  }, [generatedChatFiles, isKnowledgeReady, isZh, knowledgeFiles, pendingAttachments, scopedFileUrl]);
+  }, [generatedChatFiles, isKnowledgeReady, knowledgeFiles, pendingAttachments, scopedFileUrl]);
   const pendingAttachmentKeys = useMemo(
     () => new Set(pendingAttachments.map(chatAttachmentIdentity)),
     [pendingAttachments],
@@ -1004,7 +1005,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         ))}
       </div>
     );
-  }, [isZh, openChatFile]);
+  }, [openChatFile]);
 
   const buildSearchDisplayMessages = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -1080,7 +1081,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     if (!agentId || isFounder) return;
 
     // On agent/domain switch, reset and reload
-    const conversationScopeKey = `${agentId}:${activeDomain}:${activeOrgId || ''}`;
+    const conversationScopeKey = buildChatConversationScopeKey(agentId, activeDomain, activeOrgId);
     if (conversationScopeKey !== lastConversationScopeRef.current) {
       lastConversationScopeRef.current = conversationScopeKey;
       initialLoadDoneRef.current = false;
@@ -1110,7 +1111,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
           }
         })
         .catch(() => {});
-  }, [agentId, isFounder, normalizePersistedMessages, scopedConversationUrl]);
+  }, [activeDomain, activeOrgId, agentId, isFounder, normalizePersistedMessages, scopedConversationUrl]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1582,7 +1583,32 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       socket.off("chat:conversation_updated", onConversationUpdated);
       stop();
     };
-  }, [speak, stop, isFounder, socket, normalizePersistedMessages, scopedConversationUrl]);
+  }, [
+    activeDomain,
+    activeOrgId,
+    agentId,
+    agentName,
+    clearChatProgress,
+    clearPersistedExecution,
+    finishChatProgress,
+    isFounder,
+    isZh,
+    normalizePersistedMessages,
+    pushChatProgress,
+    scopedConversationUrl,
+    socket,
+    speak,
+    stop,
+    t.failedToRouteNeuralMesh,
+    t.requestFailed,
+    t.workflowAnalyzing,
+    t.workflowBackgroundTask,
+    t.workflowCalling,
+    t.workflowError,
+    t.workflowResponseReady,
+    t.workflowToolFailed,
+    upsertBackgroundWorkflowTask,
+  ]);
 
   useEffect(() => {
     if (isFounder || !socket) return;
@@ -1664,7 +1690,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
         }
       });
     }
-  }, [isOpen]);
+  }, [isOpen, messages.length]);
 
   useEffect(() => {
     if (isOpen) return;
@@ -1961,7 +1987,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       });
       onPrefillConsumed?.();
     }
-  }, [prefillMessage, prefillSource, onPrefillConsumed]);
+  }, [agentName, onPrefillConsumed, prefillMessage, prefillSource]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();

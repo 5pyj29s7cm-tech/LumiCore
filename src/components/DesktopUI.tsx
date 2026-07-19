@@ -58,7 +58,6 @@ import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
 import { VoicePicker } from './VoicePicker';
 import { CursorGlow } from './CursorGlow';
-import { DesktopOnboarding } from './DesktopOnboarding';
 import { WorkModeSwitch } from './org/WorkModeSwitch';
 import { PetAvatar } from './SpriteAnimator';
 import { getDefaultPets } from '../pets/defaults';
@@ -116,9 +115,13 @@ import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 import { chatAttachmentRequestMatchesScope, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 
+const IDLE_AWAY_SECONDS = 5 * 60;
+const RETURN_IDLE_SECONDS = 30;
+
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
 const AvatarStudio = lazy(() => import('./AvatarStudio').then(m => ({ default: m.AvatarStudio })));
+const DesktopOnboarding = lazy(() => import('./DesktopOnboarding').then(m => ({ default: m.DesktopOnboarding })));
 const ContributorNodePanel = lazy(() => import('./ContributorNodePanel').then(m => ({ default: m.ContributorNodePanel })));
 const DeviceSyncCenter = lazy(() => import('./DeviceSyncCenter').then(m => ({ default: m.DeviceSyncCenter })));
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
@@ -1355,7 +1358,7 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
   const isZh = t?.langCode !== 'en';
   const activeCount = plans.length;
 
-  const loadPlans = async () => {
+  const loadPlans = useCallback(async () => {
     try {
       setLoading(true);
       const res = await fetch('/api/plans?status=active', { credentials: 'include' });
@@ -1367,9 +1370,9 @@ function DailyPlans({ t, embedded = false, onOpenQueue }: { t: any; embedded?: b
     } catch (err: any) {
       toast.error(err?.message || (t.planLoadFailed || 'Failed to load plans'));
     } finally { setLoading(false); }
-  };
+  }, [t.planLoadFailed]);
 
-  useEffect(() => { loadPlans(); }, []);
+  useEffect(() => { void loadPlans(); }, [loadPlans]);
 
   const deletePlan = async (id: string) => {
     setBusyPlanIds(prev => prev.includes(id) ? prev : [...prev, id]);
@@ -1527,7 +1530,7 @@ export function DesktopUI({
 
   useEffect(() => {
     cameraZ.set(viewMode === 'personal' ? 0 : -1000);
-  }, [viewMode]);
+  }, [cameraZ, viewMode]);
 
   // Biometrics: face recognition + voiceprint activated via useFaceRecognition / useVoiceprint
 
@@ -1854,10 +1857,10 @@ export function DesktopUI({
   const [pendingOperationMode, setPendingOperationMode] = useState<OperationMode | null>(null);
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const backgroundTaskStatusRef = useRef<Map<string, string>>(new Map());
-  const readMeetingItem = (scopedKey: string, legacyKey: string): string | null => (
+  const readMeetingItem = useCallback((scopedKey: string, legacyKey: string): string | null => (
     localStorage.getItem(scopedKey)
       ?? (workDomain === 'personal' ? localStorage.getItem(legacyKey) : null)
-  );
+  ), [workDomain]);
   const [meetingNotesOpen, setMeetingNotesOpen] = useState(false);
   const [meetingPaused, setMeetingPaused] = useState(false);
   const [meetingStartedAt, setMeetingStartedAt] = useState<number | null>(() => {
@@ -1891,7 +1894,14 @@ export function DesktopUI({
     setLegalMeetingCaseTitle(workDomain === 'personal' ? getLegalCaseLabel(getLegalConsultationCase()) : '');
     lastMeetingTranscriptRef.current = { text: '', at: 0, speakerKey: '' };
     lastLegalMeetingArchiveRef.current = '';
-  }, [meetingPreferenceScopeKey]);
+  }, [
+    meetingPreferenceScopeKey,
+    meetingStorageKeys.notes,
+    meetingStorageKeys.report,
+    meetingStorageKeys.startedAt,
+    readMeetingItem,
+    workDomain,
+  ]);
   useEffect(() => {
     meetingModeRef.current = operationMode === 'meeting';
   }, [operationMode]);
@@ -2072,6 +2082,9 @@ export function DesktopUI({
   }, [musicVisible]);
 
   const voiceprint = useVoiceprint({ socket });
+  const loadVoiceprintTemplates = voiceprint.loadTemplates;
+  const startVoiceprintListening = voiceprint.startListening;
+  const stopVoiceprintListening = voiceprint.stopListening;
   const ownerVoiceGateOpen = useCallback(() => {
     if (!voiceprint.templatesLoaded) return false;
     if (voiceprint.enrolledCount === 0) return true;
@@ -2098,17 +2111,17 @@ export function DesktopUI({
   ), [orgConnection?.connected, orgConnection?.orgId, workDomain]);
   const getVoiceScopeOptions = useCallback(() => voiceScopeOptions, [voiceScopeOptions]);
   useEffect(() => {
-    void voiceprint.loadTemplates();
-  }, [voiceprint.loadTemplates]);
+    void loadVoiceprintTemplates();
+  }, [loadVoiceprintTemplates]);
   useEffect(() => {
     if (!voiceprint.templatesLoaded || voiceprint.enrolledCount === 0 || !voiceprint.hasUsableTemplates) return;
-    void voiceprint.startListening();
-    return () => voiceprint.stopListening();
+    void startVoiceprintListening();
+    return () => stopVoiceprintListening();
   }, [
+    startVoiceprintListening,
+    stopVoiceprintListening,
     voiceprint.enrolledCount,
     voiceprint.hasUsableTemplates,
-    voiceprint.startListening,
-    voiceprint.stopListening,
     voiceprint.templatesLoaded,
   ]);
   const meetingStartAttemptRef = useRef(0);
@@ -2313,21 +2326,19 @@ export function DesktopUI({
   // Idle→active return greeting — listens for ambient idle reports and fires on return
   const lastIdleRef = useRef<number>(0);
   const greetedRef = useRef(false);
-  const IDLE_AWAY_S = 5 * 60; // 5 min considered "away"
-  const RETURN_S = 30;        // < 30s considered "back"
   useEffect(() => {
     if (!socket) return;
     const onIdleReport = (data: { idle_ms: number; idle_seconds: number }) => {
       const idleS = data.idle_seconds ?? (data.idle_ms / 1000);
-      const wasAway = lastIdleRef.current > IDLE_AWAY_S;
-      const isBack = idleS < RETURN_S;
+      const wasAway = lastIdleRef.current > IDLE_AWAY_SECONDS;
+      const isBack = idleS < RETURN_IDLE_SECONDS;
       const allowProactiveGreeting = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
       if (wasAway && isBack && !greetedRef.current && allowProactiveGreeting) {
         greetedRef.current = true;
         // LLM-generated personalized greeting — server generates, TTS speaks
         socket.emit('greeting:generate', { scene: 'return' });
       }
-      if (idleS >= IDLE_AWAY_S) {
+      if (idleS >= IDLE_AWAY_SECONDS) {
         greetedRef.current = false;
       }
       lastIdleRef.current = idleS;
@@ -2851,12 +2862,28 @@ export function DesktopUI({
     return () => window.removeEventListener('lumi:navigate', handler);
   }, [setActiveTab]);
 
+  const openMemoryAvatar = useCallback(async () => {
+    try { sounds.playClick(); } catch {}
+    try {
+      const res = await fetch('/api/agents/sanctuaries');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.agents && data.agents.length > 0) {
+          setSanctuaryAgent(data.agents[0]);
+          setSanctuaryOpen(true);
+          return;
+        }
+      }
+    } catch {}
+    setMemoryLabOpen(true);
+  }, []);
+
   // Listen for Memory Avatar Lab open request from AgentGenerator
   useEffect(() => {
     const handler = () => openMemoryAvatar();
     window.addEventListener('lumi:open-memory-lab', handler);
     return () => window.removeEventListener('lumi:open-memory-lab', handler);
-  }, []);
+  }, [openMemoryAvatar]);
 
   // Restore real system volume/brightness on mount
   useEffect(() => {
@@ -3371,7 +3398,22 @@ export function DesktopUI({
       socket.off('token:quota_update', onTokenQuotaUpdate);
       if (terminalResetTimer) clearTimeout(terminalResetTimer);
     };
-  }, [socket, workDomain, orgConnection?.orgId, petStorageKeys]);
+  }, [
+    addNotification,
+    lang,
+    orgConnection?.orgId,
+    petStorageKeys,
+    socket,
+    t.workflowAnalyzing,
+    t.workflowBackgroundStep,
+    t.workflowBackgroundTask,
+    t.workflowCalling,
+    t.workflowError,
+    t.workflowResponseReady,
+    t.workflowToolFailed,
+    upsertBackgroundWorkflowTask,
+    workDomain,
+  ]);
 
   // Fetch pet preferences from server on mount (cross-device sync source of truth)
   useEffect(() => {
@@ -3467,23 +3509,7 @@ export function DesktopUI({
     toast.info(`${pet.name} ${t.avatarSetAsDesktop || 'set as desktop avatar'}`);
   };
 
-  const openMemoryAvatar = async () => {
-    try { sounds.playClick(); } catch {}
-    try {
-      const res = await fetch('/api/agents/sanctuaries');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.agents && data.agents.length > 0) {
-          setSanctuaryAgent(data.agents[0]);
-          setSanctuaryOpen(true);
-          return;
-        }
-      }
-    } catch {}
-    setMemoryLabOpen(true);
-  };
-
-  const toggleWindow = (tab: string) => {
+  const toggleWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
     if (tab === 'home') {
       setOpenWindows([]);
@@ -3542,9 +3568,9 @@ export function DesktopUI({
       setWindowOrder(prev => [...prev, tab]);
     }
     setActiveTab(tab);
-  };
+  }, [focusedWindow, minimizedWindows, openMemoryAvatar, openWindows, setActiveTab]);
 
-  const closeWindow = (tab: string) => {
+  const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
     const remainingOrder = windowOrder.filter(w => w !== tab);
     const nextFocusedWindow = remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null;
@@ -3555,7 +3581,7 @@ export function DesktopUI({
       setFocusedWindow(nextFocusedWindow);
       if (!nextFocusedWindow) setActiveTab('home');
     }
-  };
+  }, [focusedWindow, setActiveTab, windowOrder]);
 
   const minimizeOsWindow = (tab: string) => {
     const remainingOrder = windowOrder.filter(w => w !== tab && !minimizedWindows.includes(w));
@@ -3565,7 +3591,7 @@ export function DesktopUI({
     }
   };
 
-  const applyDesktopWidgetFallback = async () => {
+  const applyDesktopWidgetFallback = useCallback(async () => {
     const windowApi = await import('@tauri-apps/api/window');
     const appWindow = windowApi.getCurrentWindow();
 
@@ -3619,9 +3645,9 @@ export function DesktopUI({
     await appWindow.setSize(new windowApi.LogicalSize(widgetWidth, widgetHeight));
     await appWindow.setPosition(new windowApi.PhysicalPosition(Math.round(physicalX), Math.round(physicalY)));
     await appWindow.setFocus().catch(() => {});
-  };
+  }, []);
 
-  const restoreDesktopWidgetFallback = async () => {
+  const restoreDesktopWidgetFallback = useCallback(async () => {
     const fallback = desktopWidgetFallbackRef.current;
     desktopWidgetFallbackRef.current = null;
     const windowApi = await import('@tauri-apps/api/window');
@@ -3652,9 +3678,9 @@ export function DesktopUI({
       }
     }
     await appWindow.setFocus().catch(() => {});
-  };
+  }, []);
 
-  const enterDesktopWidgetMode = async () => {
+  const enterDesktopWidgetMode = useCallback(async () => {
     try { sounds.playClick(); } catch {}
     setIsControlCenterOpen(false);
     setIsNotificationPanelOpen(false);
@@ -3688,9 +3714,9 @@ export function DesktopUI({
         );
       }
     }
-  };
+  }, [applyDesktopWidgetFallback, isTauri, lang, setActiveTab]);
 
-  const exitDesktopWidgetMode = async (nextSurface?: string) => {
+  const exitDesktopWidgetMode = useCallback(async (nextSurface?: string) => {
     try { sounds.playClick(); } catch {}
     setIsDesktopWidgetMode(false);
     if (isTauri) {
@@ -3709,7 +3735,7 @@ export function DesktopUI({
     if (nextSurface) {
       window.setTimeout(() => toggleWindow(nextSurface), 120);
     }
-  };
+  }, [isTauri, lang, restoreDesktopWidgetFallback, toggleWindow]);
 
   const hideDesktopWidgetMode = async () => {
     try { sounds.playClick(); } catch {}
@@ -4081,7 +4107,14 @@ export function DesktopUI({
     applyWallpaperMode,
     closeWindow,
     endMeetingAndReport,
+    enterDesktopWidgetMode,
+    exitDesktopWidgetMode,
+    focusedWindow,
+    isDesktopWidgetMode,
     musicSnapshot.track,
+    openMemoryAvatar,
+    openWindows,
+    operationMode,
     orgConnection?.connected,
     orgConnection?.orgRole,
     resetMeetingCapture,
@@ -4216,6 +4249,7 @@ export function DesktopUI({
     mcpActivities.length,
     meetingNotes.length,
     meetingNotesOpen,
+    meetingPaused,
     meetingReport,
     meetingReportGenerating,
     meetingStartedAt,
@@ -5458,14 +5492,18 @@ export function DesktopUI({
           onContinue={finishSensorPrimer}
           t={t}
         />
-        <DesktopOnboarding 
-          isOpen={showOnboarding && sensorPrimerSeen}
-          onFinish={() => {
-            setShowOnboarding(false);
-            localStorage.setItem('lumi_onboarding_seen', 'true');
-          }}
-          t={t}
-        />
+        {showOnboarding && sensorPrimerSeen && (
+          <Suspense fallback={null}>
+            <DesktopOnboarding
+              isOpen
+              onFinish={() => {
+                setShowOnboarding(false);
+                localStorage.setItem('lumi_onboarding_seen', 'true');
+              }}
+              t={t}
+            />
+          </Suspense>
+        )}
         {isTrainingOpen && (
           <Suspense fallback={null}>
             <VoiceTrainingDialog
