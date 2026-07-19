@@ -92,4 +92,16 @@ describe('voice reconnect and perception continuity', () => {
     expect(button).not.toContain('useLiveVoiceAudioLevel');
     expect(subtitle).not.toContain('useLiveVoiceAudioLevel');
   });
+
+  it('keeps the active voice work request alive while handling a conversational aside', () => {
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+
+    expect(server).toContain("socket.emit('audio:sidecar_response'");
+    expect(server).toContain('workContinues: true, requestId: workRequestId');
+    expect(server).toContain('interruptVoiceSpeech(session)');
+    expect(client).toContain("socket.on('audio:sidecar_response'");
+    expect(client).toContain('if (data?.workContinues)');
+  });
 });

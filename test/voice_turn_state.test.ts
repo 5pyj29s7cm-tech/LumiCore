@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyVoiceWorkInterruption,
   isSpeechClearlyDirectedAwayFromLumi,
   isVoiceCorrectionContinuation,
   isVoiceCurrentActivityQuestion,
   isVoiceFiller,
   isVoiceReferentialFollowup,
+  isVoiceWorkModificationContinuation,
   mergeInterruptedVoiceTurn,
 } from '../server/socket/voice_turn_state';
 
@@ -68,5 +70,29 @@ describe('voice interruption state', () => {
     expect(isVoiceCorrectionContinuation('我让你去看桌面上的设计草稿，把它画到 CAD 里。')).toBe(false);
     expect(isVoiceCurrentActivityQuestion('你在干嘛？')).toBe(true);
     expect(isVoiceCurrentActivityQuestion('我让你去打开 AutoCAD。')).toBe(false);
+  });
+
+  it('keeps voice work running for progress questions and ordinary side chat', () => {
+    expect(classifyVoiceWorkInterruption('\u505a\u5230\u54ea\u4e86\uff1f')).toBe('progress_query');
+    expect(classifyVoiceWorkInterruption('\u4f60\u89c9\u5f97\u8fd9\u4e2a\u989c\u8272\u600e\u4e48\u6837\uff1f')).toBe('side_chat');
+  });
+
+  it('separates stopping speech from cancelling or modifying the active work', () => {
+    expect(classifyVoiceWorkInterruption('\u522b\u8bf4\u4e86')).toBe('stop_speaking');
+    expect(classifyVoiceWorkInterruption('\u4f60\u5148\u522b\u8bf4\u4e86\uff0c\u7ee7\u7eed\u505a')).toBe('stop_speaking');
+    expect(classifyVoiceWorkInterruption('\u53d6\u6d88\u4efb\u52a1')).toBe('cancel_work');
+    expect(classifyVoiceWorkInterruption('\u987a\u4fbf\u518d\u52a0\u4e00\u9875\u603b\u7ed3')).toBe('modify_work');
+    expect(isVoiceWorkModificationContinuation('\u53e6\u5916\u628a\u6807\u9898\u6539\u6210\u84dd\u8272')).toBe(true);
+  });
+
+  it('merges a spoken work addition into the active task instead of treating it as chat', () => {
+    const now = Date.now();
+    const result = mergeInterruptedVoiceTurn({
+      text: '\u628a\u8fd9\u4efd\u62a5\u544a\u505a\u6210 PPT',
+      interruptedAt: now - 800,
+    }, '\u987a\u4fbf\u518d\u52a0\u4e00\u9875\u603b\u7ed3', now);
+    expect(result.usedInterruptedTurn).toBe(true);
+    expect(result.routingText).toContain('\u628a\u8fd9\u4efd\u62a5\u544a\u505a\u6210 PPT');
+    expect(result.routingText).toContain('\u518d\u52a0\u4e00\u9875\u603b\u7ed3');
   });
 });

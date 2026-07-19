@@ -75,7 +75,7 @@ import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnaly
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
-import { hasClientActionOnlyIntent, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
+import { hasClientActionOnlyIntent, hasExplicitToolIntent, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { setRealtimeVoiceSessionActive } from "../autonomy/foreground_activity";
 import { buildForegroundWeChatSendArgs } from "../agents/nl_chainer";
 import {
@@ -84,11 +84,12 @@ import {
   isVoiceCurrentActivityQuestion,
   isVoiceFiller,
   isVoiceReferentialFollowup,
+  classifyVoiceWorkInterruption,
   mergeInterruptedVoiceTurn,
   type PendingInterruptedVoiceTurn,
 } from "./voice_turn_state";
 import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../regions/packs/cn/messaging_messages";
-import { CN_VOICE_FAST_PATH_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_FAST_PATH_MESSAGES, CN_VOICE_WORK_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import { resolveWeChatRecipientFromHistory } from "./voice_messaging_context";
 import {
   collectRecentActionToolRecords,
@@ -125,6 +126,10 @@ interface AudioSession {
   isOrchestrating: boolean;
   /** AbortController for the full LLM+tool pipeline — aborted on barge-in */
   pipelineAbortController: AbortController | null;
+  /** Independent conversational response while the work pipeline keeps running. */
+  sidecarAbortController: AbortController | null;
+  sidecarGeneration: number;
+  sidecarHistory: Array<{ userText: string; responseText: string }>;
   /** User-visible text for the pipeline that currently owns the session. */
   activeTurnText: string;
   /** Stable identity for the voice turn that currently owns agent events. */
@@ -137,6 +142,9 @@ interface AudioSession {
   inputQueue: string[];
   /** True when background agent is executing tools (barge-in requires wake word) */
   isBackgroundWork: boolean;
+  activeWorkStatus: 'idle' | 'planning' | 'executing' | 'orchestrating' | 'completed';
+  activeWorkStep: string;
+  activeWorkToolCalls: number;
   /** Incremented on each new command — only latest generation gets TTS output */
   bgGeneration: number;
   /** Timestamp of last audio chunk for STT latency measurement */
@@ -260,9 +268,39 @@ function cancelActiveVoiceTurn(session: AudioSession, preserveInterruptedTurn = 
     session.pipelineAbortController.abort();
     session.pipelineAbortController = null;
   }
+  if (session.sidecarAbortController) {
+    session.sidecarAbortController.abort();
+    session.sidecarAbortController = null;
+  }
+  session.sidecarGeneration++;
+  if (!preserveInterruptedTurn) session.sidecarHistory = [];
+  session.isBackgroundWork = false;
+  session.activeWorkStatus = 'idle';
+  session.activeWorkStep = '';
+  session.activeWorkToolCalls = 0;
   session.activeTurnRequestId = null;
   const pendingDecayCount = session.ttsDecayTimers.length;
   for (const t of session.ttsDecayTimers) clearTimeout(t);
+  session.ttsDecayTimers = [];
+  if (pendingDecayCount > 0) {
+    ttsSpeakingCount = Math.max(0, ttsSpeakingCount - pendingDecayCount);
+  }
+}
+
+function interruptVoiceSpeech(session: AudioSession): void {
+  session.bgGeneration++;
+  session.isSpeaking = false;
+  if (session.ttsAbortController) {
+    session.ttsAbortController.abort();
+    session.ttsAbortController = null;
+  }
+  if (session.sidecarAbortController) {
+    session.sidecarAbortController.abort();
+    session.sidecarAbortController = null;
+  }
+  session.sidecarGeneration++;
+  const pendingDecayCount = session.ttsDecayTimers.length;
+  for (const timer of session.ttsDecayTimers) clearTimeout(timer);
   session.ttsDecayTimers = [];
   if (pendingDecayCount > 0) {
     ttsSpeakingCount = Math.max(0, ttsSpeakingCount - pendingDecayCount);
@@ -361,8 +399,14 @@ function getAudioSession(socket: Socket): AudioSession {
       isSpeaking: false,
       isProcessing: false,
       isBackgroundWork: false,
+      activeWorkStatus: 'idle',
+      activeWorkStep: '',
+      activeWorkToolCalls: 0,
       bgGeneration: 0,
       pipelineAbortController: null,
+      sidecarAbortController: null,
+      sidecarGeneration: 0,
+      sidecarHistory: [],
       activeTurnText: '',
       activeTurnRequestId: null,
       activeRoutingText: '',
@@ -515,6 +559,199 @@ function blockUnverifiedVoice(socket: Socket, session: AudioSession, reason: str
   socket.emit('audio:status', { status: 'listening' });
 }
 
+function buildActiveVoiceWorkProgressReply(session: AudioSession, userText: string): string {
+  const task = session.activeRoutingText.replace(/\s+/g, ' ').trim().slice(0, 32);
+  const isEnglish = /[a-z]/i.test(userText) && !/[\u3400-\u9fff]/u.test(userText);
+  const rawStep = session.activeWorkStep.replace(/\s+/g, ' ').trim().slice(0, 80);
+  const toolStep = rawStep.match(/^(?:Running\s+)?([a-z][\w-]+?)(?:\s+(completed|failed))?$/i);
+  const step = (() => {
+    if (!toolStep) {
+      if (/^Coordinating worker agents$/i.test(rawStep)) {
+        return isEnglish ? 'coordinating the parallel work' : CN_VOICE_WORK_MESSAGES.coordinatingParallelWork;
+      }
+      if (!rawStep) return '';
+      if (!isEnglish && !/[\u3400-\u9fff]/u.test(rawStep)) return CN_VOICE_WORK_MESSAGES.executingCurrentStep;
+      return rawStep.slice(0, 36);
+    }
+    const toolName = toolStep[1].toLowerCase();
+    const phase = toolStep[2]?.toLowerCase();
+    const category = /cad|autocad|drawing/.test(toolName)
+      ? ['the drawing', CN_VOICE_WORK_MESSAGES.drawingStep]
+      : /browser|web/.test(toolName)
+        ? ['the web step', CN_VOICE_WORK_MESSAGES.webStep]
+        : /wechat|message|mail/.test(toolName)
+          ? ['the message', CN_VOICE_WORK_MESSAGES.messageStep]
+          : /knowledge|search|retrieve/.test(toolName)
+            ? ['the research step', CN_VOICE_WORK_MESSAGES.researchStep]
+            : /file|document|pdf|ppt|presentation|spreadsheet|excel/.test(toolName)
+              ? ['the document step', CN_VOICE_WORK_MESSAGES.documentStep]
+              : /desktop/.test(toolName)
+                ? ['the desktop step', CN_VOICE_WORK_MESSAGES.desktopStep]
+                : /client/.test(toolName)
+                  ? ['the client check', CN_VOICE_WORK_MESSAGES.clientStep]
+                  : ['the current step', CN_VOICE_WORK_MESSAGES.currentStep];
+    if (isEnglish) {
+      if (phase === 'completed') return `finishing ${category[0]}`;
+      if (phase === 'failed') return `recovering from an issue in ${category[0]}`;
+      return `working on ${category[0]}`;
+    }
+    if (phase === 'completed') return CN_VOICE_WORK_MESSAGES.completedStep(category[1]);
+    if (phase === 'failed') return CN_VOICE_WORK_MESSAGES.failedStep(category[1]);
+    return CN_VOICE_WORK_MESSAGES.runningStep(category[1]);
+  })();
+  if (isEnglish) {
+    if (step) return `Still working on ${task || 'it'}; I'm ${step}.`;
+    return `Still working on ${task || 'it'}; it hasn't stopped.`;
+  }
+  return step
+    ? CN_VOICE_WORK_MESSAGES.progressWithStep(step)
+    : session.isOrchestrating
+      ? CN_VOICE_WORK_MESSAGES.coordinatingTask(task)
+      : CN_VOICE_WORK_MESSAGES.continuingTask(task);
+}
+
+async function respondAlongsideActiveVoiceWork(
+  socket: Socket,
+  session: AudioSession,
+  userText: string,
+  llmGetters: LlmGetters,
+  kind: ReturnType<typeof classifyVoiceWorkInterruption>,
+): Promise<void> {
+  session.sidecarAbortController?.abort();
+  const controller = new AbortController();
+  const generation = ++session.sidecarGeneration;
+  session.sidecarAbortController = controller;
+  let ttsCountIncremented = false;
+
+  let responseText = '';
+  try {
+    if (kind === 'progress_query') {
+      responseText = buildActiveVoiceWorkProgressReply(session, userText);
+    } else {
+      const recentSideChat = session.sidecarHistory.slice(-4)
+        .flatMap(item => [
+          { role: 'user' as const, content: item.userText },
+          { role: 'assistant' as const, content: item.responseText },
+        ]);
+      const activeTask = session.activeRoutingText.replace(/\s+/g, ' ').trim().slice(0, 160);
+      const activeStep = session.activeWorkStep.replace(/\s+/g, ' ').trim().slice(0, 100);
+      const personalityPrompt = personalityRegistry.buildSystemPrompt(
+        session.personalityId || 'lumi',
+        { mode: 'chat', uiContext: 'voice' },
+        {
+          userId: session.userId,
+          userText,
+          domain: session.domain,
+          orgId: session.orgId,
+        },
+      ).systemPrompt;
+      const sidecarPrompt = [
+        personalityPrompt,
+        'You are Lumi speaking naturally during a live voice call.',
+        `A separate work lane is still running: ${activeTask || 'the user task'}.`,
+        activeStep ? `Current verified progress: ${activeStep}.` : '',
+        'Answer the user\'s conversational aside now without stopping, replacing, or expanding that work lane.',
+        'Use one short spoken sentence in the user\'s language. Do not call tools, claim completion, expose hidden reasoning, or ask the user to wait.',
+      ].filter(Boolean).join('\n');
+      const preferred = getUserPreferredLLMConfig(session.userId, {
+        maxTokens: 120,
+        domain: session.domain,
+        orgId: session.orgId,
+      });
+      const response = await makeLLMCall(
+        [
+          { role: 'system', content: sidecarPrompt },
+          ...recentSideChat,
+          { role: 'user', content: userText },
+        ],
+        [],
+        preferred,
+        llmGetters.getDeepSeek,
+        llmGetters.getGemini,
+        llmGetters.getOpenAI,
+        llmGetters.getAnthropic,
+        llmGetters.getQwen,
+        llmGetters.getOllama,
+        llmGetters.getLmStudio,
+        llmGetters.getArk,
+        llmGetters.getXiaomi,
+        llmGetters.getKimi,
+        llmGetters.getGlm,
+        llmGetters.getRelay,
+      );
+      if (controller.signal.aborted || session.sidecarGeneration !== generation) return;
+      recordTokenUsage(session.userId, preferred.provider, preferred.model, response.usage, `voice_sidecar_${Date.now()}`, 'voice');
+      const finalized = finalizeLumiResponse({
+        taskText: `Conversational aside while active work continues: ${userText}`,
+        responseText: response.text?.trim() || '',
+        toolRecords: [],
+        source: 'voice_sidecar',
+      });
+      responseText = finalized.blocked
+        ? buildActiveVoiceWorkProgressReply(session, userText)
+        : finalized.text.trim();
+    }
+
+    if (!responseText || controller.signal.aborted || session.sidecarGeneration !== generation) return;
+    session.sidecarHistory.push({ userText, responseText });
+    session.sidecarHistory = session.sidecarHistory.slice(-8);
+    socket.emit('audio:sidecar_response', {
+      text: responseText,
+      source: 'voice',
+      channel: 'voice',
+      workRequestId: session.activeTurnRequestId,
+    });
+
+    const ttsProvider = getTTSProvider();
+    if (!ttsProvider || !session.currentVoiceId || !session.isActive) return;
+    const emotionVoice = (() => {
+      try {
+        return resolveEmotionVoice(session.currentVoiceId || 'longxiaochun_v3', loadEmotionalState(getVoiceStateKey(session)));
+      } catch {
+        return { voiceId: session.currentVoiceId || 'longxiaochun_v3' };
+      }
+    })();
+    const speechGeneration = ++session.bgGeneration;
+    session.ttsAbortController?.abort();
+    session.ttsAbortController = controller;
+    session.isSpeaking = true;
+    ttsSpeakingCount++;
+    ttsCountIncremented = true;
+    const ttsResult = await synthesizeSpeech(responseText, {
+      provider: ttsProvider,
+      voiceId: emotionVoice.voiceId,
+      speechRate: emotionVoice.speechRate,
+      pitch: emotionVoice.pitch,
+      volume: emotionVoice.volume,
+      signal: controller.signal,
+    });
+    if (
+      controller.signal.aborted
+      || session.sidecarGeneration !== generation
+      || session.bgGeneration !== speechGeneration
+      || !session.isActive
+    ) return;
+    socket.emit('audio:status', { status: 'speaking', lane: 'conversation' });
+    addEchoText(responseText);
+    socket.emit('audio:response', {
+      buffer: ttsResult.audioBuffer,
+      volumeGain: computeVolumeGain(),
+      lane: 'conversation',
+    });
+  } catch (err: any) {
+    if (err?.name !== 'AbortError') logger.warn(`[Audio Sidecar] ${err?.message || String(err)}`);
+  } finally {
+    if (session.sidecarAbortController === controller) session.sidecarAbortController = null;
+    if (session.ttsAbortController === controller) session.ttsAbortController = null;
+    if (session.sidecarGeneration === generation) session.isSpeaking = false;
+    if (ttsCountIncremented) {
+      const decay = () => { ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1); };
+      const timer = setTimeout(decay, 3000);
+      session.ttsDecayTimers.push(timer);
+    }
+  }
+}
+
 async function processVoiceInput(
   socket: Socket,
   session: AudioSession,
@@ -587,11 +824,13 @@ async function processVoiceInput(
 
   session.isSpeaking = false;
   session.isProcessing = true;
+  session.isBackgroundWork = hasExplicitToolIntent(actionIntentText);
+  session.activeWorkStatus = session.isBackgroundWork ? 'planning' : 'idle';
+  session.activeWorkStep = '';
+  session.activeWorkToolCalls = 0;
   const requestId = `voice_${randomUUID()}`;
   const pipelineAbort = new AbortController();
-  const ttsAbort = new AbortController();
   session.pipelineAbortController = pipelineAbort;
-  session.ttsAbortController = ttsAbort;
   session.activeTurnText = userText;
   session.activeTurnRequestId = requestId;
   session.activeRoutingText = actionIntentText;
@@ -816,6 +1055,8 @@ async function processVoiceInput(
     toolDeclarations: toolRegistry.getToolDeclarations(),
     personalityToolPolicy: personality.toolPolicy,
   });
+  session.isBackgroundWork = executionDecision.allowToolUse;
+  session.activeWorkStatus = executionDecision.allowToolUse ? 'planning' : 'idle';
   const intentTrace = buildLumiIntentTrace({
     dispatch: turnDispatch,
     execution: executionDecision,
@@ -916,6 +1157,37 @@ async function processVoiceInput(
       },
     });
   };
+  const persistSidecarConversation = (conversationId: string) => {
+    const history = session.sidecarHistory.splice(0);
+    for (const item of history) {
+      addMessage({
+        userId: session.userId,
+        agentId: session.agentId,
+        conversationId,
+        role: 'user',
+        content: item.userText,
+        personality: session.personalityId,
+        mode: 'voice',
+        source: 'voice_sidecar',
+        channel: 'voice',
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+      });
+      addMessage({
+        userId: session.userId,
+        agentId: session.agentId,
+        conversationId,
+        role: 'assistant',
+        content: item.responseText,
+        personality: session.personalityId,
+        mode: 'voice',
+        source: 'voice_sidecar',
+        channel: 'voice',
+        domain: voiceScope.domain,
+        orgId: voiceScope.orgId,
+      });
+    }
+  };
 
   const maxIterations = executionDecision.allowToolUse
     ? Math.max(1, executionDecision.maxIterations || 1)
@@ -929,6 +1201,15 @@ async function processVoiceInput(
     result?: string;
     error?: string;
   }) => {
+    if (session.isBackgroundWork) {
+      session.activeWorkStatus = 'executing';
+      session.activeWorkStep = payload.error !== undefined
+        ? `${payload.name} failed`
+        : payload.result !== undefined
+          ? `${payload.name} completed`
+          : `Running ${payload.name}`;
+      if (payload.result !== undefined || payload.error !== undefined) session.activeWorkToolCalls++;
+    }
     const normalized = { ...payload, args: payload.arguments, source: 'voice' };
     emitAgent("agent:tool_call", normalized);
     emitAgent("agent:tool", normalized);
@@ -1006,6 +1287,10 @@ async function processVoiceInput(
     ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
     isCancelled: () => pipelineAbort?.signal.aborted ?? false,
     onProgress: (step: string) => {
+      if (session.isBackgroundWork && step.trim()) {
+        session.activeWorkStatus = 'executing';
+        session.activeWorkStep = step.trim().slice(0, 160);
+      }
       if (shouldForwardPreFinalizationProgress(step)) {
         emitAgent("agent:progress", { text: step, agentName: "Lumi" });
       }
@@ -1100,8 +1385,25 @@ async function processVoiceInput(
 
   // ── Generation gating: only latest command gets TTS output ──
   session.bgGeneration++;
-  const myGeneration = session.bgGeneration;
+  let turnSpeechGeneration = -1;
+  let turnSpeechAbort: AbortController | null = null;
   let ttsQueue: Promise<void> = Promise.resolve();
+
+  const ensureTurnSpeechController = () => {
+    if (
+      !turnSpeechAbort
+      || turnSpeechAbort.signal.aborted
+      || turnSpeechGeneration !== session.bgGeneration
+    ) {
+      if (session.ttsAbortController && session.ttsAbortController !== turnSpeechAbort) {
+        session.ttsAbortController.abort();
+      }
+      turnSpeechAbort = new AbortController();
+      turnSpeechGeneration = session.bgGeneration;
+      session.ttsAbortController = turnSpeechAbort;
+    }
+    return { controller: turnSpeechAbort, generation: turnSpeechGeneration };
+  };
 
   const estimatePlaybackMs = (audioBuffer: Buffer, text: string): number => {
     const fallback = Math.min(18000, Math.max(2200, text.length * 185 + 700));
@@ -1131,18 +1433,18 @@ async function processVoiceInput(
     const txt = sentence.trim();
     if (!txt || txt.length <= 1 || !ttsProvider || !session.currentVoiceId || !session.isActive) return Promise.resolve(0);
     if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
-    if (ttsAbort?.signal.aborted) return Promise.resolve(0);
-    if (session.bgGeneration !== myGeneration) return Promise.resolve(0);
+    const speech = ensureTurnSpeechController();
+    if (speech.controller.signal.aborted) return Promise.resolve(0);
     sentenceIdx++;
     let resolvePlayback: (value: number) => void = () => {};
     const playbackDone = new Promise<number>(resolve => { resolvePlayback = resolve; });
     // Serialize TTS to avoid 429 rate limits
     ttsQueue = ttsQueue.then(async () => {
-      if (ttsAbort?.signal.aborted) {
+      if (speech.controller.signal.aborted) {
         resolvePlayback(0);
         return;
       }
-      if (session.bgGeneration !== myGeneration) {
+      if (session.bgGeneration !== speech.generation) {
         resolvePlayback(0);
         return;
       }
@@ -1155,9 +1457,9 @@ async function processVoiceInput(
           speechRate: emotionVoice.speechRate,
           pitch: emotionVoice.pitch,
           volume: emotionVoice.volume,
-          signal: ttsAbort?.signal,
+          signal: speech.controller.signal,
         });
-        if (!ttsAbort?.signal.aborted && session.bgGeneration === myGeneration) {
+        if (!speech.controller.signal.aborted && session.bgGeneration === speech.generation) {
           socket.emit("audio:status", { status: "speaking" });
           addEchoText(txt);
           const volumeGain = computeVolumeGain();
@@ -1172,7 +1474,7 @@ async function processVoiceInput(
         if (e?.name === 'AbortError') return;
         logger.warn(`[Audio TTS] ${e.message?.slice(0, 80)}`);
       } finally {
-        if (session.bgGeneration === myGeneration) session.isSpeaking = false;
+        if (session.bgGeneration === speech.generation) session.isSpeaking = false;
         // Keep ttsSpeakingCount elevated for 3s after synthesis — client playback continues
         const decay = () => { ttsSpeakingCount = Math.max(0, ttsSpeakingCount - 1); };
         const t = setTimeout(decay, 3000);
@@ -1184,6 +1486,13 @@ async function processVoiceInput(
   };
 
   const queueFinalizedSpeech = (text: string) => {
+    if (session.isBackgroundWork) {
+      session.activeWorkStatus = 'completed';
+      session.sidecarAbortController?.abort();
+      session.sidecarAbortController = null;
+      session.sidecarGeneration++;
+    }
+    session.bgGeneration++;
     for (const sentence of String(text || '').split(/(?<=[。！？.!?\n])/u)) {
       if (pipelineAbort?.signal.aborted) break;
       flushSentence(sentence);
@@ -1219,12 +1528,13 @@ async function processVoiceInput(
     if (!isCurrentTurn()) return;
     const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    persistSidecarConversation(conversation.id);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conversation.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     session.pipelineAbortController = null;
-    session.ttsAbortController = null;
+    if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
     session.activeTurnText = '';
     session.activeRoutingText = '';
     socket.emit('chat:conversation_updated', { conversationId: conversation.id, agentId: session.agentId, source: 'voice' });
@@ -1310,6 +1620,7 @@ async function processVoiceInput(
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    persistSidecarConversation(conv.id);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
@@ -1397,6 +1708,7 @@ async function processVoiceInput(
       if (!isCurrentTurn()) return;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      persistSidecarConversation(conv.id);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [modeToolRecord], cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
       scheduleVoiceSummary(conv.id);
       session.isProcessing = false;
@@ -1496,12 +1808,13 @@ async function processVoiceInput(
         assistantTextTrusted: !quickFinalized.blocked,
         finalizationReason: quickFinalized.reason,
       });
-      flushSentence(quickResponseText);
+      queueFinalizedSpeech(quickResponseText);
       await Promise.allSettled(ttsPromises);
       if (!isCurrentTurn()) return;
       responseText = quickResponseText;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      persistSidecarConversation(conv.id);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: quickToolRecord ? [quickToolRecord] : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
       scheduleVoiceSummary(conv.id);
       session.isProcessing = false;
@@ -1589,17 +1902,18 @@ async function processVoiceInput(
       assistantTextTrusted: !directFinal.blocked,
       finalizationReason: directFinal.reason,
     });
-    flushSentence(responseText);
+    queueFinalizedSpeech(responseText);
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    persistSidecarConversation(conv.id);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: [toolRecord], cognitiveIntent: directFinal.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
     session.pipelineAbortController = null;
-    session.ttsAbortController = null;
+    if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
     session.activeTurnText = '';
     session.activeRoutingText = '';
     socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
@@ -1669,6 +1983,7 @@ async function processVoiceInput(
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    persistSidecarConversation(conv.id);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [profileRecord], cognitiveIntent: profileFinalized.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
@@ -1743,6 +2058,7 @@ async function processVoiceInput(
 
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    persistSidecarConversation(conv.id);
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [musicRecord], cognitiveIntent: musicFinalized.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
@@ -1816,12 +2132,13 @@ async function processVoiceInput(
         assistantTextTrusted: !directFinal.blocked,
         finalizationReason: directFinal.reason,
       });
-      flushSentence(responseText);
+      queueFinalizedSpeech(responseText);
       await Promise.allSettled(ttsPromises);
       if (!isCurrentTurn()) return;
       // Persist
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      persistSidecarConversation(conv.id);
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: directRecords.length ? directRecords : undefined, cognitiveIntent: directFinal.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
       scheduleVoiceSummary(conv.id);
       session.isProcessing = false;
@@ -1880,6 +2197,8 @@ async function processVoiceInput(
           flushSentence(voiceLeadIn);
         }
         session.isOrchestrating = true;
+        session.activeWorkStatus = 'orchestrating';
+        session.activeWorkStep = 'Coordinating worker agents';
 
         const orchResult = await runOrchestratedTask(
           routedUserText,
@@ -1902,7 +2221,14 @@ async function processVoiceInput(
               }
             : undefined,
           (record, meta) => {
+            session.activeWorkStatus = 'executing';
+            session.activeWorkStep = record.error
+              ? `${record.name} failed`
+              : record.result !== undefined
+                ? `${record.name} completed`
+                : `Running ${record.name}`;
             if (isTerminalOrchestrationToolEvent(record)) {
+              session.activeWorkToolCalls++;
               toolResults.push({
                 id: record.id,
                 name: record.name,
@@ -2115,6 +2441,7 @@ async function processVoiceInput(
       writeDB(readDB());
     }
     addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    persistSidecarConversation(conv.id);
     if (responseText) {
       addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: toolResults.length ? toolResults : undefined, cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
     }
@@ -2168,10 +2495,17 @@ async function processVoiceInput(
     // An older aborted pipeline must never clear the state/controllers that
     // already belong to a newer barge-in turn.
     if (session.pipelineAbortController === pipelineAbort) {
+      session.sidecarAbortController?.abort();
+      session.sidecarAbortController = null;
+      session.sidecarGeneration++;
+      session.sidecarHistory = [];
       session.isSpeaking = false;
       session.isProcessing = false;
       session.isBackgroundWork = false;
-      session.ttsAbortController = null;
+      session.activeWorkStatus = 'idle';
+      session.activeWorkStep = '';
+      session.activeWorkToolCalls = 0;
+      if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
       session.pipelineAbortController = null;
       session.activeTurnText = '';
       session.activeRoutingText = '';
@@ -2212,11 +2546,20 @@ export function registerVoiceHandlers(
     const session = getAudioSession(socket);
     if (session.isActive && session.userId) {
       setRealtimeVoiceSessionActive(session.userId, socket.id, false);
+      cancelActiveVoiceTurn(session);
     }
     session.isActive = true;
     session.accumulatedText = '';
     session.isSpeaking = false;
     session.isProcessing = false;
+    session.isBackgroundWork = false;
+    session.activeWorkStatus = 'idle';
+    session.activeWorkStep = '';
+    session.activeWorkToolCalls = 0;
+    session.sidecarAbortController?.abort();
+    session.sidecarAbortController = null;
+    session.sidecarGeneration++;
+    session.sidecarHistory = [];
     session.inputQueue = [];
     session.lastChunkTime = 0;
     session.userId = getUserId(socket);
@@ -2326,13 +2669,44 @@ export function registerVoiceHandlers(
 
             if (session.isProcessing || session.isSpeaking) {
               const explicitInterrupt = isExplicitInterruptCommand(text);
-              // Speaking (TTS playing): only long or explicit speech → barge-in
-              // Short fragments (< 4 chars) are likely speaker echo, not user speech
-              if (session.isSpeaking) {
-                if (!explicitInterrupt && isEchoText(text)) {
-                  logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
+              const activeWorkRunning = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
+              if (session.isSpeaking && !explicitInterrupt && isEchoText(text)) {
+                logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
+                return;
+              }
+
+              if (activeWorkRunning) {
+                const interruptionKind = classifyVoiceWorkInterruption(text);
+                logger.info(`[Audio] Work-lane interruption=${interruptionKind} (${text.length} chars)`);
+                if (interruptionKind === 'cancel_work') {
+                  cancelActiveVoiceTurn(session);
+                  socket.emit("audio:status", { status: "interrupted" });
+                  socket.emit("audio:interrupt-ack", { workContinues: false });
+                  socket.emit("audio:status", { status: "listening" });
+                  resetSilenceTimer(session, socket);
                   return;
                 }
+                if (interruptionKind === 'modify_work') {
+                  cancelActiveVoiceTurn(session, true);
+                  socket.emit("audio:status", { status: "interrupted" });
+                  socket.emit("audio:interrupt-ack", { workContinues: false });
+                  // Fall through: the correction is merged into a replacement work turn.
+                } else {
+                  const workRequestId = session.activeTurnRequestId;
+                  interruptVoiceSpeech(session);
+                  socket.emit("audio:status", { status: "interrupted" });
+                  socket.emit("audio:interrupt-ack", { workContinues: true, requestId: workRequestId });
+                  if (interruptionKind === 'stop_speaking') {
+                    socket.emit("audio:status", { status: "listening", requestId: workRequestId, lane: 'work' });
+                    resetSilenceTimer(session, socket);
+                    return;
+                  }
+                  socket.emit("audio:confirm", { text });
+                  void respondAlongsideActiveVoiceWork(socket, session, text, llmGetters, interruptionKind);
+                  resetSilenceTimer(session, socket);
+                  return;
+                }
+              } else if (session.isSpeaking) {
                 logger.info(`[Audio] Barge-in during speech (${text.length} chars)`);
                 cancelActiveVoiceTurn(session, !isPureInterruptCommand(text));
                 socket.emit("audio:status", { status: "interrupted" });
@@ -2343,8 +2717,6 @@ export function registerVoiceHandlers(
                   return;
                 }
               } else {
-                // Processing but not speaking (LLM thinking / tool exec):
-                // Any real speech → barge-in, abort current pipeline
                 logger.info(`[Audio] Barge-in during processing (${text.length} chars)`);
                 cancelActiveVoiceTurn(session, !isPureInterruptCommand(text));
                 socket.emit("audio:status", { status: "interrupted" });
@@ -2354,7 +2726,6 @@ export function registerVoiceHandlers(
                   resetSilenceTimer(session, socket);
                   return;
                 }
-                // Fall through to processInput with new speech
               }
             }
 
@@ -2461,9 +2832,16 @@ export function registerVoiceHandlers(
   socket.on("audio:interrupt", () => {
     logger.info(`[Audio] Interrupt from ${socket.id}`);
     const session = getAudioSession(socket);
+    if (session.isBackgroundWork && session.isProcessing && session.pipelineAbortController) {
+      const workRequestId = session.activeTurnRequestId;
+      interruptVoiceSpeech(session);
+      socket.emit("audio:status", { status: "interrupted" });
+      socket.emit("audio:interrupt-ack", { workContinues: true, requestId: workRequestId });
+      return;
+    }
     cancelActiveVoiceTurn(session);
     socket.emit("audio:status", { status: "interrupted" });
-    socket.emit("audio:interrupt-ack", {});
+    socket.emit("audio:interrupt-ack", { workContinues: false });
   });
 
   socket.on("audio:stop", (data?: { refineTranscript?: boolean; sessionId?: string }) => {

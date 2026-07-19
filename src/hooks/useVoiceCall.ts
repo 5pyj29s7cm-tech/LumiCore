@@ -434,11 +434,22 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       setCallState('idle');
     };
 
-    const onAudioInterruptAck = () => {
-      activeVoiceRequestIdRef.current = null;
+    const onAudioInterruptAck = (data?: { workContinues?: boolean; requestId?: string }) => {
+      if (data?.workContinues) {
+        if (data.requestId) activeVoiceRequestIdRef.current = data.requestId;
+      } else {
+        activeVoiceRequestIdRef.current = null;
+      }
       clearThinkingWatchdog();
       stopAllPlayback();
       setCallState('listening');
+    };
+
+    const onAudioSidecarResponse = (data: { text?: string }) => {
+      if (!isCallActive.current || !data.text?.trim()) return;
+      setTranscript('');
+      setResponseText(data.text.trim());
+      onResponse?.(data.text.trim());
     };
 
     const onAudioProactiveSpeak = (data: { audioBuffer: ArrayBuffer; text: string; timestamp: string }) => {
@@ -496,6 +507,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     socket.on('agent:response', onAgentResponse);
     socket.on('audio:error', onAudioError);
     socket.on('audio:interrupt-ack', onAudioInterruptAck);
+    socket.on('audio:sidecar_response', onAudioSidecarResponse);
     socket.on('audio:proactive_speak', onAudioProactiveSpeak);
 
     return () => {
@@ -506,6 +518,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       socket.off('agent:response', onAgentResponse);
       socket.off('audio:error', onAudioError);
       socket.off('audio:interrupt-ack', onAudioInterruptAck);
+      socket.off('audio:sidecar_response', onAudioSidecarResponse);
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
       clearThinkingWatchdog();
     };

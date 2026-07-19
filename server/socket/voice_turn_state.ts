@@ -3,6 +3,13 @@ export interface PendingInterruptedVoiceTurn {
   interruptedAt: number;
 }
 
+export type VoiceWorkInterruptionKind =
+  | 'cancel_work'
+  | 'modify_work'
+  | 'progress_query'
+  | 'stop_speaking'
+  | 'side_chat';
+
 const CORRECTION_CONTINUATION_PATTERNS: RegExp[] = [
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
   /(?:\u4e0d\u662f|\u4e0d\u5bf9|\u9519\u4e86|\u641e\u9519\u4e86|\u5f04\u9519\u4e86|\u542c\u9519\u4e86|\u8bc6\u522b\u9519\u4e86|\u5bf9\u8c61\u9519\u4e86|\u4eba\u540d\u9519\u4e86|\u540d\u5b57\u9519\u4e86|\u5e94\u8be5\u662f|\u6539\u6210|\u66f4\u6b63\u4e3a|\u6211\u8bf4\u7684\u662f).{0,80}(?:\u4e0d\u662f|\u800c\u662f|\u662f|\u95ee|\u53d1|\u6253\u5f00|\u641c\u7d22|\u8054\u7cfb\u4eba|\u5bf9\u8c61|\u4eba\u540d|\u540d\u5b57)/u,
@@ -17,6 +24,36 @@ const CORRECTION_CONTINUATION_PATTERNS: RegExp[] = [
 export function isVoiceCorrectionContinuation(text: string): boolean {
   const normalized = String(text || '').trim();
   return Boolean(normalized) && CORRECTION_CONTINUATION_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+export function isVoiceWorkModificationContinuation(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized) return false;
+  if (isVoiceCorrectionContinuation(normalized)) return true;
+  return /(?:\u518d|\u987a\u4fbf|\u53e6\u5916|\u8fd8\u8981|\u4e5f|\u540c\u65f6).{0,24}(?:\u52a0|\u8865|\u6539|\u6362|\u5220|\u53bb\u6389|\u4fdd\u7559|\u4fdd\u5b58|\u5bfc\u51fa|\u53d1)|^(?:\u52a0\u4e0a|\u8865\u5145|\u6539\u6210|\u6539\u4e3a|\u6362\u6210|\u53bb\u6389|\u5220\u6389|\u4e0d\u8981|\u522b\u5fd8\u4e86|\u8bb0\u5f97).{1,80}/u.test(normalized)
+    || /\b(?:also|and also|while you're at it|add|change|replace|remove|keep|save|export)\b/i.test(normalized);
+}
+
+export function classifyVoiceWorkInterruption(text: string): VoiceWorkInterruptionKind {
+  const normalized = String(text || '').trim();
+  const compact = normalized
+    .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001]+/gu, '')
+    .toLowerCase();
+  if (
+    /(?:\u505c\u6b62\u4efb\u52a1|\u7ec8\u6b62\u4efb\u52a1|\u53d6\u6d88\u4efb\u52a1|\u4e0d\u7528\u505a\u4e86|\u522b\u505a\u4e86|\u4efb\u52a1\u53d6\u6d88)/u.test(compact)
+    || /\b(?:stop|cancel|abort|terminate)\s+(?:the\s+)?(?:work|task|job)\b/i.test(normalized)
+  ) return 'cancel_work';
+  if (
+    isVoiceCurrentActivityQuestion(normalized)
+    || /(?:\u8fdb\u5ea6|\u505a\u5230\u54ea|\u5e72\u5230\u54ea|\u5b8c\u6210\u591a\u5c11|\u8fd8\u5728\u505a|\u8fd8\u5728\u5904\u7406)/u.test(normalized)
+    || /\b(?:progress|how(?:'s| is) (?:it|the task) going|where are you (?:at|up to))\b/i.test(normalized)
+  ) return 'progress_query';
+  if (isVoiceWorkModificationContinuation(normalized)) return 'modify_work';
+  if (
+    /^(?:\u505c|\u505c\u4e0b|\u95ed\u5634|\u522b\u8bf4(?:\u4e86)?|\u4e0d\u8981\u8bf4(?:\u4e86)?|\u5148\u522b\u8bf4(?:\u4e86)?|\u7b49\u4e00\u4e0b|\u7b49\u4e0b|\u6682\u505c|\u597d\u4e86|\u884c\u4e86|\u591f\u4e86|stop|wait|pause|interrupt|holdon|shutup)$/u.test(compact)
+    || /(?:\u5148)?(?:\u522b|\u4e0d\u7528)(?:\u518d)?\u8bf4(?:\u4e86)?(?:\u4f60)?(?:\u7ee7\u7eed|\u63a5\u7740)(?:\u505a|\u5904\u7406)/u.test(compact)
+  ) return 'stop_speaking';
+  return 'side_chat';
 }
 
 export function isVoiceCurrentActivityQuestion(text: string): boolean {
@@ -73,7 +110,7 @@ export function mergeInterruptedVoiceTurn(
     && Number.isFinite(ageMs)
     && ageMs >= 0
     && ageMs <= maxAgeMs
-    && isVoiceCorrectionContinuation(current),
+    && isVoiceWorkModificationContinuation(current),
   );
   if (!canUsePrior) return { routingText: current, usedInterruptedTurn: false };
   return {

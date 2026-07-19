@@ -54,6 +54,25 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
   readingKnowledgeStats: '正在读取知识库统计。',
 } as const;
 
+export const CN_VOICE_WORK_MESSAGES = {
+  coordinatingParallelWork: '正在协调并行任务',
+  executingCurrentStep: '正在执行当前步骤',
+  currentStep: '执行当前步骤',
+  drawingStep: '处理图纸',
+  webStep: '处理网页',
+  messageStep: '处理消息',
+  researchStep: '查找资料',
+  documentStep: '整理文件',
+  desktopStep: '操作桌面',
+  clientStep: '检查客户端',
+  completedStep: (label: string) => `刚完成${label}`,
+  failedStep: (label: string) => `${label}时遇到了问题`,
+  runningStep: (label: string) => `正在${label}`,
+  progressWithStep: (step: string) => `还在继续，当前${step}。`,
+  coordinatingTask: (task: string) => `还在继续，正在并行处理${task || '这个任务'}。`,
+  continuingTask: (task: string) => `还在继续处理${task || '这个任务'}，没有停。`,
+} as const;
+
 export const CN_RESULT_GROUNDING_MESSAGES = {
   priorDiagnosticUnsupported: '刚才没有可核实的客户端自检工具回执。我不能把延迟解释成“在跑自检”；只能确认那一轮没有记录到客户端自检。',
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',
