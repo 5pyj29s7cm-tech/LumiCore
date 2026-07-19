@@ -133,11 +133,19 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ui_snapshot',
-    description: 'Capture a read-only Windows UI Automation tree for the active/focused/desktop window, including control names, types, automation ids, enabled/offscreen state, and bounding boxes. Use this before clicking native apps so Lumi can reason about real controls instead of only screen pixels.',
+    description: 'Capture a read-only Windows UI Automation tree for the active/focused/desktop window, including control names, types, automation ids, enabled/offscreen state, and bounding boxes. A desktop-root snapshot can target a specific native window by accessible identity without foregrounding it. Use this before clicking native apps so Lumi can reason about real controls instead of only screen pixels.',
     parameters: {
       type: 'object',
       properties: {
         root: { type: 'string', enum: ['active', 'focused', 'desktop'], description: 'Snapshot root. Defaults active foreground window.' },
+        name: { type: 'string', description: 'Optional exact accessible root-window name when root=desktop.' },
+        nameContains: { type: 'string', description: 'Optional partial accessible root-window name when root=desktop.' },
+        automationId: { type: 'string', description: 'Optional root-window AutomationId selector.' },
+        controlType: { type: 'string', description: 'Optional root control type selector, such as Window.' },
+        className: { type: 'string', description: 'Optional root-window class selector.' },
+        processId: { type: 'number', description: 'Optional root process id selector.' },
+        nativeWindowHandle: { type: 'number', description: 'Optional native window handle selector.' },
+        allMatches: { type: 'boolean', description: 'Return up to six matching native-window trees instead of only the first.' },
         maxDepth: { type: 'number', description: 'Maximum UI tree depth, default 3, max 6.' },
         maxNodes: { type: 'number', description: 'Maximum controls to return, default 80, max 300.' },
         includeOffscreen: { type: 'boolean', description: 'Include offscreen controls. Defaults false.' },
@@ -147,6 +155,14 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     },
     handler: async (args) => JSON.stringify(await captureWindowsUiSnapshot({
       root: args.root,
+      name: args.name,
+      nameContains: args.nameContains,
+      automationId: args.automationId,
+      controlType: args.controlType,
+      className: args.className,
+      processId: args.processId,
+      nativeWindowHandle: args.nativeWindowHandle,
+      allMatches: args.allMatches === true,
       maxDepth: args.maxDepth,
       maxNodes: args.maxNodes,
       includeOffscreen: args.includeOffscreen === true,

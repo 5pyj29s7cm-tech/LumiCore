@@ -2,6 +2,15 @@ import { execFile } from 'child_process';
 
 export interface DesktopUiSnapshotOptions {
   root?: 'active' | 'focused' | 'desktop';
+  /** Optional root selector used to inspect a specific native window without foregrounding it. */
+  name?: string;
+  nameContains?: string;
+  automationId?: string;
+  controlType?: string;
+  className?: string;
+  processId?: number;
+  nativeWindowHandle?: number;
+  allMatches?: boolean;
   maxDepth?: number;
   maxNodes?: number;
   includeOffscreen?: boolean;
@@ -64,7 +73,13 @@ export async function captureWindowsUiSnapshot(options: DesktopUiSnapshotOptions
   const includeOffscreen = options.includeOffscreen === true;
   const timeoutMs = clampInt(options.timeoutMs, 5000, 1000, 15000);
 
-  const script = buildUiaScript(root, maxDepth, maxNodes, includeOffscreen);
+  const script = buildUiaScript({
+    ...options,
+    root,
+    maxDepth,
+    maxNodes,
+    includeOffscreen,
+  });
   const stdout = await runPowershell(script, timeoutMs);
   try {
     return JSON.parse(stdout);
@@ -137,15 +152,28 @@ function normalizeAction(action: unknown): DesktopUiAction {
   return 'focus';
 }
 
-function buildUiaScript(root: 'active' | 'focused' | 'desktop', maxDepth: number, maxNodes: number, includeOffscreen: boolean): string {
+function buildUiaScript(options: DesktopUiSnapshotOptions & {
+  root: 'active' | 'focused' | 'desktop';
+  maxDepth: number;
+  maxNodes: number;
+  includeOffscreen: boolean;
+}): string {
   return `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
-$RootMode = ${psLiteral(root)}
-$MaxDepth = ${maxDepth}
-$MaxNodes = ${maxNodes}
-$IncludeOffscreen = ${includeOffscreen ? '$true' : '$false'}
+$RootMode = ${psLiteral(options.root)}
+$TargetName = ${psLiteral(optionalString(options.name))}
+$TargetNameContains = ${psLiteral(optionalString(options.nameContains))}
+$TargetAutomationId = ${psLiteral(optionalString(options.automationId))}
+$TargetControlType = ${psLiteral(optionalString(options.controlType))}
+$TargetClassName = ${psLiteral(optionalString(options.className))}
+$TargetProcessId = ${optionalNumber(options.processId)}
+$TargetNativeWindowHandle = ${optionalNumber(options.nativeWindowHandle)}
+$AllMatches = ${options.allMatches === true ? '$true' : '$false'}
+$MaxDepth = ${options.maxDepth}
+$MaxNodes = ${options.maxNodes}
+$IncludeOffscreen = ${options.includeOffscreen ? '$true' : '$false'}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type @"
@@ -172,6 +200,45 @@ function RectToMap($rect) {
 function ControlTypeName($controlType) {
   if ($null -eq $controlType) { return '' }
   return ($controlType.ProgrammaticName -replace '^ControlType\\.', '')
+}
+
+function NormalizeText($value) {
+  return ([string]$value).Trim().ToLowerInvariant()
+}
+
+function ElementMatches($element) {
+  if ($null -eq $element) { return $false }
+  $current = $element.Current
+  $hasCriterion = $false
+  if ($TargetName) {
+    $hasCriterion = $true
+    if ((NormalizeText $current.Name) -ne (NormalizeText $TargetName)) { return $false }
+  }
+  if ($TargetNameContains) {
+    $hasCriterion = $true
+    if (-not (NormalizeText $current.Name).Contains((NormalizeText $TargetNameContains))) { return $false }
+  }
+  if ($TargetAutomationId) {
+    $hasCriterion = $true
+    if ((NormalizeText $current.AutomationId) -ne (NormalizeText $TargetAutomationId)) { return $false }
+  }
+  if ($TargetControlType) {
+    $hasCriterion = $true
+    if ((NormalizeText (ControlTypeName $current.ControlType)) -ne (NormalizeText $TargetControlType)) { return $false }
+  }
+  if ($TargetClassName) {
+    $hasCriterion = $true
+    if ((NormalizeText $current.ClassName) -ne (NormalizeText $TargetClassName)) { return $false }
+  }
+  if ($TargetProcessId -gt 0) {
+    $hasCriterion = $true
+    if ([int]$current.ProcessId -ne $TargetProcessId) { return $false }
+  }
+  if ($TargetNativeWindowHandle -gt 0) {
+    $hasCriterion = $true
+    if ([int]$current.NativeWindowHandle -ne $TargetNativeWindowHandle) { return $false }
+  }
+  return $hasCriterion
 }
 
 $script:Count = 0
@@ -221,7 +288,52 @@ function ConvertElement($element, [int]$depth) {
 }
 
 if ($RootMode -eq 'desktop') {
-  $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
+  $desktopRoot = [System.Windows.Automation.AutomationElement]::RootElement
+  $hasTarget = [bool]($TargetName -or $TargetNameContains -or $TargetAutomationId -or $TargetControlType -or $TargetClassName -or $TargetProcessId -gt 0 -or $TargetNativeWindowHandle -gt 0)
+  if ($hasTarget) {
+    $matches = @()
+    try {
+      $candidateCondition = if ($TargetName) {
+        New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          $TargetName
+        )
+      } elseif ($TargetAutomationId) {
+        New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+          $TargetAutomationId
+        )
+      } elseif ($TargetProcessId -gt 0) {
+        New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+          $TargetProcessId
+        )
+      } elseif ($TargetNativeWindowHandle -gt 0) {
+        New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::NativeWindowHandleProperty,
+          $TargetNativeWindowHandle
+        )
+      } else {
+        [System.Windows.Automation.Condition]::TrueCondition
+      }
+      $candidates = $desktopRoot.FindAll([System.Windows.Automation.TreeScope]::Descendants, $candidateCondition)
+      foreach ($candidate in $candidates) {
+        if (ElementMatches $candidate) {
+          $matches += $candidate
+          if (-not $AllMatches -or $matches.Count -ge 6) { break }
+        }
+      }
+    } catch {}
+    $trees = @()
+    foreach ($match in $matches) {
+      $converted = ConvertElement $match 0
+      if ($null -ne $converted) { $trees += $converted }
+      if ($script:Count -ge $MaxNodes) { break }
+    }
+    $rootElement = if ($matches.Count -gt 0) { $matches[0] } else { $null }
+  } else {
+    $rootElement = $desktopRoot
+  }
 } elseif ($RootMode -eq 'focused') {
   $rootElement = [System.Windows.Automation.AutomationElement]::FocusedElement
 } else {
@@ -232,7 +344,7 @@ if ($RootMode -eq 'desktop') {
   }
 }
 
-$tree = ConvertElement $rootElement 0
+$tree = if ($null -ne $trees -and $trees.Count -gt 0) { $trees[0] } else { ConvertElement $rootElement 0 }
 $result = [ordered]@{
   status = if ($null -eq $tree) { 'empty' } else { 'ok' }
   platform = 'win32'
@@ -242,6 +354,8 @@ $result = [ordered]@{
   capturedNodes = $script:Count
   truncated = [bool]$script:Truncated
   tree = $tree
+  trees = if ($null -ne $trees) { $trees } else { @() }
+  targetMatched = if ($RootMode -eq 'desktop' -and $hasTarget) { [bool]($null -ne $tree) } else { $null }
   note = 'Read-only Windows UI Automation snapshot. Use boundingRectangle with desktop mouse tools only after confirmation.'
 }
 $result | ConvertTo-Json -Depth 32 -Compress

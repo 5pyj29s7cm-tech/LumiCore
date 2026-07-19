@@ -8743,6 +8743,106 @@
     "en": "Voice Name",
     "zh": "声音名称"
   },
+  "we-chat-settings.desktop-watch-confirm-send.8998ae12ed": {
+    "en": "Confirm and send",
+    "zh": "确认并发送"
+  },
+  "we-chat-settings.desktop-watch-description.178efc2b3b": {
+    "en": "Watches the native desktop WeChat window for unread indicators. After you are idle, visible chat may be analyzed by your configured models to prepare a draft. It never sends without your confirmation.",
+    "zh": "后台检查电脑版微信未读提示；仅在你空闲后读取，并可能交由已配置模型分析、准备草稿；未经你确认绝不发送。"
+  },
+  "we-chat-settings.desktop-watch-dismiss-failed.2edee3698f": {
+    "en": "Failed to dismiss the WeChat watch item",
+    "zh": "忽略微信值守事项失败"
+  },
+  "we-chat-settings.desktop-watch-dismiss.9ccf5d09f2": {
+    "en": "Dismiss",
+    "zh": "忽略"
+  },
+  "we-chat-settings.desktop-watch-draft.44b27f1b2b": {
+    "en": "Reply draft",
+    "zh": "回复草稿"
+  },
+  "we-chat-settings.desktop-watch-enable.83ef3913c3": {
+    "en": "Enable duty mode",
+    "zh": "开启值守"
+  },
+  "we-chat-settings.desktop-watch-enabled.27aa612584": {
+    "en": "Desktop WeChat duty mode enabled",
+    "zh": "电脑版微信值守已开启"
+  },
+  "we-chat-settings.desktop-watch-last-scan.89e43c4289": {
+    "en": "Last scan: ",
+    "zh": "上次扫描："
+  },
+  "we-chat-settings.desktop-watch-no-pending.ef9e4a5da4": {
+    "en": "No WeChat messages are waiting for review.",
+    "zh": "目前没有等待处理的微信消息。"
+  },
+  "we-chat-settings.desktop-watch-pause.7191c2d9bd": {
+    "en": "Pause duty mode",
+    "zh": "暂停值守"
+  },
+  "we-chat-settings.desktop-watch-paused.8a90ff899c": {
+    "en": "Desktop WeChat duty mode paused",
+    "zh": "电脑版微信值守已暂停"
+  },
+  "we-chat-settings.desktop-watch-pending.9b39196186": {
+    "en": "pending",
+    "zh": "项待处理"
+  },
+  "we-chat-settings.desktop-watch-reply-sent.6e8198661c": {
+    "en": "The WeChat reply was sent and visibly verified",
+    "zh": "微信回复已发送并完成可见验证"
+  },
+  "we-chat-settings.desktop-watch-running.7c95612f89": {
+    "en": "Watching",
+    "zh": "值守中"
+  },
+  "we-chat-settings.desktop-watch-scan-complete.e9d80bd065": {
+    "en": "Desktop WeChat scan completed",
+    "zh": "电脑版微信扫描已完成"
+  },
+  "we-chat-settings.desktop-watch-scan-failed.4ac560b84c": {
+    "en": "Desktop WeChat scan failed",
+    "zh": "电脑版微信扫描失败"
+  },
+  "we-chat-settings.desktop-watch-scan-now.4d9a29c34e": {
+    "en": "Scan now",
+    "zh": "立即扫描"
+  },
+  "we-chat-settings.desktop-watch-send-confirmation-note.090199b14d": {
+    "en": "Review the exact contact and text. Sending represents you to another person.",
+    "zh": "请核对联系人和文字；发送后将代表你与对方沟通。"
+  },
+  "we-chat-settings.desktop-watch-send-failed.095456f2e8": {
+    "en": "The WeChat reply could not be verified as sent",
+    "zh": "微信回复未能验证为已发送"
+  },
+  "we-chat-settings.desktop-watch-sensitive.274fe20e82": {
+    "en": "Sensitive",
+    "zh": "敏感事项"
+  },
+  "we-chat-settings.desktop-watch-stopped.dbd30abebc": {
+    "en": "Paused",
+    "zh": "已暂停"
+  },
+  "we-chat-settings.desktop-watch-summary.5cc2aad5fc": {
+    "en": "Visible message summary",
+    "zh": "可见消息摘要"
+  },
+  "we-chat-settings.desktop-watch-title.86719d0f47": {
+    "en": "Desktop WeChat duty mode",
+    "zh": "电脑版微信值守"
+  },
+  "we-chat-settings.desktop-watch-unknown-contact.6fb6d6349a": {
+    "en": "Unidentified conversation",
+    "zh": "未识别会话"
+  },
+  "we-chat-settings.desktop-watch-update-failed.4ae0c83828": {
+    "en": "Failed to update desktop WeChat duty mode",
+    "zh": "更新电脑版微信值守失败"
+  },
   "we-chat-settings.a-local-administrator-must-authorize.f914ade1a6": {
     "en": "A local administrator must authorize the WeChat Bot first.",
     "zh": "需要本机管理员先授权微信 Bot。"

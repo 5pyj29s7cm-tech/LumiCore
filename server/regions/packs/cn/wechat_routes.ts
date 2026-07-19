@@ -20,6 +20,7 @@ import {
 } from './messaging_routes';
 import type { MessagingRouteOptions } from './messaging_routes';
 import { setActiveWeChatAdapter } from '../../../messaging/wechat_runtime';
+import { desktopWechatWatchService } from '../../../messaging/desktop_wechat_watch';
 
 function requireWechatAdmin(req: any, res: any): boolean {
   if (req.user?.role === 'admin') return true;
@@ -111,7 +112,55 @@ export function createWeChatRoutes(
         code: pendingPersonalBinding.code,
         expiresAt: pendingPersonalBinding.expiresAt,
       } : null,
+      desktopWatch: desktopWechatWatchService.status(req.user!.uid),
     });
+  });
+
+  // Desktop WeChat duty mode observes the user's native WeChat window. It is
+  // independent from the iLink bot connection above and never auto-sends.
+  router.put('/wechat/desktop-watch', requireAuth, (req, res) => {
+    try {
+      const config = desktopWechatWatchService.updateConfig(req.user!.uid, {
+        enabled: req.body?.enabled,
+        pollIntervalSeconds: req.body?.pollIntervalSeconds,
+        autoInspectWhenIdle: req.body?.autoInspectWhenIdle,
+        idleBeforeInspectSeconds: req.body?.idleBeforeInspectSeconds,
+        contactAllowlist: req.body?.contactAllowlist,
+      });
+      res.json({ success: true, ...desktopWechatWatchService.status(req.user!.uid), config });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to update desktop WeChat watch.' });
+    }
+  });
+
+  router.post('/wechat/desktop-watch/scan', requireAuth, async (req, res) => {
+    try {
+      res.json({ success: true, ...(await desktopWechatWatchService.scanNow(req.user!.uid)) });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Desktop WeChat scan failed.' });
+    }
+  });
+
+  router.post('/wechat/desktop-watch/events/:eventId/approve', requireAuth, async (req, res) => {
+    try {
+      const event = await desktopWechatWatchService.approveReply(
+        req.user!.uid,
+        req.params.eventId,
+        req.body?.draft ? String(req.body.draft) : undefined,
+      );
+      res.json({ success: event.status === 'sent', event, desktopWatch: desktopWechatWatchService.status(req.user!.uid) });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Desktop WeChat reply failed.' });
+    }
+  });
+
+  router.post('/wechat/desktop-watch/events/:eventId/dismiss', requireAuth, (req, res) => {
+    try {
+      const event = desktopWechatWatchService.dismissEvent(req.user!.uid, req.params.eventId);
+      res.json({ success: true, event, desktopWatch: desktopWechatWatchService.status(req.user!.uid) });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'Failed to dismiss desktop WeChat event.' });
+    }
   });
 
   // ── GET /wechat/config ──

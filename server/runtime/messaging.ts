@@ -10,6 +10,7 @@ import { loadEmotionalState } from "../personality/state";
 import { messagingConnectionManager } from "../messaging/connections";
 import type { MessagingRouteOptions } from "../messaging/routes";
 import { createDesktopRelay } from "../socket/desktop_relay";
+import { desktopWechatWatchService } from "../messaging/desktop_wechat_watch";
 
 export function setupMessaging(
   apiRouter: Router,
@@ -79,6 +80,13 @@ export function setupMessaging(
     },
   };
   messagingConnectionManager.configure(cfg, routeOptions);
+  if (io && routeOptions.createPersonalDesktopRelay) {
+    desktopWechatWatchService.configure({
+      io,
+      llmGetters,
+      createPersonalDesktopRelay: routeOptions.createPersonalDesktopRelay,
+    });
+  }
 
   // Always mount messaging routes so UI can save config even before env vars are set
   // Feishu
@@ -95,9 +103,11 @@ export function setupMessaging(
 }
 
 export function startMessagingConnections(): Promise<void> {
+  desktopWechatWatchService.start();
   return messagingConnectionManager.start();
 }
 
 export function stopMessagingConnections(): Promise<void> {
+  desktopWechatWatchService.stop();
   return messagingConnectionManager.stop();
 }

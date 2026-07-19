@@ -42,6 +42,7 @@ import { registerWorkTakeoverTools } from './work_takeover_tools';
 import { registerDesktopAiTools } from './desktop_ai_tools';
 import { registerMessagingTools } from './messaging_tools';
 import { registerModelConfigurationTools } from './model_configuration_tools';
+import { registerDesktopWechatWatchTools } from './desktop_wechat_watch_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -96,6 +97,7 @@ export function registerAllTools(
   registerWorkTakeoverTools(registry);
   registerDesktopAiTools(registry);
   registerMessagingTools(registry);
+  registerDesktopWechatWatchTools(registry);
   if (llmGetters) {
     setSkillLLMGetters(llmGetters);
   }
