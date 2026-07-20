@@ -1371,3 +1371,196 @@ html[data-mode="light"] [data-theme-scope="dark"] [class*="border-white\\/20"] {
   background: rgba(0,255,255,0.055);
   border-radius: 0 0.75rem 0.75rem 0;
 }
+
+/* Desktop DPI/display-scaling resilience. The OS may expose far fewer logical
+   pixels at 125%-200% scaling, so chrome must reflow instead of covering apps. */
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lumi-desktop-root {
+  height: 100dvh !important;
+}
+
+.lumi-shell-topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.lumi-shell-topbar-left,
+.lumi-shell-topbar-right {
+  min-width: 0;
+}
+
+.lumi-dock {
+  scrollbar-width: none;
+  overscroll-behavior-inline: contain;
+}
+
+.lumi-dock::-webkit-scrollbar {
+  display: none;
+}
+
+.lumi-dock > button {
+  flex: 0 0 auto;
+}
+
+[data-ui-density="compact"] .lumi-shell-topbar {
+  height: 36px;
+  gap: 8px;
+  padding-inline: 10px;
+}
+
+[data-ui-density="compact"] .lumi-shell-topbar-left,
+[data-ui-density="compact"] .lumi-shell-topbar-right,
+[data-ui-density="compact"] .lumi-shell-status-actions {
+  gap: 8px;
+}
+
+[data-ui-density="compact"] .lumi-shell-brand-label,
+[data-ui-density="compact"] .lumi-shell-optional,
+[data-ui-density="compact"] .lumi-shell-tutorial-label,
+[data-ui-density="compact"] .lumi-shell-wallpaper-label,
+[data-ui-density="compact"] .lumi-shell-date {
+  display: none;
+}
+
+[data-ui-density="compact"] .lumi-shell-tutorial,
+[data-ui-density="compact"] .lumi-shell-wallpaper,
+[data-ui-density="compact"] .lumi-shell-clock {
+  padding-inline: 8px;
+}
+
+[data-ui-density="compact"] .lumi-shell-window-controls {
+  margin-left: 0;
+}
+
+[data-ui-density="compact"] .lumi-dock {
+  bottom: 12px;
+  height: 52px;
+  max-width: calc(100vw - 20px);
+  gap: 4px;
+  padding-inline: 8px;
+}
+
+[data-ui-density="compact"] .lumi-dock > button {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+}
+
+[data-ui-density="compact"] .lumi-dock-separator {
+  margin-inline: 4px;
+}
+
+[data-ui-density="compact"] .os-window-header {
+  height: 40px;
+  padding-inline: 12px;
+}
+
+[data-ui-density="compact"] .os-window-body {
+  padding: 12px;
+}
+
+[data-ui-density="tight"] .lumi-shell-topbar {
+  height: 34px;
+  gap: 4px;
+  padding-inline: 6px;
+}
+
+[data-ui-density="tight"] .lumi-shell-topbar-left,
+[data-ui-density="tight"] .lumi-shell-topbar-right,
+[data-ui-density="tight"] .lumi-shell-status-actions {
+  gap: 4px;
+}
+
+[data-ui-density="tight"] .lumi-shell-brand-label,
+[data-ui-density="tight"] .lumi-shell-optional,
+[data-ui-density="tight"] .lumi-shell-tutorial-label,
+[data-ui-density="tight"] .lumi-shell-wallpaper-label,
+[data-ui-density="tight"] .lumi-shell-date,
+[data-ui-density="tight"] .lumi-shell-battery {
+  display: none;
+}
+
+[data-ui-density="tight"] .lumi-shell-tutorial,
+[data-ui-density="tight"] .lumi-shell-wallpaper,
+[data-ui-density="tight"] .lumi-shell-clock {
+  padding-inline: 6px;
+}
+
+[data-ui-density="tight"] .lumi-shell-window-controls {
+  gap: 0;
+  margin-left: 0;
+}
+
+[data-ui-density="tight"] .lumi-shell-window-controls > button {
+  width: 26px;
+  height: 26px;
+}
+
+[data-ui-density="tight"] .lumi-work-mode-switch button {
+  min-width: 32px;
+  padding-inline: 8px;
+}
+
+[data-ui-density="tight"] .lumi-work-mode-label {
+  display: none;
+}
+
+[data-ui-density="tight"] .lumi-dock {
+  bottom: 6px;
+  height: 44px;
+  max-width: calc(100vw - 12px);
+  gap: 3px;
+  padding-inline: 6px;
+}
+
+[data-ui-density="tight"] .lumi-dock > button {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+}
+
+[data-ui-density="tight"] .lumi-dock-separator {
+  height: 24px;
+  margin-inline: 2px;
+}
+
+[data-ui-density="tight"] .os-window-header {
+  height: 36px;
+  padding-inline: 8px;
+}
+
+[data-ui-density="tight"] .os-window-header button {
+  width: 28px;
+  height: 28px;
+}
+
+[data-ui-density="tight"] .os-window-body {
+  padding: 10px;
+}
+
+[data-ui-density="compact"] .lumi-control-center,
+[data-ui-density="tight"] .lumi-control-center {
+  right: 8px;
+  top: 42px;
+  max-height: calc(100dvh - 50px);
+  padding: 16px;
+}
+
+@media (max-height: 700px) {
+  .lumi-onboarding-copy {
+    min-height: 0;
+  }
+
+  .lumi-onboarding-content {
+    padding-bottom: 20px;
+  }
+}

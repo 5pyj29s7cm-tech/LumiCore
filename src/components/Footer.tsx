@@ -77,7 +77,7 @@ export function Footer({ t }: FooterProps) {
             </p>
           </div>
           <div className="flex gap-6 text-xs text-white/45">
-            <span>v3.0.1-stable</span>
+            <span>v3.0.2-stable</span>
             <span className="flex items-center gap-1">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
               {t.systemsOnline}

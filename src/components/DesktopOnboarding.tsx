@@ -230,7 +230,7 @@ export function DesktopOnboarding({ isOpen, onFinish, t }: OnboardingProps) {
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-auto">
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-2 sm:p-4 pointer-events-auto">
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -242,7 +242,7 @@ export function DesktopOnboarding({ isOpen, onFinish, t }: OnboardingProps) {
           initial={{ opacity: 0, scale: 0.96, y: 18 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: 18 }}
-          className="relative grid w-full max-w-5xl overflow-hidden rounded-3xl border border-white/10 bg-[#080a10]/95 shadow-2xl md:min-h-[580px] md:grid-cols-[300px_1fr]"
+          className="lumi-onboarding-dialog relative grid max-h-[calc(100dvh-1rem)] w-full max-w-5xl overflow-y-auto rounded-3xl border border-white/10 bg-[#080a10]/95 shadow-2xl md:min-h-[580px] md:grid-cols-[300px_1fr] sm:max-h-[calc(100dvh-2rem)]"
         >
           <button
             onClick={onFinish}
@@ -279,9 +279,9 @@ export function DesktopOnboarding({ isOpen, onFinish, t }: OnboardingProps) {
             </div>
           </aside>
 
-          <section className="p-6 pt-14 md:p-8 md:pt-14">
+          <section className="lumi-onboarding-content p-5 pt-14 sm:p-6 sm:pt-14 md:p-8 md:pt-14">
             <div className="grid gap-7 lg:grid-cols-[1fr_360px]">
-              <div className="flex min-h-[420px] flex-col">
+              <div className="lumi-onboarding-copy flex min-h-[420px] flex-col">
                 <motion.div
                   key={`copy-${currentStep}`}
                   initial={{ opacity: 0, y: 12 }}

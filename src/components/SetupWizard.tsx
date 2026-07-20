@@ -148,7 +148,7 @@ export function SetupWizard({ onFinish }: Props) {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -20 }}
-        className="max-w-md mx-auto"
+        className="mx-auto w-full max-w-md py-3"
       >
         {/* Step: Detection */}
         {step === 'detect' && (

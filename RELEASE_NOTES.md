@@ -1,5 +1,12 @@
 # Lumi OS Release Notes
 
+## v3.0.2 display-scaling adaptation
+
+- Added compact and tight desktop layouts for macOS/Windows display scaling.
+- Kept app windows clear of the top bar and dock at reduced logical resolutions.
+- Made first-run, onboarding, login, and control-center actions scrollable and reachable.
+- Added live visual-viewport tracking for scaling and mixed-DPI monitor changes.
+
 ## v3.0.1 macOS desktop-control repair
 
 - Preserves the legacy macOS `open` behavior that already launched AutoCAD, while adding installed `.app` discovery, localized aliases, and LaunchServices name lookup.

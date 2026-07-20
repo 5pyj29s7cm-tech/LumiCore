@@ -62,14 +62,16 @@ export function DesktopApp() {
   };
 
   return (
-    <div className="h-screen w-full bg-transparent overflow-hidden">
+    <div className="lumi-desktop-root h-screen w-full bg-transparent overflow-hidden">
       <ProactiveNotifications />
       <Toaster position="top-right" theme={resolvedAppearanceMode} />
       {showSetup ? (
-        <div className="h-full w-full flex items-center justify-center bg-black/80 p-8">
-          <Suspense fallback={null}>
-            <SetupWizard onFinish={() => { setShowSetup(false); localStorage.setItem(SETUP_DONE_KEY, '1'); }} />
-          </Suspense>
+        <div className="h-full w-full overflow-y-auto bg-black/80 p-4 sm:p-8">
+          <div className="flex min-h-full w-full items-center justify-center py-2">
+            <Suspense fallback={null}>
+              <SetupWizard onFinish={() => { setShowSetup(false); localStorage.setItem(SETUP_DONE_KEY, '1'); }} />
+            </Suspense>
+          </div>
         </div>
       ) : (
         <>

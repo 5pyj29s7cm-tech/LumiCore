@@ -85,7 +85,7 @@ export function LoginModal({ t, isOpen, onClose, onLoginSuccess, onGoogleLogin }
       <motion.div 
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-[#111] border border-white/10 rounded-[2rem] w-full max-w-md overflow-hidden shadow-2xl relative"
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[2rem] border border-white/10 bg-[#111] shadow-2xl"
       >
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-celestial-mars via-celestial-saturn to-celestial-mars" />
         

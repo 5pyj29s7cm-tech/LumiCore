@@ -114,6 +114,12 @@ import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 import { chatAttachmentRequestMatchesScope, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
+import {
+  getDesktopChromeMetrics,
+  getDesktopIconLayout,
+  resolveDesktopWindowBounds,
+  type ViewportSize,
+} from '@/lib/desktopLayout';
 
 const IDLE_AWAY_SECONDS = 5 * 60;
 const RETURN_IDLE_SECONDS = 30;
@@ -312,14 +318,13 @@ interface WindowProps {
   zIndex?: number;
 }
 
-type ViewportSize = {
-  width: number;
-  height: number;
-};
-
 const getViewportSize = (): ViewportSize => {
   if (typeof window === 'undefined') return { width: 1280, height: 820 };
-  return { width: window.innerWidth, height: window.innerHeight };
+  const visualViewport = window.visualViewport;
+  return {
+    width: Math.min(window.innerWidth, visualViewport?.width ?? window.innerWidth),
+    height: Math.min(window.innerHeight, visualViewport?.height ?? window.innerHeight),
+  };
 };
 
 function useViewportSize() {
@@ -333,9 +338,11 @@ function useViewportSize() {
     };
 
     window.addEventListener('resize', updateViewport);
+    window.visualViewport?.addEventListener('resize', updateViewport);
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', updateViewport);
+      window.visualViewport?.removeEventListener('resize', updateViewport);
     };
   }, []);
 
@@ -349,19 +356,6 @@ const parseWindowLength = (value: string | number | undefined, fallback: number)
     if (Number.isFinite(parsed)) return parsed;
   }
   return fallback;
-};
-
-const getDesktopIconLayout = (viewport: ViewportSize) => {
-  const compact = viewport.width < 820 || viewport.height < 620;
-  const startX = compact ? 8 : 40;
-  const startY = compact ? 4 : 0;
-  const cellWidth = compact ? 94 : 130;
-  const cellHeight = compact ? 98 : 120;
-  const widgetReserve = viewport.width >= 1280 ? 430 : 0;
-  const availableWidth = Math.max(cellWidth, viewport.width - startX * 2 - widgetReserve);
-  const columns = Math.max(2, Math.min(compact ? 3 : 4, Math.floor(availableWidth / cellWidth)));
-
-  return { compact, startX, startY, cellWidth, cellHeight, columns };
 };
 
 function OSWindow({
@@ -388,28 +382,13 @@ function OSWindow({
   const constrainRef = React.useRef<HTMLDivElement>(null);
   const viewport = useViewportSize();
 
-  const isSnapped = isMaximized || snapZone !== 'none';
-  const compact = viewport.width < 820 || viewport.height < 640;
-  const safeInset = compact ? 8 : 16;
-  const topInset = compact ? 8 : 48;
-  const bottomInset = compact ? 68 : 96;
-  const availableWidth = Math.max(320, viewport.width - safeInset * 2);
-  const availableHeight = Math.max(300, viewport.height - topInset - bottomInset);
-  const roomyScale = viewport.width >= 1500 && viewport.height >= 850
-    ? Math.min(1.18, viewport.width / 1600)
-    : 1;
-  const requestedWidth = parseWindowLength(width, Math.min(900, availableWidth)) * roomyScale;
-  const requestedHeight = parseWindowLength(height, Math.min(700, availableHeight)) * Math.min(roomyScale, 1.12);
-  const fittedWidth = Math.round(Math.min(requestedWidth, availableWidth));
-  const fittedHeight = Math.round(Math.min(requestedHeight, availableHeight));
-  const normalLeft = Math.max(safeInset, Math.round((viewport.width - fittedWidth) / 2));
-  const normalTop = Math.max(topInset, Math.round(topInset + (availableHeight - fittedHeight) / 2));
-  const snappedWidth = isMaximized || compact ? availableWidth : Math.floor(availableWidth / 2);
-  const snappedLeft = isMaximized || snapZone === 'left'
-    ? safeInset
-    : safeInset + availableWidth - snappedWidth;
-  const resolvedWidth = isSnapped ? snappedWidth : fittedWidth;
-  const resolvedHeight = isSnapped ? availableHeight : fittedHeight;
+  const chrome = getDesktopChromeMetrics(viewport);
+  const bounds = resolveDesktopWindowBounds(
+    viewport,
+    parseWindowLength(width, Math.min(900, chrome.availableWidth)),
+    parseWindowLength(height, Math.min(700, chrome.availableHeight)),
+    isMaximized ? 'maximized' : snapZone,
+  );
 
   return (
     <>
@@ -425,8 +404,8 @@ function OSWindow({
         onDragStart={() => setIsDragging(true)}
         onDragEnd={(_e, info) => {
           setIsDragging(false);
-          if (info.point.x < safeInset + 80) setSnapZone('left');
-          else if (info.point.x > viewport.width - safeInset - 80) setSnapZone('right');
+          if (info.point.x < bounds.safeInset + 80) setSnapZone('left');
+          else if (info.point.x > viewport.width - bounds.safeInset - 80) setSnapZone('right');
           else setSnapZone('none');
         }}
         initial={{
@@ -434,10 +413,10 @@ function OSWindow({
           scale: 0.92,
           y: 12,
           filter: 'blur(0px)',
-          width: resolvedWidth,
-          height: resolvedHeight,
-          top: isSnapped ? topInset : normalTop,
-          left: isSnapped ? snappedLeft : normalLeft,
+          width: bounds.width,
+          height: bounds.height,
+          top: bounds.top,
+          left: bounds.left,
           x: 0,
         }}
         animate={isMinimized
@@ -447,10 +426,10 @@ function OSWindow({
               scale: 1,
               y: 0,
               filter: 'blur(0px)',
-              width: resolvedWidth,
-              height: resolvedHeight,
-              top: isSnapped ? topInset : normalTop,
-              left: isSnapped ? snappedLeft : normalLeft,
+              width: bounds.width,
+              height: bounds.height,
+              top: bounds.top,
+              left: bounds.left,
               x: 0,
               transition: { type: 'spring', stiffness: 300, damping: 26, mass: 0.8 },
             }
@@ -462,8 +441,8 @@ function OSWindow({
         style={{
           zIndex: isMinimized ? zIndex - 100 : zIndex,
           position: 'fixed',
-          maxWidth: `calc(100vw - ${safeInset * 2}px)`,
-          maxHeight: `${availableHeight}px`,
+          maxWidth: `calc(100vw - ${bounds.safeInset * 2}px)`,
+          maxHeight: `${bounds.availableHeight}px`,
         }}
         onClick={() => !isMinimized && onFocus(id)}
         className={`os-window pointer-events-auto overflow-hidden ${isMaximized ? 'rounded-2xl' : 'rounded-3xl'} ${isActive ? 'ring-1 ring-white/15' : ''} ${isMinimized ? 'pointer-events-none' : ''} ${isDragging ? 'is-dragging' : ''}`}
@@ -520,7 +499,7 @@ function OSWindow({
           </div>
         </div>
         <div
-          className="os-window-content bg-[#05050a]/98 backdrop-blur-3xl h-full"
+          className="os-window-content bg-[#05050a]/98 backdrop-blur-3xl"
           style={isDragging ? { backdropFilter: 'none' } : undefined}
         >
           {children}
@@ -551,7 +530,7 @@ function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, 
       initial={{ opacity: 0, y: -20, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -20, scale: 0.95 }}
-      className="fixed top-12 right-6 w-80 glass-dark rounded-[2.5rem] p-6 z-[100] shadow-[0_30px_70px_rgba(0,0,0,0.7)] border border-white/10 backdrop-blur-3xl"
+      className="lumi-control-center fixed right-6 top-12 z-[100] max-h-[calc(100dvh-3.5rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[2.5rem] border border-white/10 p-6 shadow-[0_30px_70px_rgba(0,0,0,0.7)] backdrop-blur-3xl glass-dark"
     >
       <div className="flex items-center justify-between mb-6">
         <h3 className="text-xs font-black uppercase tracking-widest text-white/40">{t.nexusControl || 'Nexus Control'}</h3>
@@ -653,7 +632,7 @@ function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, 
         </div>
       </div>
       <div className="mt-6 pt-6 border-t border-white/5 flex items-center justify-between font-sans">
-        <span className="text-xs font-bold text-white/45 tracking-widest uppercase">{t.desktopVersion || 'Lumi OS v3.0.1'}</span>
+        <span className="text-xs font-bold text-white/45 tracking-widest uppercase">{t.desktopVersion || 'Lumi OS v3.0.2'}</span>
         <button onClick={onClose} className="text-xs font-black text-celestial-saturn hover:underline uppercase tracking-widest">{t.closeNexus || 'Close Nexus'}</button>
       </div>
     </motion.div>
@@ -1691,6 +1670,7 @@ export function DesktopUI({
   const [wallpaper, setWallpaper] = useState<string>(() => localStorage.getItem('lumi_wallpaper_type') || 'celestial');
   const [wallpaperUrl, setWallpaperUrl] = useState<string>(() => localStorage.getItem('lumi_wallpaper_url') || '');
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
+  const desktopChrome = useMemo(() => getDesktopChromeMetrics(viewport), [viewport]);
   const desktopIconLayout = useMemo(() => getDesktopIconLayout(viewport), [viewport]);
 
   useEffect(() => {
@@ -4432,6 +4412,7 @@ export function DesktopUI({
       data-theme-scope="shell"
       data-appearance={resolvedAppearanceMode}
       data-view-mode={viewMode}
+      data-ui-density={desktopChrome.density}
       onContextMenu={handleShellContextMenu}
       className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${resolvedAppearanceMode === 'light' ? 'lumi-light-shell' : 'lumi-dark-shell'} ${
       isWallpaperMode ? 'bg-transparent pointer-events-none' :
@@ -4629,29 +4610,29 @@ export function DesktopUI({
         {/* Top Status Bar */}
         <div
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
-          className={`absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+          className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
         >
-          <div className="flex items-center gap-6 flex-1">
+          <div className="lumi-shell-topbar-left flex min-w-0 items-center gap-6">
             <button data-lumi-target="home" onClick={() => toggleWindow('home')} className="flex items-center gap-2 group transition-all">
                <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-celestial-mars to-celestial-saturn flex items-center justify-center p-1 group-hover:rotate-12 transition-transform shadow-lg shadow-celestial-saturn/20">
                  <Rocket size={14} className="text-white" />
                </div>
-               <span className="text-xs font-black tracking-widest uppercase text-white/60">{t.lumiOS || 'Lumi OS'}</span>
+               <span className="lumi-shell-brand-label text-xs font-black tracking-widest uppercase text-white/60">{t.lumiOS || 'Lumi OS'}</span>
             </button>
-            <div className="h-4 w-px bg-white/10" />
+            <div className="lumi-shell-optional h-4 w-px bg-white/10" />
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowOnboarding(true)}
-                className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-black uppercase tracking-widest text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+                className="lumi-shell-tutorial flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-black uppercase tracking-widest text-white/50 transition-colors hover:bg-white/10 hover:text-white"
                 title={tutorialLabel}
               >
                 <Sparkles size={12} />
-                {tutorialLabel}
+                <span className="lumi-shell-tutorial-label">{tutorialLabel}</span>
               </button>
             </div>
           </div>
 
-          <div className="flex items-center justify-center">
+          <div className="lumi-shell-topbar-center flex items-center justify-center">
             <WorkModeSwitch
               domain={workDomain}
               onSelectDomain={switchDomain}
@@ -4664,8 +4645,8 @@ export function DesktopUI({
             />
           </div>
 
-          <div className="flex items-center gap-6 flex-1 justify-end">
-            <div className="flex items-center gap-4 text-white/55">
+          <div className="lumi-shell-topbar-right flex min-w-0 items-center gap-6 justify-end">
+            <div className="lumi-shell-status-actions flex items-center gap-4 text-white/55">
                <div className="flex items-center gap-1" onClick={() => setIsSearchOpen(true)}><Search size={14} className="hover:text-white transition-colors cursor-pointer" /></div>
                <button
                  onClick={() => setIsNotificationPanelOpen(prev => !prev)}
@@ -4690,10 +4671,10 @@ export function DesktopUI({
                  {isMuted ? <VolumeX size={14} className="text-red-400" /> : <Volume2 size={14} />}
                </button>
                {/* Battery — real via navigator.getBattery() */}
-                <BatteryIndicator lang={lang} />
+               <span className="lumi-shell-battery"><BatteryIndicator lang={lang} /></span>
                <button
                  onClick={toggleWallpaperMode}
-                 className={`h-6 px-2 rounded-md border transition-all flex items-center gap-1 text-[12px] font-bold uppercase tracking-wider ${
+                 className={`lumi-shell-wallpaper h-6 px-2 rounded-md border transition-all flex items-center gap-1 text-[12px] font-bold uppercase tracking-wider ${
                    isWallpaperMode
                      ? 'bg-celestial-saturn/20 text-celestial-saturn border-celestial-saturn/30'
                      : 'bg-white/5 border-white/5 text-white/55 hover:bg-white/10 hover:text-white'
@@ -4701,23 +4682,23 @@ export function DesktopUI({
                   title={isWallpaperMode ? (uiMessage('desktop-ui.exit-wallpaper-mode.9b9dd6514d', (lang === 'zh') ? 'zh' : 'en')) : (uiMessage('desktop-ui.wallpaper-mode.eb93c52005', (lang === 'zh') ? 'zh' : 'en'))}
                >
                  <Zap size={10} className={isWallpaperMode ? 'animate-pulse' : ''} />
-                 {isWallpaperMode ? 'Fusion' : (uiMessage('desktop-ui.wallpaper.b2aa8da019', (lang === 'zh') ? 'zh' : 'en'))}
+                 <span className="lumi-shell-wallpaper-label">{isWallpaperMode ? 'Fusion' : (uiMessage('desktop-ui.wallpaper.b2aa8da019', (lang === 'zh') ? 'zh' : 'en'))}</span>
                </button>
             </div>
 
             <button
               onClick={() => setIsControlCenterOpen(!isControlCenterOpen)}
-              className="flex items-center gap-3 px-3 py-1 bg-white/5 hover:bg-white/10 rounded-full border border-white/5 transition-all group"
+              className="lumi-shell-clock flex items-center gap-3 px-3 py-1 bg-white/5 hover:bg-white/10 rounded-full border border-white/5 transition-all group"
             >
               <div className="flex flex-col items-end">
                 <span className="text-[12px] font-black text-white/80 leading-none">{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                <span className="text-xs font-bold text-white/55 uppercase tracking-tighter">{time.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+                <span className="lumi-shell-date text-xs font-bold text-white/55 uppercase tracking-tighter">{time.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
               </div>
               <Activity size={14} className="text-celestial-saturn group-hover:rotate-180 transition-transform duration-500" />
             </button>
 
             {/* Window Controls */}
-            <div className="flex items-center gap-1 ml-2">
+            <div className="lumi-shell-window-controls flex items-center gap-1 ml-2">
               <button
                 onClick={() => void enterDesktopWidgetMode()}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors"
@@ -4802,7 +4783,7 @@ export function DesktopUI({
         {/* Bottom Taskbar / Dock */}
         <div
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
-          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}
+          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}
         >
           <button 
             onClick={() => setViewMode(viewMode === 'personal' ? 'world' : 'personal')}
@@ -4829,7 +4810,7 @@ export function DesktopUI({
               {t.knowledgeBase || 'Knowledge Base'}
             </div>
           </button>
-          <div className="h-8 w-px bg-white/10 mx-2" />
+          <div className="lumi-dock-separator h-8 w-px shrink-0 bg-white/10 mx-2" />
           <AnimatePresence>
             {dockApps.map(app => {
               const isActive = openWindows.includes(app.id) || (app.id === 'chat' && chatOpen);
@@ -4875,7 +4856,7 @@ export function DesktopUI({
               );
             })}
           </AnimatePresence>
-          <div className="h-8 w-px bg-white/10 mx-2" />
+          <div className="lumi-dock-separator h-8 w-px shrink-0 bg-white/10 mx-2" />
           {user ? (
             <button
               onClick={() => toggleWindow('profile')}

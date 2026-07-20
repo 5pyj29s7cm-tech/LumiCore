@@ -79,7 +79,7 @@ export function WorkModeSwitch({
   };
 
   return (
-    <div className={`flex h-8 items-center rounded-full border border-white/10 bg-black/20 p-0.5 text-[11px] font-black uppercase tracking-widest ${switching ? 'opacity-75' : ''}`}>
+    <div className={`lumi-work-mode-switch flex h-8 items-center rounded-full border border-white/10 bg-black/20 p-0.5 text-[11px] font-black uppercase tracking-widest ${switching ? 'opacity-75' : ''}`}>
       <button
         type="button"
         onClick={handlePersonal}
@@ -92,7 +92,7 @@ export function WorkModeSwitch({
         } disabled:cursor-wait`}
       >
         <User size={13} />
-        {uiMessage('work-mode-switch.personal.d3eb901f5d')}
+        <span className="lumi-work-mode-label">{uiMessage('work-mode-switch.personal.d3eb901f5d')}</span>
       </button>
       <button
         type="button"
@@ -106,7 +106,7 @@ export function WorkModeSwitch({
         } disabled:cursor-wait`}
       >
         {switching ? <Loader2 size={13} className="animate-spin" /> : <Building2 size={13} />}
-        {uiMessage('work-mode-switch.organization.86b86ee61b')}
+        <span className="lumi-work-mode-label">{uiMessage('work-mode-switch.organization.86b86ee61b')}</span>
       </button>
     </div>
   );
