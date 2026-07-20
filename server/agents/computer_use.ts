@@ -57,6 +57,8 @@ export type DesktopScreenGeometry = {
   screenY: number;
   width: number;
   height: number;
+  inputWidth: number;
+  inputHeight: number;
 };
 
 const DEFAULT_COMPUTER_USE_ITERATIONS = 12;
@@ -106,9 +108,15 @@ async function executeAction(
   desktopRelay: ComputerUseOptions['desktopRelay'],
   screen: DesktopScreenGeometry,
 ): Promise<void> {
+  const scaleX = screen.width > 0 && screen.inputWidth > 0 ? screen.inputWidth / screen.width : 1;
+  const scaleY = screen.height > 0 && screen.inputHeight > 0 ? screen.inputHeight / screen.height : 1;
   const screenAction = action.x === undefined || action.y === undefined
     ? action
-    : { ...action, x: Math.round(action.x + screen.screenX), y: Math.round(action.y + screen.screenY) };
+    : {
+      ...action,
+      x: Math.round(action.x * scaleX + screen.screenX),
+      y: Math.round(action.y * scaleY + screen.screenY),
+    };
   switch (action.action) {
     case 'click':
       await moveVisibleCursor(screenAction, desktopRelay);
@@ -218,9 +226,11 @@ export function parseDesktopScreenGeometry(raw: string): DesktopScreenGeometry {
       screenY: Number(parsed.screen_y ?? parsed.screenY) || 0,
       width: Math.max(0, Number(parsed.width) || 0),
       height: Math.max(0, Number(parsed.height) || 0),
+      inputWidth: Math.max(0, Number(parsed.input_width ?? parsed.inputWidth) || Number(parsed.width) || 0),
+      inputHeight: Math.max(0, Number(parsed.input_height ?? parsed.inputHeight) || Number(parsed.height) || 0),
     };
   } catch {
-    return { screenX: 0, screenY: 0, width: 0, height: 0 };
+    return { screenX: 0, screenY: 0, width: 0, height: 0, inputWidth: 0, inputHeight: 0 };
   }
 }
 
@@ -429,7 +439,7 @@ export async function computerUseLoop(
     // ── 1. Capture screenshot ──
     let screenshotBase64: string;
     let screenshotMime = 'image/jpeg';
-    let screenGeometry: DesktopScreenGeometry = { screenX: 0, screenY: 0, width: 0, height: 0 };
+    let screenGeometry: DesktopScreenGeometry = { screenX: 0, screenY: 0, width: 0, height: 0, inputWidth: 0, inputHeight: 0 };
     const windowBeforeCapture = await readDesktopWindowFingerprint(options.desktopRelay);
     let observedWindow: DesktopWindowFingerprint | null = null;
     try {

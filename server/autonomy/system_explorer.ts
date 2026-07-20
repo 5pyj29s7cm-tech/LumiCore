@@ -44,6 +44,7 @@ export interface AppDiscoveryStats {
   desktopShortcuts: number;
   commonFolderEntries: number;
   pathExecutables: number;
+  applicationBundles?: number;
   scannedRoots: string[];
   limitReached: boolean;
 }
@@ -254,6 +255,42 @@ function collectPathExecutables(maxEntries: number): string[] {
   return names;
 }
 
+function getMacApplicationRoots(): string[] {
+  return uniqueExistingDirs([
+    '/Applications',
+    '/System/Applications',
+    path.join(os.homedir(), 'Applications'),
+  ]);
+}
+
+export function collectMacApplicationBundles(roots: string[], maxEntries: number): string[] {
+  const names: string[] = [];
+  const seenPaths = new Set<string>();
+  for (const root of roots) {
+    const stack = [{ dir: root, depth: 0 }];
+    while (stack.length > 0 && names.length < maxEntries) {
+      const { dir, depth } = stack.pop()!;
+      let entries: fs.Dirent[] = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const fullPath = path.join(dir, entry.name);
+        const pathKey = fullPath.toLocaleLowerCase();
+        if (seenPaths.has(pathKey)) continue;
+        seenPaths.add(pathKey);
+        if (/\.app$/i.test(entry.name)) {
+          const name = cleanAppName(entry.name.replace(/\.app$/i, ''));
+          if (name) names.push(name);
+          continue;
+        }
+        if (depth < 3) stack.push({ dir: fullPath, depth: depth + 1 });
+        if (names.length >= maxEntries) break;
+      }
+    }
+  }
+  return names;
+}
+
 function getRegistryInstalledApps(): string[] {
   const apps: string[] = [];
   const out = exec(`powershell -NoProfile -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* 2>$null | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName -First 1000"`);
@@ -267,6 +304,26 @@ function getRegistryInstalledApps(): string[] {
 }
 
 function getInstalledApps(): { apps: string[]; discovery: AppDiscoveryStats } {
+  if (os.platform() === 'darwin') {
+    const roots = getMacApplicationRoots();
+    const applicationBundles = collectMacApplicationBundles(roots, APP_SCAN_LIMIT);
+    const pathExecutables = collectPathExecutables(250);
+    const apps = mergeApps(applicationBundles, pathExecutables);
+    return {
+      apps,
+      discovery: {
+        registryEntries: 0,
+        startMenuShortcuts: 0,
+        desktopShortcuts: 0,
+        commonFolderEntries: 0,
+        pathExecutables: pathExecutables.length,
+        applicationBundles: applicationBundles.length,
+        scannedRoots: roots,
+        limitReached: apps.length >= APP_SCAN_LIMIT,
+      },
+    };
+  }
+
   const registryApps = getRegistryInstalledApps();
   const startMenuDirs = getStartMenuDirs();
   const desktopDirs = getDesktopDirs();
@@ -291,11 +348,36 @@ function getInstalledApps(): { apps: string[]; discovery: AppDiscoveryStats } {
 }
 
 function getStartupPrograms(): string[] {
+  if (os.platform() === 'darwin') {
+    const roots = uniqueExistingDirs([
+      path.join(os.homedir(), 'Library', 'LaunchAgents'),
+      '/Library/LaunchAgents',
+      '/Library/LaunchDaemons',
+    ]);
+    return mergeApps(...roots.map((root) => {
+      try {
+        return fs.readdirSync(root)
+          .filter(name => /\.plist$/i.test(name))
+          .map(name => name.replace(/\.plist$/i, ''));
+      } catch {
+        return [];
+      }
+    })).slice(0, 300);
+  }
   const out = exec(`powershell -NoProfile -Command "Get-CimInstance Win32_StartupCommand 2>$null | Select-Object -ExpandProperty Name"`);
   return out ? out.split("\n").map(l => l.trim()).filter(Boolean) : [];
 }
 
 function getRunningServices(): string[] {
+  if (os.platform() === 'darwin') {
+    const out = exec('launchctl list');
+    return out
+      .split('\n')
+      .slice(1)
+      .map(line => line.trim().split(/\s+/).slice(2).join(' '))
+      .filter(Boolean)
+      .slice(0, 100);
+  }
   const out = exec(`powershell -NoProfile -Command "Get-Service 2>$null | Where-Object { $_.Status -eq 'Running' } | Select-Object -ExpandProperty DisplayName -First 100"`);
   return out ? out.split("\n").map(l => l.trim()).filter(Boolean) : [];
 }
@@ -471,7 +553,7 @@ function scanSoftwareProfile(): SoftwareProfile {
     installedApps: discovered.apps,
     appDiscovery: discovered.discovery,
     startupPrograms: getStartupPrograms(),
-    nodeVersion: exec("node --version") || undefined,
+    nodeVersion: process.version || undefined,
     pythonVersion: exec("python --version 2>&1") || exec("python3 --version 2>&1") || undefined,
     runningServices: getRunningServices(),
   };

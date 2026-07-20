@@ -9,7 +9,8 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 if ([string]::IsNullOrWhiteSpace($Installer)) {
-  $Installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\Lumi OS_3.0.0_x64-setup.exe"
+  $PackageJson = Get-Content (Join-Path $ProjectRoot "package.json") -Raw | ConvertFrom-Json
+  $Installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\Lumi OS_$($PackageJson.version)_x64-setup.exe"
 }
 $Installer = [System.IO.Path]::GetFullPath($Installer)
 if (!(Test-Path $Installer)) {

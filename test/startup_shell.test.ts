@@ -31,7 +31,7 @@ describe('desktop startup shell', () => {
     expect(rustEntry).toContain('webview.window().show()');
   });
 
-  it('merges macOS camera and microphone permission prompts at bundle time', () => {
+  it('merges macOS media, automation, and protected-folder permission prompts at bundle time', () => {
     const tauriConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'));
     const plistPath = path.join(process.cwd(), 'src-tauri', tauriConfig.bundle.macOS.infoPlist);
     const infoPlist = fs.readFileSync(plistPath, 'utf8');
@@ -42,11 +42,27 @@ describe('desktop startup shell', () => {
 
     expect(infoPlist).toContain('<key>NSCameraUsageDescription</key>');
     expect(infoPlist).toContain('<key>NSMicrophoneUsageDescription</key>');
+    expect(infoPlist).toContain('<key>NSAppleEventsUsageDescription</key>');
+    expect(infoPlist).toContain('<key>NSDesktopFolderUsageDescription</key>');
+    expect(infoPlist).toContain('<key>NSDocumentsFolderUsageDescription</key>');
+    expect(infoPlist).toContain('<key>NSDownloadsFolderUsageDescription</key>');
     expect(infoPlist).not.toContain('<key>CFBundleVersion</key>');
     expect(infoPlist).not.toContain('<key>CFBundleExecutable</key>');
     expect(macBuildWorkflow).toContain("Print :NSCameraUsageDescription");
     expect(macBuildWorkflow).toContain("Print :NSMicrophoneUsageDescription");
+    expect(macBuildWorkflow).toContain("Print :NSAppleEventsUsageDescription");
     expect(macBuildWorkflow).toContain('CFBundleShortVersionString');
+  });
+
+  it('keeps the legacy macOS open fallback after indexed and LaunchServices app lookup', () => {
+    const rustEntry = fs.readFileSync(path.join(process.cwd(), 'src-tauri/src/lib.rs'), 'utf8');
+    const indexed = rustEntry.indexOf('try_launch_macos_app(&target)');
+    const registered = rustEntry.indexOf('Command::new("open").args(["-a", &target])');
+    const legacy = rustEntry.indexOf('Command::new("open").arg(&target).output()');
+
+    expect(indexed).toBeGreaterThan(-1);
+    expect(registered).toBeGreaterThan(indexed);
+    expect(legacy).toBeGreaterThan(registered);
   });
 
   it('tracks the replacement backend after a supervised restart', () => {
@@ -65,5 +81,13 @@ describe('desktop startup shell', () => {
     expect(buildScript).toContain("'@larksuiteoapi/node-sdk'");
     expect(resourceScript).toContain("'@larksuiteoapi/node-sdk'");
     expect(packagedSmoke).toContain("'packaged Lark SDK'");
+  });
+
+  it('packages Sharp native dependencies for the build host instead of Windows-only binaries', () => {
+    const resourceScript = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-desktop-resources.mjs'), 'utf8');
+    expect(resourceScript).toContain('sharp-darwin-${sharpArch}');
+    expect(resourceScript).toContain('sharp-win32-${sharpArch}');
+    expect(resourceScript).toContain('platformSharpPackages');
+    expect(resourceScript).not.toContain("'sharp-win32-x64',");
   });
 });

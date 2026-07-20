@@ -47,7 +47,7 @@ export interface LumiCapabilitySelection {
 const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
   conversation: [],
   client_surface: ['client_get_state', 'client_action'],
-  self_repair: ['client_get_state', 'client_health_check', 'client_self_repair', 'desktop_ui_snapshot'],
+  self_repair: ['client_get_state', 'client_health_check', 'client_self_repair', 'desktop_capability_status', 'desktop_ui_snapshot'],
   capability_learning: [
     'capability_learning_list',
     'self_extension_plan',
@@ -112,6 +112,7 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'mcp_cad-drafting_autocad_playback_file',
   ],
   desktop_control: [
+    'desktop_capability_status',
     'desktop_ai_list_targets',
     'desktop_ai_discovery_plan',
     'desktop_ai_roundtable',

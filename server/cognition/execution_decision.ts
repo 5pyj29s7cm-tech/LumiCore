@@ -90,6 +90,7 @@ export function buildSelfRepairToolPolicy(text: string): ToolPolicy {
   if (explicitSkillRepair) allowedTools.push('client_repair_skill');
   if (SELF_REPAIR_DESKTOP_RE.test(requested)) {
     allowedTools.push(
+      'desktop_capability_status',
       'desktop_active_window',
       'desktop_running_processes',
       'desktop_ui_snapshot',

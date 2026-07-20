@@ -7,6 +7,13 @@ async function desktopSystemInfo(_args: Record<string, any>, context?: any): Pro
   return context.desktopRelay('desktop_system_info', {});
 }
 
+async function desktopCapabilityStatus(_args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) {
+    throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
+  }
+  return context.desktopRelay('desktop_capability_status', {});
+}
+
 async function desktopListFiles(args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
@@ -88,6 +95,20 @@ async function desktopPollActivity(_args: Record<string, any>, context?: any): P
 
 export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
+    name: 'desktop_capability_status',
+    description:
+      'Read native desktop readiness by capability: app discovery and launch, screen capture, input control, and macOS Accessibility/Screen Recording authorization. Use this before diagnosing desktop permissions. There is no separate Lumi external-app automation switch.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+    handler: desktopCapabilityStatus,
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
     name: 'desktop_system_info',
     description:
       'Get real host system info (OS, CPU, memory, home directory) from the desktop machine. Use this instead of get_system_info when you need actual hardware details, not just the server process view.',
@@ -121,7 +142,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_open',
     description:
-      'Open a file, folder, application, or URL using the OS default handler. For common apps, the native client first resolves launch history, Desktop shortcuts, Start Menu shortcuts, and known install paths, so app names like "微信", "WeChat", "WPS", "浏览器", "剪映", or "CAD" should be opened through this tool instead of guessing paths. This is the preferred way to visibly launch something on the user\'s desktop.',
+      'Open a file, folder, application, or URL using the native OS. On macOS this resolves installed .app bundles and localized aliases before preserving the direct LaunchServices/open fallback; on Windows it resolves launch history, Desktop/Start Menu shortcuts, and known install paths. App names such as WeChat, WPS, a browser, AutoCAD, or CAD should be opened through this tool instead of guessing paths.',
     parameters: {
       type: 'object',
       properties: {
@@ -137,7 +158,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_list_apps',
     description:
-      'List launchable local desktop applications known by the native client. It checks successful launch history, Desktop shortcuts, Start Menu shortcuts, and common install paths. Use this before opening an app when the exact local path is unknown, especially for Chinese app names or user-specific installs.',
+      'List launchable local desktop applications known by the native client. On macOS it scans /Applications, /System/Applications, and the user Applications folder for .app bundles; on Windows it checks successful launch history, Desktop/Start Menu shortcuts, and common install paths. Use this before opening an app when the exact local path is unknown.',
     parameters: {
       type: 'object',
       properties: {

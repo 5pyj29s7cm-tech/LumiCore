@@ -31,16 +31,17 @@ const optionalRuntimePackageTrees = [
   '@minimax/mcp-js',
   '@e2b/mcp-server',
 ];
+const sharpArch = process.arch === 'arm64' ? 'arm64' : process.arch === 'ia32' ? 'ia32' : 'x64';
+const platformSharpPackages = process.platform === 'darwin'
+  ? [`sharp-darwin-${sharpArch}`, `sharp-libvips-darwin-${sharpArch}`]
+  : process.platform === 'win32'
+    ? [`sharp-win32-${sharpArch}`, `sharp-libvips-win32-${sharpArch}`]
+    : [`sharp-linux-${sharpArch}`, `sharp-libvips-linux-${sharpArch}`];
 const runtimeScopedNodeModules = {
   '@img': [
     'colour',
-    'sharp-win32-x64',
-    'sharp-win32-arm64',
-    'sharp-win32-ia32',
     'sharp-wasm32',
-    'sharp-libvips-win32-x64',
-    'sharp-libvips-win32-arm64',
-    'sharp-libvips-win32-ia32',
+    ...platformSharpPackages,
   ],
 };
 const ignoredNames = new Set([

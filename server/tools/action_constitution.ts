@@ -204,7 +204,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
   if (name === 'desktop_ai_list_targets' || name === 'desktop_ai_discovery_plan') return 'observe';
   if (name === 'desktop_ai_register_target') return 'local_write';
-  if (name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';
+  if (name === 'desktop_capability_status' || name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';
   if (isTrustedDesktopRunCommand(toolName, args)) return 'desktop_control';
   if (name === 'cad_prepare_autocad_operations') return 'local_write';
   if (name === 'mcp_cad-drafting_autocad_playback_file') return 'desktop_control';

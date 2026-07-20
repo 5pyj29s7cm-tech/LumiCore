@@ -56,6 +56,7 @@ interface SystemSnapshot {
       desktopShortcuts?: number;
       commonFolderEntries?: number;
       pathExecutables?: number;
+      applicationBundles?: number;
       scannedRoots?: string[];
       limitReached?: boolean;
     };
@@ -99,6 +100,23 @@ interface EcosystemStats {
 interface ProviderStatus {
   available: boolean;
   model?: string;
+}
+
+interface DesktopCapabilitySnapshot {
+  platform?: string;
+  shell_available?: boolean;
+  app_discovery_available?: boolean;
+  app_launch_available?: boolean;
+  screen_capture_available?: boolean;
+  input_available?: boolean;
+  accessibility_permission?: 'granted' | 'required' | 'not_required' | 'unknown';
+  screen_recording_permission?: 'granted' | 'required' | 'not_required' | 'unknown';
+}
+
+interface KnowledgeHealthSnapshot {
+  reachable: boolean;
+  totalFiles: number;
+  indexedFiles: number;
 }
 
 type PermissionStateValue = 'granted' | 'denied' | 'prompt' | 'unknown' | 'available' | 'unavailable';
@@ -172,14 +190,17 @@ function getPermissionName(key: string, isZh: boolean) {
   return labels[key] || key;
 }
 
-function buildReport(
+export function buildReport(
   latest: SystemSnapshot | null,
   permissions: Record<string, PermissionStateValue>,
   ecosystem: EcosystemStats | null,
   providers: Record<string, ProviderStatus>,
   isDesktop: boolean,
+  desktopCapabilities: DesktopCapabilitySnapshot | null,
+  knowledgeHealth: KnowledgeHealthSnapshot | null,
   isZh: boolean,
 ): AdaptationReport {
+  const copy = systemExplorerCopy(isZh ? 'zh' : 'en');
   const apps = latest?.software?.installedApps || [];
   const detectedApps = COMMON_APP_MATCHERS.filter(item => isSystemAppDetected(apps, item));
   const llmReady = Object.values(providers).filter(p => p.available).length;
@@ -194,19 +215,39 @@ function buildReport(
   const hasCad = cadApps.length > 0;
   const hasAiApps = aiApps.length > 0;
   const hasMusic = musicApps.length > 0;
+  const connectedSkills = ecosystem?.connectedSkillCount || 0;
+  const enabledSkills = ecosystem?.enabledSkillCount || 0;
+  const desktopControlReady = Boolean(
+    isDesktop
+    && desktopCapabilities?.shell_available
+    && desktopCapabilities?.app_discovery_available
+    && desktopCapabilities?.app_launch_available
+    && desktopCapabilities?.screen_capture_available
+    && desktopCapabilities?.input_available,
+  );
+  const permissionCopy = (value?: DesktopCapabilitySnapshot['accessibility_permission']) => {
+    if (value === 'granted' || value === 'not_required') return copy.desktop.granted;
+    if (value === 'required') return copy.desktop.required;
+    return copy.desktop.unknown;
+  };
+  const desktopDetail = !isDesktop
+    ? copy.desktop.unavailable
+    : desktopControlReady
+      ? copy.desktop.ready
+      : `${copy.desktop.partial} ${copy.desktop.accessibility}: ${permissionCopy(desktopCapabilities?.accessibility_permission)}; ${copy.desktop.screenRecording}: ${permissionCopy(desktopCapabilities?.screen_recording_permission)}.`;
 
   const capabilities: CapabilityItem[] = [
     {
       id: 'desktop_shell',
       label: uiMessage('system-explorer.desktop-shell.634c816416', (isZh) ? 'zh' : 'en'),
-      status: isDesktop ? 'ready' : 'missing',
-      detail: isDesktop ? uiMessage('system-explorer.native-desktop-automation-bridge-is.9925e11c0b', (isZh) ? 'zh' : 'en') : uiMessage('system-explorer.desktop-automation-requires-the-tauri.150793d6f4', (isZh) ? 'zh' : 'en'),
+      status: !isDesktop ? 'missing' : desktopControlReady ? 'ready' : 'partial',
+      detail: desktopDetail,
     },
     {
       id: 'local_runtime',
       label: uiMessage('system-explorer.local-runtime.530d5e4cb8', (isZh) ? 'zh' : 'en'),
       status: nodeReady && pythonReady ? 'ready' : nodeReady || pythonReady ? 'partial' : 'missing',
-      detail: `Node ${latest?.software?.nodeVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')} / Python ${latest?.software?.pythonVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')}`,
+      detail: `${copy.runtime.node} ${latest?.software?.nodeVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')} / ${copy.runtime.python} ${latest?.software?.pythonVersion || uiMessage('system-explorer.not-detected.5ca0f4dc91', (isZh) ? 'zh' : 'en')}`,
       actionLabel: nodeReady && pythonReady ? undefined : uiMessage('system-explorer.review-mcp.e42e25bdaf', (isZh) ? 'zh' : 'en'),
       actionSection: nodeReady && pythonReady ? undefined : 'tools',
     },
@@ -221,23 +262,25 @@ function buildReport(
     {
       id: 'mcp',
       label: uiMessage('system-explorer.mcp-and-skills.0bbce8b9ac', (isZh) ? 'zh' : 'en'),
-      status: (ecosystem?.enabledSkillCount || 0) > 0 ? 'ready' : (ecosystem?.skillCount || 0) > 0 ? 'partial' : 'missing',
-      detail: formatUiMessage('system-explorer.value0-value1-skills-enabled-value2.1c3d9e8c13', { value0: ecosystem?.enabledSkillCount || 0, value1: ecosystem?.skillCount || 0, value2: ecosystem?.toolCount || 0 }, (isZh) ? 'zh' : 'en'),
-      actionLabel: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
-      actionSection: (ecosystem?.enabledSkillCount || 0) > 0 ? undefined : 'tools',
+      status: enabledSkills > 0 && connectedSkills > 0 ? 'ready' : (ecosystem?.skillCount || 0) > 0 ? 'partial' : 'missing',
+      detail: copy.mcp.summary(enabledSkills, ecosystem?.skillCount || 0, connectedSkills, ecosystem?.toolCount || 0),
+      actionLabel: enabledSkills > 0 && connectedSkills > 0 ? undefined : uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
+      actionSection: enabledSkills > 0 && connectedSkills > 0 ? undefined : 'tools',
     },
     {
       id: 'knowledge_files',
       label: uiMessage('system-explorer.knowledge-files.166a683950', (isZh) ? 'zh' : 'en'),
-      status: 'ready',
-      detail: uiMessage('system-explorer.files-live-in-lumi-knowledge.1153562b59', (isZh) ? 'zh' : 'en'),
+      status: knowledgeHealth?.reachable ? 'ready' : 'partial',
+      detail: knowledgeHealth?.reachable
+        ? copy.knowledge.ready(knowledgeHealth.totalFiles, knowledgeHealth.indexedFiles)
+        : copy.knowledge.unavailable,
     },
     {
       id: 'sensors',
       label: uiMessage('system-explorer.mic-and-camera.8be2fe4a27', (isZh) ? 'zh' : 'en'),
-      status: permissions.microphone === 'granted' || permissions.camera === 'granted'
+      status: permissions.microphone === 'granted'
         ? 'ready'
-        : permissions.microphone === 'denied' || permissions.camera === 'denied'
+        : permissions.microphone === 'denied'
           ? 'missing'
           : 'partial',
       detail: formatUiMessage('system-explorer.mic-value0-camera-value1.efb8a36889', { value0: { en: getPermissionLabel(permissions.microphone), zh: getPermissionLabel(permissions.microphone, isZh) }, value1: { en: getPermissionLabel(permissions.camera), zh: getPermissionLabel(permissions.camera, isZh) } }, (isZh) ? 'zh' : 'en'),
@@ -319,9 +362,16 @@ function buildReport(
     actionSection: 'ai-providers',
     priority: 'high',
   });
-  if ((ecosystem?.enabledSkillCount || 0) === 0) suggestions.push({
+  if (enabledSkills === 0) suggestions.push({
     id: 'mcp',
     text: uiMessage('system-explorer.enable-at-least-one-mcp.1bccc5f0e7', (isZh) ? 'zh' : 'en'),
+    actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
+    actionSection: 'tools',
+    priority: 'medium',
+  });
+  if (enabledSkills > 0 && connectedSkills === 0) suggestions.push({
+    id: 'mcp-disconnected',
+    text: copy.mcp.reconnect,
     actionLabel: uiMessage('system-explorer.open-mcp.6aac86b030', (isZh) ? 'zh' : 'en'),
     actionSection: 'tools',
     priority: 'medium',
@@ -358,30 +408,41 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
   const [ecosystem, setEcosystem] = useState<EcosystemStats | null>(null);
   const [providers, setProviders] = useState<Record<string, ProviderStatus>>({});
   const [permissions, setPermissions] = useState<Record<string, PermissionStateValue>>({});
+  const [desktopCapabilities, setDesktopCapabilities] = useState<DesktopCapabilitySnapshot | null>(null);
+  const [knowledgeHealth, setKnowledgeHealth] = useState<KnowledgeHealthSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
 
   const loadPermissions = useCallback(async () => {
-    const snapshot = await getSensorPermissionSnapshot({
-      desktopAutomation: isTauri ? 'available' : 'unavailable',
-    });
+    const snapshot = await getSensorPermissionSnapshot();
     setPermissions({
       microphone: snapshot.microphone as PermissionStateValue,
       camera: snapshot.camera as PermissionStateValue,
       notifications: snapshot.notifications as PermissionStateValue,
-      desktopAutomation: snapshot.desktopAutomation || 'unknown',
     });
+  }, []);
+
+  const loadDesktopCapabilities = useCallback(async (): Promise<DesktopCapabilitySnapshot | null> => {
+    if (!isTauri) return null;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<DesktopCapabilitySnapshot>('get_desktop_capability_status');
+    } catch {
+      return null;
+    }
   }, [isTauri]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [statusRes, historyRes, profRes, ecoRes, providerRes] = await Promise.all([
+      const [statusRes, historyRes, profRes, ecoRes, providerRes, knowledgeRes, desktopStatus] = await Promise.all([
         fetch('/api/explore/status', { credentials: 'include' }),
         fetch('/api/explore/history', { credentials: 'include' }),
         fetch('/api/explore/profession', { credentials: 'include' }),
         fetch('/api/ecosystem/stats', { credentials: 'include' }),
         fetch('/api/llm/providers', { credentials: 'include' }),
+        fetch('/api/files/list?domain=personal', { credentials: 'include' }),
+        loadDesktopCapabilities(),
         loadPermissions(),
       ]);
       const status = await statusRes.json().catch(() => ({}));
@@ -389,31 +450,42 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
       const professionData = await profRes.json().catch(() => ({}));
       const ecosystemData = await ecoRes.json().catch(() => ({}));
       const providerData = await providerRes.json().catch(() => ({}));
+      const knowledgeData = await knowledgeRes.json().catch(() => ({}));
+      const knowledgeFiles = Array.isArray(knowledgeData.files) ? knowledgeData.files : [];
       setLatest(status.latest || null);
       setHistory(historyData.snapshots || []);
       setProfiles(professionData.profiles || []);
       setEcosystem(ecosystemData || null);
       setProviders(providerData.providers || {});
+      setDesktopCapabilities(desktopStatus);
+      setKnowledgeHealth({
+        reachable: knowledgeRes.ok,
+        totalFiles: knowledgeFiles.length,
+        indexedFiles: knowledgeFiles.filter((file: any) => String(file?.status || '').toLowerCase() === 'indexed').length,
+      });
     } catch (err: any) {
       toast.error(err?.message || uiMessage('system-explorer.failed-to-load-adaptation-report.15e33730d2', (isZh) ? 'zh' : 'en'));
     } finally {
       setLoading(false);
     }
-  }, [loadPermissions]);
+  }, [loadDesktopCapabilities, loadPermissions]);
 
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
 
   useEffect(() => {
-    const refresh = () => void loadPermissions();
+    const refresh = () => {
+      void loadPermissions();
+      void loadDesktopCapabilities().then(setDesktopCapabilities);
+    };
     window.addEventListener(SENSOR_PERMISSIONS_CHANGED, refresh);
     window.addEventListener('visibilitychange', refresh);
     return () => {
       window.removeEventListener(SENSOR_PERMISSIONS_CHANGED, refresh);
       window.removeEventListener('visibilitychange', refresh);
     };
-  }, [loadPermissions]);
+  }, [loadDesktopCapabilities, loadPermissions]);
 
   const runScan = async () => {
     setScanning(true);
@@ -446,8 +518,8 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
   };
 
   const report = useMemo(
-    () => buildReport(latest, permissions, ecosystem, providers, isDesktop, isZh),
-    [ecosystem, isDesktop, isZh, latest, permissions, providers],
+    () => buildReport(latest, permissions, ecosystem, providers, isDesktop, desktopCapabilities, knowledgeHealth, isZh),
+    [desktopCapabilities, ecosystem, isDesktop, isZh, knowledgeHealth, latest, permissions, providers],
   );
 
   const apps = latest?.software?.installedApps || [];
@@ -635,6 +707,7 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
           {discovery && (
             <div className="mt-2 text-xs leading-relaxed text-white/28">
               {formatUiMessage('system-explorer.sources-registry-value0-start-menu.a60f269dc0', { value0: discovery.registryEntries || 0, value1: discovery.startMenuShortcuts || 0, value2: discovery.desktopShortcuts || 0, value3: discovery.commonFolderEntries || 0, value4: discovery.pathExecutables || 0, value5: discovery.scannedRoots?.length || 0, value6: discovery.limitReached ? systemExplorerCopy(isZh ? 'zh' : 'en').limitReachedSuffix : '' }, (isZh) ? 'zh' : 'en')}
+              {` / ${systemExplorerCopy(isZh ? 'zh' : 'en').applicationBundles}: ${discovery.applicationBundles || 0}`}
             </div>
           )}
         </section>
@@ -651,6 +724,26 @@ export function SystemExplorer({ t, onSectionChange }: { t?: any; onSectionChang
                 <span className="text-white/40">{getPermissionLabel(value, isZh)}</span>
               </div>
             ))}
+            {desktopCapabilities?.platform === 'macos' && (
+              <>
+                <div className="flex items-center justify-between rounded-xl bg-black/18 px-3 py-2 text-xs">
+                  <span className="font-bold text-white/55">{systemExplorerCopy(isZh ? 'zh' : 'en').desktop.accessibility}</span>
+                  <span className="text-white/40">
+                    {desktopCapabilities.accessibility_permission === 'granted'
+                      ? systemExplorerCopy(isZh ? 'zh' : 'en').desktop.granted
+                      : systemExplorerCopy(isZh ? 'zh' : 'en').desktop.required}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-black/18 px-3 py-2 text-xs">
+                  <span className="font-bold text-white/55">{systemExplorerCopy(isZh ? 'zh' : 'en').desktop.screenRecording}</span>
+                  <span className="text-white/40">
+                    {desktopCapabilities.screen_recording_permission === 'granted'
+                      ? systemExplorerCopy(isZh ? 'zh' : 'en').desktop.granted
+                      : systemExplorerCopy(isZh ? 'zh' : 'en').desktop.required}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </section>
       </div>

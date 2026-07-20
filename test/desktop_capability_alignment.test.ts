@@ -16,6 +16,7 @@ describe('desktop capability alignment', () => {
     const toolNames = registry.getToolDeclarations().map(declaration => declaration.function.name);
 
     expect(toolNames).toEqual(expect.arrayContaining([
+      'desktop_capability_status',
       'desktop_show_lumi_window',
       'desktop_idle_time',
       'desktop_poll_activity',
@@ -41,6 +42,25 @@ describe('desktop capability alignment', () => {
       'keyboard_press',
       'computer_use',
     ]));
+  });
+
+  it('grounds desktop permission diagnostics in the native capability receipt', async () => {
+    const { formatClientDiagnosticResult } = await import('../server/cognition/client_diagnostic_result');
+    const result = formatClientDiagnosticResult([{
+      name: 'desktop_capability_status',
+      arguments: {},
+      result: JSON.stringify({
+        platform: 'macos',
+        app_discovery_available: true,
+        app_launch_available: true,
+        accessibility_permission: 'required',
+        screen_recording_permission: 'granted',
+      }),
+    }], 'Check desktop client permissions');
+
+    expect(result).toContain('nativeDesktop=available');
+    expect(result).toContain('accessibility=required');
+    expect(result).toContain('screenRecording=granted');
   });
 
   it('lets vision computer use follow the active desktop/autonomy tool policy', async () => {
@@ -106,6 +126,7 @@ describe('desktop capability alignment', () => {
     expect(localMachine?.status).toBe('available');
     expect(localMachine?.requiresConfirmation).toBe(false);
     expect(localMachine?.actions).toEqual(expect.arrayContaining([
+      'desktop_capability_status',
       'desktop_system_info',
       'desktop_list_apps',
       'desktop_list_files',

@@ -151,6 +151,7 @@ describe('Lumi client self model', () => {
     const backgroundRuntime = capabilities.find(capability => capability.id === 'runtime.background_residency');
 
     expect(localMachine?.actions).toEqual(expect.arrayContaining([
+      'desktop_capability_status',
       'desktop_system_info',
       'desktop_list_apps',
       'desktop_list_files',
@@ -451,6 +452,12 @@ describe('client self tools', () => {
 
     expect(personal.state).toBeNull();
     expect(JSON.stringify(personal)).not.toContain('Scoped Tool Org');
+    expect(personal.autonomyGate.externalAppAutomationGate).toBe('removed');
+    expect(personal.autonomyGate).not.toHaveProperty('externalAppAutomationEnabled');
+    expect(personal.autonomyWorkflows.every((workflow: any) => (
+      workflow.policyScope === 'unattended_background_workflow'
+      && !Object.prototype.hasOwnProperty.call(workflow, 'externalAppsAllowed')
+    ))).toBe(true);
     expect(work.state.orgWorkspace.activeView).toBe('chat');
     expect(work.scope).toEqual({ domain: 'work', orgId: 'client-self-scope-org' });
     expect(work.autonomyGate).toBeNull();

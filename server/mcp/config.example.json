@@ -7,10 +7,10 @@
         "@modelcontextprotocol/server-filesystem",
         "."
       ],
-      "enabled": true,
+      "enabled": false,
       "source": "external",
       "transport": "stdio",
-      "description": "Filesystem access for the Lumi workspace."
+      "description": "Legacy external filesystem MCP. Desktop files use Lumi built-in native file tools without npx."
     },
     "sqlite": {
       "command": "npx",

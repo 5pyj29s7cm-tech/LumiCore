@@ -168,7 +168,7 @@ describe('computer use completion verification', () => {
   it('preserves virtual-desktop origins for multi-monitor screenshots', async () => {
     expect(parseDesktopScreenGeometry(JSON.stringify({
       screen_x: -1920, screen_y: -200, width: 3840, height: 1280,
-    }))).toEqual({ screenX: -1920, screenY: -200, width: 3840, height: 1280 });
+    }))).toEqual({ screenX: -1920, screenY: -200, width: 3840, height: 1280, inputWidth: 3840, inputHeight: 1280 });
 
     mocks.makeLLMCall.mockResolvedValueOnce(modelResult(JSON.stringify({
       action: 'click', x: 100, y: 250,
@@ -194,6 +194,34 @@ describe('computer use completion verification', () => {
     });
 
     expect(clickArgs).toEqual([{ x: -1820, y: 50, button: 'left' }]);
+  });
+
+  it('maps Retina screenshot pixels into native macOS input coordinates', async () => {
+    mocks.makeLLMCall.mockResolvedValueOnce(modelResult(JSON.stringify({
+      action: 'click', x: 1000, y: 500,
+    })));
+    const clickArgs: Array<Record<string, any>> = [];
+    const relay = vi.fn(async (toolName: string, args: Record<string, any>) => {
+      if (toolName === 'desktop_capture_screen') {
+        return JSON.stringify({
+          image_base64: 'screen', format: 'png', width: 3840, height: 2160,
+          input_width: 1920, input_height: 1080,
+        });
+      }
+      if (toolName === 'desktop_active_window') {
+        return JSON.stringify({ window_id: 'stable-window', title: 'AutoCAD', process_name: 'AutoCAD', pid: 10 });
+      }
+      if (toolName === 'desktop_mouse_click_at') clickArgs.push(args);
+      return '';
+    });
+
+    await computerUseLoop('Click the visible AutoCAD command', {
+      desktopRelay: relay,
+      llmGetters: { getOpenAI: () => ({}) },
+      maxIterations: 1,
+    });
+
+    expect(clickArgs).toEqual([{ x: 500, y: 250, button: 'left' }]);
   });
 
   it('skips a planned input action when the foreground window changes during model latency', async () => {

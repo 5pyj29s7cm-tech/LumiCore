@@ -354,7 +354,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.local_machine_awareness',
     label: 'Local machine awareness',
     kind: 'system',
-    actions: ['client_get_state', 'client_health_check', 'desktop_system_info', 'desktop_list_apps', 'desktop_list_files', 'desktop_path_info', 'desktop_running_processes', 'desktop_active_window', 'desktop_capture_screen', 'adapter_registry_list'],
+    actions: ['client_get_state', 'client_health_check', 'desktop_capability_status', 'desktop_system_info', 'desktop_list_apps', 'desktop_list_files', 'desktop_path_info', 'desktop_running_processes', 'desktop_active_window', 'desktop_capture_screen', 'adapter_registry_list'],
     notes: 'Lumi treats this host as her local machine body only through evidence: OS and home directory, launchable apps, files/folders, foreground window, running processes, and screenshots from the desktop relay. In Autonomy mode she may run bounded local body learning: observe app inventory, top-level file/folder landmarks, running processes, active window, and runtime signals, then produce a body map with uncertainty. Before claiming what is installed, where a file is, what is on the Desktop, or what is currently running, refresh the relevant machine/desktop fact instead of guessing.',
     stateKeys: ['runtime', 'tools', 'windows', 'surfaces', 'permissions'],
   },
@@ -1605,7 +1605,7 @@ export function getClientSelfAwarenessReport(
     gaps: gaps.length ? gaps : ['No current self-awareness gaps reported by client health.'],
     habits: [
       'Before changing a Lumi client surface or mode, read client_get_state unless the current tool result already contains fresh state.',
-      'Before saying what this machine has installed, where a file is, what is on the desktop, or what is running, refresh with desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_active_window, desktop_running_processes, or desktop_capture_screen as needed.',
+      'Before diagnosing desktop readiness or permissions, refresh with desktop_capability_status; there is no separate Lumi external-app automation switch. Before saying what this machine has installed, where a file is, what is on the desktop, or what is running, refresh with desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_active_window, desktop_running_processes, or desktop_capture_screen as needed.',
       'Before saying Lumi can keep working in the background, read client_get_state or client_health_check and distinguish resident runtime from autonomous workflow execution.',
       'After client_action, trust verified state or explicit failure, not intention alone.',
       'After an upload or article save, inspect current-domain ingestion and index health before claiming that the source is fully retrievable.',

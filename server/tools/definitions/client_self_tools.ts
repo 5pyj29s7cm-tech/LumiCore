@@ -129,6 +129,27 @@ function getSkillRuntimeFindings() {
     .filter(Boolean);
 }
 
+function getAutonomyDiagnosticPolicy(userId: string) {
+  const policy = { ...getGateConfig(userId) } as Record<string, any>;
+  delete policy.externalAppAutomationEnabled;
+  return {
+    ...policy,
+    externalAppAutomationGate: 'removed',
+    externalAppExecutionScope: 'foreground_user_requests_use_registered_adapters',
+  };
+}
+
+function getAutonomyWorkflowDiagnostics(userId: string) {
+  return listAutonomousWorkflows(userId).map((workflow) => {
+    const { externalAppsAllowed, ...rest } = workflow;
+    return {
+      ...rest,
+      policyScope: 'unattended_background_workflow',
+      backgroundExternalAppsAllowed: externalAppsAllowed,
+    };
+  });
+}
+
 export function registerClientSelfTools(registry: ToolRegistry): void {
   registry.register({
     name: 'client_get_state',
@@ -152,8 +173,8 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         stateDigest: getClientStateDigest(state),
         health: getClientHealthReport(userId, scope),
         skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: isWork ? null : getGateConfig(userId),
-        autonomyWorkflows: isWork ? [] : listAutonomousWorkflows(userId),
+        autonomyGate: isWork ? null : getAutonomyDiagnosticPolicy(userId),
+        autonomyWorkflows: isWork ? [] : getAutonomyWorkflowDiagnostics(userId),
         scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
       }), null, 2);
     },
@@ -291,8 +312,8 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       return JSON.stringify(sanitizeDiagnosticValue({
         report: getClientHealthReport(userId, scope),
         skillRuntimeFindings: getSkillRuntimeFindings(),
-        autonomyGate: isWork ? null : getGateConfig(userId),
-        autonomyWorkflows: isWork ? [] : listAutonomousWorkflows(userId),
+        autonomyGate: isWork ? null : getAutonomyDiagnosticPolicy(userId),
+        autonomyWorkflows: isWork ? [] : getAutonomyWorkflowDiagnostics(userId),
         scope: isWork ? { domain: 'work', orgId: context?.orgId } : { domain: 'personal' },
       }), null, 2);
     },

@@ -79,7 +79,7 @@ export function Navbar({ user, onLogin, onLogout, activeTab, setActiveTab, lang,
         </div>
         <div className="flex flex-col -space-y-1">
           <span className="text-sm font-black tracking-tight glow-text uppercase">{t.lumiKernel || 'Lumi Kernel'}</span>
-          <span className="text-xs font-bold text-white/40 tracking-widest">{t.stableVersion || 'STABLE v3.0.0'}</span>
+          <span className="text-xs font-bold text-white/40 tracking-widest">{t.stableVersion || 'STABLE v3.0.1'}</span>
         </div>
       </div>
 

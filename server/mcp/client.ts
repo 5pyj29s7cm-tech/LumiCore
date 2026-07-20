@@ -71,6 +71,7 @@ interface ConnectedServer {
 interface MCPConfigFile {
   mcpServers?: Record<string, MCPServerConfig>;
   remoteDevices?: Record<string, string>;
+  migrations?: Record<string, number>;
   [key: string]: any;
 }
 
@@ -84,10 +85,10 @@ const DEFAULT_CONFIG_FILE: MCPConfigFile = {
     filesystem: {
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
-      enabled: true,
+      enabled: false,
       source: 'external',
       transport: 'stdio',
-      description: 'Filesystem access for the Lumi workspace.',
+      description: 'Legacy external filesystem MCP. Desktop files use Lumi built-in native file tools without npx.',
     },
     sqlite: {
       command: 'npx',
@@ -271,11 +272,30 @@ export class MCPClientManager {
       // Replace static relative paths with actual data directory paths
       raw = raw.replace(/"data\/lumi\.db"/g, JSON.stringify(getDataPath('lumi.db')));
       const parsed = JSON.parse(raw);
-      if (parsed.mcpServers && typeof parsed.mcpServers === 'object') return parsed;
-      return { mcpServers: parsed && typeof parsed === 'object' ? parsed : {} };
+      const config = parsed.mcpServers && typeof parsed.mcpServers === 'object'
+        ? parsed
+        : { mcpServers: parsed && typeof parsed === 'object' ? parsed : {} };
+      this.migrateDesktopFilesystemConfig(config);
+      return config;
     } catch {
       return { mcpServers: {} };
     }
+  }
+
+  private migrateDesktopFilesystemConfig(config: MCPConfigFile): void {
+    if (process.env.LUMI_DESKTOP !== '1') return;
+    if (Number(config.migrations?.desktopBuiltinFilesystem || 0) >= 1) return;
+    const filesystem = config.mcpServers?.filesystem;
+    const isLegacyDefault = filesystem?.command === 'npx'
+      && Array.isArray(filesystem.args)
+      && filesystem.args.includes('@modelcontextprotocol/server-filesystem')
+      && filesystem.args.includes('.');
+    if (isLegacyDefault && filesystem) {
+      filesystem.enabled = false;
+      filesystem.description = 'Legacy external filesystem MCP disabled: Lumi desktop uses built-in native file tools without npx.';
+    }
+    config.migrations = { ...(config.migrations || {}), desktopBuiltinFilesystem: 1 };
+    this.saveConfigFile(config);
   }
 
   private saveConfigFile(config: MCPConfigFile): void {

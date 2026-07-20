@@ -206,6 +206,7 @@ describe('Lumi execution decision', () => {
       'client_health_check',
       'adapter_registry_list',
       'adapter_health_check',
+      'desktop_capability_status',
       'desktop_active_window',
       'desktop_running_processes',
       'desktop_ui_snapshot',

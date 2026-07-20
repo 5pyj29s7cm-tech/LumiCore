@@ -7,7 +7,7 @@ import {
 } from '../regions/packs/cn/client_diagnostic_messages';
 import { isCurrentClientDiagnosticRequest } from './tool_intent';
 
-const SUBSTANTIVE_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|adapter_registry_list|adapter_health_check|model_configuration_get|model_configuration_test)$/i;
+const SUBSTANTIVE_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|adapter_registry_list|adapter_health_check|model_configuration_get|model_configuration_test|desktop_capability_status)$/i;
 const SUPPORTING_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:desktop_active_window|get_active_window_info|desktop_running_processes|desktop_ui_snapshot|desktop_capture_screen)$/i;
 const FAILED_DIAGNOSTIC_STATUS_RE = /^(?:error|failed|failure|blocked|denied|rejected|pending|not_verified|unverified|requires_confirmation|not_supported|unsupported|unavailable|timed_out|timeout)$/i;
 
@@ -142,9 +142,18 @@ export function formatClientDiagnosticResult(
   const skillFindings = statePayload?.skillRuntimeFindings || healthPayload?.skillRuntimeFindings || [];
   const activeRecord = [...diagnosticRecords].reverse().find(record => /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
   const processRecord = [...diagnosticRecords].reverse().find(record => /^desktop_running_processes$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
+  const capabilityRecord = [...diagnosticRecords].reverse().find(record => /^desktop_capability_status$/i.test(record.name) && isSuccessfulDiagnosticRecord(record));
   const active = parseJson(activeRecord?.result);
   const processes = parseJson(processRecord?.result);
+  const desktopCapability = parseJson(capabilityRecord?.result);
   const repairRecords = diagnosticRecords.filter(record => /^(?:client_self_repair|client_repair_skill)$/i.test(record.name));
+  const capabilityFindings = desktopCapability && typeof desktopCapability === 'object'
+    ? unique([
+      `nativeDesktop=${desktopCapability.app_discovery_available && desktopCapability.app_launch_available ? 'available' : 'partial'}`,
+      desktopCapability.accessibility_permission ? `accessibility=${desktopCapability.accessibility_permission}` : '',
+      desktopCapability.screen_recording_permission ? `screenRecording=${desktopCapability.screen_recording_permission}` : '',
+    ])
+    : [];
 
   const facts: ClientDiagnosticFacts = {
     hasSuccessfulSubstantiveCheck: hasSuccessfulSubstantiveClientDiagnosticReceipt(diagnosticRecords),
@@ -156,7 +165,10 @@ export function formatClientDiagnosticResult(
     scopeDomain: String(scope?.domain || 'personal'),
     scopeOrgId: String(scope?.orgId || ''),
     stateDigest: stateDigest && typeof stateDigest === 'object' ? stateDigest : null,
-    findings: unique((health?.findings || []).map((finding: any) => String(finding?.message || finding?.id || ''))),
+    findings: unique([
+      ...(health?.findings || []).map((finding: any) => String(finding?.message || finding?.id || '')),
+      ...capabilityFindings,
+    ]),
     disconnectedSkills: unique((skillFindings || [])
       .filter((finding: any) => finding?.connected === false)
       .map((finding: any) => String(finding?.name || ''))),

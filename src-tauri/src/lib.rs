@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -97,6 +97,114 @@ pub struct SystemInfo {
 pub struct CommandResult {
     pub success: bool,
     pub output: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DesktopCapabilityStatus {
+    pub platform: String,
+    pub shell_available: bool,
+    pub app_discovery_available: bool,
+    pub app_launch_available: bool,
+    pub screen_capture_available: bool,
+    pub input_available: bool,
+    pub accessibility_permission: String,
+    pub screen_recording_permission: String,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayBounds(display: u32) -> MacCGRect;
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MacCGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MacCGSize {
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MacCGRect {
+    origin: MacCGPoint,
+    size: MacCGSize,
+}
+
+#[cfg(target_os = "macos")]
+fn mac_main_display_input_geometry() -> (i32, i32, u32, u32) {
+    let bounds = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    (
+        bounds.origin.x.round() as i32,
+        bounds.origin.y.round() as i32,
+        bounds.size.width.max(0.0).round() as u32,
+        bounds.size.height.max(0.0).round() as u32,
+    )
+}
+
+#[tauri::command]
+fn get_desktop_capability_status() -> DesktopCapabilityStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let accessibility_granted = unsafe { AXIsProcessTrusted() };
+        let screen_recording_granted = unsafe { CGPreflightScreenCaptureAccess() };
+        return DesktopCapabilityStatus {
+            platform: "macos".to_string(),
+            shell_available: true,
+            app_discovery_available: true,
+            app_launch_available: true,
+            screen_capture_available: screen_recording_granted,
+            input_available: accessibility_granted,
+            accessibility_permission: if accessibility_granted { "granted" } else { "required" }.to_string(),
+            screen_recording_permission: if screen_recording_granted { "granted" } else { "required" }.to_string(),
+        };
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return DesktopCapabilityStatus {
+            platform: "windows".to_string(),
+            shell_available: true,
+            app_discovery_available: true,
+            app_launch_available: true,
+            screen_capture_available: true,
+            input_available: true,
+            accessibility_permission: "not_required".to_string(),
+            screen_recording_permission: "not_required".to_string(),
+        };
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        DesktopCapabilityStatus {
+            platform: std::env::consts::OS.to_string(),
+            shell_available: true,
+            app_discovery_available: false,
+            app_launch_available: true,
+            screen_capture_available: false,
+            input_available: true,
+            accessibility_permission: "unknown".to_string(),
+            screen_recording_permission: "unknown".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1121,7 +1229,7 @@ fn windows_app_definitions() -> Vec<WindowsAppDefinition> {
     ]
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn compact_app_text(value: &str) -> String {
     value
         .trim()
@@ -1131,7 +1239,7 @@ fn compact_app_text(value: &str) -> String {
         .collect()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn normalize_app_query(value: &str) -> String {
     let mut compact = compact_app_text(value);
     let prefixes = [
@@ -1181,6 +1289,150 @@ fn normalize_app_query(value: &str) -> String {
         }
     }
     compact
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_roots() -> Vec<(PathBuf, &'static str, i32)> {
+    let mut roots = vec![
+        (PathBuf::from("/Applications"), "applications", 120),
+        (PathBuf::from("/System/Applications"), "system_applications", 90),
+    ];
+    if let Some(home) = dirs_next::home_dir() {
+        roots.push((home.join("Applications"), "user_applications", 140));
+    }
+    roots
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_aliases(label: &str) -> Vec<String> {
+    let normalized = compact_app_text(label);
+    let mut aliases = Vec::new();
+    if ["safari", "googlechrome", "chrome", "firefox", "microsoftedge", "bravebrowser"]
+        .iter()
+        .any(|name| normalized.contains(name))
+    {
+        aliases.extend(["browser".to_string(), "浏览器".to_string()]);
+    }
+    if normalized.contains("wechat") || normalized.contains("weixin") || normalized.contains("微信") {
+        aliases.extend(["wechat".to_string(), "weixin".to_string(), "微信".to_string()]);
+    }
+    if normalized.contains("autocad") || normalized.contains("zwcad") || normalized.contains("gstarcad") {
+        aliases.extend(["cad".to_string(), "CAD".to_string()]);
+    }
+    if normalized.contains("microsoftword") || normalized.contains("wpsoffice") {
+        aliases.extend(["office".to_string(), "文档".to_string()]);
+    }
+    aliases
+}
+
+#[cfg(target_os = "macos")]
+fn list_macos_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppEntry> {
+    let normalized_query = query.map(normalize_app_query).unwrap_or_default();
+    let mut apps = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (root, source, score) in macos_app_roots() {
+        if !root.is_dir() {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 3 || apps.len() >= 1500 {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_bundle = path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(|extension| extension.eq_ignore_ascii_case("app"))
+                    .unwrap_or(false);
+                if is_bundle {
+                    let label = path
+                        .file_stem()
+                        .map(|name| name.to_string_lossy().trim().to_string())
+                        .unwrap_or_default();
+                    if label.is_empty() {
+                        continue;
+                    }
+                    let path_text = path.to_string_lossy().to_string();
+                    let path_key = path_text.to_lowercase();
+                    if !seen.insert(path_key) {
+                        continue;
+                    }
+                    let aliases = macos_app_aliases(&label);
+                    let label_key = compact_app_text(&label);
+                    let matches_query = normalized_query.is_empty()
+                        || label_key.contains(&normalized_query)
+                        || normalized_query.contains(&label_key)
+                        || aliases.iter().any(|alias| {
+                            let alias_key = compact_app_text(alias);
+                            alias_key == normalized_query || alias_key.contains(&normalized_query)
+                        });
+                    if matches_query {
+                        apps.push(NativeAppEntry {
+                            app_id: if label_key.is_empty() { label.to_lowercase() } else { label_key },
+                            label,
+                            path: path_text,
+                            source: source.to_string(),
+                            aliases,
+                            score,
+                        });
+                    }
+                    continue;
+                }
+                if depth < 3 && path.is_dir() {
+                    stack.push((path, depth + 1));
+                }
+            }
+        }
+    }
+
+    apps.sort_by(|left, right| {
+        right.score.cmp(&left.score).then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+    });
+    apps.truncate(limit.clamp(1, 200));
+    apps
+}
+
+#[cfg(target_os = "macos")]
+fn should_try_macos_app_index(target: &str) -> bool {
+    let trimmed = target.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.starts_with('.')
+        || trimmed.contains("://")
+        || trimmed.starts_with("mailto:")
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn try_launch_macos_app(target: &str) -> Option<CommandResult> {
+    if !should_try_macos_app_index(target) {
+        return None;
+    }
+    let app = list_macos_native_apps(Some(target), 1).into_iter().next()?;
+    let output = Command::new("open").arg(&app.path).output();
+    Some(match output {
+        Ok(result) if result.status.success() => CommandResult {
+            success: true,
+            output: format!("Opened app {} ({})", app.label, app.path),
+        },
+        Ok(result) => CommandResult {
+            success: false,
+            output: String::from_utf8_lossy(&result.stderr).trim().to_string(),
+        },
+        Err(error) => CommandResult {
+            success: false,
+            output: error.to_string(),
+        },
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -1768,7 +2020,16 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
         .unwrap_or_default();
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            list_macos_native_apps(query.as_deref(), limit.unwrap_or(80))
+        })
+        .await
+        .unwrap_or_default();
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = query;
         let _ = limit;
@@ -1784,6 +2045,29 @@ fn open_item(target: String, window: tauri::WebviewWindow) -> CommandResult {
     #[cfg(target_os = "windows")]
     if let Some(result) = try_launch_windows_app_alias(&target) {
         return result;
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(result) = try_launch_macos_app(&target) {
+        if result.success {
+            return result;
+        }
+        eprintln!("[LumiOS] indexed macOS app launch failed, keeping LaunchServices fallbacks: {}", result.output);
+    }
+
+    #[cfg(target_os = "macos")]
+    if should_try_macos_app_index(&target) {
+        // Ask LaunchServices by registered application name before retaining the
+        // legacy direct `open <target>` behavior below. This also covers apps
+        // installed outside the directories indexed by Lumi.
+        if let Ok(output) = Command::new("open").args(["-a", &target]).output() {
+            if output.status.success() {
+                return CommandResult {
+                    success: true,
+                    output: format!("Opened registered app: {}", target),
+                };
+            }
+        }
     }
 
     if cfg!(target_os = "windows") && Path::new(&target).is_dir() {
@@ -2473,6 +2757,10 @@ pub struct CaptureResult {
     pub screen_y: i32,
     pub width: u32,
     pub height: u32,
+    /// Coordinate-space size expected by native input APIs. On Retina macOS
+    /// displays this can be smaller than the PNG pixel dimensions.
+    pub input_width: u32,
+    pub input_height: u32,
 }
 
 #[tauri::command]
@@ -2549,13 +2837,48 @@ fn get_active_window_info() -> ActiveWindowInfo {
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("osascript")
-            .args(["-e", r#"tell application "System Events" to get name of first application process whose frontmost is true"#])
+            .args(["-e", r#"
+tell application "System Events"
+  set frontProcess to first application process whose frontmost is true
+  set appName to name of frontProcess
+  set appPid to unix id of frontProcess
+  set windowTitle to ""
+  set windowX to 0
+  set windowY to 0
+  set windowWidth to 0
+  set windowHeight to 0
+  if (count of windows of frontProcess) > 0 then
+    set frontWindow to front window of frontProcess
+    try
+      set windowTitle to name of frontWindow
+    end try
+    try
+      set windowPosition to position of frontWindow
+      set windowX to item 1 of windowPosition
+      set windowY to item 2 of windowPosition
+    end try
+    try
+      set windowSize to size of frontWindow
+      set windowWidth to item 1 of windowSize
+      set windowHeight to item 2 of windowSize
+    end try
+  end if
+  return appName & tab & appPid & tab & windowTitle & tab & windowX & tab & windowY & tab & windowWidth & tab & windowHeight
+end tell
+"#])
             .output();
         if let Ok(out) = output {
-            let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !name.is_empty() {
-                title = name.clone();
-                process_name = name;
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let fields: Vec<&str> = text.split('\t').collect();
+            if let Some(name) = fields.first().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+                process_name = name.to_string();
+                title = fields.get(2).map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).unwrap_or_else(|| name.to_string());
+                pid = fields.get(1).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
+                window_id = if pid > 0 { pid.to_string() } else { String::new() };
+                x = fields.get(3).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
+                y = fields.get(4).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
+                width = fields.get(5).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
+                height = fields.get(6).and_then(|value| value.trim().parse().ok()).unwrap_or(0);
             }
         }
     }
@@ -2970,6 +3293,43 @@ Write-Output "OK|$x|$y|$w|$h""#,
                             screen_y: parts[2].parse().unwrap_or(0),
                             width: parts[3].parse().unwrap_or(0),
                             height: parts[4].parse().unwrap_or(0),
+                            input_width: parts[3].parse().unwrap_or(0),
+                            input_height: parts[4].parse().unwrap_or(0),
+                        };
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let unique = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let temp_path = std::env::temp_dir().join(format!("lumi_scr_{}_{}.png", std::process::id(), unique));
+        let output = Command::new("/usr/sbin/screencapture")
+            .args(["-x", "-m"])
+            .arg(&temp_path)
+            .output();
+        if let Ok(result) = output {
+            if result.status.success() {
+                if let Ok(png) = std::fs::read(&temp_path) {
+                    let _ = std::fs::remove_file(&temp_path);
+                    if png.len() >= 24 && &png[0..8] == b"\x89PNG\r\n\x1a\n" {
+                        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+                        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+                        let (screen_x, screen_y, input_width, input_height) = mac_main_display_input_geometry();
+                        return CaptureResult {
+                            image_base64: base64_encode(&png),
+                            screen_x,
+                            screen_y,
+                            width,
+                            height,
+                            input_width,
+                            input_height,
                         };
                     }
                 }
@@ -3001,6 +3361,8 @@ Write-Output "OK|$x|$y|$w|$h""#,
                         screen_y: 0,
                         width: 0,
                         height: 0,
+                        input_width: 0,
+                        input_height: 0,
                     };
                 }
             }
@@ -3019,6 +3381,8 @@ Write-Output "OK|$x|$y|$w|$h""#,
                                 screen_y: 0,
                                 width: parts[0].parse().unwrap_or(0),
                                 height: parts[1].parse().unwrap_or(0),
+                                input_width: parts[0].parse().unwrap_or(0),
+                                input_height: parts[1].parse().unwrap_or(0),
                             };
                         }
                     }
@@ -3026,7 +3390,15 @@ Write-Output "OK|$x|$y|$w|$h""#,
             }
         }
     }
-    CaptureResult { image_base64: String::new(), screen_x: 0, screen_y: 0, width: 0, height: 0 }
+    CaptureResult {
+        image_base64: String::new(),
+        screen_x: 0,
+        screen_y: 0,
+        width: 0,
+        height: 0,
+        input_width: 0,
+        input_height: 0,
+    }
 }
 
 /// Simple base64 encoder — avoids pulling in a crate for one function.
@@ -3264,6 +3636,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
+            get_desktop_capability_status,
             get_live_stats,
             list_home_files,
             list_directory,

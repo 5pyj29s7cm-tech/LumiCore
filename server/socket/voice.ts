@@ -1216,6 +1216,7 @@ async function processVoiceInput(
   };
   const directDesktopRelayTools = new Set([
     'client_action',
+    'desktop_capability_status',
     'desktop_system_info',
     'desktop_list_files',
     'desktop_list_apps',

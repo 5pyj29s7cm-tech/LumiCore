@@ -64,6 +64,7 @@ const DOMAIN_TOOL_HINTS: Record<string, string[]> = {
 
 const DIRECT_DESKTOP_RELAY_TOOLS = new Set([
   'client_action',
+  'desktop_capability_status',
   'desktop_system_info',
   'desktop_list_files',
   'desktop_list_apps',

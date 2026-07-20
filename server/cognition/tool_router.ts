@@ -196,6 +196,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'client_health_check',
     'client_self_repair',
     'get_system_info',
+    'desktop_capability_status',
     'desktop_system_info',
     'desktop_show_lumi_window',
     'desktop_idle_time',
@@ -226,6 +227,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'external_app_list_adapters',
   ],
   externalControl: [
+    'desktop_capability_status',
     'desktop_ai_list_targets',
     'desktop_ai_discovery_plan',
     'desktop_ai_register_target',

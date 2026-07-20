@@ -233,7 +233,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Local Machine Awareness',
       category: 'system',
       status: 'available',
-      actions: ['client_get_state', 'client_health_check', 'desktop_system_info', 'desktop_list_apps', 'desktop_list_files', 'desktop_path_info', 'desktop_running_processes', 'desktop_active_window', 'desktop_capture_screen', 'adapter_registry_list'],
+      actions: ['client_get_state', 'client_health_check', 'desktop_capability_status', 'desktop_system_info', 'desktop_list_apps', 'desktop_list_files', 'desktop_path_info', 'desktop_running_processes', 'desktop_active_window', 'desktop_capture_screen', 'adapter_registry_list'],
       surfaces: ['native desktop client', 'host OS', 'home directory', 'Desktop/Documents/Downloads', 'installed apps', 'running processes', 'foreground window'],
       requiresConfirmation: false,
       diagnostics: [

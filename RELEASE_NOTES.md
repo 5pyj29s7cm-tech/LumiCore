@@ -1,5 +1,14 @@
 # Lumi OS Release Notes
 
+## v3.0.1 macOS desktop-control repair
+
+- Preserves the legacy macOS `open` behavior that already launched AutoCAD, while adding installed `.app` discovery, localized aliases, and LaunchServices name lookup.
+- Reports native macOS Accessibility and Screen Recording readiness instead of an obsolete external-app switch.
+- Adds real macOS screen capture and Retina-aware input coordinate mapping for visible computer control.
+- Makes the computer adaptation report evidence-based for apps, MCP connections, knowledge files, permissions, and the bundled Node runtime.
+- Replaces the fragile default desktop `npx` Filesystem process with Lumi's built-in file tools and packages the correct macOS Sharp native runtime.
+- Adds optional Developer ID signing/notarization to the macOS workflow and verifies architecture, permissions metadata, native resources, and signature state.
+
 ## v3.0.0 private-paid
 
 Release artifacts:

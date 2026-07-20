@@ -6,5 +6,13 @@
   <string>Lumi OS 需要访问摄像头，用于视频、图像采集和相关功能。</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Lumi OS 需要访问麦克风，用于语音输入、录音和相关功能。</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Lumi OS 需要在你交代桌面任务时操作已安装的应用，并读取当前窗口状态。</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Lumi OS 仅在你交代文件任务时访问桌面文件。</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Lumi OS 仅在你交代文档任务时访问文稿文件。</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Lumi OS 仅在你交代文件任务时访问下载文件。</string>
 </dict>
 </plist>
