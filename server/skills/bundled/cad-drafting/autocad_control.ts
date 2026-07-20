@@ -571,10 +571,23 @@ function releasePlaybackLock(lockPath: string, ownerToken: string): void {
 }
 
 export async function runAutocadComPlayback(options: AutocadPlaybackOptions): Promise<Record<string, any>> {
-  if (process.platform !== 'win32') throw new Error('AutoCAD MCP playback currently requires Windows.');
   const payload = readAutocadOperationPayload(options.operationsPath);
   const markerPath = options.completionMarkerPath ? path.resolve(options.completionMarkerPath) : '';
   if (!markerPath) throw new Error('AutoCAD MCP playback requires a completionMarkerPath.');
+  const progressPath = options.progressPath
+    ? path.resolve(options.progressPath)
+    : `${markerPath}.progress.json`;
+  const cachedResult = readVerifiedCompletionMarker(markerPath, payload);
+  if (cachedResult) {
+    try { fs.rmSync(progressPath, { force: true }); } catch {}
+    return {
+      ...cachedResult,
+      alreadyCompleted: true,
+      completionMarkerExists: true,
+      operationsPath: path.resolve(options.operationsPath),
+    };
+  }
+  if (process.platform !== 'win32') throw new Error('AutoCAD MCP playback currently requires Windows.');
   const requestedDelay = Number(options.strokeDelayMs);
   const delayMs = Number.isFinite(requestedDelay)
     ? Math.max(100, Math.min(Math.round(requestedDelay), 5000))
@@ -584,9 +597,6 @@ export async function runAutocadComPlayback(options: AutocadPlaybackOptions): Pr
     Math.min(options.timeoutMs || 180_000 + payload.operations.length * delayMs * 2, 30 * 60_000),
   );
   const lockPath = options.lockPath ? path.resolve(options.lockPath) : path.join(os.tmpdir(), 'lumios-autocad-playback.lock');
-  const progressPath = options.progressPath
-    ? path.resolve(options.progressPath)
-    : `${markerPath}.progress.json`;
   const lockOwnerToken = options.lockOwnerToken || crypto.randomUUID();
   const acquired = await acquirePlaybackLock({
     lockPath,
