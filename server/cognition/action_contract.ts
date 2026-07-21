@@ -144,6 +144,24 @@ export function isSimpleDesktopOpenRequest(input: string): boolean {
   return Boolean(extractSimpleDesktopOpenTarget(input));
 }
 
+export function requiresDesktopAiCollaboration(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  // i18n-allow: multilingual desktop-AI surface recognition; not user-visible copy.
+  const hasAiSurface = /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM\s*Studio|Cherry\s*Studio|AnythingLLM|外部\s*AI|桌面\s*AI|AI\s*(?:工具|客户端|app))/iu.test(text)
+    // i18n-allow: generic AI-target recognition; not user-visible copy.
+    || /(?:AI|模型|agent|智能体)/iu.test(text);
+  // i18n-allow: multilingual collaboration-action recognition; not user-visible copy.
+  const hasCollaborationAction = /(?:问(?:一下|问)?|询问|发给|发送给|交给|跟|和|同).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(text);
+  return hasAiSurface && hasCollaborationAction;
+}
+
+export function requiresDesktopAiAnswerCollection(input: string): boolean {
+  if (!requiresDesktopAiCollaboration(input)) return false;
+  const text = compact(extractPrimaryTaskText(input));
+  // i18n-allow: multilingual answer-collection intent recognition; not user-visible copy.
+  return /(?:聊天|聊|对话|讨论|回答|结果|带回|拿回|告诉我|总结|对比|汇总)|\b(?:chat|talk|discuss|answer|bring\s+back|collect|compare|summari[sz]e)\b/iu.test(text);
+}
+
 export function requiresCadGeometryExtractionOnly(input: string): boolean {
   const text = compact(extractPrimaryTaskText(input));
   if (!text) return false;
@@ -557,6 +575,26 @@ export function buildActionContract(input: string): LumiActionContract {
 
   if (isRemoteLegalMessageTurn(text)) {
     return buildLegalDocumentContract();
+  }
+
+  if (requiresDesktopAiCollaboration(text)) {
+    const collectAnswer = requiresDesktopAiAnswerCollection(text);
+    return withDefaults({
+      kind: 'desktop_operation',
+      label: 'Verified desktop AI collaboration',
+      coreAction: 'Send the requested question or task through the named desktop AI surface and, when requested, bring its visible answer back to Lumi.',
+      preparationIsNotCompletion: ['opening the AI app', 'focusing its window', 'pasting without submitting', 'claiming an answer from a screenshot that was not read'],
+      requiredEvidence: [
+        'desktop_ai_ask with submittedCount greater than zero or a desktop_ai_roundtable submission receipt',
+        ...(collectAnswer ? ['desktop_ai_collect_answer with status=collected and nonempty answerText, or desktop_ai_roundtable with collectedCount greater than zero'] : []),
+      ],
+      preferredTools: ['desktop_ai_ask', 'desktop_ai_collect_answer', 'desktop_ai_roundtable', 'desktop_ai_list_targets'],
+      verificationTools: collectAnswer ? ['desktop_ai_collect_answer', 'desktop_ai_roundtable'] : ['desktop_ai_ask', 'desktop_ai_roundtable'],
+      nextStep: collectAnswer
+        ? 'Submit through desktop_ai_ask, then collect the visible answer; report pending, login, or vision blockers instead of inventing a response.'
+        : 'Submit through desktop_ai_ask and report the verified submission state.',
+      caution: 'A launched or focused AI window is not proof that a message was submitted or that an answer was collected.',
+    });
   }
 
   if (
@@ -1566,6 +1604,28 @@ export function hasCoreActionEvidence(
     return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name));
   }
   if (contract.kind === 'desktop_operation') {
+    if (requiresDesktopAiCollaboration(taskText)) {
+      const submitted = successful.some(record => {
+        if (!/^(?:desktop_ai_ask|desktop_ai_roundtable)$/i.test(record.name)) return false;
+        const payload = parseRecordJson(record);
+        if (record.name === 'desktop_ai_roundtable') {
+          return Number(payload?.ask?.submittedCount || 0) > 0;
+        }
+        return payload?.ok === true && Number(payload?.submittedCount || 0) > 0;
+      });
+      if (!submitted) return false;
+      if (!requiresDesktopAiAnswerCollection(taskText)) return true;
+      return successful.some(record => {
+        const payload = parseRecordJson(record);
+        if (record.name === 'desktop_ai_collect_answer') {
+          return payload?.status === 'collected' && Boolean(compact(payload?.answerText));
+        }
+        if (record.name === 'desktop_ai_roundtable') {
+          return payload?.ok === true && Number(payload?.collectedCount || 0) > 0;
+        }
+        return false;
+      });
+    }
     const needsActiveWindow = requiresActiveWindowObservation(taskText);
     const needsDesktopFiles = requiresDesktopFileListingObservation(taskText);
     if (needsActiveWindow || needsDesktopFiles) {

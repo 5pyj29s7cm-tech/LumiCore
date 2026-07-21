@@ -7,13 +7,14 @@ import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
 import { runWithTools, LLMUsageRecord } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
-import { queryMemories, addMemory, addReminder, extractMemories } from "../memory";
+import { queryMemories, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, vectorMemoryBias } from "../personality/state";
 import { personalityRegistry } from "../personality";
 import { canOutputHolographic, textToHolographicOutput } from "../output/holographic";
 import { getConversationForScope, getOrCreateActiveConversation } from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
 import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggregateWithLLM, recordWorkflowPattern, shouldDistillSkill, buildSkillDescription } from "../agents/orchestrator";
+import { markLatestUserTurn } from "../agents/background_delivery";
 import { getMessagesByTokenBudget, addMessage, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
 import { shouldExposeAgentWork } from "../cognition/tool_intent";
@@ -180,6 +181,7 @@ export function registerTaskHandler(
     if (superseded?.terminalEvent) {
       io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
     }
+    markLatestUserTurn(executionScope, requestId);
     let cancelled = false;
     const taskAbortController = new AbortController();
     const cancelTask = () => {
@@ -222,6 +224,7 @@ export function registerTaskHandler(
       retrievalPerspectiveWeights: retrievalBiases.perspectiveWeights,
       domain: taskScope.domain,
       orgId: taskScope.orgId,
+      evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
     });
 
     const emotionalState = loadEmotionalState(taskStateKey);
@@ -457,7 +460,8 @@ export function registerTaskHandler(
 
       if (cognition.directToolExecuted && cognition.responseText) {
         console.log(`[Cognition] Task handled directly: ${cognition.intent.category}/${cognition.intent.subIntent}`);
-        const directToolRecords = cognition.toolRecord ? [cognition.toolRecord] : [];
+        const directToolRecords = cognition.toolRecords
+          || (cognition.toolRecord ? [cognition.toolRecord] : []);
         const finalDirect = finalizeLumiResponse({
           taskText: data.text,
           responseText: cognition.responseText,
@@ -876,7 +880,8 @@ export function registerTaskHandler(
       const finalFailure = finalizeLumiResponse({
         taskText: data.text,
         responseText: cf.responseText,
-        toolRecords: cognition?.toolRecord ? [cognition.toolRecord] : [],
+        toolRecords: cognition?.toolRecords
+          || (cognition?.toolRecord ? [cognition.toolRecord] : []),
         source: 'task',
         flow: turnFlow,
       });

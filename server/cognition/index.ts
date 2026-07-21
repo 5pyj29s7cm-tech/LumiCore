@@ -21,6 +21,8 @@ import { toolRegistry } from '../tools/registry';
 import { getModeConfig, ConversationMode, ModeConfig } from './modes';
 import type { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { hasExplicitTeamExecutionRequest } from './tool_intent';
+import { buildDesktopObservationPlan, formatDesktopObservationResult } from './desktop_observation';
+import { formatDesktopObservationUnavailable } from '../i18n/naturalness_messages';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -50,6 +52,8 @@ export interface CognitiveResult {
   toolResult?: string;
   /** Grounded receipt for a direct tool execution. */
   toolRecord?: ToolExecutionRecord;
+  /** Complete receipt ledger when a deterministic path needs multiple reads. */
+  toolRecords?: ToolExecutionRecord[];
   /** Whether the response came from the fallback system */
   isFallback: boolean;
 }
@@ -75,7 +79,11 @@ export async function processInput(
 
   // Second-stage LLM classification for ambiguous inputs
   let intent: IntentResult = regexIntent;
-  if (llmClassifier && regexIntent.confidence < 0.65) {
+  // The local classifier already knows common conversation, question and
+  // command shapes. A second model call on every short utterance doubled
+  // voice latency without improving routing; reserve it for genuinely unknown
+  // inputs only.
+  if (llmClassifier && regexIntent.category === 'unknown' && regexIntent.confidence < 0.65) {
     intent = await classifyIntentLLM(input, regexIntent, llmClassifier);
   }
 
@@ -84,6 +92,41 @@ export async function processInput(
   // desktop files". That sub-step must not consume the whole turn before the
   // orchestrator sees the user's requested decomposition/delegation contract.
   const explicitTeamExecution = hasExplicitTeamExecutionRequest(input);
+  const desktopObservationPlan = explicitTeamExecution ? [] : buildDesktopObservationPlan(input);
+  if (desktopObservationPlan.length > 0 && toolContext) {
+    const records: ToolExecutionRecord[] = [];
+    for (const call of desktopObservationPlan) {
+      const record: ToolExecutionRecord = {
+        id: `cognition-observation-${Date.now()}-${records.length}`,
+        name: call.name,
+        arguments: call.arguments,
+        result: '',
+      };
+      try {
+        record.result = await toolRegistry.execute(call.name, call.arguments, toolContext);
+      } catch (err: any) {
+        record.error = err?.message || String(err);
+      }
+      records.push(record);
+    }
+    const formatted = formatDesktopObservationResult(records, input);
+    return {
+      responseText: formatted || formatDesktopObservationUnavailable(input),
+      intent: {
+        category: 'system',
+        confidence: 0.98,
+        entities: {},
+        subIntent: 'desktop_observation',
+        needsLLM: false,
+      },
+      llmWasCalled: false,
+      directToolExecuted: true,
+      toolResult: records.map(record => record.result).filter(Boolean).join('\n'),
+      toolRecord: records[0],
+      toolRecords: records,
+      isFallback: false,
+    };
+  }
   if (
     !explicitTeamExecution
     && intent.directToolCall
@@ -98,18 +141,20 @@ export async function processInput(
       );
 
       const fallback = generateFallback(intent, toolResult);
+      const toolRecord: ToolExecutionRecord = {
+        id: `cognition-${Date.now()}`,
+        name: intent.directToolCall.name,
+        arguments: intent.directToolCall.args,
+        result: toolResult,
+      };
       return {
         responseText: fallback?.text || toolResult,
         intent,
         llmWasCalled: false,
         directToolExecuted: true,
         toolResult,
-        toolRecord: {
-          id: `cognition-${Date.now()}`,
-          name: intent.directToolCall.name,
-          arguments: intent.directToolCall.args,
-          result: toolResult,
-        },
+        toolRecord,
+        toolRecords: [toolRecord],
         isFallback: !!fallback,
       };
     } catch (err: any) {

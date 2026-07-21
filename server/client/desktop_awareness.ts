@@ -14,7 +14,8 @@ interface DesktopEntry {
 interface RunningProcess {
   name: string;
   pid: number;
-  cpu?: number | null;
+  /** Cumulative processor time reported by Get-Process; this is not CPU%. */
+  cpuTimeSeconds?: number | null;
   memoryMB?: number | null;
 }
 
@@ -186,8 +187,8 @@ $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
 function getRunningProcesses(): RunningProcess[] {
   const script = `
 Get-Process |
-  Sort-Object @{Expression = 'CPU'; Descending = $true}, @{Expression = 'WorkingSet64'; Descending = $true} |
-  Select-Object -First ${PROCESS_LIMIT} @{Name='name'; Expression={$_.ProcessName}}, @{Name='pid'; Expression={$_.Id}}, @{Name='cpu'; Expression={ if ($_.CPU -ne $null) { [math]::Round($_.CPU, 1) } else { $null } }}, @{Name='memoryMB'; Expression={ [math]::Round($_.WorkingSet64 / 1MB, 1) }} |
+  Sort-Object @{Expression = 'WorkingSet64'; Descending = $true} |
+  Select-Object -First ${PROCESS_LIMIT} @{Name='name'; Expression={$_.ProcessName}}, @{Name='pid'; Expression={$_.Id}}, @{Name='cpuTimeSeconds'; Expression={ if ($_.CPU -ne $null) { [math]::Round($_.CPU, 1) } else { $null } }}, @{Name='memoryMB'; Expression={ [math]::Round($_.WorkingSet64 / 1MB, 1) }} |
   ConvertTo-Json -Compress
 `;
   const raw = asArray(runPowerShellJson(script, 2800) as any);
@@ -195,7 +196,7 @@ Get-Process |
     .map((item: any) => ({
       name: String(item?.name || '').trim(),
       pid: Number(item?.pid),
-      cpu: item?.cpu == null ? null : Number(item.cpu),
+      cpuTimeSeconds: item?.cpuTimeSeconds == null ? null : Number(item.cpuTimeSeconds),
       memoryMB: item?.memoryMB == null ? null : Number(item.memoryMB),
     }))
     .filter(item => item.name && Number.isFinite(item.pid))

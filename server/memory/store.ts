@@ -1,5 +1,14 @@
 import { readDB, writeDB } from '../../db_layer';
-import { Memory, MemoryQuery, MemoryType, MemoryTier, MemoryPerspective } from './types';
+import {
+  Memory,
+  MemoryEvidenceClass,
+  MemoryQuery,
+  MemoryType,
+  MemoryTier,
+  MemoryPerspective,
+  CONVERSATIONAL_MEMORY_EVIDENCE,
+} from './types';
+export { CONVERSATIONAL_MEMORY_EVIDENCE } from './types';
 import { applyMemoryFirewallMetadata, evaluateMemoryFirewall } from './firewall';
 import { generateConfiguredEmbedding, getEmbeddingRoute } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
@@ -17,8 +26,48 @@ function getMemoryStore(): Memory[] {
 export function isOperationalTraceMemory(
   memory: Pick<Memory, 'sourceInteractionId' | 'content'>,
 ): boolean {
-  return String(memory.sourceInteractionId || '').startsWith('orch_')
-    || String(memory.content || '').trimStart().startsWith('[Orchestrated Workflow]');
+  const source = String(memory.sourceInteractionId || '').trim().toLowerCase();
+  const content = String(memory.content || '').trimStart();
+  return source.startsWith('orch_')
+    || /^(?:proactive_scan|growth_journal|autonomy_scan|daily_growth|self_reflection)_/i.test(source)
+    || /^\[(?:Orchestrated Workflow|Proactive Scan|Growth Journal|Autonomy Scan|Daily Growth|Self Reflection)\b/i.test(content);
+}
+
+/**
+ * Classify memory evidence from provenance fields instead of reading intent out
+ * of the generated sentence. This keeps Lumi's own stories separate from facts
+ * about the owner even when both happen to mention the same topic.
+ */
+export function classifyMemoryEvidence(
+  memory: Pick<Memory, 'perspective' | 'source' | 'sourceInteractionId' | 'content'>,
+): MemoryEvidenceClass {
+  if (isOperationalTraceMemory(memory)) return 'operational_trace';
+  if (memory.perspective === 'lumi_self' || memory.perspective === 'lumi_growth') {
+    return 'lumi_narrative';
+  }
+  if (memory.perspective === 'shared_memory') return 'shared_context';
+  if (memory.source === 'chat' || memory.source === 'voice' || memory.source === 'manual') {
+    return 'owner_statement';
+  }
+  return 'owner_observation';
+}
+
+function semanticMemoryKey(memory: Memory): string {
+  return String(memory.content || '')
+    .toLowerCase()
+    .replace(/^\[[^\]]{1,80}\]\s*/u, '')
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
+    .slice(0, 1000);
+}
+
+function dedupeMemoriesInRankOrder(memories: Memory[]): Memory[] {
+  const seen = new Set<string>();
+  return memories.filter(memory => {
+    const key = semanticMemoryKey(memory) || memory.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // ── Embedding / Vector Search ──
@@ -54,6 +103,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 function matchesMemoryQueryFilters(memory: Memory, query: MemoryQuery): boolean {
   if (query.includeOperationalTraces !== true && isOperationalTraceMemory(memory)) return false;
+  if (query.evidenceClasses && !query.evidenceClasses.includes(classifyMemoryEvidence(memory))) return false;
   if (query.userId && memory.userId !== query.userId) return false;
   if (query.agentId !== undefined && (memory.agentId || '') !== query.agentId) return false;
   if (query.type && memory.type !== query.type) return false;
@@ -418,6 +468,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     });
   }
 
+  memories = dedupeMemoriesInRankOrder(memories);
   const limit = q.limit || 10;
   const result = memories.slice(0, limit);
 
@@ -439,7 +490,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
         q.includeOperationalTraces === true,
       );
       for (const am of assoc) {
-        if (!resultIdSet.has(am.id) && matchesMemoryScope(am, q.domain, q.orgId)) {
+        if (!resultIdSet.has(am.id) && matchesMemoryQueryFilters(am, q)) {
           resultIdSet.add(am.id);
           associated.push(am);
         }
@@ -455,9 +506,10 @@ export function queryMemories(q: MemoryQuery): Memory[] {
     // (no pairwise to strengthen, but we can use this info later)
   }
 
-  markMemoriesRetrieved(result);
+  const uniqueResult = dedupeMemoriesInRankOrder(result);
+  markMemoriesRetrieved(uniqueResult);
 
-  return result;
+  return uniqueResult;
 }
 
 /** Async vector-based semantic search. Falls back to keyword search if embeddings unavailable. */
@@ -480,7 +532,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
 
   // Vector recall scans every memory in the requested scope, including passages with no shared keyword.
   const scopedMemories = getMemoryStore().filter(memory => matchesMemoryQueryFilters(memory, q));
-  const scored = scopedMemories
+  const ranked = scopedMemories
     .map(m => {
       let score = 0;
       if (!m.embedding || m.embedding.length === 0 || m.embedding.length !== queryVec.length) {
@@ -497,6 +549,13 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
     })
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score);
+  const seenSemanticKeys = new Set<string>();
+  const scored = ranked.filter(({ m }) => {
+    const key = semanticMemoryKey(m) || m.id;
+    if (seenSemanticKeys.has(key)) return false;
+    seenSemanticKeys.add(key);
+    return true;
+  });
 
   const retrievalUserId = q.userId || 'anonymous';
   const rerank = getRerankSelection(retrievalUserId);
@@ -711,12 +770,12 @@ export function addMemory(
     existing.updatedAt = now;
     existing.domain = domain;
     existing.orgId = orgId;
-    applyMemoryFirewallMetadata(existing, firewall);
+    Object.assign(existing, applyMemoryFirewallMetadata(existing, firewall));
     saveMemoryStore(all);
     return existing;
   }
 
-  const newMemory: Memory = {
+  const newMemory = applyMemoryFirewallMetadata<Memory>({
     id: generateId(),
     ...memory,
     createdAt: now,
@@ -732,8 +791,7 @@ export function addMemory(
     location: overrides?.location,
     domain,
     orgId,
-  };
-  applyMemoryFirewallMetadata(newMemory, firewall);
+  }, firewall);
 
   all.push(newMemory);
   saveMemoryStore(all);
@@ -815,7 +873,20 @@ export function formatMemoriesForContext(memories: Memory[]): string {
   const branches = memories.filter(m => m.nodeType === 'branch');
   const leaves = memories.filter(m => m.nodeType !== 'branch');
 
-  const lines: string[] = [];
+  const lines: string[] = [
+    '## Retrieved memory evidence',
+    'Treat these as recalled candidates, not unquestionable truth. Owner statements are direct evidence; owner observations are inferences that may be wrong; shared context is not proof of an owner trait; Lumi narrative describes Lumi and must never be used as evidence about the owner.',
+  ];
+
+  const evidenceLabel = (memory: Memory): string => {
+    switch (classifyMemoryEvidence(memory)) {
+      case 'owner_statement': return 'owner statement';
+      case 'owner_observation': return 'owner observation';
+      case 'shared_context': return 'shared context';
+      case 'lumi_narrative': return 'Lumi narrative';
+      case 'operational_trace': return 'operational trace';
+    }
+  };
 
   // Group leaves by parent
   const byParent = new Map<string | null, Memory[]>();
@@ -835,7 +906,7 @@ export function formatMemoriesForContext(memories: Memory[]): string {
     lines.push(`### ${branch.content}`);
     children.sort((a, b) => b.importance - a.importance || b.confidence - a.confidence);
     for (const m of children) {
-      lines.push(`- ${m.content}`);
+      lines.push(`- [${evidenceLabel(m)}] ${m.content}`);
     }
   }
 
@@ -845,7 +916,7 @@ export function formatMemoriesForContext(memories: Memory[]): string {
     for (const m of orphans) {
       // Filter out branches from the root display
       if (m.nodeType !== 'branch') {
-        lines.push(`- ${m.content}`);
+        lines.push(`- [${evidenceLabel(m)}] ${m.content}`);
       }
     }
   }
@@ -875,7 +946,15 @@ export function computeMemoryValue(memory: Memory, childrenCount: number = 0, he
   const recencyScore = Math.max(0, 1 - hoursSinceRetrieve / 72); // Decay over 72h
 
   // Retrieve frequency: log-scale so the 1st retrieval matters most
-  const retrieveScore = Math.min(1, Math.log2(memory.retrieveCount + 1) / 5); // log2(33) ≈ 5
+  const rawRetrieveScore = Math.min(1, Math.log2(memory.retrieveCount + 1) / 5); // log2(33) ≈ 5
+  const evidenceClass = classifyMemoryEvidence(memory);
+  // Generated narratives and operational traces must not gain durable authority
+  // merely because the system repeatedly recalled its own output.
+  const retrieveScore = evidenceClass === 'operational_trace'
+    ? 0
+    : evidenceClass === 'lumi_narrative'
+      ? Math.min(0.25, rawRetrieveScore)
+      : rawRetrieveScore;
 
   // Confidence
   const confidenceScore = memory.confidence;

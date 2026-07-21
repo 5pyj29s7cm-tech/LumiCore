@@ -542,6 +542,26 @@ export function needsRecentActionContinuationContext(userText: string): boolean 
   return classifyRecentActionFollowupIntent(clean) !== 'none';
 }
 
+/**
+ * Resolve a terse, explicit open instruction from the durable receipt-backed
+ * continuation state. This keeps "open it" deterministic without asking a
+ * model to guess which earlier website or app the pronoun referred to.
+ */
+export function resolveRecentActionOpenTarget(
+  userText: string,
+  persistedState?: ConversationActionContinuationState | null,
+): string | null {
+  const clean = compact(userText, 120)
+    .replace(/[。！？.!?]+$/u, '')
+    .trim();
+  const state = normalizeConversationActionState(persistedState);
+  if (!clean || !state?.sourcePaths.length) return null;
+  const explicitReferentialOpen = /^(?:请|麻烦)?(?:你)?(?:现在)?(?:直接)?(?:把)?(?:它|这个|那个|这个文件|那个文件|这个文档|那个文档|刚才的文件|刚生成的文件)?(?:给我)?打开(?:一下)?$/u.test(clean) // i18n-allow: Chinese referential-open recognition; not user-visible copy.
+    || /^(?:please\s+)?(?:just\s+)?open\s+(?:it|that|this|the\s+file|the\s+document)$/i.test(clean);
+  if (!explicitReferentialOpen) return null;
+  return [...state.sourcePaths].reverse().find(Boolean) || null;
+}
+
 export function buildRecentActionContinuationBridge(
   userText: string,
   history: ActionContinuationHistoryItem[] | undefined,

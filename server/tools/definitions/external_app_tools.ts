@@ -1287,13 +1287,14 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'browser_open_task',
-    description: 'Prepare or open a browser task. By default returns the target URL without opening it; set open=true only when the user wants the browser opened.',
+    description: 'Prepare or open a browser task. By default returns the target URL without opening it; set open=true only when the user wants the browser opened. If the user explicitly named a browser, pass that browser so the target is not opened in a different default browser.',
     parameters: {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'URL to open. If omitted, query is converted to a Bing search URL.' },
         query: { type: 'string', description: 'Search query when no URL is provided.' },
         open: { type: 'boolean', description: 'Open the URL in the desktop browser. High-risk submits, payments, publishing, and account transitions still require confirmation.' },
+        browser: { type: 'string', description: 'Optional explicitly requested browser application, such as "Google Chrome", "Microsoft Edge", or "Safari". Leave empty to use the OS default.' },
       },
       required: [],
     },
@@ -1303,8 +1304,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         return JSON.stringify({ target, opened: false, note: 'Set open=true to open the browser when the user wants visible browser work.' }, null, 2);
       }
       const desktopRelay = requireDesktopRelay(context);
-      const result = await desktopRelay('desktop_open', { target });
-      return JSON.stringify({ target, opened: true, result }, null, 2);
+      const browser = String(args.browser || '').trim();
+      const result = await desktopRelay('desktop_open', { target, ...(browser ? { application: browser } : {}) });
+      return JSON.stringify({ target, opened: true, ...(browser ? { browser } : {}), result }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',

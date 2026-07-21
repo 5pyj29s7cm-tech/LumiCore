@@ -302,7 +302,11 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       streamRef.current = stream;
       audioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
       const source = audioContextRef.current.createMediaStreamSource(stream);
-      const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+      // 128 ms frames let owner verification catch up with short commands
+      // before realtime STT finalizes them. The previous 256 ms frame needed
+      // over a second of voiced audio and made short commands work only on a
+      // second attempt.
+      const processor = audioContextRef.current.createScriptProcessor(2048, 1, 1);
       processorRef.current = processor;
 
       processor.onaudioprocess = (event) => {
@@ -313,7 +317,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
         if (rms > 0.01) {
           frameBufferRef.current.push(new Float32Array(buffer));
           // Keep only last ~5s of speech.
-          if (frameBufferRef.current.length > 20) frameBufferRef.current.shift();
+          if (frameBufferRef.current.length > 40) frameBufferRef.current.shift();
 
           // Check every ~650ms.
           const now = Date.now();

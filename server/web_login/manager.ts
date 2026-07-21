@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright-core';
 import { getDataPath } from '../config/data_path';
+import { getWebLoginSitePreset } from './legal_presets';
 
 export type WebLoginScope = {
   userId?: string;
@@ -782,9 +783,25 @@ function updateProfileLoginStatus(
 
 export async function runWebLogin(options: LoginRunOptions, scope?: WebLoginScope) {
   const target = options.url ? normalizeUrl(options.url).toString() : '';
-  const profile = options.profileId
+  let profile = options.profileId
     ? getProfile(options.profileId, scope)
     : findWebLoginProfileForUrl(target, scope);
+  // Built-in presets are safe, passwordless local session definitions. When
+  // the user explicitly asks to log into a known site, materialize the preset
+  // on first use instead of stopping at a profile-listing step.
+  if (!profile && options.profileId) {
+    const preset = getWebLoginSitePreset(options.profileId);
+    if (preset) {
+      saveWebLoginProfile({
+        id: preset.id,
+        label: preset.label,
+        loginUrl: preset.loginUrl,
+        matchHosts: preset.matchHosts,
+        notes: preset.notes,
+      }, scope);
+      profile = getProfile(preset.id, scope);
+    }
+  }
   if (!profile) throw new Error('No matching web login profile found. Save one first.');
   const navigationTarget = target || profile.loginUrl;
   assertWebLoginProfileAllowsUrl(profile, navigationTarget);

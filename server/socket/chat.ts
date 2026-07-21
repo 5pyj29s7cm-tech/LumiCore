@@ -46,7 +46,7 @@ import {
   isExplicitConfirmationReply,
   recordPendingConfirmation,
 } from "../tools/pending_confirmation";
-import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories } from "../memory";
+import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay } from "../personality/engine";
 import { personalityRegistry } from "../personality";
@@ -57,8 +57,8 @@ import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
-import { buildRecentActionContinuationBridge } from "../cognition/action_continuation";
-import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
+import { buildRecentActionContinuationBridge, resolveRecentActionOpenTarget } from "../cognition/action_continuation";
+import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
@@ -92,6 +92,7 @@ import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflo
 import { buildProfessionOverlay } from "../autonomy/professions";
 import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildResponseLanguageInstruction } from "../utils/language";
+import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { CN_MESSAGING_MESSAGES } from "../regions/packs/cn/messaging_messages";
 import { CN_CLIENT_DIAGNOSTIC_MESSAGES } from "../regions/packs/cn/client_diagnostic_messages";
@@ -1033,6 +1034,7 @@ export function registerChatHandler(
         domain: resolvedDomain,
         orgId: resolvedOrgId,
         useVector: true,
+        evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
       });
       console.log('[ChatHandler] relevantMemories (vector):', relevantMemories.length);
 
@@ -1116,6 +1118,10 @@ export function registerChatHandler(
         conversationTurn.rolledOver
           ? persistedConversationHistory
           : [...historyItems, ...persistedConversationHistory],
+        conversation?.actionContinuationState,
+      );
+      const continuationOpenTarget = resolveRecentActionOpenTarget(
+        visibleUserText,
         conversation?.actionContinuationState,
       );
 
@@ -1931,11 +1937,15 @@ export function registerChatHandler(
 
       // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
       try {
-        const quickResult = await matchQuickCommand(text, uid, {
+        const quickResult = await matchQuickCommand(
+          continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
+          uid,
+          {
           domain: resolvedDomain,
           orgId: resolvedOrgId,
           surface: turnSurface,
-        });
+          },
+        );
         if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
           let quickResponseText = quickResult.responseText;
@@ -2179,8 +2189,11 @@ export function registerChatHandler(
       }
 
       // Auto-select model: flash for simple chat, pro for complex tasks
-      const complexCategories = ['command', 'code', 'question', 'analysis'];
-      const isComplex = complexCategories.includes(cognition.intent.category);
+      const isComplex = ['command', 'code', 'analysis'].includes(cognition.intent.category)
+        || (
+          cognition.intent.category === 'question'
+          && (visibleUserText.length > 80 || isUserCorrectionOrExplanationQuestion(visibleUserText))
+        );
       if (activeProvider === 'deepseek') {
         activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
       } else if (activeProvider === 'qwen') {
@@ -2373,6 +2386,7 @@ export function registerChatHandler(
       const desktopObservationPlan = buildDesktopObservationPlan(visibleUserText);
       if (
         !responseText &&
+        !cognition.directToolExecuted &&
         !explicitTeamOrchestration &&
         desktopObservationPlan.length > 0 &&
         executionDecision.allowToolUse &&
@@ -2430,7 +2444,9 @@ export function registerChatHandler(
       if (cognition.directToolExecuted && cognition.responseText) {
         // Path A: Lumi handled this directly — no LLM needed
         responseText = cognition.responseText;
-        if (cognition.toolRecord) allToolRecords.push(cognition.toolRecord);
+        const directRecords = cognition.toolRecords
+          || (cognition.toolRecord ? [cognition.toolRecord] : []);
+        allToolRecords.push(...directRecords);
         console.log(`[Cognition] Direct tool '${cognition.intent.directToolCall?.name}' handled without LLM`);
       }
 

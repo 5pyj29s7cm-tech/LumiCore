@@ -20,7 +20,6 @@ interface UseVoiceCallOptions {
   socket: any;
   onTranscript?: (text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => void;
   onResponse?: (text: string) => void;
-  canInterruptFromVoice?: () => boolean;
   canSendMicAudio?: () => boolean;
 }
 
@@ -80,7 +79,7 @@ function releaseAudioBufferSource(source: AudioBufferSourceNode | null, stop = f
   try { source.buffer = null; } catch {}
 }
 
-export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFromVoice, canSendMicAudio }: UseVoiceCallOptions) {
+export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio }: UseVoiceCallOptions) {
   const [callState, setCallState] = useState<CallState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string>('');
@@ -99,10 +98,9 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   const disconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevCallState = useRef<CallState>('idle');
   const transcriptionOnlyRef = useRef(false);
-  const canInterruptFromVoiceRef = useRef(canInterruptFromVoice);
   const canSendMicAudioRef = useRef(canSendMicAudio);
-  const ttsPreRollChunks = useRef<Uint8Array[]>([]);
-  const flushTtsPreRollOnNextAudio = useRef(false);
+  const ttsEchoFloorRef = useRef(0);
+  const ttsBargeInFramesRef = useRef(0);
   const musicDuckingRef = useRef<{ active: boolean; level: number | null }>({ active: false, level: null });
   const thinkingWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thinkingWatchdogStartedAt = useRef(0);
@@ -115,7 +113,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
   const playbackGenerationRef = useRef(0);
   const startInFlightRef = useRef(false);
 
-  useEffect(() => { canInterruptFromVoiceRef.current = canInterruptFromVoice; }, [canInterruptFromVoice]);
   useEffect(() => { canSendMicAudioRef.current = canSendMicAudio; }, [canSendMicAudio]);
   useEffect(() => { callStateRef.current = callState; }, [callState]);
   useEffect(() => { socketRef.current = socket; }, [socket]);
@@ -170,8 +167,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     playbackStartTime.current = 0;
     // Clear sentence audio queue
     audioQueue.current = [];
-    ttsPreRollChunks.current = [];
-    flushTtsPreRollOnNextAudio.current = false;
     // Stop proactive speech (greetings, check-ins) — now interruptible
     if (proactiveSource.current) {
       releaseAudioBufferSource(proactiveSource.current, true);
@@ -194,6 +189,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       }
     }
     isTtsPlaying.current = false;
+    ttsEchoFloorRef.current = 0;
+    ttsBargeInFramesRef.current = 0;
   }, []);
 
   const disposePlaybackContexts = useCallback(() => {
@@ -301,7 +298,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       });
     };
 
-    // Voice confirmation window — show recognized text during the 600ms delay
+    // Voice confirmation window — show recognized text while the server yields
+    // briefly before starting the task pipeline.
     const onAudioConfirm = (data: { text: string }) => {
       if (!isCallActive.current) return;
       setTranscript(data.text);
@@ -633,7 +631,9 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
       const source = audioContext.current.createMediaStreamSource(stream);
 
       // Set up ScriptProcessorNode to capture raw PCM (linear16) for realtime STT.
-      const bufferSize = 4096;
+      // 128 ms frames keep realtime STT and spoken barge-in responsive while
+      // remaining large enough to avoid excessive socket overhead.
+      const bufferSize = 2048;
       const scriptProcessor = audioContext.current.createScriptProcessor(bufferSize, 1, 1);
 
       scriptProcessor.onaudioprocess = (event) => {
@@ -655,35 +655,51 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
           detail: { level: frameRms },
         }));
 
-        // While Lumi is speaking, keep a tiny pre-roll instead of streaming
-        // speaker echo into STT. If the owner truly barges in, we flush this
-        // short tail after playback stops so the first words are less likely
-        // to be clipped.
+        // Keep realtime STT active while Lumi speaks. Browser echo cancellation
+        // plus the server's recent-TTS matcher remove self speech; keeping this
+        // lane open gives stop commands a semantic path even when the local
+        // energy detector does not cross its threshold.
         if (isTtsPlaying.current) {
-          ttsPreRollChunks.current.push(chunk);
-          if (ttsPreRollChunks.current.length > 6) ttsPreRollChunks.current.shift();
+          currentSocket.volatile.emit('audio:chunk', chunk);
+
+          const ttsAgeMs = ttsStartedAt.current > 0 ? Date.now() - ttsStartedAt.current : 0;
+          // Learn the current room/speaker echo at the start of every
+          // utterance. A fixed threshold made normal-volume and short
+          // interruptions unreliable across different microphones.
+          if (ttsAgeMs <= 450) {
+            ttsEchoFloorRef.current = ttsEchoFloorRef.current === 0
+              ? frameRms
+              : (ttsEchoFloorRef.current * 0.72) + (frameRms * 0.28);
+            ttsBargeInFramesRef.current = 0;
+          } else {
+            const adaptiveThreshold = Math.max(
+              0.018,
+              Math.min(0.09, (ttsEchoFloorRef.current * 2.2) + 0.006),
+            );
+            ttsBargeInFramesRef.current = frameRms > adaptiveThreshold
+              ? ttsBargeInFramesRef.current + 1
+              : 0;
+            const strongSpeechFrame = frameRms > Math.max(0.045, adaptiveThreshold * 1.6);
+            if (strongSpeechFrame || ttsBargeInFramesRef.current >= 2) {
+              // Stopping local playback is harmless and must not wait for an
+              // asynchronous voiceprint sample. Audio is already flowing
+              // through the semantic stop lane, so no pre-roll replay is needed.
+              currentSocket.emit('audio:interrupt');
+              stopAllPlayback();
+              ttsStartedAt.current = 0;
+              setCallState('listening');
+            }
+          }
           return;
         }
 
         const micAllowed = transcriptionOnlyRef.current || (canSendMicAudioRef.current?.() ?? true);
-        if (!micAllowed) {
-          ttsPreRollChunks.current = [];
-          flushTtsPreRollOnNextAudio.current = false;
-          return;
-        }
+        if (!micAllowed) return;
 
         if (!transcriptionOnlyRef.current && callStateRef.current === 'passive' && frameRms < 0.004) {
           const now = Date.now();
           if (now - lastPassiveSilenceKeepAlive.current < 1500) return;
           lastPassiveSilenceKeepAlive.current = now;
-        }
-
-        if (flushTtsPreRollOnNextAudio.current && ttsPreRollChunks.current.length > 0) {
-          for (const preRollChunk of ttsPreRollChunks.current) {
-            currentSocket.volatile.emit('audio:chunk', preRollChunk);
-          }
-          ttsPreRollChunks.current = [];
-          flushTtsPreRollOnNextAudio.current = false;
         }
 
         currentSocket.volatile.emit('audio:chunk', chunk);
@@ -723,7 +739,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     } finally {
       startInFlightRef.current = false;
     }
-  }, [cleanupCapture]);
+  }, [cleanupCapture, stopAllPlayback]);
 
   const startCallRef = useRef(startCall);
   startCallRef.current = startCall;
@@ -766,40 +782,17 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canInterruptFro
     disposePlaybackContexts();
   }, [cleanupCapture, disposePlaybackContexts]);
 
-  // Barge-in: detect user speaking over TTS via audio level.
-  // After TTS starts, wait 400ms before enabling barge-in so Lumi's own
-  // voice from external speakers doesn't trigger a self-interrupt.
+  // Track the beginning of each TTS utterance. Audio-frame processing above
+  // uses this timestamp to learn an adaptive echo floor and detect barge-in.
   useEffect(() => {
     if (isTtsPlaying.current && ttsStartedAt.current === 0) {
       ttsStartedAt.current = Date.now();
     } else if (!isTtsPlaying.current) {
       ttsStartedAt.current = 0;
+      ttsEchoFloorRef.current = 0;
+      ttsBargeInFramesRef.current = 0;
     }
   }, [callState]);
-
-  useEffect(() => {
-    const threshold = 0.12;
-    const minTtsDuration = 500; // ms — ignore barge-in during first 500ms of TTS
-    if (callState !== 'speaking' && callState !== 'thinking') return;
-    const interval = setInterval(() => {
-      if (
-        rawAudioLevelRef.current > threshold &&
-        isTtsPlaying.current &&
-        ttsStartedAt.current > 0 &&
-        Date.now() - ttsStartedAt.current > minTtsDuration
-      ) {
-        if (!(canInterruptFromVoiceRef.current?.() ?? true)) return;
-        const preRoll = [...ttsPreRollChunks.current];
-        socket?.emit('audio:interrupt');
-        stopAllPlayback();
-        ttsPreRollChunks.current = preRoll;
-        flushTtsPreRollOnNextAudio.current = true;
-        ttsStartedAt.current = 0;
-        setCallState('listening');
-      }
-    }, 50);
-    return () => clearInterval(interval);
-  }, [callState, socket, stopAllPlayback]);
 
   // Monitor connection quality via socket latency
   useEffect(() => {

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildPresenceHeartbeat } from '../src/hooks/usePresence';
 import { waitForVoiceSocket } from '../src/hooks/useVoiceCall';
+import { addEchoText, isEchoText, isPureInterruptCommand } from '../server/socket/voice';
 
 class FakeSocket {
   connected = false;
@@ -103,5 +104,44 @@ describe('voice reconnect and perception continuity', () => {
     expect(server).toContain('interruptVoiceSpeech(session)');
     expect(client).toContain("socket.on('audio:sidecar_response'");
     expect(client).toContain('if (data?.workContinues)');
+  });
+
+  it('keeps a semantic stop lane open during TTS before voiceprint gating', () => {
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const priorityStop = server.indexOf('isPureInterruptCommand(immediateText)');
+    const voiceprintGate = server.indexOf('if (!session.transcriptionOnly && !isVoiceprintGateOpen(session))', priorityStop);
+
+    expect(isPureInterruptCommand('闭嘴')).toBe(true);
+    expect(isPureInterruptCommand('先别说了')).toBe(true);
+    expect(isPureInterruptCommand('闭嘴，然后继续画图')).toBe(false);
+    expect(priorityStop).toBeGreaterThan(0);
+    expect(voiceprintGate).toBeGreaterThan(priorityStop);
+    expect(server).toContain('await waitForVoiceprintGate(session)');
+    expect(client).toContain("if (isTtsPlaying.current) {");
+    expect(client).toContain("currentSocket.volatile.emit('audio:chunk', chunk)");
+    expect(client).not.toContain('ttsPreRollChunks');
+    const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
+    expect(voiceprint).toContain('createScriptProcessor(2048, 1, 1)');
+  });
+
+  it('matches recent TTS by sequence without treating every short utterance as echo', () => {
+    addEchoText('这是 Lumi 正在播放的一段完整句子。');
+    expect(isEchoText('这是Lumi正在播放的一段完整句子')).toBe(true);
+    expect(isEchoText('我现在要打开浏览器')).toBe(false);
+    expect(isEchoText('嗯')).toBe(false);
+  });
+
+  it('advances the same latest-turn generation from chat, voice, and task surfaces', () => {
+    const root = process.cwd();
+    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+
+    expect(chat).toContain('markLatestUserTurn(executionScope, requestId)');
+    expect(voice).toContain('markLatestUserTurn({');
+    expect(voice).toContain('domain: voiceScope.domain');
+    expect(task).toContain('markLatestUserTurn(executionScope, requestId)');
   });
 });

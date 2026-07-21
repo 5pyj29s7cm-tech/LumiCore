@@ -707,7 +707,22 @@ fn read_command_output(path: &Path) -> (String, bool) {
     if truncated {
         bytes.truncate(MAX_COMMAND_OUTPUT_BYTES as usize);
     }
-    (String::from_utf8_lossy(&bytes).to_string(), truncated)
+    (decode_command_bytes(&bytes), truncated)
+}
+
+fn decode_command_bytes(bytes: &[u8]) -> String {
+    if let Ok(value) = std::str::from_utf8(bytes) {
+        return value.to_string();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let (decoded, _, _) = encoding_rs::GBK.decode(bytes);
+        return decoded.into_owned();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
 }
 
 fn terminate_command_tree(child: &mut Child) {
@@ -1272,6 +1287,24 @@ fn normalize_app_query(value: &str) -> String {
         }
     }
 
+    let location_prefixes = [
+        "\u{684c}\u{9762}\u{4e0a}\u{7684}",
+        "\u{684c}\u{9762}\u{91cc}\u{7684}",
+        "\u{684c}\u{9762}\u{7684}",
+        "\u{684c}\u{9762}\u{4e0a}",
+        "\u{684c}\u{9762}\u{91cc}",
+        "\u{684c}\u{9762}",
+        "onthedesktop",
+        "desktop",
+    ];
+    for prefix in location_prefixes {
+        let normalized_prefix = compact_app_text(prefix);
+        if compact.starts_with(&normalized_prefix) && compact.len() > normalized_prefix.len() {
+            compact = compact[normalized_prefix.len()..].to_string();
+            break;
+        }
+    }
+
     let suffixes = [
         "\u{5ba2}\u{6237}\u{7aef}",
         "\u{5e94}\u{7528}",
@@ -1289,6 +1322,18 @@ fn normalize_app_query(value: &str) -> String {
         }
     }
     compact
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod app_query_tests {
+    use super::normalize_app_query;
+
+    #[test]
+    fn strips_desktop_location_words_without_shortening_the_app_name() {
+        assert_eq!(normalize_app_query("打开桌面上的网易云音乐"), "网易云音乐");
+        assert_eq!(normalize_app_query("桌面的网易云音乐软件"), "网易云音乐");
+        assert_eq!(normalize_app_query("打开微信消息值守"), "微信消息值守");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1758,6 +1803,65 @@ fn shortcut_candidates_for_definitions(defs: &[WindowsAppDefinition]) -> Vec<Win
 }
 
 #[cfg(target_os = "windows")]
+fn generic_windows_launch_candidates(query: Option<&str>) -> Vec<WindowsLaunchCandidate> {
+    let normalized_query = query.map(normalize_app_query).unwrap_or_default();
+    if query.is_some() && normalized_query.is_empty() {
+        return Vec::new();
+    }
+    let query_is_specific = normalized_query.chars().count() >= 2;
+    let mut candidates = Vec::new();
+    for (root, source, base_score) in windows_app_search_roots() {
+        if !root.exists() {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        let mut visited = 0usize;
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 7 || visited > 1800 {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                visited += 1;
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push((path, depth + 1));
+                    continue;
+                }
+                if !launchable_extension(&path) {
+                    continue;
+                }
+                let label = path
+                    .file_stem()
+                    .map(|value| value.to_string_lossy().trim().to_string())
+                    .unwrap_or_default();
+                let label_key = compact_app_text(&label);
+                if label_key.is_empty() {
+                    continue;
+                }
+                let exact_match = !normalized_query.is_empty() && label_key == normalized_query;
+                let partial_match = query_is_specific && label_key.contains(&normalized_query);
+                if !normalized_query.is_empty() && !exact_match && !partial_match {
+                    continue;
+                }
+                candidates.push(WindowsLaunchCandidate {
+                    app_id: label_key.clone(),
+                    label: label.clone(),
+                    path,
+                    args: Vec::new(),
+                    source: source.to_string(),
+                    aliases: vec![label],
+                    score: base_score + if exact_match { 45 } else if partial_match { 15 } else { 0 },
+                });
+            }
+        }
+    }
+    dedupe_windows_candidates(candidates)
+}
+
+#[cfg(target_os = "windows")]
 fn fixed_candidates_for_definition(def: &WindowsAppDefinition) -> Vec<WindowsLaunchCandidate> {
     def.fixed_paths
         .iter()
@@ -1821,12 +1925,14 @@ fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppE
         for def in definitions.iter().filter(|def| app_query_matches_definition(q, def)) {
             candidates.extend(candidates_for_definition(def));
         }
+        candidates.extend(generic_windows_launch_candidates(Some(q)));
     } else {
         for def in &definitions {
             candidates.extend(history_candidates_for_definition(def));
             candidates.extend(fixed_candidates_for_definition(def));
         }
         candidates.extend(shortcut_candidates_for_definitions(&definitions));
+        candidates.extend(generic_windows_launch_candidates(None));
     }
     dedupe_windows_candidates(candidates)
         .into_iter()
@@ -1947,6 +2053,9 @@ fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", "start", ""]);
         cmd.arg(path);
+        for arg in extra_args {
+            cmd.arg(arg);
+        }
         spawn_hidden(&mut cmd)
     } else {
         let mut cmd = Command::new(path);
@@ -1966,6 +2075,75 @@ fn launch_windows_path(path: &Path, extra_args: &[String]) -> CommandResult {
             output: e.to_string(),
         },
     }
+}
+
+#[cfg(target_os = "windows")]
+fn open_target_in_windows_application(application: &str, target: &str) -> Option<CommandResult> {
+    let mut candidates = generic_windows_launch_candidates(Some(application));
+    if candidates.is_empty() {
+        if let Some(definition) = resolve_app_definition(application) {
+            candidates = candidates_for_definition(&definition);
+        }
+    }
+    if candidates.is_empty() {
+        return Some(CommandResult {
+            success: false,
+            output: format!("No installed application matched: {}", application),
+        });
+    }
+
+    let mut last_error = None;
+    for candidate in candidates {
+        let mut args = candidate.args.clone();
+        args.push(target.to_string());
+        let result = launch_windows_path(&candidate.path, &args);
+        if result.success {
+            record_app_launch(&candidate);
+            return Some(CommandResult {
+                success: true,
+                output: format!(
+                    "Opened {} in {} via {}",
+                    target,
+                    candidate.label,
+                    candidate.path.display()
+                ),
+            });
+        }
+        last_error = Some(result.output);
+    }
+    Some(CommandResult {
+        success: false,
+        output: last_error.unwrap_or_else(|| format!("Failed to open {} in {}", target, application)),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn open_target_in_macos_application(application: &str, target: &str) -> Option<CommandResult> {
+    let app = list_macos_native_apps(Some(application), 1).into_iter().next();
+    let mut command = Command::new("open");
+    if let Some(ref matched) = app {
+        command.arg("-a").arg(&matched.path).arg(target);
+    } else {
+        command.args(["-a", application, target]);
+    }
+    Some(match command.output() {
+        Ok(result) if result.status.success() => CommandResult {
+            success: true,
+            output: format!(
+                "Opened {} in {}",
+                target,
+                app.map(|matched| matched.label).unwrap_or_else(|| application.to_string())
+            ),
+        },
+        Ok(result) => CommandResult {
+            success: false,
+            output: decode_command_bytes(&result.stderr).trim().to_string(),
+        },
+        Err(error) => CommandResult {
+            success: false,
+            output: error.to_string(),
+        },
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -2009,6 +2187,38 @@ fn try_launch_windows_app_alias(target: &str) -> Option<CommandResult> {
     })
 }
 
+#[cfg(target_os = "windows")]
+fn try_launch_generic_windows_app(target: &str) -> Option<CommandResult> {
+    if !should_try_windows_app_index(target) {
+        return None;
+    }
+    let candidates = generic_windows_launch_candidates(Some(target));
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut last_error = None;
+    for candidate in candidates {
+        let result = launch_windows_path(&candidate.path, &candidate.args);
+        if result.success {
+            record_app_launch(&candidate);
+            return Some(CommandResult {
+                success: true,
+                output: format!(
+                    "Opened app {} via {} ({})",
+                    candidate.label,
+                    candidate.path.display(),
+                    candidate.source
+                ),
+            });
+        }
+        last_error = Some(result.output);
+    }
+    Some(CommandResult {
+        success: false,
+        output: last_error.unwrap_or_else(|| format!("Failed to open {}", target)),
+    })
+}
+
 #[tauri::command]
 async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<NativeAppEntry> {
     #[cfg(target_os = "windows")]
@@ -2038,12 +2248,29 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
 }
 
 #[tauri::command]
-fn open_item(target: String, window: tauri::WebviewWindow) -> CommandResult {
+fn open_item(target: String, application: Option<String>, window: tauri::WebviewWindow) -> CommandResult {
     // Open file, folder, app, or URL with the OS default handler
     let _ = window.set_always_on_top(false);
 
+    if let Some(application) = application.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+        #[cfg(target_os = "windows")]
+        if let Some(result) = open_target_in_windows_application(&application, &target) {
+            return result;
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(result) = open_target_in_macos_application(&application, &target) {
+            return result;
+        }
+    }
+
     #[cfg(target_os = "windows")]
     if let Some(result) = try_launch_windows_app_alias(&target) {
+        return result;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(result) = try_launch_generic_windows_app(&target) {
         return result;
     }
 
@@ -2108,8 +2335,8 @@ fn open_item(target: String, window: tauri::WebviewWindow) -> CommandResult {
                 };
             }
 
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = decode_command_bytes(&out.stderr).trim().to_string();
+            let stdout = decode_command_bytes(&out.stdout).trim().to_string();
             let detail = if !stderr.is_empty() {
                 stderr
             } else if !stdout.is_empty() {
@@ -2750,6 +2977,13 @@ pub struct ProcessInfo {
     pub memory_mb: f32,
 }
 
+/// sysinfo reports a process relative to one logical CPU, so a multi-threaded
+/// process can legitimately exceed 100. The desktop API exposes whole-machine
+/// share instead because that is the percentage users expect in conversation.
+fn normalize_process_cpu_percent(raw_percent: f32, logical_cpu_count: usize) -> f32 {
+    (raw_percent / logical_cpu_count.max(1) as f32).clamp(0.0, 100.0)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CaptureResult {
     pub image_base64: String,
@@ -2893,13 +3127,16 @@ fn get_running_processes() -> Vec<ProcessInfo> {
     std::thread::sleep(std::time::Duration::from_millis(50));
     sys.refresh_all();
 
+    let logical_cpu_count = sys.cpus().len().max(1);
+
     let mut processes: Vec<ProcessInfo> = Vec::new();
     for (pid, proc) in sys.processes() {
-        let cpu = proc.cpu_usage();
+        let raw_cpu = proc.cpu_usage();
+        let cpu = normalize_process_cpu_percent(raw_cpu, logical_cpu_count);
         let mem = proc.memory() as f32 / 1024.0 / 1024.0; // bytes -> MB
         let name = proc.name().to_string_lossy().to_string();
         // Only include processes using >0.1% CPU or >10MB memory (reduce noise)
-        if cpu > 0.1 || mem > 10.0 {
+        if raw_cpu > 0.1 || mem > 10.0 {
             processes.push(ProcessInfo {
                 pid: pid.as_u32(),
                 name,

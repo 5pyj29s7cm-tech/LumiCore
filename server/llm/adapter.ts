@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ToolRegistry } from '../tools/registry';
+import { ToolRegistry, isToolNameAllowedByPolicy } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage } from '../tools/types';
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback, type LLMResponseFormat } from './providers';
 import { recordTokenUsage } from './token_tracker';
@@ -484,16 +484,9 @@ function filterToolDeclarationsForPolicy(
   // policy from the orchestrator. Never silently expose the full registry.
   if (!policy && context?.source === 'orchestrator') return [];
   if (!policy) return declarations;
-  if (policy.forbiddenTools?.includes('*')) return [];
-
-  const allowed = new Set(policy.allowedTools || []);
-  const forbidden = new Set(policy.forbiddenTools || []);
-  return declarations.filter((declaration) => {
-    const name = declaration.function.name;
-    if (forbidden.has(name)) return false;
-    if (allowed.has('*')) return true;
-    return allowed.has(name);
-  });
+  return declarations.filter(declaration => (
+    isToolNameAllowedByPolicy(declaration.function.name, policy)
+  ));
 }
 
 function isLocalDesktopCadImageTask(task: string): boolean {

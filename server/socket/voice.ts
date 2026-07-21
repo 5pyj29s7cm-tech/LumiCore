@@ -10,7 +10,7 @@ import { readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
 import { compactToolResultForModel } from "../llm/adapter";
-import { toolRegistry } from "../tools/registry";
+import { isToolNameAllowedByPolicy, toolRegistry } from "../tools/registry";
 import { ToolExecutionRecord } from "../tools/types";
 import {
   buildToolEvidenceRecord,
@@ -39,7 +39,9 @@ import {
   type LlmGetters,
 } from "../agents/orchestrator";
 import { retrieveChunks } from "../agents/rag";
+import { markLatestUserTurn } from "../agents/background_delivery";
 import { queryMemories, addMemory } from "../memory/store";
+import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { searchKnowledgeBase } from "../org/kb";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
@@ -51,6 +53,7 @@ import {
 } from "../cognition/operation_modes";
 import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
+import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionDecision } from "../cognition/execution_decision";
@@ -102,7 +105,7 @@ import {
   collectRecentActionToolRecords,
   describeRecentActionsFromHistory,
 } from "./voice_action_history";
-import { buildRecentActionContinuationBridge } from "../cognition/action_continuation";
+import { buildRecentActionContinuationBridge, resolveRecentActionOpenTarget } from "../cognition/action_continuation";
 import { guardCurrentAppToolCall } from "../cognition/current_app_execution";
 import {
   createPreFinalizationTextGate,
@@ -177,6 +180,8 @@ interface AudioSession {
   voiceprintSource: string;
   voiceprintRequired: boolean;
   voiceprintLastAt: number;
+  /** Short trust lease for an explicitly opened or owner-woken voice call. */
+  voiceprintTrustedUntil: number;
   /** Meeting mode: STT only, no LLM/TTS/tool processing. */
   transcriptionOnly: boolean;
   /** Meeting mode raw PCM recording for high-accuracy final transcription. */
@@ -196,16 +201,30 @@ export function isTtsPlaying(): boolean { return ttsSpeakingCount > 0; }
 
 // ── Module-level TTS echo tracker (shared with wake detector) ──
 
-/** Simple character-overlap ratio for echo detection. > 0.5 = likely echo. */
-function charOverlap(a: string, b: string): number {
-  const an = a.replace(/\s/g, '').toLowerCase();
-  const bn = b.replace(/\s/g, '').toLowerCase();
-  if (!an || !bn) return 0;
-  const setA = new Set(an);
-  const setB = new Set(bn);
-  let overlap = 0;
-  for (const c of setA) { if (setB.has(c)) overlap++; }
-  return overlap / Math.max(setA.size, setB.size);
+function normalizeEchoText(text: string): string {
+  return String(text || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/** Sequence-aware overlap avoids the false positives caused by shared character sets. */
+function bigramDiceSimilarity(a: string, b: string): number {
+  if (a.length < 2 || b.length < 2) return 0;
+  const counts = new Map<string, number>();
+  for (let index = 0; index < a.length - 1; index += 1) {
+    const gram = a.slice(index, index + 2);
+    counts.set(gram, (counts.get(gram) || 0) + 1);
+  }
+  let intersection = 0;
+  for (let index = 0; index < b.length - 1; index += 1) {
+    const gram = b.slice(index, index + 2);
+    const count = counts.get(gram) || 0;
+    if (count <= 0) continue;
+    intersection += 1;
+    counts.set(gram, count - 1);
+  }
+  return (2 * intersection) / ((a.length - 1) + (b.length - 1));
 }
 
 const MAX_ECHO_ENTRIES = 50;
@@ -218,18 +237,22 @@ export function addEchoText(text: string): void {
 }
 
 /** Check if a transcript matches recent TTS output (speaker → mic echo). */
-export function isEchoText(transcript: string): boolean {
+export function isEchoText(transcript: string, includeShortFragments = false): boolean {
   const now = Date.now();
   // Purge stale entries
   for (let i = recentTtsTexts.length - 1; i >= 0; i--) {
     if (recentTtsTexts[i].until <= now) recentTtsTexts.splice(i, 1);
   }
   if (recentTtsTexts.length === 0) return false;
-  const tNorm = transcript.replace(/\s/g, '').toLowerCase();
-  if (tNorm.length < 2) return true;
+  const tNorm = normalizeEchoText(transcript);
+  if (tNorm.length < 2) return false;
+  if (tNorm.length < 4 && !includeShortFragments) return false;
   for (const r of recentTtsTexts) {
-    if (r.text.includes(transcript) || transcript.includes(r.text)) return true;
-    if (charOverlap(transcript, r.text) > 0.5) return true;
+    const recent = normalizeEchoText(r.text);
+    if (!recent) continue;
+    if (recent.includes(tNorm) || tNorm.includes(recent)) return true;
+    const lengthRatio = Math.min(tNorm.length, recent.length) / Math.max(tNorm.length, recent.length);
+    if (lengthRatio >= 0.45 && bigramDiceSimilarity(tNorm, recent) >= 0.72) return true;
   }
   return false;
 }
@@ -241,16 +264,7 @@ function normalizeSpeechText(text: string): string {
     .toLowerCase();
 }
 
-function isExplicitInterruptCommand(text: string): boolean {
-  const normalized = normalizeSpeechText(text);
-  if (!normalized) return false;
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  return /^(停|停下|停止|停止任务|终止任务|取消任务|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|stop|stoptask|canceltask|wait|pause|interrupt|holdon|shutup)$/.test(normalized)
-    || /^(停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样)$/.test(normalized)
-    || /(停一下|先停|别说了|不要说了|打断一下|等我一下|暂停一下|不用说了|别讲了|stop|hold on|wait a second|pause)/i.test(text);
-}
-
-function isPureInterruptCommand(text: string): boolean {
+export function isPureInterruptCommand(text: string): boolean {
   const normalized = normalizeSpeechText(text);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   return /^(停|停下|停止|停止任务|终止任务|取消任务|打断|闭嘴|别说|不要说|先别说|别讲|不要讲|等下|等一下|暂停|好了|行了|够了|停一下|停一停|先停|先停一下|别说了|不要说了|先别说了|别讲了|不要讲了|打断一下|等我一下|暂停一下|可以了|不用说了|先这样|stop|stoptask|canceltask|wait|pause|interrupt|holdon|shutup)$/.test(normalized);
@@ -323,7 +337,14 @@ function interruptVoiceSpeech(session: AudioSession): void {
 }
 
 export function normalizeVoiceHistoryRecord(m: any): NormalizedMessage[] {
-  if (m?.role === 'tool' || m?.mode === 'proactive') return [];
+  const hasToolCalls = Array.isArray(m?.toolCalls)
+    ? m.toolCalls.length > 0
+    : Boolean(String(m?.toolCalls || '').trim());
+  // Tool-bearing assistant turns are execution receipts, not conversational
+  // priming. Continuation state carries their compact evidence separately;
+  // excluding the prose prevents an old process snapshot or failure from
+  // being appended to an unrelated new reply.
+  if (m?.role === 'tool' || m?.mode === 'proactive' || hasToolCalls || m?.tool_call_id) return [];
   const role = m?.role === 'assistant' ? 'assistant' : m?.role === 'user' ? 'user' : '';
   if (!role) return [];
   if (role === 'assistant' && isGuardGeneratedConversationRecord(m)) return [];
@@ -350,6 +371,7 @@ function buildVoiceReplyStyleOverlay(): string {
     '- Default to one short sentence. For simple confirmations, use 2-6 Chinese characters.',
     '- If the user interrupts or says you are verbose, stop immediately and do not explain.',
     '- Never invent a self-check, scan, background action, or tool run to explain latency. Only describe execution that has a real receipt in the current context.',
+    '- Answer the current utterance first. Never append an earlier process snapshot, task result, or failure unless the user explicitly asks about that earlier work.',
     '- The current turn is always coming from the Lumi desktop client voice interface. Historical messages may come from other sources; never infer that the current user is speaking through WeChat or another channel.',
     '- If a messaging tool such as wechat_send_message is present in the current tool set, never claim that Lumi lacks that capability. Execute it for an explicit ordinary send, or report the exact tool error.',
     '- Describe a capability as currently available only when it is present in the current tool set or supported by a current receipt. Distinguish “configured”, “available”, and “completed”.',
@@ -441,6 +463,7 @@ function getAudioSession(socket: Socket): AudioSession {
       voiceprintSource: '',
       voiceprintRequired: false,
       voiceprintLastAt: 0,
+      voiceprintTrustedUntil: 0,
       transcriptionOnly: false,
       meetingPcmPath: null,
       meetingPcmBytes: 0,
@@ -541,8 +564,31 @@ async function refineMeetingTranscript(io: Server, socket: Socket, session: Audi
 
 function isVoiceprintGateOpen(session: AudioSession): boolean {
   if (!session.voiceprintRequired) return true;
+  if (Date.now() <= session.voiceprintTrustedUntil) return true;
   const fresh = Date.now() - session.voiceprintLastAt < 3500;
   return fresh && session.voiceprintMatched && session.voiceprintConfidence >= 0.68;
+}
+
+async function waitForVoiceprintGate(session: AudioSession, timeoutMs = 1_100): Promise<boolean> {
+  if (isVoiceprintGateOpen(session)) return true;
+  const startedAt = Date.now();
+  const decisionAtStart = session.voiceprintLastAt;
+  while (session.isActive && Date.now() - startedAt < timeoutMs) {
+    await new Promise(resolve => setTimeout(resolve, 70));
+    if (isVoiceprintGateOpen(session)) return true;
+    // A new, explicit negative result is decisive. An absent/stale result is
+    // allowed the rest of the short synchronization window to catch up.
+    if (
+      session.voiceprintLastAt > decisionAtStart
+      && session.voiceprintConfidence > 0
+      && !session.voiceprintMatched
+    ) return false;
+  }
+  return isVoiceprintGateOpen(session);
+}
+
+function extendVoiceprintTrust(session: AudioSession, durationMs = 5_000): void {
+  session.voiceprintTrustedUntil = Math.max(session.voiceprintTrustedUntil, Date.now() + durationMs);
 }
 
 function getVoiceprintSpeakerMeta(session: AudioSession): {
@@ -568,10 +614,26 @@ function getVoiceprintSpeakerMeta(session: AudioSession): {
 
 function blockUnverifiedVoice(socket: Socket, session: AudioSession, reason: string): void {
   logger.info(`[Voiceprint] ${reason} (required=${session.voiceprintRequired}, matched=${session.voiceprintMatched}, conf=${session.voiceprintConfidence.toFixed(2)})`);
-  session.isSpeaking = false;
-  session.isProcessing = false;
   session.accumulatedText = '';
-  socket.emit('audio:status', { status: 'listening' });
+  socket.emit('audio:voice_rejected', { reason: 'voiceprint_unverified' });
+}
+
+function handlePriorityVoiceStop(socket: Socket, session: AudioSession): void {
+  const workContinues = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
+  const requestId = session.activeTurnRequestId;
+  if (workContinues) {
+    interruptVoiceSpeech(session);
+  } else {
+    cancelActiveVoiceTurn(session);
+  }
+  socket.emit('audio:status', { status: 'interrupted', requestId });
+  socket.emit('audio:interrupt-ack', { workContinues, requestId });
+  socket.emit('audio:status', {
+    status: 'listening',
+    requestId,
+    ...(workContinues ? { lane: 'work' } : {}),
+  });
+  resetSilenceTimer(session, socket);
 }
 
 function buildActiveVoiceWorkProgressReply(session: AudioSession, userText: string): string {
@@ -706,7 +768,7 @@ async function respondAlongsideActiveVoiceWork(
       if (controller.signal.aborted || session.sidecarGeneration !== generation) return;
       recordTokenUsage(session.userId, preferred.provider, preferred.model, response.usage, `voice_sidecar_${Date.now()}`, 'voice');
       const finalized = finalizeLumiResponse({
-        taskText: `Conversational aside while active work continues: ${userText}`,
+        taskText: userText,
         responseText: response.text?.trim() || '',
         toolRecords: [],
         source: 'voice_sidecar',
@@ -804,7 +866,12 @@ async function processVoiceInput(
   // ── Voiceprint gate: ignore speech from unrecognized speakers ──
   // Only active when voiceprints are enrolled for this user AND at least one
   // recent voiceprint:result has been received with confidence data.
-  if (session.voiceprintRequired && session.voiceprintMatched === false && session.voiceprintConfidence > 0) {
+  if (
+    session.voiceprintRequired
+    && Date.now() > session.voiceprintTrustedUntil
+    && session.voiceprintMatched === false
+    && session.voiceprintConfidence > 0
+  ) {
     logger.info(`[Voiceprint] Stranger voice detected (conf=${session.voiceprintConfidence.toFixed(2)}) — ignoring`);
     session.isSpeaking = false;
     session.isProcessing = false;
@@ -879,6 +946,11 @@ async function processVoiceInput(
   session.activeWorkStep = '';
   session.activeWorkToolCalls = 0;
   const requestId = `voice_${randomUUID()}`;
+  markLatestUserTurn({
+    userId: session.userId,
+    domain: session.domain,
+    orgId: session.orgId,
+  }, requestId);
   const pipelineAbort = new AbortController();
   session.pipelineAbortController = pipelineAbort;
   session.activeTurnText = userText;
@@ -927,6 +999,7 @@ async function processVoiceInput(
     : '';
   let recentVoiceHistory: any[] = [];
   let actionContinuationBridge = '';
+  let continuationOpenTarget: string | null = null;
   try {
     const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
     recentVoiceHistory = getMessages(conversation.id, 30);
@@ -935,16 +1008,24 @@ async function processVoiceInput(
       recentVoiceHistory,
       conversation.actionContinuationState,
     );
+    continuationOpenTarget = resolveRecentActionOpenTarget(
+      actionIntentText,
+      conversation.actionContinuationState,
+    );
   } catch {}
   const routedUserText = [actionIntentText, actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
   session.activeRoutingText = actionIntentText;
   let preMatchedQuickResult: Awaited<ReturnType<typeof matchQuickCommand>> = null;
   try {
-    preMatchedQuickResult = await matchQuickCommand(userText, session.userId, {
+    preMatchedQuickResult = await matchQuickCommand(
+      continuationOpenTarget ? buildInternalOpenCommand(userText, continuationOpenTarget) : userText,
+      session.userId,
+      {
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
       surface: 'voice',
-    });
+      },
+    );
   } catch {}
   const requestedModeHint = detectRequestedOperationMode(userText);
   const skipKnowledgeRetrieval = Boolean(preMatchedQuickResult)
@@ -976,6 +1057,7 @@ async function processVoiceInput(
         minConfidence: 0.4,
         domain: voiceScope.domain,
         orgId: voiceScope.orgId,
+        evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
       });
     } catch {}
   }
@@ -2177,7 +2259,8 @@ async function processVoiceInput(
 
     if (cognition.directToolExecuted && cognition.responseText) {
       // Path A: Cognitive engine handled this directly — no LLM needed
-      const directRecords = cognition.toolRecord ? [cognition.toolRecord] : [];
+      const directRecords = cognition.toolRecords
+        || (cognition.toolRecord ? [cognition.toolRecord] : []);
       const directFinal = finalizeLumiResponse({
         taskText: actionIntentText,
         responseText: cognition.responseText,
@@ -2228,8 +2311,11 @@ async function processVoiceInput(
     }
 
     // Auto-select model based on cognitive intent
-    const complexCategories = ['command', 'code', 'question', 'analysis'];
-    const isComplex = complexCategories.includes(cognition.intent.category);
+    const isComplex = ['command', 'code', 'analysis'].includes(cognition.intent.category)
+      || (
+        cognition.intent.category === 'question'
+        && (userText.length > 60 || isUserCorrectionOrExplanationQuestion(userText))
+      );
     let effectiveModel = voiceModel;
     if (provider === 'deepseek') {
       effectiveModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
@@ -2343,7 +2429,7 @@ async function processVoiceInput(
       const messages: any[] = [
         { role: 'system', content: voiceSystemPrompt },
         ...voiceHistory,
-        { role: 'user', content: userText },
+        { role: 'user', content: routedUserText },
       ];
 
       for (let iter = 0; iter < maxIterations; iter++) {
@@ -2351,14 +2437,9 @@ async function processVoiceInput(
 
       logger.info(`[Audio] LLM iter ${iter + 1}/${maxIterations}: provider=${provider} model=${effectiveModel}`);
       const toolDeclarations = executionDecision.allowToolUse
-        ? toolRegistry.getToolDeclarations().filter((declaration) => {
-            const name = declaration.function.name;
-            const forbidden = new Set(routedToolPolicy?.forbiddenTools || []);
-            if (forbidden.has('*') || forbidden.has(name)) return false;
-            const allowed = routedToolPolicy?.allowedTools || [];
-            if (allowed.includes('*')) return true;
-            return allowed.includes(name);
-          })
+        ? toolRegistry.getToolDeclarations().filter(declaration => (
+            isToolNameAllowedByPolicy(declaration.function.name, routedToolPolicy)
+          ))
         : [];
 
       const streamResult = await makeLLMCallStreaming(
@@ -2721,6 +2802,10 @@ export function registerVoiceHandlers(
     session.voiceprintSpeakerLabel = null;
     session.voiceprintSource = '';
     session.voiceprintLastAt = 0;
+    // Starting a call is already an explicit UI action or the result of an
+    // accepted wake flow. Let the first short utterance reach STT while the
+    // asynchronous voiceprint sampler catches up, then expire automatically.
+    session.voiceprintTrustedUntil = session.transcriptionOnly ? 0 : Date.now() + 5_000;
     const personalityCfg = personalityRegistry.getForUser(
       data.personalityId || 'lumi',
       session.userId,
@@ -2749,6 +2834,18 @@ export function registerVoiceHandlers(
         resetSilenceTimer(session, socket);
 
         session.sttSession.onResult(async (result) => {
+          const immediateText = String(result.text || '').trim();
+          if (
+            immediateText
+            && !session.transcriptionOnly
+            && (session.isSpeaking || session.isProcessing)
+            && isPureInterruptCommand(immediateText)
+          ) {
+            logger.info(`[Audio] Priority stop recognized (${result.isFinal ? 'final' : 'interim'})`);
+            session.accumulatedText = '';
+            handlePriorityVoiceStop(socket, session);
+            return;
+          }
           if (result.text && result.isFinal) {
             if (session.lastChunkTime > 0) {
               recordLatency('stt', Date.now() - session.lastChunkTime);
@@ -2795,20 +2892,23 @@ export function registerVoiceHandlers(
               return;
             }
 
-            if (!session.transcriptionOnly && !isVoiceprintGateOpen(session)) {
-              blockUnverifiedVoice(socket, session, 'Ignored transcript before command/barge-in');
-              resetSilenceTimer(session, socket);
+            // TTS echo is not an authorization failure. Remove it before the
+            // voiceprint gate so self speech cannot mutate the call state.
+            if (isEchoText(text, session.isSpeaking)) {
+              logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
               return;
             }
 
-            if (session.isProcessing || session.isSpeaking) {
-              const explicitInterrupt = isExplicitInterruptCommand(text);
-              const activeWorkRunning = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
-              if (session.isSpeaking && !explicitInterrupt && isEchoText(text)) {
-                logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
+            if (!session.transcriptionOnly && !isVoiceprintGateOpen(session)) {
+              const verifiedAfterSync = await waitForVoiceprintGate(session);
+              if (!verifiedAfterSync) {
+                blockUnverifiedVoice(socket, session, 'Ignored transcript before command/barge-in');
+                resetSilenceTimer(session, socket);
                 return;
               }
-
+            }
+            if (session.isProcessing || session.isSpeaking) {
+              const activeWorkRunning = session.isBackgroundWork && session.activeWorkStatus !== 'completed';
               if (activeWorkRunning) {
                 const interruptionKind = classifyVoiceWorkInterruption(text, {
                   hasExplicitToolIntent: hasExplicitToolIntent(text),
@@ -2887,12 +2987,15 @@ export function registerVoiceHandlers(
               return;
             }
 
-            // Brief delay before processing (user can barge-in during this window)
+            // Yield just long enough for the confirmation event to render. The
+            // streaming microphone lane remains open, so a fixed 600 ms grace
+            // period only made every accepted command feel sluggish without
+            // adding meaningful interruption safety.
             session.bargeinTimer = setTimeout(() => {
               session.bargeinTimer = null;
               if (!session.isActive) return;
               void runVoiceInputPipeline(socket, session, text, llmGetters, sensoryFn, io);
-            }, 600);
+            }, 160);
           } else if (result.text && !result.isFinal) {
             socket.emit("audio:transcript", { text: result.text, isFinal: false });
           }
@@ -2949,6 +3052,7 @@ export function registerVoiceHandlers(
     session.voiceprintSpeakerLabel = data.speakerLabel || null;
     session.voiceprintSource = data.source || '';
     session.voiceprintLastAt = Date.now();
+    if (data.isOwnerSpeaking && data.confidence >= 0.68) extendVoiceprintTrust(session);
     logger.info(`[Voiceprint] result source=${data.source || 'unknown'} matched=${data.isOwnerSpeaking} conf=${Number(data.confidence || 0).toFixed(2)} quality=${typeof data.quality === 'number' ? data.quality.toFixed(2) : '-'} reason=${data.reason || '-'}`);
   });
 

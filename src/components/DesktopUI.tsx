@@ -2080,8 +2080,6 @@ export function DesktopUI({
   const { callState, audioLevel, startCall, startCallRef, endCall, error: callError, transcript, interrupt, toggleMute, isMuted, switchPersonality } = useVoiceCall({
     socket,
     onTranscript: appendMeetingTranscript,
-    canInterruptFromVoice: ownerVoiceGateOpen,
-    canSendMicAudio: ownerVoiceGateOpen,
   });
   const voiceScopeOptions = useMemo(() => (
     workDomain === 'work' && orgConnection?.connected && orgConnection?.orgId

@@ -4,6 +4,19 @@ import { evaluateActionConstitution } from './action_constitution';
 
 export type EffectiveSecurity = { level: SecurityLevel; reason: string };
 
+/**
+ * Canonical tool-name visibility rule shared by model declarations, routed
+ * workflows and the executor. Security level/confirmation is resolved later;
+ * this function answers only whether the name exists in the effective policy.
+ */
+export function isToolNameAllowedByPolicy(toolName: string, policy?: ToolPolicy): boolean {
+  if (!policy) return true;
+  const forbidden = policy.forbiddenTools || [];
+  if (forbidden.includes('*') || forbidden.includes(toolName)) return false;
+  const allowed = policy.allowedTools || [];
+  return allowed.includes('*') || allowed.includes(toolName);
+}
+
 export function getToolExecutionTimeoutMs(name: string): number {
   if (name === 'computer_use') return 10 * 60_000;
   if (name === 'generate_video') return 15 * 60_000;
@@ -157,7 +170,7 @@ export class ToolRegistry {
     if (!policy) return { level: builtIn, reason: 'tool default' };
 
     // 1. forbiddenTools overrides everything
-    if (policy.forbiddenTools?.includes(toolName)) {
+    if (policy.forbiddenTools?.includes('*') || policy.forbiddenTools?.includes(toolName)) {
       return { level: 'forbidden', reason: 'personality forbiddenTools list' };
     }
 
@@ -172,10 +185,8 @@ export class ToolRegistry {
     }
 
     // 4. allowedTools check — if '*' all allowed, otherwise specific list
-    if (policy.allowedTools[0] !== '*') {
-      if (!policy.allowedTools.includes(toolName)) {
-        return { level: 'forbidden', reason: 'not in allowedTools list' };
-      }
+    if (!isToolNameAllowedByPolicy(toolName, policy)) {
+      return { level: 'forbidden', reason: 'not in allowedTools list' };
     }
 
     return { level: builtIn, reason: 'tool default' };

@@ -16,6 +16,20 @@ export type MemorySource = 'chat' | 'voice' | 'runtime_log' | 'meeting' | 'manua
 export type MemoryPrivacyClass = 'private' | 'organization' | 'shared' | 'public' | 'secret';
 export type MemoryRetention = 'ephemeral' | 'session' | 'long_term' | 'permanent';
 
+/** Evidence role derived from durable metadata, never guessed from prose. */
+export type MemoryEvidenceClass = 'owner_statement'
+                                | 'owner_observation'
+                                | 'shared_context'
+                                | 'lumi_narrative'
+                                | 'operational_trace';
+
+/** Evidence classes safe to use as context about the owner in ordinary turns. */
+export const CONVERSATIONAL_MEMORY_EVIDENCE: readonly MemoryEvidenceClass[] = [
+  'owner_statement',
+  'owner_observation',
+  'shared_context',
+];
+
 /** Tree node type — branch nodes are topic containers, leaves are actual memories */
 export type MemoryNodeType = 'branch' | 'leaf';
 
@@ -89,6 +103,8 @@ export interface MemoryQuery {
    * Defaults to false so execution receipts do not leak into conversational memory.
    */
   includeOperationalTraces?: boolean;
+  /** Restrict recall by evidence role (for example, exclude Lumi narratives from owner context). */
+  evidenceClasses?: readonly MemoryEvidenceClass[];
   type?: MemoryType;
   limit?: number;
   minConfidence?: number;

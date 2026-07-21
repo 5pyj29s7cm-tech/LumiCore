@@ -50,6 +50,7 @@ async function desktopOpen(args: Record<string, any>, context?: any): Promise<st
   }
   return context.desktopRelay('desktop_open', {
     target: args.target || '',
+    application: args.application || args.browser || '',
   });
 }
 
@@ -142,11 +143,12 @@ export function registerDesktopTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_open',
     description:
-      'Open a file, folder, application, or URL using the native OS. On macOS this resolves installed .app bundles and localized aliases before preserving the direct LaunchServices/open fallback; on Windows it resolves launch history, Desktop/Start Menu shortcuts, and known install paths. App names such as WeChat, WPS, a browser, AutoCAD, or CAD should be opened through this tool instead of guessing paths.',
+      'Open a file, folder, application, or URL using the native OS. On macOS this resolves installed .app bundles and localized aliases before preserving the direct LaunchServices/open fallback; on Windows it resolves launch history, Desktop/Start Menu shortcuts, and known install paths. App names such as WeChat, WPS, a browser, AutoCAD, or CAD should be opened through this tool instead of guessing paths. When the user names a specific application for a file or URL, pass it in application so the OS does not silently switch to another default app.',
     parameters: {
       type: 'object',
       properties: {
         target: { type: 'string', description: 'The file, folder, app name, or URL to open. Examples: "notepad.exe", "calc.exe", "C:\\Users", "https://github.com"' },
+        application: { type: 'string', description: 'Optional explicit application name to open the target with, such as "Google Chrome", "Microsoft Edge", "Safari", or "WPS".' },
       },
       required: ['target'],
     },

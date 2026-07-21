@@ -10,6 +10,8 @@ import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface }
 import { listWorkflows } from '../agents/workflows';
 import { CN_VOICE_FAST_PATH_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 import type { ToolPolicy } from '../personality/types';
+import { listWebLoginSitePresets } from '../web_login/legal_presets';
+import { formatKnownLoginOpening, formatKnownLoginResult } from '../i18n/naturalness_messages';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
@@ -33,7 +35,7 @@ export interface QuickCommandOptions {
   surface?: WorkTakeoverTurnSurface;
 }
 
-function quickOpenToolCall(target: string): { name: string; arguments: Record<string, any> } {
+function resolveKnownSiteUrl(target: string): string | null {
   const clean = String(target || '').trim();
   // i18n-allow: Chinese site-name recognition patterns; not user-visible copy.
   const knownSites: Array<[RegExp, string]> = [
@@ -42,7 +44,13 @@ function quickOpenToolCall(target: string): { name: string; arguments: Record<st
     [/人民法院在线服务/u, 'https://zxfw.court.gov.cn/'], // i18n-allow: site-name input recognition
   ];
   const known = knownSites.find(([pattern]) => pattern.test(clean));
-  if (known) return { name: 'browser_open_task', arguments: { url: known[1], open: true } };
+  return known?.[1] || null;
+}
+
+function quickOpenToolCall(target: string): { name: string; arguments: Record<string, any> } {
+  const clean = String(target || '').trim();
+  const knownSiteUrl = resolveKnownSiteUrl(clean);
+  if (knownSiteUrl) return { name: 'browser_open_task', arguments: { url: knownSiteUrl, open: true } };
   if (/^(?:https?:\/\/|www\.)/i.test(clean)) return { name: 'browser_open_task', arguments: { url: clean, open: true } };
   // i18n-allow: Chinese website-target recognition pattern; not user-visible copy.
   if (/(?:网站|网页|网址|网)$/u.test(clean)) return { name: 'browser_open_task', arguments: { query: clean, open: true } };
@@ -82,13 +90,34 @@ function normalizeQuickOpenTarget(value: string): string | null {
     .trim();
 
   if (!target) return null;
+  // Natural-language website labels are context-sensitive in speech (ASR can
+  // turn a recently mentioned brand into a homophone). Keep URLs and cataloged
+  // sites deterministic, but let unknown home-page/site labels reach the
+  // normal contextual planner instead of launching an unrelated local app.
+  // i18n-allow: Chinese website-target recognition; not user-visible copy.
+  if (!resolveKnownSiteUrl(target) && !/^(?:https?:\/\/|www\.)/i.test(target) && /(?:主页|官网|网站|网页|页面|平台)$/u.test(target)) {
+    return null;
+  }
   // Do not let the low-latency app launcher eat a compound task. The full turn
   // must reach the normal planner so later actions (inspect, count, remember,
   // message, edit, etc.) remain part of the user's requested outcome.
-  if (/(?:然后|接着|随后|之后|以后|并且|同时|打开后|启动后|运行后|看下|看一下|看看|看一看|查一下|检查一下|统计|数一下|有多少|记住|读取|联系人|画图|绘制|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|发送|发布|播放|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|\b(?:then|after|inspect|count|remember|read|draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell)\b)/iu.test(target)) { // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  if (/(?:然后|接着|随后|之后|以后|并且|同时|打开后|启动后|运行后|看下|看一下|看看|看一看|查一下|检查一下|统计|数一下|有多少|记住|读取|联系人|画图|绘制|生成|创建|新建|修改|编辑|保存|导出|登录|搜索|发送|发布|播放|执行脚本|运行脚本|问一下|问问|询问|回复|告诉|值守|监控|盯着|处理|管理|协作|聊天|对话|操作|移动|搬到|窗口|消息|工作流|任务|\b(?:then|after|inspect|count|remember|read|draw|draft|create|generate|edit|save|export|login|search|send|publish|play|script|ask|reply|tell|watch|monitor|handle|manage|collaborate|chat|message|workflow|task|move|window)\b)/iu.test(target)) { // i18n-allow: Chinese compound-work recognition; not user-visible copy.
     return null;
   }
   return target;
+}
+
+function findKnownLoginPreset(target: string) {
+  const clean = String(target || '')
+    .replace(/(?:网站|官网|平台|网页)$/u, '') // i18n-allow: Chinese site-target normalization; not user-visible copy.
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
+  if (!clean) return undefined;
+  return listWebLoginSitePresets().find(preset => {
+    const label = preset.label.replace(/\s+/g, '').toLowerCase();
+    return clean.includes(label) || label.includes(clean);
+  });
 }
 
 const patterns: QuickPattern[] = [
@@ -224,6 +253,32 @@ const patterns: QuickPattern[] = [
       toolCall: { name: 'desktop_open', arguments: { target: 'code' } },
       matched: true,
     }),
+  },
+  {
+    // Known account sites use the visible persistent login session directly.
+    // Captcha/QR/2FA remain manual and are reported by the tool receipt.
+    patterns: [
+      /^(?:(?:请|麻烦|请你|帮我|你帮我|给我)\s*)?(?:登录|登陆|登入|log\s*in(?:to)?|sign\s*in(?:to)?)\s*(.+?)[。！？.!?]*$/iu, // i18n-allow: Chinese login-intent recognition; not user-visible copy.
+    ],
+    handler: (match) => {
+      const target = String(match[1] || '').trim();
+      const preset = findKnownLoginPreset(target);
+      if (!preset) return { responseText: '', matched: false };
+      return {
+        responseText: formatKnownLoginOpening(match[0], preset.label),
+        toolCall: {
+          name: 'web_login_run',
+          arguments: {
+            profileId: preset.id,
+            url: preset.loginUrl,
+            headless: false,
+            waitForManualMs: 45_000,
+          },
+        },
+        formatToolResult: (raw, error) => formatKnownLoginResult(match[0], preset.label, raw, error),
+        matched: true,
+      };
+    },
   },
   {
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.

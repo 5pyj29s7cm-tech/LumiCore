@@ -218,7 +218,6 @@ function enhanceToolRouteForFlow(
           'desktop_ui_type',
           'desktop_ui_invoke',
           'desktop_capture_screen',
-          'desktop_show_lumi_window',
           'desktop_run_command',
           'read_clipboard',
           'write_clipboard',

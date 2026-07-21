@@ -17,6 +17,7 @@ import { NormalizedMessage, makeLLMCall } from "../llm/providers";
 import { runWithTools } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { queryMemories, addMemory } from "../memory/store";
+import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { Memory } from "../memory/types";
 import { AgentRecord } from "./runtime";
 import { recordWorkflow } from "../skills/worklog";
@@ -90,18 +91,18 @@ export function shouldAttemptOrchestration(input: OrchestrationTurnGateInput): b
 
   if (input.channel === 'voice') {
     if (!explicitTeamExecution && input.artifactFirst && !input.directDesktop) return false;
-    return explicitTeamExecution
-      || input.complexity === 'complex'
-      || input.complexity === 'moderate';
+    // Moderate single-lane actions (open, inspect, type, create one file)
+    // are faster and more reliable in Lumi's foreground tool loop. Bring in
+    // workers only for genuinely complex work or when the user asks for a
+    // team explicitly.
+    return explicitTeamExecution || input.complexity === 'complex';
   }
 
   if (input.responseReady || input.hasPreflightContext) return false;
   if (!explicitTeamExecution && input.prefersSequentialWorkflow) return false;
   if (!explicitTeamExecution && input.capabilityLane === 'desktop_control') return false;
   if (explicitTeamExecution) return true;
-  return input.cognitionCategory === 'command'
-    || input.cognitionCategory === 'code'
-    || input.cognitionCategory === 'question';
+  return input.complexity === 'complex';
 }
 
 export interface SubTask {
@@ -1340,6 +1341,7 @@ async function executeWorkerTask(
       agentId: currentAgent.id,
       domain: context.domain,
       orgId: context.orgId,
+      evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
     });
 
     const memoryContext = workerMemories.length > 0

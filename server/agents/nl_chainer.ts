@@ -5,7 +5,7 @@
  * Plan-first, execute-next — more reliable than iterative tool calling for office workflows.
  */
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
-import { toolRegistry } from '../tools/registry';
+import { isToolNameAllowedByPolicy, toolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext } from '../tools/types';
 import { routeToolsForTurn } from '../cognition/tool_router';
 import type { ToolPolicy } from '../personality/types';
@@ -98,13 +98,8 @@ export function filterChainerToolNamesByPolicy(
   toolNames: string[],
   policy?: ToolPolicy,
 ): string[] {
-  if (!policy || policy.forbiddenTools?.includes('*')) return [];
-  const allowed = new Set(policy.allowedTools || []);
-  const forbidden = new Set(policy.forbiddenTools || []);
-  return toolNames.filter(name =>
-    !forbidden.has(name)
-    && (allowed.has('*') || allowed.has(name))
-  );
+  if (!policy) return [];
+  return toolNames.filter(name => isToolNameAllowedByPolicy(name, policy));
 }
 
 function compactChainerOutput(value: string, limit = 5000): string {

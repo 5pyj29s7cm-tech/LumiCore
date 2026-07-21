@@ -10,6 +10,11 @@ import { isCurrentClientDiagnosticRequest } from './tool_intent';
 import { CN_CAD_MESSAGES } from '../regions/packs/cn/cad_messages';
 import { CN_VOICE_FAST_PATH_MESSAGES, formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import {
+  formatArtifactCreatedAndOpened,
+  formatArtifactCreatedOpenFailed,
+  formatInternalDispatchUnavailable,
+} from '../i18n/naturalness_messages';
+import {
   CN_MESSAGING_MESSAGES,
   formatCnMessagingContractBlocker,
   formatCnUnsupportedToolExecutionClaim,
@@ -201,6 +206,19 @@ function taskActionContract(input: LumiResultFinalizerInput) {
 
 function isChineseText(value: string): boolean {
   return /[\u3400-\u9fff]/u.test(value || '');
+}
+
+function sanitizeInternalExecutionText(value: string, chinese: boolean): string {
+  const raw = String(value || '').trim();
+  if (!raw) return raw;
+  const internalLine = /(?:No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b)/i;
+  if (!internalLine.test(raw)) return raw;
+  const cleaned = raw
+    .split(/\r?\n/)
+    .filter(line => !internalLine.test(line))
+    .join('\n')
+    .trim();
+  return cleaned || formatInternalDispatchUnavailable(chinese);
 }
 
 function summarizeToolFailure(records: ToolExecutionRecord[]): string {
@@ -502,7 +520,23 @@ function formatGroundedSimpleDesktopOpenResult(
   input: LumiResultFinalizerInput,
 ): string | null {
   const actionText = resultTaskText(input);
-  const requestedTarget = extractSimpleDesktopOpenTarget(actionText);
+  const successfulOpen = [...(input.toolRecords || [])].reverse().find(record => (
+    /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
+    && !record.error
+    && String(record.result || '').trim()
+  ));
+  if (!successfulOpen) return null;
+  const primaryTask = actionText.split(/\n## Recent action continuation context\b/i, 1)[0].trim();
+  const receiptTarget = String(
+    successfulOpen.arguments?.target
+    || successfulOpen.arguments?.url
+    || successfulOpen.arguments?.path
+    || '',
+  ).trim();
+  const requestedTarget = extractSimpleDesktopOpenTarget(actionText)
+    || (/^(?:你)?(?:直接)?(?:把)?(?:它|这个|那个|文件|文档)?(?:给我)?打开(?:一下)?[。！？.!?]*$/iu.test(primaryTask) // i18n-allow: Chinese referential-open recognition; not user-visible copy.
+      ? receiptTarget
+      : '');
   if (!requestedTarget) return null;
   const contract = buildActionContract(actionText);
   if (
@@ -511,15 +545,71 @@ function formatGroundedSimpleDesktopOpenResult(
   ) {
     return null;
   }
-  const successfulOpen = [...(input.toolRecords || [])].reverse().find(record => (
-    /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || ''))
-    && !record.error
-    && String(record.result || '').trim()
-  ));
-  if (!successfulOpen) return null;
   return isChineseText(actionText)
     ? CN_VOICE_FAST_PATH_MESSAGES.opened(requestedTarget)
     : `Opened ${requestedTarget}.`;
+}
+
+function artifactPathFromRecord(record: ToolExecutionRecord): string {
+  const text = `${String(record.result || '')}\n${JSON.stringify(record.arguments || {})}`;
+  const extension = '(?:docx|xlsx|pptx|pdf|md|txt|csv|dxf|dwg)';
+  const windows = text.match(new RegExp(`([A-Za-z]:[\\\\/][^\\r\\n"<>|*?]+?\\.${extension})`, 'i'));
+  if (windows?.[1]) return windows[1].trim();
+  const unix = text.match(new RegExp(`((?:/[^\\s"']+)+\\.${extension})`, 'i'));
+  return unix?.[1]?.trim() || '';
+}
+
+function formatGroundedArtifactResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  if (taskActionContract(input).kind !== 'artifact_work') return null;
+  const records = input.toolRecords || [];
+  const created = [...records].reverse().find(record => (
+    !record.error
+    && /^(?:create_docx|create_xlsx|create_ppt|create_pdf|write_file|cad_generate_dxf)$/i.test(String(record.name || ''))
+    && String(record.result || '').trim()
+    && artifactPathFromRecord(record)
+  ));
+  if (!created) return null;
+  const path = artifactPathFromRecord(created);
+  const actionText = resultTaskText(input);
+  const asksToOpen = /(?:\u6253\u5f00|\u6253\u5f00\u770b\u770b|\u76f4\u63a5\u6253\u5f00)|\bopen\b/iu.test(actionText);
+  const openRecord = [...records].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || '')));
+  const verified = records.some(record => (
+    !record.error
+    && /^(?:desktop_path_info|work_product_verify)$/i.test(String(record.name || ''))
+    && String(record.result || '').trim()
+  ));
+  const zh = isChineseText(actionText);
+  if (asksToOpen && openRecord?.error) {
+    const failure = formatCnToolFailureDetail(String(openRecord.error || ''));
+    const text = formatArtifactCreatedOpenFailed(
+      actionText,
+      path,
+      verified,
+      zh ? failure : String(openRecord.error || ''),
+    );
+    return {
+      text,
+      blocked: true,
+      reason: 'Artifact creation succeeded, but the requested open step failed.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Artifact creation succeeded, but the requested open step failed.',
+      },
+    };
+  }
+  if (asksToOpen && openRecord && !openRecord.error && String(openRecord.result || '').trim()) {
+    return {
+      text: formatArtifactCreatedAndOpened(actionText, path, verified),
+      blocked: false,
+      reason: 'Grounded artifact creation and open result from current-turn receipts.',
+    };
+  }
+  // For an ordinary creation-only task, preserve the model's concise wording;
+  // the generic completion guard already accepts the producing receipt.
+  return null;
 }
 
 const CAD_GEOMETRY_ZH = {
@@ -1009,6 +1099,13 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const actionText = resultTaskText(input);
   const protocolLeak = leakedLegacyToolProtocol(input);
   if (protocolLeak) return protocolLeak;
+  const safeResponseText = sanitizeInternalExecutionText(
+    input.responseText,
+    isChineseText(actionText) || isChineseText(input.responseText),
+  );
+  if (safeResponseText !== input.responseText) {
+    input = { ...input, responseText: safeResponseText };
+  }
   const unsupportedMode = unsupportedToolModeClaim(input);
   if (unsupportedMode) {
     return {
@@ -1086,10 +1183,23 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     };
   }
   const actionContract = taskActionContract(input);
+  // Ordinary conversation has no execution contract. Keep it natural after
+  // the protocol/evidence sanity checks above instead of forcing it through a
+  // work-product completion guard.
+  if (
+    !actionContract.applies
+    && (input.toolRecords || []).length === 0
+    && input.flow?.completionEvidenceNeeded !== true
+    && !guard.blocked
+  ) {
+    return { text: input.responseText, blocked: false };
+  }
   const groundedBlankCadDocument = formatGroundedBlankAutoCadDocumentResult(input);
   if (groundedBlankCadDocument) return groundedBlankCadDocument;
   const groundedWpsMutation = formatGroundedWpsMutationResult(input);
   if (groundedWpsMutation) return groundedWpsMutation;
+  const groundedArtifact = formatGroundedArtifactResult(input);
+  if (groundedArtifact) return groundedArtifact;
   const groundedCadGeometry = formatGroundedCadGeometryExtractionResult(input);
   if (groundedCadGeometry) return groundedCadGeometry;
   const groundedCadRun = formatGroundedCadRunResult(input);

@@ -150,11 +150,15 @@ async function handleDesktopExec(socket: Socket, data: {
       }
       case 'desktop_open': {
         const target: string = args.target || '';
+        const application: string = args.application || args.browser || '';
         if (!target.trim()) {
           socket.emit(`tool:desktop_result:${correlationId}`, { error: 'No target provided to open' });
           return;
         }
-        const openResult: { success: boolean; output: string } = await invoke('open_item', { target: target.trim() });
+        const openResult: { success: boolean; output: string } = await invoke('open_item', {
+          target: target.trim(),
+          application: application.trim() || null,
+        });
         if (!openResult.success) {
           throw new Error(openResult.output || `Failed to open: ${target}`);
         }

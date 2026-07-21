@@ -1,5 +1,6 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import { formatDesktopProcessCount } from '../i18n/naturalness_messages';
 
 export interface DesktopObservationToolCall {
   name: 'desktop_active_window' | 'desktop_running_processes' | 'desktop_idle_time' | 'desktop_system_info' | 'desktop_list_apps' | 'desktop_list_files';
@@ -63,13 +64,18 @@ export function requiresDesktopFileListingObservation(input: string): boolean {
   return /(?:\u5217\u51fa|\u67e5\u770b|\u663e\u793a|\u76d8\u70b9|\u7edf\u8ba1|\u6570\u4e00\u4e0b).{0,20}\u684c\u9762(?:\u4e0a|\u91cc|\u4e2d)?(?:\u7684)?(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6761\u76ee)|\u684c\u9762(?:\u4e0a|\u91cc|\u4e2d)?(?:\u7684)?(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6761\u76ee).{0,20}(?:\u5217\u51fa|\u67e5\u770b|\u663e\u793a|\u591a\u5c11|\u51e0\u4e2a|\u6570\u91cf|\u7edf\u8ba1)|\b(?:list|show|inspect|count)\b.{0,24}\bdesktop\b.{0,16}\b(?:files?|folders?|entries)\b|\bdesktop\b.{0,16}\b(?:files?|folders?|entries)\b.{0,24}\b(?:list|show|count|how\s+many)\b/iu.test(text);
 }
 
+export function requiresRunningProcessObservation(input: string): boolean {
+  const text = String(input || '');
+  return /\b(?:running\s+process(?:es)?|process\s+(?:list|state|status)|runtime\s+state|desktop\s+(?:state|status)|desktop\s+(?:program|app)(?:lication)?\s+check)\b|\b(?:running|active)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b(?:\u5217\u8868|\u72b6\u6001|\u4fe1\u606f)|\u684c\u9762\u8fd0\u884c\u72b6\u6001|(?:\u6b63\u5728\u8fd0\u884c|\u5df2\u8fd0\u884c).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|(?:\u505a\u4e2a|\u505a\u4e00\u4e2a|\u8fdb\u884c|\u68c0\u67e5|\u67e5\u770b|\u770b\u4e00\u4e0b|\u770b\u4e0b|\u770b\u770b).{0,10}(?:\u684c\u9762)?(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528)(?:\u68c0\u67e5|\u72b6\u6001|\u8fd0\u884c\u60c5\u51b5)|(?:\u540e\u53f0|\u5f53\u524d|\u684c\u9762).{0,12}(?:\u591a\u5c11|\u51e0\u4e2a|\u6709\u54ea\u4e9b|\u770b\u770b|\u770b\u4e00\u4e0b|\u67e5\u770b)?.{0,8}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,12}(?:\u8fd0\u884c|\u8fd0\u884c\u60c5\u51b5|\u72b6\u6001|\u68c0\u67e5)|(?:\u540e\u53f0|\u5f53\u524d).{0,12}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,12}(?:\u591a\u5c11|\u51e0\u4e2a|\u6709\u54ea\u4e9b)/iu.test(text);
+}
+
 export function buildDesktopObservationPlan(input: string): DesktopObservationToolCall[] {
   const text = String(input || '').trim();
   if (!text) return [];
 
   const wantsActiveWindow = requiresActiveWindowObservation(text);
   const wantsDesktopFiles = requiresDesktopFileListingObservation(text);
-  const wantsProcesses = /\b(?:running\s+process(?:es)?|process\s+(?:list|state|status)|runtime\s+state|desktop\s+(?:state|status)|desktop\s+(?:program|app)(?:lication)?\s+check)\b|\b(?:running|active)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b(?:\u5217\u8868|\u72b6\u6001|\u4fe1\u606f)|\u684c\u9762\u8fd0\u884c\u72b6\u6001|(?:\u6b63\u5728\u8fd0\u884c|\u5df2\u8fd0\u884c).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|(?:\u505a\u4e2a|\u505a\u4e00\u4e2a|\u8fdb\u884c|\u68c0\u67e5|\u67e5\u770b|\u770b\u4e00\u4e0b).{0,10}(?:\u684c\u9762)?(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528)(?:\u68c0\u67e5|\u72b6\u6001|\u8fd0\u884c\u60c5\u51b5)|(?:\u540e\u53f0|\u684c\u9762).{0,8}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,8}(?:\u8fd0\u884c\u60c5\u51b5|\u72b6\u6001|\u68c0\u67e5)/iu.test(text);
+  const wantsProcesses = requiresRunningProcessObservation(text);
   const wantsIdle = /\b(?:idle\s+time|away\s+time)\b|\u7a7a\u95f2\u65f6\u95f4|\u591a\u4e45\u6ca1\u64cd\u4f5c/iu.test(text);
   const wantsSystem = /\b(?:system\s+info|os\s+info|cpu|memory|disk)\b|\u7cfb\u7edf\u4fe1\u606f|CPU|\u5185\u5b58|\u78c1\u76d8/iu.test(text);
   const wantsAppInventory = /\b(?:(?:installed|launchable|available|local(?:ly)?)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?|app(?:lication)?\s+(?:inventory|list))\b|\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u672c\u673a|\u672c\u5730).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|\u5e94\u7528(?:\u6e05\u5355|\u5217\u8868)|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
@@ -77,7 +83,12 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
   if (!wantsActiveWindow && !wantsDesktopFiles && !wantsProcesses && !wantsIdle && !wantsSystem && !wantsAppInventory && !wantsDesktopState) return [];
 
   const positiveText = stripNegativeConstraints(text);
-  const mutationText = positiveText.replace(/\blaunch\s+target\b/giu, ' ');
+  const mutationText = positiveText
+    .replace(/\blaunch\s+target\b/giu, ' ')
+    // Treat "software/process is running" as observed state, not an instruction to run it.
+    // Keeping the noun requirement preserves imperative phrases such as "运行 Photoshop".
+    .replace(/(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,4}(?:\u6b63\u5728|\u8fd8\u5728|\u5df2\u7ecf|\u5df2|\u5728)?\u8fd0\u884c(?:\u4e2d|\u7740|\u72b6\u6001|\u60c5\u51b5)?/giu, ' ')
+    .replace(/\b(?:software|program|app(?:lication)?|process)(?:es)?\s+(?:is|are|currently\s+)?running\b/giu, ' ');
   const hasPositiveMutation = /\b(?:open|launch|start|click|type|switch|close|send|post|write|change|modify|run)\b|(?:\u6253\u5f00|\u542f\u52a8|\u70b9\u51fb|\u8f93\u5165|\u5207\u6362|\u5173\u95ed|\u53d1\u9001|\u53d1\u5e03|\u5199\u5165|\u4fee\u6539|\u8fd0\u884c)(?!\u72b6\u6001|\u60c5\u51b5)/iu.test(mutationText);
   if (hasPositiveMutation) return [];
 
@@ -156,6 +167,7 @@ export function formatDesktopObservationResult(
     /^(desktop_open|desktop_show_lumi_window|desktop_run_command|desktop_clipboard_write|desktop_mouse_|desktop_keyboard_|client_action|computer_use)/i.test(record.name)
   );
   const zh = /[\u3400-\u9fff]/u.test(taskText || '');
+  const wantsRunningProcessCount = /(?:\u540e\u53f0|\u5f53\u524d|\u684c\u9762).{0,20}(?:\u591a\u5c11|\u51e0\u4e2a).{0,16}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b)|(?:\u540e\u53f0|\u5f53\u524d|\u684c\u9762).{0,16}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,16}(?:\u591a\u5c11|\u51e0\u4e2a)|\bhow\s+many\b.{0,32}\b(?:running\s+)?(?:processes|apps?|applications?|programs?)\b/iu.test(taskText || '');
   const wantsDesktopSoftwareCount = /(?:\u684c\u9762).{0,24}(?:\u591a\u5c11|\u51e0\u4e2a|\u6570\u91cf).{0,16}(?:\u8f6f\u4ef6|\u5e94\u7528|\u7a0b\u5e8f|\u5feb\u6377\u65b9\u5f0f)|(?:\u684c\u9762).{0,16}(?:\u8f6f\u4ef6|\u5e94\u7528|\u7a0b\u5e8f|\u5feb\u6377\u65b9\u5f0f).{0,16}(?:\u591a\u5c11|\u51e0\u4e2a|\u6570\u91cf)|\bhow\s+many\b.{0,32}\b(?:desktop\s+)?(?:apps?|applications?|programs?|shortcuts?)\b/iu.test(taskText || '');
   const observationRequested = wantsDesktopSoftwareCount || buildDesktopObservationPlan(taskText).length > 0;
   if (!observationRequested) return null;
@@ -172,6 +184,14 @@ export function formatDesktopObservationResult(
   const processItems = processList
     ? (wantsDesktopAi ? processList.filter(item => DESKTOP_AI_EVIDENCE_RE.test(String(item?.name || item?.window_title || ''))) : processList)
     : [];
+  if (wantsRunningProcessCount && processList) {
+    const names = uniqueLabels(
+      processList,
+      item => String(item?.name || item?.window_title || ''),
+      item => String(item?.name || item?.window_title || ''),
+    );
+    return formatDesktopProcessCount(taskText, processList.length, names);
+  }
   const appItems = Array.isArray(apps)
     ? (wantsDesktopAi ? apps.filter(isDesktopAiApp) : apps)
     : [];
