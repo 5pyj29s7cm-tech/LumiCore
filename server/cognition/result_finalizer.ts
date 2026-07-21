@@ -33,6 +33,7 @@ import {
   summarizeActionContractBlocker,
 } from './action_contract';
 import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 
 export interface LumiResultFinalizerInput {
   taskText: string;
@@ -123,6 +124,44 @@ function unsupportedToolExecutionClaim(input: LumiResultFinalizerInput): string 
       : `No actual tool call was recorded for: ${missing.join(', ')}.`,
     'I cannot present an unrecorded action as executed; the real tools must run before I report their results.',
   ].join('\n');
+}
+
+function unsupportedToolModeClaim(input: LumiResultFinalizerInput): string | null {
+  const response = String(input.responseText || '');
+  // i18n-allow: Chinese unsupported-mode claim recognition; not user-visible copy.
+  const claimsInventedMode = /(?:已(?:经)?|现在|已经成功).{0,18}(?:切换|切到|进入|开启).{0,32}(?:Fetcher|System\s*Diagnostics|工具可用(?:模式|状态)|诊断工具模式)/iu.test(response);
+  if (!claimsInventedMode) return null;
+  const hasModeReceipt = (input.toolRecords || []).some(record => (
+    !record.error
+    && (
+      /^(?:set_client_mode|operation_mode)$/i.test(String(record.name || ''))
+      || (
+        /^client_action$/i.test(String(record.name || ''))
+        && /^(?:set_mode|set_client_mode)$/i.test(String(record.arguments?.action || ''))
+      )
+    )
+    && String(record.result || '').trim()
+  ));
+  if (hasModeReceipt) return null;
+  return isChineseText(resultTaskText(input)) || isChineseText(response)
+    ? CN_EXECUTION_EVIDENCE_MESSAGES.inventedToolMode
+    : 'No such mode switch occurred. Fetcher/System Diagnostics is not a user-selectable runtime mode; the tools actually declared for this turn are authoritative.';
+}
+
+function unsupportedToolAvailabilityExcuse(input: LumiResultFinalizerInput): string | null {
+  const response = String(input.responseText || '');
+  // i18n-allow: Unsupported user-switchable tool-state excuse recognition; not user-visible copy.
+  const claimsToolsAreOff = /(?:当前|现在|这轮|我这边)?[^。！？!?\n]{0,24}(?:工具|tool)[^。！？!?\n]{0,28}(?:没(?:有)?打开|未打开|没开启|未开启|不可用|没有开放|not (?:open|enabled|available)|disabled)|(?:需要|要不要|可以)(?:我)?[^。！？!?\n]{0,28}(?:切换|切到|进入|开启)[^。！？!?\n]{0,24}(?:工具可用|工具模式|tool mode|tools? enabled)/iu.test(response);
+  if (!claimsToolsAreOff) return null;
+  const actualUnavailableReceipt = (input.toolRecords || []).some(record => (
+    String(record.error || '').trim()
+    // i18n-allow: Chinese tool-error recognition pattern; not user-visible copy.
+    && /(?:tool[^\n]{0,40}(?:unavailable|not found|not declared|disabled)|工具[^\n]{0,32}(?:不可用|未声明|不存在|已禁用))/iu.test(String(record.error || ''))
+  ));
+  if (actualUnavailableReceipt) return null;
+  return isChineseText(resultTaskText(input)) || isChineseText(response)
+    ? CN_EXECUTION_EVIDENCE_MESSAGES.inventedToolAvailability
+    : 'No receipt shows that tools were disabled, and there is no user-switchable “tool available mode.” Lumi must resume the real tool route instead of shifting an internal routing failure to the user.';
 }
 
 function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): string | null {
@@ -936,6 +975,32 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const actionText = resultTaskText(input);
   const protocolLeak = leakedLegacyToolProtocol(input);
   if (protocolLeak) return protocolLeak;
+  const unsupportedMode = unsupportedToolModeClaim(input);
+  if (unsupportedMode) {
+    return {
+      text: unsupportedMode,
+      blocked: true,
+      reason: 'Response claimed a fictional tool-mode switch without a matching receipt.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Response claimed a fictional tool-mode switch without a matching receipt.',
+      },
+    };
+  }
+  const unsupportedAvailability = unsupportedToolAvailabilityExcuse(input);
+  if (unsupportedAvailability) {
+    return {
+      text: unsupportedAvailability,
+      blocked: true,
+      reason: 'Response blamed a fictional user-switchable tool availability state without evidence.',
+      notification: {
+        type: 'work_product_guard',
+        level: 'warning',
+        message: 'Response blamed a fictional user-switchable tool availability state without evidence.',
+      },
+    };
+  }
   const guard = guardCompletionClaims({
     task: actionText,
     response: input.responseText,

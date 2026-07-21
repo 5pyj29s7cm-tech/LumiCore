@@ -43,6 +43,7 @@ import { registerDesktopAiTools } from './desktop_ai_tools';
 import { registerMessagingTools } from './messaging_tools';
 import { registerModelConfigurationTools } from './model_configuration_tools';
 import { registerDesktopWechatWatchTools } from './desktop_wechat_watch_tools';
+import { registerNetworkDiagnosticTools } from './network_diagnostic_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -98,6 +99,7 @@ export function registerAllTools(
   registerDesktopAiTools(registry);
   registerMessagingTools(registry);
   registerDesktopWechatWatchTools(registry);
+  registerNetworkDiagnosticTools(registry);
   if (llmGetters) {
     setSkillLLMGetters(llmGetters);
   }

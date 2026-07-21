@@ -1314,6 +1314,7 @@ export function registerChatHandler(
             flow: turnFlow,
             text: turnFlow.routeText,
             toolDeclarations: toolRegistry.getToolDeclarations(),
+            toolRegistry,
             personalityToolPolicy: personality.toolPolicy,
             isSanctuary,
           });
@@ -1549,8 +1550,9 @@ export function registerChatHandler(
         const workflowExecutionDecision = buildLumiExecutionDecision({
           flow: turnFlow,
           text: specialWorkflowText,
-          toolDeclarations: toolRegistry.getToolDeclarations(),
-          personalityToolPolicy: personality.toolPolicy,
+        toolDeclarations: toolRegistry.getToolDeclarations(),
+        toolRegistry,
+        personalityToolPolicy: personality.toolPolicy,
           isSanctuary,
         });
         const workflowIntentTrace = buildLumiIntentTrace({

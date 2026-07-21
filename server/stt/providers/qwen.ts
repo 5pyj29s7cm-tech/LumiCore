@@ -2,6 +2,7 @@ import { STTResult } from '../types';
 import { logger } from '../../../logger';
 import { getKey } from '../../config/keys';
 import { isCircuitClosed, recordSuccess, recordFailure } from '../../cloud/circuit_breaker';
+import { classifyCloudError } from '../../cloud/core';
 
 function getApiKey(): string {
   const key = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY
@@ -51,7 +52,6 @@ export function createStream(
   }
 
   ws.onopen = () => {
-    recordSuccess(PROVIDER);
     logger.info('[Qwen-ASR] WebSocket connected, sending session.update');
 
     // Configure session: VAD mode, PCM 16kHz mono
@@ -80,6 +80,7 @@ export function createStream(
       switch (msg.type) {
         case 'session.created':
           sessionReady = true;
+          recordSuccess(PROVIDER);
           logger.info('[Qwen-ASR] Session ready');
           // Flush queued audio
           for (const chunk of audioQueue) {
@@ -124,8 +125,15 @@ export function createStream(
           break;
 
         case 'error':
-          logger.error('[Qwen-ASR] Server error:', msg.message || msg);
-          errorCallbacks.forEach(cb => cb(new Error(msg.message || 'Qwen-ASR server error')));
+          {
+            const err = new Error(msg.message || 'Qwen-ASR server error');
+            const classified = classifyCloudError(err, PROVIDER);
+            recordFailure(PROVIDER, undefined, err, {
+              openImmediately: classified.category === 'auth' || classified.category === 'quota',
+            });
+            logger.error('[Qwen-ASR] Server error:', msg.message || msg);
+            errorCallbacks.forEach(cb => cb(err));
+          }
           break;
       }
     } catch {
@@ -142,7 +150,11 @@ export function createStream(
 
   ws.onclose = (event: CloseEvent) => {
     if (event.code !== 1000 && event.code !== 1001 && event.code !== 0) {
-      recordFailure(PROVIDER, undefined, new Error(`Qwen-ASR closed (code=${event.code})`));
+      const err = new Error(`Qwen-ASR closed (code=${event.code}, reason=${event.reason || 'none'})`);
+      const classified = classifyCloudError(err, PROVIDER);
+      recordFailure(PROVIDER, undefined, err, {
+        openImmediately: classified.category === 'auth' || classified.category === 'quota',
+      });
     }
     logger.info(`[Qwen-ASR] Closed (code=${event.code}, reason=${event.reason || 'none'})`);
   };

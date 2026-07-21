@@ -263,6 +263,7 @@ export function registerTaskHandler(
       flow: turnFlow,
       text: routedTaskText,
       toolDeclarations: toolRegistry.getToolDeclarations(),
+      toolRegistry,
       personalityToolPolicy: personality.toolPolicy,
     });
     const deferTaskModelOutput =

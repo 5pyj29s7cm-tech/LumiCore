@@ -112,6 +112,61 @@ describe('Wake Detector Factory', () => {
     session.stop();
   });
 
+  it('marks Qwen wake service unhealthy immediately on an account denial', async () => {
+    process.env.DASHSCOPE_API_KEY = 'sk-test123';
+    vi.doMock('../server/config/voice_preference', () => ({
+      getVoicePreference: () => ({ stt: 'qwen', tts: 'auto' }),
+    }));
+    vi.doMock('../server/config/keys', () => ({ getKey: () => undefined }));
+
+    const circuits = await import('../server/cloud/circuit_breaker');
+    circuits.resetCircuit();
+    const { createWakeDetector } = await import('../server/stt/wake_detector');
+    const session = createWakeDetector();
+    const errors: Error[] = [];
+    session.onError(error => errors.push(error));
+
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    socket.message({ type: 'error', message: 'Access denied, please make sure your account is in good standing.' });
+
+    expect(errors).toHaveLength(1);
+    expect(circuits.getCircuitStatus()).toContainEqual(expect.objectContaining({
+      key: 'qwen-stt',
+      state: 'open',
+    }));
+    session.stop();
+    circuits.resetCircuit();
+  });
+
+  it('does not mark realtime Qwen STT healthy until the provider creates a session', async () => {
+    process.env.DASHSCOPE_API_KEY = 'sk-test123';
+    vi.doMock('../server/config/keys', () => ({ getKey: () => undefined }));
+    const circuits = await import('../server/cloud/circuit_breaker');
+    circuits.resetCircuit();
+    circuits.recordFailure('qwen-stt', undefined, new Error('prior transient failure'));
+
+    const qwen = await import('../server/stt/providers/qwen');
+    const session = qwen.createStream('zh', true);
+    const errors: Error[] = [];
+    session.onError(error => errors.push(error));
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    expect(circuits.getCircuitStatus()).toContainEqual(expect.objectContaining({
+      key: 'qwen-stt',
+      failureCount: 1,
+    }));
+
+    socket.message({ type: 'error', message: 'Access denied: overdue-payment' });
+    expect(errors).toHaveLength(1);
+    expect(circuits.getCircuitStatus()).toContainEqual(expect.objectContaining({
+      key: 'qwen-stt',
+      state: 'open',
+    }));
+    session.end();
+    circuits.resetCircuit();
+  });
+
   it('selects Ark when STT preference is ark and Doubao key has colon', async () => {
     process.env.DOUBAO_SPEECH_KEY = '12345:token-abc';
     vi.doMock('../server/config/voice_preference', () => ({

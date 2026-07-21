@@ -194,6 +194,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
   system: [
     'client_get_state',
     'client_health_check',
+    'network_stability_check',
     'client_self_repair',
     'get_system_info',
     'desktop_capability_status',

@@ -5,6 +5,8 @@
 import { logger } from '../../logger';
 import { getKey } from '../config/keys';
 import { getVoicePreference } from '../config/voice_preference';
+import { classifyCloudError } from '../cloud/core';
+import { isCircuitClosed, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 
 const WAKE_WORDS = [
   'Jarvis', 'jarvis', '贾维斯',
@@ -73,6 +75,10 @@ function createQwenWakeDetector(
   apiKey: string,
   echoFilter?: (text: string) => boolean,
 ): WakeDetectorSession {
+  const circuitProvider = 'qwen-stt';
+  if (!isCircuitClosed(circuitProvider)) {
+    throw new Error('Qwen wake-word detection is temporarily unavailable because its provider health circuit is open.');
+  }
   const model = 'qwen3-asr-flash-realtime';
   const url = `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=${model}`;
 
@@ -261,6 +267,11 @@ function createQwenWakeDetector(
       return;
     }
 
+    const classified = classifyCloudError(err, circuitProvider);
+    recordFailure(circuitProvider, undefined, err, {
+      openImmediately: classified.category === 'auth' || classified.category === 'quota',
+    });
+
     notifyTerminalFailure(connection, err);
   }
 
@@ -333,6 +344,7 @@ function createQwenWakeDetector(
             connection.ready = true;
             clearTimer(connection.readyTimer);
             connection.readyTimer = null;
+            recordSuccess(circuitProvider);
             promoteConnection(connection);
             break;
           case 'conversation.item.input_audio_transcription.completed': {

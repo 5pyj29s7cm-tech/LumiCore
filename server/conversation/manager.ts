@@ -10,6 +10,12 @@ import {
   isGuardGeneratedAssistantText,
   isGuardGeneratedConversationRecord,
 } from './guard_history';
+import {
+  buildCompactToolEvidenceNote,
+  isUnverifiedExecutionAssistantRecord,
+  isUnverifiedExecutionAssistantText,
+  sanitizeSummaryForPrompt,
+} from './summary_grounding';
 
 export interface Conversation {
   id: string;
@@ -215,6 +221,7 @@ function buildRolloverTranscriptTail(conversationId: string): string[] {
   const lines: string[] = [];
   const recent = getMessages(conversationId, 18)
     .filter(isPromptEligibleMessage)
+    .filter(record => !isUnverifiedExecutionAssistantRecord(record))
     .slice(-10);
 
   for (const record of recent) {
@@ -223,7 +230,7 @@ function buildRolloverTranscriptTail(conversationId: string): string[] {
     if (record.role === 'user') {
       if (message) lines.push(`User: ${message}`);
       // Legacy rows sometimes stored both sides of a turn in one user record.
-      if (response && !isGuardGeneratedAssistantText(response)) lines.push(`Lumi: ${response}`);
+      if (response && !isGuardGeneratedAssistantText(response) && !isUnverifiedExecutionAssistantText(response)) lines.push(`Lumi: ${response}`);
     } else if (record.role === 'assistant' && message) {
       lines.push(`Lumi: ${message}`);
     }
@@ -235,12 +242,13 @@ function buildRolloverTranscriptTail(conversationId: string): string[] {
 function buildConversationRolloverSummary(conversation: Conversation): string {
   const priorParts: string[] = [];
   if (conversation.summary && !isStandaloneGuardOutput(conversation.summary)) {
-    priorParts.push(compactRolloverText(conversation.summary, 1800));
+    const safe = sanitizeSummaryForPrompt(conversation.summary);
+    if (safe) priorParts.push(compactRolloverText(safe, 1800));
   }
   if (conversation.summaryChain?.length) {
     const older = conversation.summaryChain
       .filter(summary => !isStandaloneGuardOutput(summary))
-      .map(summary => compactRolloverText(summary, 700))
+      .map(summary => compactRolloverText(sanitizeSummaryForPrompt(summary), 700))
       .filter(Boolean)
       .join(' | ');
     if (older) priorParts.push(`Earlier context: ${compactRolloverText(older, 1200)}`);
@@ -531,15 +539,22 @@ function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       String(m.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
       || isGuardGeneratedAssistantText(m.response)
     );
+  const evidenceNote = buildCompactToolEvidenceNote(m.toolCalls);
+  const compactedMessage = compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT);
+  const compactedResponse = legacyCombinedGuardResponse
+    ? ''
+    : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);
   return {
     ...m,
-    message: compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT),
+    message: evidenceNote && m.role === 'assistant'
+      ? `${compactedMessage}\n${evidenceNote}`.trim()
+      : compactedMessage,
     // Older interaction rows stored the assistant reply in `response` while
     // keeping role=user. Preserve the user's side, but never reconstruct a
     // marked/legacy guard reply as conversational assistant truth.
-    response: legacyCombinedGuardResponse
-      ? ''
-      : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT),
+    response: evidenceNote && m.role === 'user' && compactedResponse
+      ? `${compactedResponse}\n${evidenceNote}`.trim()
+      : compactedResponse,
     toolCalls: undefined,
   };
 }
@@ -862,10 +877,14 @@ export function getConversationSummary(conversationId: string): string | null {
 
   const parts: string[] = [];
   if (conv.summary && !isStandaloneGuardOutput(conv.summary)) {
-    parts.push(conv.summary);
+    const safe = sanitizeSummaryForPrompt(conv.summary);
+    if (safe) parts.push(safe);
   }
   if (conv.summaryChain && conv.summaryChain.length > 0) {
-    const cleanChain = conv.summaryChain.filter(summary => !isStandaloneGuardOutput(summary));
+    const cleanChain = conv.summaryChain
+      .filter(summary => !isStandaloneGuardOutput(summary))
+      .map(summary => sanitizeSummaryForPrompt(summary))
+      .filter(Boolean);
     if (cleanChain.length) parts.push('Earlier: ' + cleanChain.join(' | '));
   }
   return parts.length ? parts.join('\n') : null;

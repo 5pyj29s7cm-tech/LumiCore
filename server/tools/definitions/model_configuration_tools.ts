@@ -8,6 +8,7 @@ import {
 } from '../../llm/model_configuration';
 import type { ToolContext } from '../types';
 import type { ToolRegistry } from '../registry';
+import { CN_TOOL_DISCOVERY_HINTS } from '../../regions/packs/cn/tool_discovery_hints';
 
 function safeError(error: unknown): string {
   return String((error as any)?.message || error || 'Model configuration failed')
@@ -45,7 +46,8 @@ function requiredRole(value: unknown): LumiModelRole {
 export function registerModelConfigurationTools(registry: ToolRegistry): void {
   registry.register({
     name: 'model_configuration_get',
-    description: 'Read the effective model configuration for this Lumi. Use before answering which model is active or before changing a role. Model configuration belongs to the Lumi user and is shared across personal and organization domains; organizations do not own a separate model policy.',
+    description: 'Read or list all or one Lumi model configuration. Use before answering which model is active or before changing a role. Model configuration belongs to the Lumi user and is shared across personal and organization domains; organizations do not own a separate model policy.',
+    routingHints: [...CN_TOOL_DISCOVERY_HINTS.modelConfigurationRead],
     parameters: {
       type: 'object',
       properties: {
@@ -63,6 +65,12 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    evidence: {
+      capability: 'model.configuration',
+      operation: 'observe',
+      assurance: 'observed',
+      subjectArgument: 'role',
+    },
   });
 
   registry.register({
@@ -154,7 +162,8 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'model_configuration_test',
-    description: 'Test the currently effective provider and model for one Lumi model role without changing it. Reasoning, vision, world, embedding, and enabled rerank use live model calls; generation verifies adapter and credential readiness without generating a paid artifact; voice verifies the active healthy adapter.',
+    description: 'Test the current provider and model route for one Lumi role. Reasoning, vision, world, embedding, and enabled rerank use live model calls; generation verifies adapter and credential readiness without generating a paid artifact; voice verifies the active healthy adapter.',
+    routingHints: [...CN_TOOL_DISCOVERY_HINTS.modelRouteTest],
     parameters: {
       type: 'object',
       properties: {
@@ -181,5 +190,11 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    evidence: {
+      capability: 'model.live_route',
+      operation: 'test',
+      assurance: 'verified',
+      subjectArgument: 'role',
+    },
   });
 }

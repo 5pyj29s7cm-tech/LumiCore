@@ -27,6 +27,7 @@ export interface LumiExecutionDecisionInput {
   flow: LumiTurnFlow;
   text: string;
   toolDeclarations: ToolDeclaration[];
+  toolRegistry?: ToolRegistry;
   personalityToolPolicy?: ToolPolicy;
   isSanctuary?: boolean;
 }
@@ -62,8 +63,6 @@ const SELF_REPAIR_SKILL_RE =
   /(?:\u6280\u80fd|\u63d2\u4ef6|\b(?:mcp|skill|plugin)\b)/iu;
 const SELF_REPAIR_DESKTOP_RE =
   /(?:\u684c\u9762|\u7a97\u53e3|\u753b\u9762|\u9875\u9762|\u754c\u9762|\u767d\u5c4f|\u9ed1\u5c4f|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u6ca1\u53cd\u5e94|\u6253\u4e0d\u5f00|\u542f\u52a8\u5931\u8d25|\b(?:autocad|wps|wechat|weixin|desktop|window|screen|page|ui|blank|crash(?:ed)?|stuck|hang(?:ing)?)\b|white\s+screen|black\s+screen|failed\s+to\s+(?:open|start))/iu;
-const SELF_REPAIR_MODEL_RE =
-  /(?:\u6a21\u578b|\u5927\u6a21\u578b|\u63a8\u7406\u670d\u52a1|\u89c6\u89c9\u670d\u52a1|\u8bed\u97f3\u6a21\u578b|\u8bed\u97f3\u8bc6\u522b|\u8bed\u97f3\u5408\u6210|provider|llm|reasoning\s+model|vision\s+model|speech\s+(?:recognition|synthesis)|openai|deepseek|qwen|gemini|anthropic|ollama|lm\s*studio)/iu;
 const SELF_REPAIR_ADAPTER_RE =
   /(?:\u80fd\u529b|\u9002\u914d\u5668|\u63a5\u5165|\u8fde\u63a5|\u8f6f\u4ef6|\u5e94\u7528|\b(?:mcp|skill|plugin|adapter|capability|integration|connection|autocad|wps|wechat|weixin|cad|bim)\b)/iu;
 
@@ -74,7 +73,7 @@ const SELF_REPAIR_ADAPTER_RE =
  * paid model probes require an explicit model symptom, and package repair
  * requires both a skill/MCP target and repair wording.
  */
-export function buildSelfRepairToolPolicy(text: string): ToolPolicy {
+export function buildSelfRepairToolPolicy(text: string, registry?: ToolRegistry): ToolPolicy {
   const requested = String(text || '');
   const allowedTools = [
     'client_get_state',
@@ -97,8 +96,11 @@ export function buildSelfRepairToolPolicy(text: string): ToolPolicy {
       'desktop_capture_screen',
     );
   }
-  if (SELF_REPAIR_MODEL_RE.test(requested)) {
-    allowedTools.push('model_configuration_get', 'model_configuration_test');
+  if (registry) {
+    allowedTools.push(...registry.findRelevant(requested, {
+      limit: 8,
+      evidenceOperations: ['observe', 'test'],
+    }).map(tool => tool.name));
   }
 
   return {
@@ -136,6 +138,7 @@ function enhanceToolRouteForFlow(
   route: ToolRoute,
   flow: LumiTurnFlow,
   declarations: ToolDeclaration[],
+  registry?: ToolRegistry,
 ): ToolRoute {
   if (route.hardAllowlist) return route;
 
@@ -145,6 +148,15 @@ function enhanceToolRouteForFlow(
   const reasons = [...route.reasons];
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
   const recoveredWpsCreateAndType = isRecoveredWpsCreateAndTypeTask(flow.routeText);
+  const discoveredEvidenceTools = registry?.findRelevant(flow.routeText, {
+    limit: 8,
+    evidenceOperations: ['observe', 'test'],
+  }) || [];
+  if (discoveredEvidenceTools.length) {
+    addAvailable(additions, available, discoveredEvidenceTools.map(tool => tool.name));
+    categories.push('capability_discovery');
+    reasons.push('evidence-producing tools were matched from their own descriptions and schemas');
+  }
 
   if (!recoveredCurrentAppEdit && (flow.channel === 'task' || flow.workTakeover.shouldResumeTask)) {
     addAvailable(additions, available, [
@@ -265,7 +277,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     /Recovered structured action state:[\s\S]{0,500}- followupIntent:\s*status\b/i.test(input.flow.routeText || input.text);
   const allowToolUse = input.flow.allowToolUseForTurn && !input.isSanctuary && !statusOnlyContinuation;
   const selfRepairToolPolicy = input.flow.selfRepairTurn && !statusOnlyContinuation
-    ? buildSelfRepairToolPolicy(input.flow.routeText || input.text)
+    ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry)
     : null;
   const clientActionToolPolicy = input.flow.clientActionOnlyTurn && !statusOnlyContinuation ? CLIENT_ACTION_TOOL_POLICY : null;
   const baseToolPolicy = input.isSanctuary || statusOnlyContinuation
@@ -283,7 +295,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
       })
     : null;
   const toolRoute = rawToolRoute
-    ? enhanceToolRouteForFlow(rawToolRoute, input.flow, input.toolDeclarations)
+    ? enhanceToolRouteForFlow(rawToolRoute, input.flow, input.toolDeclarations, input.toolRegistry)
     : null;
   const uncappedToolPolicy = toolRoute
     ? mergeToolPolicyWithRoute(baseToolPolicy, toolRoute)
@@ -312,6 +324,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     '## Lumi Execution Decision',
     `Boundary: ${input.flow.channel}/${input.flow.surface}; tools=${allowToolUse ? 'available' : 'off'}; policyMaxIterations=${toolPolicy.maxIterations || 0}.`,
     allowToolUse ? 'For file/screen/document actions, do not answer with a future-tense promise such as "I will read/open/review it now" as the final response. Call the actual read/open/review tool in this turn. If no readable path/content is available, say clearly that no tool has run yet and ask for the file or location.' : '',
+    allowToolUse ? 'The current tool declaration list is authoritative. Never invent a special tool mode or ask the user to switch to a fictional Fetcher/System Diagnostics mode. For an evidence-bearing check, state only conclusions supported by current-turn receipts and preserve each tool\'s stated limitations.' : '',
     clientActionToolPolicy ? 'Use only Lumi client state/action tools for this turn. First read client_get_state when the current state is not already in the tool result, then call client_action. Trust the returned verification.status: verified=done, pending=state not confirmed yet, failed=diagnose or one safe recovery. Do not claim a mode/window/surface changed from intention alone.' : '',
     selfRepairToolPolicy
       ? selfRepairToolPolicy.allowedTools.includes('client_self_repair')

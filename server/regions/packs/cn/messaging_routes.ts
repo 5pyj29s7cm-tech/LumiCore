@@ -1335,6 +1335,7 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
     flow: dispatch.flow,
     text: input.text,
     toolDeclarations: toolRegistry.getToolDeclarations(),
+    toolRegistry,
     personalityToolPolicy: input.personalityToolPolicy,
     isSanctuary: !input.identityBound,
   });

@@ -12,6 +12,13 @@ import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/pro
 import { compactToolResultForModel } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { ToolExecutionRecord } from "../tools/types";
+import {
+  buildToolEvidenceRecord,
+  GENERIC_TOOL_PLANNING_PROMPT,
+  GENERIC_TOOL_REPLAN_PROMPT,
+  hasRelevantEvidenceTool,
+  normalizePlannedToolScope,
+} from "../cognition/tool_planning";
 import { personalityRegistry } from "../personality";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../personality/state";
 import { himTick } from "../personality/him";
@@ -1068,6 +1075,7 @@ async function processVoiceInput(
     flow: turnFlow,
     text: turnFlow.routeText,
     toolDeclarations: toolRegistry.getToolDeclarations(),
+    toolRegistry,
     personalityToolPolicy: personality.toolPolicy,
   });
   session.isBackgroundWork = executionDecision.allowToolUse;
@@ -1149,7 +1157,7 @@ async function processVoiceInput(
   const organizationKnowledgeOverlay = voiceOrganizationKnowledge
     ? `\n\n## Company Knowledge Base\n${voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
     : '';
-  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + actionContinuationOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+  const voiceSystemPrompt = fullPersonalityPrompt + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + proactiveContextOverlay + actionContinuationOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay + (executionDecision.allowToolUse ? `\n${GENERIC_TOOL_PLANNING_PROMPT}` : '');
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
@@ -2333,23 +2341,49 @@ async function processVoiceInput(
       );
       if (!isCurrentTurn()) return;
 
+      const plannedToolCalls = streamResult.toolCalls?.length
+        ? normalizePlannedToolScope(
+            streamResult.toolCalls.map((call, index) => ({
+              ...call,
+              id: call.id || `voice_call_${iter}_${index}_${Date.now().toString(36)}`,
+            })),
+            toolRegistry,
+            turnFlow.routeText,
+          )
+        : [];
+
       messages.push({
         role: 'assistant',
         content: streamResult.text || null,
-        ...(streamResult.toolCalls?.length ? { toolCalls: streamResult.toolCalls } : {}),
+        ...(plannedToolCalls.length ? { toolCalls: plannedToolCalls } : {}),
         reasoningContent: streamResult.reasoningContent,
       });
 
       // Record token usage for this streaming call
       recordTokenUsage(session.userId, provider, effectiveModel, streamResult.usage, `voice_stream_${Date.now()}`, 'voice');
 
-      if (!streamResult.toolCalls || streamResult.toolCalls.length === 0) break;
+      if (plannedToolCalls.length === 0) {
+        if (
+          iter === 0
+          && toolResults.length === 0
+          && hasRelevantEvidenceTool(
+            toolRegistry,
+            turnFlow.routeText,
+            toolDeclarations.map(declaration => declaration.function.name),
+          )
+        ) {
+          messages.push({ role: 'system', content: GENERIC_TOOL_REPLAN_PROMPT });
+          responseText = '';
+          continue;
+        }
+        break;
+      }
 
-      const toolSig = JSON.stringify(streamResult.toolCalls.map(tc => ({ n: tc.name, a: tc.arguments })));
+      const toolSig = JSON.stringify(plannedToolCalls.map(tc => ({ n: tc.name, a: tc.arguments })));
       if (toolSig === previousToolSig) { logger.info('[Audio] Duplicate tools, breaking'); break; }
       previousToolSig = toolSig;
 
-      for (const tc of streamResult.toolCalls) {
+      for (const tc of plannedToolCalls) {
         if (pipelineAbort?.signal.aborted) break;
         const cid = `${tc.name}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
         const currentAppGuard = guardCurrentAppToolCall({
@@ -2386,6 +2420,7 @@ async function processVoiceInput(
           arguments: executionArguments,
           result: execResult,
           error: execError,
+          evidence: buildToolEvidenceRecord(toolRegistry, tc.name, executionArguments),
         });
 
         if (!isDirectDesktopTool(tc.name)) {

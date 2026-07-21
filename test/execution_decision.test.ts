@@ -214,15 +214,6 @@ describe('Lumi execution decision', () => {
     ]);
     expect(desktop.allowedTools).not.toContain('model_configuration_test');
 
-    const model = buildSelfRepairToolPolicy('检查 DeepSeek 推理模型为什么失败');
-    expect(model.allowedTools).toEqual([
-      'client_get_state',
-      'client_health_check',
-      'model_configuration_get',
-      'model_configuration_test',
-    ]);
-    expect(model.allowedTools).not.toContain('desktop_capture_screen');
-
     const skillRepair = buildSelfRepairToolPolicy('修复并重启这个 MCP 技能');
     expect(skillRepair.allowedTools).toEqual([
       'client_get_state',

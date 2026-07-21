@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { classifyCloudError } from '../server/cloud/core';
+import { classifyCloudError, getCloudHealth } from '../server/cloud/core';
 import {
   getCircuitStatus,
   isCircuitClosed,
@@ -48,6 +48,14 @@ describe('cloud provider failure feedback', () => {
     recordFailure('status-provider', undefined, new Error('offline'));
     expect(isCircuitHealthy('status-provider')).toBe(false);
     expect(getCircuitStatus()).toContainEqual(expect.objectContaining({ key: 'status-provider', state: 'open' }));
+  });
+
+  it('maps service-specific speech circuits into the provider health summary', () => {
+    recordFailure('qwen-stt', undefined, new Error('account denied'), { openImmediately: true });
+    recordFailure('doubao-tts', undefined, new Error('account denied'), { openImmediately: true });
+    const health = getCloudHealth();
+    expect(health.stt.find(item => item.provider === 'qwen')?.circuitState).toBe('open');
+    expect(health.tts.find(item => item.provider === 'ark')?.circuitState).toBe('open');
   });
 
   it('marks an HTTP-level CosyVoice account failure unhealthy', async () => {

@@ -68,6 +68,49 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
+  getEvidenceDescriptor(name: string): ToolDefinition['evidence'] | undefined {
+    return this.tools.get(name)?.evidence;
+  }
+
+  /**
+   * Generic lexical capability discovery. Domain vocabulary lives in each
+   * tool description; the orchestrator does not need a branch per tool.
+   */
+  findRelevant(text: string, options?: {
+    limit?: number;
+    evidenceOperations?: Array<NonNullable<ToolDefinition['evidence']>['operation']>;
+  }): ToolDefinition[] {
+    const query = String(text || '').toLowerCase().trim();
+    if (!query) return [];
+    const ascii = query.match(/[a-z0-9_]{3,}/g) || [];
+    const cjkRuns = query.match(/[\u3400-\u9fff]+/g) || [];
+    const cjk: string[] = [];
+    for (const run of cjkRuns) {
+      for (let size = 2; size <= Math.min(4, run.length); size += 1) {
+        for (let index = 0; index <= run.length - size; index += 1) {
+          cjk.push(run.slice(index, index + size));
+        }
+      }
+    }
+    const tokens = Array.from(new Set([...ascii, ...cjk]));
+    const allowedOperations = options?.evidenceOperations?.length
+      ? new Set(options.evidenceOperations)
+      : null;
+    return this.list()
+      .filter(tool => !allowedOperations || (tool.evidence && allowedOperations.has(tool.evidence.operation)))
+      .map(tool => {
+        const haystack = `${tool.name} ${tool.description} ${(tool.routingHints || []).join(' ')}`.toLowerCase();
+        const score = tokens.reduce((total, token) => (
+          total + (haystack.includes(token) ? Math.min(4, token.length) : 0)
+        ), 0);
+        return { tool, score };
+      })
+      .filter(item => item.score >= 4)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, Math.max(1, options?.limit || 8))
+      .map(item => item.tool);
+  }
+
   unregister(name: string): boolean {
     return this.tools.delete(name);
   }

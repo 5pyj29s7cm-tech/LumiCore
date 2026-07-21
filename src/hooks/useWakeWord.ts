@@ -466,6 +466,10 @@ export function useWakeWord({
     };
     const onReconnect = () => {
       console.log('[WakeWord] Socket reconnected');
+      // The server may have refreshed provider health or credentials while the
+      // socket was down. Permit exactly one fresh start; a persistent account
+      // denial will set this flag again and stop the retry loop.
+      wakeConfigUnavailableRef.current = false;
       setError(null);
     };
 

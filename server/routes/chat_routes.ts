@@ -236,6 +236,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       flow: restTurnDispatch.flow,
       text: routeText,
       toolDeclarations: toolRegistry.getToolDeclarations(),
+      toolRegistry,
     });
     const deferRestStream =
       restExecutionDecision.allowToolUse

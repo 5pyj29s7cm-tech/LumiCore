@@ -78,6 +78,25 @@ export interface ToolDefinition {
   permission: ToolPermission;
   /** Security level: safe = auto-execute, confirm = ask user, forbidden = never execute */
   securityLevel: SecurityLevel;
+  /** Localized discovery vocabulary; interpreted generically by ToolRegistry. */
+  routingHints?: string[];
+  /**
+   * Machine-readable evidence produced by a successful invocation. This lets
+   * the execution ledger reason about capabilities instead of hard-coding
+   * every possible user sentence.
+   */
+  evidence?: {
+    capability: string;
+    operation: 'observe' | 'test' | 'mutate' | 'create' | 'communicate';
+    assurance: 'declared' | 'observed' | 'measured' | 'verified';
+    /**
+     * Argument that identifies one member of a tool's natural scope. When its
+     * JSON schema contains an enum, the generic planner can preserve an
+     * explicit "all/every/remaining" request without knowing the domain.
+     */
+    subjectArgument?: string;
+    limitations?: string[];
+  };
 }
 
 export interface ParsedToolCall {
@@ -105,4 +124,12 @@ export interface ToolExecutionRecord {
   arguments: Record<string, any>;
   result: string;
   error?: string;
+  /** Evidence metadata copied from the invoked tool definition. */
+  evidence?: {
+    capability: string;
+    operation: 'observe' | 'test' | 'mutate' | 'create' | 'communicate';
+    assurance: 'declared' | 'observed' | 'measured' | 'verified';
+    scope: string[];
+    limitations?: string[];
+  };
 }

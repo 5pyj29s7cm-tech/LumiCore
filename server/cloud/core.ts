@@ -140,8 +140,17 @@ export function getCloudHealth(): {
   const ttsProviders = getAvailableTTSProviders();
   const circuits = getCircuitStatus();
 
-  const toHealth = (provider: string, configured: boolean): ProviderHealth => {
-    const circuit = circuits.find(c => c.key === provider);
+  const toHealth = (
+    provider: string,
+    configured: boolean,
+    circuitKeys: string[] = [provider],
+  ): ProviderHealth => {
+    const matching = circuits.filter(circuit => circuitKeys.some(key => (
+      circuit.key === key || circuit.key.startsWith(`${key}:`)
+    )));
+    const circuit = matching.find(item => item.state === 'open')
+      || matching.find(item => item.state === 'half-open')
+      || matching[0];
     return {
       provider,
       configured,
@@ -152,8 +161,20 @@ export function getCloudHealth(): {
 
   return {
     llm: LLM_PRIORITY.map(p => toHealth(p.provider, llmProviders[p.provider] || false)),
-    stt: STT_PRIORITY.map(p => toHealth(p.provider, sttProviders[p.provider] || false)),
-    tts: TTS_PRIORITY.map(p => toHealth(p.provider, ttsProviders[p.provider] || false)),
+    stt: STT_PRIORITY.map(p => toHealth(
+      p.provider,
+      sttProviders[p.provider] || false,
+      p.provider === 'qwen'
+        ? ['qwen-stt', 'qwen']
+        : p.provider === 'ark'
+          ? ['doubao-stt-stream', 'ark']
+          : ['openai'],
+    )),
+    tts: TTS_PRIORITY.map(p => toHealth(
+      p.provider,
+      ttsProviders[p.provider] || false,
+      p.provider === 'ark' ? ['doubao-tts'] : [p.provider],
+    )),
     circuits,
   };
 }
