@@ -181,9 +181,9 @@ function routeHasTool(input: LumiCapabilitySelectionInput, pattern: RegExp): boo
 
 function availablePreferredTools(input: LumiCapabilitySelectionInput, lane: LumiCapabilityLane): string[] {
   const routeTools = input.execution.toolRoute?.toolNames || [];
-  const allowedTools = (input.execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*');
-  const available = new Set([...routeTools, ...allowedTools]);
-  const hints = TOOL_HINTS[lane].filter(name => available.size === 0 || available.has(name));
+  const allowedNames = (input.execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*');
+  const available = new Set(allowedNames.length ? allowedNames : routeTools);
+  const hints = TOOL_HINTS[lane].filter(name => available.has(name));
   const directRoute = routeTools.filter(name => TOOL_HINTS[lane].some(hint => name === hint || name.startsWith(`${hint}_`)));
   return unique([...hints, ...directRoute, ...routeTools.slice(0, 8)]).slice(0, 18);
 }
@@ -443,13 +443,12 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
   const actionContract = buildActionContract(routeText);
   const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routeText);
-  const currentAppAllowed = new Set(
+  const effectiveAllowed = new Set(
     (input.execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*'),
   );
   const contractPreferredTools = actionContract.applies
     ? actionContract.preferredTools.filter(name => (
-        !recoveredCurrentAppEdit
-        || currentAppAllowed.has(name)
+        effectiveAllowed.has(name)
       ))
     : [];
   const preferredTools = unique([

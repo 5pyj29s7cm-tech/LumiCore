@@ -476,7 +476,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Desktop Computer Use',
       category: 'automation',
       status: 'available',
-      actions: ['computer_use', 'desktop_show_lumi_window', 'desktop_open', 'desktop_run_command', 'read_clipboard', 'write_clipboard', 'mouse_move', 'mouse_click', 'mouse_drag', 'keyboard_type', 'keyboard_press', 'desktop_active_window', 'desktop_running_processes', 'desktop_idle_time', 'desktop_poll_activity', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen'],
+      actions: ['computer_use', 'desktop_show_lumi_window', 'desktop_open', 'desktop_run_command', 'read_clipboard', 'write_clipboard', 'mouse_move', 'mouse_click', 'mouse_drag', 'keyboard_type', 'keyboard_press', 'desktop_active_window', 'desktop_window_control', 'desktop_running_processes', 'desktop_idle_time', 'desktop_poll_activity', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_capture_screen'],
       surfaces: ['desktop apps', 'browser UI', 'CAD/Revit UI', 'messaging UI'],
       requiresConfirmation: false,
       setup: [],

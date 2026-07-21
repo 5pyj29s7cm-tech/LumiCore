@@ -44,6 +44,7 @@ import { registerMessagingTools } from './messaging_tools';
 import { registerModelConfigurationTools } from './model_configuration_tools';
 import { registerDesktopWechatWatchTools } from './desktop_wechat_watch_tools';
 import { registerNetworkDiagnosticTools } from './network_diagnostic_tools';
+import { registerRuntimeWorkTools } from './runtime_work_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -100,6 +101,7 @@ export function registerAllTools(
   registerMessagingTools(registry);
   registerDesktopWechatWatchTools(registry);
   registerNetworkDiagnosticTools(registry);
+  registerRuntimeWorkTools(registry);
   if (llmGetters) {
     setSkillLLMGetters(llmGetters);
   }

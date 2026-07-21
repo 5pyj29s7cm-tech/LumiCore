@@ -194,6 +194,11 @@ async function handleDesktopExec(socket: Socket, data: {
         output = JSON.stringify(info, null, 2);
         break;
       }
+      case 'desktop_window_control': {
+        const result = await invoke('control_active_window', { action: String(args.action || '') });
+        output = JSON.stringify(result, null, 2);
+        break;
+      }
       case 'desktop_running_processes': {
         const procs = await invoke('get_running_processes');
         output = JSON.stringify(procs, null, 2);

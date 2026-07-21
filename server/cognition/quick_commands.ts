@@ -8,10 +8,19 @@
 import { readDB } from '../../db_layer';
 import { getWorkTakeoverContinuationQuickCommand, type WorkTakeoverTurnSurface } from '../work_takeover/continuity';
 import { listWorkflows } from '../agents/workflows';
-import { CN_VOICE_FAST_PATH_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import {
+  CN_VOICE_FAST_PATH_MESSAGES,
+  CN_VOICE_QUICK_WORK_MESSAGES,
+} from '../regions/packs/cn/voice_fast_path_messages';
 import type { ToolPolicy } from '../personality/types';
 import { listWebLoginSitePresets } from '../web_login/legal_presets';
 import { formatKnownLoginOpening, formatKnownLoginResult } from '../i18n/naturalness_messages';
+import { classifyRuntimeWorkIntent } from './runtime_work_intent';
+import {
+  extractCurrentAppTarget,
+  isRunningSoftwareInspectionRequest,
+  requestedDesktopWindowAction,
+} from './action_contract';
 
 export interface QuickCommandResult {
   /** The response text to send back to the user */
@@ -33,6 +42,7 @@ export interface QuickCommandOptions {
   domain?: string;
   orgId?: string;
   surface?: WorkTakeoverTurnSurface;
+  currentAppTarget?: string;
 }
 
 function resolveKnownSiteUrl(target: string): string | null {
@@ -121,6 +131,98 @@ function findKnownLoginPreset(target: string) {
 }
 
 const patterns: QuickPattern[] = [
+  {
+    patterns: [/[\s\S]+/u],
+    handler: (match) => {
+      const intent = classifyRuntimeWorkIntent(match[0]);
+      if (intent === 'none') return { responseText: '', matched: false };
+      const cancelling = intent === 'cancel';
+      return {
+        responseText: CN_VOICE_QUICK_WORK_MESSAGES.readingRuntimeWork(cancelling),
+        matched: true,
+        toolCall: { name: cancelling ? 'runtime_work_cancel' : 'runtime_work_status', arguments: {} },
+        formatToolResult: (raw, error) => {
+          if (error) return CN_VOICE_QUICK_WORK_MESSAGES.runtimeReadFailed;
+          try {
+            const payload = JSON.parse(raw || '{}');
+            if (cancelling) {
+              if (payload.status === 'idle' || Number(payload.matchedCount || 0) === 0) return CN_VOICE_QUICK_WORK_MESSAGES.noActiveWork;
+              if (payload.status === 'cancelling') return CN_VOICE_QUICK_WORK_MESSAGES.workCancelling(Number(payload.cancellingCount || 0));
+              return CN_VOICE_QUICK_WORK_MESSAGES.workCancelled(Number(payload.cancelledCount || payload.matchedCount || 0));
+            }
+            if (payload.status === 'idle' || Number(payload.activeCount || 0) === 0) return CN_VOICE_QUICK_WORK_MESSAGES.noActiveWork;
+            const titles = Array.isArray(payload.items)
+              ? payload.items.slice(0, 3).map((item: any) => String(item.title || item.id || '')).filter(Boolean)
+              : [];
+            return CN_VOICE_QUICK_WORK_MESSAGES.activeWork(Number(payload.activeCount || titles.length), titles);
+          } catch {
+            return CN_VOICE_QUICK_WORK_MESSAGES.runtimeReceiptInvalid;
+          }
+        },
+      };
+    },
+  },
+  {
+    patterns: [/[\s\S]+/u],
+    handler: (match) => {
+      if (!isRunningSoftwareInspectionRequest(match[0])) return { responseText: '', matched: false };
+      return {
+        responseText: CN_VOICE_QUICK_WORK_MESSAGES.readingProcesses,
+        matched: true,
+        toolCall: { name: 'desktop_running_processes', arguments: { top: 50 } },
+        formatToolResult: (raw, error) => {
+          if (error) return CN_VOICE_QUICK_WORK_MESSAGES.processReadFailed;
+          try {
+            const payload = JSON.parse(raw || '[]');
+            const entries = Array.isArray(payload) ? payload : Array.isArray(payload?.processes) ? payload.processes : [];
+            const names = Array.from(new Set(entries
+              .map((item: any) => String(item?.name || item?.process_name || '').replace(/\.exe$/i, '').trim())
+              .filter(Boolean)));
+            const topNames = names.slice(0, 8).join('\u3001');
+            return [
+              CN_VOICE_QUICK_WORK_MESSAGES.processSummary(entries.length, names.length),
+              topNames ? CN_VOICE_QUICK_WORK_MESSAGES.processExamples(topNames) : '',
+              CN_VOICE_QUICK_WORK_MESSAGES.processSnapshotCaveat,
+            ].filter(Boolean).join('');
+          } catch {
+            return CN_VOICE_QUICK_WORK_MESSAGES.processReceiptInvalid;
+          }
+        },
+      };
+    },
+  },
+  {
+    patterns: [/[\s\S]+/u],
+    handler: (match, _userId, options) => {
+      const action = requestedDesktopWindowAction(match[0]);
+      if (!action) return { responseText: '', matched: false };
+      const expectedTarget = String(options?.currentAppTarget || extractCurrentAppTarget(match[0]) || '').trim();
+      return {
+        responseText: CN_VOICE_QUICK_WORK_MESSAGES.adjustingWindow,
+        matched: true,
+        toolCall: {
+          name: 'desktop_window_control',
+          arguments: { action, ...(expectedTarget ? { expectedTarget } : {}) },
+        },
+        formatToolResult: (raw, error) => {
+          if (error) return CN_VOICE_QUICK_WORK_MESSAGES.windowControlFailed;
+          try {
+            const payload = JSON.parse(raw || '{}');
+            if (payload.ok === true && payload.status === 'verified' && payload.targetMatched === true) {
+              return CN_VOICE_QUICK_WORK_MESSAGES.windowAdjusted(
+                CN_VOICE_QUICK_WORK_MESSAGES.windowActionLabels[action],
+                expectedTarget ? ` ${expectedTarget}` : '',
+              );
+            }
+            if (payload.status === 'target_mismatch') return CN_VOICE_QUICK_WORK_MESSAGES.windowTargetMismatch;
+            return CN_VOICE_QUICK_WORK_MESSAGES.windowNotVerified;
+          } catch {
+            return CN_VOICE_QUICK_WORK_MESSAGES.windowReceiptInvalid;
+          }
+        },
+      };
+    },
+  },
   // ── Voice connection acknowledgement ──
   {
     patterns: [

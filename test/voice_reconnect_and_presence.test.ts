@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildPresenceHeartbeat } from '../src/hooks/usePresence';
-import { waitForVoiceSocket } from '../src/hooks/useVoiceCall';
+import { shouldAcceptVoiceStatus, waitForVoiceSocket } from '../src/hooks/useVoiceCall';
 import { addEchoText, isEchoText, isPureInterruptCommand, isVoiceCallEndCommand } from '../server/socket/voice';
 
 class FakeSocket {
@@ -23,6 +23,37 @@ class FakeSocket {
 }
 
 describe('voice reconnect and perception continuity', () => {
+  it('ignores a stale turn status instead of clearing the current watchdog', () => {
+    expect(shouldAcceptVoiceStatus({ status: 'listening', requestId: 'old' }, 'current')).toBe(false);
+    expect(shouldAcceptVoiceStatus({ status: 'listening' }, 'current')).toBe(false);
+    expect(shouldAcceptVoiceStatus({ status: 'speaking', requestId: 'current' }, 'current')).toBe(true);
+    expect(shouldAcceptVoiceStatus({ status: 'thinking', requestId: 'next' }, 'current')).toBe(true);
+  });
+
+  it('delivers finalized text before waiting for speech playback', () => {
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const responseLog = server.indexOf('logger.info(`[Audio] Response:');
+    const speechQueue = server.indexOf('if (responseText) queueFinalizedSpeech(responseText)', responseLog);
+
+    expect(responseLog).toBeGreaterThan(0);
+    expect(speechQueue).toBeGreaterThan(responseLog);
+    expect(client).not.toContain("if (data.finalized === true) activeVoiceRequestIdRef.current = null");
+  });
+
+  it('keeps browser TTS fallback inside the same request lifecycle', () => {
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+
+    expect(server).toContain("socket.on('audio:tts_fallback_done', done)");
+    expect(server).toContain('fallbackTimeoutMs');
+    expect(client).toContain("socket.emit('audio:tts_fallback_done'");
+    expect(client.indexOf('isTtsPlaying.current = true', client.indexOf('const onTtsFallback')))
+      .toBeLessThan(client.indexOf('window.speechSynthesis.speak(utterance)', client.indexOf('const onTtsFallback')));
+  });
+
   it('waits for the socket before starting microphone streaming', async () => {
     const socket = new FakeSocket();
     const pending = waitForVoiceSocket(socket, 1000);

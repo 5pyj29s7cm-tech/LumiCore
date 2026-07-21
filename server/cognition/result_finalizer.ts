@@ -214,7 +214,7 @@ function isChineseText(value: string): boolean {
 function sanitizeInternalExecutionText(value: string, chinese: boolean): string {
   const raw = String(value || '').trim();
   if (!raw) return raw;
-  const internalLine = /(?:No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b|\ballowedTools\b|work product guard|Maximum tool call iterations|\[historical\s+source=[^\]]+\])/i;
+  const internalLine = /(?:No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b|\ballowedTools\b|\bappTarget\b|\bUI\s*evidence\b|work product guard|action contract|Required completion evidence|Preferred tools|Verification tools|tool route|tool protocol|Maximum tool call iterations|<\/?function_calls?>|<invoke\b|\[historical\s+source=[^\]]+\])/i;
   const withoutHistoryMarkers = raw.replace(/\[historical\s+source=[^\]]+\]\s*/gi, '');
   if (!internalLine.test(withoutHistoryMarkers) && withoutHistoryMarkers === raw) return raw;
   const cleaned = withoutHistoryMarkers
@@ -280,7 +280,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
 
 function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildActionContract>, text: string): boolean {
   if (!contract.applies) return false;
-  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'desktop_operation'].includes(contract.kind)) {
+  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation'].includes(contract.kind)) {
     return true;
   }
   if (contract.kind === 'legal_document') {
@@ -820,7 +820,6 @@ function formatGroundedWpsMutationResult(
     && Boolean(String(receipt.windowTitle || '').trim())
     && receipt.saved === false
     && !String(receipt.savePath || '').trim()
-    && Boolean(requestedText)
     && suppliedText === requestedText
     && readBack === requestedText
   );
@@ -833,13 +832,17 @@ function formatGroundedWpsMutationResult(
   const processId = Number(receipt.processId);
   const lines = zh
     ? [
-        `\u5df2\u5728\u53ef\u89c1 WPS \u6587\u6863\u201c${documentName}\u201d\u4e2d\u7cbe\u786e\u5199\u5165\uff1a${requestedText}`, // i18n-allow: reviewed Chinese grounded WPS receipt.
-        `\u7a97\u53e3\uff1a${windowTitle}`, // i18n-allow: reviewed Chinese grounded WPS receipt.
-        `\u8fdb\u7a0b\uff1awps.exe (PID ${processId})`, // i18n-allow: reviewed Chinese grounded WPS receipt.
-        '\u5f53\u524d\u672a\u4fdd\u5b58\u3002', // i18n-allow: reviewed Chinese grounded WPS receipt.
+        requestedText
+          ? CN_RESULT_GROUNDING_MESSAGES.wpsExactTextWritten(documentName, requestedText)
+          : CN_RESULT_GROUNDING_MESSAGES.wpsBlankDocumentCreated(documentName),
+        CN_RESULT_GROUNDING_MESSAGES.wpsWindow(windowTitle),
+        CN_RESULT_GROUNDING_MESSAGES.wpsProcess(processId),
+        CN_RESULT_GROUNDING_MESSAGES.wpsUnsaved,
       ]
     : [
-        `Created visible WPS document "${documentName}" and wrote the exact requested text: ${requestedText}`,
+        requestedText
+          ? `Created visible WPS document "${documentName}" and wrote the exact requested text: ${requestedText}`
+          : `Created visible blank WPS document "${documentName}".`,
         `Window: ${windowTitle}`,
         `Process: wps.exe (PID ${processId})`,
         'The document is currently unsaved.',
@@ -849,7 +852,9 @@ function formatGroundedWpsMutationResult(
     blocked: userRequestedSave,
     reason: userRequestedSave
       ? 'WPS document creation and exact text entry were verified, but the requested save action was not completed.'
-      : 'Grounded WPS document creation and exact text entry from a verified KWPS.Application receipt.',
+      : requestedText
+        ? 'Grounded WPS document creation and exact text entry from a verified KWPS.Application receipt.'
+        : 'Grounded blank WPS document creation from a verified KWPS.Application receipt.',
     notification: userRequestedSave
       ? {
           type: 'work_product_guard',

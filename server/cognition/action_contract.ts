@@ -5,6 +5,8 @@ import {
   requiresActiveWindowObservation,
   requiresDesktopFileListingObservation,
 } from './desktop_observation';
+import { classifyRuntimeWorkIntent } from './runtime_work_intent';
+import { CN_ACTION_CONTRACT_BLOCKERS } from '../regions/packs/cn/voice_fast_path_messages';
 
 export type LumiActionContractKind =
   | 'none'
@@ -18,6 +20,7 @@ export type LumiActionContractKind =
   | 'ecommerce_operations'
   | 'design_delivery'
   | 'stock_monitor'
+  | 'task_control'
   | 'legal_document'
   | 'desktop_operation'
   | 'artifact_work';
@@ -75,11 +78,23 @@ const CURRENT_APP_REFERENCE_RE =
 const CURRENT_APP_MUTATION_INTENT_RE =
   /(?:\u65b0\u5efa|\u521b\u5efa|\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\u5199|\u7f16\u8f91|\u4fee\u6539|\u4fdd\u5b58)|\b(?:new|create|write|type|paste|edit|modify|save)\b/iu;
 
-export function requiresCurrentAppUiMutation(input: string): boolean {
+export type DesktopWindowAction = 'maximize' | 'minimize' | 'restore';
+
+export function requestedDesktopWindowAction(input: string): DesktopWindowAction | null {
   const primary = compact(extractPrimaryTaskText(input));
+  if (/(?:\u6700\u5927\u5316|\u653e\u5927\u5230\u5168\u7a97\u53e3|\u94fa\u6ee1\u5c4f\u5e55)|\bmaximi[sz]e\b/iu.test(primary)) return 'maximize';
+  if (/(?:\u6700\u5c0f\u5316|\u6536\u5230\u4efb\u52a1\u680f)|\bminimi[sz]e\b/iu.test(primary)) return 'minimize';
+  if (/(?:\u8fd8\u539f\u7a97\u53e3|\u6062\u590d\u7a97\u53e3|\u53d6\u6d88\u6700\u5927\u5316)|\brestore\s+(?:the\s+)?window\b/iu.test(primary)) return 'restore';
+  return null;
+}
+
+export function requiresCurrentAppUiMutation(input: string): boolean {
+  const raw = String(input || '');
+  const primary = compact(extractPrimaryTaskText(input));
+  const hasRecoveredTarget = /(?:^|\r?\n)\s*-\s*appTarget:\s*(?!none|null|unknown|n\/a)[^\r\n]+/i.test(raw);
   return Boolean(
     primary
-    && CURRENT_APP_REFERENCE_RE.test(primary)
+    && (CURRENT_APP_REFERENCE_RE.test(primary) || hasRecoveredTarget)
     && CURRENT_APP_MUTATION_INTENT_RE.test(primary)
   );
 }
@@ -407,6 +422,43 @@ function withDefaults(contract: Omit<LumiActionContract, 'applies'>): LumiAction
   };
 }
 
+function buildCurrentAppMutationContract(): LumiActionContract {
+  return withDefaults({
+    kind: 'desktop_operation',
+    label: '\u5f53\u524d\u5e94\u7528\u5185\u7684\u53ef\u89c1\u7f16\u8f91', // i18n-allow: reviewed internal action-contract prompt copy.
+    coreAction: '\u5728\u6062\u590d\u7684\u76ee\u6807\u5e94\u7528\u524d\u53f0\u6267\u884c\u65b0\u5efa\u3001\u8f93\u5165/\u7c98\u8d34\u548c\u4fdd\u5b58\u7b49\u7528\u6237\u8981\u6c42\u7684\u53ef\u89c1\u64cd\u4f5c', // i18n-allow: reviewed internal action-contract prompt copy.
+    preparationIsNotCompletion: [
+      '\u53ea\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u5e94\u7528', // i18n-allow: reviewed internal action-contract prompt copy.
+      '\u53ea\u6309\u4e0b\u65b0\u5efa\u5feb\u6377\u952e', // i18n-allow: reviewed internal action-contract prompt copy.
+      '\u53ea\u751f\u6210\u9879\u76ee\u76ee\u5f55\u4e0b\u7684\u672c\u5730\u6587\u672c\u6587\u4ef6', // i18n-allow: reviewed internal action-contract prompt copy.
+      '\u64cd\u4f5c\u540e\u6ca1\u6709\u65b0\u7684\u7a97\u53e3/OCR/\u63a7\u4ef6\u5feb\u7167\u9a8c\u8bc1', // i18n-allow: reviewed internal action-contract prompt copy.
+    ],
+    requiredEvidence: [
+      '\u5339\u914d appTarget \u7684\u524d\u53f0\u7a97\u53e3\u8bc1\u636e', // i18n-allow: reviewed internal action-contract prompt copy.
+      '\u5339\u914d\u8bf7\u6c42\u7684 UI \u65b0\u5efa\u4e0e\u8f93\u5165/\u7c98\u8d34\u52a8\u4f5c\u56de\u6267', // i18n-allow: reviewed internal action-contract prompt copy.
+      '\u6838\u5fc3\u52a8\u4f5c\u4e4b\u540e\u7684\u7a97\u53e3/OCR/\u63a7\u4ef6\u5feb\u7167\u9a8c\u8bc1', // i18n-allow: reviewed internal action-contract prompt copy.
+      '\u82e5\u58f0\u79f0\u5df2\u4fdd\u5b58\uff0c\u8fd8\u9700\u8981\u4fdd\u5b58\u52a8\u4f5c\u548c\u4fdd\u5b58\u540e\u7684\u6587\u6863\u8bc1\u636e', // i18n-allow: reviewed internal action-contract prompt copy.
+    ],
+    preferredTools: [
+      'wps_create_document_with_text',
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_click',
+      'desktop_ui_invoke',
+      'desktop_ui_type',
+      'desktop_clipboard_write',
+      'desktop_keyboard_press',
+      'ocr_screen',
+      'desktop_capture_screen',
+      'computer_use',
+    ],
+    verificationTools: ['desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen', 'desktop_capture_screen'],
+    nextStep: '\u5148\u786e\u8ba4\u6062\u590d\u7684 appTarget \u6b63\u5728\u524d\u53f0\uff0c\u6267\u884c\u771f\u5b9e UI \u65b0\u5efa\u4e0e\u8f93\u5165\uff0c\u518d\u505a\u4e8b\u540e\u53ef\u89c1\u9a8c\u8bc1\uff1b\u9a8c\u8bc1\u5931\u8d25\u5c31\u5982\u5b9e\u62a5\u544a\u963b\u585e\u3002', // i18n-allow: reviewed internal action-contract prompt copy.
+    caution: '\u9879\u76ee\u76ee\u5f55\u4e0b\u7684 write_file \u4e0d\u80fd\u8bc1\u660e\u5185\u5bb9\u5df2\u5199\u5165\u76ee\u6807\u5e94\u7528\uff1bOCR/\u56de\u6267\u660e\u786e\u8bf4\u672a\u6253\u5f00\u3001\u672a\u65b0\u5efa\u6216\u672a\u8f93\u5165\u65f6\u5fc5\u987b\u89c6\u4e3a\u53cd\u8bc1\u3002', // i18n-allow: reviewed internal action-contract prompt copy.
+  });
+}
+
 function buildLegalDocumentContract(): LumiActionContract {
   return withDefaults({
     kind: 'legal_document',
@@ -543,22 +595,44 @@ export function buildActionContract(input: string): LumiActionContract {
   const primaryTaskText = extractPrimaryTaskText(rawInput);
   if (primaryTaskText && primaryTaskText.trim() !== rawInput.trim()) {
     const primaryContract = buildActionContract(primaryTaskText);
-    if (primaryContract.applies && primaryContract.kind !== 'none') return primaryContract;
+    if (
+      primaryContract.applies
+      && primaryContract.kind !== 'none'
+      && !requiresCurrentAppUiMutation(rawInput)
+    ) return primaryContract;
   }
 
   const text = compact(rawInput);
   if (!text) return NONE_CONTRACT;
+  const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
+  if (runtimeWorkIntent !== 'none') {
+    const cancelling = runtimeWorkIntent === 'cancel';
+    return withDefaults({
+      kind: 'task_control',
+      label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
+      coreAction: cancelling
+        ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
+        : 'Read the active Lumi work recorded in the unified runtime ledger.',
+      preparationIsNotCompletion: [
+        'listing operating-system processes',
+        'checking client health',
+        'saying work was stopped without a runtime cancellation receipt',
+      ],
+      requiredEvidence: [cancelling
+        ? 'runtime_work_cancel result with ok=true and an exact cancelled/cancelling/idle status'
+        : 'runtime_work_status result with ok=true and the exact active item count'],
+      preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
+      verificationTools: ['runtime_work_status'],
+      nextStep: cancelling
+        ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
+        : 'Read the runtime work ledger and report its current items without substituting a process list.',
+      caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
+    });
+  }
   if (isInformationOnlyQuestion(text)) return NONE_CONTRACT;
-  const negatedMessagingSend = hasNegatedMessagingSendIntent(text);
-  const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
-  const activeWindowObservation = requiresActiveWindowObservation(text);
-  const desktopFileObservation = requiresDesktopFileListingObservation(text);
-  const desktopObservationInspection = activeWindowObservation || desktopFileObservation;
-  const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
-    || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(text);
-
+  // Blank AutoCAD creation has a dedicated verified COM path. It remains a
+  // CAD document action even when continuation context also supplies the
+  // current AutoCAD appTarget.
   if (requestsBlankAutoCadDocument(text)) {
     return withDefaults({
       kind: 'cad_document',
@@ -572,6 +646,22 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: 'Do not infer paper size, coordinates, an outer boundary, or source-geometry verification for a blank-document request.',
     });
   }
+  // Recovered foreground-app continuations carry trusted appTarget context.
+  // Classify the requested UI mutation before inspecting its payload: prose
+  // typed into WPS may itself mention law, CAD, websites, or messaging, but
+  // those words describe document content rather than a new task lane.
+  if (requiresCurrentAppUiMutation(rawInput)) {
+    return buildCurrentAppMutationContract();
+  }
+  const negatedMessagingSend = hasNegatedMessagingSendIntent(text);
+  const appInventoryInspection = /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
+  const activeWindowObservation = requiresActiveWindowObservation(text);
+  const desktopFileObservation = requiresDesktopFileListingObservation(text);
+  const desktopObservationInspection = activeWindowObservation || desktopFileObservation;
+  const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
+    || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
+  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(text);
 
   if (isRemoteLegalMessageTurn(text)) {
     return buildLegalDocumentContract();
@@ -768,44 +858,22 @@ export function buildActionContract(input: string): LumiActionContract {
     return buildLegalDocumentContract();
   }
 
-  // A request to edit inside the current/recently opened application is a
-  // visible desktop operation, even when it also mentions a document. Keep
-  // this ahead of generic artifact work so a local write_file cannot stand in
-  // for typing into WPS/Word/CAD or another foreground application.
-  if (requiresCurrentAppUiMutation(rawInput)) {
+  const windowAction = requestedDesktopWindowAction(rawInput);
+  if (windowAction) {
     return withDefaults({
       kind: 'desktop_operation',
-      label: '\u5f53\u524d\u5e94\u7528\u5185\u7684\u53ef\u89c1\u7f16\u8f91', // i18n-allow: reviewed internal action-contract prompt copy.
-      coreAction: '\u5728\u6062\u590d\u7684\u76ee\u6807\u5e94\u7528\u524d\u53f0\u6267\u884c\u65b0\u5efa\u3001\u8f93\u5165/\u7c98\u8d34\u548c\u4fdd\u5b58\u7b49\u7528\u6237\u8981\u6c42\u7684\u53ef\u89c1\u64cd\u4f5c', // i18n-allow: reviewed internal action-contract prompt copy.
+      label: 'Verified external window control',
+      coreAction: `${windowAction} the intended foreground external application window.`,
       preparationIsNotCompletion: [
-        '\u53ea\u6253\u5f00\u6216\u805a\u7126\u76ee\u6807\u5e94\u7528', // i18n-allow: reviewed internal action-contract prompt copy.
-        '\u53ea\u6309\u4e0b\u65b0\u5efa\u5feb\u6377\u952e', // i18n-allow: reviewed internal action-contract prompt copy.
-        '\u53ea\u751f\u6210\u9879\u76ee\u76ee\u5f55\u4e0b\u7684\u672c\u5730\u6587\u672c\u6587\u4ef6', // i18n-allow: reviewed internal action-contract prompt copy.
-        '\u64cd\u4f5c\u540e\u6ca1\u6709\u65b0\u7684\u7a97\u53e3/OCR/\u63a7\u4ef6\u5feb\u7167\u9a8c\u8bc1', // i18n-allow: reviewed internal action-contract prompt copy.
+        'bringing Lumi itself to the foreground',
+        'only opening the application',
+        'pressing a shortcut without verifying the controlled target',
       ],
-      requiredEvidence: [
-        '\u5339\u914d appTarget \u7684\u524d\u53f0\u7a97\u53e3\u8bc1\u636e', // i18n-allow: reviewed internal action-contract prompt copy.
-        '\u5339\u914d\u8bf7\u6c42\u7684 UI \u65b0\u5efa\u4e0e\u8f93\u5165/\u7c98\u8d34\u52a8\u4f5c\u56de\u6267', // i18n-allow: reviewed internal action-contract prompt copy.
-        '\u6838\u5fc3\u52a8\u4f5c\u4e4b\u540e\u7684\u7a97\u53e3/OCR/\u63a7\u4ef6\u5feb\u7167\u9a8c\u8bc1', // i18n-allow: reviewed internal action-contract prompt copy.
-        '\u82e5\u58f0\u79f0\u5df2\u4fdd\u5b58\uff0c\u8fd8\u9700\u8981\u4fdd\u5b58\u52a8\u4f5c\u548c\u4fdd\u5b58\u540e\u7684\u6587\u6863\u8bc1\u636e', // i18n-allow: reviewed internal action-contract prompt copy.
-      ],
-      preferredTools: [
-        'wps_create_document_with_text',
-        'desktop_active_window',
-        'desktop_ui_snapshot',
-        'desktop_ui_focus',
-        'desktop_ui_click',
-        'desktop_ui_invoke',
-        'desktop_ui_type',
-        'desktop_clipboard_write',
-        'desktop_keyboard_press',
-        'ocr_screen',
-        'desktop_capture_screen',
-        'computer_use',
-      ],
-      verificationTools: ['desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen', 'desktop_capture_screen'],
-      nextStep: '\u5148\u786e\u8ba4\u6062\u590d\u7684 appTarget \u6b63\u5728\u524d\u53f0\uff0c\u6267\u884c\u771f\u5b9e UI \u65b0\u5efa\u4e0e\u8f93\u5165\uff0c\u518d\u505a\u4e8b\u540e\u53ef\u89c1\u9a8c\u8bc1\uff1b\u9a8c\u8bc1\u5931\u8d25\u5c31\u5982\u5b9e\u62a5\u544a\u963b\u585e\u3002', // i18n-allow: reviewed internal action-contract prompt copy.
-      caution: '\u9879\u76ee\u76ee\u5f55\u4e0b\u7684 write_file \u4e0d\u80fd\u8bc1\u660e\u5185\u5bb9\u5df2\u5199\u5165\u76ee\u6807\u5e94\u7528\uff1bOCR/\u56de\u6267\u660e\u786e\u8bf4\u672a\u6253\u5f00\u3001\u672a\u65b0\u5efa\u6216\u672a\u8f93\u5165\u65f6\u5fc5\u987b\u89c6\u4e3a\u53cd\u8bc1\u3002', // i18n-allow: reviewed internal action-contract prompt copy.
+      requiredEvidence: ['desktop_window_control result with ok=true, status=verified, the requested action, and targetMatched=true'],
+      preferredTools: ['desktop_active_window', 'desktop_open', 'desktop_window_control'],
+      verificationTools: ['desktop_window_control', 'desktop_active_window'],
+      nextStep: 'Recover or identify the intended application, verify/focus it, apply the requested native window state, and report the native receipt.',
+      caution: 'Never use desktop_show_lumi_window to control another application.',
     });
   }
 
@@ -1323,6 +1391,31 @@ function hasMeaningfulArguments(record: ToolExecutionRecord): boolean {
   });
 }
 
+function isDesktopAppInventoryRequest(text: string): boolean {
+  return /\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program)\b|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f)/iu.test(text);
+}
+
+export function isRunningSoftwareInspectionRequest(text: string): boolean {
+  return /(?:\u540e\u53f0|\u6b63\u5728\u8fd0\u884c|\u5f00\u7740|\u8fd0\u884c\u4e2d).{0,24}(?:\u8f6f\u4ef6|\u5e94\u7528|\u7a0b\u5e8f|\u8fdb\u7a0b)|(?:\u8f6f\u4ef6|\u5e94\u7528|\u7a0b\u5e8f|\u8fdb\u7a0b).{0,24}(?:\u6b63\u5728\u8fd0\u884c|\u5f00\u7740|\u6709\u591a\u5c11|\u51e0\u4e2a)|\b(?:running|open|background)\b.{0,24}\b(?:apps?|applications?|software|processes?)\b/iu.test(text);
+}
+
+function hasVerifiedGenericDesktopMutation(records: ToolExecutionRecord[]): boolean {
+  const mutationPattern = /^(?:desktop_ui_(?:click|invoke|type)|desktop_(?:mouse_.+|keyboard_.+)|keyboard_press|mouse_(?:move|click|drag)|keyboard_type|computer_use|client_action)$/i;
+  const observationPattern = /^(?:desktop_active_window|get_active_window_info|desktop_ui_snapshot|desktop_capture_screen|capture_screen|ocr_screen)$/i;
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!mutationPattern.test(record.name) || !hasMeaningfulArguments(record)) continue;
+    const payload = parseRecordJson(record);
+    const embeddedVerification = record.evidence?.assurance === 'verified'
+      || payload?.ok === true && /^(?:verified|completed|success|succeeded|ok)$/i.test(String(payload?.status || payload?.verification?.status || ''))
+      || payload?.verification?.status === 'pass'
+      || Boolean(payload?.selectedAfter);
+    if (embeddedVerification) return true;
+    if (records.slice(index + 1).some(candidate => observationPattern.test(candidate.name))) return true;
+  }
+  return false;
+}
+
 function isPreparationOnlyTool(name: string): boolean {
   return /^(?:work_product_plan|work_takeover_task_(?:create|from_wechat|from_clipboard|list|get|update|continue|orchestrate|execute_step|advance|autorun|export_packet)|work_takeover_capability_reuse_probe|mcp_cad-drafting_cad_renovation_folder_workflow|desktop_(?:open|list_apps|list_files|active_window|capture_screen|ui_snapshot)|browser_open_task|write_clipboard)$/i.test(name);
 }
@@ -1549,6 +1642,21 @@ export function hasCoreActionEvidence(
   const successful = expandSuccessfulRecords(records);
   if (successful.length === 0) return false;
   const toolNames = successful.map(record => record.name);
+  if (contract.kind === 'task_control') {
+    const intent = classifyRuntimeWorkIntent(taskText);
+    const expectedTool = intent === 'cancel' ? 'runtime_work_cancel' : 'runtime_work_status';
+    return successful.some(record => {
+      if (record.name !== expectedTool) return false;
+      const payload = parseRecordJson(record);
+      if (payload?.ok !== true) return false;
+      if (expectedTool === 'runtime_work_cancel') {
+        return ['idle', 'cancelled', 'cancelling'].includes(String(payload.status || ''))
+          && Number.isFinite(Number(payload.matchedCount));
+      }
+      return ['idle', 'active'].includes(String(payload.status || ''))
+        && Number.isFinite(Number(payload.activeCount));
+    });
+  }
   if (contract.kind === 'messaging_read') {
     return successful.some(record =>
       record.name === 'wechat_read_recent_chat' && /"read"\s*:\s*true|read:\s*true/i.test(String(record.result || ''))
@@ -1626,6 +1734,17 @@ export function hasCoreActionEvidence(
         return false;
       });
     }
+    const windowAction = requestedDesktopWindowAction(taskText);
+    if (windowAction) {
+      return successful.some(record => {
+        if (record.name !== 'desktop_window_control') return false;
+        const payload = parseRecordJson(record);
+        return payload?.ok === true
+          && payload?.status === 'verified'
+          && payload?.action === windowAction
+          && payload?.targetMatched === true;
+      });
+    }
     const needsActiveWindow = requiresActiveWindowObservation(taskText);
     const needsDesktopFiles = requiresDesktopFileListingObservation(taskText);
     if (needsActiveWindow || needsDesktopFiles) {
@@ -1641,6 +1760,12 @@ export function hasCoreActionEvidence(
     if (requiresCurrentAppUiMutation(taskText)) {
       return hasCurrentAppUiMutationEvidence(records, taskText);
     }
+    if (isDesktopAppInventoryRequest(taskText)) {
+      return successful.some(record => record.name === 'desktop_list_apps');
+    }
+    if (isRunningSoftwareInspectionRequest(taskText)) {
+      return successful.some(record => /^(?:desktop_running_processes|get_running_processes)$/i.test(record.name));
+    }
     if (isSimpleDesktopOpenRequest(taskText)) {
       const target = extractSimpleDesktopOpenTarget(taskText).toLowerCase();
       const targetTerms = target.includes('autocad') || /\bacad(?:\.exe)?\b/i.test(target)
@@ -1654,7 +1779,7 @@ export function hasCoreActionEvidence(
         return targetTerms.some(term => term.length >= 2 && evidence.includes(term));
       });
     }
-    return toolNames.some(name => /desktop_|computer_use|client_action/i.test(name));
+    return hasVerifiedGenericDesktopMutation(successful);
   }
   return successful.length > 0;
 }
@@ -1680,10 +1805,15 @@ export function formatActionContractPrompt(contract: LumiActionContract): string
 
 export function summarizeActionContractBlocker(contract: LumiActionContract, failure = ''): string {
   if (!contract.applies) return failure || '';
-  return [
-    `\u4efb\u52a1\u7c7b\u578b\uff1a${contract.label}\u3002`,
-    failure ? `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a${failure}\u3002` : '\u539f\u56e0\uff1a\u8fd8\u6ca1\u6709\u62ff\u5230\u6838\u5fc3\u52a8\u4f5c\u7684\u9a8c\u8bc1\u8bc1\u636e\u3002',
-    contract.requiredEvidence.length ? `\u8fd8\u7f3a\u7684\u8bc1\u636e\uff1a${contract.requiredEvidence.join('\uff1b')}\u3002` : '',
-    contract.nextStep ? `\u4e0b\u4e00\u6b65\uff1a${contract.nextStep}` : '',
-  ].filter(Boolean).join('\n');
+  const safeFailure = compact(failure);
+  if (contract.kind === 'task_control') {
+    return CN_ACTION_CONTRACT_BLOCKERS.taskControl(safeFailure);
+  }
+  if (contract.kind === 'messaging_read') {
+    return CN_ACTION_CONTRACT_BLOCKERS.messagingRead(safeFailure);
+  }
+  if (contract.kind === 'cad_drafting') {
+    return CN_ACTION_CONTRACT_BLOCKERS.cadDrafting(safeFailure);
+  }
+  return CN_ACTION_CONTRACT_BLOCKERS.generic(safeFailure);
 }

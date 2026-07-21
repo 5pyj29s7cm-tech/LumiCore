@@ -43,6 +43,7 @@ const BASELINE_TOOLS = [
 const TOOL_GROUPS: Record<string, string[]> = {
   currentAppControl: [
     'desktop_active_window',
+    'desktop_window_control',
     'desktop_ui_snapshot',
     'desktop_ui_focus',
     'desktop_ui_click',
@@ -250,6 +251,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'desktop_list_apps',
     'desktop_open',
     'desktop_active_window',
+    'desktop_window_control',
     'desktop_capture_screen',
     'ocr_screen',
     'external_control_candidates',
@@ -977,6 +979,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
       priorities.push(
         'legal_message_intake_to_case',
         'legal_process_notice_link',
+        'legal_download_and_extract_document',
         'legal_case_workflow_status',
         'legal_case_workspace',
         'legal_import_materials_to_kb',
@@ -1018,6 +1021,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
       'legal_case_workflow_status',
       'legal_message_intake_to_case',
       'legal_process_notice_link',
+      'legal_download_and_extract_document',
       'legal_import_materials_to_kb',
       'legal_meeting_minutes_to_case',
       'legal_case_reasoning_matrix',
@@ -1158,7 +1162,15 @@ export function routeToolsForTurn(
     addIfAvailable(selected, available, 'desktop_list_apps');
     addIfAvailable(selected, available, 'desktop_open');
     addIfAvailable(selected, available, 'desktop_active_window');
+    for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
     reasons.push('explicit open request requires the same launch tool used by the deterministic fast path');
+  }
+
+  if (actionContract.kind === 'task_control') {
+    for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
+    addIfAvailable(selected, available, 'runtime_work_status');
+    categories.push('task_control');
+    reasons.push('runtime work status and cancellation use the unified task ledger');
   }
 
   if (categories.length === 0 && text) {

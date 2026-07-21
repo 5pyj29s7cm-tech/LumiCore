@@ -31,7 +31,123 @@ async function keyPress(args: Record<string, any>, context?: any): Promise<strin
   return context.desktopRelay('desktop_keyboard_press', { key: args.key });
 }
 
+async function relayDesktopInput(
+  toolName: string,
+  args: Record<string, any>,
+  context?: any,
+): Promise<string> {
+  if (!context?.desktopRelay) throw new Error('Desktop input requires the Tauri desktop app');
+  return context.desktopRelay(toolName, args);
+}
+
 export function registerInputTools(registry: ToolRegistry): void {
+  // These names are the canonical foreground-workflow operations used by the
+  // router, action contracts, executor and Tauri relay. Register them as real
+  // tools so the model-visible capability set and the executable policy are
+  // derived from the same source of truth.
+  registry.register({
+    name: 'desktop_mouse_click_at',
+    description: 'Click a specific absolute screen coordinate in the visible desktop app. Inspect the target first and use this only when an accessible UI control is unavailable.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Absolute horizontal screen coordinate.' },
+        y: { type: 'number', description: 'Absolute vertical screen coordinate.' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button. Defaults to left.' },
+      },
+      required: ['x', 'y'],
+    },
+    handler: (args, context) => relayDesktopInput('desktop_mouse_click_at', {
+      x: args.x,
+      y: args.y,
+      button: args.button || 'left',
+    }, context),
+    permission: 'user',
+    securityLevel: 'safe',
+    evidence: {
+      capability: 'desktop.pointer.click',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['A click receipt proves input was issued, not that the intended UI outcome occurred.'],
+    },
+  });
+
+  registry.register({
+    name: 'desktop_keyboard_press',
+    description: 'Press a key or keyboard shortcut in the visible foreground desktop app.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Key name or combination such as enter, escape, ctrl+v, or meta+n.' },
+      },
+      required: ['key'],
+    },
+    handler: (args, context) => relayDesktopInput('desktop_keyboard_press', { key: args.key }, context),
+    permission: 'user',
+    securityLevel: 'safe',
+    evidence: {
+      capability: 'desktop.keyboard.press',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['A key receipt proves input was issued, not that the intended UI outcome occurred.'],
+    },
+  });
+
+  for (const definition of [
+    {
+      name: 'desktop_cursor_glow_show',
+      description: 'Show Lumi\'s visible desktop cursor indicator before a foreground pointer action.',
+      properties: {
+        timeoutMs: { type: 'number', description: 'Optional automatic hide timeout in milliseconds.' },
+        source: { type: 'string', description: 'Optional workflow source label.' },
+      },
+    },
+    {
+      name: 'desktop_cursor_glow_update',
+      description: 'Move Lumi\'s visible desktop cursor indicator to an absolute screen coordinate.',
+      properties: {
+        x: { type: 'number', description: 'Absolute horizontal screen coordinate.' },
+        y: { type: 'number', description: 'Absolute vertical screen coordinate.' },
+      },
+      required: ['x', 'y'],
+    },
+    {
+      name: 'desktop_cursor_glow_click',
+      description: 'Animate Lumi\'s visible desktop cursor indicator at a click coordinate.',
+      properties: {
+        x: { type: 'number', description: 'Absolute horizontal screen coordinate.' },
+        y: { type: 'number', description: 'Absolute vertical screen coordinate.' },
+      },
+      required: ['x', 'y'],
+    },
+    {
+      name: 'desktop_cursor_glow_hide',
+      description: 'Hide Lumi\'s visible desktop cursor indicator after foreground work finishes.',
+      properties: {
+        source: { type: 'string', description: 'Optional workflow source label.' },
+      },
+    },
+  ] as const) {
+    registry.register({
+      name: definition.name,
+      description: definition.description,
+      parameters: {
+        type: 'object',
+        properties: definition.properties,
+        required: 'required' in definition ? [...definition.required] : [],
+      },
+      handler: (args, context) => relayDesktopInput(definition.name, args, context),
+      permission: 'user',
+      securityLevel: 'safe',
+      evidence: {
+        capability: 'desktop.pointer.visibility',
+        operation: 'mutate',
+        assurance: 'observed',
+        limitations: ['Cursor visualization is execution feedback, not proof of the target application result.'],
+      },
+    });
+  }
+
   registry.register({
     name: 'mouse_move',
     description:

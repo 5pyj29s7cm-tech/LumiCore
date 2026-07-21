@@ -57,7 +57,7 @@ import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
-import { buildRecentActionContinuationBridge, resolveRecentActionOpenTarget } from "../cognition/action_continuation";
+import { buildRecentActionContinuationBridge, getRecoveredApplicationContinuationTarget, resolveRecentActionOpenTarget } from "../cognition/action_continuation";
 import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
@@ -1301,6 +1301,7 @@ export function registerChatHandler(
         'desktop_show_lumi_window',
         'desktop_run_command',
         'desktop_active_window',
+        'desktop_window_control',
         'desktop_running_processes',
         'desktop_capture_screen',
         'desktop_clipboard_read',
@@ -2069,6 +2070,7 @@ export function registerChatHandler(
           domain: resolvedDomain,
           orgId: resolvedOrgId,
           surface: turnSurface,
+          currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
           },
         );
         if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {

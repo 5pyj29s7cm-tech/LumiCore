@@ -16,7 +16,7 @@ import {
 import {
   buildCurrentAppUiStateMachinePrompt,
   CURRENT_APP_MAX_ITERATIONS,
-  isRecoveredWpsCreateAndTypeTask,
+  isRecoveredWpsCreateTask,
   WPS_CURRENT_APP_MAX_ITERATIONS,
 } from './current_app_execution';
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
@@ -41,6 +41,26 @@ export interface LumiExecutionDecision {
   toolPolicy: ToolPolicy;
   maxIterations: number;
   promptOverlay: string;
+}
+
+function alignToolRouteWithPolicy(route: ToolRoute, policy: ToolPolicy): ToolRoute {
+  const allowed = new Set(policy.allowedTools || []);
+  const wildcard = allowed.has('*');
+  const forbidden = new Set(policy.forbiddenTools || []);
+  const toolNames = route.toolNames.filter(name => (
+    (wildcard || allowed.has(name))
+    && !forbidden.has('*')
+    && !forbidden.has(name)
+  ));
+  if (toolNames.length === route.toolNames.length) return route;
+  return {
+    ...route,
+    toolNames,
+    reasons: unique([
+      ...route.reasons,
+      'the displayed route was aligned with the executor policy; unavailable tools were removed',
+    ]),
+  };
 }
 
 const NO_TOOLS_POLICY: ToolPolicy = {
@@ -147,7 +167,7 @@ function enhanceToolRouteForFlow(
   const categories = [...route.categories];
   const reasons = [...route.reasons];
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
-  const recoveredWpsCreateAndType = isRecoveredWpsCreateAndTypeTask(flow.routeText);
+  const recoveredWpsCreateAndType = isRecoveredWpsCreateTask(flow.routeText);
   const discoveredEvidenceTools = registry?.findRelevant(flow.routeText, {
     limit: 8,
     evidenceOperations: ['observe', 'test'],
@@ -299,6 +319,9 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   const uncappedToolPolicy = toolRoute
     ? mergeToolPolicyWithRoute(baseToolPolicy, toolRoute)
     : baseToolPolicy;
+  const effectiveToolRoute = toolRoute
+    ? alignToolRouteWithPolicy(toolRoute, uncappedToolPolicy)
+    : null;
   const requestedMaxIterations = uncappedToolPolicy.maxIterations
     ?? input.personalityToolPolicy?.maxIterations
     ?? 5;
@@ -306,7 +329,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     ? 12
     : Number.MAX_SAFE_INTEGER;
   const taskIterationCap = recoveredCurrentAppEdit
-    ? isRecoveredWpsCreateAndTypeTask(input.flow.routeText || input.text)
+    ? isRecoveredWpsCreateTask(input.flow.routeText || input.text)
       ? WPS_CURRENT_APP_MAX_ITERATIONS
       : CURRENT_APP_MAX_ITERATIONS
     : Number.MAX_SAFE_INTEGER;
@@ -337,17 +360,17 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         )
       : '',
     input.isSanctuary ? 'This agent is in sanctuary territory; tools are disabled.' : '',
-    toolRoute ? formatToolRouteForPrompt(toolRoute) : '',
+    effectiveToolRoute ? formatToolRouteForPrompt(effectiveToolRoute) : '',
     buildUnifiedLegalEntryPrompt({
       text: input.flow.routeText || input.text,
       domain: input.flow.domain,
       orgId: input.flow.orgId,
       channel: input.flow.channel,
       source: input.flow.source,
-      routeCategories: toolRoute?.categories,
-      toolNames: toolRoute?.toolNames,
+      routeCategories: effectiveToolRoute?.categories,
+      toolNames: effectiveToolRoute?.toolNames,
     }),
-    !toolRoute && allowToolUse && !input.flow.clientActionOnlyTurn && !input.flow.selfRepairTurn
+    !effectiveToolRoute && allowToolUse && !input.flow.clientActionOnlyTurn && !input.flow.selfRepairTurn
       ? 'No narrow tool route was selected. Use the base policy conservatively and ask one clarification if the work surface is unclear.'
       : '',
   ].filter(Boolean).join('\n');
@@ -357,7 +380,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     selfRepairToolPolicy,
     clientActionToolPolicy,
     baseToolPolicy,
-    toolRoute,
+    toolRoute: effectiveToolRoute,
     toolPolicy,
     maxIterations,
     promptOverlay: promptParts,

@@ -138,6 +138,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopListFiles,
     permission: 'user',
     securityLevel: 'safe',
+    evidence: { capability: 'desktop_files', operation: 'observe', assurance: 'observed', subjectArgument: 'path' },
   });
 
   registry.register({
@@ -155,6 +156,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopOpen,
     permission: 'user',
     securityLevel: 'safe',
+    evidence: { capability: 'desktop_target', operation: 'mutate', assurance: 'observed', subjectArgument: 'target' },
   });
 
   registry.register({
@@ -172,6 +174,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopListApps,
     permission: 'user',
     securityLevel: 'safe',
+    evidence: { capability: 'desktop_apps', operation: 'observe', assurance: 'observed', subjectArgument: 'query' },
   });
 
   registry.register({

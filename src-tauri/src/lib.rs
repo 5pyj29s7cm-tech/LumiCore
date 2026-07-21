@@ -1324,6 +1324,80 @@ fn normalize_app_query(value: &str) -> String {
     compact
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn unicode_edit_distance(left: &str, right: &str) -> usize {
+    let left_chars: Vec<char> = left.chars().collect();
+    let right_chars: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
+    for (left_index, left_char) in left_chars.iter().enumerate() {
+        let mut current = vec![left_index + 1; right_chars.len() + 1];
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            current[right_index + 1] = std::cmp::min(
+                std::cmp::min(current[right_index] + 1, previous[right_index + 1] + 1),
+                previous[right_index] + usize::from(left_char != right_char),
+            );
+        }
+        previous = current;
+    }
+    previous[right_chars.len()]
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn desktop_item_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs_next::home_dir() {
+        roots.push(home.join("Desktop"));
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(public_dir) = std::env::var("PUBLIC") {
+        roots.push(PathBuf::from(public_dir).join("Desktop"));
+    }
+    roots
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn resolve_desktop_item_fuzzy(target: &str) -> Option<PathBuf> {
+    let mut query = normalize_app_query(target);
+    for suffix in [
+        "\u{6587}\u{4ef6}\u{5939}",
+        "\u{76ee}\u{5f55}",
+        "folder",
+        "directory",
+    ] {
+        let suffix = compact_app_text(suffix);
+        if query.ends_with(&suffix) && query.len() > suffix.len() {
+            query.truncate(query.len() - suffix.len());
+            break;
+        }
+    }
+    if query.is_empty() { return None; }
+
+    let mut ranked: Vec<(usize, PathBuf)> = Vec::new();
+    for root in desktop_item_roots() {
+        let Ok(entries) = std::fs::read_dir(root) else { continue; };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let label = path.file_stem()
+                .or_else(|| path.file_name())
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let candidate = compact_app_text(&label);
+            if candidate.is_empty() { continue; }
+            let distance = if candidate.contains(&query) || query.contains(&candidate) {
+                0
+            } else {
+                unicode_edit_distance(&query, &candidate)
+            };
+            let threshold = std::cmp::max(1, query.chars().count() / 3);
+            if distance <= threshold { ranked.push((distance, path)); }
+        }
+    }
+    ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let best = ranked.first()?;
+    if ranked.get(1).map(|next| next.0 == best.0).unwrap_or(false) { return None; }
+    Some(best.1.clone())
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod app_query_tests {
     use super::normalize_app_query;
@@ -2248,7 +2322,7 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
 }
 
 #[tauri::command]
-fn open_item(target: String, application: Option<String>, window: tauri::WebviewWindow) -> CommandResult {
+fn open_item(mut target: String, application: Option<String>, window: tauri::WebviewWindow) -> CommandResult {
     // Open file, folder, app, or URL with the OS default handler
     let _ = window.set_always_on_top(false);
 
@@ -2294,6 +2368,13 @@ fn open_item(target: String, application: Option<String>, window: tauri::Webview
                     output: format!("Opened registered app: {}", target),
                 };
             }
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if !Path::new(&target).exists() {
+        if let Some(resolved) = resolve_desktop_item_fuzzy(&target) {
+            target = resolved.to_string_lossy().to_string();
         }
     }
 
@@ -2956,7 +3037,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveWindowInfo {
     pub window_id: String,
     pub title: String,
@@ -3117,6 +3198,138 @@ end tell
         }
     }
     ActiveWindowInfo { window_id, title, process_name, pid, x, y, width, height }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WindowControlResult {
+    pub ok: bool,
+    pub status: String,
+    pub action: String,
+    pub before: ActiveWindowInfo,
+    pub after: ActiveWindowInfo,
+    pub error: String,
+}
+
+#[tauri::command]
+fn control_active_window(action: String) -> WindowControlResult {
+    let normalized = action.trim().to_lowercase();
+    let before = get_active_window_info();
+    if !matches!(normalized.as_str(), "maximize" | "minimize" | "restore") {
+        return WindowControlResult {
+            ok: false,
+            status: "invalid_action".to_string(),
+            action: normalized,
+            before: before.clone(),
+            after: before,
+            error: "Action must be maximize, minimize, or restore".to_string(),
+        };
+    }
+    if before.window_id.is_empty() && before.pid == 0 {
+        return WindowControlResult {
+            ok: false,
+            status: "no_active_window".to_string(),
+            action: normalized,
+            before: before.clone(),
+            after: before,
+            error: "No active desktop window was found".to_string(),
+        };
+    }
+
+    let mut command_ok = false;
+    let mut command_error = String::new();
+
+    #[cfg(target_os = "windows")]
+    unsafe {
+        extern "system" {
+            fn GetForegroundWindow() -> isize;
+            fn ShowWindow(hwnd: isize, nCmdShow: i32) -> i32;
+            fn SetForegroundWindow(hwnd: isize) -> i32;
+        }
+        const SW_MINIMIZE: i32 = 6;
+        const SW_MAXIMIZE: i32 = 3;
+        const SW_RESTORE: i32 = 9;
+        let hwnd = GetForegroundWindow();
+        if hwnd != 0 {
+            let mode = match normalized.as_str() {
+                "maximize" => SW_MAXIMIZE,
+                "minimize" => SW_MINIMIZE,
+                _ => SW_RESTORE,
+            };
+            ShowWindow(hwnd, mode);
+            if normalized != "minimize" { SetForegroundWindow(hwnd); }
+            command_ok = true;
+        } else {
+            command_error = "The foreground window disappeared before control".to_string();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = match normalized.as_str() {
+            "minimize" => r#"tell application "System Events"
+set frontProcess to first application process whose frontmost is true
+if (count of windows of frontProcess) is 0 then error "No front window"
+set value of attribute "AXMinimized" of front window of frontProcess to true
+end tell"#,
+            "maximize" => r#"tell application "System Events"
+set frontProcess to first application process whose frontmost is true
+if (count of windows of frontProcess) is 0 then error "No front window"
+set frontWindow to front window of frontProcess
+try
+perform action "AXZoomWindow" of frontWindow
+on error
+click button 2 of frontWindow
+end try
+end tell"#,
+            _ => r#"tell application "System Events"
+set frontProcess to first application process whose frontmost is true
+if (count of windows of frontProcess) is 0 then error "No front window"
+set frontWindow to front window of frontProcess
+try
+set value of attribute "AXMinimized" of frontWindow to false
+end try
+try
+perform action "AXZoomWindow" of frontWindow
+end try
+end tell"#,
+        };
+        match Command::new("osascript").args(["-e", script]).output() {
+            Ok(output) if output.status.success() => command_ok = true,
+            Ok(output) => command_error = String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            Err(error) => command_error = error.to_string(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let result = if normalized == "minimize" {
+            Command::new("sh").args(["-c", "xdotool getactivewindow windowminimize"]).output()
+        } else {
+            let mode = if normalized == "maximize" { "add" } else { "remove" };
+            Command::new("wmctrl")
+                .args(["-r", ":ACTIVE:", "-b", &format!("{},maximized_vert,maximized_horz", mode)])
+                .output()
+        };
+        match result {
+            Ok(output) if output.status.success() => command_ok = true,
+            Ok(output) => command_error = String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            Err(error) => command_error = error.to_string(),
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(180));
+    let after = get_active_window_info();
+    let same_window = normalized == "minimize"
+        || before.window_id == after.window_id
+        || (before.pid != 0 && before.pid == after.pid);
+    WindowControlResult {
+        ok: command_ok && same_window,
+        status: if command_ok && same_window { "verified" } else { "failed" }.to_string(),
+        action: normalized,
+        before,
+        after,
+        error: command_error,
+    }
 }
 
 #[tauri::command]
@@ -3901,6 +4114,7 @@ pub fn run() {
             set_autostart_enabled,
             get_runtime_resilience_status,
             get_active_window_info,
+            control_active_window,
             get_running_processes,
             capture_screen,
             get_clipboard_text,

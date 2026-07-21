@@ -7,6 +7,7 @@ import {
   hasCurrentAppUiMutationEvidence,
   requiresCurrentAppUiMutation,
 } from '../cognition/action_contract';
+import { formatCnToolFailureDetail, isInternalExecutionDetail } from '../regions/packs/cn/voice_fast_path_messages';
 
 export interface CompletionGuardResult {
   text: string;
@@ -23,7 +24,7 @@ function buildActionPromiseGuardedResponse(
   const isZh = /[\u3400-\u9fff]/.test(task);
   const clientSurfaceTask = isClientSurfaceTask(task);
   const desktopActionTask = isDesktopActionTask(task);
-  const lastFailure = summarizeFailedToolCalls(failed);
+  const lastFailure = summarizeFailedToolCalls(failed, isZh);
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(toolFailureDetail(call))
   );
@@ -375,11 +376,14 @@ function toolFailureDetail(call: ToolExecutionRecord): string {
   return '';
 }
 
-function summarizeFailedToolCalls(failed: ToolExecutionRecord[]): string {
+function summarizeFailedToolCalls(failed: ToolExecutionRecord[], chinese = false): string {
   return failed.slice(-2).map(call => {
     const name = String(call.name || 'tool').trim() || 'tool';
     const detail = toolFailureDetail(call);
-    return detail ? `${name}: ${detail}` : name;
+    const safeDetail = chinese && detail && isInternalExecutionDetail(detail)
+      ? formatCnToolFailureDetail(detail)
+      : detail;
+    return safeDetail ? `${name}: ${safeDetail}` : name;
   }).join('; ');
 }
 
@@ -397,7 +401,7 @@ function buildExecutionStatusGuardedResponse(
   failed: ToolExecutionRecord[],
 ): string {
   const isZh = /[\u3400-\u9fff]/.test(task);
-  const lastFailure = summarizeFailedToolCalls(failed);
+  const lastFailure = summarizeFailedToolCalls(failed, isZh);
   if (!isZh) {
     return [
       `I cannot honestly say I am executing this yet: ${reason}`,
@@ -579,7 +583,7 @@ function buildGuardedResponse(
   const clientSurfaceTask = isClientSurfaceTask(task);
   const desktopActionTask = isDesktopActionTask(task);
   const lastSuccess = successful.slice(-3).map(call => call.name).join(', ');
-  const lastFailure = summarizeFailedToolCalls(failed);
+  const lastFailure = summarizeFailedToolCalls(failed, isZh);
   const confirmationBlocked = failed.some(call =>
     /requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(toolFailureDetail(call))
   );

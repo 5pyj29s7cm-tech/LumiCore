@@ -167,7 +167,6 @@ export async function createVisibleWpsDocumentWithText(
     throw new Error('WPS COM automation is available only on Windows.');
   }
   const requestedText = String(text || '');
-  if (!requestedText.trim()) throw new Error('text is required.');
   if (requestedText.length > 100_000) {
     throw new Error('WPS visible document input is limited to 100,000 characters per call.');
   }

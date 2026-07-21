@@ -835,8 +835,8 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('\u6d88\u606f\u8bfb\u53d6');
-    expect(result.text).toContain('wechat_read_recent_chat');
+    expect(result.text).toContain('\u5f53\u524d\u804a\u5929');
+    expect(result.text).not.toContain('wechat_read_recent_chat');
     expect(result.text).toContain('\u5df2\u8bfb\u5230\u804a\u5929\u5185\u5bb9');
     expect(result.text).not.toContain('\u5fae\u4fe1\u53d1\u9001\u8bf4\u6210\u5df2\u53d1\u9001');
   });
@@ -957,7 +957,8 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe('Missing visible AutoCAD execution evidence.');
     expect(result.text).toContain('\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210');
-    expect(result.text).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(result.text).toContain('AutoCAD \u524d\u53f0\u7ed8\u56fe');
+    expect(result.text).not.toContain('mcp_cad-drafting_autocad_playback_file');
   });
 
   it('calls geometry extraction successful only for a verified server receipt', async () => {

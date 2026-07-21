@@ -55,6 +55,12 @@ const ENGLISH_REFERENTIAL_ACTION_RE =
 const CURRENT_APP_EDIT_RE =
   /(?:在|到|往)?\s*(?:这里面|这里|里面|这个软件里|这个应用里|当前软件里|当前应用里|当前窗口里|刚打开的里面|刚才打开的里面|刚打开的软件里|刚才打开的软件里).{0,96}(?:新建|创建|写|写入|输入|填写|编辑|粘贴|保存)|\b(?:create|write|type|paste|edit|save)\b.{0,80}\b(?:in|inside)\b.{0,32}\b(?:here|this|that|the current|the opened)\b.{0,16}\b(?:app|application|document|window)?\b|\b(?:in|inside)\b.{0,32}\b(?:this|that|the current|the opened)\b.{0,16}\b(?:app|application|document|window)\b.{0,80}\b(?:create|write|type|paste|edit|save)\b/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
+const CURRENT_APP_WINDOW_ACTION_RE =
+  /(?:\u6700\u5927\u5316|\u6700\u5c0f\u5316|\u8fd8\u539f\u7a97\u53e3|\u6062\u590d\u7a97\u53e3|\u6536\u5230\u4efb\u52a1\u680f|\u94fa\u6ee1\u5c4f\u5e55)|\b(?:maximi[sz]e|minimi[sz]e|restore)\b.{0,12}\b(?:it|that|this|window|app|application)?\b/iu;
+
+const CURRENT_APP_DOCUMENT_CREATE_RE =
+  /^(?:\u65b0\u5efa|\u521b\u5efa)(?:\u4e00\u4e2a|\u4e00\u4efd)?(?:\u7a7a\u767d)?(?:Word|WPS)?(?:\u6587\u6863|\u9875\u9762|\u8868\u683c|\u6f14\u793a\u6587\u7a3f)|^(?:new|create)(?:\s+a)?\s+(?:blank\s+)?(?:document|page|workbook|presentation)$/iu;
+
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const CONCRETE_LOCAL_SOURCE_RE =
   /(?:[A-Za-z]:[\\/]|(?:桌面上?|本地|下载|文档|图片|图纸|文件夹).{0,24}(?:叫|名为|名称是|里的|中的).{1,36}|(?:named|called)\s+.{1,48}\s+(?:file|image|drawing|folder))/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -274,7 +280,10 @@ function recoveredStructuredState(text: string): string {
 }
 
 export function isCurrentAppEditingRequest(text: string): boolean {
-  return CURRENT_APP_EDIT_RE.test(currentTurnText(text));
+  const current = currentTurnText(text);
+  return CURRENT_APP_EDIT_RE.test(current)
+    || CURRENT_APP_WINDOW_ACTION_RE.test(current)
+    || CURRENT_APP_DOCUMENT_CREATE_RE.test(current);
 }
 
 export function getRecoveredApplicationContinuationTarget(text: string): string {

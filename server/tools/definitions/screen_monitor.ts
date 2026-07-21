@@ -11,9 +11,17 @@ async function getRunningProcesses(args: Record<string, any>, context?: any): Pr
   if (!context?.desktopRelay) {
     throw new Error('Screen monitoring requires the Tauri desktop app');
   }
-  return context.desktopRelay('desktop_running_processes', {
+  const raw = await context.desktopRelay('desktop_running_processes', {
     top: args.top || 30,
   });
+  try {
+    const parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed)) return raw;
+    const top = Math.max(1, Math.min(50, Number(args.top) || 30));
+    return JSON.stringify(parsed.slice(0, top));
+  } catch {
+    return raw;
+  }
 }
 
 async function captureScreen(args: Record<string, any>, context?: any): Promise<string> {
@@ -23,6 +31,54 @@ async function captureScreen(args: Record<string, any>, context?: any): Promise<
   return context.desktopRelay('desktop_capture_screen', {
     quality: args.quality || 60,
   });
+}
+
+function parseDesktopJson(raw: string): Record<string, any> {
+  try {
+    const parsed = JSON.parse(String(raw || '{}'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function windowMatchesTarget(window: Record<string, any>, target: string): boolean {
+  const expected = String(target || '').normalize('NFKC').toLowerCase().replace(/\.exe$/i, '').replace(/[^\p{L}\p{N}]+/gu, '');
+  if (!expected) return true;
+  const actual = `${window.title || ''} ${window.process_name || window.processName || ''}`
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\.exe\b/gi, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+  return Boolean(actual && (actual.includes(expected) || expected.includes(actual)));
+}
+
+async function controlActiveWindow(args: Record<string, any>, context?: any): Promise<string> {
+  if (!context?.desktopRelay) throw new Error('Window control requires the Tauri desktop app');
+  const action = String(args.action || '').trim().toLowerCase();
+  const expectedTarget = String(args.expectedTarget || '').trim();
+  let active = parseDesktopJson(await context.desktopRelay('desktop_active_window', {}));
+  if (expectedTarget && !windowMatchesTarget(active, expectedTarget)) {
+    await context.desktopRelay('desktop_open', { target: expectedTarget });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    active = parseDesktopJson(await context.desktopRelay('desktop_active_window', {}));
+  }
+  if (expectedTarget && !windowMatchesTarget(active, expectedTarget)) {
+    return JSON.stringify({
+      ok: false,
+      status: 'target_mismatch',
+      action,
+      expectedTarget,
+      targetMatched: false,
+      activeWindow: active,
+    }, null, 2);
+  }
+  const controlled = parseDesktopJson(await context.desktopRelay('desktop_window_control', { action }));
+  return JSON.stringify({
+    ...controlled,
+    expectedTarget,
+    targetMatched: expectedTarget ? windowMatchesTarget(controlled.after || active, expectedTarget) : true,
+  }, null, 2);
 }
 
 export function registerScreenMonitorTools(registry: ToolRegistry): void {
@@ -52,6 +108,35 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
     handler: getActiveWindowInfo,
     permission: 'user',
     securityLevel: 'safe',
+    evidence: {
+      capability: 'desktop_window',
+      operation: 'observe',
+      assurance: 'observed',
+    },
+  });
+
+  registry.register({
+    name: 'desktop_window_control',
+    description: 'Maximize, minimize, or restore the real foreground external application window. Pass expectedTarget for referential requests so Lumi verifies or focuses the intended application before acting and never controls its own window by accident.',
+    // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
+    routingHints: ['\u6700\u5927\u5316\u7a97\u53e3', '\u6700\u5c0f\u5316\u7a97\u53e3', '\u8fd8\u539f\u7a97\u53e3', 'maximize app', 'minimize window', 'restore window'],
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['maximize', 'minimize', 'restore'], description: 'Requested window state change.' },
+        expectedTarget: { type: 'string', description: 'Optional application target recovered from a verified desktop_open receipt or named by the user.' },
+      },
+      required: ['action'],
+    },
+    handler: controlActiveWindow,
+    permission: 'user',
+    securityLevel: 'safe',
+    evidence: {
+      capability: 'desktop_window',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'expectedTarget',
+    },
   });
 
   registry.register({
@@ -84,6 +169,11 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
     handler: getRunningProcesses,
     permission: 'user',
     securityLevel: 'safe',
+    evidence: {
+      capability: 'desktop_processes',
+      operation: 'observe',
+      assurance: 'measured',
+    },
   });
 
   registry.register({

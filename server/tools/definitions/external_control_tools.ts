@@ -29,13 +29,13 @@ const UI_TARGET_PROPERTIES = {
 export function registerExternalControlTools(registry: ToolRegistry): void {
   registry.register({
     name: WPS_CREATE_DOCUMENT_TOOL,
-    description: 'Create exactly one real blank WPS Writer document in a visible WPS instance and type the requested text through the registered KWPS COM automation interface. Use only for a recovered current-WPS continuation that explicitly asks to create a document and write text. The receipt verifies attachedExisting versus newVisibleInstance, Visible=true, a real wps.exe PID/window/document, and exact body-text readback. This tool does not save the document.',
+    description: 'Create exactly one real blank WPS Writer document in a visible WPS instance and optionally type requested text through the registered KWPS COM automation interface. Use for a recovered current-WPS create request. The receipt verifies attachedExisting versus newVisibleInstance, Visible=true, a real wps.exe PID/window/document, and exact body-text readback including an empty blank document. This tool does not save the document.',
     parameters: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Exact text to write into the new visible WPS document.' },
+        text: { type: 'string', description: 'Optional exact text to write. Omit or pass an empty string for a real blank document.' },
       },
-      required: ['text'],
+      required: [],
     },
     handler: async (args) => JSON.stringify(
       await createVisibleWpsDocumentWithText(String(args.text || '')),
@@ -44,6 +44,11 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     ),
     permission: 'user',
     securityLevel: 'safe',
+    evidence: {
+      capability: 'wps_document',
+      operation: 'create',
+      assurance: 'verified',
+    },
   });
 
   registry.register({

@@ -43,6 +43,16 @@ interface VoiceStartPayload {
   sessionId: string;
 }
 
+export function shouldAcceptVoiceStatus(
+  data: { status: string; requestId?: string },
+  activeRequestId: string | null,
+): boolean {
+  if (data.status === 'thinking') return true;
+  if (data.requestId && activeRequestId && data.requestId !== activeRequestId) return false;
+  if (!data.requestId && activeRequestId && (data.status === 'listening' || data.status === 'idle')) return false;
+  return true;
+}
+
 export function waitForVoiceSocket(socket: any, timeoutMs = 8000): Promise<void> {
   if (socket?.connected) return Promise.resolve();
   if (!socket) return Promise.reject(new Error('Voice connection is unavailable'));
@@ -129,7 +139,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     thinkingWatchdogStartedAt.current = startedAt;
     thinkingWatchdogRef.current = setTimeout(() => {
       if (thinkingWatchdogStartedAt.current !== startedAt) return;
-      console.warn('[VoiceCall] thinking state timed out; returning to listening');
+      const requestId = activeVoiceRequestIdRef.current;
+      console.warn('[VoiceCall] thinking state timed out; cancelling server turn');
+      if (requestId) {
+        socketRef.current?.emit('audio:cancel_turn', { requestId, reason: 'thinking_watchdog' });
+      }
       setCallState(prev => {
         if (prev !== 'thinking') return prev;
         return isCallActive.current ? 'listening' : 'idle';
@@ -147,6 +161,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const nextStartTime = useRef(0);  // When the next chunk should start playing
   const ttsStartedAt = useRef(0);
+  const fallbackSpeechPendingRef = useRef(0);
 
   const ensureTtsContext = useCallback(() => {
     if (!ttsContext.current || ttsContext.current.state === 'closed') {
@@ -164,6 +179,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const stopAllPlayback = useCallback(() => {
     playbackGenerationRef.current++;
     playbackStartTime.current = 0;
+    fallbackSpeechPendingRef.current = 0;
+    try { window.speechSynthesis?.cancel(); } catch {}
     // Clear sentence audio queue
     audioQueue.current = [];
     // Stop proactive speech (greetings, check-ins) — now interruptible
@@ -250,13 +267,15 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     setCallState('idle');
   }, [cleanupCapture, disposePlaybackContexts, clearPassiveTimers, clearThinkingWatchdog]);
 
-  const audioQueue = useRef<Array<ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number }>>([]);
+  const audioQueue = useRef<Array<ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number; lane?: string }>>([]);
 
   useEffect(() => {
     if (!socket) return;
 
-    const onAudioStatus = (data: { status: string; requestId?: string }) => {
+    const onAudioStatus = (data: { status: string; requestId?: string; lane?: string }) => {
       if (!isCallActive.current) return;
+      const activeRequestId = activeVoiceRequestIdRef.current;
+      if (!shouldAcceptVoiceStatus(data, activeRequestId)) return;
       if (data.status === 'thinking' && data.requestId) {
         activeVoiceRequestIdRef.current = data.requestId;
       }
@@ -270,7 +289,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       };
       const next = map[data.status] || 'idle';
       if (next === 'thinking') scheduleThinkingWatchdog();
-      else clearThinkingWatchdog();
+      else if (data.lane !== 'conversation') clearThinkingWatchdog();
       setCallState(prev => {
         // Start passive timer when transitioning to listening (server waiting for speech)
         if (next === 'listening' && prev !== 'listening') {
@@ -295,6 +314,13 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         prevCallState.current = next;
         return next;
       });
+      if (
+        data.requestId
+        && data.requestId === activeVoiceRequestIdRef.current
+        && (data.status === 'listening' || data.status === 'idle')
+      ) {
+        activeVoiceRequestIdRef.current = null;
+      }
     };
 
     // Voice confirmation window — show recognized text while the server yields
@@ -313,13 +339,13 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
      * Cross-fade: overlaps the last 50ms of previous audio with the first 50ms of next.
      * VolumeGain: applies server-computed volume adaptation.
      */
-    const playAudioChunk = (buffer: ArrayBuffer, volumeGain?: number) => {
+    const playAudioChunk = (buffer: ArrayBuffer, volumeGain?: number, lane?: string) => {
       if (!isCallActive.current) return;
       const ctx = ensureTtsContext();
       const playbackGeneration = playbackGenerationRef.current;
       isTtsPlaying.current = true;
       if (ttsStartedAt.current === 0) ttsStartedAt.current = Date.now();
-      clearThinkingWatchdog();
+      if (lane !== 'conversation') clearThinkingWatchdog();
       setCallState(prev => (prev === 'thinking' || prev === 'queued') ? 'speaking' : prev);
 
       ctx.decodeAudioData(buffer.slice(0), (decoded) => {
@@ -354,7 +380,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
             const next = audioQueue.current.shift()!;
             const nextGain = typeof next === 'object' ? (next as any).volumeGain : undefined;
             const nextBuffer = typeof next === 'object' ? (next as any).buffer : next;
-            playAudioChunk(nextBuffer, nextGain);
+            const nextLane = typeof next === 'object' ? (next as any).lane : undefined;
+            playAudioChunk(nextBuffer, nextGain, nextLane);
           } else {
             isTtsPlaying.current = false;
             setCallState(prev => prev === 'speaking' ? 'listening' : prev);
@@ -369,23 +396,71 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         if (audioQueue.current.length > 0) {
           const next = audioQueue.current.shift()!;
           const nextBuffer = typeof next === 'object' ? (next as any).buffer : next;
-          playAudioChunk(nextBuffer);
+          const nextGain = typeof next === 'object' ? (next as any).volumeGain : undefined;
+          const nextLane = typeof next === 'object' ? (next as any).lane : undefined;
+          playAudioChunk(nextBuffer, nextGain, nextLane);
         }
       });
     };
 
     // Handle both old format (raw ArrayBuffer) and new format ({ buffer, volumeGain })
-    const onAudioResponse = (data: ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number }) => {
+    const onAudioResponse = (data: ArrayBuffer | { buffer: ArrayBuffer; volumeGain?: number; requestId?: string; lane?: string }) => {
       if (!isCallActive.current) { console.log('[VoiceCall] Ignoring audio:response, call ended'); return; }
+      if (!(data instanceof ArrayBuffer) && data.requestId && data.requestId !== activeVoiceRequestIdRef.current) return;
       const actualBuffer = data instanceof ArrayBuffer ? data : data.buffer;
       const actualGain = data instanceof ArrayBuffer ? undefined : data.volumeGain;
+      const actualLane = data instanceof ArrayBuffer ? undefined : data.lane;
 
       if (isTtsPlaying.current) {
         // Currently playing — queue this chunk
-        audioQueue.current.push(data instanceof ArrayBuffer ? data : { buffer: actualBuffer, volumeGain: actualGain });
+        audioQueue.current.push(data instanceof ArrayBuffer ? data : { buffer: actualBuffer, volumeGain: actualGain, lane: actualLane });
         return;
       }
-      playAudioChunk(actualBuffer, actualGain);
+      playAudioChunk(actualBuffer, actualGain, actualLane);
+    };
+
+    const onTtsFallback = (data: { text?: string; requestId?: string; fallbackId?: string }) => {
+      const text = String(data?.text || '').trim();
+      if (!isCallActive.current || !text) return;
+      if (data.requestId && data.requestId !== activeVoiceRequestIdRef.current) return;
+      if (!('speechSynthesis' in window)) {
+        if (data.requestId && data.fallbackId) socket.emit('audio:tts_fallback_done', data);
+        return;
+      }
+      const playbackGeneration = playbackGenerationRef.current;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'zh-CN';
+      fallbackSpeechPendingRef.current += 1;
+      isTtsPlaying.current = true;
+      ttsStartedAt.current = Date.now();
+      clearThinkingWatchdog();
+      setCallState('speaking');
+      utterance.onstart = () => {
+        if (playbackGeneration !== playbackGenerationRef.current) return;
+        isTtsPlaying.current = true;
+        setCallState('speaking');
+      };
+      let completed = false;
+      const finish = () => {
+        if (completed) return;
+        completed = true;
+        if (data.requestId && data.fallbackId) {
+          socket.emit('audio:tts_fallback_done', {
+            requestId: data.requestId,
+            fallbackId: data.fallbackId,
+          });
+        }
+        fallbackSpeechPendingRef.current = Math.max(0, fallbackSpeechPendingRef.current - 1);
+        if (playbackGeneration !== playbackGenerationRef.current) return;
+        if (fallbackSpeechPendingRef.current === 0) {
+          isTtsPlaying.current = false;
+          ttsStartedAt.current = 0;
+          setCallState(prev => prev === 'speaking' ? 'listening' : prev);
+        }
+      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      window.speechSynthesis.speak(utterance);
     };
 
     const onAudioTranscript = (data: { text: string; isFinal: boolean } & VoiceTranscriptMeta) => {
@@ -410,7 +485,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       if (!isCallActive.current) return;
       if (data.channel !== 'voice') return;
       if (!activeVoiceRequestIdRef.current || data.requestId !== activeVoiceRequestIdRef.current) return;
-      if (data.finalized === true) activeVoiceRequestIdRef.current = null;
       if (!shouldDisplayAgentResponse(data)) return;
       setTranscript(''); // Clear user transcript when AI starts responding
       setResponseText(data.text!);
@@ -505,6 +579,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     socket.on('audio:status', onAudioStatus);
     socket.on('audio:confirm', onAudioConfirm);
     socket.on('audio:response', onAudioResponse);
+    socket.on('audio:tts_fallback', onTtsFallback);
     socket.on('audio:transcript', onAudioTranscript);
     socket.on('agent:response', onAgentResponse);
     socket.on('audio:error', onAudioError);
@@ -517,6 +592,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       socket.off('audio:status', onAudioStatus);
       socket.off('audio:confirm', onAudioConfirm);
       socket.off('audio:response', onAudioResponse);
+      socket.off('audio:tts_fallback', onTtsFallback);
       socket.off('audio:transcript', onAudioTranscript);
       socket.off('agent:response', onAgentResponse);
       socket.off('audio:error', onAudioError);

@@ -41,12 +41,15 @@ function isWpsTarget(value: string): boolean {
     .test(String(value || '').trim());
 }
 
-export function isRecoveredWpsCreateAndTypeTask(text: string): boolean {
+export function isRecoveredWpsCreateTask(text: string): boolean {
   if (!isRecoveredCurrentAppEditingContinuation(text)) return false;
   const primary = primaryTurnText(text);
   return isWpsTarget(getRecoveredApplicationContinuationTarget(text))
-    && CREATE_INTENT_RE.test(primary)
-    && WRITE_INTENT_RE.test(primary);
+    && CREATE_INTENT_RE.test(primary);
+}
+
+export function isRecoveredWpsCreateAndTypeTask(text: string): boolean {
+  return isRecoveredWpsCreateTask(text) && WRITE_INTENT_RE.test(primaryTurnText(text));
 }
 
 function parseNestedJson(value: unknown): unknown {
@@ -228,14 +231,14 @@ export function guardCurrentAppToolCall(input: {
   const verifiedWpsAutomation = hasVerifiedWpsAutomation(records);
 
   if (toolName === WPS_CREATE_DOCUMENT_TOOL) {
-    if (!isRecoveredWpsCreateAndTypeTask(input.taskText)) {
+    if (!isRecoveredWpsCreateTask(input.taskText)) {
       return {
         allowed: false,
-        reason: `${WPS_CREATE_DOCUMENT_TOOL} is restricted to a recovered WPS continuation that explicitly asks to create a document and write text.`,
+        reason: `${WPS_CREATE_DOCUMENT_TOOL} is restricted to a recovered WPS continuation that explicitly asks to create a document.`,
       };
     }
     const requestedText = extractRequestedCurrentAppText(primaryTurnText(input.taskText));
-    if (!requestedText) {
+    if (WRITE_INTENT_RE.test(primaryTurnText(input.taskText)) && !requestedText) {
       return {
         allowed: false,
         reason: `${WPS_CREATE_DOCUMENT_TOOL} requires an exact text payload recoverable from the user's write/type instruction.`,
@@ -351,7 +354,7 @@ export function guardCurrentAppToolCall(input: {
 export function buildCurrentAppUiStateMachinePrompt(appTarget = ''): string {
   const wpsAutomation = isWpsTarget(appTarget)
     ? [
-        `WPS deterministic path: for a create-and-write request, call ${WPS_CREATE_DOCUMENT_TOOL} exactly once with the requested text before trying UIA navigation.`,
+        `WPS deterministic path: for a create request, call ${WPS_CREATE_DOCUMENT_TOOL} exactly once with the requested text, or an empty text for a blank document, before trying UIA navigation.`,
         'Its verified receipt must say attachedExisting or newVisibleInstance, Visible=true, include a real wps.exe PID/document/window, and exact body-text readback. It does not save.',
         'A verified WPS automation receipt is terminal evidence. Do not create another document, navigate, type, paste, or save after it.',
         'Use the generic UIA path only if that tool is unavailable or returns an explicit failure.',

@@ -73,6 +73,7 @@ const DIRECT_DESKTOP_RELAY_TOOLS = new Set([
   'desktop_show_lumi_window',
   'desktop_run_command',
   'desktop_active_window',
+  'desktop_window_control',
   'desktop_running_processes',
   'desktop_capture_screen',
   'desktop_clipboard_read',
