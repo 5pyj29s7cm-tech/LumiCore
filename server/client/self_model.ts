@@ -336,10 +336,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'window.avatar_sound',
-    label: 'Avatar, voice, and sound surfaces',
+    label: 'Personalization surface',
     kind: 'window',
-    actions: ['open_avatar_studio', 'open_sound_studio', 'open_memory_avatar', 'open_app:avatar-studio', 'open_app:sound', 'open_app:memory-avatar'],
-    notes: 'Avatar design, voice/sound configuration, and memory avatar lab surfaces.',
+    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio', 'open_memory_avatar', 'open_app:personalization', 'open_app:avatar-studio', 'open_app:sound', 'open_app:memory-avatar'],
+    notes: 'One personalization window contains avatar appearance and voice/sound controls; the memory avatar lab remains a separate surface.',
     stateKeys: ['windows'],
   },
   {
@@ -700,17 +700,10 @@ const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     closeAfterUse: true,
   },
   {
-    id: 'avatar-studio',
-    label: 'Avatar studio',
-    actions: ['open_avatar_studio'],
-    useWhen: 'Show Lumi avatar, appearance, embodied presence, or personality-facing surfaces.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'sound',
-    label: 'Sound studio',
-    actions: ['open_sound_studio'],
-    useWhen: 'Show voice, sound, speech, and audio configuration surfaces.',
+    id: 'personalization',
+    label: 'Personalization',
+    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio'],
+    useWhen: 'Show Lumi avatar appearance and voice or sound configuration in the unified personalization window.',
     closeAfterUse: true,
   },
   {
@@ -1116,10 +1109,12 @@ export function normalizeClientActionTarget(value?: string): string {
     docs: 'docs',
     documentation: 'docs',
     founders: 'founders',
-    'avatar-studio': 'avatar-studio',
-    avatar: 'avatar-studio',
-    'sound-studio': 'sound',
-    sound: 'sound',
+    personalization: 'personalization',
+    personalize: 'personalization',
+    'avatar-studio': 'personalization',
+    avatar: 'personalization',
+    'sound-studio': 'personalization',
+    sound: 'personalization',
     'memory-avatar': 'memory-avatar',
     files: 'knowledge',
     file: 'knowledge',
@@ -1153,11 +1148,13 @@ export function normalizeClientActionTarget(value?: string): string {
     '团队面板': 'team',
     '工具': 'tools',
     '工具面板': 'tools',
-    '形象': 'avatar-studio',
-    '头像': 'avatar-studio',
-    '头像工作室': 'avatar-studio',
-    '声音': 'sound',
-    '声音工作室': 'sound',
+    '个性化': 'personalization', // i18n-allow: Chinese client-surface input alias; not user-visible copy.
+    '形象': 'personalization',
+    '头像': 'personalization',
+    '头像工作室': 'personalization',
+    '形象设计室': 'personalization', // i18n-allow: Chinese legacy client-surface input alias; not user-visible copy.
+    '声音': 'personalization',
+    '声音工作室': 'personalization',
     '记忆头像': 'memory-avatar',
     '组织': 'org',
     '组织空间': 'org',
@@ -1371,11 +1368,14 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
     case 'open_computer_adaptation':
       setSurface('kernel', 'computer adaptation center');
       break;
+    case 'open_personalization':
+      setSurface('personalization', 'personalization');
+      break;
     case 'open_avatar_studio':
-      setSurface('avatar-studio', 'avatar studio');
+      setSurface('personalization', 'personalization appearance');
       break;
     case 'open_sound_studio':
-      setSurface('sound', 'sound studio');
+      setSurface('personalization', 'personalization voice');
       break;
     case 'open_memory_avatar':
       setSurface('memory-avatar', 'memory avatar');

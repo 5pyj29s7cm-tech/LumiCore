@@ -742,9 +742,9 @@ exit 2
     {
       text: '这里是形象和声音。我可以有自己的视觉形象、语音和情绪反馈，让陪伴不只停在文字里。',
       actions: [
-        { clientAction: { action: 'demo_open_surface', target: 'avatar-studio' } },
+        { clientAction: { action: 'demo_open_surface', target: 'personalization' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'avatar-studio' } }],
+      postActions: [{ clientAction: { action: 'close_app', target: 'personalization' } }],
     },
     {
       text: '这里是技能。我可以把文档、网页、代码、数据、行业流程这些能力沉淀成可以复用的工作模块。',

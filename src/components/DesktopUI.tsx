@@ -759,7 +759,7 @@ function DesktopWidgetPanel({
   onExpand,
   onHide,
   onOpenKnowledge,
-  onOpenAvatarStudio,
+  onOpenPersonalization,
 }: {
   t: any;
   lang: 'en' | 'zh';
@@ -779,7 +779,7 @@ function DesktopWidgetPanel({
   onExpand: () => void;
   onHide: () => void;
   onOpenKnowledge: () => void;
-  onOpenAvatarStudio: () => void;
+  onOpenPersonalization: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const nativeDropHandledAtRef = useRef(0);
@@ -1008,9 +1008,9 @@ function DesktopWidgetPanel({
           </button>
           <button
             data-widget-action="true"
-            onClick={onOpenAvatarStudio}
+            onClick={onOpenPersonalization}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-fuchsia-300/14 bg-fuchsia-300/9 text-fuchsia-100/72 shadow-lg backdrop-blur-lg transition-colors hover:bg-fuchsia-300/18 hover:text-white"
-            title={uiMessage('desktop-ui.avatar-studio.ef5c66e7de', (lang === 'zh') ? 'zh' : 'en')}
+            title={t.personalization || 'Personalization'}
           >
             <Brush size={14} />
           </button>
@@ -1648,6 +1648,7 @@ export function DesktopUI({
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('general');
+  const [personalizationSection, setPersonalizationSection] = useState<'appearance' | 'voice'>('appearance');
   const [brightness, setBrightness] = useState(85);
   const [volume, setVolume] = useState(60);
   const [time, setTime] = useState(new Date());
@@ -1665,6 +1666,7 @@ export function DesktopUI({
   const wallpaperInputRef = React.useRef<HTMLInputElement>(null);
   const desktopChrome = useMemo(() => getDesktopChromeMetrics(viewport), [viewport]);
   const desktopIconLayout = useMemo(() => getDesktopIconLayout(viewport), [viewport]);
+  const desktopIconColumns = 3;
 
   useEffect(() => {
     isWallpaperModeRef.current = isWallpaperMode;
@@ -1713,9 +1715,9 @@ export function DesktopUI({
   }, [lang, orgConnection?.connected, orgConnection?.orgId, setActiveTab, workDomain]);
 
   const getDefaultDesktopIconPosition = useCallback((index: number) => ({
-    x: desktopIconLayout.startX + (index % desktopIconLayout.columns) * desktopIconLayout.cellWidth,
-    y: desktopIconLayout.startY + Math.floor(index / desktopIconLayout.columns) * desktopIconLayout.cellHeight,
-  }), [desktopIconLayout]);
+    x: desktopIconLayout.startX + (index % desktopIconColumns) * desktopIconLayout.cellWidth,
+    y: desktopIconLayout.startY + Math.floor(index / desktopIconColumns) * desktopIconLayout.cellHeight,
+  }), [desktopIconColumns, desktopIconLayout]);
 
   // Desktop icon layout: absolute positioning with viewport-aware columns.
   const desktopIcons = [
@@ -1724,12 +1726,11 @@ export function DesktopUI({
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
     { id: 'team', labelKey: 'team', icon: <Bot size={24} />, colorClass: 'from-cyan-500 to-blue-600', windowId: 'team' },
     { id: 'memory-avatar', labelKey: 'memoryAvatars', icon: <Castle size={24} />, colorClass: 'from-fuchsia-500 to-purple-600', windowId: 'memory-avatar' },
-    { id: 'avatar-studio', labelKey: 'avatarStudio', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-blue-600', windowId: 'avatar-studio' },
-    { id: 'sound', labelKey: 'sound', icon: <Volume2 size={24} />, colorClass: 'from-sky-500 to-indigo-600', windowId: 'sound' },
+    { id: 'personalization', labelKey: 'personalization', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
   ];
   const desktopIconAreaHeight = Math.max(
     desktopIconLayout.compact ? 300 : 400,
-    Math.ceil(desktopIcons.length / desktopIconLayout.columns) * desktopIconLayout.cellHeight + desktopIconLayout.startY + 24,
+    Math.ceil(desktopIcons.length / desktopIconColumns) * desktopIconLayout.cellHeight + desktopIconLayout.startY + 24,
   );
 
   const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3459,6 +3460,13 @@ export function DesktopUI({
 
   const toggleWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
+    if (tab === 'avatar-studio') {
+      setPersonalizationSection('appearance');
+      tab = 'personalization';
+    } else if (tab === 'sound') {
+      setPersonalizationSection('voice');
+      tab = 'personalization';
+    }
     if (tab === 'home') {
       setOpenWindows([]);
       setFocusedWindow(null);
@@ -3500,10 +3508,6 @@ export function DesktopUI({
       openMemoryAvatar();
       return;
     }
-    if (tab === 'avatar-studio') {
-      // Opens as a normal window below
-    }
-
     if (openWindows.includes(tab)) {
       if (minimizedWindows.includes(tab)) {
         setMinimizedWindows(prev => prev.filter(w => w !== tab));
@@ -3713,11 +3717,14 @@ export function DesktopUI({
         if (value === 'memory') return 'knowledge';
         if (value === 'files') return 'knowledge';
         if (value === 'sync') return 'devices';
+        if (value === 'avatar-studio' || value === 'sound') return 'personalization';
         if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
         return value;
       };
 
         const openSurface = (value: string) => {
+          if (value === 'avatar-studio') setPersonalizationSection('appearance');
+          if (value === 'sound') setPersonalizationSection('voice');
           const windowId = normalizeTarget(value);
           if (!windowId) throw new Error('Client action requires a target surface');
         if (isDesktopWidgetMode) {
@@ -3941,6 +3948,8 @@ export function DesktopUI({
         const registeredSurface = getPersonalClientSurfaceByAction(action);
         if (registeredSurface) {
           if (registeredSurface.settingsSection) setSettingsSection(registeredSurface.settingsSection);
+          if (action === 'open_avatar_studio') setPersonalizationSection('appearance');
+          if (action === 'open_sound_studio') setPersonalizationSection('voice');
           openSurface(registeredSurface.target);
           respond({
             ok: true,
@@ -4237,8 +4246,7 @@ export function DesktopUI({
     if (windowId === 'devices') return { w: '900px', h: '700px' };
     if (windowId === 'tokens') return { w: '800px', h: '620px' };
     if (windowId === 'skills') return { w: '900px', h: '700px' };
-    if (windowId === 'avatar-studio') return { w: '1050px', h: '720px' };
-    if (windowId === 'sound') return { w: '900px', h: '700px' };
+    if (windowId === 'personalization') return { w: '1050px', h: '720px' };
     if (windowId === 'terminal') return { w: '900px', h: '600px' };
     if (windowId === 'runtime-log') return { w: '980px', h: '680px' };
     return { w: '900px', h: '700px' };
@@ -4330,7 +4338,7 @@ export function DesktopUI({
         onExpand={() => void exitDesktopWidgetMode()}
         onHide={() => void hideDesktopWidgetMode()}
         onOpenKnowledge={() => void exitDesktopWidgetMode('knowledge')}
-        onOpenAvatarStudio={() => void exitDesktopWidgetMode('avatar-studio')}
+        onOpenPersonalization={() => void exitDesktopWidgetMode('personalization')}
       />
     );
   }
@@ -4828,9 +4836,12 @@ export function DesktopUI({
             {selectedPet ? (
               <div className="relative group flex flex-col items-center gap-3">
                 <button
-                  onClick={() => toggleWindow('avatar-studio')}
+                  onClick={() => {
+                    setPersonalizationSection('appearance');
+                    toggleWindow('personalization');
+                  }}
                   className={`cursor-pointer transition-all ${callState !== 'idle' ? 'animate-pulse' : ''}`}
-                  title={formatUiMessage('desktop-ui.value0-open-avatar-studio.0ef4556aac', { value0: selectedPet.name }, (lang === 'zh') ? 'zh' : 'en')}
+                  title={`${selectedPet.name} · ${t.personalization || 'Personalization'}`}
                 >
                   <PetAvatar
                     pet={selectedPet}
@@ -5483,35 +5494,63 @@ export function DesktopUI({
                     <TokenDashboard />
                   ) : windowId === 'skills' ? (
                     <SkillCenter t={t} lang={lang} />
-                  ) : windowId === 'avatar-studio' ? (
-                    <AvatarStudio
-                      key={petPreferenceScopeKey}
-                      t={t}
-                      lang={lang}
-                      storageScope={petPreferenceScopeKey}
-                      selectedPetId={selectedPet?.id}
-                      onSelectPet={handleSelectPet}
-                      equippedAccessories={equippedAccessories}
-                      onChangeAccessories={(ids) => {
-                        if (!canCustomizeLumiAppearance) {
-                          toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
-                          return;
-                        }
-                        setEquippedAccessories(ids);
-                        savePetPrefsToServer(selectedPet, ids);
-                      }}
-                      onResetToSphere={() => {
-                        if (!canCustomizeLumiAppearance) {
-                          toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
-                          return;
-                        }
-                        setSelectedPet(null);
-                        savePetPrefsToServer(null, equippedAccessories);
-                        toast.info(uiMessage('desktop-ui.switched-back-to-the-default.97edb4815a', (lang === 'zh') ? 'zh' : 'en'));
-                      }}
-                    />
-                  ) : windowId === 'sound' ? (
-                    <SoundPanel t={t} onOpenAvatarStudio={() => toggleWindow('avatar-studio')} />
+                  ) : windowId === 'personalization' ? (
+                    <div className="flex h-full min-h-0 flex-col gap-3">
+                      <div className="grid shrink-0 grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/20 p-1.5" role="tablist" aria-label={t.personalization || 'Personalization'}>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={personalizationSection === 'appearance'}
+                          onClick={() => setPersonalizationSection('appearance')}
+                          className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-colors ${personalizationSection === 'appearance' ? 'bg-cyan-400/18 text-cyan-100' : 'text-white/45 hover:bg-white/[0.06] hover:text-white/75'}`}
+                        >
+                          <Brush size={15} />
+                          {t.avatarStudio || 'Avatar Studio'}
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={personalizationSection === 'voice'}
+                          onClick={() => setPersonalizationSection('voice')}
+                          className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-colors ${personalizationSection === 'voice' ? 'bg-indigo-400/18 text-indigo-100' : 'text-white/45 hover:bg-white/[0.06] hover:text-white/75'}`}
+                        >
+                          <Volume2 size={15} />
+                          {t.sound || 'Sound'}
+                        </button>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        {personalizationSection === 'appearance' ? (
+                          <AvatarStudio
+                            key={petPreferenceScopeKey}
+                            t={t}
+                            lang={lang}
+                            storageScope={petPreferenceScopeKey}
+                            selectedPetId={selectedPet?.id}
+                            onSelectPet={handleSelectPet}
+                            equippedAccessories={equippedAccessories}
+                            onChangeAccessories={(ids) => {
+                              if (!canCustomizeLumiAppearance) {
+                                toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
+                                return;
+                              }
+                              setEquippedAccessories(ids);
+                              savePetPrefsToServer(selectedPet, ids);
+                            }}
+                            onResetToSphere={() => {
+                              if (!canCustomizeLumiAppearance) {
+                                toast.error(uiMessage('desktop-ui.only-an-organization-owner-or.cbb301d68a', (lang === 'zh') ? 'zh' : 'en'));
+                                return;
+                              }
+                              setSelectedPet(null);
+                              savePetPrefsToServer(null, equippedAccessories);
+                              toast.info(uiMessage('desktop-ui.switched-back-to-the-default.97edb4815a', (lang === 'zh') ? 'zh' : 'en'));
+                            }}
+                          />
+                        ) : (
+                          <SoundPanel t={t} onOpenAppearance={() => setPersonalizationSection('appearance')} />
+                        )}
+                      </div>
+                    </div>
                   ) : windowId === 'terminal' ? (
                     <TerminalWindow t={t} onClose={() => closeWindow('terminal')} isActive={focusedWindow === 'terminal'} />
                   ) : windowId === 'chat' ? (
@@ -5688,7 +5727,7 @@ export function DesktopUI({
   );
 }
 
-function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: () => void }) {
+function SoundPanel({ t, onOpenAppearance }: { t?: any; onOpenAppearance?: () => void }) {
   const { selectedVoiceId } = useApp();
   const [designPrompt, setDesignPrompt] = useState('');
   const [designName, setDesignName] = useState('');
@@ -5791,7 +5830,7 @@ function SoundPanel({ t, onOpenAvatarStudio }: { t?: any; onOpenAvatarStudio?: (
         {voiceIdentitySteps.map((step, index) => (
           <button
             key={step.id}
-            onClick={step.id === 'avatar' ? onOpenAvatarStudio : undefined}
+            onClick={step.id === 'avatar' ? onOpenAppearance : undefined}
             disabled={step.id !== 'avatar'}
             className={`group min-w-0 rounded-xl border px-3 py-2 text-left transition-colors ${
               step.done
