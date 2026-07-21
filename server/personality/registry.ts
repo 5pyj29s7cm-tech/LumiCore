@@ -93,6 +93,7 @@ class PersonalityRegistry {
         securityOverrides: {
           desktop_run_command: 'safe',
           cad_prepare_autocad_operations: 'safe',
+          'mcp_cad-drafting_autocad_new_document': 'safe',
           'mcp_cad-drafting_autocad_playback_file': 'safe',
         },
         maxIterations: 35,

@@ -6,6 +6,7 @@ import fs from 'fs';
 import { extractPptxText } from '../knowledge/pptx';
 import { extractRtfText } from '../knowledge/rtf';
 import { loadXlsxWorkbook, worksheetToCsv } from '../utils/spreadsheet';
+import { extractPdfTextContent, PdfPasswordError } from '../utils/pdf_text';
 
 // ── PDF Parsing ─────────────────────────────────────────────────────────
 
@@ -21,30 +22,12 @@ export interface LegalMetadata {
   rawText: string;           // 原始全文
 }
 
-export async function parsePdf(filePath: string): Promise<{ text: string; pageCount: number } | null> {
+export async function parsePdf(filePath: string, password?: string): Promise<{ text: string; pageCount: number } | null> {
   try {
-    const buffer = fs.readFileSync(filePath);
-    const pdfModule: any = await import('pdf-parse');
-    const legacyParser = typeof pdfModule.default === 'function'
-      ? pdfModule.default
-      : typeof pdfModule === 'function'
-        ? pdfModule
-        : null;
-    if (legacyParser) {
-      const data = await legacyParser(buffer);
-      return { text: String(data?.text || ''), pageCount: Number(data?.numpages || data?.numPages || 0) };
-    }
-
-    const PDFParse = pdfModule.PDFParse || pdfModule.default?.PDFParse;
-    if (typeof PDFParse !== 'function') return null;
-    const parser = new PDFParse({ data: buffer });
-    try {
-      const data = await parser.getText();
-      return { text: String(data?.text || ''), pageCount: Number(data?.total || data?.numpages || data?.numPages || 0) };
-    } finally {
-      await parser.destroy?.();
-    }
-  } catch {
+    const result = await extractPdfTextContent(filePath, password);
+    return { text: result.text, pageCount: result.pageCount };
+  } catch (error) {
+    if (error instanceof PdfPasswordError) throw error;
     return null;
   }
 }
@@ -83,7 +66,7 @@ export async function parseSpreadsheet(filePath: string): Promise<string | null>
 
 // ── Unified parse ───────────────────────────────────────────────────────
 
-export async function parseDocument(filePath: string): Promise<{ text: string; format: string } | null> {
+export async function parseDocument(filePath: string, options: { password?: string } = {}): Promise<{ text: string; format: string } | null> {
   const ext = filePath.split('.').pop()?.toLowerCase();
   const mimeMap: Record<string, string> = {
     pdf: 'pdf',
@@ -101,7 +84,7 @@ export async function parseDocument(filePath: string): Promise<{ text: string; f
 
   try {
     if (format === 'pdf') {
-      const result = await parsePdf(filePath);
+      const result = await parsePdf(filePath, options.password);
       return result ? { text: result.text, format } : null;
     }
     if (format === 'docx') {

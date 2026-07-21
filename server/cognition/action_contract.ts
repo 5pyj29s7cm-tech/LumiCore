@@ -12,6 +12,7 @@ export type LumiActionContractKind =
   | 'messaging_send'
   | 'browser_account'
   | 'public_post'
+  | 'cad_document'
   | 'cad_drafting'
   | 'customer_operations'
   | 'ecommerce_operations'
@@ -247,6 +248,15 @@ export function requiresVisibleAutoCadExecution(input: string): boolean {
   return mentionsCadSurface && wantsVisibleDrawing;
 }
 
+export function requestsBlankAutoCadDocument(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  if (!text) return false;
+  const cadSurface = /(?:\bAutoCAD\b|\bacad(?:\.exe)?\b|\bCAD\b|CAD\s*(?:\u91cc|\u4e2d|\u8f6f\u4ef6|\u7a97\u53e3|\u754c\u9762))/iu.test(text);
+  const blankDocument = /(?:\u65b0\u5efa|\u521b\u5efa|\u6253\u5f00|\u52a0|\u518d\u6765|\u53e6\u5f00).{0,20}(?:\u7a7a\u767d)?(?:\u753b\u5e03|\u56fe\u7eb8|\u7ed8\u56fe|\u6587\u6863|\u6587\u4ef6)|(?:\u7a7a\u767d|\u65b0\u7684?|\u53e6\u4e00\u4e2a).{0,12}(?:CAD\s*)?(?:\u753b\u5e03|\u56fe\u7eb8|\u7ed8\u56fe|\u6587\u6863)|\b(?:new|create|open|add)\b.{0,24}\b(?:blank\s+)?(?:drawing|document|canvas)\b/iu.test(text);
+  const asksForGeometry = /(?:\u6309\u7167|\u6839\u636e|\u8bfb\u53d6|\u7167\u7740|\u753b\u8fdb|\u753b\u5165|\u7ed8\u5236|\u753b\u51fa|\u751f\u6210).{0,40}(?:\u8349\u7a3f|\u56fe\u7247|\u7167\u7247|\u6237\u578b|\u5e73\u9762|\u56fe\u7eb8|\u7ebf|\u5899|\u95e8|\u7a97|\u5c3a\u5bf8|\u51e0\u4f55)|\b(?:draw|draft|trace|render|convert)\b.{0,40}\b(?:image|photo|plan|geometry|wall|door|window|line)\b/iu.test(text);
+  return cadSurface && blankDocument && !asksForGeometry;
+}
+
 export function requiresAutoCadMcpPlayback(input: string): boolean {
   const text = compact(input);
   if (!text) return false;
@@ -317,6 +327,19 @@ export function hasVisibleAutoCadExecutionEvidence(
       && Number(payload?.operationCount) === Number(payload?.expectedEntityCount)
       && Number(payload?.entitiesAdded) === Number(payload?.expectedEntityCount)
       && Boolean(String(payload?.operationSetId || '').trim());
+  });
+}
+
+export function hasBlankAutoCadDocumentEvidence(records: ToolExecutionRecord[] = []): boolean {
+  return records.some(record => {
+    if (record.error || !/^mcp_cad-drafting_autocad_new_document$/i.test(String(record.name || ''))) return false;
+    const payload = parseRecordJson(record);
+    return payload?.status === 'completed'
+      && payload?.transport === 'mcp_autocad_com'
+      && payload?.documentCreated === true
+      && payload?.visible === true
+      && Boolean(String(payload?.document || '').trim())
+      && Number(payload?.entityCount) === 0;
   });
 }
 
@@ -517,6 +540,20 @@ export function buildActionContract(input: string): LumiActionContract {
     || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(text);
+
+  if (requestsBlankAutoCadDocument(text)) {
+    return withDefaults({
+      kind: 'cad_document',
+      label: 'AutoCAD blank document',
+      coreAction: 'Create and focus one real blank drawing document in visible AutoCAD without inventing geometry or dimensions.',
+      preparationIsNotCompletion: ['opening AutoCAD', 'focusing an existing drawing', 'preparing drawing operations', 'creating placeholder geometry'],
+      requiredEvidence: ['mcp_cad-drafting_autocad_new_document receipt with documentCreated=true, visible=true, and a document name'],
+      preferredTools: ['mcp_cad-drafting_autocad_new_document'],
+      verificationTools: ['mcp_cad-drafting_autocad_new_document'],
+      nextStep: 'Create a real blank AutoCAD document through COM and report only the verified document receipt.',
+      caution: 'Do not infer paper size, coordinates, an outer boundary, or source-geometry verification for a blank-document request.',
+    });
+  }
 
   if (isRemoteLegalMessageTurn(text)) {
     return buildLegalDocumentContract();
@@ -1489,6 +1526,9 @@ export function hasCoreActionEvidence(
   }
   if (contract.kind === 'browser_account') {
     return hasAuthenticatedWebResultEvidence(successful, taskText);
+  }
+  if (contract.kind === 'cad_document') {
+    return hasBlankAutoCadDocumentEvidence(successful);
   }
   if (contract.kind === 'cad_drafting') {
     if (requiresCadGeometryExtractionOnly(taskText)) {

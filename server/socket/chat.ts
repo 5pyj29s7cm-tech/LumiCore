@@ -3438,7 +3438,8 @@ export function registerChatHandler(
           domain: resolvedDomain,
           orgId: resolvedOrgId,
           toolCalls: allToolRecords.length ? allToolRecords : undefined,
-          cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : undefined,
+          cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category,
+          llmWasCalled,
         });
         // (conversation_updated NOW emitted AFTER agent:response — see below)
 

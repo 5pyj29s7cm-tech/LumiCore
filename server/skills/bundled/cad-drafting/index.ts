@@ -2,13 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { runRenovationFolderWorkflow } from './renovation_workflow';
-import { runAutocadComPlayback } from './autocad_control';
+import { runAutocadComPlayback, runAutocadNewDocument } from './autocad_control';
 
 function ok(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-const server = new McpServer({ name: 'cad-drafting', version: '1.6.1' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'cad-drafting', version: '1.7.0' }, { capabilities: { tools: {} } });
 
 server.registerTool('cad_space_program', {
   description: 'Create a room/space program with estimated areas, adjacency notes, and drafting assumptions.',
@@ -70,6 +70,11 @@ server.registerTool('autocad_playback_file', {
   createNewDocument: args.createNewDocument !== false,
   savePath: args.savePath ? String(args.savePath) : undefined,
 })));
+
+server.registerTool('autocad_new_document', {
+  description: 'Create and focus one real blank drawing document in visible Windows AutoCAD through COM. Use this when the user asks for a new/blank CAD canvas, drawing, or document without asking to draw geometry. The verified receipt reports the created document and its initial entity count; it does not invent dimensions or source geometry.',
+  inputSchema: {},
+}, async () => ok(await runAutocadNewDocument()));
 
 server.registerTool('cad_renovation_folder_workflow', {
   description: 'Inventory a local renovation/floor-plan folder, extract readable source facts, identify likely reference drawings, and prepare the verified next-tool plan. This scan never generates CAD, BIM, renders, budgets, material schedules, or a client delivery package. Continue with floorplan_extract_geometry and the requested real output tools.',

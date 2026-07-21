@@ -55,6 +55,7 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
 } as const;
 
 export const CN_VOICE_WORK_MESSAGES = {
+  queuedWork: '收到，这个操作已经排在当前任务后面，当前任务完成后我会自动接着执行。',
   coordinatingParallelWork: '正在协调并行任务',
   executingCurrentStep: '正在执行当前步骤',
   currentStep: '执行当前步骤',

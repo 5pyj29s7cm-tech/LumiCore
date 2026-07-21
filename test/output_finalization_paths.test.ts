@@ -236,10 +236,10 @@ describe('finalized output paths', () => {
       'profileFinalized',
       'musicFinalized',
     ]) {
-      expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' : undefined`);
+      expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
       expect(voice).toContain(`if (!${finalized}.blocked) {`);
     }
-    expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' : undefined/g)).toHaveLength(2);
+    expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(2);
     expect(voice.match(/if \(!directFinal\.blocked\) \{/g)).toHaveLength(2);
   });
 

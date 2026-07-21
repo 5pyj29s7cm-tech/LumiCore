@@ -8,7 +8,13 @@ export type VoiceWorkInterruptionKind =
   | 'modify_work'
   | 'progress_query'
   | 'stop_speaking'
+  | 'new_work'
   | 'side_chat';
+
+export interface VoiceWorkInterruptionOptions {
+  /** Result of the shared, domain-independent tool-intent classifier. */
+  hasExplicitToolIntent?: boolean;
+}
 
 const CORRECTION_CONTINUATION_PATTERNS: RegExp[] = [
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
@@ -34,7 +40,10 @@ export function isVoiceWorkModificationContinuation(text: string): boolean {
     || /\b(?:also|and also|while you're at it|add|change|replace|remove|keep|save|export)\b/i.test(normalized);
 }
 
-export function classifyVoiceWorkInterruption(text: string): VoiceWorkInterruptionKind {
+export function classifyVoiceWorkInterruption(
+  text: string,
+  options: VoiceWorkInterruptionOptions = {},
+): VoiceWorkInterruptionKind {
   const normalized = String(text || '').trim();
   const compact = normalized
     .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001]+/gu, '')
@@ -53,6 +62,7 @@ export function classifyVoiceWorkInterruption(text: string): VoiceWorkInterrupti
     /^(?:\u505c|\u505c\u4e0b|\u95ed\u5634|\u522b\u8bf4(?:\u4e86)?|\u4e0d\u8981\u8bf4(?:\u4e86)?|\u5148\u522b\u8bf4(?:\u4e86)?|\u7b49\u4e00\u4e0b|\u7b49\u4e0b|\u6682\u505c|\u597d\u4e86|\u884c\u4e86|\u591f\u4e86|stop|wait|pause|interrupt|holdon|shutup)$/u.test(compact)
     || /(?:\u5148)?(?:\u522b|\u4e0d\u7528)(?:\u518d)?\u8bf4(?:\u4e86)?(?:\u4f60)?(?:\u7ee7\u7eed|\u63a5\u7740)(?:\u505a|\u5904\u7406)/u.test(compact)
   ) return 'stop_speaking';
+  if (options.hasExplicitToolIntent === true) return 'new_work';
   return 'side_chat';
 }
 
@@ -61,9 +71,10 @@ export function isVoiceCurrentActivityQuestion(text: string): boolean {
     .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001]+/gu, '')
     .trim()
     .toLowerCase();
-  if (!normalized || normalized.length > 28) return false;
+  if (!normalized || normalized.length > 40) return false;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  return /^(?:你)?(?:刚才|刚刚|现在)?(?:在)?(?:干嘛|干什么|做什么|忙什么|处理什么|跑什么|弄什么|搞什么|what(?:are|were)youdoing)$/iu.test(normalized);
+  return /^(?:你)?(?:刚才|刚刚|现在)?(?:有|还|是否)?在(?:干嘛|干什么|做什么|忙什么|处理什么|跑什么|弄什么|搞什么|执行|处理|做|运行)(?:这个|那个|刚才的|当前的)?(?:任务|操作|工作)?(?:吗)?$/u.test(normalized)
+    || /^(?:what(?:are|were)youdoing|areyou(?:still)?(?:doing|running|workingon)(?:this|it|thetask)?)$/iu.test(normalized);
 }
 
 export function isVoiceFiller(text: string): boolean {

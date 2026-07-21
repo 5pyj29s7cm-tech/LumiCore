@@ -10,6 +10,7 @@ import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/
 import { hasVisibleAutoCadExecutionEvidence, requiresVisibleAutoCadExecution } from '../cognition/action_contract';
 import { guardCurrentAppToolCall } from '../cognition/current_app_execution';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
+import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 import {
   buildToolEvidenceRecord,
   GENERIC_TOOL_PLANNING_PROMPT,
@@ -720,11 +721,12 @@ export async function runWithTools(
       const executionArguments = currentAppGuard.normalizedArguments
         || tc.arguments
         || {};
+      const safeExecutionArguments = sanitizeDiagnosticValue(executionArguments);
       if (!currentAppGuard.allowed) {
         const record: ToolExecutionRecord = {
           id: tc.id,
           name: tc.name,
-          arguments: executionArguments,
+          arguments: safeExecutionArguments,
           result: '',
           error: currentAppGuard.reason,
           evidence: buildToolEvidenceRecord(toolRegistry, tc.name, executionArguments),
@@ -744,7 +746,7 @@ export async function runWithTools(
         const record: ToolExecutionRecord = {
           id: tc.id,
           name: tc.name,
-          arguments: tc.arguments,
+          arguments: sanitizeDiagnosticValue(tc.arguments || {}),
           result: '',
           error: 'Blocked unsafe CAD image fallback. Use desktop_list_files/desktop_path_info followed by floorplan_extract_geometry or ocr_image_file; do not use project-scoped MCP filesystem or certutil/base64 shell conversion.',
           evidence: buildToolEvidenceRecord(toolRegistry, tc.name, tc.arguments || {}),
@@ -761,7 +763,7 @@ export async function runWithTools(
       }
 
       try {
-        context?.onToolStart?.({ id: tc.id, name: tc.name, arguments: executionArguments });
+        context?.onToolStart?.({ id: tc.id, name: tc.name, arguments: safeExecutionArguments });
       } catch {}
 
       try {
@@ -774,7 +776,7 @@ export async function runWithTools(
       const record: ToolExecutionRecord = {
         id: tc.id,
         name: tc.name,
-        arguments: executionArguments,
+        arguments: safeExecutionArguments,
         result,
         error,
         evidence: buildToolEvidenceRecord(toolRegistry, tc.name, executionArguments),

@@ -136,7 +136,15 @@ interface AudioSession {
   /** Independent conversational response while the work pipeline keeps running. */
   sidecarAbortController: AbortController | null;
   sidecarGeneration: number;
-  sidecarHistory: Array<{ userText: string; responseText: string }>;
+  sidecarHistory: Array<{
+    userText: string;
+    responseText: string;
+    userReceivedAt: string;
+    responseAt: string;
+    cognitiveIntent: string;
+    llmWasCalled: boolean;
+    persist: boolean;
+  }>;
   /** User-visible text for the pipeline that currently owns the session. */
   activeTurnText: string;
   /** Stable identity for the voice turn that currently owns agent events. */
@@ -145,8 +153,8 @@ interface AudioSession {
   activeRoutingText: string;
   /** Last action interrupted by real user speech; consumed only by an explicit correction. */
   pendingInterruptedTurn: PendingInterruptedVoiceTurn | null;
-  /** Queue of pending utterances while isProcessing=true */
-  inputQueue: string[];
+  /** Independent action requests accepted while another voice work lane is active. */
+  inputQueue: Array<{ text: string; queuedAt: string }>;
   /** True when background agent is executing tools (barge-in requires wake word) */
   isBackgroundWork: boolean;
   activeWorkStatus: 'idle' | 'planning' | 'executing' | 'orchestrating' | 'completed';
@@ -624,6 +632,7 @@ async function respondAlongsideActiveVoiceWork(
   llmGetters: LlmGetters,
   kind: ReturnType<typeof classifyVoiceWorkInterruption>,
 ): Promise<void> {
+  const userReceivedAt = new Date().toISOString();
   session.sidecarAbortController?.abort();
   const controller = new AbortController();
   const generation = ++session.sidecarGeneration;
@@ -631,9 +640,15 @@ async function respondAlongsideActiveVoiceWork(
   let ttsCountIncremented = false;
 
   let responseText = '';
+  let llmWasCalled = false;
   try {
     if (kind === 'progress_query') {
       responseText = buildActiveVoiceWorkProgressReply(session, userText);
+    } else if (kind === 'new_work') {
+      const isEnglish = /[a-z]/i.test(userText) && !/[\u3400-\u9fff]/u.test(userText);
+      responseText = isEnglish
+        ? 'Got it. I queued that action and will run it automatically as soon as the current task finishes.'
+        : CN_VOICE_WORK_MESSAGES.queuedWork;
     } else {
       const recentSideChat = session.sidecarHistory.slice(-4)
         .flatMap(item => [
@@ -658,6 +673,7 @@ async function respondAlongsideActiveVoiceWork(
         `A separate work lane is still running: ${activeTask || 'the user task'}.`,
         activeStep ? `Current verified progress: ${activeStep}.` : '',
         'Answer the user\'s conversational aside now without stopping, replacing, or expanding that work lane.',
+        'This conversational lane cannot execute or schedule actions. Never say that a newly requested action is running, queued, or awaiting confirmation unless the runtime explicitly says so.',
         'Use one short spoken sentence in the user\'s language. Do not call tools, claim completion, expose hidden reasoning, or ask the user to wait.',
       ].filter(Boolean).join('\n');
       const preferred = getUserPreferredLLMConfig(session.userId, {
@@ -686,6 +702,7 @@ async function respondAlongsideActiveVoiceWork(
         llmGetters.getGlm,
         llmGetters.getRelay,
       );
+      llmWasCalled = true;
       if (controller.signal.aborted || session.sidecarGeneration !== generation) return;
       recordTokenUsage(session.userId, preferred.provider, preferred.model, response.usage, `voice_sidecar_${Date.now()}`, 'voice');
       const finalized = finalizeLumiResponse({
@@ -700,7 +717,18 @@ async function respondAlongsideActiveVoiceWork(
     }
 
     if (!responseText || controller.signal.aborted || session.sidecarGeneration !== generation) return;
-    session.sidecarHistory.push({ userText, responseText });
+    const responseAt = new Date().toISOString();
+    session.sidecarHistory.push({
+      userText,
+      responseText,
+      userReceivedAt,
+      responseAt,
+      cognitiveIntent: kind === 'new_work' ? 'queued_work' : kind,
+      llmWasCalled,
+      // A queued command is persisted by its own execution turn so it is not
+      // duplicated as an ordinary conversational aside.
+      persist: kind !== 'new_work',
+    });
     session.sidecarHistory = session.sidecarHistory.slice(-8);
     socket.emit('audio:sidecar_response', {
       text: responseText,
@@ -766,6 +794,7 @@ async function processVoiceInput(
   llmGetters: LlmGetters,
   sensoryFn: (uid: string) => any,
   io: Server,
+  userReceivedAt = new Date().toISOString(),
 ): Promise<void> {
   if (!isVoiceprintGateOpen(session)) {
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
@@ -1183,6 +1212,7 @@ async function processVoiceInput(
   const persistSidecarConversation = (conversationId: string) => {
     const history = session.sidecarHistory.splice(0);
     for (const item of history) {
+      if (!item.persist) continue;
       addMessage({
         userId: session.userId,
         agentId: session.agentId,
@@ -1193,6 +1223,10 @@ async function processVoiceInput(
         mode: 'voice',
         source: 'voice_sidecar',
         channel: 'voice',
+        cognitiveIntent: item.cognitiveIntent,
+        llmWasCalled: false,
+        receivedAt: item.userReceivedAt,
+        timestamp: item.userReceivedAt,
         domain: voiceScope.domain,
         orgId: voiceScope.orgId,
       });
@@ -1206,6 +1240,10 @@ async function processVoiceInput(
         mode: 'voice',
         source: 'voice_sidecar',
         channel: 'voice',
+        cognitiveIntent: item.cognitiveIntent,
+        llmWasCalled: item.llmWasCalled,
+        receivedAt: item.responseAt,
+        timestamp: item.responseAt,
         domain: voiceScope.domain,
         orgId: voiceScope.orgId,
       });
@@ -1551,9 +1589,9 @@ async function processVoiceInput(
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
     persistSidecarConversation(conversation.id);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conversation.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : 'action_history', llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conversation.id);
     session.isProcessing = false;
     session.isSpeaking = false;
@@ -1643,9 +1681,9 @@ async function processVoiceInput(
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
     persistSidecarConversation(conv.id);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: toolResults.length > 0 ? toolResults : undefined, cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : (specialWorkflow.id || 'skill_workflow'), llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
@@ -1731,9 +1769,9 @@ async function processVoiceInput(
       await Promise.allSettled(ttsPromises);
       if (!isCurrentTurn()) return;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
       persistSidecarConversation(conv.id);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [modeToolRecord], cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [modeToolRecord], cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : 'operation_mode', llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
       scheduleVoiceSummary(conv.id);
       session.isProcessing = false;
       session.isSpeaking = false;
@@ -1837,9 +1875,9 @@ async function processVoiceInput(
       if (!isCurrentTurn()) return;
       responseText = quickResponseText;
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
       persistSidecarConversation(conv.id);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: quickToolRecord ? [quickToolRecord] : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: quickToolRecord ? [quickToolRecord] : undefined, cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : 'quick_command', llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
       scheduleVoiceSummary(conv.id);
       session.isProcessing = false;
       session.isSpeaking = false;
@@ -1930,9 +1968,9 @@ async function processVoiceInput(
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
     persistSidecarConversation(conv.id);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: [toolRecord], cognitiveIntent: directFinal.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: [toolRecord], cognitiveIntent: directFinal.blocked ? 'work_product_guard' : 'messaging', llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
@@ -2006,9 +2044,9 @@ async function processVoiceInput(
     await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
     persistSidecarConversation(conv.id);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [profileRecord], cognitiveIntent: profileFinalized.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [profileRecord], cognitiveIntent: profileFinalized.blocked ? 'work_product_guard' : 'music_profile', llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
@@ -2081,9 +2119,9 @@ async function processVoiceInput(
     if (!isCurrentTurn()) return;
 
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', cognitiveIntent: turnDispatch.boundary, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
     persistSidecarConversation(conv.id);
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [musicRecord], cognitiveIntent: musicFinalized.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: [musicRecord], cognitiveIntent: musicFinalized.blocked ? 'work_product_guard' : 'music', llmWasCalled: false, domain: voiceScope.domain, orgId: voiceScope.orgId });
     scheduleVoiceSummary(conv.id);
     session.isProcessing = false;
     session.isSpeaking = false;
@@ -2161,9 +2199,9 @@ async function processVoiceInput(
       if (!isCurrentTurn()) return;
       // Persist
       const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', cognitiveIntent: cognition.intent.category, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
       persistSidecarConversation(conv.id);
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: directRecords.length ? directRecords : undefined, cognitiveIntent: directFinal.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', toolCalls: directRecords.length ? directRecords : undefined, cognitiveIntent: directFinal.blocked ? 'work_product_guard' : cognition.intent.category, llmWasCalled: cognition.llmWasCalled, domain: voiceScope.domain, orgId: voiceScope.orgId });
       scheduleVoiceSummary(conv.id);
       session.isProcessing = false;
       session.isSpeaking = false;
@@ -2491,10 +2529,10 @@ async function processVoiceInput(
       conv.title = userText.slice(0, 50);
       writeDB(readDB());
     }
-    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId });
+    addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'user', content: userText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', cognitiveIntent: cognition.intent.category, llmWasCalled: false, receivedAt: userReceivedAt, timestamp: userReceivedAt, domain: voiceScope.domain, orgId: voiceScope.orgId });
     persistSidecarConversation(conv.id);
     if (responseText) {
-      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: toolResults.length ? toolResults : undefined, cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : undefined, domain: voiceScope.domain, orgId: voiceScope.orgId });
+      addMessage({ userId: session.userId, agentId: session.agentId, conversationId: conv.id, role: 'assistant', content: responseText, personality: session.personalityId, mode: 'voice', source: 'voice', channel: 'voice', toolCalls: toolResults.length ? toolResults : undefined, cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category, llmWasCalled: true, domain: voiceScope.domain, orgId: voiceScope.orgId });
     }
     scheduleVoiceSummary(conv.id);
     // Topic tracking — extract and record topics for cross-session continuity
@@ -2568,6 +2606,51 @@ async function processVoiceInput(
       }
       session.activeTurnRequestId = null;
     }
+  }
+}
+
+async function runVoiceInputPipeline(
+  socket: Socket,
+  session: AudioSession,
+  userText: string,
+  llmGetters: LlmGetters,
+  sensoryFn: (uid: string) => any,
+  io: Server,
+  userReceivedAt = new Date().toISOString(),
+): Promise<void> {
+  try {
+    await processVoiceInput(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt);
+  } catch (err: any) {
+    logger.error('[Voice Error]:', err);
+    session.isSpeaking = false;
+    session.isProcessing = false;
+    session.isBackgroundWork = false;
+    session.activeWorkStatus = 'idle';
+    socket.emit('audio:status', { status: 'listening' });
+  } finally {
+    if (!session.isActive || session.isProcessing || session.inputQueue.length === 0) return;
+    const next = session.inputQueue.shift();
+    if (!next) return;
+
+    // Reserve the lane before yielding so a new transcript cannot replace the
+    // queued action in the small handoff window between two work turns.
+    session.isProcessing = true;
+    socket.emit('audio:work_started', {
+      text: next.text,
+      queuedAt: next.queuedAt,
+      remaining: session.inputQueue.length,
+    });
+    setImmediate(() => {
+      void runVoiceInputPipeline(
+        socket,
+        session,
+        next.text,
+        llmGetters,
+        sensoryFn,
+        io,
+        next.queuedAt,
+      );
+    });
   }
 }
 
@@ -2727,7 +2810,9 @@ export function registerVoiceHandlers(
               }
 
               if (activeWorkRunning) {
-                const interruptionKind = classifyVoiceWorkInterruption(text);
+                const interruptionKind = classifyVoiceWorkInterruption(text, {
+                  hasExplicitToolIntent: hasExplicitToolIntent(text),
+                });
                 logger.info(`[Audio] Work-lane interruption=${interruptionKind} (${text.length} chars)`);
                 if (interruptionKind === 'cancel_work') {
                   cancelActiveVoiceTurn(session);
@@ -2751,6 +2836,17 @@ export function registerVoiceHandlers(
                     socket.emit("audio:status", { status: "listening", requestId: workRequestId, lane: 'work' });
                     resetSilenceTimer(session, socket);
                     return;
+                  }
+                  if (interruptionKind === 'new_work') {
+                    const duplicate = session.inputQueue.some(item => item.text === text);
+                    if (!duplicate) {
+                      session.inputQueue.push({ text, queuedAt: new Date().toISOString() });
+                    }
+                    socket.emit('audio:work_queued', {
+                      text,
+                      queuePosition: session.inputQueue.findIndex(item => item.text === text) + 1,
+                      activeRequestId: workRequestId,
+                    });
                   }
                   socket.emit("audio:confirm", { text });
                   void respondAlongsideActiveVoiceWork(socket, session, text, llmGetters, interruptionKind);
@@ -2795,12 +2891,7 @@ export function registerVoiceHandlers(
             session.bargeinTimer = setTimeout(() => {
               session.bargeinTimer = null;
               if (!session.isActive) return;
-              processVoiceInput(socket, session, text, llmGetters, sensoryFn, io).catch(err => {
-                logger.error("[Voice Error]:", err);
-                session.isSpeaking = false;
-                session.isProcessing = false;
-                socket.emit("audio:status", { status: "listening" });
-              });
+              void runVoiceInputPipeline(socket, session, text, llmGetters, sensoryFn, io);
             }, 600);
           } else if (result.text && !result.isFinal) {
             socket.emit("audio:transcript", { text: result.text, isFinal: false });

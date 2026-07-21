@@ -67,6 +67,7 @@ export interface MessageRecord {
   source?: string;
   channel?: string;
   cognitiveIntent?: string;
+  llmWasCalled?: boolean;
   /** Provider message identity used to keep asynchronous remote turns ordered. */
   externalMessageId?: string;
   /** Monotonic sequence within one external conversation. */
@@ -404,13 +405,15 @@ export function addMessage(msg: {
   source?: string;
   channel?: string;
   cognitiveIntent?: string;
+  llmWasCalled?: boolean;
   externalMessageId?: string;
   routeSequence?: number;
   receivedAt?: string;
+  timestamp?: string;
 }): string {
   const db = readDB();
   const id = 'msg_' + crypto.randomUUID();
-  const now = new Date().toISOString();
+  const now = msg.timestamp || new Date().toISOString();
   const normalizedToolCalls = normalizeToolCalls(msg.toolCalls);
 
   const interaction: any = {
@@ -430,6 +433,7 @@ export function addMessage(msg: {
     source: msg.source || '',
     channel: msg.channel || '',
     cognitiveIntent: msg.cognitiveIntent || '',
+    llmWasCalled: msg.llmWasCalled === true,
     externalMessageId: msg.externalMessageId || '',
     routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : undefined,
     receivedAt: msg.receivedAt || '',

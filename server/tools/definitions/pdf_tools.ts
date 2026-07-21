@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
+import { extractPdfTextContent } from '../../utils/pdf_text';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
@@ -24,12 +25,10 @@ async function readPdf(args: Record<string, any>): Promise<string> {
     throw new Error(`PDF file not found: ${filePath}`);
   }
 
-  const pdfParse = require('pdf-parse');
-  const dataBuffer = fs.readFileSync(filePath);
-  const data = await pdfParse(dataBuffer);
+  const data = await extractPdfTextContent(filePath, args.password);
 
   const info = [
-    `Pages: ${data.numpages}`,
+    `Pages: ${data.pageCount}`,
     `Info: ${JSON.stringify(data.info || {})}`,
     ``,
     data.text.slice(0, 10000),
@@ -46,9 +45,7 @@ async function pdfToText(args: Record<string, any>): Promise<string> {
     throw new Error(`PDF file not found: ${filePath}`);
   }
 
-  const pdfParse = require('pdf-parse');
-  const dataBuffer = fs.readFileSync(filePath);
-  const data = await pdfParse(dataBuffer);
+  const data = await extractPdfTextContent(filePath, args.password);
 
   // Save extracted text alongside the PDF
   const outPath = filePath.replace(/\.pdf$/i, '.txt');
@@ -380,11 +377,12 @@ async function extractPdfTables(args: Record<string, any>): Promise<string> {
 export function registerPdfTools(registry: ToolRegistry): void {
   registry.register({
     name: 'read_pdf',
-    description: 'Read and extract text from a PDF file. Returns page count, metadata, and the full text content (truncated at 10000 chars). Use this when asked to read or summarize a PDF document.',
+    description: 'Read and extract text from a PDF file, including password-protected PDFs when the user supplies the password. Returns page count, metadata, and text truncated at 10000 chars. If a password is required or incorrect, ask the user and retry; never repeat the password.',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the PDF file' },
+        password: { type: 'string', description: 'Optional PDF open password. Sensitive: use only for this read and never repeat it in output.' },
       },
       required: ['filePath'],
     },
@@ -395,11 +393,12 @@ export function registerPdfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'pdf_to_text',
-    description: 'Extract all text from a PDF and save it as a .txt file alongside the original. Returns the output file path.',
+    description: 'Extract all text from a PDF, including a password-protected PDF when the user supplies the password, and save it as an unencrypted .txt file alongside the original. Returns the output path. Never repeat the password.',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the PDF file' },
+        password: { type: 'string', description: 'Optional PDF open password. Sensitive: use only for this conversion and never repeat it in output.' },
       },
       required: ['filePath'],
     },

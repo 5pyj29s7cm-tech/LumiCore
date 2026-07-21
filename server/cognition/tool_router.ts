@@ -3,6 +3,7 @@ import { ToolRegistry } from '../tools/registry';
 import { mcpManager } from '../mcp/client';
 import {
   buildActionContract,
+  requestsBlankAutoCadDocument,
   requiresCadGeometryExtractionOnly,
   requiresVisibleAutoCadExecution,
 } from './action_contract';
@@ -171,6 +172,7 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'generate_video',
     'cad_generate_dxf',
     'cad_prepare_autocad_operations',
+    'mcp_cad-drafting_autocad_new_document',
     'mcp_cad-drafting_autocad_playback_file',
     'floorplan_extract_geometry',
     'ocr_image_file',
@@ -720,6 +722,9 @@ function requestsExplicitCadFileExport(text: string): boolean {
 
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
+  if (requestsBlankAutoCadDocument(text)) {
+    priorities.push('mcp_cad-drafting_autocad_new_document');
+  }
   if (categories.includes('desktop_observation')) {
     priorities.push(...buildDesktopObservationPlan(text).map(call => call.name));
   }
@@ -1151,7 +1156,11 @@ export function routeToolsForTurn(
     reasons.push('existing AutoCAD operations are played only through MCP/COM');
   }
 
-  if (!recoveredCurrentAppEdit && requiresVisibleAutoCadExecution(text)) {
+  if (!recoveredCurrentAppEdit && requestsBlankAutoCadDocument(text)) {
+    selected.clear();
+    addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_new_document');
+    reasons.push('blank AutoCAD document requests use the dedicated COM document tool and never synthesize geometry');
+  } else if (!recoveredCurrentAppEdit && requiresVisibleAutoCadExecution(text)) {
     if (!requestsExplicitCadFileExport(text)) selected.delete('cad_generate_dxf');
     selected.delete('mcp_cad-drafting_cad_renovation_folder_workflow');
     addIfAvailable(selected, available, 'cad_prepare_autocad_operations');

@@ -13,6 +13,7 @@ import { extractRtfText } from '../../knowledge/rtf';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
 import type { STTProvider } from '../../stt/types';
 import { applySpreadsheetOperations, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, workbookToText, worksheetToCsv, writeXlsxWorkbook } from '../../utils/spreadsheet';
+import { extractPdfText } from '../../utils/pdf_text';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
@@ -151,34 +152,6 @@ async function transcribeAudioToTextFile(args: Record<string, any>, context?: To
   }
 }
 
-async function parsePdfText(filePath: string): Promise<string> {
-  const buffer = fs.readFileSync(filePath);
-  const pdfModule: any = require('pdf-parse');
-  const legacyParser = typeof pdfModule === 'function'
-    ? pdfModule
-    : typeof pdfModule.default === 'function'
-      ? pdfModule.default
-      : null;
-
-  if (legacyParser) {
-    const result = await legacyParser(buffer);
-    return String(result?.text || '');
-  }
-
-  const PDFParse = pdfModule.PDFParse || pdfModule.default?.PDFParse;
-  if (typeof PDFParse !== 'function') {
-    throw new Error('Unsupported pdf-parse API');
-  }
-
-  const parser = new PDFParse({ data: buffer });
-  try {
-    const result = await parser.getText();
-    return String(result?.text || '');
-  } finally {
-    await parser.destroy?.();
-  }
-}
-
 async function readDocx(args: Record<string, any>): Promise<string> {
   const filePath: string = args.filePath || '';
   if (!filePath || !fs.existsSync(filePath)) {
@@ -246,7 +219,7 @@ async function extractDocumentText(args: Record<string, any>): Promise<string> {
       text = await extractPptxText(filePath);
       break;
     case '.pdf':
-      text = await parsePdfText(filePath);
+      text = await extractPdfText(filePath, args.password);
       break;
     case '.txt':
     case '.md':
@@ -271,7 +244,7 @@ async function ingestDocumentToRag(args: Record<string, any>, context?: any): Pr
 
   const userId = context?.userId || 'system';
   const title = args.title || path.basename(filePath);
-  const text = await extractDocumentText({ filePath });
+  const text = await extractDocumentText({ filePath, password: args.password });
   const count = await ingestDocument(userId, agentId, title, text, { filePath });
 
   return `Ingested "${title}" into agent ${agentId}: ${count} chunks stored.`;
@@ -566,14 +539,14 @@ async function diffDocuments(args: Record<string, any>): Promise<string> {
   const ext1 = path.extname(filePath1).toLowerCase();
   const ext2 = path.extname(filePath2).toLowerCase();
 
-  async function extractText(fp: string, ext: string): Promise<string> {
+  async function extractText(fp: string, ext: string, password?: unknown): Promise<string> {
     switch (ext) {
       case '.docx': {
         const mammoth = require('mammoth');
         return (await mammoth.extractRawText({ path: fp })).value;
       }
       case '.pdf': {
-        return parsePdfText(fp);
+        return extractPdfText(fp, password);
       }
       case '.txt': case '.md': case '.csv':
         return fs.readFileSync(fp, 'utf-8');
@@ -583,8 +556,8 @@ async function diffDocuments(args: Record<string, any>): Promise<string> {
   }
 
   const [text1, text2] = await Promise.all([
-    extractText(filePath1, ext1),
-    extractText(filePath2, ext2),
+    extractText(filePath1, ext1, args.password1),
+    extractText(filePath2, ext2, args.password2),
   ]);
 
   const diffLib = require('diff');
@@ -666,11 +639,12 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'extract_document_text',
-    description: 'Auto-detect document format and extract text. Supports .docx, .xlsx, .pptx, .pdf, .rtf, .txt, .md, .csv. Use this when you need to read any document without knowing its format in advance.',
+    description: 'Auto-detect document format and extract text. Supports .docx, .xlsx, .pptx, .pdf (including password-protected PDFs when supplied), .rtf, .txt, .md, .csv. If a PDF password is required or incorrect, ask the user and retry; never repeat the password.',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the document' },
+        password: { type: 'string', description: 'Optional PDF open password. Sensitive: use only for this read and never repeat it in output.' },
       },
       required: ['filePath'],
     },
@@ -681,13 +655,14 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'ingest_document_to_rag',
-    description: 'Read a document (.docx, .pdf, .xlsx, .pptx, .rtf, .txt, .md) and ingest it into an agent\'s RAG knowledge base. The document is chunked and stored as searchable memories scoped to the specified agent.',
+    description: 'Read a document (.docx, .pdf, .xlsx, .pptx, .rtf, .txt, .md), including a password-protected PDF when supplied, and ingest its content into an agent\'s RAG knowledge base. Never repeat the PDF password.',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the document' },
         agentId: { type: 'string', description: 'Target agent ID for knowledge storage' },
         title: { type: 'string', description: 'Optional title override (defaults to filename)' },
+        password: { type: 'string', description: 'Optional PDF open password. Sensitive: use only for this ingestion and never repeat it in output.' },
       },
       required: ['filePath', 'agentId'],
     },
@@ -850,13 +825,15 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'diff_documents',
-    description: 'Compare two documents (.docx, .pdf, .txt, .md, .csv) and produce a detailed diff. Output formats: "unified" (text diff file), "html" (redline with green/red highlights), or "summary" (change statistics). Essential for contract review and document revision tracking.',
+    description: 'Compare two documents (.docx, .pdf, .txt, .md, .csv), including password-protected PDFs when supplied, and produce a detailed diff. Output formats: "unified" (text diff file), "html" (redline with green/red highlights), or "summary" (change statistics). Never repeat PDF passwords.',
     parameters: {
       type: 'object',
       properties: {
         filePath1: { type: 'string', description: 'Absolute path to the first (original) document' },
         filePath2: { type: 'string', description: 'Absolute path to the second (modified) document' },
         outputFormat: { type: 'string', description: '"unified" (text diff, default), "html" (colored redline), or "summary" (statistics only)' },
+        password1: { type: 'string', description: 'Optional open password for the first PDF. Sensitive: never repeat it in output.' },
+        password2: { type: 'string', description: 'Optional open password for the second PDF. Sensitive: never repeat it in output.' },
       },
       required: ['filePath1', 'filePath2'],
     },

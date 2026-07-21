@@ -3,6 +3,7 @@ import type { LumiTurnDispatch } from './turn_dispatch';
 import {
   buildActionContract,
   formatActionContractPrompt,
+  requestsBlankAutoCadDocument,
   requiresVisibleAutoCadExecution,
 } from './action_contract';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn } from './legal_entry';
@@ -109,6 +110,7 @@ const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
     'mcp_cad-drafting_cad_renovation_folder_workflow',
     'cad_generate_dxf',
     'cad_prepare_autocad_operations',
+    'mcp_cad-drafting_autocad_new_document',
     'mcp_cad-drafting_autocad_playback_file',
   ],
   desktop_control: [
@@ -413,6 +415,9 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
     case 'artifact_work':
       return 'Produce or inspect local files first, verify content and existence, then explain what is ready and what still needs confirmation.';
     case 'design_cad':
+      if (requestsBlankAutoCadDocument(text)) {
+        return 'Use mcp_cad-drafting_autocad_new_document to create and focus exactly one real blank AutoCAD drawing. Do not prepare geometry, infer dimensions, draw a placeholder boundary, or claim source verification.';
+      }
       if (requiresVisibleAutoCadExecution(text)) {
         return 'Run floorplan_extract_geometry and continue only when it returns geometryReady=true, geometryVerified=true, and a geometryReceiptPath; then call cad_prepare_autocad_operations with the receipt handoff directly. Never copy, shorten, or reconstruct coordinates in chat. Then call mcp_cad-drafting_autocad_playback_file for observable stroke-by-stroke drawing in real AutoCAD; never substitute DXF/DWG generation, LISP, scripts, batch commands, cursor drawing, or an opened window. Accept completion only when the verified operationSetId matches and operationCount=expectedEntityCount=entitiesAdded with entityCountMatches=true.';
       }

@@ -108,6 +108,77 @@ function psLiteral(value: string): string {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+export function buildAutocadNewDocumentScript(): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$InformationPreference = 'SilentlyContinue'",
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+    '$OutputEncoding = [Console]::OutputEncoding',
+    'Add-Type @"',
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public static class LumiAutoCadNewDocumentWindow {',
+    '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
+    '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);',
+    '}',
+    '"@',
+    '$acad = $null',
+    "try { $acad = [Runtime.InteropServices.Marshal]::GetActiveObject('AutoCAD.Application') } catch {}",
+    '$startedNewApplication = $false',
+    'if ($null -eq $acad) {',
+    '  $startedNewApplication = $true',
+    "  $clsid = (Get-ItemProperty -LiteralPath 'Registry::HKEY_CLASSES_ROOT\\AutoCAD.Application\\CLSID' -ErrorAction SilentlyContinue).'(default)'",
+    '  $localServer = if ($clsid) { (Get-ItemProperty -LiteralPath "Registry::HKEY_CLASSES_ROOT\\CLSID\\$clsid\\LocalServer32" -ErrorAction SilentlyContinue).\'(default)\' } else { \'\' }',
+    "  $exeMatch = [regex]::Match([string]$localServer, '^\\s*\"(?<path>[^\"]+\\.exe)\"|^\\s*(?<path>.+?\\.exe)(?:\\s|$)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)",
+    "  $acadExecutable = if ($exeMatch.Success) { $exeMatch.Groups['path'].Value } else { '' }",
+    "  if (-not $acadExecutable -or -not (Test-Path -LiteralPath $acadExecutable)) { throw 'AutoCAD is registered, but its executable path could not be resolved.' }",
+    '  [void](Start-Process -FilePath $acadExecutable -PassThru)',
+    '  $attachDeadline = (Get-Date).AddSeconds(120)',
+    '  while ($null -eq $acad -and (Get-Date) -lt $attachDeadline) {',
+    '    Start-Sleep -Milliseconds 500',
+    "    try { $acad = [Runtime.InteropServices.Marshal]::GetActiveObject('AutoCAD.Application') } catch {}",
+    '  }',
+    "  if ($null -eq $acad) { throw 'AutoCAD started, but its COM automation object was not registered within 120 seconds.' }",
+    '}',
+    '$readyDeadline = (Get-Date).AddSeconds(120)',
+    '$applicationReady = $false',
+    'while ((Get-Date) -lt $readyDeadline -and -not $applicationReady) {',
+    '  try {',
+    '    $acad.Visible = $true',
+    '    [void]$acad.Documents.Count',
+    "    if (-not [bool]$acad.GetAcadState().IsQuiescent) { throw 'AutoCAD is still busy.' }",
+    '    $applicationReady = $true',
+    '  } catch { Start-Sleep -Milliseconds 500 }',
+    '}',
+    "if (-not $applicationReady) { throw 'AutoCAD remained busy and no blank drawing was created.' }",
+    '$documentCountBefore = [int]$acad.Documents.Count',
+    '$doc = $acad.Documents.Add()',
+    '$doc.Activate()',
+    '$model = $doc.ModelSpace',
+    '$documentCountAfter = [int]$acad.Documents.Count',
+    'try {',
+    '  $hwnd = [IntPtr][int64]$acad.HWND',
+    '  [void][LumiAutoCadNewDocumentWindow]::ShowWindow($hwnd, 9)',
+    '  [void][LumiAutoCadNewDocumentWindow]::SetForegroundWindow($hwnd)',
+    '} catch {}',
+    '$result = [pscustomobject]@{',
+    "  status = 'completed'",
+    "  transport = 'mcp_autocad_com'",
+    '  documentCreated = $true',
+    '  visible = [bool]$acad.Visible',
+    '  document = [string]$doc.Name',
+    '  entityCount = [int]$model.Count',
+    '  documentCountBefore = $documentCountBefore',
+    '  documentCountAfter = $documentCountAfter',
+    '  startedNewApplication = $startedNewApplication',
+    '  autocadVersion = [string]$acad.Version',
+    '}',
+    '$result | ConvertTo-Json -Compress',
+    '',
+  ].join('\n');
+}
+
 export function buildAutocadComPlaybackScript(
   payload: AutocadOperationPayload,
   options: AutocadPlaybackOptions,
@@ -647,4 +718,25 @@ export async function runAutocadComPlayback(options: AutocadPlaybackOptions): Pr
   } finally {
     releasePlaybackLock(lockPath, lockOwnerToken);
   }
+}
+
+export async function runAutocadNewDocument(timeoutMs = 150_000): Promise<Record<string, any>> {
+  if (process.platform !== 'win32') throw new Error('AutoCAD COM document creation currently requires Windows.');
+  const output = await executePowerShell(
+    buildAutocadNewDocumentScript(),
+    Math.max(30_000, Math.min(timeoutMs, 5 * 60_000)),
+  );
+  const jsonLine = output.split(/\r?\n/).reverse().find(line => line.trim().startsWith('{'));
+  if (!jsonLine) throw new Error(`AutoCAD MCP returned no new-document receipt: ${output.slice(-1200)}`);
+  const result = JSON.parse(jsonLine.replace(/^\uFEFF/, ''));
+  if (
+    result?.status !== 'completed'
+    || result?.transport !== 'mcp_autocad_com'
+    || result?.documentCreated !== true
+    || result?.visible !== true
+    || !String(result?.document || '').trim()
+  ) {
+    throw new Error('AutoCAD did not return a verified visible new-document receipt.');
+  }
+  return result;
 }

@@ -77,6 +77,15 @@ describe('voice interruption state', () => {
     expect(classifyVoiceWorkInterruption('\u4f60\u89c9\u5f97\u8fd9\u4e2a\u989c\u8272\u600e\u4e48\u6837\uff1f')).toBe('side_chat');
   });
 
+  it('classifies an independent tool request as queued work when the shared intent gate confirms it', () => {
+    expect(classifyVoiceWorkInterruption('打开浏览器并移到主屏幕', {
+      hasExplicitToolIntent: true,
+    })).toBe('new_work');
+    expect(classifyVoiceWorkInterruption('你觉得这个颜色怎么样', {
+      hasExplicitToolIntent: false,
+    })).toBe('side_chat');
+  });
+
   it('separates stopping speech from cancelling or modifying the active work', () => {
     expect(classifyVoiceWorkInterruption('\u522b\u8bf4\u4e86')).toBe('stop_speaking');
     expect(classifyVoiceWorkInterruption('\u4f60\u5148\u522b\u8bf4\u4e86\uff0c\u7ee7\u7eed\u505a')).toBe('stop_speaking');

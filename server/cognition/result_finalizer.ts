@@ -21,6 +21,7 @@ import {
   extractCurrentAppTarget,
   extractRequestedCurrentAppText,
   hasAuthenticatedWebResultEvidence,
+  hasBlankAutoCadDocumentEvidence,
   hasCoreActionEvidence,
   hasCurrentAppSaveEvidence,
   hasCurrentAppUiMutationEvidence,
@@ -810,7 +811,9 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
           operationsPath ? `${CN_CAD_MESSAGES.drawingOperations}${operationsPath}` : '',
           executable ? `AutoCAD：${executable}${executableSource ? `（来源：${executableSource}）` : ''}` : '',
           operationCount > 0 ? `已执行 ${operationCount} 个绘图操作。` : '',
-          parsed?.geometryVerified === true ? CN_CAD_MESSAGES.sourceGeometryVerified : '',
+          parsed?.geometryVerified === true && parsed?.geometryVerificationRequired === true && Boolean(String(parsed?.geometryReceiptPath || '').trim())
+            ? CN_CAD_MESSAGES.sourceGeometryVerified
+            : '',
           parsed?.entityCountMatches === true ? `${CN_CAD_MESSAGES.entityDeltaVerification}${entitiesAdded}/${expectedEntityCount}\u3002` : '',
         ]
       : [
@@ -820,7 +823,9 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
           executable ? `AutoCAD: ${executable}${executableSource ? ` (source: ${executableSource})` : ''}` : '',
           operationCount > 0 ? `${operationCount} drawing operations completed.` : '',
           strokeDelayMs > 0 ? `Visible stroke interval: ${strokeDelayMs} ms.` : '',
-          parsed?.geometryVerified === true ? 'Source geometry verification: passed.' : '',
+          parsed?.geometryVerified === true && parsed?.geometryVerificationRequired === true && Boolean(String(parsed?.geometryReceiptPath || '').trim())
+            ? 'Source geometry verification: passed.'
+            : '',
           parsed?.entityCountMatches === true ? `Entity delta verification: ${entitiesAdded}/${expectedEntityCount}.` : '',
         ];
     return {
@@ -858,6 +863,35 @@ function formatGroundedCadRunResult(input: LumiResultFinalizerInput): LumiResult
       level: 'warning',
       message: blocker,
     },
+  };
+}
+
+function formatGroundedBlankAutoCadDocumentResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  if (taskActionContract(input).kind !== 'cad_document') return null;
+  if (!hasBlankAutoCadDocumentEvidence(input.toolRecords || [])) return null;
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    !item.error
+    && /^mcp_cad-drafting_autocad_new_document$/i.test(String(item.name || ''))
+    && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(record.result || ''));
+  } catch {
+    return null;
+  }
+  const document = String(parsed?.document || '').trim();
+  const entityCount = Number(parsed?.entityCount);
+  const zh = isChineseText(resultTaskText(input));
+  return {
+    text: zh
+      ? CN_CAD_MESSAGES.blankDocumentCreated(document, entityCount)
+      : `Created and focused the blank drawing ${document} in the real AutoCAD application; it currently contains ${entityCount} entities.`,
+    blocked: false,
+    reason: 'Grounded blank AutoCAD document result from a verified MCP/COM receipt.',
   };
 }
 
@@ -1052,6 +1086,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     };
   }
   const actionContract = taskActionContract(input);
+  const groundedBlankCadDocument = formatGroundedBlankAutoCadDocumentResult(input);
+  if (groundedBlankCadDocument) return groundedBlankCadDocument;
   const groundedWpsMutation = formatGroundedWpsMutationResult(input);
   if (groundedWpsMutation) return groundedWpsMutation;
   const groundedCadGeometry = formatGroundedCadGeometryExtractionResult(input);
