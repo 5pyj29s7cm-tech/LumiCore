@@ -101,7 +101,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const canSendMicAudioRef = useRef(canSendMicAudio);
   const ttsEchoFloorRef = useRef(0);
   const ttsBargeInFramesRef = useRef(0);
-  const musicDuckingRef = useRef<{ active: boolean; level: number | null }>({ active: false, level: null });
   const thinkingWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thinkingWatchdogStartedAt = useRef(0);
   const callStateRef = useRef<CallState>('idle');
@@ -443,6 +442,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       setCallState('listening');
     };
 
+    const onAudioEndCallRequest = () => {
+      if (!isCallActive.current) return;
+      endCall();
+    };
+
     const onAudioSidecarResponse = (data: { text?: string }) => {
       if (!isCallActive.current || !data.text?.trim()) return;
       setTranscript('');
@@ -505,6 +509,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     socket.on('agent:response', onAgentResponse);
     socket.on('audio:error', onAudioError);
     socket.on('audio:interrupt-ack', onAudioInterruptAck);
+    socket.on('audio:end-call-request', onAudioEndCallRequest);
     socket.on('audio:sidecar_response', onAudioSidecarResponse);
     socket.on('audio:proactive_speak', onAudioProactiveSpeak);
 
@@ -516,6 +521,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       socket.off('agent:response', onAgentResponse);
       socket.off('audio:error', onAudioError);
       socket.off('audio:interrupt-ack', onAudioInterruptAck);
+      socket.off('audio:end-call-request', onAudioEndCallRequest);
       socket.off('audio:sidecar_response', onAudioSidecarResponse);
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
       clearThinkingWatchdog();
@@ -560,46 +566,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       socket.emit('perception:audio_emotion', entry);
     }
   }, [callState, socket]);
-
-  // Music coexistence: duck only while a voice turn is active so music can
-  // recover between utterances without covering speech.
-  useEffect(() => {
-    const publishDucking = () => {
-      const prev = musicDuckingRef.current;
-      const userSpeaking =
-        callState === 'listening' &&
-        (prev.active && prev.level === 0.32 ? rawAudioLevelRef.current > 0.018 : rawAudioLevelRef.current > 0.035);
-      const level =
-        callState === 'speaking' ? 0.18 :
-        callState === 'thinking' ? 0.22 :
-        callState === 'queued' ? 0.28 :
-        callState === 'connecting' ? 0.35 :
-        userSpeaking ? 0.32 :
-        null;
-      const active = typeof level === 'number';
-      if (prev.active === active && prev.level === level) return;
-      musicDuckingRef.current = { active, level };
-      window.dispatchEvent(new CustomEvent('lumi:music-ducking', {
-        detail: {
-          reason: 'voice-call',
-          active,
-          level: level ?? undefined,
-        },
-      }));
-    };
-    publishDucking();
-    if (callState !== 'listening') return;
-    const interval = setInterval(publishDucking, 250);
-    return () => clearInterval(interval);
-  }, [callState]);
-
-  useEffect(() => {
-    return () => {
-      window.dispatchEvent(new CustomEvent('lumi:music-ducking', {
-        detail: { reason: 'voice-call', active: false },
-      }));
-    };
-  }, []);
 
   const startCall = useCallback(async (voiceId?: string, personalityId: string = 'lumi', agentId?: string, options: StartCallOptions = {}) => {
     if (isCallActive.current || startInFlightRef.current) return;

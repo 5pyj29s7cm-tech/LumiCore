@@ -113,6 +113,7 @@ type OpenAICompatibleMessage = {
   tool_calls?: any;
   tool_call_id?: string;
   name?: string;
+  reasoning_content?: string;
 };
 
 function contentToText(content: MessageContent): string {
@@ -169,7 +170,10 @@ function toolResultAsUserMessage(m: NormalizedMessage): OpenAICompatibleMessage 
   };
 }
 
-function buildOpenAICompatibleMessages(messages: NormalizedMessage[]): OpenAICompatibleMessage[] {
+function buildOpenAICompatibleMessages(
+  messages: NormalizedMessage[],
+  options: { includeAssistantReasoning?: boolean } = {},
+): OpenAICompatibleMessage[] {
   const raw: OpenAICompatibleMessage[] = [];
 
   for (const m of messages) {
@@ -205,6 +209,9 @@ function buildOpenAICompatibleMessages(messages: NormalizedMessage[]): OpenAICom
       role,
       content: m.content ?? '',
       ...(validToolCalls.length > 0 ? { tool_calls: validToolCalls } : {}),
+      ...(role === 'assistant' && options.includeAssistantReasoning && m.reasoningContent
+        ? { reasoning_content: m.reasoningContent }
+        : {}),
     });
   }
 
@@ -256,23 +263,30 @@ function buildOpenAICompatibleMessages(messages: NormalizedMessage[]): OpenAICom
 
 // ── DeepSeek (OpenAI-compatible) ──
 
-export function formatDeepSeekRequest(params: {
+type OpenAICompatibleRequestParams = {
   model: string;
   messages: NormalizedMessage[];
   toolDeclarations: ToolDeclaration[];
   maxTokens?: number;
   userId?: string;
   responseFormat?: LLMResponseFormat;
-}): {
+};
+
+type OpenAICompatibleRequest = {
   model: string;
-  messages: Array<{ role: string; content: MessageContent; tool_calls?: any; tool_call_id?: string }>;
+  messages: OpenAICompatibleMessage[];
   tools?: ToolDeclaration[];
   tool_choice?: string;
   max_tokens?: number;
   user?: string;
   response_format?: { type: 'json_object' };
-} {
-  const openaiMessages = buildOpenAICompatibleMessages(params.messages);
+};
+
+function formatOpenAICompatibleRequest(
+  params: OpenAICompatibleRequestParams,
+  options: { includeAssistantReasoning?: boolean } = {},
+): OpenAICompatibleRequest {
+  const openaiMessages = buildOpenAICompatibleMessages(params.messages, options);
 
   const hasTools = params.toolDeclarations.length > 0;
 
@@ -284,6 +298,10 @@ export function formatDeepSeekRequest(params: {
     ...(params.userId ? { user: params.userId.replace(/[^a-zA-Z0-9_-]/g, '_') } : {}),
     ...(params.responseFormat === 'json_object' ? { response_format: { type: 'json_object' as const } } : {}),
   };
+}
+
+export function formatDeepSeekRequest(params: OpenAICompatibleRequestParams): OpenAICompatibleRequest {
+  return formatOpenAICompatibleRequest(params, { includeAssistantReasoning: true });
 }
 
 function extractUsage(rawResponse: any) {
@@ -491,7 +509,9 @@ export function parseGeminiResponse(rawResponse: any): NormalizedLLMResponse {
 
 // ── OpenAI (same API format as DeepSeek) ──
 
-export const formatOpenAIRequest = formatDeepSeekRequest;
+export function formatOpenAIRequest(params: OpenAICompatibleRequestParams): OpenAICompatibleRequest {
+  return formatOpenAICompatibleRequest(params);
+}
 export const parseOpenAIResponse = parseDeepSeekResponse;
 
 // ── Qwen / DashScope (OpenAI-compatible API) ──
@@ -641,7 +661,7 @@ export async function makeLLMCall(
       const localGetters = { getDeepSeek, getGemini, getOpenAI: getOpenAI || (() => null), getAnthropic: getAnthropic || (() => null), getQwen: getQwen || (() => null), getArk: getArk || (() => null), getOllama, isOllamaAvailable: () => !!getOllama?.(), getLmStudio, isLmStudioAvailable: () => !!getLmStudio?.() };
       if (getOllama?.()) {
         try {
-          const req = formatDeepSeekRequest({ model: 'llama3.2', messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
+          const req = formatOpenAIRequest({ model: 'llama3.2', messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
           const client = getOllama();
           const res = await withCloudResilience(
             () => client.chat.completions.create(req),
@@ -651,7 +671,7 @@ export async function makeLLMCall(
         } catch {
           if (getLmStudio?.()) {
             try {
-              const req = formatDeepSeekRequest({ model: config.model, messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
+              const req = formatOpenAIRequest({ model: config.model, messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
               const client = getLmStudio();
               const res = await client.chat.completions.create(req);
               return parseOpenAIResponse(res);
@@ -661,7 +681,7 @@ export async function makeLLMCall(
         }
       }
       if (getLmStudio?.()) {
-        const req = formatDeepSeekRequest({ model: config.model, messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
+        const req = formatOpenAIRequest({ model: config.model, messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
         const client = getLmStudio();
         const res = await client.chat.completions.create(req);
         return parseOpenAIResponse(res);
@@ -692,7 +712,11 @@ export async function makeLLMCall(
       : getOllama?.();
     if (!client) throw new Error(`${config.provider} not configured`);
 
-    const fmt = config.provider === 'qwen' ? formatQwenRequest : formatDeepSeekRequest;
+    const fmt = config.provider === 'qwen'
+      ? formatQwenRequest
+      : config.provider === 'deepseek'
+        ? formatDeepSeekRequest
+        : formatOpenAIRequest;
     const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
     const params: any = fmt({
       model: config.model,
@@ -839,7 +863,11 @@ export async function makeLLMCallStreaming(
       : getOllama?.();
     if (!client) throw new Error(`${config.provider} not configured`);
 
-    const fmt = config.provider === 'qwen' ? formatQwenRequest : formatDeepSeekRequest;
+    const fmt = config.provider === 'qwen'
+      ? formatQwenRequest
+      : config.provider === 'deepseek'
+        ? formatDeepSeekRequest
+        : formatOpenAIRequest;
     const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
     const params: any = fmt({
       model: config.model,

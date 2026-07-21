@@ -79,7 +79,7 @@ export function registerAdapterTools(registry: ToolRegistry): void {
       properties: {
         adapterId: {
           type: 'string',
-          description: 'Optional exact adapter id, e.g. media.music_netease, cad_bim.drafting, automation.computer_use, workspace.skills_mcp.',
+          description: 'Optional exact adapter id, e.g. cad_bim.drafting, automation.computer_use, workspace.skills_mcp.',
         },
         category: {
           type: 'string',

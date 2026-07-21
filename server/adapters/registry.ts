@@ -376,22 +376,6 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'Use Lumi Knowledge Base for browsing, importing, absorbing, and retrieving user-provided knowledge files.',
     },
     {
-      id: 'media.music_netease',
-      label: 'Music Center and NetEase Playback',
-      category: 'media',
-      status: state?.music?.lastError ? 'attention' : state?.music?.source || state?.music?.trackName ? 'ready' : 'available',
-      actions: ['open_music_center', 'show_music_layer', 'hide_music_layer', 'music_search', 'music_play'],
-      surfaces: ['music center', 'mood layer', 'voice coexistence'],
-      setup: state?.music?.lastError ? ['Check NetEase login/session, API credentials, and local player readiness in Music Center.'] : [],
-      diagnostics: [
-        state?.music?.isPlaying ? 'playing=true' : 'playing=false',
-        state?.music?.trackName ? `track=${state.music.trackName}` : '',
-        state?.music?.source ? `source=${state.music.source}` : '',
-        state?.music?.lastError ? `error=${state.music.lastError}` : '',
-      ].filter(Boolean),
-      notes: 'Music can run alongside chat, voice, meeting, runtime logs, and mood layer.',
-    },
-    {
       id: 'media.voice',
       label: 'Voice, Wake Word, STT and TTS',
       category: 'media',

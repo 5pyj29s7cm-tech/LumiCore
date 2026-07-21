@@ -69,6 +69,7 @@ describe('voice interruption state', () => {
   it('does not merge a complete repeated command into an unrelated old task', () => {
     expect(isVoiceCorrectionContinuation('我让你去看桌面上的设计草稿，把它画到 CAD 里。')).toBe(false);
     expect(isVoiceCurrentActivityQuestion('你在干嘛？')).toBe(true);
+    expect(isVoiceCurrentActivityQuestion('你现在执行什么任务？')).toBe(true);
     expect(isVoiceCurrentActivityQuestion('我让你去打开 AutoCAD。')).toBe(false);
   });
 
@@ -92,6 +93,7 @@ describe('voice interruption state', () => {
     expect(classifyVoiceWorkInterruption('\u53d6\u6d88\u4efb\u52a1')).toBe('cancel_work');
     expect(classifyVoiceWorkInterruption('\u987a\u4fbf\u518d\u52a0\u4e00\u9875\u603b\u7ed3')).toBe('modify_work');
     expect(isVoiceWorkModificationContinuation('\u53e6\u5916\u628a\u6807\u9898\u6539\u6210\u84dd\u8272')).toBe(true);
+    expect(classifyVoiceWorkInterruption('打开以后直接播放')).toBe('modify_work');
   });
 
   it('merges a spoken work addition into the active task instead of treating it as chat', () => {

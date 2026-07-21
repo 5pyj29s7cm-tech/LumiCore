@@ -86,17 +86,16 @@ import {
 } from "../agents/background_tasks";
 import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, runNLChainer, shouldChainTask } from "../agents/nl_chainer";
 import { autoInstallForTask } from "../agents/auto_installer";
-import { adjustMusicPlayback, getMusicFailureMessage, isMusicAdjustmentRequest, isMusicPlaybackRequest, searchAndPlay } from "../music/search_play";
 import { searchKnowledgeBase } from "../org/kb";
 import { getWorkflow, recordWorkflowRun, listWorkflows } from "../agents/workflows";
 import { buildProfessionOverlay } from "../autonomy/professions";
-import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnalysisRequest } from "../music/library_profile";
 import { buildResponseLanguageInstruction } from "../utils/language";
 import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { CN_MESSAGING_MESSAGES } from "../regions/packs/cn/messaging_messages";
 import { CN_CLIENT_DIAGNOSTIC_MESSAGES } from "../regions/packs/cn/client_diagnostic_messages";
 import { CN_BACKGROUND_DELEGATION_MESSAGES } from "../regions/packs/cn/background_delegation_messages";
+import { CN_VOICE_FAST_PATH_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
@@ -112,6 +111,10 @@ import {
   isGuardGeneratedAssistantText,
   isGuardGeneratedConversationRecord,
 } from "../conversation/guard_history";
+import {
+  isUnverifiedExecutionAssistantRecord,
+  isUnverifiedExecutionAssistantText,
+} from "../conversation/summary_grounding";
 
 // Foreground executions outlive an individual Socket.IO connection. Keeping the
 // controllers at module scope lets a reconnected client query or cancel the same
@@ -160,14 +163,22 @@ function normalizeChatHistoryRecord(m: any): NormalizedMessage[] {
   const primaryText = message || content;
   const isUiErrorText = /^(Request failed|请求失败|出错了|Failed to route)/i.test(primaryText);
 
-  if (role === 'assistant' && isNoisyAssistantHistory(primaryText)) {
+  if (
+    role === 'assistant'
+    && (isNoisyAssistantHistory(primaryText) || isUnverifiedExecutionAssistantRecord(m))
+  ) {
     return [];
   }
 
   if (primaryText && !isUiErrorText) {
     entries.push({ role, content: primaryText });
   }
-  if (response && role === 'user' && !isNoisyAssistantHistory(response)) {
+  if (
+    response
+    && role === 'user'
+    && !isNoisyAssistantHistory(response)
+    && !isUnverifiedExecutionAssistantText(response)
+  ) {
     entries.push({ role: 'assistant', content: response });
   }
   return entries;
@@ -1444,7 +1455,12 @@ export function registerChatHandler(
           return true;
         }
         if (canAutoApproveAction(toolName, args, { actionIntent: visibleUserText })) return true;
-        const pending = recordPendingConfirmation(uid, toolName, args, eventSource);
+        const pending = recordPendingConfirmation(uid, toolName, args, eventSource, {
+          domain: resolvedDomain,
+          orgId: resolvedOrgId,
+          channelId: socket.id,
+          actionIntent: visibleUserText,
+        });
         console.warn(`[ChatHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
         return false;
       };
@@ -1790,6 +1806,115 @@ export function registerChatHandler(
         });
       };
 
+      // Confirmation continues the exact pending action. Do not ask the model
+      // to rediscover the tool name or reconstruct arguments from conversation
+      // history after the user has already approved a concrete operation.
+      if (pendingConfirmation) {
+        const confirmedTask = pendingConfirmation.actionIntent || visibleUserText;
+        const confirmedArgs = pendingConfirmation.exactArgs || {};
+        const confirmedRecord: ToolExecutionRecord = {
+          id: `chat-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: pendingConfirmation.toolName,
+          arguments: confirmedArgs,
+          result: '',
+        };
+        const consumed = consumePendingConfirmation(
+          uid,
+          pendingConfirmation.id,
+          pendingConfirmation.toolName,
+          confirmedArgs,
+        );
+        emitAgent('agent:status', { status: 'thinking', agentName: personality.name, phase: 'tool' });
+        if (!consumed) {
+          confirmedRecord.error = 'The one-time confirmation expired before execution.';
+        } else {
+          try {
+            if (!isDirectDesktopTool(confirmedRecord.name)) {
+              emitToolLifecycle({
+                correlationId: confirmedRecord.id || `chat-confirmed-${Date.now()}`,
+                name: confirmedRecord.name,
+                arguments: confirmedArgs,
+              });
+            }
+            confirmedRecord.result = await toolRegistry.execute(
+              confirmedRecord.name,
+              confirmedArgs,
+              {
+                userId: uid,
+                domain: resolvedDomain,
+                orgId: resolvedOrgId,
+                desktopRelay,
+                llmGetters,
+                source: 'chat_confirmation',
+                supervisedExternalCommits: true,
+                allowLocalFileWrites,
+                localWriteIntentReason,
+                isCancelled: () => abortController.signal.aborted,
+                userConfirmed: true,
+                actionIntent: confirmedTask,
+                routedTaskText: confirmedTask,
+                toolPolicy: routedToolPolicy || personality.toolPolicy,
+              },
+            );
+          } catch (err: any) {
+            confirmedRecord.error = err?.message || String(err);
+          }
+        }
+        if (!isDirectDesktopTool(confirmedRecord.name)) {
+          emitToolLifecycle({
+            correlationId: confirmedRecord.id || `chat-confirmed-${Date.now()}`,
+            name: confirmedRecord.name,
+            arguments: confirmedArgs,
+            ...(confirmedRecord.error
+              ? { error: confirmedRecord.error }
+              : { result: formatToolResultForUi(confirmedRecord.result) }),
+          });
+        }
+        const candidate = confirmedRecord.error
+          ? CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(confirmedRecord.error)
+          : CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted;
+        const finalized = finalizeLumiResponse({
+          taskText: confirmedTask,
+          responseText: candidate,
+          toolRecords: [confirmedRecord],
+          source: 'chat_confirmation',
+          flow: { ...turnFlow, routeText: confirmedTask },
+        });
+        if (finalized.notification) emitAgent('agent:notification', finalized.notification);
+        emitAgent('agent:response', {
+          text: finalized.text,
+          agentName: personality.name,
+          finalized: true,
+          blocked: finalized.blocked,
+          reason: finalized.reason || '',
+        });
+        if (conversationId) {
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: finalized.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: [confirmedRecord], cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation' });
+          scheduleChatSummary(conversationId);
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+        }
+        persistChatTakeoverExecution(finalized.text, {
+          toolRecords: [confirmedRecord],
+          source: 'chat_confirmation',
+          sourceInteractionId: `${interactionId}_confirmation`,
+          capabilitySelection,
+          finalizationBlocked: finalized.blocked,
+          assistantTextTrusted: !finalized.blocked,
+          finalizationReason: finalized.reason,
+        });
+        if (!finalized.blocked) {
+          persistChatLearning(finalized.text, {
+            toolRecords: [confirmedRecord],
+            sourceInteractionId: `${interactionId}_confirmation`,
+            logLabel: 'chat confirmation',
+          });
+        }
+        emitAgent('agent:status', { status: 'idle', agentName: personality.name });
+        releaseChatSession();
+        return;
+      }
+
       // ── Named Workflow Quick-Path: "run my X" / "跑XX流程" ──
       const runWorkflowMatch = text.match(/(?:run|执行|跑|运行)\s+(?:my\s+)?(.+?)(?:\s*(?:routine|workflow|流程|工作流))?\s*$/i);
       let workflowQuickResult: string | null = null;
@@ -2066,76 +2191,6 @@ export function registerChatHandler(
         }
       } catch (qcErr: any) {
         console.warn('[ChatHandler] Quick command check failed, falling through:', qcErr.message);
-      }
-
-      if (isMusicProfileAnalysisRequest(text)) {
-        emitAgent("agent:status", { status: "thinking", agentName: personality.name, detail: "Analyzing music profile" });
-        let profileResponse = '';
-        const profileRecord: ToolExecutionRecord = {
-          id: `chat-music-profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: 'music_profile_analysis',
-          arguments: { maxSongs: 3000 },
-          result: '',
-        };
-        try {
-          const profile = await analyzeLikedMusicProfile(uid, { maxSongs: 3000 });
-          profileResponse = formatMusicProfileReport(profile);
-          profileRecord.result = JSON.stringify({
-            ok: true,
-            source: profile.source,
-            playlistName: profile.playlistName,
-            analyzedTracks: profile.analyzedTracks,
-            summary: profile.summaryCn,
-          });
-        } catch (profileErr: any) {
-          profileRecord.error = profileErr?.message || String(profileErr);
-          profileResponse = `我现在还没能完成网易云喜欢歌单分析。\n\n${profileErr?.message || '请确认网易云已经登录，再试一次。'}`;
-          socket.emit('music:error', { message: profileResponse });
-        }
-
-        const profileFinalized = finalizeLumiResponse({
-          taskText: executionTaskText,
-          responseText: profileResponse,
-          toolRecords: [profileRecord],
-          source: 'chat',
-          flow: turnFlow,
-        });
-        profileResponse = profileFinalized.text;
-        if (profileFinalized.notification) {
-          emitAgent('agent:notification', profileFinalized.notification);
-        }
-        persistChatTakeoverExecution(profileResponse, {
-          toolRecords: [profileRecord],
-          source: 'chat_music_profile',
-          sourceInteractionId: `${interactionId}_music_profile`,
-          capabilitySelection,
-          finalizationBlocked: profileFinalized.blocked,
-          assistantTextTrusted: !profileFinalized.blocked,
-          finalizationReason: profileFinalized.reason,
-        });
-        emitAgent("agent:response", {
-          text: profileResponse,
-          agentName: personality.name,
-          finalized: true,
-          blocked: profileFinalized.blocked,
-          reason: profileFinalized.reason || '',
-        });
-        if (conversationId) {
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
-          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: profileResponse, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, toolCalls: [profileRecord], cognitiveIntent: profileFinalized.blocked ? 'work_product_guard' : undefined });
-          scheduleChatSummary(conversationId);
-          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
-        }
-        if (!profileFinalized.blocked) {
-          persistChatLearning(profileResponse, {
-            toolRecords: [profileRecord],
-            sourceInteractionId: `${interactionId}_music_profile`,
-            logLabel: 'music profile',
-          });
-        }
-        emitAgent("agent:status", { status: "idle" });
-        releaseChatSession();
-        return;
       }
 
       // ── Lumi Cognitive Engine: classify intent BEFORE calling any LLM ──
@@ -2448,37 +2503,6 @@ export function registerChatHandler(
           || (cognition.toolRecord ? [cognition.toolRecord] : []);
         allToolRecords.push(...directRecords);
         console.log(`[Cognition] Direct tool '${cognition.intent.directToolCall?.name}' handled without LLM`);
-      }
-
-      // Path A2: music intent. Handle before the generic tool loop so Lumi
-      // does not wander into unrelated tools or report raw provider errors.
-      const isMusicAdjustment = isMusicAdjustmentRequest(text);
-      if (!responseText && (isMusicPlaybackRequest(text) || isMusicAdjustment)) {
-        const musicRecord: ToolExecutionRecord = {
-          id: `chat-music-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: isMusicAdjustment ? 'music_runtime_adjust' : 'music_runtime_playback',
-          arguments: { text },
-          result: '',
-        };
-        try {
-          const result = isMusicAdjustment
-            ? await adjustMusicPlayback(uid, socket, text)
-            : await searchAndPlay(uid, socket, text);
-          musicRecord.result = JSON.stringify(result);
-          if (result.success && result.text) {
-            responseText = result.text;
-            llmWasCalled = true;
-          } else {
-            responseText = getMusicFailureMessage(result.reason);
-            socket.emit('music:error', { message: responseText });
-          }
-        } catch (musicErr: any) {
-          musicRecord.error = musicErr?.message || String(musicErr);
-          console.warn('[Music Intent] Failed:', musicErr.message);
-          responseText = getMusicFailureMessage(musicErr?.message);
-          socket.emit('music:error', { message: responseText });
-        }
-        allToolRecords.push(musicRecord);
       }
 
       const foregroundWeChatReadArgs = buildForegroundWeChatReadArgs(text);

@@ -1,11 +1,11 @@
 import type { MessageRecord } from './manager';
 
 // i18n-allow: Chinese summary-grounding recognition pattern; not user-visible copy.
-const EXECUTION_OUTCOME_RE = /(?:已(?:经)?(?:完成|执行|检查|测试|切换|生成|打开|发送|读取|确认|配置|注册)|(?:完成了|执行了|进行了).{0,48}(?:检查|测试|诊断|切换|生成|发送|打开|读取)|检查(?:已)?完成|测试(?:已)?通过|执行完毕|运行正常|一切正常|无异常|全部通过|成功切换|(?:检查|测试|结果|状态).{0,24}(?:均|都|全部)?(?:正常|通过|无异常)|(?:检查|测试|诊断).{0,32}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:Lumi|助手|系统).{0,20}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:completed|passed|verified|successfully\s+(?:ran|tested|switched|opened|sent|created)|all\s+checks\s+passed|running\s+normally|no\s+issues)\b)/iu;
+const EXECUTION_OUTCOME_RE = /(?:已(?:经)?(?:完成|执行|检查|测试|切换|生成|打开|发送|读取|确认|配置|注册)|(?:完成了|执行了|进行了).{0,48}(?:检查|测试|诊断|切换|生成|发送|打开|读取)|检查(?:已)?完成|测试(?:已)?通过|执行完毕|运行正常|一切正常|无异常|全部通过|成功切换|(?:检查|测试|结果|状态).{0,24}(?:均|都|全部)?(?:正常|通过|无异常)|(?:检查|测试|诊断).{0,32}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|(?:Lumi|助手|系统).{0,20}(?:确认|判断).{0,32}(?:模型|网络|连接|工具|端口|MCP)|\b(?:completed|passed|verified|successfully\s+(?:ran|tested|switched|opened|sent|created)|all\s+checks\s+passed|running\s+normally|no\s+issues)\b)/iu;
 // i18n-allow: Chinese summary evidence-marker recognition pattern; not user-visible copy.
 const EVIDENCE_MARKER_RE = /(?:经本轮工具回执验证|verified\s+by\s+current-turn\s+tool\s+receipts)/iu;
 // i18n-allow: Chinese user-action recognition pattern; not user-visible copy.
-const EXPLICIT_USER_OWN_ACTION_RE = /^(?:用户|user)(?:此前|之前|先前|已经|已|亲自|\s|previously|already){0,4}(?:完成|执行|测试|检查|completed|ran|tested|checked)/iu;
+const EXPLICIT_USER_OWN_ACTION_RE = /^(?:用户|\buser\b)(?:此前|之前|先前|已经|已|亲自|\s|previously|already){0,4}(?:完成|执行|测试|检查|completed|ran|tested|checked)/iu;
 
 function normalizeToolCalls(value: unknown): any[] {
   if (Array.isArray(value)) return value;

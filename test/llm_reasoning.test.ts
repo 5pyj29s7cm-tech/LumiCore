@@ -100,4 +100,25 @@ describe('LLM reasoning output handling', () => {
       { role: 'tool', content: 'ok', tool_call_id: 'call_1', name: 'demo_tool' },
     ]);
   });
+
+  it('returns DeepSeek reasoning_content with an assistant tool call on the next round', () => {
+    const request = formatDeepSeekRequest({
+      model: 'deepseek-reasoner',
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          reasoningContent: '需要先读取当前窗口。',
+          toolCalls: [{ id: 'call_reasoning_1', name: 'desktop_active_window', arguments: {} }],
+        },
+        { role: 'tool', content: '{"title":"WPS"}', toolCallId: 'call_reasoning_1', name: 'desktop_active_window' },
+      ],
+      toolDeclarations: [],
+    });
+
+    expect(request.messages[0]).toMatchObject({
+      role: 'assistant',
+      reasoning_content: '需要先读取当前窗口。',
+    });
+  });
 });

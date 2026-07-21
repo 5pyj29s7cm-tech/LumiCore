@@ -5,7 +5,10 @@ export interface PendingToolConfirmation {
   userId: string;
   toolName: string;
   argsHash: string;
+  /** Exact in-memory arguments used only after the one-time grant is consumed. */
+  exactArgs: Record<string, any>;
   safeArgs: Record<string, any>;
+  actionIntent: string;
   source: string;
   domain: string;
   orgId: string;
@@ -19,6 +22,7 @@ export interface PendingConfirmationScope {
   domain?: string;
   orgId?: string;
   channelId?: string;
+  actionIntent?: string;
 }
 
 const pendingById = new Map<string, PendingToolConfirmation>();
@@ -82,7 +86,9 @@ export function recordPendingConfirmation(
     userId,
     toolName,
     argsHash: argsHash(args),
+    exactArgs: stableValue(args || {}),
     safeArgs: sanitizeValue(args || {}),
+    actionIntent: String(scope.actionIntent || '').trim(),
     source,
     domain: scope.domain || '',
     orgId: scope.orgId || '',

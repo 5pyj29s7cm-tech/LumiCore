@@ -10,7 +10,6 @@ import { registerAmbientHandlers } from "../socket/ambient";
 import { registerConversationHandlers } from "../socket/conversations";
 import { registerWakeHandlers } from "../socket/wake";
 import { registerTerminalHandlers } from "../socket/terminal";
-import { registerMusicHandlers } from "../socket/music";
 import { registerClientSelfHandlers } from "../socket/client_self";
 import { getSensory } from "../socket/shared";
 import { perceptionEvents } from "../socket/shared";
@@ -196,7 +195,6 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     registerConversationHandlers(socket, getUserId);
     registerWakeHandlers(socket, getUserId);
     registerTerminalHandlers(socket, getUserId);
-    registerMusicHandlers(socket, getUserId, io);
     registerClientSelfHandlers(socket, getUserId, io);
     const scopedSensory = (requestedUid: string) => {
       const scope = resolveSocketScope(socket, uid);

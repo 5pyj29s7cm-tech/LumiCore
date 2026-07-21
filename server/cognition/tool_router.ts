@@ -162,8 +162,17 @@ const TOOL_GROUPS: Record<string, string[]> = {
     'authority_research_save',
   ],
   music: [
-    'browser_open_task',
-    'external_app_list_adapters',
+    'desktop_list_apps',
+    'desktop_open',
+    'desktop_active_window',
+    'desktop_ui_snapshot',
+    'desktop_ui_focus',
+    'desktop_ui_invoke',
+    'desktop_ui_click',
+    'desktop_ui_type',
+    'desktop_keyboard_press',
+    'desktop_capture_screen',
+    'computer_use',
   ],
   design: [
     'generate_image',
@@ -350,12 +359,12 @@ const ROUTES: RouteDefinition[] = [
   },
   {
     category: 'music',
-    reason: 'music playback or music library request',
+    reason: 'desktop music-player launch or playback control request',
     patterns: [
-      /音乐|歌曲|歌单|网易云|播放|暂停|继续播放|歌词|旋律|作曲|写歌/u,
-      /\b(music|song|playlist|netease|lyrics|melody|compose)\b/i,
+      // i18n-allow: Chinese desktop media-control intent recognition; not user-visible copy.
+      /(?:音乐|歌曲|歌单|网易云|QQ音乐|酷狗|Spotify).{0,32}(?:打开|启动|播放|暂停|继续|切歌|上一首|下一首|搜索|音量)|(?:打开|启动|播放|放|听|暂停|继续播放|切歌|上一首|下一首|搜索).{0,32}(?:音乐|歌曲|歌单|网易云|QQ音乐|酷狗|Spotify)/u,
+      /\b(?:open|launch|play|pause|resume|skip|next|previous|search)\b.{0,40}\b(?:music|song|playlist|netease|spotify|music player)\b|\b(?:music|song|playlist|netease|spotify|music player)\b.{0,40}\b(?:open|launch|play|pause|resume|skip|next|previous|search)\b/i,
     ],
-    prefixes: ['mcp_neteasemusic_', 'mcp_locate-and-launch-netease_', 'mcp_play-music_', 'mcp_play-song_'],
     groups: ['music'],
   },
   {
@@ -885,6 +894,21 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
       'mcp_stockbot_paper_portfolio',
       'browser_open_task',
       'mcp_playwright_browser_snapshot',
+    );
+  }
+  if (categories.includes('music')) {
+    priorities.push(
+      'desktop_list_apps',
+      'desktop_open',
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_ui_focus',
+      'desktop_ui_invoke',
+      'desktop_ui_click',
+      'desktop_ui_type',
+      'desktop_keyboard_press',
+      'desktop_capture_screen',
+      'computer_use',
     );
   }
   if (categories.includes('cad_design')) {

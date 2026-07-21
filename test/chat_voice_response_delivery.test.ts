@@ -34,18 +34,14 @@ describe('chat and voice finalized delivery paths', () => {
     expect(voice).toContain('shouldForwardPreFinalizationProgress(step)');
   });
 
-  it('does not speak a music action acknowledgement before playback executes', () => {
-    expect(voice).not.toContain('acknowledging before playback');
-    expect(voice).toContain('const musicFinalized = finalizeLumiResponse({');
+  it('does not keep a dedicated built-in music execution path', () => {
+    for (const source of [chat, voice]) {
+      expect(source).not.toContain('isMusicPlaybackRequest');
+      expect(source).not.toContain('adjustMusicPlayback');
+      expect(source).not.toContain('searchAndPlay');
+      expect(source).not.toContain('musicFinalized');
+    }
     expect(voice).toContain('queueFinalizedSpeech(responseText)');
-  });
-
-  it('keeps exactly one finalized voice music-intent execution path', () => {
-    expect(voice.match(/if \(isMusicPlaybackRequest\(userText\)/g) || []).toHaveLength(1);
-    expect(voice.match(/adjustMusicPlayback\(session\.userId, socket, userText\)/g) || []).toHaveLength(1);
-    expect(voice.match(/searchAndPlay\(session\.userId, socket, userText\)/g) || []).toHaveLength(1);
-    expect(voice).not.toContain('voice_music_shortcut_error_');
-    expect(voice).not.toContain('Music intent shortcut');
   });
 
   it('marks every agent response as finalized and exposes guard state', () => {

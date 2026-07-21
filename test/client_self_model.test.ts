@@ -225,16 +225,6 @@ describe('Lumi client self model', () => {
         matched: 'surface:chat:open',
       },
       {
-        name: 'open music center',
-        args: { action: 'open_music_center' },
-        after: {
-          activeTab: 'music-center',
-          windows: { open: ['music-center'], focused: 'music-center', minimized: [] },
-          surfaces: {},
-        },
-        matched: 'surface:music-center:open',
-      },
-      {
         name: 'switch assistant mode',
         args: { action: 'set_client_mode', mode: 'assistant' },
         after: {
@@ -244,17 +234,6 @@ describe('Lumi client self model', () => {
           surfaces: {},
         },
         matched: 'mode:assistant',
-      },
-      {
-        name: 'show music layer',
-        args: { action: 'show_music_layer' },
-        after: {
-          activeTab: 'home',
-          windows: { open: [], focused: null, minimized: [] },
-          surfaces: { musicLayerVisible: true },
-          music: { layerVisible: true, trackName: 'Test Track' },
-        },
-        matched: 'surface:music-layer:open',
       },
       {
         name: 'disable wallpaper mode',

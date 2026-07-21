@@ -161,10 +161,6 @@ const BUILTIN_ZH_TRANSLATIONS: Record<string, TranslationEntry> = {
     displayName: 'Nano Banana 图像',
     description: '基于 SiliconFlow 的轻量图像生成能力，适合快速出图和灵感草稿。',
   },
-  'skill-neteasemusic': {
-    displayName: '网易云音乐',
-    description: '搜索歌曲、获取歌词、控制播放、读取歌单语境，并支持随聊天情绪播放音乐。',
-  },
   'skill-notes': {
     displayName: '本地便签',
     description: '创建、搜索、列出和删除本地便签。',

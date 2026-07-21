@@ -40,6 +40,24 @@ export function isVoiceWorkModificationContinuation(text: string): boolean {
     || /\b(?:also|and also|while you're at it|add|change|replace|remove|keep|save|export)\b/i.test(normalized);
 }
 
+/**
+ * Short, context-dependent utterances that continue the work already on the
+ * floor. These are turn-taking signals, not application-specific commands.
+ */
+export function isVoiceTaskContinuation(text: string): boolean {
+  const normalized = String(text || '').trim();
+  if (!normalized || normalized.length > 96) return false;
+  if (isVoiceWorkModificationContinuation(normalized)) return true;
+  const compact = normalized
+    .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001\u2026\uFF5E~\u201C\u201D\u2018\u2019]+/gu, '')
+    .toLowerCase();
+  if (!compact) return false;
+  return /^(?:需要|要|同意|确认|可以|行|好|好的|继续|接着|执行|执行任务|继续执行|就这样|就这个|对|是的|yes|ok|okay|confirm|proceed|continue|doit)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
+    || /^(?:就|已经|现在|目标|联系人|文件|窗口|页面|输入框|按钮).{1,72}(?:在|就在|是|打开|选中|前台|里|上|下)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
+    || /^(?:打开|完成|做好|处理好|找到|选中|进入|登录)(?:以后|之后|后)(?:直接|再|就|继续)?(?:播放|打开|保存|发送|导出|关闭|点击|输入|继续|执行).{0,48}$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
+    || /^(?:然后|接着|随后|下一步)(?:直接|再|就|继续)?(?:播放|打开|保存|发送|导出|关闭|点击|输入|继续|执行).{0,48}$/u.test(compact); // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
+}
+
 export function classifyVoiceWorkInterruption(
   text: string,
   options: VoiceWorkInterruptionOptions = {},
@@ -57,7 +75,7 @@ export function classifyVoiceWorkInterruption(
     || /(?:\u8fdb\u5ea6|\u505a\u5230\u54ea|\u5e72\u5230\u54ea|\u5b8c\u6210\u591a\u5c11|\u8fd8\u5728\u505a|\u8fd8\u5728\u5904\u7406)/u.test(normalized)
     || /\b(?:progress|how(?:'s| is) (?:it|the task) going|where are you (?:at|up to))\b/i.test(normalized)
   ) return 'progress_query';
-  if (isVoiceWorkModificationContinuation(normalized)) return 'modify_work';
+  if (isVoiceTaskContinuation(normalized)) return 'modify_work';
   if (
     /^(?:\u505c|\u505c\u4e0b|\u95ed\u5634|\u522b\u8bf4(?:\u4e86)?|\u4e0d\u8981\u8bf4(?:\u4e86)?|\u5148\u522b\u8bf4(?:\u4e86)?|\u7b49\u4e00\u4e0b|\u7b49\u4e0b|\u6682\u505c|\u597d\u4e86|\u884c\u4e86|\u591f\u4e86|stop|wait|pause|interrupt|holdon|shutup)$/u.test(compact)
     || /(?:\u5148)?(?:\u522b|\u4e0d\u7528)(?:\u518d)?\u8bf4(?:\u4e86)?(?:\u4f60)?(?:\u7ee7\u7eed|\u63a5\u7740)(?:\u505a|\u5904\u7406)/u.test(compact)
@@ -73,7 +91,9 @@ export function isVoiceCurrentActivityQuestion(text: string): boolean {
     .toLowerCase();
   if (!normalized || normalized.length > 40) return false;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  return /^(?:你)?(?:刚才|刚刚|现在)?(?:有|还|是否)?在(?:干嘛|干什么|做什么|忙什么|处理什么|跑什么|弄什么|搞什么|执行|处理|做|运行)(?:这个|那个|刚才的|当前的)?(?:任务|操作|工作)?(?:吗)?$/u.test(normalized)
+  return /^(?:你)?(?:刚才|刚刚|现在)?(?:有|还|是否|是不是)?(?:在)?(?:干嘛|干什么|做什么|忙什么|处理什么|跑什么|弄什么|搞什么|执行|处理|做|运行)(?:这个|那个|刚才的|当前的)?(?:任务|操作|工作)?(?:呢|吗)?$/u.test(normalized)
+    // i18n-allow: Chinese current-activity recognition; not user-visible copy.
+    || /^(?:你)?(?:刚才|刚刚|现在)?(?:有|还|是否|是不是)?(?:在)?(?:执行|处理|做|运行)什么(?:任务|操作|工作)?(?:呢|吗)?$/u.test(normalized)
     || /^(?:what(?:are|were)youdoing|areyou(?:still)?(?:doing|running|workingon)(?:this|it|thetask)?)$/iu.test(normalized);
 }
 
@@ -121,7 +141,7 @@ export function mergeInterruptedVoiceTurn(
     && Number.isFinite(ageMs)
     && ageMs >= 0
     && ageMs <= maxAgeMs
-    && isVoiceWorkModificationContinuation(current),
+    && isVoiceTaskContinuation(current),
   );
   if (!canUsePrior) return { routingText: current, usedInterruptedTurn: false };
   return {

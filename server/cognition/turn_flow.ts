@@ -86,7 +86,6 @@ export interface LumiExecutionGovernance {
 }
 
 const QUESTION_RE = /[?？]\s*$|是不是|为什么|怎么回事|有没有|找到了吗|听见了吗/u;
-const MUSIC_RE = /音乐|歌曲|歌单|网易云|播放|暂停|继续播放|歌词|旋律|作曲|写歌|\b(music|song|playlist|lyrics|compose)\b/i;
 const WORK_ACTION_RE = /桌面|文件|文件夹|目录|草稿图|图纸|平面图|施工图|设计图|cad|CAD|DXF|运行日志|日志|生成|创建|画一|画个|按照.*画|找|搜索|打开|执行|运行|去干活|开始干活|开始处理|继续处理|继续做|接着做/u;
 const WORK_SOURCE_RE = /(?:work|task|takeover|org|organization|job|workflow|workspace|任务|工作|接管|组织)/i;
 const WORK_PRODUCT_RE = /交付|方案|报告|PPT|PDF|CAD|DXF|DWG|文档|文件|报价|视频|发布|草稿|微信|回复|账号|店铺|立案|装修|设计|图纸|素材|脚本|表格|合同|起诉状|诉状|包\b|\b(package|deliverable|draft|publish|export|file|document|cad|dxf|ppt|pdf)\b/i;
@@ -120,7 +119,6 @@ export function shouldAutoPromoteWorkTurn(
   channel: LumiTurnChannel,
 ): boolean {
   if (operationMode !== 'chat' || requestedMode) return false;
-  if (MUSIC_RE.test(text)) return false;
   if (isCurrentClientDiagnosticRequest(text)) return true;
   if (QUESTION_RE.test(text)) return false;
   if (!hasExplicitToolIntent(text)) return false;
@@ -483,7 +481,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
 export function buildInteractionModeOverlay(flow: LumiTurnFlow): string {
   const opModeConfig = getOperationModeConfig(flow.effectiveOperationMode);
   if (flow.clientActionOnlyTurn) {
-    return '## Client Mode Control\nThe user is asking Lumi to change a client mode or open a client-native surface. You may only use client_get_state and client_action. Do not use file, terminal, desktop mouse/keyboard, web, team, or external-app tools. Music is a playback/atmosphere capability, not a top-level work mode: open the music center or mood layer without switching client mode. For meeting/autonomous mode, use the client action confirmation flow when required.';
+    return '## Client Mode Control\nThe user is asking Lumi to change a client mode or open a client-native surface. You may only use client_get_state and client_action. Do not use file, terminal, desktop mouse/keyboard, web, team, or external-app tools. For meeting/autonomous mode, use the client action confirmation flow when required.';
   }
   if (flow.selfRepairTurn) {
     return '## Client Self-Repair Turn\nThe user is reporting that Lumi or one of its client workflows is failing. Do not only apologize or repeat the raw error. Use client_get_state first when tools are available, inspect relevant status/log/config surfaces, apply one safe recovery or retry when the cause is clear, verify the result, and then give a concise report. Reads and status checks are allowed; writes, desktop control, external app automation, and system changes still require confirmation.';

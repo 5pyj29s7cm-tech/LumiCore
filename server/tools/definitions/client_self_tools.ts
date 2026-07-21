@@ -34,8 +34,6 @@ const ACTIONS = Array.from(new Set([
   'expand_from_widget',
   ...PERSONAL_CLIENT_SURFACE_ACTIONS,
   'close_nexus',
-  'show_music_layer',
-  'hide_music_layer',
   'start_meeting_mode',
   'end_meeting_mode',
   'open_meeting_notes',
@@ -47,8 +45,6 @@ const ACTIONS = Array.from(new Set([
 const RECOVERY_SURFACE_TARGETS: Record<string, string> = {
   skills: 'skills',
   skill: 'skills',
-  music: 'music-center',
-  'music-center': 'music-center',
   logs: 'runtime-log',
   log: 'runtime-log',
   runtime: 'runtime-log',
@@ -186,7 +182,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     name: 'client_action',
     description: [
       'Safely control Lumi client UI surfaces through the client action router.',
-      'Use the explicit action from the complete personal-client interface registry, including personality, notifications, reminders, devices, token usage, terminal, profile, MCP settings, Voice Forge, skill generation, app launcher, knowledge, organization, meeting, music, and runtime surfaces.',
+      'Use the explicit action from the complete personal-client interface registry, including personality, notifications, reminders, devices, token usage, terminal, profile, MCP settings, Voice Forge, skill generation, app launcher, knowledge, organization, meeting, and runtime surfaces.',
       'Legacy open_app/close_app/set_mode are still accepted for compatibility.',
       'This does not use mouse/keyboard control and should be preferred over computer_use for Lumi client UI navigation.',
     ].join(' '),
@@ -205,7 +201,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         mode: {
           type: 'string',
           enum: ['meeting', 'chat', 'assistant', 'autonomous'],
-          description: 'Target Lumi mode for set_mode or set_client_mode. Music is not a mode; use open_music_center or show_music_layer.',
+          description: 'Target Lumi mode for set_mode or set_client_mode.',
         },
         task: {
           type: 'string',
@@ -299,7 +295,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'client_health_check',
-    description: 'Run Lumi local self-governance health check: client body state, background/runtime health, runtime errors, music/runtime/files/voice issues, autonomy boundary, and skill runtime findings.',
+    description: 'Run Lumi local self-governance health check: client body state, background/runtime health, runtime errors, files/voice issues, autonomy boundary, and skill runtime findings.',
     parameters: {
       type: 'object',
       properties: {},
@@ -326,7 +322,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     description: [
       'Perform safe Lumi client self-repair actions that do not write user files or operate external apps.',
       'Use refresh_client_state to force a state relay refresh.',
-      'Use open_recovery_surface to open the relevant Lumi surface (skills, music, runtime-log, settings, kernel, plans, knowledge, org).',
+      'Use open_recovery_surface to open the relevant Lumi surface (skills, runtime-log, settings, kernel, plans, knowledge, org).',
       'For skill package repair use client_repair_skill, which requires confirmation.',
     ].join(' '),
     parameters: {
@@ -339,7 +335,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         surface: {
           type: 'string',
-          description: 'Recovery surface for open_recovery_surface: skills, music, runtime-log, settings, kernel, plans, knowledge, org. Legacy files opens knowledge.',
+          description: 'Recovery surface for open_recovery_surface: skills, runtime-log, settings, kernel, plans, knowledge, org. Legacy files opens knowledge.',
         },
       },
       required: ['action'],

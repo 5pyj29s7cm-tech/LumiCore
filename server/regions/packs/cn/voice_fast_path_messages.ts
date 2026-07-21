@@ -22,6 +22,9 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
   openReceiptMissing: (target: string) => `这次没有拿到${target}的启动回执。`,
   openConfirmedByUser: '好，已经打开了。',
   interruptedActivity: (task: string) => `刚才在处理“${task}”，被你打断后还没有完成。`,
+  idleActivity: '现在没有正在执行的任务，我在听你说。',
+  confirmationExecuted: '已执行你刚刚确认的操作。',
+  confirmationFailed: (error: string) => `已收到确认，但这次执行失败：${formatCnToolFailureDetail(error)}`,
   operationModeStatus: (mode: string) => {
     const labels: Record<string, string> = {
       chat: '聊天模式',

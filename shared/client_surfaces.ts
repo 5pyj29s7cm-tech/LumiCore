@@ -282,15 +282,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     launcherIds: ['sound'],
   },
   {
-    id: 'music-center',
-    label: 'Music Center',
-    target: 'music-center',
-    actions: ['open_music_center'],
-    useWhen: 'Search, play, control, and inspect music and mood-layer state.',
-    closeAfterUse: false,
-    launcherIds: ['music-center'],
-  },
-  {
     id: 'notifications',
     label: 'Notification Center',
     target: 'notifications',

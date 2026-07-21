@@ -64,8 +64,8 @@ describe('socket guard-history delivery paths', () => {
     });
 
     expect(normalized).toEqual([
-      { role: 'user', content: '[historical source=chat] 早' },
-      { role: 'assistant', content: '[historical source=chat] 早，今天想先做什么？' },
+      { role: 'user', content: '早' },
+      { role: 'assistant', content: '早，今天想先做什么？' },
     ]);
   });
 });

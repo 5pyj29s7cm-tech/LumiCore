@@ -2,7 +2,6 @@ import { getGateConfig } from '../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../autonomy/workflows';
 import { formatLAPSelfPrompt } from '../lap/policy';
 import { getMemoryFirewallPolicy } from '../memory/firewall';
-import { formatMusicProfileForPrompt, getCachedMusicProfile } from '../music/library_profile';
 import { getAdapterRegistry } from '../adapters/registry';
 import { formatLumiConstitutionForPrompt } from '../personality/constitution';
 import { getActionConstitutionPolicy } from '../tools/action_constitution';
@@ -102,6 +101,7 @@ export interface ClientStateSnapshot {
     memoryAvatarOpen?: boolean;
     runtimeLogOpen?: boolean;
     meetingOpen?: boolean;
+    /** Legacy client-state input; the built-in music surface is no longer registered. */
     musicLayerVisible?: boolean;
     wallpaperMode?: boolean;
     widgetMode?: boolean;
@@ -109,6 +109,7 @@ export interface ClientStateSnapshot {
   };
   settings?: { activeSection?: string };
   voice?: { state?: string; muted?: boolean };
+  /** Legacy client-state input retained so older desktop builds can report state during upgrade. */
   music?: {
     visible?: boolean;
     isPlaying?: boolean;
@@ -202,7 +203,6 @@ export interface ClientStateDigest {
   openWindows: string[];
   openSurfaces: string[];
   voice: string;
-  music: string;
   meetingActive: boolean;
   runtimeStatus: string;
   orgView: string;
@@ -348,7 +348,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     kind: 'system',
     actions: ['client_get_state', 'client_action', 'adapter_registry_list', ...PERSONAL_CLIENT_SURFACE_ACTIONS],
     notes: `Lumi knows every registered personal-client interface, its purpose, native route, current state, and verification contract: ${PERSONAL_CLIENT_SURFACES.map(surface => surface.id).join(', ')}. Organization, meeting, wallpaper, widget, and large takeover surfaces remain additional scoped interfaces.`,
-    stateKeys: ['windows', 'surfaces', 'tools', 'runtimeLog', 'music', 'meeting', 'org'],
+    stateKeys: ['windows', 'surfaces', 'tools', 'runtimeLog', 'meeting', 'org'],
   },
   {
     id: 'system.local_machine_awareness',
@@ -497,14 +497,6 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     stateKeys: ['windows'],
   },
   {
-    id: 'media.music',
-    label: 'Music center and mood layer',
-    kind: 'media',
-    actions: ['open_music_center', 'show_music_layer', 'hide_music_layer'],
-    notes: 'Music playback control, NetEase integration, lyrics, and fullscreen mood layer. Music is an always-available media capability, not a top-level work mode.',
-    stateKeys: ['music'],
-  },
-  {
     id: 'system.settings',
     label: 'Settings',
     kind: 'settings',
@@ -544,15 +536,15 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     actions: ['client_health_check', 'client_self_repair', 'client_repair_skill', 'client_get_state', 'client_action(refresh_client_state)'],
     notes: 'Lumi is not a voice-only assistant. She can inspect her own client body, diagnose client failures, refresh state, and open recovery surfaces. Skill package repair can reinstall dependencies, update configuration, or restart a process and therefore requires explicit confirmation.',
     requiresConfirmation: true,
-    stateKeys: ['mode', 'windows', 'surfaces', 'music', 'meeting', 'runtimeLog', 'permissions', 'runtime', 'errors'],
+    stateKeys: ['mode', 'windows', 'surfaces', 'meeting', 'runtimeLog', 'permissions', 'runtime', 'errors'],
   },
   {
     id: 'system.adapter_registry',
     label: 'Client capability adapter registry',
     kind: 'system',
     actions: ['adapter_registry_list', 'adapter_health_check', 'external_app_list_adapters'],
-    notes: 'Structured map of Lumi client capabilities, external app adapters, skill/MCP runtime, provider/permission state, CAD/BIM handoff, messaging, web, music, meeting, runtime logs, organization, files, and autonomy.',
-    stateKeys: ['mode', 'windows', 'surfaces', 'music', 'meeting', 'runtimeLog', 'org', 'permissions', 'runtime', 'tools', 'errors'],
+    notes: 'Structured map of Lumi client capabilities, external app adapters, skill/MCP runtime, provider/permission state, CAD/BIM handoff, messaging, web, meeting, runtime logs, organization, files, and autonomy.',
+    stateKeys: ['mode', 'windows', 'surfaces', 'meeting', 'runtimeLog', 'org', 'permissions', 'runtime', 'tools', 'errors'],
   },
   {
     id: 'system.self_extension',
@@ -813,13 +805,6 @@ const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     closeAfterUse: true,
   },
   {
-    id: 'music-center',
-    label: 'Music center and mood layer',
-    actions: ['open_music_center', 'show_music_layer', 'hide_music_layer'],
-    useWhen: 'Play music, show media state, lyrics, atmosphere, or sound-driven work context.',
-    closeAfterUse: false,
-  },
-  {
     id: 'meeting',
     label: 'Meeting mode and notes',
     actions: ['start_meeting_mode', 'end_meeting_mode', 'open_meeting_notes'],
@@ -990,27 +975,6 @@ export function getClientHealthReport(
     });
   }
 
-  if (state?.music?.lastError) {
-    add({
-      id: 'music.last_error',
-      level: 'degraded',
-      area: 'music',
-      message: safeRuntimeError(state.music.lastError) || 'Music runtime reported an error.',
-      evidence: state.music.trackName ? `track=${state.music.trackName}` : undefined,
-      safeActions: ['client_self_repair(open_recovery_surface:music-center)', 'client_action(open_music_center)'],
-    });
-  }
-  if ((state?.music?.layerVisible || state?.surfaces?.musicLayerVisible) && !state?.music?.isPlaying && state?.music?.trackName) {
-    add({
-      id: 'music.layer_without_playback',
-      level: 'attention',
-      area: 'music',
-      message: 'Music layer is visible but playback is not active.',
-      evidence: `track=${state.music.trackName}`,
-      safeActions: ['client_action(open_music_center)'],
-    });
-  }
-
   if (state?.runtimeLog?.lastError) {
     add({
       id: 'runtime_log.attention',
@@ -1109,8 +1073,6 @@ export function normalizeClientActionTarget(value?: string): string {
   if (!raw) return '';
   const normalized = raw.toLowerCase();
   const aliases: Record<string, string> = {
-    music: 'music-center',
-    media: 'music-center',
     memory: 'knowledge',
     home: 'home',
     main: 'home',
@@ -1231,8 +1193,6 @@ export function normalizeClientActionTarget(value?: string): string {
     '设置': 'settings',
     '运行日志': 'runtime-log',
     '日志': 'runtime-log',
-    '音乐': 'music-center',
-    '音乐中心': 'music-center',
     '知识库': 'knowledge',
     '文件中心': 'knowledge',
     '文件管理器': 'knowledge',
@@ -1254,7 +1214,6 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
   if (state.surfaces?.memoryAvatarOpen) openSurfaces.push('memory-avatar');
   if (state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) openSurfaces.push('runtime-log');
   if (state.surfaces?.meetingOpen || state.meeting?.active) openSurfaces.push('meeting');
-  if (state.surfaces?.musicLayerVisible || state.music?.layerVisible) openSurfaces.push('music-layer');
   if (state.surfaces?.wallpaperMode) openSurfaces.push('wallpaper');
   if (state.surfaces?.widgetMode) openSurfaces.push('widget');
   const orgView = state.orgWorkspace?.activeView || 'none';
@@ -1276,11 +1235,6 @@ export function getClientStateDigest(state: ClientStateSnapshot | null | undefin
     openWindows,
     openSurfaces,
     voice: `${state.voice?.state || 'idle'}${state.voice?.muted ? '/muted' : ''}`,
-    music: state.music?.isPlaying
-      ? `playing${state.music.trackName ? `:${state.music.trackName}` : ''}`
-      : state.music?.trackName
-        ? `loaded:${state.music.trackName}`
-        : 'idle',
     meetingActive: Boolean(state.meeting?.active),
     runtimeStatus: state.runtimeLog?.status || (state.runtime?.lastError ? 'attention' : 'ready'),
     orgView,
@@ -1366,21 +1320,6 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       verification = mode ? `Client mode should become ${mode}.` : 'A target mode is required.';
       naturalCompletion = mode ? `Mode is now ${mode}.` : 'Mode change requested.';
       naturalPending = mode ? `I asked to switch to ${mode}, but the latest state has not confirmed it yet.` : 'Mode change requested.';
-      break;
-    case 'open_music_center':
-      setSurface('music-center', 'Music Center');
-      break;
-    case 'show_music_layer':
-      expectedState = ['surface:music-layer:open'];
-      verification = 'The music layer should be visible.';
-      naturalCompletion = 'Music layer is visible.';
-      naturalPending = 'I asked to show the music layer, but I still need fresh state to confirm it.';
-      break;
-    case 'hide_music_layer':
-      expectedState = ['surface:music-layer:closed'];
-      verification = 'The music layer should be hidden.';
-      naturalCompletion = 'Music layer is hidden.';
-      naturalPending = 'I asked to hide the music layer, but I still need fresh state to confirm it.';
       break;
     case 'start_meeting_mode':
       expectedState = ['mode:meeting', 'surface:meeting:open'];
@@ -1577,7 +1516,7 @@ export function getClientSelfAwarenessReport(
       'the exact current organization workspace view and the views allowed by the authenticated member role',
       'the current-domain knowledge inventory and the difference between saved, indexed, partial, pending, failed, unsupported, missing-index, and stale content',
       'one continuous Lumi identity with personal and organization workspace overlays; organization access never grants another member personal memory access',
-      'current mode, active tab, windows, focused window, voice/music/meeting/runtime state when the desktop reports it',
+      'current mode, active tab, windows, focused window, voice/meeting/runtime state when the desktop reports it',
       'local machine identity, installed/launchable apps, files, folders, startup entries, services, and running processes when refreshed through desktop relay tools',
       'visible desktop state: foreground window, screen pixels, accessible UI controls, clipboard, cursor/input focus, and existing taskbar/background app sessions',
       'background runtime state: launch-at-login, close-to-background, backend health, runtime log, autonomy policy, idle/activity signals, and confirmed workflows',
@@ -1619,7 +1558,6 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   if (target === 'memory-avatar') return Boolean(state.surfaces?.memoryAvatarOpen) || openWindows.includes('memory-avatar');
   if (target === 'runtime-log') return Boolean(state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) || openWindows.includes('runtime-log');
   if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
-  if (target === 'music-layer') return Boolean(state.surfaces?.musicLayerVisible || state.music?.layerVisible);
   if (target === 'wallpaper') return Boolean(state.surfaces?.wallpaperMode);
   if (target === 'widget') return Boolean(state.surfaces?.widgetMode);
   return state.activeTab === target || openWindows.includes(target) || state.windows?.focused === target;
@@ -1751,7 +1689,6 @@ export function formatClientSelfPrompt(
   const enabledWorkflows = workflows.filter(workflow => workflow.enabled);
   const memoryFirewall = getMemoryFirewallPolicy();
   const actionConstitution = getActionConstitutionPolicy();
-  const musicProfile = isWork ? null : getCachedMusicProfile(userId);
   const adapterRegistry = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
   const desktopAwareness = isWork
     ? '### Organization Desktop Boundary\nThe server-host exploration profile and the member\'s personal desktop snapshot are not organization knowledge. Use only the verified live organization client state above and refresh the authenticated member desktop through relay tools when the task requires it.'
@@ -1783,17 +1720,15 @@ export function formatClientSelfPrompt(
     `- Knowledge ingestion: domain=${state.knowledge?.domain || state.workDomain || 'personal'}, files=${state.knowledge?.totalFiles || 0}, indexed=${state.knowledge?.indexedFiles || 0}, partial=${state.knowledge?.partialFiles || 0}, pending=${state.knowledge?.pendingFiles || 0}, failed=${state.knowledge?.failedFiles || 0}, unsupported=${state.knowledge?.unsupportedFiles || 0}${state.knowledge?.orgArticles ? `, orgArticles=${state.knowledge.orgArticles.total || 0}, orgPublished=${state.knowledge.orgArticles.published || 0}, orgIndexed=${state.knowledge.orgArticles.indexed || 0}, orgMissingIndex=${state.knowledge.orgArticles.missingIndex || 0}, orgStale=${state.knowledge.orgArticles.stale || 0}` : ''}${state.knowledge?.lastError ? `, error=${state.knowledge.lastError}` : ''}`,
     `- Open windows: ${(state.windows?.open || []).join(', ') || 'none'}`,
     `- Focused window: ${state.windows?.focused || 'none'}`,
-    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, musicLayer=${Boolean(state.surfaces?.musicLayerVisible)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
+    `- Surfaces: nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}, launcher=${Boolean(state.surfaces?.appLauncherOpen)}, knowledge=${Boolean(state.surfaces?.knowledgeOpen)}, chat=${Boolean(state.surfaces?.chatOpen)}, notifications=${Boolean(state.surfaces?.notificationsOpen)}, memoryAvatar=${Boolean(state.surfaces?.memoryAvatarOpen)}, runtimeLog=${Boolean(state.surfaces?.runtimeLogOpen)}, meeting=${Boolean(state.surfaces?.meetingOpen)}, wallpaper=${Boolean(state.surfaces?.wallpaperMode)}, widget=${Boolean(state.surfaces?.widgetMode)}`,
     `- Voice: ${state.voice?.state || 'idle'}${state.voice?.muted ? ' (muted)' : ''}`,
-    `- Music: ${state.music?.isPlaying ? 'playing' : 'idle'}${state.music?.trackName ? `, track="${state.music.trackName}"` : ''}${state.music?.volume != null ? `, volume=${state.music.volume}` : ''}, layer=${Boolean(state.music?.layerVisible ?? state.surfaces?.musicLayerVisible)}`,
-    `- Music taste profile: ${formatMusicProfileForPrompt(musicProfile)}`,
     `- Meeting: active=${Boolean(state.meeting?.active)}, notes=${state.meeting?.noteCount || 0}, report=${Boolean(state.meeting?.hasReport)}, reportGenerating=${Boolean(state.meeting?.reportGenerating)}`,
     `- Runtime log: open=${Boolean(state.runtimeLog?.open)}, status=${state.runtimeLog?.status || 'ready'}${state.runtimeLog?.lastError ? `, error=${state.runtimeLog.lastError}` : ''}`,
     `- Permissions: ${formatStateObject(state.permissions)}`,
     `- Tools: agent=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
     `- Native runtime: autostartSupported=${Boolean(state.runtime?.autostartSupported)}, autostart=${Boolean(state.runtime?.autostartEnabled)}, closeToBackground=${Boolean(state.runtime?.closeToBackground)}, startedInBackground=${Boolean(state.runtime?.startedInBackground)}, backendNode=${state.runtime?.backendNodeRunning ? 'running' : 'dev/not-spawned'}, backendPython=${state.runtime?.backendPythonRunning ? 'running' : 'dev/not-spawned'}, nodeRestarts=${state.runtime?.nodeRestarts ?? 0}, pythonRestarts=${state.runtime?.pythonRestarts ?? 0}, shortcut=${state.runtime?.globalShortcut || 'Alt+Space'}${state.runtime?.lastError ? `, error=${state.runtime.lastError}` : ''}`,
     isWork
-      ? '- The work workspace does not expose personal autonomy settings, autonomous workflows, music profile, private memories, or local learning records.'
+      ? '- The work workspace does not expose personal autonomy settings, autonomous workflows, private memories, or local learning records.'
       : `- Autonomy level: ${gate.autonomyLevel} (alwaysOnline=${gate.alwaysOnline}, autoProcess=${gate.autoProcessEnabled}, messagingSendRequiresConfirmation=${gate.messagingSendRequiresConfirmation}, maxConsecutiveTasks=${gate.maxConsecutiveTasks}, externalAppAutomationGate=removed)`,
     isWork
       ? '- Organization autonomous workflows: not configured on this personal client surface.'
@@ -1802,7 +1737,6 @@ export function formatClientSelfPrompt(
     `- State age: ${stateAge}s`,
   ] : [
     '- No live desktop client state has been reported yet.',
-    `- Music taste profile: ${formatMusicProfileForPrompt(musicProfile)}`,
   ];
   const healthLines = [
     `- Overall health: ${health.level}`,
@@ -1848,7 +1782,7 @@ export function formatClientSelfPrompt(
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
     'Use client_get_state or client_health_check before claiming local machine, desktop, or background runtime status. Use desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_running_processes, desktop_active_window, desktop_ui_snapshot, and desktop_capture_screen to refresh the OS/desktop layer.',
-    'Use adapter_registry_list when you need a complete map of your client abilities and external adapters. Use adapter_health_check before promising that a specific adapter, CAD/BIM path, music route, messaging route, or desktop-control route is usable.',
+    'Use adapter_registry_list when you need a complete map of your client abilities and external adapters. Use adapter_health_check before promising that a specific adapter, CAD/BIM path, messaging route, or desktop-control route is usable.',
     'When the user asks for a capability you do not have, do not simply fail or wait for a developer to hard-code another tool. First use self_extension_plan or capability_learning_list to inspect learned routes, adapters, tools, installed skills, and marketplace skills. If the plan says existing coverage can handle it, use that route. Use capability_gap_autofix only when coverage is absent or a brittle/manual path has real failure evidence, then report what was actually verified.',
     'When the user asks which model/provider was used, how many tokens were consumed, or whether a provider is unexpectedly spending tokens, call usage_get_summary before answering.',
     'Keep the five model capability groups explicit: reasoning handles chat and planning; World Model handles visual perception and desktop action planning; Generation creates image/video artifacts; Retrieval uses Embedding for semantic recall and optional Rerank for candidate ordering across memory and knowledge search; Voice and Sound handles recognition and synthesis. Document work composes reasoning, world, and parsing tools. Safety remains a policy, permission, audit, and provider-moderation layer. Model services, factual data sources, external application connections, and execution-tool runtimes are separate configuration classes. Read the configured role instead of assuming one model handles every task. Model configuration belongs to this Lumi user and is shared across personal and organization domains. When the user asks which model is active or asks you to change one, use model_configuration_get/update/test directly instead of navigating the UI or inventing an organization-specific model policy.',
@@ -1870,9 +1804,9 @@ export function formatClientSelfPrompt(
     'Respect the global Memory Firewall: store personal, organization, meeting, LAP, community, and external-app memories with their source and privacy boundaries. Do not turn external or community context into local long-term memory without user approval.',
     'Respect the Action Constitution: reads/searches/analysis plus low- and medium-risk desktop, browser, clipboard, draft, external-app preparation, saved/authorized login session reuse, user-requested foreground social/content commits, and stock watch actions such as quotes, K-lines, sectors, news, watchlists, alerts, risk plans, and paper trading may run when the active desktop mode allows tools. Local writes need an explicit deliverable request or trusted policy. Payments, purchases, transfers, real brokerage buy/sell/cancel-order actions, order/price/inventory/ad-spend changes, ambiguous external submits, installs, shell/system changes, first-time login/security verification/credential storage/account switching/third-party authorization, legal filings/signatures, and destructive actions require confirmation or are forbidden.',
     'When the user reports a client failure, do not stop at repeating the error. First read client_get_state, inspect relevant status/log/config tools when available, try one safe recovery or retry if the cause is clear, verify the state changed, then explain the remaining blocker if it still fails.',
-    'If a routed client action, music playback, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',
-    'Do not shrink yourself into voice interaction. Voice, chat, Feishu, runtime logs, organization, music, meeting, tools, skills, files, and desktop control are different entrances into the same local Lumi.',
-    'Respect modes: Chat is pure conversation; an explicit action request transitions the turn and client to Assistant. Meeting is transcription/reporting, Assistant is user-present high-permission execution, and Autonomy adds continuous 24-hour background operation and ultra-long continuation. Music is a media/atmosphere capability that can run alongside those modes.',
+    'If a routed client action, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',
+    'Do not shrink yourself into voice interaction. Voice, chat, Feishu, runtime logs, organization, meeting, tools, skills, files, and desktop control are different entrances into the same local Lumi.',
+    'Respect modes: Chat is pure conversation; an explicit action request transitions the turn and client to Assistant. Meeting is transcription/reporting, Assistant is user-present high-permission execution, and Autonomy adds continuous 24-hour background operation and ultra-long continuation. Music requests belong to installed desktop media applications, not a Lumi mode or client surface.',
     '',
     '### Workspace Identity And Data Boundaries',
     ...workspaceIdentityLines,

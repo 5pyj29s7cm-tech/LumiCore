@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildPresenceHeartbeat } from '../src/hooks/usePresence';
 import { waitForVoiceSocket } from '../src/hooks/useVoiceCall';
-import { addEchoText, isEchoText, isPureInterruptCommand } from '../server/socket/voice';
+import { addEchoText, isEchoText, isPureInterruptCommand, isVoiceCallEndCommand } from '../server/socket/voice';
 
 class FakeSocket {
   connected = false;
@@ -116,12 +116,15 @@ describe('voice reconnect and perception continuity', () => {
     expect(isPureInterruptCommand('闭嘴')).toBe(true);
     expect(isPureInterruptCommand('先别说了')).toBe(true);
     expect(isPureInterruptCommand('闭嘴，然后继续画图')).toBe(false);
+    expect(isVoiceCallEndCommand('关闭语音通话')).toBe(true);
+    expect(isVoiceCallEndCommand('停止任务')).toBe(false);
     expect(priorityStop).toBeGreaterThan(0);
     expect(voiceprintGate).toBeGreaterThan(priorityStop);
     expect(server).toContain('await waitForVoiceprintGate(session)');
     expect(client).toContain("if (isTtsPlaying.current) {");
     expect(client).toContain("currentSocket.volatile.emit('audio:chunk', chunk)");
     expect(client).not.toContain('ttsPreRollChunks');
+    expect(client).toContain("socket.on('audio:end-call-request'");
     const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
     expect(voiceprint).toContain('createScriptProcessor(2048, 1, 1)');
   });

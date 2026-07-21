@@ -82,6 +82,11 @@ const TASK_TERMS = /(?:\u4efb\u52a1|\u5ba2\u6237|\u4ea4\u4ed8|\u63a5\u7ba1|\u5de
 const CREATE_OR_DRAW_VERBS = /(?:\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u5236\u4f5c|\u505a|\u753b|\u51fa|\b(?:create|generate|draw|make)\b)/iu;
 const VISUAL_OUTPUT_TERMS = /(?:\u6d77\u62a5|\u56fe\u7247|\u89c6\u89c9\u56fe|\u54c1\u724c\u56fe|\u5e73\u9762\u56fe|\u56fe\u7eb8|\u8bbe\u8ba1\u56fe|cad|CAD|DXF|dxf|\b(?:poster|image|visual|floor plan|drawing|cad|dxf)\b)/iu;
 const WORK_PRODUCT_TERMS = /(?:\u6587\u4ef6|\u6587\u4ef6\u5939|\u76ee\u5f55|\u6587\u6863|\u5408\u540c|\u62a5\u544a|\u6c47\u62a5|\u8868\u683c|PPT|ppt|\u5e7b\u706f\u7247|\u4ee3\u7801|\u9879\u76ee|\u5e94\u7528|\u7a0b\u5e8f|\u7f51\u9875|\u7f51\u7ad9|\u94fe\u63a5|\u8fd0\u884c\u65e5\u5fd7|\u65e5\u5fd7|\u5de5\u4f5c\u6d41|\u811a\u672c|\u7ec8\u7aef|\u547d\u4ee4|\u4ed3\u5e93|github|\u6570\u636e\u5e93|\u77e5\u8bc6\u5e93|\u6a21\u677f|\u7ec4\u7ec7|\u8bbe\u7f6e|\u8bbe\u5907|\u5c4f\u5e55|\b(?:file|document|contract|report|ppt|presentation|code|project|app|website|workflow|script|repo|database)\b)/iu;
+const DESKTOP_MUSIC_CONTROL_RE = /(?:\u97f3\u4e50|\u6b4c\u66f2|\u6b4c\u5355|\u7f51\u6613\u4e91|QQ\u97f3\u4e50|\u9177\u72d7|Spotify).{0,32}(?:\u6253\u5f00|\u542f\u52a8|\u64ad\u653e|\u6682\u505c|\u7ee7\u7eed|\u5207\u6b4c|\u4e0a\u4e00\u9996|\u4e0b\u4e00\u9996|\u641c\u7d22|\u97f3\u91cf)|(?:\u6253\u5f00|\u542f\u52a8|\u64ad\u653e|\u653e|\u542c|\u6682\u505c|\u7ee7\u7eed\u64ad\u653e|\u5207\u6b4c|\u4e0a\u4e00\u9996|\u4e0b\u4e00\u9996|\u641c\u7d22).{0,32}(?:\u97f3\u4e50|\u6b4c\u66f2|\u6b4c\u5355|\u7f51\u6613\u4e91|QQ\u97f3\u4e50|\u9177\u72d7|Spotify)|\b(?:open|launch|play|pause|resume|skip|next|previous|search)\b.{0,40}\b(?:music|song|playlist|netease|spotify|music player)\b/iu;
+
+export function isDesktopMusicControlRequest(text: string): boolean {
+  return DESKTOP_MUSIC_CONTROL_RE.test(String(text || '').trim());
+}
 
 const STRUCTURED_TOOL_INTENT_RULES: IntentGrammarRule[] = [
   { name: 'web-search', all: [SEARCH_VERBS, SEARCH_OBJECTS] },
@@ -334,6 +339,7 @@ export function hasClientActionIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
+  if (isDesktopMusicControlRequest(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
   if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
@@ -345,6 +351,7 @@ export function hasClientActionOnlyIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
   if (isInformationOnlyQuestion(normalized)) return false;
+  if (isDesktopMusicControlRequest(normalized)) return false;
   if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
@@ -393,6 +400,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const externalDesktopOrTeamExecution = normalized
     ? hasExternalDesktopOrTeamExecutionIntent(normalized)
     : false;
+  const desktopMusicControl = normalized ? isDesktopMusicControlRequest(normalized) : false;
   const diagnosticOrRepair = normalized && !informationOnlyQuestion
     ? isDiagnosticOrRepairRequest(normalized)
     : false;
@@ -405,13 +413,13 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const legacyToolRules = !informationOnlyQuestion && normalized
     ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
     : [];
-  const structuredClientRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && normalized
+  const structuredClientRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && !desktopMusicControl && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_CLIENT_ACTION_RULES)
     : [];
-  const clientActionRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && normalized
+  const clientActionRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && !desktopMusicControl && normalized
     ? matchPatternRuleNames(normalized, CLIENT_ACTION_INTENT_PATTERNS, 'client-action-pattern')
     : [];
-  const clientActionOnlyRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && normalized
+  const clientActionOnlyRules = !informationOnlyQuestion && !externalDesktopOrTeamExecution && !desktopMusicControl && normalized
     ? matchPatternRuleNames(normalized, CLIENT_ACTION_ONLY_PATTERNS, 'client-action-only-pattern')
     : [];
   const autonomousTaskRules = mode === 'autonomous' && normalized

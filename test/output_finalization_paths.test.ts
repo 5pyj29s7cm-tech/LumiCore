@@ -214,12 +214,13 @@ describe('finalized output paths', () => {
       'finalizedMode',
       'finalizedWorkflow',
       'quickFinalized',
-      'profileFinalized',
     ]) {
       expect(chat).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' : undefined`);
       expect(chat).toContain(`if (!${finalized}.blocked) {`);
     }
     expect(chat).toContain('if (!finalizedWorkflowQuick.blocked) {');
+    expect(chat).toContain("cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation'");
+    expect(chat).toContain('if (!finalized.blocked) {');
     expect(chat).toContain("cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : specialWorkflow.id");
     expect(chat).toContain("cognitiveIntent: guarded ? 'work_product_guard' : undefined");
     expect(chat).toContain("cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category");
@@ -233,8 +234,7 @@ describe('finalized output paths', () => {
       'finalizedWorkflow',
       'finalizedMode',
       'quickFinalized',
-      'profileFinalized',
-      'musicFinalized',
+      'confirmedFinal',
     ]) {
       expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
       expect(voice).toContain(`if (!${finalized}.blocked) {`);
@@ -337,7 +337,7 @@ describe('finalized output paths', () => {
     expect(chat).toContain("from \"../conversation/summary_scheduler\"");
     expect(voice).toContain("from \"../conversation/summary_scheduler\"");
     expect(chat).toContain('scheduleChatSummary(conversationId)');
-    expect(voice.match(/scheduleVoiceSummary\([^)]*\.id\)/g)?.length || 0).toBeGreaterThanOrEqual(9);
+    expect(voice.match(/scheduleVoiceSummary\([^)]*\.id\)/g)?.length || 0).toBeGreaterThanOrEqual(8);
     expect(ambient).toContain('Auto-summary eligible for conversation');
     expect(ambient).not.toContain('Triggered auto-summary');
   });
@@ -352,14 +352,14 @@ describe('finalized output paths', () => {
     expect(chat).toContain('if (currentToolRecords.length === 0) return null;');
     expect(voice).toContain('if (currentToolRecords.length === 0) return null;');
     expect(chat.match(/persistChatTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
-    expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
+    expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(6);
     expect(writeback).toContain('input.flow.workTakeover.shouldResumeTask');
 
     for (const marker of [
       "source: 'chat_mode'",
       "source: 'workflow'",
       "source: 'chat_quick_command'",
-      "source: 'chat_music_profile'",
+      "source: 'chat_confirmation'",
       "source: 'background_delegation'",
     ]) {
       expect(chat).toContain(marker);
@@ -368,8 +368,7 @@ describe('finalized output paths', () => {
       "source: 'voice_mode'",
       "source: 'voice_quick_command'",
       "source: 'voice_foreground_messaging'",
-      "source: 'voice_music_profile'",
-      "source: 'voice_music_execution'",
+      "source: 'voice_confirmation'",
       "source: 'voice_cognition_direct'",
     ]) {
       expect(voice).toContain(marker);

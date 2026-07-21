@@ -29,8 +29,6 @@ import {
   ChevronRight,
   ArrowLeft,
   Bell,
-  Disc,
-  Headphones,
   BrainCircuit,
   Sparkles,
   Box,
@@ -42,7 +40,6 @@ import {
   Pause,
   Mic,
   Terminal as TerminalIcon,
-  Music,
   Bot,
   Monitor,
   Trash2,
@@ -74,7 +71,6 @@ import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
 import { appConfirm } from '@/lib/appConfirm';
 import { designVoice, listVoices, synthesizeSpeech } from '@/services/voiceService';
-import { setMusicLayerVisible, useMusicPlayerRuntime, useMusicPlayerSnapshot, useMusicVisible } from '../hooks/useMusicPlayer';
 import { useVoiceprint } from '../hooks/useVoiceprint';
 import { useFaceRecognition } from '../hooks/useFaceRecognition';
 import { usePresence } from '../hooks/usePresence';
@@ -134,8 +130,6 @@ const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ de
 const KnowledgeBase = lazy(() => import('./KnowledgeBase').then(m => ({ default: m.KnowledgeBase })));
 const MemoryAvatarLab = lazy(() => import('./MemoryAvatarLab').then(m => ({ default: m.MemoryAvatarLab })));
 const MeshSyncSelector = lazy(() => import('./MeshSyncSelector').then(m => ({ default: m.MeshSyncSelector })));
-const MusicCenter = lazy(() => import('./MusicCenter').then(m => ({ default: m.MusicCenter })));
-const MusicMoodLayer = lazy(() => import('./MusicMoodLayer').then(m => ({ default: m.MusicMoodLayer })));
 const NotificationCenter = lazy(() => import('./NotificationCenter').then(m => ({ default: m.NotificationCenter })));
 const OrgPortal = lazy(() => import('./OrgPortal').then(m => ({ default: m.OrgPortal })));
 const PersonalityEditor = lazy(() => import('./PersonalityEditor').then(m => ({ default: m.PersonalityEditor })));
@@ -1732,7 +1726,6 @@ export function DesktopUI({
     { id: 'memory-avatar', labelKey: 'memoryAvatars', icon: <Castle size={24} />, colorClass: 'from-fuchsia-500 to-purple-600', windowId: 'memory-avatar' },
     { id: 'avatar-studio', labelKey: 'avatarStudio', icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-blue-600', windowId: 'avatar-studio' },
     { id: 'sound', labelKey: 'sound', icon: <Volume2 size={24} />, colorClass: 'from-sky-500 to-indigo-600', windowId: 'sound' },
-    { id: 'music', labelKey: 'music', icon: <Music size={24} />, colorClass: 'from-red-500 to-pink-600', windowId: 'music-center' },
   ];
   const desktopIconAreaHeight = Math.max(
     desktopIconLayout.compact ? 300 : 400,
@@ -2039,11 +2032,6 @@ export function DesktopUI({
     window.addEventListener('lumi:domain-changed', onDomainChanged, { once: true });
   }), [applyRefinedMeetingTranscript, lang, socket]);
 
-  useMusicPlayerRuntime();
-  const musicVisible = useMusicVisible();
-  const [musicLayerLoaded, setMusicLayerLoaded] = useState(false);
-  const musicSnapshot = useMusicPlayerSnapshot();
-
   useEffect(() => {
     if (knowledgeOpen) setKnowledgeLoaded(true);
   }, [knowledgeOpen]);
@@ -2055,10 +2043,6 @@ export function DesktopUI({
   useEffect(() => {
     if (sanctuaryOpen) setSanctuaryLoaded(true);
   }, [sanctuaryOpen]);
-
-  useEffect(() => {
-    if (musicVisible) setMusicLayerLoaded(true);
-  }, [musicVisible]);
 
   const voiceprint = useVoiceprint({ socket });
   const loadVoiceprintTemplates = voiceprint.loadTemplates;
@@ -3726,7 +3710,6 @@ export function DesktopUI({
       const reject = typeof detail.reject === 'function' ? detail.reject : () => {};
 
       const normalizeTarget = (value: string) => {
-        if (value === 'music') return 'music-center';
         if (value === 'memory') return 'knowledge';
         if (value === 'files') return 'knowledge';
         if (value === 'sync') return 'devices';
@@ -3858,10 +3841,6 @@ export function DesktopUI({
       };
 
       const setClientMode = (value: string) => {
-        if (value === 'music') {
-          openSurface('music-center');
-          return;
-        }
         const allowed = ['chat', 'meeting', 'assistant', 'autonomous'];
         if (!allowed.includes(value)) throw new Error(`Unsupported mode: ${value}`);
         if (value === 'meeting' && !confirmed) {
@@ -3977,18 +3956,6 @@ export function DesktopUI({
           respond({ ok: true, action, target: 'nexus', viewMode: 'personal' });
           return;
         }
-        if (action === 'show_music_layer' || action === 'hide_music_layer') {
-          if (action === 'show_music_layer') {
-            if (!musicSnapshot.track) {
-              openSurface('music-center');
-              respond({ ok: false, action, mode: operationMode, reason: 'music_track_required', target: 'music-center' });
-              return;
-            }
-          }
-          setMusicLayerVisible(action === 'show_music_layer');
-          respond({ ok: true, action, mode: operationMode });
-          return;
-        }
         if (action === 'start_meeting_mode') {
           if (!confirmed) throw new Error('start_meeting_mode requires explicit user confirmation');
           if (detail.resetNotes) resetMeetingCapture();
@@ -4075,7 +4042,6 @@ export function DesktopUI({
     exitDesktopWidgetMode,
     focusedWindow,
     isDesktopWidgetMode,
-    musicSnapshot.track,
     openMemoryAvatar,
     openWindows,
     operationMode,
@@ -4094,7 +4060,6 @@ export function DesktopUI({
     const sendState = () => {
       const recentErrors = [
         callError ? { source: 'voice', message: callError, at: Date.now() } : null,
-        musicSnapshot.lastError ? { source: 'music', message: musicSnapshot.lastError, at: Date.now() } : null,
         clientRuntime.lastError ? { source: 'runtime', message: clientRuntime.lastError, at: Date.now() } : null,
       ].filter(Boolean);
 
@@ -4132,7 +4097,6 @@ export function DesktopUI({
           memoryAvatarOpen: memoryLabOpen,
           runtimeLogOpen: openWindows.includes('runtime-log'),
           meetingOpen: meetingNotesOpen,
-          musicLayerVisible: musicVisible,
           wallpaperMode: isWallpaperMode,
           widgetMode: isDesktopWidgetMode,
           nexusOpen: viewMode === 'world',
@@ -4140,21 +4104,6 @@ export function DesktopUI({
         voice: {
           state: callState,
           muted: isMuted,
-        },
-        music: {
-          visible: musicSnapshot.visible,
-          isPlaying: musicSnapshot.isPlaying,
-          trackName: musicSnapshot.track?.name || '',
-          artists: musicSnapshot.track?.artists || [],
-          album: musicSnapshot.track?.album || '',
-          source: musicSnapshot.source,
-          progress: musicSnapshot.progress,
-          duration: musicSnapshot.duration,
-          volume: musicSnapshot.volume,
-          mood: musicSnapshot.mood,
-          hasLyrics: musicSnapshot.lyrics.length > 0,
-          layerVisible: musicVisible,
-          lastError: musicSnapshot.lastError || '',
         },
         meeting: {
           active: operationMode === 'meeting',
@@ -4218,8 +4167,6 @@ export function DesktopUI({
     meetingReportGenerating,
     meetingStartedAt,
     minimizedWindows,
-    musicSnapshot,
-    musicVisible,
     openWindows,
     operationMode,
     orgConnection?.connected,
@@ -4281,8 +4228,6 @@ export function DesktopUI({
     if (windowId === 'kernel') return { w: '1050px', h: '720px' };
     if (windowId === 'personality') return { w: '1050px', h: '720px' };
     if (windowId === 'generate') return { w: '1050px', h: '720px' };
-    if (windowId === 'music') return { w: '1050px', h: '720px' };
-    if (windowId === 'music-center') return { w: '800px', h: '600px' };
     if (windowId === 'tools') return { w: '850px', h: '620px' };
     if (windowId === 'team') return { w: '900px', h: '700px' };
     if (windowId === 'github-mcp') return { w: '850px', h: '620px' };
@@ -4593,7 +4538,7 @@ export function DesktopUI({
         {/* Top Status Bar */}
         <div
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
-          className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+          className={`lumi-shell-topbar absolute top-0 inset-x-0 h-10 glass-dark border-b border-white/5 flex items-center px-6 pointer-events-auto backdrop-blur-md transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
         >
           <div className="lumi-shell-topbar-left flex min-w-0 items-center gap-6">
             <button data-lumi-target="home" onClick={() => toggleWindow('home')} className="flex items-center gap-2 group transition-all">
@@ -4715,7 +4660,7 @@ export function DesktopUI({
         </div>
 
         <AnimatePresence>
-          {isNotificationPanelOpen && !isWallpaperMode && !musicVisible && (
+          {isNotificationPanelOpen && !isWallpaperMode && (
             <>
               <motion.button
                 type="button"
@@ -4766,7 +4711,7 @@ export function DesktopUI({
         {/* Bottom Taskbar / Dock */}
         <div
           data-theme-scope={viewMode === 'world' ? 'dark' : undefined}
-          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode || musicVisible ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}
+          className={`lumi-dock absolute bottom-6 left-1/2 -translate-x-1/2 z-50 h-16 max-w-[calc(100vw-2rem)] overflow-x-auto overflow-y-hidden px-4 glass-dark rounded-[2.5rem] border border-white/10 flex items-center gap-2 shadow-2xl backdrop-blur-2xl transition-all duration-1000 ${isWallpaperMode ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}`}
         >
           <button 
             onClick={() => setViewMode(viewMode === 'personal' ? 'world' : 'personal')}
@@ -4871,8 +4816,8 @@ export function DesktopUI({
         className={`absolute inset-0 z-[15] flex flex-col ${viewMode === 'world' ? 'pointer-events-none' : ''}`}
       >
         <div className="relative w-full h-full pointer-events-auto">
-          {/* Central Interactive Entity — hidden when music layer is active */}
-          <div className={`absolute inset-0 flex items-center justify-center z-[15] pointer-events-none ${musicVisible ? 'opacity-0 pointer-events-none' : ''}`}>
+          {/* Central Interactive Entity */}
+          <div className="absolute inset-0 flex items-center justify-center z-[15] pointer-events-none">
         <motion.div 
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -5511,27 +5456,6 @@ export function DesktopUI({
                     <KernelMonitorApp t={t} />
                   ) : windowId === 'settings' ? (
                     <Settings t={t} lang={lang} setLang={setLang} activeSection={settingsSection} onSectionChange={setSettingsSection} />
-                  ) : windowId === 'music' ? (
-                    <div className="flex flex-col items-center justify-center h-full text-center space-y-8 animate-in zoom-in-95 duration-500">
-                      <div className="relative">
-                        <Disc size={120} className="text-celestial-saturn animate-[spin_8s_linear_infinite]" />
-                        <Headphones size={40} className="absolute -bottom-4 -right-4 text-white p-2 bg-black rounded-full" />
-                      </div>
-                      <div className="space-y-2">
-                        <h2 className="text-3xl font-black uppercase tracking-tighter text-white">{t.mediaCenter || 'Media Center'}</h2>
-                        <p className="text-white/40 max-w-md text-sm">{t.mediaCenterDesc || 'Voice synthesis, media playback, and audio settings.'}</p>
-                      </div>
-                      <div className="flex gap-4">
-                        <button onClick={() => { toggleWindow('settings'); setSettingsSection('voice'); }} className="px-6 py-3 bg-celestial-saturn/10 border border-celestial-saturn/30 rounded-2xl text-xs font-black uppercase tracking-widest text-celestial-saturn hover:bg-celestial-saturn/20 transition-all">
-                          {t.voiceForge || 'Voice Forge'}
-                        </button>
-                        <button onClick={() => { toggleWindow('settings'); setSettingsSection('voice-model'); }} className="px-6 py-3 bg-white/5 border border-white/10 rounded-2xl text-xs font-black uppercase tracking-widest text-white/40 hover:bg-white/10 transition-all">
-                          {t.mediaServices || 'Media Services'}
-                        </button>
-                      </div>
-                    </div>
-                  ) : windowId === 'music-center' ? (
-                    <MusicCenter isOpen={true} onClose={() => closeWindow('music-center')} t={t} />
                   ) : windowId === 'personality' ? (
                     <PersonalityEditor t={t} />
                   ) : windowId === 'tools' ? (
@@ -5759,12 +5683,6 @@ export function DesktopUI({
           </motion.div>
         )}
       </AnimatePresence>
-
-      {musicLayerLoaded && (
-        <Suspense fallback={null}>
-          <MusicMoodLayer />
-        </Suspense>
-      )}
 
     </div>
   );

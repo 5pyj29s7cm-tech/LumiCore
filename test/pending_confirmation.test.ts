@@ -28,6 +28,20 @@ describe('One-time pending tool confirmations', () => {
     expect(prompt).toContain('owner');
     expect(prompt).toContain('[redacted]');
     expect(prompt).not.toContain('super-secret-password');
+    expect(pending.exactArgs.password).toBe('super-secret-password');
+    expect(pending.safeArgs.password).toBe('[redacted]');
+  });
+
+  it('keeps the original action context for deterministic continuation', () => {
+    const pending = recordPendingConfirmation(
+      'u1',
+      'desktop_run_command',
+      { command: 'safe-example' },
+      'voice',
+      { actionIntent: '运行刚才确认的命令' },
+    );
+    expect(pending.actionIntent).toBe('运行刚才确认的命令');
+    expect(pending.exactArgs).toEqual({ command: 'safe-example' });
   });
 
   it('isolates confirmations by remote channel and data scope', () => {

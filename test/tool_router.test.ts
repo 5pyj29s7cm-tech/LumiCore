@@ -493,7 +493,14 @@ describe('tool router', () => {
     const route = routeToolsForTurn('帮我放一首网易云的歌', DECLARATIONS);
 
     expect(route.categories).toContain('music');
-    expect(route.toolNames).toContain('mcp_neteasemusic_search_song');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'desktop_list_apps',
+      'desktop_open',
+      'desktop_active_window',
+      'desktop_ui_snapshot',
+      'desktop_keyboard_press',
+    ]));
+    expect(route.toolNames).not.toContain('mcp_neteasemusic_search_song');
     expect(route.toolNames).not.toContain('mcp_legal-casework_legal_case_folder_workflow');
     expect(route.toolNames).not.toContain('legal_search_case');
   });

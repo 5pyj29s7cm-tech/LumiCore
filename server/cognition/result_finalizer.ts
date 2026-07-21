@@ -70,7 +70,10 @@ function resultTaskText(input: LumiResultFinalizerInput): string {
 
 function leakedLegacyToolProtocol(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const raw = String(input.responseText || '').trim();
-  if (!/<(?:function_calls|tool_calls|invoke)\b/i.test(raw)) return null;
+  const hasXmlProtocol = /<(?:function_calls|tool_calls|invoke)\b/i.test(raw);
+  // i18n-allow: Chinese internal tool-protocol recognition; not user-visible copy.
+  const hasBracketProtocol = /\[(?:调用|call(?:ing)?|tool)\s+[A-Za-z][A-Za-z0-9_.:-]{1,127}\s*\](?:\s*\{)?/iu.test(raw);
+  if (!hasXmlProtocol && !hasBracketProtocol) return null;
   const names = Array.from(raw.matchAll(/<invoke\s+name=["']([^"']+)["']/gi), match => match[1]);
   const clientStateRequested = names.includes('client_get_state');
   const chinese = isChineseText(resultTaskText(input));
@@ -211,9 +214,10 @@ function isChineseText(value: string): boolean {
 function sanitizeInternalExecutionText(value: string, chinese: boolean): string {
   const raw = String(value || '').trim();
   if (!raw) return raw;
-  const internalLine = /(?:No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b)/i;
-  if (!internalLine.test(raw)) return raw;
-  const cleaned = raw
+  const internalLine = /(?:No worker agent accepted|Worker (?:agent )?(?:failed|blocked|succeeded)|Coordinating worker agents|\bsubTask(?:Id)?\b|\bworkerAgentId\b|\baggregatedOutput\b|\bprerequisite\s+sub[_-]|\bsub[_-]\d+\b|\ballowedTools\b|work product guard|Maximum tool call iterations|\[historical\s+source=[^\]]+\])/i;
+  const withoutHistoryMarkers = raw.replace(/\[historical\s+source=[^\]]+\]\s*/gi, '');
+  if (!internalLine.test(withoutHistoryMarkers) && withoutHistoryMarkers === raw) return raw;
+  const cleaned = withoutHistoryMarkers
     .split(/\r?\n/)
     .filter(line => !internalLine.test(line))
     .join('\n')
