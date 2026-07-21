@@ -223,7 +223,9 @@ describe('finalized output paths', () => {
     expect(chat).toContain("cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : specialWorkflow.id");
     expect(chat).toContain("cognitiveIntent: guarded ? 'work_product_guard' : undefined");
     expect(chat).toContain("cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category");
-    expect(chat).toContain('persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked)');
+    expect(chat).toContain('persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked, deliver)');
+    expect(chat).toContain('const deliver = isLatestUserTurn(executionScope, requestId)');
+    expect(chat).toContain('if (conversationId && deliverToConversation) {');
     expect(chat).toContain('if (conversationId && !quickFinalized.blocked) {');
 
     for (const finalized of [

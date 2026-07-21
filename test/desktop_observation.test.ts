@@ -27,6 +27,17 @@ describe('desktop observation routing', () => {
     ]);
   });
 
+  it.each([
+    '做个桌面程序检查',
+    '看一下后台程序运行情况',
+    '检查一下后台进程状态',
+  ])('routes a natural program-status request to one process snapshot: %s', (text) => {
+    expect(buildDesktopObservationPlan(text)).toEqual([{
+      name: 'desktop_running_processes',
+      arguments: { top: 20 },
+    }]);
+  });
+
   it('does not replace a requested desktop mutation with observation-only work', () => {
     expect(buildDesktopObservationPlan(
       '\u6253\u5f00\u5fae\u4fe1\uff0c\u7136\u540e\u8bfb\u53d6\u5f53\u524d\u6d3b\u52a8\u7a97\u53e3',
@@ -88,6 +99,26 @@ describe('desktop observation routing', () => {
     });
     expect(finalized.blocked).toBe(false);
     expect(finalized.text).toBe(text);
+  });
+
+  it('labels a process report as a point-in-time sample without diagnosing a leak or hang', () => {
+    const text = formatDesktopObservationResult([{
+      name: 'desktop_running_processes',
+      arguments: { top: 20 },
+      result: JSON.stringify({
+        processes: [
+          { pid: 11, name: 'msedgewebview2.exe', memory_mb: 4300 },
+          { pid: 12, name: 'wps.exe', memory_mb: 800 },
+        ],
+      }),
+    }], '做个桌面程序检查');
+
+    expect(text).toContain('运行快照');
+    expect(text).toContain('msedgewebview2.exe');
+    expect(text).toContain('瞬时采样');
+    expect(text).toContain('不能判定内存泄漏');
+    expect(text).not.toContain('一切正常');
+    expect(text).not.toContain('没卡死');
   });
 
   it('maps an omitted path to the user Desktop only when the routed task asks for it', async () => {

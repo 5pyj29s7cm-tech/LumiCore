@@ -54,6 +54,15 @@ describe('audio transcription tool intent', () => {
   });
 
   it.each([
+    '你刚才是不是在做自检？',
+    '刚刚是在后台做检查吗？',
+  ])('treats a question about a prior check as explanation, not a fresh diagnostic: %s', (text) => {
+    expect(isCurrentClientDiagnosticRequest(text)).toBe(false);
+    expect(isUserCorrectionOrExplanationQuestion(text)).toBe(true);
+    expect(isDiagnosticOrRepairRequest(text)).toBe(false);
+  });
+
+  it.each([
     '检查一下你自己有没有问题',
     '检查一下你自己有没有问题，然后给我一份报告',
     '检查一下客户端',

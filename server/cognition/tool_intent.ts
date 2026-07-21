@@ -180,6 +180,8 @@ const DIRECT_CLIENT_SELF_HEALTH_RE =
   /(?:(?:\u4f60)?\u81ea\u5df1|\u4f60\u81ea\u8eab|\u81ea\u8eab|Lumi(?:\s*\u5ba2\u6237\u7aef|\s*\u7cfb\u7edf)?|\u5ba2\u6237\u7aef|\u8fd0\u884c\u65f6|\byourself\b|\b(?:lumi\s+)?client\b|\bruntime\b)(?:\u672c\u8eab|\u8fd9\u8fb9)?[\s\uff0c,]*(?:\u6709\u6ca1\u6709\u95ee\u9898|\u6709\u65e0\u95ee\u9898|\u662f\u4e0d\u662f\u6709\u95ee\u9898|\u662f\u5426(?:\u6b63\u5e38|\u901a\u7545|\u5065\u5eb7)|\u80fd(?:\u4e0d\u80fd|\u5426|\u591f)?\u4fee\u590d|\u8eab\u4f53\u72b6\u51b5|\b(?:healthy|working\s+normally)\b|\b(?:can|could)\b.{0,12}\b(?:repair|recover)\b)/iu;
 const EXPLICIT_SELF_DIAGNOSTIC_RUN_RE =
   /(?:\u505a|\u8dd1|\u8fdb\u884c|\u6267\u884c|\u5f00\u59cb).{0,16}(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5)|\b(?:run|perform|start)\b.{0,24}\b(?:self[-\s]?check|health\s+check)\b/iu;
+const PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE =
+  /(?:\u521a\u624d|\u521a\u521a|\u4e4b\u524d|\u4e0a\u4e00\u8f6e|\u4e0a\u4e00\u6b21)[^\u3002\uff01\uff1f.!?\n]{0,64}(?:\u81ea\u68c0|\u5065\u5eb7\u68c0\u67e5|\u68c0\u67e5)|\b(?:were|was)\s+you\b[^.!?\n]{0,48}\b(?:self[-\s]?check|health\s+check|diagnos)/iu;
 const CLIENT_INTEGRATION_DIAGNOSTIC_RE =
   /(?:(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b).{0,24}(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b).{0,16}(?:\u72b6\u6001|\u5065\u5eb7|\u8fde\u63a5|\u63a5\u5165|\u5f02\u5e38|\u95ee\u9898|\b(?:status|health|connection|integration|problem)\b)|(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b).{0,16}(?:\u72b6\u6001|\u5065\u5eb7|\u8fde\u63a5|\u63a5\u5165|\u5f02\u5e38|\u95ee\u9898|\b(?:status|health|connection|integration|problem)\b).{0,24}(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b))/iu;
 const CLIENT_OR_APP_RUNTIME_FAILURE_RE =
@@ -193,6 +195,7 @@ const CLIENT_OR_APP_RUNTIME_FAILURE_RE =
 export function isCurrentClientDiagnosticRequest(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
+  if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return false;
 
   if (CLIENT_INTEGRATION_DIAGNOSTIC_RE.test(normalized)) return true;
   if (DIRECT_CLIENT_SELF_HEALTH_RE.test(normalized)) return true;
@@ -222,6 +225,7 @@ function hasExplicitActionRequest(text: string): boolean {
 export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
+  if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return true;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   if (/(?:修复|处理|排查|检查|诊断|重新|重试|再试|fix|repair|diagnose|retry)/iu.test(normalized)) return false;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -253,6 +257,7 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
     /^(?:不是[，,\s]*)?(?:我现在)?[^。！？!?\n]{0,40}(?:哪来的|怎么会是|什么微信)[^。！？!?\n]{0,32}(?:微信客户端|微信渠道|渠道|客户端)/u,
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     /(?:能不能|能否|可以不可以|可不可以)[^。！？!?\n]{0,16}(?:听见|听到|听清|听得到)[^。！？!?\n]{0,16}(?:我|说话)?/u,
+    PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE,
     /\bcan\s+you\s+hear\s+me\b/i,
   ].some(pattern => pattern.test(normalized));
 }

@@ -78,4 +78,7 @@ export const CN_RESULT_GROUNDING_MESSAGES = {
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',
   toolProtocolBlocked: '这轮工具请求没有被执行，内部协议文本已拦截。',
   desktopSoftwareShortcutCount: (count: number) => `桌面上有 ${count} 个软件快捷方式。`,
+  desktopSnapshotIntro: '本轮桌面状态读取已完成，结果来自当前桌面客户端的本次采样。',
+  processSnapshot: (count: number, names: string[]) => `运行快照：已读取 ${count} 条活跃进程记录${names.length ? `，前几项为 ${names.join('、')}` : ''}。`,
+  processSnapshotCaveat: '这是一次瞬时采样；仅凭这次结果，不能判定内存泄漏、程序卡死或长期稳定性。',
 } as const;

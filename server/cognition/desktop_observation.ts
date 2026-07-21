@@ -69,7 +69,7 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
 
   const wantsActiveWindow = requiresActiveWindowObservation(text);
   const wantsDesktopFiles = requiresDesktopFileListingObservation(text);
-  const wantsProcesses = /\b(?:running\s+process(?:es)?|process\s+(?:list|state|status)|runtime\s+state|desktop\s+(?:state|status))\b|\b(?:running|active)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b(?:\u5217\u8868|\u72b6\u6001|\u4fe1\u606f)|\u684c\u9762\u8fd0\u884c\u72b6\u6001|(?:\u6b63\u5728\u8fd0\u884c|\u5df2\u8fd0\u884c).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528/iu.test(text);
+  const wantsProcesses = /\b(?:running\s+process(?:es)?|process\s+(?:list|state|status)|runtime\s+state|desktop\s+(?:state|status)|desktop\s+(?:program|app)(?:lication)?\s+check)\b|\b(?:running|active)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?\b|(?:\u8fd0\u884c|\u6d3b\u8dc3|\u5f53\u524d)\u8fdb\u7a0b|\u8fdb\u7a0b(?:\u5217\u8868|\u72b6\u6001|\u4fe1\u606f)|\u684c\u9762\u8fd0\u884c\u72b6\u6001|(?:\u6b63\u5728\u8fd0\u884c|\u5df2\u8fd0\u884c).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|(?:\u505a\u4e2a|\u505a\u4e00\u4e2a|\u8fdb\u884c|\u68c0\u67e5|\u67e5\u770b|\u770b\u4e00\u4e0b).{0,10}(?:\u684c\u9762)?(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528)(?:\u68c0\u67e5|\u72b6\u6001|\u8fd0\u884c\u60c5\u51b5)|(?:\u540e\u53f0|\u684c\u9762).{0,8}(?:\u7a0b\u5e8f|\u8f6f\u4ef6|\u5e94\u7528|\u8fdb\u7a0b).{0,8}(?:\u8fd0\u884c\u60c5\u51b5|\u72b6\u6001|\u68c0\u67e5)/iu.test(text);
   const wantsIdle = /\b(?:idle\s+time|away\s+time)\b|\u7a7a\u95f2\u65f6\u95f4|\u591a\u4e45\u6ca1\u64cd\u4f5c/iu.test(text);
   const wantsSystem = /\b(?:system\s+info|os\s+info|cpu|memory|disk)\b|\u7cfb\u7edf\u4fe1\u606f|CPU|\u5185\u5b58|\u78c1\u76d8/iu.test(text);
   const wantsAppInventory = /\b(?:(?:installed|launchable|available|local(?:ly)?)\s+(?:desktop\s+)?(?:ai\s+)?app(?:lication)?s?|app(?:lication)?\s+(?:inventory|list))\b|\b(?:inspect|check|list|show|find|detect|inventory)\b.{0,64}\b(?:installed|launchable|available|local|app|application|software|program|launch\s+target)\b|(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u672c\u673a|\u672c\u5730).{0,16}(?:AI|\u4eba\u5de5\u667a\u80fd)?\u5e94\u7528|\u5e94\u7528(?:\u6e05\u5355|\u5217\u8868)|(?:\u68c0\u67e5|\u67e5\u770b|\u5217\u51fa|\u8bc6\u522b|\u68c0\u6d4b|\u76d8\u70b9|\u67e5\u627e).{0,32}(?:\u5df2\u5b89\u88c5|\u53ef\u542f\u52a8|\u5e94\u7528|\u8f6f\u4ef6|\u7a0b\u5e8f|\u542f\u52a8\u5165\u53e3|\u5b89\u88c5\u72b6\u6001)/iu.test(text);
@@ -78,7 +78,7 @@ export function buildDesktopObservationPlan(input: string): DesktopObservationTo
 
   const positiveText = stripNegativeConstraints(text);
   const mutationText = positiveText.replace(/\blaunch\s+target\b/giu, ' ');
-  const hasPositiveMutation = /\b(?:open|launch|start|click|type|switch|close|send|post|write|change|modify|run)\b|(?:\u6253\u5f00|\u542f\u52a8|\u70b9\u51fb|\u8f93\u5165|\u5207\u6362|\u5173\u95ed|\u53d1\u9001|\u53d1\u5e03|\u5199\u5165|\u4fee\u6539|\u8fd0\u884c)(?!\u72b6\u6001)/iu.test(mutationText);
+  const hasPositiveMutation = /\b(?:open|launch|start|click|type|switch|close|send|post|write|change|modify|run)\b|(?:\u6253\u5f00|\u542f\u52a8|\u70b9\u51fb|\u8f93\u5165|\u5207\u6362|\u5173\u95ed|\u53d1\u9001|\u53d1\u5e03|\u5199\u5165|\u4fee\u6539|\u8fd0\u884c)(?!\u72b6\u6001|\u60c5\u51b5)/iu.test(mutationText);
   if (hasPositiveMutation) return [];
 
   const calls: DesktopObservationToolCall[] = [];
@@ -115,6 +115,13 @@ function asFileItems(value: any): any[] {
   return [];
 }
 
+function asProcessItems(value: any): any[] | null {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.processes)) return value.processes;
+  if (Array.isArray(value?.items)) return value.items;
+  return null;
+}
+
 function isDesktopSoftwareShortcut(item: any): boolean {
   if (String(item?.type || '').toLowerCase() === 'directory') return false;
   const value = `${String(item?.name || '')}\n${String(item?.path || '')}`;
@@ -136,13 +143,15 @@ export function formatDesktopObservationResult(
   const fileRecord = [...successful].reverse().find(record => /^desktop_list_files$/i.test(record.name));
   const parsedFiles = parseResult(fileRecord);
   const files = asFileItems(parsedFiles);
+  const processList = asProcessItems(processes);
   const fileListingAvailable = Boolean(fileRecord) && (
     Array.isArray(parsedFiles)
     || Array.isArray(parsedFiles?.files)
     || Array.isArray(parsedFiles?.entries)
     || Array.isArray(parsedFiles?.items)
   );
-  const failures = records.filter(record => record.error);
+  const plannedToolNames = new Set(buildDesktopObservationPlan(taskText).map(call => call.name));
+  const failures = records.filter(record => record.error && plannedToolNames.has(record.name as DesktopObservationToolCall['name']));
   const hasMutation = successful.some(record =>
     /^(desktop_open|desktop_show_lumi_window|desktop_run_command|desktop_clipboard_write|desktop_mouse_|desktop_keyboard_|client_action|computer_use)/i.test(record.name)
   );
@@ -160,8 +169,8 @@ export function formatDesktopObservationResult(
   const wantsDesktopFiles = requiresDesktopFileListingObservation(taskText);
   const desktopFileCount = files.filter(item => String(item?.type || '').toLowerCase() !== 'directory').length;
   const desktopFolderCount = files.filter(item => String(item?.type || '').toLowerCase() === 'directory').length;
-  const processItems = Array.isArray(processes)
-    ? (wantsDesktopAi ? processes.filter(item => DESKTOP_AI_EVIDENCE_RE.test(String(item?.name || item?.window_title || ''))) : processes)
+  const processItems = processList
+    ? (wantsDesktopAi ? processList.filter(item => DESKTOP_AI_EVIDENCE_RE.test(String(item?.name || item?.window_title || ''))) : processList)
     : [];
   const appItems = Array.isArray(apps)
     ? (wantsDesktopAi ? apps.filter(isDesktopAiApp) : apps)
@@ -169,7 +178,7 @@ export function formatDesktopObservationResult(
 
   const hasStructuredObservation = Boolean(
     active
-    || Array.isArray(processes)
+    || Boolean(processList)
     || Array.isArray(apps)
     || (idle && typeof idle === 'object')
     || (system && typeof system === 'object')
@@ -187,7 +196,7 @@ export function formatDesktopObservationResult(
     if (wantsDesktopFiles && fileListingAvailable) {
       lines.push(`Desktop entries read this turn: ${files.length}; ${desktopFileCount} files and ${desktopFolderCount} folders.`);
     }
-    if (Array.isArray(processes)) {
+    if (processList) {
       const names = uniqueLabels(
         processItems,
         item => String(item?.name || item?.window_title || ''),
@@ -195,7 +204,8 @@ export function formatDesktopObservationResult(
       ).slice(0, 12);
       lines.push(wantsDesktopAi
         ? `Running desktop AI evidence: ${names.length ? names.join(', ') : 'none detected'}.`
-        : `Runtime state: ${processes.length} process entries were read${names.length ? `; leading entries: ${names.slice(0, 5).join(', ')}` : ''}.`);
+        : `Runtime snapshot: ${processList.length} process entries were read${names.length ? `; leading entries: ${names.slice(0, 5).join(', ')}` : ''}.`);
+      if (!wantsDesktopAi) lines.push('This is a point-in-time sample; it does not by itself prove a memory leak, a hang, or long-term stability.');
     }
     if (Array.isArray(apps)) {
       const names = uniqueLabels(
@@ -214,7 +224,7 @@ export function formatDesktopObservationResult(
     return lines.join('\n');
   }
 
-  const lines = ['\u672c\u8f6e\u684c\u9762\u72b6\u6001\u8bfb\u53d6\u5df2\u5b8c\u6210\uff0c\u7ed3\u679c\u6765\u81ea\u5f53\u524d\u684c\u9762\u5ba2\u6237\u7aef\u7684\u5b9e\u65f6\u56de\u4f20\u3002'];
+  const lines: string[] = [CN_RESULT_GROUNDING_MESSAGES.desktopSnapshotIntro];
   if (active && typeof active === 'object') {
     const processLabel = active.process_name ? `\uff08${active.process_name}${active.pid ? `\uff0cPID ${active.pid}` : ''}\uff09` : '';
     const sizeLabel = Number(active.width) > 0 && Number(active.height) > 0 ? `\uff0c\u7a97\u53e3 ${active.width}x${active.height}` : '';
@@ -224,7 +234,7 @@ export function formatDesktopObservationResult(
     // i18n-allow: reviewed Chinese desktop observation result.
     lines.push(`\u684c\u9762\u6761\u76ee\uff1a\u672c\u6b21\u8bfb\u53d6\u5230 ${files.length} \u4e2a\uff0c\u5176\u4e2d\u6587\u4ef6 ${desktopFileCount} \u4e2a\u3001\u6587\u4ef6\u5939 ${desktopFolderCount} \u4e2a\u3002`);
   }
-  if (Array.isArray(processes)) {
+  if (processList) {
     const names = uniqueLabels(
       processItems,
       item => String(item?.name || item?.window_title || ''),
@@ -232,7 +242,8 @@ export function formatDesktopObservationResult(
     ).slice(0, 12);
     lines.push(wantsDesktopAi
       ? `\u6b63\u5728\u8fd0\u884c\u7684\u684c\u9762 AI \u8bc1\u636e\uff1a${names.length ? names.join('\u3001') : '\u672a\u68c0\u6d4b\u5230'}\u3002`
-      : `\u8fd0\u884c\u72b6\u6001\uff1a\u5df2\u8bfb\u53d6 ${processes.length} \u6761\u6d3b\u8dc3\u8fdb\u7a0b\u8bb0\u5f55${names.length ? `\uff0c\u524d\u51e0\u9879\u4e3a ${names.slice(0, 5).join('\u3001')}` : ''}\u3002`);
+      : CN_RESULT_GROUNDING_MESSAGES.processSnapshot(processList.length, names.slice(0, 5)));
+    if (!wantsDesktopAi) lines.push(CN_RESULT_GROUNDING_MESSAGES.processSnapshotCaveat);
   }
   if (Array.isArray(apps)) {
     const names = uniqueLabels(

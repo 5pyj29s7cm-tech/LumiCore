@@ -23,6 +23,7 @@ import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
+import { buildClientDiagnosticPlan, formatClientDiagnosticResult } from "../cognition/client_diagnostic_result";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildActionContract, summarizeActionContractBlocker } from "../cognition/action_contract";
 import {
@@ -68,9 +69,11 @@ import {
   buildSkillDescription,
   classifyComplexity,
   isTerminalOrchestrationToolEvent,
+  listAvailableOrchestrationAgents,
   shouldAttemptOrchestration,
 } from "../agents/orchestrator";
-import { buildDelegationAck, shouldDelegateWorkInBackground } from "../agents/background_delegation";
+import { buildDelegationAck, formatBackgroundDelegationFailure, shouldDelegateWorkInBackground } from "../agents/background_delegation";
+import { isLatestUserTurn, markLatestUserTurn } from "../agents/background_delivery";
 import {
   cancelBackgroundTask,
   completeBackgroundTask,
@@ -92,6 +95,8 @@ import { analyzeLikedMusicProfile, formatMusicProfileReport, isMusicProfileAnaly
 import { buildResponseLanguageInstruction } from "../utils/language";
 import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { CN_MESSAGING_MESSAGES } from "../regions/packs/cn/messaging_messages";
+import { CN_CLIENT_DIAGNOSTIC_MESSAGES } from "../regions/packs/cn/client_diagnostic_messages";
+import { CN_BACKGROUND_DELEGATION_MESSAGES } from "../regions/packs/cn/background_delegation_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
@@ -994,6 +999,7 @@ export function registerChatHandler(
     }
     const abortController = new AbortController();
     chatSessionMap.set(sessionKey, abortController);
+    markLatestUserTurn(executionScope, requestId);
     const releaseChatSession = () => {
       if (chatSessionMap.get(sessionKey) === abortController) chatSessionMap.delete(sessionKey);
     };
@@ -2328,6 +2334,43 @@ export function registerChatHandler(
         }
       }
 
+      const clientDiagnosticPlan = selfRepairTurn
+        ? buildClientDiagnosticPlan(visibleUserText)
+        : [];
+      if (
+        !responseText
+        && !actionPreflightContext
+        && clientDiagnosticPlan.length > 0
+        && executionDecision.allowToolUse
+        && !clientActionOnlyTurn
+        && !isSanctuary
+      ) {
+        const zh = /[\u3400-\u9fff]/u.test(visibleUserText);
+        const progressText = zh
+          ? CN_CLIENT_DIAGNOSTIC_MESSAGES.checking
+          : 'I am checking the client and runtime path now.';
+        emitAgent("agent:status", {
+          status: "thinking",
+          agentName: personality.name,
+          phase: 'client_diagnostic',
+          detail: progressText,
+        });
+        emitAgent("agent:progress", {
+          text: progressText,
+          tone: 'tool',
+          agentName: personality.name,
+        });
+        const diagnosticStartIndex = allToolRecords.length;
+        for (const call of clientDiagnosticPlan) {
+          await runPreflightTool(call.name, call.arguments);
+        }
+        responseText = formatClientDiagnosticResult(
+          allToolRecords.slice(diagnosticStartIndex),
+          visibleUserText,
+        ) || '';
+        llmWasCalled = false;
+      }
+
       const desktopObservationPlan = buildDesktopObservationPlan(visibleUserText);
       if (
         !responseText &&
@@ -2367,13 +2410,12 @@ export function registerChatHandler(
         !workSurfaceRoute.directDesktop;
       const availableWorkerAgents = (() => {
         try {
-          return (readDB().agents || []).filter((agent: any) => (
-            agent
-            && agent.id
-            && agent.id !== conversationAgentId
-            && agent.status !== 'offline'
-            && agent.status !== 'terminated'
-          ));
+          return listAvailableOrchestrationAgents({
+            userId: uid,
+            personalityId,
+            domain: resolvedDomain,
+            orgId: resolvedOrgId,
+          }).filter((agent: any) => agent.id !== conversationAgentId);
         } catch {
           return [];
         }
@@ -2624,6 +2666,10 @@ export function registerChatHandler(
           setTimeout(() => {
             const backgroundToolRecords: ToolExecutionRecord[] = [];
             const emitBackground = (event: string, payload: Record<string, any> = {}) => {
+              if (
+                event !== 'agent:background_task_update'
+                && !isLatestUserTurn(executionScope, requestId)
+              ) return;
               socket.emit(event, {
                 ...payload,
                 source: 'background_delegation',
@@ -2644,9 +2690,10 @@ export function registerChatHandler(
               content: string,
               toolCalls?: ToolExecutionRecord[],
               guarded = false,
+              deliverToConversation = true,
             ) => {
               try {
-                if (conversationId) {
+                if (conversationId && deliverToConversation) {
                   addMessage({
                     userId: uid,
                     agentId: conversationAgentId,
@@ -2661,25 +2708,27 @@ export function registerChatHandler(
                   });
                   socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'background_delegation' });
                 }
-                const db = readDB();
-                db.interactions.push({
-                  id: `bg-${interactionId}`,
-                  userId: uid,
-                  agentId: agentId || '',
-                  conversationId: conversationId || '',
-                  content: `Background delegated task: ${storedUserContent}`,
-                  response: content,
-                  role: 'agent',
-                  personality: personality.id,
-                  timestamp: new Date().toISOString(),
-                  mode: 'background_delegation',
-                  cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category,
-                  llmWasCalled: true,
-                  domain: resolvedDomain,
-                  orgId: resolvedOrgId,
-                } as any);
-                writeDB(db);
-                if (!guarded) {
+                if (deliverToConversation) {
+                  const db = readDB();
+                  db.interactions.push({
+                    id: `bg-${interactionId}`,
+                    userId: uid,
+                    agentId: agentId || '',
+                    conversationId: conversationId || '',
+                    content: `Background delegated task: ${storedUserContent}`,
+                    response: content,
+                    role: 'agent',
+                    personality: personality.id,
+                    timestamp: new Date().toISOString(),
+                    mode: 'background_delegation',
+                    cognitiveIntent: guarded ? 'work_product_guard' : cognition.intent.category,
+                    llmWasCalled: true,
+                    domain: resolvedDomain,
+                    orgId: resolvedOrgId,
+                  } as any);
+                  writeDB(db);
+                }
+                if (!guarded && deliverToConversation) {
                   persistChatLearning(content, {
                     toolRecords: toolCalls || [],
                     sourceInteractionId: `bg-${interactionId}`,
@@ -2710,6 +2759,8 @@ export function registerChatHandler(
                     orgId: resolvedOrgId,
                     desktopRelay,
                     toolPolicy: routedToolPolicy,
+                    availableAgentIds: backgroundTask.workers.map(worker => worker.id),
+                    forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
                     isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId),
                   },
                   { provider: activeProvider as any, model: activeModel },
@@ -2777,51 +2828,69 @@ export function registerChatHandler(
                 if (terminalTask) emitTaskUpdate(terminalTask);
                 if (terminalTask?.status === 'cancelled') {
                   const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
-                  persistBackgroundResult(cancelText, backgroundToolRecords);
-                  emitBackground("agent:response", {
-                    text: cancelText,
-                    agentName: personality.name,
-                    finalized: true,
-                    blocked: true,
-                    reason: 'cancelled',
-                  });
-                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
+                  const deliver = isLatestUserTurn(executionScope, requestId);
+                  persistBackgroundResult(cancelText, backgroundToolRecords, true, deliver);
+                  if (deliver) {
+                    emitBackground("agent:response", {
+                      text: cancelText,
+                      agentName: personality.name,
+                      finalized: true,
+                      blocked: true,
+                      reason: 'cancelled',
+                    });
+                    emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
+                  }
                   return;
                 }
-                persistChatTakeoverExecution(completionText, {
-                  toolRecords: backgroundToolRecords,
-                  source: 'background_delegation',
-                  sourceInteractionId: `bg-${interactionId}`,
-                  capabilitySelection,
-                  finalizationBlocked: finalizedBackground.blocked,
-                  assistantTextTrusted: !finalizedBackground.blocked,
-                  finalizationReason: finalizedBackground.reason,
-                });
-                persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked);
-                emitBackground("agent:response", {
-                  text: completionText,
-                  agentName: personality.name,
-                  finalized: true,
-                  blocked: finalizedBackground.blocked,
-                  reason: finalizedBackground.reason || '',
-                });
-                emitBackground("agent:proactive", {
-                  type: 'background_result',
-                  message: completionText.slice(0, 1200),
-                  agentName: personality.name,
-                  timestamp: new Date().toISOString(),
-                  finalized: true,
-                  blocked: finalizedBackground.blocked,
-                  reason: finalizedBackground.reason || '',
-                });
-                emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                pushNotification(uid, {
-                  type: 'background_result',
-                  title: backgroundBlocked ? '\u540e\u53f0\u4efb\u52a1\u672a\u5b8c\u6210' : '\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210',
-                  message: completionText.slice(0, 180),
-                });
+                const deliver = isLatestUserTurn(executionScope, requestId);
+                if (deliver) {
+                  persistChatTakeoverExecution(completionText, {
+                    toolRecords: backgroundToolRecords,
+                    source: 'background_delegation',
+                    sourceInteractionId: `bg-${interactionId}`,
+                    capabilitySelection,
+                    finalizationBlocked: finalizedBackground.blocked,
+                    assistantTextTrusted: !finalizedBackground.blocked,
+                    finalizationReason: finalizedBackground.reason,
+                  });
+                }
+                persistBackgroundResult(completionText, backgroundToolRecords, finalizedBackground.blocked, deliver);
+                if (deliver) {
+                  emitBackground("agent:response", {
+                    text: completionText,
+                    agentName: personality.name,
+                    finalized: true,
+                    blocked: finalizedBackground.blocked,
+                    reason: finalizedBackground.reason || '',
+                  });
+                  emitBackground("agent:proactive", {
+                    type: 'background_result',
+                    message: completionText.slice(0, 1200),
+                    agentName: personality.name,
+                    timestamp: new Date().toISOString(),
+                    finalized: true,
+                    blocked: finalizedBackground.blocked,
+                    reason: finalizedBackground.reason || '',
+                  });
+                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
+                  pushNotification(uid, {
+                    type: 'background_result',
+                    title: backgroundBlocked ? '\u540e\u53f0\u4efb\u52a1\u672a\u5b8c\u6210' : '\u540e\u53f0\u4efb\u52a1\u5df2\u5b8c\u6210',
+                    message: completionText.slice(0, 180),
+                  });
+                } else {
+                  pushNotification(uid, {
+                    type: backgroundBlocked ? 'background_error' : 'background_result',
+                    title: backgroundBlocked
+                      ? CN_BACKGROUND_DELEGATION_MESSAGES.failedTitle
+                      : CN_BACKGROUND_DELEGATION_MESSAGES.completedTitle,
+                    message: backgroundBlocked
+                      ? CN_BACKGROUND_DELEGATION_MESSAGES.failedInTaskCenter
+                      : CN_BACKGROUND_DELEGATION_MESSAGES.completedInTaskCenter,
+                  });
+                }
 
-                if (!backgroundBlocked && shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
+                if (deliver && !backgroundBlocked && shouldDistillSkill(executionTaskText) && orchResult.workflowResult.totalAgentsUsed >= 2) {
                   const skillDesc = buildSkillDescription(executionTaskText, orchResult.workflowResult);
                   emitBackground("agent:proactive", {
                     type: 'distill_hint',
@@ -2836,25 +2905,28 @@ export function registerChatHandler(
                   const cancelledTask = cancelBackgroundTask(backgroundTaskId);
                   if (cancelledTask) emitTaskUpdate(cancelledTask);
                   const cancelText = `Background task cancelled: ${text.slice(0, 80)}`;
-                  persistBackgroundResult(cancelText, backgroundToolRecords);
-                  emitBackground("agent:response", {
-                    text: cancelText,
-                    agentName: personality.name,
-                    finalized: true,
-                    blocked: true,
-                    reason: 'cancelled',
-                  });
-                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                  pushNotification(uid, {
-                    type: 'background_cancelled',
-                    title: 'Background task cancelled',
-                    message: cancelText.slice(0, 180),
-                  });
+                  const deliver = isLatestUserTurn(executionScope, requestId);
+                  persistBackgroundResult(cancelText, backgroundToolRecords, true, deliver);
+                  if (deliver) {
+                    emitBackground("agent:response", {
+                      text: cancelText,
+                      agentName: personality.name,
+                      finalized: true,
+                      blocked: true,
+                      reason: 'cancelled',
+                    });
+                    emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
+                    pushNotification(uid, {
+                      type: 'background_cancelled',
+                      title: 'Background task cancelled',
+                      message: cancelText.slice(0, 180),
+                    });
+                  }
                   return;
                 }
-                const failedTask = failBackgroundTask(backgroundTaskId, bgMessage);
+                const errorText = formatBackgroundDelegationFailure(bgErr, /[\u3400-\u9fff]/u.test(visibleUserText));
+                const failedTask = failBackgroundTask(backgroundTaskId, errorText);
                 if (failedTask) emitTaskUpdate(failedTask);
-                const errorText = `后台子 agent 处理受阻：${bgErr?.message || String(bgErr)}`;
                 const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0
                   ? backgroundToolRecords
                   : [{
@@ -2864,29 +2936,40 @@ export function registerChatHandler(
                       result: '',
                       error: bgMessage,
                     }];
-                persistChatTakeoverExecution(errorText, {
-                  toolRecords: terminalBackgroundRecords,
-                  source: 'background_delegation',
-                  sourceInteractionId: `bg-${interactionId}`,
-                  capabilitySelection,
-                  finalizationBlocked: true,
-                  assistantTextTrusted: false,
-                  finalizationReason: bgMessage,
-                });
-                persistBackgroundResult(errorText, backgroundToolRecords);
-                emitBackground("agent:response", {
-                  text: errorText,
-                  agentName: personality.name,
-                  finalized: true,
-                  blocked: true,
-                  reason: bgMessage,
-                });
-                emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
-                pushNotification(uid, {
-                  type: 'background_error',
-                  title: '后台子 agent 受阻',
-                  message: errorText.slice(0, 180),
-                });
+                const deliver = isLatestUserTurn(executionScope, requestId);
+                if (deliver) {
+                  persistChatTakeoverExecution(errorText, {
+                    toolRecords: terminalBackgroundRecords,
+                    source: 'background_delegation',
+                    sourceInteractionId: `bg-${interactionId}`,
+                    capabilitySelection,
+                    finalizationBlocked: true,
+                    assistantTextTrusted: false,
+                    finalizationReason: bgMessage,
+                  });
+                }
+                persistBackgroundResult(errorText, backgroundToolRecords, true, deliver);
+                if (deliver) {
+                  emitBackground("agent:response", {
+                    text: errorText,
+                    agentName: personality.name,
+                    finalized: true,
+                    blocked: true,
+                    reason: bgMessage,
+                  });
+                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
+                  pushNotification(uid, {
+                    type: 'background_error',
+                    title: '后台子 agent 受阻',
+                    message: errorText.slice(0, 180),
+                  });
+                } else {
+                  pushNotification(uid, {
+                    type: 'background_error',
+                    title: CN_BACKGROUND_DELEGATION_MESSAGES.failedTitle,
+                    message: CN_BACKGROUND_DELEGATION_MESSAGES.failedInTaskCenter,
+                  });
+                }
               }
             })().catch((err) => {
               console.error('[BackgroundDelegation] Unhandled error:', err);

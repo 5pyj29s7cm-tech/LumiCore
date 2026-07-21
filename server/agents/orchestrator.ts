@@ -150,6 +150,8 @@ export interface OrchestrationContext {
   toolPolicy?: ToolPolicy;
   /** Original routed task retained across decomposition so worker safety classification cannot lose source constraints. */
   rootTaskText?: string;
+  /** Explicit user-requested delegation may use the moderate pipeline even when the short command itself classifies as simple. */
+  forceOrchestration?: boolean;
 }
 
 export interface OrchestrationToolMeta {
@@ -716,6 +718,11 @@ function agentAvailableForContext(agent: AgentRecord, context: OrchestrationCont
   if (agent.domain === 'work' || agent.orgId) return false;
   if (agent.ownerUid && agent.ownerUid !== context.userId) return false;
   return true;
+}
+
+export function listAvailableOrchestrationAgents(context: OrchestrationContext): AgentRecord[] {
+  const db = readDB();
+  return (db.agents || []).filter((agent: any) => agentAvailableForContext(agent, context));
 }
 
 function recordExternalAgentRun(agentId: string, result: { success: boolean; output: string; exitCode: number | null; durationMs: number }) {
@@ -1836,7 +1843,10 @@ export async function runOrchestratedTask(
     rootTaskText: context.rootTaskText || text,
   };
   throwIfCancelled(rootedContext);
-  const complexity = classifyComplexity(text, rootedContext);
+  const classifiedComplexity = classifyComplexity(text, rootedContext);
+  const complexity = rootedContext.forceOrchestration && classifiedComplexity === 'simple'
+    ? 'moderate'
+    : classifiedComplexity;
   if (complexity !== 'complex' && complexity !== 'moderate') return null;
 
   if (strictDesktopObservationRoute(text)) {
@@ -1849,8 +1859,7 @@ export async function runOrchestratedTask(
     );
   }
 
-  const db = readDB();
-  const availableAgents = (db.agents || []).filter((a: any) => agentAvailableForContext(a, rootedContext));
+  const availableAgents = listAvailableOrchestrationAgents(rootedContext);
   if (availableAgents.length < 1) return null;
 
   throwIfCancelled(rootedContext);

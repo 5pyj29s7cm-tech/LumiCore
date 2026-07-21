@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildDelegationAck, shouldDelegateWorkInBackground } from '../server/agents/background_delegation';
+import {
+  buildDelegationAck,
+  formatBackgroundDelegationFailure,
+  hasExplicitBackgroundDelegationPreference,
+  shouldDelegateWorkInBackground,
+} from '../server/agents/background_delegation';
 
 const BASE = {
   text: '整理这个案件文件夹并生成代理词和证据目录',
@@ -57,6 +62,30 @@ describe('background delegation', () => {
     });
   });
 
+  it.each([
+    '你刚刚是在后台做检查吗，我不回你你怎么不理我',
+    '你刚才为什么在后台处理？',
+    '后台程序现在运行得怎么样？',
+    '检查一下后台进程',
+  ])('does not confuse a background question or app inspection with delegation: %s', (text) => {
+    expect(hasExplicitBackgroundDelegationPreference(text)).toBe(false);
+    const decision = shouldDelegateWorkInBackground({
+      ...BASE,
+      text,
+      complexity: 'moderate',
+    });
+    expect(decision.shouldDelegate).toBe(false);
+    expect(['background_meta_inquiry', 'background_app_inspection']).toContain(decision.reason);
+  });
+
+  it.each([
+    '后台继续这个任务',
+    '把这项工作放到后台处理',
+    '这个不用等，交给子 agent 处理',
+  ])('recognizes an actual background delegation command: %s', (text) => {
+    expect(hasExplicitBackgroundDelegationPreference(text)).toBe(true);
+  });
+
   it('keeps simple foreground chat and visible desktop work in the foreground', () => {
     expect(shouldDelegateWorkInBackground({
       ...BASE,
@@ -102,5 +131,14 @@ describe('background delegation', () => {
     expect(ack).toContain('法律检索员、文书整理员');
     expect(ack).toContain('bg_123');
     expect(ack).toContain('继续和你聊天');
+  });
+
+  it('does not expose the internal no-worker error to the user', () => {
+    const message = formatBackgroundDelegationFailure(
+      new Error('No worker agent accepted the delegated task.'),
+      true,
+    );
+    expect(message).toContain('后台执行单元暂时不可用');
+    expect(message).not.toContain('No worker agent accepted');
   });
 });

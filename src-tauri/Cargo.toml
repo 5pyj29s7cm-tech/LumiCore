@@ -1,6 +1,6 @@
 [package]
 name = "lumi-os"
-version = "3.0.2"
+version = "3.0.3"
 description = "Lumi Virtual Node OS"
 authors = ["LumiOS"]
 edition = "2021"

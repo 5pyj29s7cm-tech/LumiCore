@@ -872,6 +872,30 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('wechat_read_recent_chat');
   });
 
+  it('keeps successful process evidence when an irrelevant auxiliary write fails later', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '做个桌面程序检查',
+      responseText: '这次还没有完成，因为 write_file 失败了。',
+      toolRecords: [{
+        name: 'desktop_running_processes',
+        arguments: { top: 20 },
+        result: '[{"pid":3928,"name":"lumi-os.exe"},{"pid":22920,"name":"msedgewebview2.exe"}]',
+      }, {
+        name: 'write_file',
+        arguments: {},
+        result: '',
+        error: 'write_file requires a file path',
+      }],
+      source: 'background_delegation',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('运行快照');
+    expect(result.text).toContain('lumi-os.exe');
+    expect(result.text).not.toContain('write_file');
+  });
+
   it('grounds desktop AI roundtable summaries in submission and answer status', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const toolResult = {

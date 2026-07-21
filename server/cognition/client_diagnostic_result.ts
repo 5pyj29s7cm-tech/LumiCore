@@ -7,6 +7,39 @@ import {
 } from '../regions/packs/cn/client_diagnostic_messages';
 import { isCurrentClientDiagnosticRequest } from './tool_intent';
 
+export interface ClientDiagnosticToolCall {
+  name: 'client_health_check' | 'client_get_state' | 'adapter_registry_list' | 'adapter_health_check';
+  arguments: Record<string, any>;
+}
+
+const CLIENT_DIAGNOSTIC_MUTATION_RE =
+  /(?:\u4fee\u590d|\u6062\u590d|\u5237\u65b0|\u91cd\u8bd5|\u91cd\u65b0\u8fde\u63a5|\u91cd\u542f|\brepair\b|\brecover\b|\brefresh\b|\bretry\b|\breconnect\b|\brestart\b)/iu;
+const CLIENT_INTEGRATION_TARGET_RE =
+  /(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b)/iu;
+
+/**
+ * Pure, current-state checks should not depend on the model deciding whether
+ * to call the two core diagnostic tools. Repair requests still stay in the
+ * full self-repair loop because they may require confirmation or mutation.
+ */
+export function buildClientDiagnosticPlan(text: string): ClientDiagnosticToolCall[] {
+  const normalized = String(text || '').trim();
+  if (!isCurrentClientDiagnosticRequest(normalized)) return [];
+  if (CLIENT_DIAGNOSTIC_MUTATION_RE.test(normalized)) return [];
+
+  const plan: ClientDiagnosticToolCall[] = [
+    { name: 'client_health_check', arguments: {} },
+    { name: 'client_get_state', arguments: {} },
+  ];
+  if (CLIENT_INTEGRATION_TARGET_RE.test(normalized)) {
+    plan.push(
+      { name: 'adapter_registry_list', arguments: {} },
+      { name: 'adapter_health_check', arguments: {} },
+    );
+  }
+  return plan;
+}
+
 const SUBSTANTIVE_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:client_get_state|client_health_check|client_self_repair|client_repair_skill|adapter_registry_list|adapter_health_check|model_configuration_get|model_configuration_test|desktop_capability_status)$/i;
 const SUPPORTING_CLIENT_DIAGNOSTIC_TOOL_RE = /^(?:desktop_active_window|get_active_window_info|desktop_running_processes|desktop_ui_snapshot|desktop_capture_screen)$/i;
 const FAILED_DIAGNOSTIC_STATUS_RE = /^(?:error|failed|failure|blocked|denied|rejected|pending|not_verified|unverified|requires_confirmation|not_supported|unsupported|unavailable|timed_out|timeout)$/i;

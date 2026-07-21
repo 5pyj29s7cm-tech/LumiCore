@@ -1009,6 +1009,26 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       reason: 'Grounded exact desktop-open success from the requested target receipt.',
     };
   }
+  const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
+  if (groundedDriftCorrection) {
+    return {
+      text: groundedDriftCorrection,
+      blocked: false,
+      reason: 'Corrected current-turn action-contract drift using fresh desktop evidence.',
+    };
+  }
+  // A successful read-only desktop receipt is the result for an observation
+  // task. Do not let an unrelated auxiliary failure (for example a worker
+  // attempting write_file after the process list was already returned)
+  // overwrite that evidence with a generic incomplete-work guard.
+  const groundedDesktopObservation = formatGroundedDesktopEvidence(input);
+  if (groundedDesktopObservation) {
+    return {
+      text: groundedDesktopObservation,
+      blocked: false,
+      reason: 'Grounded desktop observation from current-turn tool receipts.',
+    };
+  }
   const responseClaimsIncomplete = /(?:\u8fd8|\u5c1a|\u4ecd)?(?:\u6ca1\u6709|\u6ca1|\u672a|\u5e76\u672a|\u4e0d\u7b97|\u4e0d\u80fd\u8bf4)[^\u3002\uFF01\uFF1F.!?\n]{0,18}(?:\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00|\u8bfb\u53d6|\u751f\u6210)|\b(?:not|isn'?t|wasn'?t|didn'?t|incomplete|unfinished)\b[^.!?\n]{0,40}\b(?:complete|completed|sent|opened|read|created|generated)\b/iu
     .test(input.responseText || '');
   const reportsToolIterationLimit = TOOL_ITERATION_LIMIT_RESPONSE_RE.test(input.responseText || '');
@@ -1031,22 +1051,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         level: 'warning',
         message: reason,
       },
-    };
-  }
-  const groundedDriftCorrection = correctCurrentTurnContractDrift(input, actionContract);
-  if (groundedDriftCorrection) {
-    return {
-      text: groundedDriftCorrection,
-      blocked: false,
-      reason: 'Corrected current-turn action-contract drift using fresh desktop evidence.',
-    };
-  }
-  const groundedDesktopObservation = formatGroundedDesktopEvidence(input);
-  if (groundedDesktopObservation) {
-    return {
-      text: groundedDesktopObservation,
-      blocked: false,
-      reason: 'Grounded desktop observation from current-turn tool receipts.',
     };
   }
   const claimsActionDone = !responseClaimsIncomplete && /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|complete|completed|success|sent|opened|read|viewed|created|generated)/iu

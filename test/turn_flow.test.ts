@@ -76,6 +76,27 @@ describe('Lumi turn flow', () => {
     expect(flow.allowToolUseForTurn).toBe(true);
   });
 
+  it('promotes a question-shaped self-check from chat mode and executes it in the foreground', async () => {
+    const { initDatabase } = await import('../db_layer');
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    await initDatabase();
+
+    const flow = buildLumiTurnFlow({
+      userId: 'turn_flow_question_self_check',
+      text: '你不能自检吗？',
+      channel: 'chat',
+      source: 'chat',
+      operationMode: 'chat',
+      targetIsLumi: true,
+    });
+
+    expect(flow.autoPromoteToAssistant).toBe(true);
+    expect(flow.effectiveOperationMode).toBe('assistant');
+    expect(flow.selfRepairTurn).toBe(true);
+    expect(flow.allowToolUseForTurn).toBe(true);
+    expect(flow.executionGovernance.delegationIntent).toBe('none');
+  });
+
   it('keeps guard-polluted conversational follow-ups chat-only in text and voice', async () => {
     const { initDatabase } = await import('../db_layer');
     const { buildRecentActionContinuationBridge } = await import('../server/cognition/action_continuation');

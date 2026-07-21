@@ -8,6 +8,7 @@ import {
   hasClientActionOnlyIntent,
   hasExplicitTeamExecutionRequest,
   hasExplicitToolIntent,
+  isCurrentClientDiagnosticRequest,
   isDiagnosticOrRepairRequest,
   shouldAllowToolUseForTurn,
   shouldExposeAgentWork,
@@ -120,6 +121,7 @@ export function shouldAutoPromoteWorkTurn(
 ): boolean {
   if (operationMode !== 'chat' || requestedMode) return false;
   if (MUSIC_RE.test(text)) return false;
+  if (isCurrentClientDiagnosticRequest(text)) return true;
   if (QUESTION_RE.test(text)) return false;
   if (!hasExplicitToolIntent(text)) return false;
   if (channel === 'voice') return WORK_ACTION_RE.test(text);
