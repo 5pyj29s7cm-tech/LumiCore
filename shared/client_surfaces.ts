@@ -347,14 +347,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     launcherIds: [],
   },
   {
-    id: 'subscription',
-    label: 'Subscription, activation, and billing',
-    target: 'subscription',
-    actions: ['open_subscription', 'open_activation', 'open_billing'],
-    useWhen: 'Inspect subscription, local activation, plan, or billing information.',
-    launcherIds: [],
-  },
-  {
     id: 'agent-ecosystem',
     label: 'Agent ecosystem',
     target: 'ecosystem',

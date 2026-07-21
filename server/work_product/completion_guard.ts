@@ -174,7 +174,7 @@ const ACTION_PROMISE_RE =
 
 const CLIENT_SURFACE_TASK_RE =
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|订阅|激活|账单|桌面小组件|小组件|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view|subscription|activation|billing|desktop\s+widget|widget\s+mode)\b/iu;
+  /客户端|自己的客户端|中枢世界|中枢|世界视图|云端画布|技能大厅|知识库|运行日志|主屏幕|主页|桌面小组件|小组件|client_get_state|client_action|\b(?:client|nexus|nexus\s+view|cloud\s+canvas|world\s+view|desktop\s+widget|widget\s+mode)\b/iu;
 
 function isClientSurfaceTask(task: string): boolean {
   return CLIENT_SURFACE_TASK_RE.test(task || '');

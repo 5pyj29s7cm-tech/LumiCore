@@ -1598,8 +1598,6 @@ export const translations: TranslationMap = {
     editContentPrompt: "Edit content:",
     // ── Neural Synthesis Monitor ──
     noSensorData: "No sensor data",
-    // ── Subscription Panel ──
-    contactAdminUpgrade: "Contact admin to upgrade",
     // ── Sanctuary ──
     defaultMemoryLabel: "Memory",
     defaultYouLabel: "You",
@@ -3217,8 +3215,6 @@ export const translations: TranslationMap = {
     editContentPrompt: "编辑内容：",
     // ── Neural Synthesis Monitor ──
     noSensorData: "无传感器数据",
-    // ── Subscription Panel ──
-    contactAdminUpgrade: "联系管理员升级",
     // ── Sanctuary ──
     defaultMemoryLabel: "记忆",
     defaultYouLabel: "你",

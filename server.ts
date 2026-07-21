@@ -94,7 +94,6 @@ import { bootstrap } from "./server/runtime/bootstrap";
 import { lapRoutes } from "./server/lap/routes";
 import voiceRoutes from "./routes/voice";
 import fileRoutes, { configureKnowledgeFileRoutes } from "./routes/files";
-import { subscriptionRoutes } from "./server/subscription/routes";
 import {
   configureNcmCredentials,
   normalizeNcmAppId as normalizeStoredNcmAppId,
@@ -131,7 +130,6 @@ configureKnowledgeFileRoutes({
 });
 apiRouter.use("/", voiceRoutes);
 apiRouter.use("/", fileRoutes);
-apiRouter.use("/", subscriptionRoutes);
 apiRouter.use("/", lapRoutes);
 
 // ── NetEase ncm-cli login ──

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'motion/react';
-import { Zap, TrendingUp, Clock, Layers, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Zap, TrendingUp, Clock, Layers, RefreshCw } from 'lucide-react';
 import { GlassCard } from './SharedUI';
-import { socketService } from '@/services/socketService';
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 
@@ -64,30 +63,15 @@ export const TokenDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
   const [error, setError] = useState<string | null>(null);
-  const [quota, setQuota] = useState<{ used: number; cap: number; remaining: number; plan?: string } | null>(null);
 
   const fetchUsage = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [usageResp, subResp] = await Promise.all([
-        fetch(`/api/llm/usage?days=${days}`, { credentials: 'include' }),
-        fetch('/api/subscription/status', { credentials: 'include' }),
-      ]);
+      const usageResp = await fetch(`/api/llm/usage?days=${days}`, { credentials: 'include' });
       if (!usageResp.ok) throw new Error(usageResp.status === 401 ? uiMessage('token-dashboard.login-required.5fda35cfff') : `HTTP ${usageResp.status}`);
       const res = await usageResp.json();
       setData(res);
-      if (subResp.ok) {
-        const sub = await subResp.json();
-        if (sub?.subscription) {
-          setQuota({
-            used: sub.subscription.tokensUsedThisMonth || 0,
-            cap: sub.subscription.monthlyTokenCap || 500000,
-            remaining: Math.max(0, (sub.subscription.monthlyTokenCap || 500000) - (sub.subscription.tokensUsedThisMonth || 0)),
-            plan: sub.subscription.planId || 'Free',
-          });
-        }
-      }
     } catch (err: any) {
       setError(err.message || uiMessage('token-dashboard.failed-to-load.1131733383'));
     } finally {
@@ -102,18 +86,6 @@ export const TokenDashboard: React.FC = () => {
     return () => clearInterval(id);
   }, [fetchUsage]);
 
-  useEffect(() => {
-    const s = socketService.getSocket();
-    if (!s) return;
-    const handler = () => { fetchUsage(); };
-    s.on('token:usage_update', handler);
-    s.on('token:quota_update', handler);
-    return () => {
-      s.off('token:usage_update', handler);
-      s.off('token:quota_update', handler);
-    };
-  }, [fetchUsage]);
-
   const providers = data?.byProvider ? Object.entries(data.byProvider) : [];
   const maxDaily = data?.daily?.length ? Math.max(...data.daily.map(d => d.totalTokens), 1) : 1;
 
@@ -126,9 +98,6 @@ export const TokenDashboard: React.FC = () => {
     return { provider: p, stats: s, start, frac, color: PROVIDER_COLORS[p] || '#666' };
   });
   const circumference = 2 * Math.PI * 52;
-
-  const quotaPct = quota ? Math.round((quota.used / quota.cap) * 100) : 0;
-  const barColor = quotaPct >= 90 ? 'bg-red-500' : quotaPct >= 80 ? 'bg-amber-500' : 'bg-emerald-400';
 
   return (
     <div className="h-full flex flex-col text-white">
@@ -171,8 +140,8 @@ export const TokenDashboard: React.FC = () => {
         </div>
       ) : (
         <div className="flex-1 flex flex-col gap-3 overflow-auto custom-scrollbar pr-0.5">
-          {/* Top row: Total + Quota */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Top row: measured local/provider usage */}
+          <div className="grid grid-cols-1 gap-3">
             {/* Grand total */}
             <GlassCard className="p-4 rounded-2xl border-white/5 bg-white/[0.03]">
               <div className="flex items-center gap-2 mb-2">
@@ -181,36 +150,6 @@ export const TokenDashboard: React.FC = () => {
               </div>
               <div className="text-2xl font-black tracking-tight">{formatTokens(data?.grandTotal || 0)}</div>
               <div className="text-xs text-white/45 mt-0.5">{formatNumber(data?.recordCount || 0)} {uiMessage('token-dashboard.api-calls.adf9b52346')}</div>
-            </GlassCard>
-
-            {/* Quota */}
-            <GlassCard className="p-4 rounded-2xl border-white/5 bg-white/[0.03]">
-              <div className="flex items-center gap-2 mb-2">
-                <AlertTriangle size={13} className={quotaPct >= 80 ? 'text-amber-400' : 'text-white/50'} />
-                <span className="text-[12px] font-bold text-white/50 uppercase tracking-wider">
-                  {uiMessage('token-dashboard.quota.474cf3da08')} · {quota?.plan || 'Free'}
-                </span>
-              </div>
-              {quota ? (
-                <>
-                  <div className="text-lg font-black tracking-tight">
-                    {formatTokens(quota.remaining)} <span className="text-xs text-white/45 font-normal">{uiMessage('token-dashboard.left.78dff592bf')}</span>
-                  </div>
-                  <div className="mt-2 h-1.5 rounded-full bg-white/5 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(quotaPct, 100)}%` }}
-                      transition={{ duration: 0.6 }}
-                      className={`h-full rounded-full ${barColor}`}
-                    />
-                  </div>
-                  <div className="text-[12px] text-white/45 mt-1">
-                    {formatTokens(quota.used)} / {formatTokens(quota.cap)} · {quotaPct}%
-                  </div>
-                </>
-              ) : (
-                <div className="text-sm text-white/45">{uiMessage('token-dashboard.no-subscription-data.4e1e6c99ac')}</div>
-              )}
             </GlassCard>
           </div>
 

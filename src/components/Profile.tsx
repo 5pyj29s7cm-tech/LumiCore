@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { User, Shield, Cpu, Rocket, Ghost, Activity, Wallet, Zap, Key, CheckCircle, AlertCircle, Crown, TrendingUp, BarChart3 } from 'lucide-react';
+import { User, Shield, Cpu, Rocket, Ghost, Activity, Wallet, Zap, Key, CheckCircle, AlertCircle, BarChart3 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useApp } from '../contexts/AppContext';
@@ -109,14 +109,6 @@ export function Profile({ t }: { t: any }) {
 
         <GlassCard className="p-8 rounded-[3rem] space-y-6" hoverEffect={false}>
           <h3 className="text-xl font-bold tracking-tighter flex items-center gap-2">
-            <Crown size={20} className="text-amber-400" />
-            {t.subscription || 'Subscription'}
-          </h3>
-          <SubscriptionSection t={t} />
-        </GlassCard>
-
-        <GlassCard className="p-8 rounded-[3rem] space-y-6" hoverEffect={false}>
-          <h3 className="text-xl font-bold tracking-tighter flex items-center gap-2">
             <Key size={20} className="text-celestial-mars" />
             {t.changePassword || 'Change Password'}
           </h3>
@@ -195,69 +187,6 @@ export function Profile({ t }: { t: any }) {
           </GlassCard>
         )}
       </div>
-    </div>
-  );
-}
-
-function SubscriptionSection({ t }: { t: any }) {
-  const [sub, setSub] = useState<any>(null);
-  const [tokens, setTokens] = useState<any>(null);
-
-  useEffect(() => {
-    fetch('/api/subscription/status', { credentials: 'include' })
-      .then(r => r.json()).then(d => setSub(d.subscription)).catch(() => {});
-    fetch('/api/llm/usage?days=1', { credentials: 'include' })
-      .then(r => r.json()).then(d => setTokens(d)).catch(() => {});
-  }, []);
-
-  const cap = sub?.monthlyTokenCap ?? 500000;
-  const used = sub?.tokensUsedThisMonth ?? 0;
-  const pct = cap > 0 ? Math.round((used / cap) * 100) : 0;
-  const todayTotal = tokens?.grandTotal ?? 0;
-
-  const planLabels: Record<string, string> = { free: 'Free', light: 'Light', pro: 'Pro', org: 'Org' };
-  const planColors: Record<string, string> = {
-    free: 'text-white/40',
-    light: 'text-blue-400',
-    pro: 'text-purple-400',
-    org: 'text-amber-400',
-  };
-  const planId = sub?.planId || 'free';
-  const planLabel = planLabels[planId] || planId;
-  const planColor = planColors[planId] || 'text-white/40';
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
-        <div>
-          <span className="text-xs font-black uppercase tracking-widest text-white/40">{t.currentPlan || 'Current Plan'}</span>
-          <div className={`text-lg font-bold ${planColor}`}>{planLabel}</div>
-        </div>
-        <Crown size={28} className="text-amber-400/40" />
-      </div>
-      <div className="space-y-2">
-        <div className="text-xs font-black uppercase tracking-widest text-white/55">{t.monthlyUsage || 'Monthly Token Usage'}</div>
-        <div className="flex items-center gap-3">
-          <div className="flex-1 h-3 bg-white/5 rounded-full overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.min(pct, 100)}%` }}
-              className={`h-full rounded-full ${pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-amber-500' : 'bg-gradient-to-r from-cyan-400 to-blue-500'}`}
-            />
-          </div>
-          <span className="text-sm font-mono font-bold text-white/60">{pct}%</span>
-        </div>
-        <div className="flex justify-between text-xs text-white/40">
-          <span>{used.toLocaleString()} / {cap.toLocaleString()} tokens</span>
-          <span>{t.today || 'Today'}: {todayTotal.toLocaleString()}</span>
-        </div>
-      </div>
-      {sub?.planId === 'free' && (
-        <div className="p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-xs text-amber-300/60 flex items-center gap-2">
-          <TrendingUp size={14} />
-          {t.upgradeHint || 'Upgrade to unlock higher token caps and premium features.'}
-        </div>
-      )}
     </div>
   );
 }

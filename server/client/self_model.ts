@@ -490,10 +490,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'window.advanced',
-    label: 'Advanced and account windows',
+    label: 'Advanced windows',
     kind: 'window',
-    actions: ['open_app:terminal', 'open_app:tokens', 'open_subscription', 'open_activation', 'open_billing', 'open_app:notifications', 'open_app:reminders'],
-    notes: 'Terminal, token usage, subscription, activation, billing, notification, and reminder windows remain available when the user asks for them.',
+    actions: ['open_app:terminal', 'open_app:tokens', 'open_app:notifications', 'open_app:reminders'],
+    notes: 'Terminal, measured token usage, notification, and reminder windows remain available when the user asks for them.',
     stateKeys: ['windows'],
   },
   {
@@ -841,13 +841,6 @@ const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     closeAfterUse: false,
   },
   {
-    id: 'subscription',
-    label: 'Subscription, activation, and billing',
-    actions: ['open_subscription', 'open_activation', 'open_billing'],
-    useWhen: 'Show plan status, activation, billing, or subscription controls.',
-    closeAfterUse: true,
-  },
-  {
     id: 'computer-adaptation',
     label: 'Computer adaptation center',
     actions: ['open_computer_adaptation'],
@@ -1172,9 +1165,6 @@ export function normalizeClientActionTarget(value?: string): string {
     computer: 'kernel',
     adaptation: 'kernel',
     'computer-adaptation': 'kernel',
-    subscription: 'subscription',
-    billing: 'subscription',
-    activation: 'subscription',
     widget: 'widget',
     'desktop-widget': 'widget',
     'desktop-widget-mode': 'widget',
@@ -1234,9 +1224,6 @@ export function normalizeClientActionTarget(value?: string): string {
     '电脑适配中心': 'kernel',
     '计算机适配中心': 'kernel',
     '电脑适配': 'kernel',
-    '订阅': 'subscription',
-    '激活': 'subscription',
-    '账单': 'subscription',
     log: 'runtime-log',
     logs: 'runtime-log',
     runtime: 'runtime-log',
@@ -1469,11 +1456,6 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
     case 'open_plans':
     case 'open_work_queue':
       setSurface('plans', 'plans');
-      break;
-    case 'open_subscription':
-    case 'open_activation':
-    case 'open_billing':
-      setSurface('subscription', action === 'open_activation' ? 'activation' : action === 'open_billing' ? 'billing' : 'subscription');
       break;
     case 'set_wallpaper_mode':
       expectedState = [`surface:wallpaper:${enabled ? 'open' : 'closed'}`];

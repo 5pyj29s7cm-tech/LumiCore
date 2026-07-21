@@ -61,7 +61,6 @@ import { buildRecentActionContinuationBridge } from "../cognition/action_continu
 import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
-import { checkLLMAccess, recordUsage, estimateTokens } from "../subscription/proxy";
 import { recordTokenUsage } from "../llm/token_tracker";
 import {
   runOrchestratedTask,
@@ -1772,16 +1771,6 @@ export function registerChatHandler(
         console.log('[Chat] Hybrid mode enabled — local Ollama → cloud DeepSeek');
       }
 
-      // ── Subscription enforcement: never switch the user's selected brain silently ──
-      const access = checkLLMAccess({ userId: uid, provider: activeProvider, model: activeModel });
-      if (!access.allowed) {
-        emitAgent("agent:error", {
-          message: access.reason,
-          code: access.tokenLimitReached ? 'TOKEN_LIMIT' : 'PROVIDER_RESTRICTED',
-        });
-        emitAgent("agent:status", { status: "error" });
-        return;
-      }
       const scheduleChatSummary = (targetConversationId: string) => {
         scheduleConversationSummary({
           conversationId: targetConversationId,
@@ -3213,8 +3202,6 @@ export function registerChatHandler(
                 totalTokens: response.usage.totalTokens,
               }, interactionId);
             }
-            const tokens = estimateTokens(text + ' ' + responseText);
-            const subStatus = recordUsage(uid, tokens);
             const totalUsage = response.usage?.totalTokens || 0;
             socket.emit('token:usage_update', {
               userId: uid,
@@ -3223,17 +3210,6 @@ export function registerChatHandler(
               mode: 'chat',
               timestamp: new Date().toISOString(),
             });
-            if (subStatus) {
-              socket.emit('token:quota_update', { used: subStatus.used, cap: subStatus.cap, remaining: subStatus.remaining });
-              const pct = subStatus.used / subStatus.cap;
-              if (pct >= 0.9) {
-                socket.emit('agent:notification', { type: 'token_warning', level: 'critical', message: `Token usage at ${Math.round(pct * 100)}% (${subStatus.used.toLocaleString()} / ${subStatus.cap.toLocaleString()})` });
-                pushNotification(uid, { type: 'token_warning', title: 'Token Quota Critical', message: `Token usage at ${Math.round(pct * 100)}% (${subStatus.used.toLocaleString()} / ${subStatus.cap.toLocaleString()})` });
-              } else if (pct >= 0.8) {
-                socket.emit('agent:notification', { type: 'token_warning', level: 'warning', message: `Token usage at ${Math.round(pct * 100)}%` });
-                pushNotification(uid, { type: 'token_warning', title: 'Token Quota Warning', message: `Token usage at ${Math.round(pct * 100)}%` });
-              }
-            }
           } else {
             const maxIterations = routedToolPolicy?.maxIterations || personality.toolPolicy.maxIterations || 25;
 
@@ -3300,14 +3276,11 @@ export function registerChatHandler(
 
           responseText = result.text || '';
           llmWasCalled = true;
-          // Record analytics + subscription
+          // Record provider/model analytics. Product billing is not part of the local execution path.
           for (const u of result.usageRecords) {
             recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId);
           }
-          const tokens = estimateTokens(text + ' ' + responseText);
-          const subStatus = recordUsage(uid, tokens);
-
-          // Real-time token push + threshold alerts
+          // Real-time token telemetry for the local dashboard.
           const totalUsage = result.usageRecords.reduce((s: number, r: any) => s + (r.totalTokens || 0), 0);
           socket.emit('token:usage_update', {
             userId: uid,
@@ -3316,17 +3289,6 @@ export function registerChatHandler(
             mode: 'chat',
             timestamp: new Date().toISOString(),
           });
-          if (subStatus) {
-            socket.emit('token:quota_update', { used: subStatus.used, cap: subStatus.cap, remaining: subStatus.remaining });
-            const pct = subStatus.used / subStatus.cap;
-            if (pct >= 0.9) {
-              socket.emit('agent:notification', { type: 'token_warning', level: 'critical', message: `Token usage at ${Math.round(pct * 100)}% (${subStatus.used.toLocaleString()} / ${subStatus.cap.toLocaleString()})` });
-              pushNotification(uid, { type: 'token_warning', title: 'Token Quota Critical', message: `Token usage at ${Math.round(pct * 100)}% (${subStatus.used.toLocaleString()} / ${subStatus.cap.toLocaleString()})` });
-            } else if (pct >= 0.8) {
-              socket.emit('agent:notification', { type: 'token_warning', level: 'warning', message: `Token usage at ${Math.round(pct * 100)}%` });
-              pushNotification(uid, { type: 'token_warning', title: 'Token Quota Warning', message: `Token usage at ${Math.round(pct * 100)}%` });
-            }
-          }
           }
         } catch (llmErr: any) {
           console.error(`[Cognition] LLM '${activeProvider}/${activeModel}' failed: ${llmErr.message}`);

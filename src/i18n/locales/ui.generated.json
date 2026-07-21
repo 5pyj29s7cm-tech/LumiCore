@@ -2819,10 +2819,6 @@
     "en": "Time",
     "zh": "时长"
   },
-  "desktop-ui.token-quota-alert.a42936b017": {
-    "en": "Token Quota Alert",
-    "zh": "Token 配额告警"
-  },
   "desktop-ui.transcript-items.8cb25feb7a": {
     "en": "Transcript items",
     "zh": "记录条数"
@@ -7303,142 +7299,6 @@
     "en": "Work profile",
     "zh": "工作画像"
   },
-  "subscription-panel.activate.95003fa938": {
-    "en": "Activate",
-    "zh": "激活"
-  },
-  "subscription-panel.activation-request-pending.2039f4ccaf": {
-    "en": "Activation request pending",
-    "zh": "已有待处理激活申请"
-  },
-  "subscription-panel.activation-request-submitted.a30c160e59": {
-    "en": "Activation request submitted",
-    "zh": "激活申请已提交"
-  },
-  "subscription-panel.agents.364731ee22": {
-    "en": "agents",
-    "zh": "个 Agent"
-  },
-  "subscription-panel.basic-voice.6b48b379cd": {
-    "en": "Basic voice",
-    "zh": "基础语音"
-  },
-  "subscription-panel.contact.7c7e7a1bc6": {
-    "en": "Contact",
-    "zh": "联系方式"
-  },
-  "subscription-panel.current-plan.79019776da": {
-    "en": "Current plan",
-    "zh": "当前套餐"
-  },
-  "subscription-panel.enter-a-contact-method.33a04c5074": {
-    "en": "Enter a contact method",
-    "zh": "请填写联系方式"
-  },
-  "subscription-panel.example-i-want-pro-for.4dfc27dd3b": {
-    "en": "Example: I want Pro for voice cloning and avatar studio.",
-    "zh": "例如：想开通 Pro，用于声音克隆和形象设计室。"
-  },
-  "subscription-panel.failed-to-load-subscription-status.b34a73b90e": {
-    "en": "Failed to load subscription status",
-    "zh": "订阅状态加载失败"
-  },
-  "subscription-panel.free-remains-usable-paid-plans.7582919e6a": {
-    "en": "Free remains usable. Paid plans are activated manually until online checkout is ready.",
-    "zh": "Free 可以继续使用基础能力。付费套餐通过人工确认后开通，更高配额和声音克隆等能力会随套餐开放。"
-  },
-  "subscription-panel.log-in-to-view-subscription.63fac4aec4": {
-    "en": "Log in to view subscription and activation status.",
-    "zh": "登录后查看订阅与激活状态。"
-  },
-  "subscription-panel.manual-activation-before-website-launch.f6283fecf1": {
-    "en": "Manual activation before website launch",
-    "zh": "官网上线前采用人工激活"
-  },
-  "subscription-panel.network-error.92e4a239d2": {
-    "en": "Network error",
-    "zh": "网络异常"
-  },
-  "subscription-panel.note.a907cbf17f": {
-    "en": "Note",
-    "zh": "备注"
-  },
-  "subscription-panel.or-contact.ccb8e41498": {
-    "en": "Or contact",
-    "zh": "也可以直接联系"
-  },
-  "subscription-panel.paid-boundary.eb2c6c0d0f": {
-    "en": "Paid boundary",
-    "zh": "付费版开放能力"
-  },
-  "subscription-panel.plans.cd279ecf3f": {
-    "en": "Plans",
-    "zh": "套餐"
-  },
-  "subscription-panel.priority-queue.91844d6271": {
-    "en": "Priority queue",
-    "zh": "优先队列"
-  },
-  "subscription-panel.remaining.113ea03291": {
-    "en": "remaining",
-    "zh": "剩余"
-  },
-  "subscription-panel.request-activation.22a6ce6562": {
-    "en": "Request activation",
-    "zh": "申请激活"
-  },
-  "subscription-panel.request-failed.975ba56a43": {
-    "en": "Request failed",
-    "zh": "提交失败"
-  },
-  "subscription-panel.retry.563171cfe4": {
-    "en": "Retry",
-    "zh": "重试"
-  },
-  "subscription-panel.standard-queue.c2134618a8": {
-    "en": "Standard queue",
-    "zh": "标准队列"
-  },
-  "subscription-panel.status.b8f1474d96": {
-    "en": "Status",
-    "zh": "状态"
-  },
-  "subscription-panel.submit-activation-request.2953a3a2f4": {
-    "en": "Submit activation request",
-    "zh": "提交激活申请"
-  },
-  "subscription-panel.submit-request.6d2a2e58bb": {
-    "en": "Submit request",
-    "zh": "提交申请"
-  },
-  "subscription-panel.subscription-activation.adf311cc1e": {
-    "en": "Subscription & Activation",
-    "zh": "订阅与激活"
-  },
-  "subscription-panel.support.a708e57f24": {
-    "en": "Support",
-    "zh": "支持"
-  },
-  "subscription-panel.target-plan.8b8ea2ef87": {
-    "en": "Target plan",
-    "zh": "目标套餐"
-  },
-  "subscription-panel.used.cc42f7b540": {
-    "en": "used",
-    "zh": "已使用"
-  },
-  "subscription-panel.voice-cloning.af508583e9": {
-    "en": "Voice cloning",
-    "zh": "声音克隆"
-  },
-  "subscription-panel.website.8e805238ba": {
-    "en": "Website",
-    "zh": "官网"
-  },
-  "subscription-panel.wechat-email-phone.dc8732b23e": {
-    "en": "WeChat / email / phone",
-    "zh": "微信 / 邮箱 / 手机号"
-  },
   "system-explorer.a-music-app-was-detected.c7933a87a2": {
     "en": "A music app was detected; playback and controls still require runtime verification.",
     "zh": "已检测到音乐应用；实际播放和控制仍需运行验收。"
@@ -8511,10 +8371,6 @@
     "en": "No daily data yet.",
     "zh": "暂无每日数据。"
   },
-  "token-dashboard.no-subscription-data.4e1e6c99ac": {
-    "en": "No subscription data",
-    "zh": "暂无订阅数据"
-  },
   "token-dashboard.no-usage-data-yet.3365b0e5cf": {
     "en": "No usage data yet.",
     "zh": "暂无用量数据。"
@@ -8522,10 +8378,6 @@
   "token-dashboard.providers.e98de89731": {
     "en": "Providers",
     "zh": "服务商"
-  },
-  "token-dashboard.quota.474cf3da08": {
-    "en": "Quota",
-    "zh": "额度"
   },
   "token-dashboard.token-usage.074d21ae63": {
     "en": "Token Usage",

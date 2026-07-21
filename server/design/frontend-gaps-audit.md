@@ -95,7 +95,6 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 | 事件 | 用途 |
 |------|------|
 | `token:usage_update` | 用量更新 |
-| `token:quota_update` | 配额变更 |
 
 **建议**: TokenDashboard / Profile 监听，替换轮询 `/api/llm/usage`。
 
@@ -201,7 +200,7 @@ Codex 产品完整化参考。按优先级排列：P0=用户路径断点，P1=�
 | `/api/api/plans/*` | 7 | 双前缀 bug + 未接入 |
 | `/api/contacts/*` | 5 | 联系人全部未接入 |
 | `/api/branch/*` | 4 | 分支全部未接入 |
-| Token socket (2) | emit | `token:usage_update`, `token:quota_update` |
+| Token socket (1) | emit | `token:usage_update` |
 | Wake socket (3) | emit | `wake:detected`, `wake:error`, `wake:started` |
 
 ---

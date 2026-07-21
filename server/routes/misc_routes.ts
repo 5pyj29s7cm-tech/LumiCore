@@ -3,7 +3,6 @@ import { Router } from "express";
 import { readDB, writeDB, querySQL, runSQL } from "../../db_layer";
 import { runWithTools } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
-import { recordUsage, estimateTokens } from "../subscription/proxy";
 import { makeLLMCall, NormalizedMessage } from "../llm/providers";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
@@ -143,7 +142,6 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
         source: 'misc_chat',
       });
       const responseText = finalized.text;
-      const tokens = estimateTokens(messages.map((m: any) => m.content || '').join(' ') + ' ' + responseText);
       for (const u of result.usageRecords || []) {
         recordTokenUsage(userId, u.provider, u.model, {
           promptTokens: u.promptTokens,
@@ -151,7 +149,6 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, llm: {
           totalTokens: u.totalTokens,
         }, `misc_chat_${Date.now()}`, 'chat');
       }
-      recordUsage(userId, tokens);
       res.json({
         text: responseText,
         toolCalls: result.toolCalls.length,

@@ -2,7 +2,6 @@ import { Router } from "express";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { checkLLMAccess, recordUsage, estimateTokens } from "../subscription/proxy";
 import { runWithTools } from "../llm/adapter";
 import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
@@ -269,13 +268,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       console.warn(`[Chat] Ignoring request provider ${reqProvider}; using primary brain ${provider}/${model} for user ${userId}`);
     }
 
-    if (!isBYOK) {
-      const access = checkLLMAccess({ userId, provider, model: model || '' });
-      if (!access.allowed) {
-        return res.status(402).json({ error: access.reason, code: access.tokenLimitReached ? 'TOKEN_LIMIT' : 'PROVIDER_RESTRICTED' });
-      }
-    }
-
     try {
       let responseText = '';
 
@@ -366,9 +358,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             flow: restTurnDispatch.flow,
           });
           responseText = finalized.text;
-          const tokens = estimateTokens(
-            normalizedMessages.map((m: any) => m.content || '').join(' ') + ' ' + responseText
-          );
           for (const u of result.usageRecords || []) {
             recordTokenUsage(userId, u.provider, u.model, {
               promptTokens: u.promptTokens,
@@ -376,7 +365,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
               totalTokens: u.totalTokens,
             }, `rest_chat_${Date.now()}`, 'chat');
           }
-          recordUsage(userId, tokens);
           res.write(`data: ${JSON.stringify({
             done: true,
             text: responseText,
@@ -408,9 +396,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           flow: restTurnDispatch.flow,
         });
         responseText = finalized.text;
-        const tokens = estimateTokens(
-          normalizedMessages.map((m: any) => m.content || '').join(' ') + ' ' + responseText
-        );
         for (const u of result.usageRecords || []) {
           recordTokenUsage(userId, u.provider, u.model, {
             promptTokens: u.promptTokens,
@@ -418,7 +403,10 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             totalTokens: u.totalTokens,
           }, `rest_chat_${Date.now()}`, 'chat');
         }
-        const usage = recordUsage(userId, tokens);
+        const usage = {
+          totalTokens: result.usageRecords.reduce((sum, item) => sum + item.totalTokens, 0),
+          records: result.usageRecords.length,
+        };
         return res.json({
           text: responseText,
           usage,
@@ -563,11 +551,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       return res.status(400).json({ error: 'No meeting transcript to analyze' });
     }
 
-    const access = checkLLMAccess({ userId, provider, model: model || '' });
-    if (!access.allowed) {
-      return res.status(402).json({ error: access.reason, code: access.tokenLimitReached ? 'TOKEN_LIMIT' : 'PROVIDER_RESTRICTED' });
-    }
-
     const started = startedAt ? new Date(startedAt).toLocaleString() : 'unknown';
     const ended = endedAt ? new Date(endedAt).toLocaleString() : new Date().toLocaleString();
     const outputLanguage = language === 'zh' ? 'Chinese' : 'English';
@@ -633,9 +616,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     );
 
     const report = result.text || '';
-    const tokens = estimateTokens(prompt + ' ' + report);
     recordTokenUsage(userId, provider, model, result.usage, `meeting_analyze_${Date.now()}`, 'meeting');
-    const usage = recordUsage(userId, tokens);
+    const usage = result.usage || null;
     let legalCasework = '';
     let legalCaseworkError = '';
     if (shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)) {

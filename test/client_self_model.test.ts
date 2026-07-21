@@ -102,7 +102,6 @@ describe('Lumi client self model', () => {
     const ids = getClientInterfaceSurfaces().map(surface => surface.id);
 
     expect(ids).toEqual(expect.arrayContaining([
-      'subscription',
       'widget',
       'org-dashboard',
       'org-knowledge',
@@ -112,6 +111,7 @@ describe('Lumi client self model', () => {
       'org-spatial-design',
       'org-brand-design',
     ]));
+    expect(ids).not.toContain('subscription');
   });
 
   it('verifies an exact organization workspace destination', () => {
@@ -280,16 +280,6 @@ describe('Lumi client self model', () => {
           surfaces: { widgetMode: true },
         },
         matched: 'surface:widget:open',
-      },
-      {
-        name: 'open subscription',
-        args: { action: 'open_subscription' },
-        after: {
-          activeTab: 'subscription',
-          windows: { open: ['subscription'], focused: 'subscription', minimized: [] },
-          surfaces: {},
-        },
-        matched: 'surface:subscription:open',
       },
     ];
 
@@ -477,11 +467,11 @@ describe('client self tools', () => {
       'show_desktop_widget',
       'exit_widget_mode',
       'expand_from_widget',
+    ]));
+    expect(actionEnum).not.toEqual(expect.arrayContaining([
       'open_subscription',
       'open_activation',
       'open_billing',
-    ]));
-    expect(actionEnum).not.toEqual(expect.arrayContaining([
       'customer_takeover_panel',
       'design_delivery_panel',
       'ecommerce_growth_panel',

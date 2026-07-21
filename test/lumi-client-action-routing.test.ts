@@ -8,8 +8,6 @@ describe('Lumi client action routing', () => {
     expect(hasClientActionOnlyIntent('你能打开中枢世界吗')).toBe(true);
     expect(hasClientActionOnlyIntent('打开技能大厅')).toBe(true);
     expect(hasClientActionOnlyIntent('检查自己的客户端')).toBe(true);
-    expect(hasClientActionOnlyIntent('打开订阅页面')).toBe(true);
-    expect(hasClientActionOnlyIntent('打开激活页面')).toBe(true);
     expect(hasClientActionOnlyIntent('进入桌面小组件模式')).toBe(true);
     expect(hasClientActionOnlyIntent('展开 Lumi 小组件')).toBe(true);
     expect(hasClientActionOnlyIntent('打开头像工作室')).toBe(true);
@@ -24,7 +22,9 @@ describe('Lumi client action routing', () => {
     expect(hasClientActionOnlyIntent('关掉知识库')).toBe(true);
     expect(hasClientActionOnlyIntent('关闭运行日志')).toBe(true);
     expect(hasClientActionOnlyIntent('关闭桌面小组件')).toBe(true);
-    expect(hasClientActionOnlyIntent('close subscription page')).toBe(true);
+    expect(hasClientActionOnlyIntent('打开订阅页面')).toBe(false);
+    expect(hasClientActionOnlyIntent('打开激活页面')).toBe(false);
+    expect(hasClientActionOnlyIntent('close subscription page')).toBe(false);
   });
 
   it('routes concrete organization workspace destinations as client navigation', () => {

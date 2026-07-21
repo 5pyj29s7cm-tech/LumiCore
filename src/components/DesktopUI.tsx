@@ -144,7 +144,6 @@ const RuntimeLogPanel = lazy(() => import('./RuntimeLogPanel').then(m => ({ defa
 const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanctuary })));
 const Settings = lazy(() => import('./Settings').then(m => ({ default: m.Settings })));
 const SkillCenter = lazy(() => import('./SkillCenter').then(m => ({ default: m.SkillCenter })));
-const SubscriptionPanel = lazy(() => import('./SubscriptionPanel').then(m => ({ default: m.SubscriptionPanel })));
 const SystemExplorer = lazy(() => import('./SystemExplorer').then(m => ({ default: m.SystemExplorer })));
 const TeamHub = lazy(() => import('./TeamHub').then(m => ({ default: m.TeamHub })));
 const TerminalWindow = lazy(() => import('./Terminal').then(m => ({ default: m.TerminalWindow })));
@@ -3339,17 +3338,6 @@ export function DesktopUI({
     const onTokenUsageUpdate = (_data: { totalTokens: number; provider: string }) => {
       // Token usage updated — TokenDashboard handles REST polling, this is real-time supplement
     };
-    const onTokenQuotaUpdate = (data: { used: number; cap: number; remaining: number }) => {
-      const pct = data.used / data.cap;
-      if (pct >= 0.9) {
-        addNotification({
-          type: 'warning',
-          title: uiMessage('desktop-ui.token-quota-alert.a42936b017', (lang === 'zh') ? 'zh' : 'en'),
-          message: formatUiMessage('desktop-ui.value0-used-value1-value2.f3403a0250', { value0: Math.round(pct * 100), value1: data.used.toLocaleString(), value2: data.cap.toLocaleString() }, (lang === 'zh') ? 'zh' : 'en'),
-        });
-      }
-    };
-
     socket.on('preferences:changed', onPreferencesChanged);
     socket.on('agent:promoted', onAgentPromoted);
     socket.on('agent:notification', onAgentNotification);
@@ -3357,7 +3345,6 @@ export function DesktopUI({
     socket.on('wake:error', onWakeError);
     socket.on('wake:started', onWakeStarted);
     socket.on('token:usage_update', onTokenUsageUpdate);
-    socket.on('token:quota_update', onTokenQuotaUpdate);
 
     return () => {
       socket.off('agent:status', onStatus);
@@ -3375,7 +3362,6 @@ export function DesktopUI({
       socket.off('wake:error', onWakeError);
       socket.off('wake:started', onWakeStarted);
       socket.off('token:usage_update', onTokenUsageUpdate);
-      socket.off('token:quota_update', onTokenQuotaUpdate);
       if (terminalResetTimer) clearTimeout(terminalResetTimer);
     };
   }, [
@@ -4308,7 +4294,6 @@ export function DesktopUI({
     if (windowId === 'devices') return { w: '900px', h: '700px' };
     if (windowId === 'tokens') return { w: '800px', h: '620px' };
     if (windowId === 'skills') return { w: '900px', h: '700px' };
-    if (windowId === 'subscription') return { w: '850px', h: '640px' };
     if (windowId === 'avatar-studio') return { w: '1050px', h: '720px' };
     if (windowId === 'sound') return { w: '900px', h: '700px' };
     if (windowId === 'terminal') return { w: '900px', h: '600px' };
@@ -5576,8 +5561,6 @@ export function DesktopUI({
                     <TokenDashboard />
                   ) : windowId === 'skills' ? (
                     <SkillCenter t={t} lang={lang} />
-                  ) : windowId === 'subscription' ? (
-                    <SubscriptionPanel t={t} />
                   ) : windowId === 'avatar-studio' ? (
                     <AvatarStudio
                       key={petPreferenceScopeKey}

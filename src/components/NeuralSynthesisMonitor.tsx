@@ -9,7 +9,6 @@ const SPARKLINE_POINTS = 60;
 const SYSTEM_POLL_MS = 2000;
 const TOKEN_POLL_MS = 10000;
 const LATENCY_POLL_MS = 5000;
-const SUBSCRIPTION_POLL_MS = 60000;
 
 interface TokenData {
   grandTotal: number;
@@ -21,11 +20,6 @@ interface LatencyStats {
   llm: { avgMs: number; lastMs: number; count: number };
   tts: { avgMs: number; lastMs: number; count: number };
   stt: { avgMs: number; lastMs: number; count: number };
-}
-
-interface SubStatus {
-  tokensUsedThisMonth: number;
-  monthlyTokenCap: number;
 }
 
 // ── helpers ──
@@ -93,7 +87,6 @@ export function NeuralSynthesisMonitor({ t, onOpenTokens }: { t?: any; onOpenTok
   const { aiConfig } = useApp();
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
   const [tokenData, setTokenData] = useState<TokenData | null>(null);
-  const [subStatus, setSubStatus] = useState<SubStatus | null>(null);
   const [latency, setLatency] = useState<LatencyStats | null>(null);
   const prevTokenTotal = useRef<number>(0);
   const [tokenSpeed, setTokenSpeed] = useState<number>(0);
@@ -142,25 +135,6 @@ export function NeuralSynthesisMonitor({ t, onOpenTokens }: { t?: any; onOpenTok
     };
     poll();
     const id = setInterval(poll, TOKEN_POLL_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  // ── Subscription polling ──
-
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch('/api/subscription/status', { credentials: 'include' });
-        if (!r.ok) return;
-        const d = await r.json();
-        setSubStatus({
-          tokensUsedThisMonth: d.subscription?.tokensUsedThisMonth ?? 0,
-          monthlyTokenCap: d.subscription?.monthlyTokenCap ?? 500000,
-        });
-      } catch {}
-    };
-    poll();
-    const id = setInterval(poll, SUBSCRIPTION_POLL_MS);
     return () => clearInterval(id);
   }, []);
 
@@ -215,9 +189,7 @@ export function NeuralSynthesisMonitor({ t, onOpenTokens }: { t?: any; onOpenTok
   const modelLabel = aiConfig ? `${aiConfig.provider}/${aiConfig.model}` : '--';
   const tokenSpeedFmt = tokenSpeed > 0 ? `${Math.round(tokenSpeed)} tok/s` : '--';
   const todayTokens = tokenData ? fmtTokens(tokenData.grandTotal) : '--';
-  const capPct = subStatus && subStatus.monthlyTokenCap > 0
-    ? Math.round((subStatus.tokensUsedThisMonth / subStatus.monthlyTokenCap) * 100)
-    : 0;
+  const callCount = tokenData ? tokenData.recordCount.toLocaleString() : '--';
 
   return (
     <GlassCard className="p-5 rounded-[2.5rem] space-y-5 border-white/5 bg-black/30 backdrop-blur-3xl">
@@ -274,17 +246,8 @@ export function NeuralSynthesisMonitor({ t, onOpenTokens }: { t?: any; onOpenTok
             <div className="text-xs font-mono text-white/50">{todayTokens}</div>
           </div>
           <div>
-            <div className="text-xs text-white/45 font-medium mb-0.5">Month Cap</div>
-            <div className="flex items-center gap-1.5">
-              <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${Math.min(capPct, 100)}%` }}
-                  className={`h-full rounded-full ${capPct > 90 ? 'bg-red-500' : capPct > 70 ? 'bg-amber-500' : 'bg-cyan-400'}`}
-                />
-              </div>
-              <span className="text-[12px] font-mono text-white/55">{capPct}%</span>
-            </div>
+            <div className="text-xs text-white/45 font-medium mb-0.5">Calls</div>
+            <div className="text-xs font-mono text-white/50">{callCount}</div>
           </div>
         </div>
       </div>
