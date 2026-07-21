@@ -51,7 +51,7 @@ import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmo
 import { buildModeOverlay } from "../personality/engine";
 import { personalityRegistry } from "../personality";
 import { lightweightEvolve } from "../personality/evolution";
-import { getOrCreateActiveConversation, addMessage, getMessages, getMessagesByTokenBudget, getConversationSummary, setConversationMode, getUnclosedConversation, extractTopics, trackTopic, getTopicContext } from "../conversation/manager";
+import { getOrCreateConversationForTurn, addMessage, getMessages, getMessagesByTokenBudget, getConversationSummary, setConversationMode, extractTopics, trackTopic, getTopicContext } from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
@@ -929,10 +929,10 @@ export function registerChatHandler(
     const conversationAgentId = agentId || 'lumi';
     const uid = userIdFn(socket);
     if (isConfirmationCancellation(visibleUserText)) clearPendingConfirmation(uid);
-    const pendingConfirmation = isExplicitConfirmationReply(visibleUserText)
+    let pendingConfirmation = isExplicitConfirmationReply(visibleUserText)
       ? getPendingConfirmation(uid)
       : null;
-    const pendingConfirmationPrompt = pendingConfirmation
+    let pendingConfirmationPrompt = pendingConfirmation
       ? formatPendingConfirmationPrompt(pendingConfirmation)
       : '';
     console.log('[ChatHandler] uid:', uid, 'agentId:', agentId, 'source:', source);
@@ -1076,18 +1076,29 @@ export function registerChatHandler(
       const isNovel = relevantMemories.length < 2;
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──
-      const conversation = getOrCreateActiveConversation(uid, conversationAgentId, resolvedDomain, resolvedOrgId);
+      const conversationTurn = getOrCreateConversationForTurn(
+        uid,
+        conversationAgentId,
+        resolvedDomain,
+        resolvedOrgId,
+        { userText: visibleUserText },
+      );
+      const conversation = conversationTurn.conversation;
       const conversationId = conversation?.id;
-      // Cross-session continuity: inject previous conversation context if starting fresh
-      let previousSessionContext: string | null = null;
-      if (!conversationId) {
-        const prevConv = getUnclosedConversation(uid);
-        if (prevConv && prevConv.id !== conversationId) {
-          const prevSummary = getConversationSummary(prevConv.id);
-          if (prevSummary) {
-            previousSessionContext = `## Previous Session (${prevConv.lastActiveAt?.slice(0, 10) || 'recent'})\nYou and the user were discussing: ${prevSummary}\n\nContinue naturally. The user may want to pick up where you left off.`;
-          }
-        }
+      if (conversationTurn.rolledOver) {
+        console.log(
+          '[ChatHandler] rolled over oversized conversation:',
+          conversationTurn.previousConversationId,
+          '->',
+          conversationId,
+        );
+        // The client may still send its old local transcript after a server-side
+        // rollover. Re-evaluate direct client intent without letting that stale
+        // transcript reactivate a prior UI task.
+        chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, []);
+        clearPendingConfirmation(uid);
+        pendingConfirmation = null;
+        pendingConfirmationPrompt = '';
       }
       const conversationMode = payloadMode || conversation?.mode || undefined;
       if (conversation && payloadMode && payloadMode !== conversation.mode) {
@@ -1103,7 +1114,9 @@ export function registerChatHandler(
       }
       actionContinuationBridge = buildRecentActionContinuationBridge(
         visibleUserText,
-        [...historyItems, ...persistedConversationHistory],
+        conversationTurn.rolledOver
+          ? persistedConversationHistory
+          : [...historyItems, ...persistedConversationHistory],
         conversation?.actionContinuationState,
       );
 
@@ -1154,11 +1167,6 @@ export function registerChatHandler(
           effectiveSystemPrompt += `\n\n## Conversation Context\n${summaryContext}`;
         }
       }
-      // Cross-session: inject previous conversation context when starting fresh
-      if (previousSessionContext) {
-        effectiveSystemPrompt += `\n\n${previousSessionContext}`;
-      }
-
       // Topic continuity: inject recent conversation topics
       if (conversationId) {
         const topicCtx = getTopicContext(conversationId);
@@ -3147,15 +3155,18 @@ export function registerChatHandler(
 
         // Load conversation history from persistence (survives page reload / reconnect)
         let persistedHistory: NormalizedMessage[] = [];
-        if (conversationAgentId) {
-          const conv = getOrCreateActiveConversation(uid, conversationAgentId, resolvedDomain, resolvedOrgId);
-          const msgs = getMessagesByTokenBudget(conv.id);
+        if (conversationId) {
+          const msgs = getMessagesByTokenBudget(conversationId);
           persistedHistory = msgs
             .filter((m: any) => m.message || m.content || m.response)
             .flatMap(normalizeChatHistoryRecord);
         }
 
-        const conversationHistory = persistedHistory.length > 0
+        // Once a server conversation exists, persistence is authoritative even
+        // when the new segment is intentionally empty. Falling back to the
+        // client's pre-rollover transcript would immediately restore the very
+        // stale context this boundary is meant to remove.
+        const conversationHistory = conversationId
           ? persistedHistory
           : (history ? history.flatMap(normalizeChatHistoryRecord) : []);
 

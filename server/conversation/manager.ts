@@ -92,6 +92,19 @@ function resolveConversationScope(domainOrOrgId?: string, orgIdMaybe?: string): 
   };
 }
 
+export interface ConversationTurnOptions {
+  /** Current user text, used to avoid a soft rollover during a referential follow-up. */
+  userText?: string;
+  /** Test/diagnostic override. Production defaults to CONVERSATION_ROLLOVER_MESSAGE_LIMIT or 240. */
+  messageLimit?: number;
+}
+
+export interface ConversationTurnResult {
+  conversation: Conversation;
+  rolledOver: boolean;
+  previousConversationId?: string;
+}
+
 function conversationMatchesScope(c: Conversation, domainOrOrgId?: string, orgIdMaybe?: string): boolean {
   const scope = resolveConversationScope(domainOrOrgId, orgIdMaybe);
   if (scope.domain === 'work') {
@@ -154,6 +167,160 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
   db.conversations.push(conv);
   writeDB(db);
   return conv;
+}
+
+const DEFAULT_CONVERSATION_ROLLOVER_MESSAGE_LIMIT = 240;
+
+function resolveConversationRolloverMessageLimit(override?: number): number {
+  const configured = override ?? Number.parseInt(
+    process.env.CONVERSATION_ROLLOVER_MESSAGE_LIMIT || '',
+    10,
+  );
+  if (!Number.isFinite(configured)) return DEFAULT_CONVERSATION_ROLLOVER_MESSAGE_LIMIT;
+  return Math.max(4, Math.floor(configured));
+}
+
+/**
+ * Decide whether a completed conversation segment should be archived before
+ * accepting a new user turn. Referential follow-ups get one extra segment so
+ * a natural "continue" is not separated from the action it refers to. The hard
+ * limit still prevents an indefinitely reused thread.
+ */
+export function shouldRolloverConversationForTurn(
+  conversation: Conversation,
+  userText = '',
+  messageLimit?: number,
+): boolean {
+  const limit = resolveConversationRolloverMessageLimit(messageLimit);
+  const count = Math.max(0, Math.floor(Number(conversation.messageCount) || 0));
+  if (count < limit) return false;
+
+  // A user turn without a terminal assistant record is still in flight. Never
+  // split that turn merely because it crossed the message threshold.
+  if (conversation.pendingActionContinuation) return false;
+
+  const hardLimit = Math.max(limit + 1, limit * 2);
+  if (count >= hardLimit) return true;
+
+  return !needsRecentActionContinuationContext(String(userText || '').trim());
+}
+
+function compactRolloverText(value: unknown, limit: number): string {
+  const clean = String(value || '').replace(/\s+/g, ' ').trim();
+  if (clean.length <= limit) return clean;
+  return clean.slice(0, Math.max(0, limit - 1)).trimEnd() + '…';
+}
+
+function buildRolloverTranscriptTail(conversationId: string): string[] {
+  const lines: string[] = [];
+  const recent = getMessages(conversationId, 18)
+    .filter(isPromptEligibleMessage)
+    .slice(-10);
+
+  for (const record of recent) {
+    const message = compactRolloverText(record.message, 360);
+    const response = compactRolloverText(record.response, 360);
+    if (record.role === 'user') {
+      if (message) lines.push(`User: ${message}`);
+      // Legacy rows sometimes stored both sides of a turn in one user record.
+      if (response && !isGuardGeneratedAssistantText(response)) lines.push(`Lumi: ${response}`);
+    } else if (record.role === 'assistant' && message) {
+      lines.push(`Lumi: ${message}`);
+    }
+  }
+
+  return lines.slice(-10);
+}
+
+function buildConversationRolloverSummary(conversation: Conversation): string {
+  const priorParts: string[] = [];
+  if (conversation.summary && !isStandaloneGuardOutput(conversation.summary)) {
+    priorParts.push(compactRolloverText(conversation.summary, 1800));
+  }
+  if (conversation.summaryChain?.length) {
+    const older = conversation.summaryChain
+      .filter(summary => !isStandaloneGuardOutput(summary))
+      .map(summary => compactRolloverText(summary, 700))
+      .filter(Boolean)
+      .join(' | ');
+    if (older) priorParts.push(`Earlier context: ${compactRolloverText(older, 1200)}`);
+  }
+
+  const recentLines = buildRolloverTranscriptTail(conversation.id);
+  return [
+    `Conversation continuity snapshot from an archived segment (${conversation.messageCount || 0} stored messages).`,
+    priorParts.length ? `Durable summary:\n${priorParts.join('\n')}` : '',
+    recentLines.length ? `Recent conversational context:\n${recentLines.join('\n')}` : '',
+    'Continuity boundary: treat this only as conversational background. Do not infer or claim that any prior tool run, pending confirmation, background job, or unfinished action remains active. Resume prior work only when the current user explicitly asks.',
+  ].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Acquire the conversation for one new user turn, rolling over an oversized
+ * segment when safe. The compact continuity snapshot is stored as the new
+ * segment's summary, so chat and voice share the same restart-safe context.
+ */
+export function getOrCreateConversationForTurn(
+  userId: string,
+  agentId?: string,
+  domain?: string,
+  orgId?: string,
+  options: ConversationTurnOptions = {},
+): ConversationTurnResult {
+  const current = getOrCreateActiveConversation(userId, agentId, domain, orgId);
+  if (!shouldRolloverConversationForTurn(current, options.userText, options.messageLimit)) {
+    return { conversation: current, rolledOver: false };
+  }
+
+  const db = readDB();
+  if (!db.conversations) return { conversation: current, rolledOver: false };
+  const active = db.conversations.find((conversation: Conversation) =>
+    conversation.id === current.id
+    && conversation.userId === userId
+    && conversation.status === 'active'
+  );
+  if (
+    !active
+    || !conversationMatchesScope(active, domain, orgId)
+    || !shouldRolloverConversationForTurn(active, options.userText, options.messageLimit)
+  ) {
+    return { conversation: active || current, rolledOver: false };
+  }
+
+  const now = new Date().toISOString();
+  const continuitySummary = buildConversationRolloverSummary(active);
+  active.status = 'closed';
+  active.summary = continuitySummary;
+  active.lastSummaryMessageCount = Math.max(0, active.messageCount || 0);
+  active.lastActiveAt = now;
+  delete active.pendingActionContinuation;
+
+  const next: Conversation = {
+    id: 'conv_' + crypto.randomUUID(),
+    userId,
+    agentId: agentId || '',
+    title: '',
+    status: 'active',
+    mode: active.mode,
+    summary: continuitySummary,
+    summaryChain: [],
+    lastSummaryMessageCount: 0,
+    messageCount: 0,
+    lastActiveAt: now,
+    createdAt: now,
+    recentTopics: active.recentTopics ? [...active.recentTopics] : undefined,
+    lastTopicChangeAt: active.lastTopicChangeAt,
+    domain: resolveConversationScope(domain, orgId).domain,
+    orgId: resolveConversationScope(domain, orgId).orgId,
+  };
+  db.conversations.push(next);
+  writeDB(db);
+
+  return {
+    conversation: next,
+    rolledOver: true,
+    previousConversationId: active.id,
+  };
 }
 
 export function closeConversation(conversationId: string, summary?: string, userId?: string): Conversation | null {

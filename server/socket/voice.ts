@@ -21,7 +21,7 @@ import { getMeetingAudioDir } from "../stt/artifact_paths";
 import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, resolveEmotionVoice } from "../tts/adapter";
 import { recordLatency } from "../monitor/latency_store";
-import { getOrCreateActiveConversation, addMessage, getMessages, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
+import { getOrCreateActiveConversation, getOrCreateConversationForTurn, addMessage, getMessages, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { processInput, CognitiveContext, extractSentiment } from "../cognition";
 import {
@@ -822,6 +822,20 @@ async function processVoiceInput(
     logger.info(`[Audio] Applied correction to interrupted voice request: "${userText.slice(0, 80)}"`);
   }
 
+  const conversationTurn = getOrCreateConversationForTurn(
+    session.userId,
+    session.agentId,
+    session.domain,
+    session.orgId,
+    { userText: actionIntentText },
+  );
+  if (conversationTurn.rolledOver) {
+    logger.info(
+      `[Audio] Rolled over oversized conversation ${conversationTurn.previousConversationId} -> ${conversationTurn.conversation.id}`,
+    );
+    clearPendingConfirmation(session.userId);
+  }
+
   session.isSpeaking = false;
   session.isProcessing = true;
   session.isBackgroundWork = hasExplicitToolIntent(actionIntentText);
@@ -867,7 +881,8 @@ async function processVoiceInput(
     : '';
   const recentProactiveSuggestion = getRecentProactiveSuggestion(session.userId);
   const shouldUseProactiveContext = Boolean(
-    !interruptedMerge.usedInterruptedTurn
+    !conversationTurn.rolledOver
+    && !interruptedMerge.usedInterruptedTurn
     && recentProactiveSuggestion
     && isVoiceReferentialFollowup(userText),
   );
