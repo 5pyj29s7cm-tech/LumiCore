@@ -2,6 +2,38 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
+import { getDataPath } from '../../config/data_path';
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === ''
+    || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+function getAutonomousReportRoot(): string {
+  return path.dirname(getDataPath(path.join('autonomy', 'reports', '.keep')));
+}
+
+function resolveWritePath(inputPath: string, context?: Pick<ToolContext, 'cwd' | 'autonomous'>): string {
+  const requestedPath = resolveSafePath(inputPath, context?.cwd);
+  if (!context?.autonomous) return requestedPath;
+
+  const reportRoot = getAutonomousReportRoot();
+  const requestBase = path.resolve(context.cwd || process.cwd());
+  let relativePath = isPathInside(requestBase, requestedPath)
+    ? path.relative(requestBase, requestedPath)
+    : path.basename(requestedPath);
+
+  if (!relativePath || relativePath === '.') {
+    relativePath = path.basename(requestedPath);
+  }
+
+  const candidate = path.resolve(reportRoot, relativePath);
+  return isPathInside(reportRoot, candidate)
+    ? candidate
+    : path.resolve(reportRoot, path.basename(requestedPath));
+}
 
 function resolveSafePath(userPath: string, cwd?: string): string {
   const base = cwd || process.cwd();
@@ -81,9 +113,12 @@ async function readFileHandler(args: Record<string, any>, context?: { cwd?: stri
   return fs.readFileSync(targetPath, 'utf-8');
 }
 
-async function writeFileHandler(args: Record<string, any>, context?: { cwd?: string }): Promise<string> {
+async function writeFileHandler(
+  args: Record<string, any>,
+  context?: Pick<ToolContext, 'cwd' | 'autonomous'>,
+): Promise<string> {
   const inputPath = requirePathArg(args, ['path', 'filePath', 'filepath', 'targetPath', 'target'], 'write_file');
-  const targetPath = resolveSafePath(inputPath, context?.cwd);
+  const targetPath = resolveWritePath(inputPath, context);
 
   const blockedPaths = ['/etc', '/sys', '/proc', '/dev', 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)'];
   const normalizedTarget = path.normalize(targetPath);

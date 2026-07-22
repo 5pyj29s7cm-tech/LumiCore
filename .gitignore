@@ -23,6 +23,7 @@ server/mcp/config.json
 gpt-sovits-src/
 local-tts/
 src-tauri/target/
+src-tauri/target-codex-check/
 .claude/
 docs/
 gen_landing.py
