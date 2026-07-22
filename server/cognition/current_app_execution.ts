@@ -1,6 +1,7 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import {
   extractRequestedCurrentAppText,
+  extractCurrentAppTarget,
   requiresCurrentAppUiMutation,
 } from './action_contract';
 import {
@@ -42,9 +43,13 @@ function isWpsTarget(value: string): boolean {
 }
 
 export function isRecoveredWpsCreateTask(text: string): boolean {
-  if (!isRecoveredCurrentAppEditingContinuation(text)) return false;
   const primary = primaryTurnText(text);
-  return isWpsTarget(getRecoveredApplicationContinuationTarget(text))
+  const target = isRecoveredCurrentAppEditingContinuation(text)
+    ? getRecoveredApplicationContinuationTarget(text)
+    : requiresCurrentAppUiMutation(text)
+      ? extractCurrentAppTarget(text)
+      : '';
+  return isWpsTarget(target)
     && CREATE_INTENT_RE.test(primary);
 }
 
@@ -234,7 +239,7 @@ export function guardCurrentAppToolCall(input: {
     if (!isRecoveredWpsCreateTask(input.taskText)) {
       return {
         allowed: false,
-        reason: `${WPS_CREATE_DOCUMENT_TOOL} is restricted to a recovered WPS continuation that explicitly asks to create a document.`,
+        reason: `${WPS_CREATE_DOCUMENT_TOOL} requires an explicit WPS request or a recovered WPS continuation that creates a document.`,
       };
     }
     const requestedText = extractRequestedCurrentAppText(primaryTurnText(input.taskText));

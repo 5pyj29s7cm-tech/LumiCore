@@ -4,10 +4,12 @@ import { mcpManager } from '../mcp/client';
 import {
   buildActionContract,
   requestsBlankAutoCadDocument,
+  requiresCurrentAppUiMutation,
   requiresCadGeometryExtractionOnly,
   requiresVisibleAutoCadExecution,
 } from './action_contract';
 import { isRecoveredCurrentAppEditingContinuation } from './action_continuation';
+import { detectRequestedOperationMode, isPureOperationModeSwitchRequest } from './operation_modes';
 import { buildDesktopObservationPlan } from './desktop_observation';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
@@ -1105,21 +1107,27 @@ export function routeToolsForTurn(
   const actionContract = buildActionContract(text);
   const recoveredApplicationContinuation = isRecoveredApplicationContinuation(text);
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(text);
+  const currentAppEdit = recoveredCurrentAppEdit
+    || (actionContract.kind === 'desktop_operation' && requiresCurrentAppUiMutation(text));
+  const requestedMode = detectRequestedOperationMode(text);
+  const compoundModeAction = Boolean(
+    requestedMode && !isPureOperationModeSwitchRequest(text, requestedMode),
+  );
   const localCadSourceRequest = isLocalCadSourceRequest(text);
   const localCadImageSourceRequest = isLocalCadImageSourceRequest(text);
   const cadGeometryExtractionOnly = requiresCadGeometryExtractionOnly(text);
-  const desktopObservationToolNames = recoveredCurrentAppEdit
+  const desktopObservationToolNames = currentAppEdit
     ? []
     : strictDesktopObservationToolNames(text, actionContract.kind);
   const desktopObservationOnly = desktopObservationToolNames.length > 0;
   const forbiddenToolNames = new Set<string>();
 
-  if (!recoveredCurrentAppEdit) {
+  if (!currentAppEdit) {
     for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
   }
 
   for (const route of ROUTES) {
-    if (recoveredCurrentAppEdit) continue;
+    if (currentAppEdit) continue;
     if (!routeMatches(route, text)) continue;
     if (
       route.category === 'work_takeover'
@@ -1148,17 +1156,20 @@ export function routeToolsForTurn(
     for (const pattern of route.namePatterns || []) addNamePattern(selected, availableNames, pattern);
   }
 
-  if (recoveredCurrentAppEdit) {
+  if (currentAppEdit) {
     categories.push('external_control');
-    reasons.push('the current turn edits inside the application recovered from a successful desktop_open receipt');
+    reasons.push(recoveredCurrentAppEdit
+      ? 'the current turn edits inside the application recovered from a successful desktop_open receipt'
+      : 'the current turn explicitly opens and edits inside a named authoring application');
     addGroup(selected, available, 'currentAppControl');
+    addIfAvailable(selected, available, 'wps_create_document_with_text');
   } else if (recoveredApplicationContinuation) {
     categories.push('external_control');
     reasons.push('the current turn continues inside the application recovered from a successful desktop_open receipt');
     addGroup(selected, available, 'externalControl');
   }
 
-  if (actionContract.kind === 'desktop_operation' && !recoveredCurrentAppEdit) {
+  if (actionContract.kind === 'desktop_operation' && !currentAppEdit) {
     addIfAvailable(selected, available, 'desktop_list_apps');
     addIfAvailable(selected, available, 'desktop_open');
     addIfAvailable(selected, available, 'desktop_active_window');
@@ -1186,25 +1197,30 @@ export function routeToolsForTurn(
     }
   }
 
-  if (!recoveredCurrentAppEdit && isDirectAutocadOperationsPlayback(text)) {
+  if (!currentAppEdit && isDirectAutocadOperationsPlayback(text)) {
     for (const name of TOOL_GROUPS.documents) selected.delete(name);
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
     reasons.push('existing AutoCAD operations are played only through MCP/COM');
   }
 
-  if (!recoveredCurrentAppEdit && requestsBlankAutoCadDocument(text)) {
+  if (!currentAppEdit && requestsBlankAutoCadDocument(text)) {
     selected.clear();
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_new_document');
     reasons.push('blank AutoCAD document requests use the dedicated COM document tool and never synthesize geometry');
-  } else if (!recoveredCurrentAppEdit && requiresVisibleAutoCadExecution(text)) {
+  } else if (!currentAppEdit && requiresVisibleAutoCadExecution(text)) {
     if (!requestsExplicitCadFileExport(text)) selected.delete('cad_generate_dxf');
     selected.delete('mcp_cad-drafting_cad_renovation_folder_workflow');
+    addIfAvailable(selected, available, 'desktop_list_apps');
+    addIfAvailable(selected, available, 'desktop_open');
+    addIfAvailable(selected, available, 'desktop_running_processes');
+    addIfAvailable(selected, available, 'desktop_active_window');
     addIfAvailable(selected, available, 'cad_prepare_autocad_operations');
     addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_playback_file');
     reasons.push('visible AutoCAD execution requires MCP/COM playback and excludes generated-file or script fallback');
+    reasons.push('the fixed capability envelope also keeps application discovery, open, and recovery available');
   }
 
-  if (!recoveredCurrentAppEdit && localCadImageSourceRequest) {
+  if (!currentAppEdit && localCadImageSourceRequest) {
     for (const name of LOCAL_CAD_GENERIC_READER_TOOLS) selected.delete(name);
     for (const name of Array.from(selected)) {
       if (LOCAL_CAD_SOURCE_FORBIDDEN_TOOL_RE.test(name)) selected.delete(name);
@@ -1214,9 +1230,14 @@ export function routeToolsForTurn(
     addIfAvailable(selected, available, 'floorplan_extract_geometry');
     addIfAvailable(selected, available, 'ocr_image_file');
     reasons.push('local desktop CAD images must use the built-in desktop discovery and image OCR/geometry path; project-scoped MCP filesystem and shell/base64 fallbacks are excluded');
+    if (requiresVisibleAutoCadExecution(text) && available.has('cad_draw_floorplan_in_autocad')) {
+      selected.clear();
+      addIfAvailable(selected, available, 'cad_draw_floorplan_in_autocad');
+      reasons.push('one composite CAD skill owns discovery, calibration, verified geometry, AutoCAD playback, resume, and acceptance for local floor-plan drawing');
+    }
   }
 
-  if (!recoveredCurrentAppEdit && cadGeometryExtractionOnly) {
+  if (!currentAppEdit && cadGeometryExtractionOnly) {
     selected.clear();
     for (const name of availableNames) {
       if (isCadGeometryExtractionAllowedTool(name)) {
@@ -1255,6 +1276,13 @@ export function routeToolsForTurn(
     }
   }
 
+  if (compoundModeAction) {
+    addIfAvailable(selected, available, 'client_get_state');
+    addIfAvailable(selected, available, 'client_action');
+    categories.push('client_surface');
+    reasons.push('a compound mode-and-work request needs both client mode control and the task tools selected for the remaining instruction');
+  }
+
   const orderedBeforeHealthGate = applyRoutePriority(
     availableNames.filter(name => selected.has(name)),
     priorityToolsForRoute(categories, text),
@@ -1284,11 +1312,16 @@ export function routeToolsForTurn(
     maxTools,
     truncated,
     unavailableMcpServers: unique(unavailableMcpServers),
-    hardAllowlist: desktopObservationOnly || cadGeometryExtractionOnly || undefined,
+    hardAllowlist: desktopObservationOnly
+      || cadGeometryExtractionOnly
+      || selected.has('cad_draw_floorplan_in_autocad')
+      || undefined,
     forbiddenToolNames: forbiddenToolNames.size > 0
       ? Array.from(forbiddenToolNames)
       : undefined,
-    maxIterations: desktopObservationOnly
+    maxIterations: selected.has('cad_draw_floorplan_in_autocad')
+      ? 2
+      : desktopObservationOnly
       ? desktopObservationToolNames.length + 1
       : undefined,
   };
@@ -1330,7 +1363,9 @@ export function formatToolRouteForPrompt(route: ToolRoute): string {
       ? `Use only the exposed tools. Prefer the most specific skill tool when one directly matches the task.`
       : 'No tool matched strongly. Answer naturally or ask one clarification question instead of inventing tool work.',
     route.hardAllowlist
-      ? route.categories.includes('desktop_observation')
+      ? route.toolNames.includes('cad_draw_floorplan_in_autocad')
+        ? 'This route is a hard allowlist for one composite CAD skill. Call only cad_draw_floorplan_in_autocad; it owns source discovery, calibration, geometry verification, visible AutoCAD playback, resume, and final acceptance internally.'
+        : route.categories.includes('desktop_observation')
         ? 'This route is a hard allowlist for read-only desktop observation. Call only the selected window/directory observation tools. Do not write files or substitute list_directory, search_files, grep_files, filesystem MCP, shell, or Python tools.'
         : 'This route is a hard allowlist. Do not generate files, prepare CAD operations, open or operate AutoCAD, or substitute any filesystem MCP, shell, or Python fallback.'
       : '',

@@ -13,6 +13,7 @@ export interface PendingToolConfirmation {
   domain: string;
   orgId: string;
   channelId: string;
+  taskId: string;
   createdAt: string;
   expiresAt: number;
 }
@@ -22,6 +23,7 @@ export interface PendingConfirmationScope {
   domain?: string;
   orgId?: string;
   channelId?: string;
+  taskId?: string;
   actionIntent?: string;
 }
 
@@ -59,6 +61,7 @@ function matchesScope(pending: PendingToolConfirmation, scope?: PendingConfirmat
   if (scope.domain !== undefined && pending.domain !== scope.domain) return false;
   if (scope.orgId !== undefined && pending.orgId !== scope.orgId) return false;
   if (scope.channelId !== undefined && pending.channelId !== scope.channelId) return false;
+  if (scope.taskId !== undefined && pending.taskId !== scope.taskId) return false;
   return true;
 }
 
@@ -81,6 +84,19 @@ export function recordPendingConfirmation(
   source = 'chat',
   scope: Omit<PendingConfirmationScope, 'source'> = {},
 ): PendingToolConfirmation {
+  const taskId = String(scope.taskId || '').trim();
+  if (taskId) {
+    const existing = readFresh(userId, {
+      source,
+      domain: scope.domain || '',
+      orgId: scope.orgId || '',
+      channelId: scope.channelId || '',
+      taskId,
+    });
+    // One unfinished task owns one immutable confirmation boundary. Until it
+    // is consumed or cleared, a retry/re-plan cannot replace its tool or args.
+    if (existing) return existing;
+  }
   const pending: PendingToolConfirmation = {
     id: crypto.randomUUID(),
     userId,
@@ -93,6 +109,7 @@ export function recordPendingConfirmation(
     domain: scope.domain || '',
     orgId: scope.orgId || '',
     channelId: scope.channelId || '',
+    taskId,
     createdAt: new Date().toISOString(),
     expiresAt: Date.now() + CONFIRMATION_TTL_MS,
   };
@@ -148,11 +165,11 @@ export function clearPendingConfirmation(userId: string, scope?: PendingConfirma
 }
 
 export function isExplicitConfirmationReply(text: string): boolean {
-  return /^(?:确认|确认执行|继续执行|同意|授权继续|可以执行|yes|confirm|proceed|approve)[。.!！?？\s]*$/i.test(String(text || '').trim());
+  return /^(?:\u786e\u8ba4|\u786e\u8ba4\u6267\u884c|\u7ee7\u7eed\u6267\u884c|\u540c\u610f|\u6388\u6743\u7ee7\u7eed|\u53ef\u4ee5\u6267\u884c|\u53ef\u4ee5|\u597d|\u597d\u7684|\u5f00\u59cb|yes|confirm|proceed|approve|go)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
 }
 
 export function isConfirmationCancellation(text: string): boolean {
-  return /^(?:取消|不要执行|停止执行|不同意|拒绝|cancel|deny|reject|stop)[。.!！?？\s]*$/i.test(String(text || '').trim());
+  return /^(?:\u53d6\u6d88|\u4e0d\u8981\u6267\u884c|\u505c\u6b62\u6267\u884c|\u4e0d\u540c\u610f|\u62d2\u7edd|cancel|deny|reject|stop)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
 }
 
 export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation): string {

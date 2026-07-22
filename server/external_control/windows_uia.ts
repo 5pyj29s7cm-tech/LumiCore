@@ -15,6 +15,7 @@ export interface DesktopUiSnapshotOptions {
   maxNodes?: number;
   includeOffscreen?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface DesktopUiTarget {
@@ -31,6 +32,7 @@ export interface DesktopUiTarget {
   maxNodes?: number;
   includeOffscreen?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export type DesktopUiAction = 'focus' | 'click' | 'invoke' | 'type';
@@ -80,7 +82,7 @@ export async function captureWindowsUiSnapshot(options: DesktopUiSnapshotOptions
     maxNodes,
     includeOffscreen,
   });
-  const stdout = await runPowershell(script, timeoutMs);
+  const stdout = await runPowershell(script, timeoutMs, options.signal);
   try {
     return JSON.parse(stdout);
   } catch {
@@ -118,7 +120,7 @@ export async function runWindowsUiAction(options: DesktopUiActionOptions) {
     index,
     delayAfterMs,
   });
-  const stdout = await runPowershell(script, timeoutMs);
+  const stdout = await runPowershell(script, timeoutMs, options.signal);
   try {
     return JSON.parse(stdout);
   } catch {
@@ -129,20 +131,40 @@ export async function runWindowsUiAction(options: DesktopUiActionOptions) {
   }
 }
 
-function runPowershell(script: string, timeoutMs: number): Promise<string> {
+function runPowershell(script: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(
+    if (signal?.aborted) {
+      const error = new Error('Windows UI Automation cancelled before execution');
+      error.name = 'AbortError';
+      reject(error);
+      return;
+    }
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (signal) signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const child = execFile(
       powershellExecutable(),
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
       { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 * 4 },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error((stderr || error.message || 'Windows UI Automation snapshot failed').trim()));
+          finish(() => reject(new Error((stderr || error.message || 'Windows UI Automation snapshot failed').trim())));
           return;
         }
-        resolve(stdout.trim());
+        finish(() => resolve(stdout.trim()));
       },
     );
+    const onAbort = () => {
+      try { child.kill(); } catch {}
+      const error = new Error('Windows UI Automation cancelled because the active task was stopped or superseded');
+      error.name = 'AbortError';
+      finish(() => reject(error));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 

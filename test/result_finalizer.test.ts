@@ -740,6 +740,21 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('no successful tool evidence');
   });
 
+  it('blocks a runtime-repair plan when no tool actually started', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+
+    const result = finalizeLumiResponse({
+      taskText: '\u91cd\u542f\u540e\u7aef\u8fdb\u7a0b\u3002',
+      responseText: '\u597d\u7684\uff0c\u5148\u770b\u770b\u5f53\u524d\u540e\u7aef\u8fdb\u7a0b\u7684\u72b6\u6001\u3002',
+      toolRecords: [],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u53ea\u8bf4\u4e86\u65b9\u6848');
+    expect(result.text).toContain('\u5b9e\u9645\u8fd8\u6ca1\u5f00\u59cb');
+  });
+
   it('blocks Chinese read/review promises when no tool evidence exists', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 
@@ -1086,6 +1101,33 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('stroke-by-stroke playback');
     expect(result.text).toContain('plan_operations.json');
     expect(result.text).toContain('450 ms');
+  });
+
+  it('uses the composite CAD workflow receipt instead of leaking model process narration', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: '读取桌面上的阿陆平面图，画进 AutoCAD 里。',
+      responseText: '先找到图片。现在让我继续尝试几个工具，再看看内部协议和 allowedTools。',
+      toolRecords: [{
+        name: 'cad_draw_floorplan_in_autocad',
+        arguments: { sourceName: '阿陆平面图' },
+        result: JSON.stringify({
+          status: 'blocked',
+          completed: false,
+          stage: 'autocad_playback',
+          sourcePath: 'C:\\Users\\me\\Desktop\\阿陆平面图.jpg',
+          operationsPath: 'C:\\CAD\\plan_operations.json',
+          completionMarkerPath: 'C:\\CAD\\plan_completed.json',
+          blocker: 'AutoCAD entity-count verification failed after operation 33.',
+        }),
+      }],
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('operation 33');
+    expect(result.text).not.toContain('allowedTools');
+    expect(result.text).not.toContain('先找到图片');
   });
 
   it('uses a successful AutoCAD MCP retry after an earlier timeout on an attached CAD task', async () => {

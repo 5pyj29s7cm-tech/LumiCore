@@ -12,6 +12,7 @@ import bcrypt from "bcryptjs";
 import { getLocalAdminPassword } from "../config/local_identity";
 import { repairCorruptedOrganizationNames } from "../org/db";
 import { startMessagingConnections, stopMessagingConnections } from "./messaging";
+import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
 
 interface BootstrapContext {
   server: any;
@@ -65,6 +66,10 @@ export async function bootstrap(ctx: BootstrapContext) {
   try {
     await ensureDatabaseInitialized();
     console.log('Database initialized successfully');
+    const recoveredTasks = recoverOrphanedConversationActionExecutions();
+    if (recoveredTasks > 0) {
+      console.warn(`[Bootstrap] Recovered ${recoveredTasks} orphaned conversation task lease(s)`);
+    }
     if (llm.refreshLocalModels) {
       const localModels = await llm.refreshLocalModels();
       console.log(`[LLM] Local runtime ready — Ollama=${localModels.ollama}, LM Studio=${localModels.lmstudio}`);

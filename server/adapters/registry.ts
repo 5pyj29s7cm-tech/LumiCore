@@ -250,7 +250,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       category: 'system',
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
       actions: ['client_get_state', 'client_health_check', 'open_runtime_log', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
-      surfaces: ['runtime log', 'background tray state', 'autostart', 'close-to-background', 'backend processes', 'autonomy policy', 'confirmed workflows'],
+      surfaces: ['kernel runtime diagnostics', 'background tray state', 'autostart', 'close-to-background', 'backend processes', 'autonomy policy', 'confirmed workflows'],
       requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client so runtime state can report whether the client/server are alive.'],
       diagnostics: [
@@ -271,7 +271,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       category: 'client',
       status: hasState && !staleState ? 'ready' : 'available',
       actions: ['client_get_state', 'client_action', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click', 'desktop_active_window', 'desktop_capture_screen'],
-      surfaces: ['Lumi surfaces', 'wallpaper mode', 'cursor glow', 'runtime log', 'external desktop'],
+      surfaces: ['Lumi surfaces', 'wallpaper mode', 'cursor glow', 'kernel runtime diagnostics', 'external desktop'],
       requiresConfirmation: false,
       diagnostics: [
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
@@ -281,18 +281,18 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'Use whenever Lumi needs to act like a visible desktop partner rather than a text-only assistant.',
     },
     {
-      id: 'workspace.runtime_log',
-      label: 'Runtime Log',
+      id: 'workspace.runtime_diagnostics',
+      label: 'Runtime Diagnostics',
       category: 'workspace',
       status: state?.runtimeLog?.status === 'attention' ? 'attention' : 'ready',
       actions: ['open_runtime_log', 'client_self_repair(open_recovery_surface:runtime-log)'],
-      surfaces: ['runtime log', 'server logs', 'startup traces'],
+      surfaces: ['kernel monitor', 'runtime health', 'startup diagnostics'],
       diagnostics: [
         state?.runtimeLog?.open ? 'open=true' : 'open=false',
         state?.runtimeLog?.status ? `status=${state.runtimeLog.status}` : '',
         state?.runtimeLog?.lastError ? `error=${state.runtimeLog.lastError}` : '',
       ].filter(Boolean),
-      notes: 'Use for inspecting live startup, server, and runtime traces.',
+      notes: 'Use the unified Kernel monitor for runtime health and startup diagnostics; the former standalone run-log window is removed.',
     },
     {
       id: 'workspace.knowledge_memory',

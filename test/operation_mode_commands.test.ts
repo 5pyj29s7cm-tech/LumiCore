@@ -98,4 +98,26 @@ describe('shared Lumi operation mode commands', () => {
     expect(flow.clientActionOnlyTurn).toBe(true);
     expect(flow.allowToolUseForTurn).toBe(true);
   });
+
+  it('keeps a compound mode switch and external task in one executable turn', async () => {
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const { hasClientActionOnlyIntent } = await import('../server/cognition/tool_intent');
+    const { routeToolsForTurn } = await import('../server/cognition/tool_router');
+    const text = '\u5148\u5207\u5230\u52a9\u624b\u6a21\u5f0f\uff0c\u7136\u540e\u6253\u5f00\u7f51\u6613\u4e91\u97f3\u4e50';
+    const flow = buildLumiTurnFlow({
+      userId: 'compound-mode-task-user',
+      text,
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'chat',
+    });
+    const declarations = ['client_get_state', 'client_action', 'desktop_list_apps', 'desktop_open', 'desktop_active_window']
+      .map(name => ({ type: 'function' as const, function: { name, description: name, parameters: { type: 'object', properties: {} } } }));
+    const route = routeToolsForTurn(text, declarations);
+
+    expect(hasClientActionOnlyIntent(text)).toBe(false);
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(true);
+    expect(route.toolNames).toEqual(expect.arrayContaining(['client_action', 'desktop_open']));
+  });
 });

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,11 @@ struct WallpaperState {
     previous_position: Option<tauri::PhysicalPosition<i32>>,
     was_fullscreen: bool,
     was_maximized: bool,
+}
+
+#[derive(Default)]
+struct ActiveDesktopCommands {
+    pids: HashMap<String, u32>,
 }
 
 struct ResidentState {
@@ -739,7 +745,13 @@ fn terminate_command_tree(child: &mut Child) {
 }
 
 #[tauri::command]
-fn run_command(command: String, cwd: Option<String>, timeout_ms: Option<u64>) -> CommandResult {
+fn run_command(
+    command: String,
+    cwd: Option<String>,
+    timeout_ms: Option<u64>,
+    command_id: Option<String>,
+    active_commands: tauri::State<'_, Mutex<ActiveDesktopCommands>>,
+) -> CommandResult {
     let now = SystemTime::now();
     let truncated: String = if command.chars().count() > 500 {
         let head: String = command.chars().take(500).collect();
@@ -808,6 +820,11 @@ fn run_command(command: String, cwd: Option<String>, timeout_ms: Option<u64>) ->
 
     let result = match cmd.spawn() {
         Ok(mut child) => {
+            if let Some(id) = command_id.as_ref().filter(|value| !value.trim().is_empty()) {
+                if let Ok(mut active) = active_commands.lock() {
+                    active.pids.insert(id.clone(), child.id());
+                }
+            }
             let deadline = Instant::now() + timeout;
             let mut timed_out = false;
             let status = loop {
@@ -843,6 +860,11 @@ fn run_command(command: String, cwd: Option<String>, timeout_ms: Option<u64>) ->
         }
         Err(error) => Err(error),
     };
+    if let Some(id) = command_id.as_ref() {
+        if let Ok(mut active) = active_commands.lock() {
+            active.pids.remove(id);
+        }
+    }
     let _ = std::fs::remove_file(&stdout_path);
     let _ = std::fs::remove_file(&stderr_path);
 
@@ -959,6 +981,35 @@ fn spawn_hidden(cmd: &mut Command) -> std::io::Result<Child> {
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
     cmd.spawn()
+}
+
+#[tauri::command]
+fn cancel_command(
+    command_id: String,
+    active_commands: tauri::State<'_, Mutex<ActiveDesktopCommands>>,
+) -> bool {
+    let pid = active_commands
+        .lock()
+        .ok()
+        .and_then(|mut active| active.pids.remove(command_id.trim()));
+    let Some(pid) = pid else { return false; };
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut taskkill = Command::new("taskkill");
+        taskkill.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        taskkill.creation_flags(0x08000000u32);
+        return taskkill.stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -4074,6 +4125,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None, python_config: None }))
+        .manage(Mutex::new(ActiveDesktopCommands::default()))
         .manage(Mutex::new(WallpaperState::default()))
         .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
         .manage(Mutex::new(DesktopWidgetState::default()))
@@ -4096,6 +4148,7 @@ pub fn run() {
             rename_item,
             delete_item,
             run_command,
+            cancel_command,
             open_item,
             pick_directory,
             set_wallpaper_mode,

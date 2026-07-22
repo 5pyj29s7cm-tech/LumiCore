@@ -67,7 +67,7 @@ server.registerTool('autocad_playback_file', {
   operationsPath: String(args.operationsPath || ''),
   completionMarkerPath: String(args.completionMarkerPath || ''),
   strokeDelayMs: args.strokeDelayMs,
-  createNewDocument: args.createNewDocument !== false,
+  createNewDocument: typeof args.createNewDocument === 'boolean' ? args.createNewDocument : undefined,
   savePath: args.savePath ? String(args.savePath) : undefined,
 })));
 

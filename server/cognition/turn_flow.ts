@@ -342,12 +342,21 @@ function buildExecutionGovernance(input: {
 export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const continuationContext = compact(input.continuationContext);
   const hasContinuationContext = Boolean(continuationContext);
-  const actionFollowupIntent = classifyRecentActionFollowupIntent(input.text);
+  const directActionFollowupIntent = classifyRecentActionFollowupIntent(input.text);
+  const recoveredActionFollowupIntent = /(?:^|\n)- followupIntent:\s*status(?:\s|$)/i.test(continuationContext)
+    ? 'status' as const
+    : /(?:^|\n)- followupIntent:\s*execute(?:\s|$)/i.test(continuationContext)
+      ? 'execute' as const
+      : 'none' as const;
+  const actionFollowupIntent = directActionFollowupIntent !== 'none'
+    ? directActionFollowupIntent
+    : recoveredActionFollowupIntent;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const explicitContinuationConfirmation =
     /^(?:确认|确定|嗯|好|好的|可以|行|开始|yes|ok|okay|confirm|go)[。！？.!?]*$/iu.test(input.text.trim()); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const currentAcceptsContinuationContext = needsRecentActionContinuationContext(input.text)
-    || explicitContinuationConfirmation;
+    || explicitContinuationConfirmation
+    || recoveredActionFollowupIntent !== 'none';
   const continuationMayDriveAction = hasContinuationContext
     && (actionFollowupIntent === 'execute' || explicitContinuationConfirmation);
   const statusOnlyContinuation = hasContinuationContext && actionFollowupIntent === 'status';

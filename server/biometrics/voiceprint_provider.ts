@@ -1,4 +1,5 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +36,33 @@ const UNAVAILABLE_RETRY_MS = 60000;
 const MAX_PCM_BASE64_CHARS = 800000;
 let providerCooldownUntil = 0;
 let providerCooldownReason = '';
+
+export function resolveVoiceprintPython(): string {
+  if (process.env.LUMI_VOICEPRINT_PYTHON?.trim()) {
+    return process.env.LUMI_VOICEPRINT_PYTHON.trim();
+  }
+
+  const projectRoot = path.resolve(__dirname, '..', '..');
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const roots = [projectRoot, process.cwd(), resourcesPath].filter((value): value is string => Boolean(value));
+  const relativeCandidates = process.platform === 'win32'
+    ? [
+        path.join('gpt-sovits-src', 'venv', 'Scripts', 'python.exe'),
+        path.join('resources', 'voiceprint', 'venv', 'Scripts', 'python.exe'),
+      ]
+    : [
+        path.join('gpt-sovits-src', 'venv', 'bin', 'python3'),
+        path.join('resources', 'voiceprint', 'venv', 'bin', 'python3'),
+      ];
+
+  for (const root of roots) {
+    for (const relativePath of relativeCandidates) {
+      const candidate = path.resolve(root, relativePath);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
 
 class SpeechBrainSidecarClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
@@ -78,7 +106,7 @@ class SpeechBrainSidecarClient {
   private ensureProcess(): void {
     if (this.proc && !this.proc.killed) return;
 
-    const python = process.env.LUMI_VOICEPRINT_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    const python = resolveVoiceprintPython();
     this.proc = spawn(python, [SIDECAR_SCRIPT], {
       cwd: path.resolve(__dirname, '..', '..'),
       env: { ...process.env, PYTHONUTF8: '1' },

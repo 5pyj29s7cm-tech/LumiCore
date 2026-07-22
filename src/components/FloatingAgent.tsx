@@ -5,13 +5,11 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { GlassCard } from './SharedUI';
 import { useSocket } from '@/hooks/useSocket';
-import { useTTS } from '@/hooks/useTTS';
 import { useApp } from '@/contexts/AppContext';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
 import {
   isTerminalAgentStatus,
   shouldDisplayAgentResponse,
-  shouldSpeakAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
 import Markdown from 'react-markdown';
@@ -24,7 +22,6 @@ export function FloatingAgent({ t }: { t: any }) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const { speak, isSpeaking } = useTTS();
   const scrollRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
 
@@ -41,9 +38,6 @@ export function FloatingAgent({ t }: { t: any }) {
     const onResponse = (data: AgentResponseDelivery) => {
       if (shouldDisplayAgentResponse(data)) {
         setMessages(prev => [...prev, { role: 'assistant', content: data.text! }]);
-      }
-      if (shouldSpeakAgentResponse(data)) {
-        speak(data.text!);
       }
       setIsLoading(false);
     };
@@ -63,7 +57,7 @@ export function FloatingAgent({ t }: { t: any }) {
       socket.off("agent:response", onResponse);
       socket.off("agent:status", onStatus);
     };
-  }, [isOpen, socket, speak]);
+  }, [isOpen, socket]);
 
   useEffect(() => {
     if (scrollRef.current) {

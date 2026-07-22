@@ -20,6 +20,8 @@ import {
   WPS_CURRENT_APP_MAX_ITERATIONS,
 } from './current_app_execution';
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
+import type { ConversationActionContinuationState } from './action_continuation';
+import { applyTaskPolicySnapshot } from './task_execution_ledger';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -30,6 +32,7 @@ export interface LumiExecutionDecisionInput {
   toolRegistry?: ToolRegistry;
   personalityToolPolicy?: ToolPolicy;
   isSanctuary?: boolean;
+  actionTaskState?: ConversationActionContinuationState | null;
 }
 
 export interface LumiExecutionDecision {
@@ -316,9 +319,21 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   const toolRoute = rawToolRoute
     ? enhanceToolRouteForFlow(rawToolRoute, input.flow, input.toolDeclarations, input.toolRegistry)
     : null;
-  const uncappedToolPolicy = toolRoute
+  const routedPolicy = toolRoute
     ? mergeToolPolicyWithRoute(baseToolPolicy, toolRoute)
     : baseToolPolicy;
+  const taskMarker = input.actionTaskState?.taskId
+    ? `- taskId: ${input.actionTaskState.taskId}`
+    : '';
+  const resumesPinnedTask = Boolean(
+    taskMarker
+    && (input.flow.routeText || input.text).includes(taskMarker)
+    && input.actionTaskState?.policySnapshot
+    && !statusOnlyContinuation,
+  );
+  const uncappedToolPolicy = resumesPinnedTask && toolRoute?.hardAllowlist !== true
+    ? applyTaskPolicySnapshot(routedPolicy, input.actionTaskState?.policySnapshot)
+    : routedPolicy;
   const effectiveToolRoute = toolRoute
     ? alignToolRouteWithPolicy(toolRoute, uncappedToolPolicy)
     : null;
@@ -358,6 +373,9 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
       ? buildCurrentAppUiStateMachinePrompt(
           getRecoveredApplicationContinuationTarget(input.flow.routeText || input.text),
         )
+      : '',
+    resumesPinnedTask
+      ? `Continue task ${input.actionTaskState?.taskId} with its original capability envelope. Short confirmations, corrections, or retry wording must not narrow the tools selected for the original task.`
       : '',
     input.isSanctuary ? 'This agent is in sanctuary territory; tools are disabled.' : '',
     effectiveToolRoute ? formatToolRouteForPrompt(effectiveToolRoute) : '',

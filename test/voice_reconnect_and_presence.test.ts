@@ -3,7 +3,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildPresenceHeartbeat } from '../src/hooks/usePresence';
 import { shouldAcceptVoiceStatus, waitForVoiceSocket } from '../src/hooks/useVoiceCall';
-import { addEchoText, isEchoText, isPureInterruptCommand, isVoiceCallEndCommand } from '../server/socket/voice';
+import {
+  addEchoText,
+  isEchoText,
+  isPureInterruptCommand,
+  isVoiceCallEndCommand,
+  isVoiceprintUtteranceAccepted,
+} from '../server/socket/voice';
 
 class FakeSocket {
   connected = false;
@@ -42,16 +48,16 @@ describe('voice reconnect and perception continuity', () => {
     expect(client).not.toContain("if (data.finalized === true) activeVoiceRequestIdRef.current = null");
   });
 
-  it('keeps browser TTS fallback inside the same request lifecycle', () => {
+  it('never substitutes the configured Lumi voice with browser speech synthesis', () => {
     const root = process.cwd();
     const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
     const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
 
-    expect(server).toContain("socket.on('audio:tts_fallback_done', done)");
-    expect(server).toContain('fallbackTimeoutMs');
-    expect(client).toContain("socket.emit('audio:tts_fallback_done'");
-    expect(client.indexOf('isTtsPlaying.current = true', client.indexOf('const onTtsFallback')))
-      .toBeLessThan(client.indexOf('window.speechSynthesis.speak(utterance)', client.indexOf('const onTtsFallback')));
+    expect(server).not.toContain('audio:tts_fallback');
+    expect(server).not.toContain('playBrowserSpeechFallback');
+    expect(client).not.toContain('audio:tts_fallback');
+    expect(client).not.toContain('SpeechSynthesisUtterance');
+    expect(client).not.toContain('window.speechSynthesis');
   });
 
   it('waits for the socket before starting microphone streaming', async () => {
@@ -131,9 +137,12 @@ describe('voice reconnect and perception continuity', () => {
     const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
 
     expect(server).toContain("socket.emit('audio:sidecar_response'");
+    expect(server).toContain('requestId: workRequestId');
     expect(server).toContain('workContinues: true, requestId: workRequestId');
+    expect(server).toContain('cancelActiveVoiceTurn(session, false, true)');
     expect(server).toContain('interruptVoiceSpeech(session)');
     expect(client).toContain("socket.on('audio:sidecar_response'");
+    expect(client).toContain('workRequestId !== activeVoiceRequestIdRef.current');
     expect(client).toContain('if (data?.workContinues)');
   });
 
@@ -158,6 +167,46 @@ describe('voice reconnect and perception continuity', () => {
     expect(client).toContain("socket.on('audio:end-call-request'");
     const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
     expect(voiceprint).toContain('createScriptProcessor(2048, 1, 1)');
+  });
+
+  it('authorizes only a strong decision from the current utterance', () => {
+    const base = {
+      required: true,
+      decided: true,
+      matched: true,
+      confidence: 0.9,
+      quality: 0.8,
+      frameCount: 6,
+      source: 'server-local',
+    };
+    expect(isVoiceprintUtteranceAccepted(base)).toBe(true);
+    expect(isVoiceprintUtteranceAccepted({ ...base, decided: false })).toBe(false);
+    expect(isVoiceprintUtteranceAccepted({ ...base, confidence: 0.81 })).toBe(false);
+    expect(isVoiceprintUtteranceAccepted({ ...base, quality: 0.54 })).toBe(false);
+    expect(isVoiceprintUtteranceAccepted({ ...base, frameCount: 2 })).toBe(false);
+    expect(isVoiceprintUtteranceAccepted({ ...base, source: 'speechbrain', confidence: 0.67, quality: 0.2 })).toBe(true);
+    expect(isVoiceprintUtteranceAccepted({ ...base, source: 'speechbrain', confidence: 0.65 })).toBe(false);
+    expect(isVoiceprintUtteranceAccepted({ ...base, required: false })).toBe(true);
+  });
+
+  it('uses the STT PCM stream and isolates voiceprint decisions by utterance', () => {
+    const root = process.cwd();
+    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const call = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
+
+    expect(server).not.toContain('voiceprintTrustedUntil');
+    expect(server).toContain("socket.emit('voiceprint:utterance_reset'");
+    expect(server).toContain('resultEpoch !== session.voiceprintUtteranceEpoch');
+    expect(call).toContain("new CustomEvent('lumi:voice-pcm-frame'");
+    expect(voiceprint).toContain("activeSocket.on('voiceprint:utterance_reset'");
+    expect(voiceprint).toContain('utteranceEpoch,');
+  });
+
+  it('keeps meeting transcription multi-speaker while hiding unverified personal interim text', () => {
+    const server = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    expect(server).toContain('session.transcriptionOnly || !session.voiceprintRequired || isVoiceprintGateOpen(session)');
+    expect(server).toContain('voiceAuthorized = session.transcriptionOnly || isVoiceprintGateOpen(session)');
   });
 
   it('matches recent TTS by sequence without treating every short utterance as echo', () => {

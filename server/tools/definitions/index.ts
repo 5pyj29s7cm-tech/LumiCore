@@ -45,6 +45,7 @@ import { registerModelConfigurationTools } from './model_configuration_tools';
 import { registerDesktopWechatWatchTools } from './desktop_wechat_watch_tools';
 import { registerNetworkDiagnosticTools } from './network_diagnostic_tools';
 import { registerRuntimeWorkTools } from './runtime_work_tools';
+import { registerCadWorkflowTools } from './cad_workflow_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -87,6 +88,7 @@ export function registerAllTools(
   registerClientSelfTools(registry);
   registerModelConfigurationTools(registry);
   registerExternalAppTools(registry);
+  registerCadWorkflowTools(registry);
   registerExternalControlTools(registry);
   registerAutonomyTools(registry);
   registerCapabilityResearchTools(registry);

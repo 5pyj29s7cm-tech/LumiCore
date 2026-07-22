@@ -5,7 +5,6 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { LocalAgentSphere } from './LocalAgentSphere';
 import { socketService } from '@/services/socketService';
-import { useTTS } from '@/hooks/useTTS';
 import { useModuleData } from '@/hooks/useModuleData';
 import { GlassCard } from './SharedUI';
 import { useApp } from '../contexts/AppContext';
@@ -16,7 +15,6 @@ import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import {
   isTerminalAgentStatus,
   shouldDisplayAgentResponse,
-  shouldSpeakAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
 
@@ -59,7 +57,6 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
     }
   });
 
-  const { speak, stop, isSpeaking } = useTTS();
   const { data: agents, error: agentsError } = useModuleData<any[]>('/api/agents');
   const agentConfig = agents?.[0];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -82,10 +79,6 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
         setMessages(prev => [...prev, agentMsg]);
       }
       
-      // Only speak if we are in voice mode or it was a voice trigger
-      if (isVoiceMode && shouldSpeakAgentResponse(data)) {
-        speak(data.text!);
-      }
     };
 
     const handleStatus = (data: { status: string }) => {
@@ -121,7 +114,6 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
           type: 'agent'
         };
         setMessages(prev => [...prev, greetingMsg]);
-        if (isVoiceMode && shouldSpeakAgentResponse(delivery)) speak(data.message);
       }
     };
 
@@ -136,7 +128,7 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
       socket.off("agent:error", handleError);
       socket.off("agent:proactive", handleProactive);
     };
-  }, [socket, speak, isVoiceMode]);
+  }, [socket]);
 
   const fetchInteractions = async () => {
     try {
@@ -235,11 +227,6 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
 
     setIsVoiceMode(isVoice);
     
-    // If typing, stop any ongoing speech
-    if (!isVoice) {
-      stop();
-    }
-
     const userMsg = {
       id: Date.now().toString(),
       text: messageText,
@@ -407,16 +394,8 @@ export function UnifiedAgent({ t, user, onEnterSanctuary }: { t: any; user: any;
             </AnimatePresence>
             <div className="p-6 border-b border-white/5 flex items-center justify-between bg-white/5">
               <div className="flex items-center gap-3">
-                <div className={`w-2 h-2 rounded-full ${isSpeaking ? 'bg-celestial-mars animate-ping' : 'bg-celestial-saturn animate-pulse'}`} />
+                <div className={`w-2 h-2 rounded-full ${callState !== 'idle' ? 'bg-celestial-mars animate-ping' : 'bg-celestial-saturn animate-pulse'}`} />
                 <span className="text-xs font-bold uppercase tracking-widest text-white/60">{t.realTimeNode || uiMessage('unified-agent.real-time-node.b5eb7f62d7')}</span>
-                {isSpeaking && (
-                  <Button 
-                    onClick={stop}
-                    className="h-6 px-2 text-xs bg-red-500/20 text-red-500 hover:bg-red-500/40 rounded-full border border-red-500/20"
-                  >
-                    {t.stopSpeaking || uiMessage('unified-agent.stop.6864db7885')}
-                  </Button>
-                )}
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-xs text-white/40 font-mono uppercase">

@@ -100,10 +100,9 @@ function compactStoredContinuationValue(value: unknown, limit: number): string {
 }
 
 /**
- * Only evidence-backed continuation pointers are durable. The in-flight
- * pending user turn intentionally remains memory-only: after a restart there
- * is no live execution to pair it with, and persisting it could attach an
- * unrelated later assistant message to stale intent.
+ * Persist the conversation-scoped task ledger. V2 deliberately includes the
+ * pre-tool planning/confirmation state so a restart cannot erase the task or
+ * turn the user's later “确认/继续” into an unrelated chat message.
  */
 function parseStoredActionContinuationState(value: unknown): Record<string, any> | undefined {
   let parsed = value;
@@ -124,7 +123,12 @@ function parseStoredActionContinuationState(value: unknown): Record<string, any>
       .map((name: unknown) => compactStoredContinuationValue(name, 120))
       .filter(Boolean),
   )).slice(-10);
-  if (Number(raw.version) !== 1 || !goal || evidenceTools.length === 0) return undefined;
+  const version = Number(raw.version);
+  if ((version !== 1 && version !== 2) || !goal) return undefined;
+  // Legacy v1 pointers were evidence-only. V2 also persists planning and
+  // confirmation state before the first tool runs, so an empty evidence list
+  // is valid and necessary for cross-turn task continuity.
+  if (version === 1 && evidenceTools.length === 0) return undefined;
 
   const sourcePaths = Array.from(new Set(
     (Array.isArray(raw.sourcePaths) ? raw.sourcePaths : [])
@@ -137,8 +141,65 @@ function parseStoredActionContinuationState(value: unknown): Record<string, any>
       .filter(Boolean),
   )).slice(-10);
 
+  const policy = raw.policySnapshot && typeof raw.policySnapshot === 'object'
+    ? raw.policySnapshot as Record<string, any>
+    : null;
+  const policySnapshot = policy
+    ? {
+        allowedTools: Array.from(new Set(
+          (Array.isArray(policy.allowedTools) ? policy.allowedTools : [])
+            .map((item: unknown) => compactStoredContinuationValue(item, 160))
+            .filter(Boolean),
+        )).slice(0, 160),
+        requireConfirmation: Array.from(new Set(
+          (Array.isArray(policy.requireConfirmation) ? policy.requireConfirmation : [])
+            .map((item: unknown) => compactStoredContinuationValue(item, 160))
+            .filter(Boolean),
+        )).slice(0, 160),
+        forbiddenTools: Array.from(new Set(
+          (Array.isArray(policy.forbiddenTools) ? policy.forbiddenTools : [])
+            .map((item: unknown) => compactStoredContinuationValue(item, 160))
+            .filter(Boolean),
+        )).slice(0, 160),
+        maxIterations: Math.max(1, Math.min(Number(policy.maxIterations) || 5, 40)),
+      }
+    : undefined;
+  const receipts = (Array.isArray(raw.receipts) ? raw.receipts : [])
+    .map((receipt: any) => {
+      const name = compactStoredContinuationValue(receipt?.name, 160);
+      const key = compactStoredContinuationValue(receipt?.key, 1000);
+      if (!name || !key) return null;
+      return {
+        id: compactStoredContinuationValue(receipt?.id, 180) || key,
+        key,
+        name,
+        arguments: receipt?.arguments && typeof receipt.arguments === 'object' && !Array.isArray(receipt.arguments)
+          ? receipt.arguments
+          : {},
+        result: compactStoredContinuationValue(receipt?.result, 3000),
+        error: compactStoredContinuationValue(receipt?.error, 700),
+        outcome: receipt?.outcome === 'success' ? 'success' : 'failure',
+        recordedAt: compactStoredContinuationValue(receipt?.recordedAt, 80) || new Date(0).toISOString(),
+      };
+    })
+    .filter(Boolean)
+    .slice(-40);
+  const status = ['planning', 'executing', 'waiting_confirmation', 'blocked', 'completed', 'cancelled']
+    .includes(compactStoredContinuationValue(raw.status, 40))
+    ? compactStoredContinuationValue(raw.status, 40)
+    : Boolean(raw.unfinished) ? 'blocked' : 'completed';
+
   return {
-    version: 1,
+    version,
+    ...(version === 2 ? {
+      taskId: compactStoredContinuationValue(raw.taskId, 180) || undefined,
+      status,
+      policySnapshot,
+      receipts,
+      activeRequestId: compactStoredContinuationValue(raw.activeRequestId, 180) || undefined,
+      supersededTaskId: compactStoredContinuationValue(raw.supersededTaskId, 180) || undefined,
+      revision: Math.max(0, Math.trunc(Number(raw.revision) || 0)),
+    } : {}),
     goal,
     latestInstruction: compactStoredContinuationValue(raw.latestInstruction || goal, 700),
     appTarget: compactStoredContinuationValue(raw.appTarget, 160),
@@ -235,10 +296,18 @@ export function persistLegacySummaryRepairsBestEffort(
   }
 }
 
-export async function initDatabase(): Promise<void> {
-  return new Promise((resolve, reject) => {
+let initPromise: Promise<void> | null = null;
+
+export function initDatabase(): Promise<void> {
+  if (db && memoryDB) return Promise.resolve();
+  if (initPromise) return initPromise;
+  const pending = new Promise<void>((resolve, reject) => {
     db = new sqlite3.Database(DB_PATH, (err) => {
       if (err) { reject(err); return; }
+      // Runtime services and parallel diagnostics can briefly overlap on the
+      // same local database. Wait for the active writer instead of surfacing a
+      // transient SQLITE_BUSY failure to the client or test harness.
+      db!.configure('busyTimeout', 5000);
       db!.run('PRAGMA foreign_keys = ON', async (err) => {
         if (err) { reject(err); return; }
         try {
@@ -255,6 +324,11 @@ export async function initDatabase(): Promise<void> {
       });
     });
   });
+  initPromise = pending.catch(error => {
+    initPromise = null;
+    throw error;
+  });
+  return initPromise;
 }
 
 function onAlter(err: Error | null) {
@@ -913,6 +987,41 @@ export function pruneOldData(): void {
 let writeLock: Promise<void> = Promise.resolve();
 
 let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let writeRevision = 0;
+let persistedRevision = 0;
+let writeInFlight = false;
+
+function scheduleDatabaseFlush(delayMs = 100): void {
+  if (writeDebounceTimer || writeInFlight) return;
+  writeDebounceTimer = setTimeout(() => {
+    writeDebounceTimer = null;
+    if (writeInFlight || persistedRevision >= writeRevision) return;
+
+    const targetRevision = writeRevision;
+    writeInFlight = true;
+    const ready = writeLock.catch((err) => {
+      console.error('[DB] Previous write failed:', err);
+    });
+    writeLock = ready
+      .then(() => persistMemoryDB())
+      .then(() => {
+        persistedRevision = Math.max(persistedRevision, targetRevision);
+        dbDirty = persistedRevision < writeRevision;
+      })
+      .catch((err) => {
+        // persistMemoryDB writes through a transaction and does not mutate the
+        // in-memory source of truth. Keeping that live object is both safer and
+        // dramatically cheaper than cloning the complete database on every
+        // chat/voice event (large tool receipts previously exhausted V8 heap).
+        dbDirty = true;
+        console.error('[DB] Failed to persist database:', err);
+      })
+      .finally(() => {
+        writeInFlight = false;
+        if (persistedRevision < writeRevision) scheduleDatabaseFlush(250);
+      });
+  }, delayMs);
+}
 
 export function writeDB(data: any): void {
   if (!db) {
@@ -920,23 +1029,12 @@ export function writeDB(data: any): void {
   }
   memoryDB = data;
   dbDirty = true;
+  writeRevision += 1;
 
-  // Debounce persistence: batch rapid writes into a single SQLite flush
-  if (writeDebounceTimer) clearTimeout(writeDebounceTimer);
-  writeDebounceTimer = setTimeout(() => {
-    writeDebounceTimer = null;
-    const previous = JSON.parse(JSON.stringify(memoryDB));
-    const ready = writeLock.catch((err) => {
-      console.error('[DB] Previous write failed:', err);
-    });
-    writeLock = ready
-      .then(() => persistMemoryDB())
-      .then(() => { dbDirty = false; })
-      .catch((err) => {
-        console.error('[DB] Failed to persist database:', err);
-        memoryDB = previous;
-      });
-  }, 100);
+  // Keep at most one full snapshot write in flight. Rapid message, memory and
+  // voice updates are coalesced into the next revision instead of queuing a
+  // chain of expensive whole-database rewrites behind SQLite.
+  scheduleDatabaseFlush(100);
 }
 
 /** Flush pending writes immediately — call before shutdown */
@@ -949,10 +1047,19 @@ export async function flushDB(): Promise<void> {
     await writeLock.catch((err) => {
       console.error('[DB] Previous write failed before flush:', err);
     });
-    await persistMemoryDB();
-    dbDirty = false;
+    if (persistedRevision < writeRevision || dbDirty) {
+      const targetRevision = writeRevision;
+      writeInFlight = true;
+      await persistMemoryDB();
+      persistedRevision = Math.max(persistedRevision, targetRevision);
+      dbDirty = persistedRevision < writeRevision;
+    }
   } catch (err) {
+    dbDirty = true;
     console.error('[DB] flushDB failed:', err);
+  } finally {
+    writeInFlight = false;
+    if (persistedRevision < writeRevision) scheduleDatabaseFlush(100);
   }
 }
 
@@ -1123,7 +1230,7 @@ async function persistMemoryDB(): Promise<void> {
 
   const allSpecs = [...specs, founderSpec];
 
-  await run('BEGIN TRANSACTION');
+  await run('BEGIN IMMEDIATE TRANSACTION');
   try {
     // Phase 1: Create temp tables and populate them
     for (const spec of allSpecs) {
@@ -1152,18 +1259,18 @@ async function persistMemoryDB(): Promise<void> {
 
     await run('COMMIT');
   } catch (err) {
-    // On failure, clean up temp tables and rollback
+    // Preserve the original failure. A failed/externally interrupted BEGIN or
+    // COMMIT must not be replaced by "no transaction is active" from cleanup.
+    try { await run('ROLLBACK'); } catch {}
     try {
       for (const spec of allSpecs) {
         await run(`DROP TABLE IF EXISTS _temp_${spec.name}`);
       }
     } catch {}
-    await run('ROLLBACK');
     throw err;
   }
 }
 
-let initPromise: Promise<void> | null = null;
 export function ensureDatabaseInitialized(): Promise<void> {
   if (!initPromise) {
     initPromise = initDatabase();

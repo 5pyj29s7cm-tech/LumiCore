@@ -51,13 +51,37 @@ import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmo
 import { buildModeOverlay } from "../personality/engine";
 import { personalityRegistry } from "../personality";
 import { lightweightEvolve } from "../personality/evolution";
-import { getOrCreateConversationForTurn, addMessage, getMessages, getMessagesByTokenBudget, getConversationSummary, setConversationMode, extractTopics, trackTopic, getTopicContext } from "../conversation/manager";
+import {
+  getOrCreateConversationForTurn,
+  addMessage,
+  getMessages,
+  getMessagesByTokenBudget,
+  getConversationSummary,
+  setConversationMode,
+  extractTopics,
+  trackTopic,
+  getTopicContext,
+  getActiveConversation,
+  prepareConversationActionExecution,
+  cancelConversationActionExecution,
+  setConversationActionExecutionStatus,
+} from "../conversation/manager";
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { ensureBranch } from "../memory/tree";
 import { retrieveChunks } from "../agents/rag";
 import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
-import { buildRecentActionContinuationBridge, getRecoveredApplicationContinuationTarget, resolveRecentActionOpenTarget } from "../cognition/action_continuation";
+import {
+  buildRecentActionContinuationBridge,
+  classifyConversationActionFollowupIntent,
+  formatConversationActionTaskStatus,
+  getRecoveredApplicationContinuationTarget,
+  resolveRecentActionOpenTarget,
+} from "../cognition/action_continuation";
+import {
+  coalesceToolExecutionRecords,
+  taskReceiptsToRecords,
+} from "../cognition/task_execution_ledger";
 import { hasExplicitTeamExecutionRequest, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
@@ -95,7 +119,7 @@ import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messag
 import { CN_MESSAGING_MESSAGES } from "../regions/packs/cn/messaging_messages";
 import { CN_CLIENT_DIAGNOSTIC_MESSAGES } from "../regions/packs/cn/client_diagnostic_messages";
 import { CN_BACKGROUND_DELEGATION_MESSAGES } from "../regions/packs/cn/background_delegation_messages";
-import { CN_VOICE_FAST_PATH_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
@@ -1001,6 +1025,49 @@ export function registerChatHandler(
       return;
     }
 
+    // A status question is a side conversation, not a replacement command.
+    // Answer it without aborting/superseding the foreground executor.
+    const existingController = chatSessionMap.get(sessionKey);
+    const activeConversationForStatus = existingController ? getActiveConversation(
+      uid,
+      conversationAgentId,
+      resolvedDomain,
+      resolvedOrgId,
+    ) : null;
+    if (
+      existingController
+      && classifyConversationActionFollowupIntent(
+        visibleUserText,
+        activeConversationForStatus?.actionContinuationState,
+      ) === 'status'
+    ) {
+      const activeConversation = activeConversationForStatus || getActiveConversation(
+        uid,
+        conversationAgentId,
+        resolvedDomain,
+        resolvedOrgId,
+      );
+      const statusText = activeConversation?.actionContinuationState
+        ? formatConversationActionTaskStatus(activeConversation.actionContinuationState)
+        : CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
+      try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+      socket.emit('agent:response', {
+        text: statusText,
+        agentName: 'Lumi',
+        source: eventSource,
+        requestId,
+        sidecar: true,
+        finalized: true,
+        blocked: false,
+        reason: '',
+      });
+      if (activeConversation) {
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
+      }
+      return;
+    }
+
     // Abort any previous chat session for this user
     const prevController = chatSessionMap.get(sessionKey);
     if (prevController) prevController.abort();
@@ -1117,6 +1184,20 @@ export function registerChatHandler(
         setConversationMode(conversation.id, payloadMode);
       }
       console.log('[ChatHandler] conversationId:', conversationId, 'mode:', conversationMode);
+
+      if (conversationId && isConfirmationCancellation(visibleUserText)) {
+        const cancelled = cancelConversationActionExecution(conversationId, uid);
+        if (cancelled) {
+          const responseText = CN_TASK_EXECUTION_MESSAGES.cancelled;
+          emitAgent("agent:response", { text: responseText, agentName: "Lumi", finalized: true, blocked: false, reason: '' });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
+          addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseText, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_cancel' });
+          socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+          emitAgent("agent:status", { status: "idle" });
+          releaseChatSession();
+          return;
+        }
+      }
 
       const persistedConversationHistory = conversationId ? getMessages(conversationId, 18) : [];
       if (!chatContextBridge && conversationId && isShortClientContinuation(visibleUserText)) {
@@ -1334,6 +1415,7 @@ export function registerChatHandler(
             toolRegistry,
             personalityToolPolicy: personality.toolPolicy,
             isSanctuary,
+            actionTaskState: conversation?.actionContinuationState,
           });
         }
         return cachedExecutionDecision;
@@ -1412,6 +1494,22 @@ export function registerChatHandler(
         return executionWriteback;
       };
 
+      const actionFollowupIntent = classifyConversationActionFollowupIntent(
+        visibleUserText,
+        conversation?.actionContinuationState,
+      );
+      if (conversationId && actionFollowupIntent === 'status' && conversation?.actionContinuationState) {
+        const statusText = formatConversationActionTaskStatus(conversation.actionContinuationState);
+        emitAgent("agent:status", { status: "responding", agentName: personality.name });
+        emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
+        addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: statusText, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, cognitiveIntent: 'task_status' });
+        socket.emit('chat:conversation_updated', { conversationId, agentId: conversationAgentId, source: 'chat' });
+        emitAgent("agent:status", { status: "idle" });
+        releaseChatSession();
+        return;
+      }
+
       const recentFailureExplanation = conversationId && !pendingConfirmation
         ? buildRecentFailureExplanation(visibleUserText, getMessages(conversationId, 24))
         : '';
@@ -1445,6 +1543,7 @@ export function registerChatHandler(
         // The foreground execution belongs to the user task, not to this
         // transport connection. The relay still has its own bounded timeout.
         cancelOnRequestSocketDisconnect: false,
+        signal: abortController.signal,
       });
 
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
@@ -1462,6 +1561,12 @@ export function registerChatHandler(
           channelId: socket.id,
           actionIntent: visibleUserText,
         });
+        if (conversationId) {
+          setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
+            assistantState: formatPendingConfirmationPrompt(pending),
+            requestId,
+          });
+        }
         console.warn(`[ChatHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
         return false;
       };
@@ -1723,6 +1828,29 @@ export function registerChatHandler(
       });
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
+      const actionTaskExecution = conversationId
+        ? prepareConversationActionExecution({
+            conversationId,
+            userId: uid,
+            userText: visibleUserText,
+            requestId,
+            toolPolicy: routedToolPolicy,
+            forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
+          })
+        : { state: null, kind: 'conversation' as const };
+      const priorTaskRecords = actionTaskExecution.kind === 'resume'
+        ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
+        : [];
+      const taskAwareRecords = (records: ToolExecutionRecord[]) => (
+        coalesceToolExecutionRecords([...priorTaskRecords, ...records])
+      );
+      if (
+        conversationId
+        && executionDecision.allowToolUse
+        && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
+      ) {
+        setConversationActionExecutionStatus(conversationId, uid, 'executing', { requestId });
+      }
       const exposeAgentWork = turnFlow.exposeAgentWork;
       effectiveSystemPrompt += '\n\n' + formatClientSelfPrompt(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
       console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'enabled' : 'chat-only', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
@@ -1877,7 +2005,7 @@ export function registerChatHandler(
         const finalized = finalizeLumiResponse({
           taskText: confirmedTask,
           responseText: candidate,
-          toolRecords: [confirmedRecord],
+          toolRecords: taskAwareRecords([confirmedRecord]),
           source: 'chat_confirmation',
           flow: { ...turnFlow, routeText: confirmedTask },
         });
@@ -3440,7 +3568,7 @@ export function registerChatHandler(
       const finalResponse = finalizeLumiResponse({
         taskText: executionTaskText,
         responseText,
-        toolRecords: allToolRecords,
+        toolRecords: taskAwareRecords(allToolRecords),
         source: 'chat',
         flow: turnFlow,
       });

@@ -48,7 +48,8 @@ describe('AutoCAD MCP control', () => {
       expect(script).toContain('Start-Process -FilePath $acadExecutable');
       expect(script).toContain('$applicationReady = $false');
       expect(script).toContain('$documentCreated = $false');
-      expect(script).toContain('[void]$acad.Documents.Add()');
+      expect(script).toContain('$needsDocument = $createNewDocument');
+      expect(script).toContain('$targetDoc = $acad.Documents.Add()');
       expect(script).toContain('$readyDeadline = (Get-Date).AddSeconds(120)');
       expect(script).toContain('if ($null -ne $candidateDoc) { $candidateModel = $candidateDoc.ModelSpace }');
       expect(script).toContain('for ($attempt = 1; $attempt -le 20');
@@ -57,6 +58,16 @@ describe('AutoCAD MCP control', () => {
       expect(script).toContain('$model.AddText');
       expect(script).toContain('$doc.Regen(1)');
       expect(script).toContain('$startingEntityCount = if ($resumeCompleted -gt 0)');
+      expect(script).toContain('function WaitForEntityCount');
+      expect(script).toContain('function WaitForEntityHandles');
+      expect(script).toContain('function WaitForDocumentReady');
+      expect(script).toContain('function WaitForAcadQuiescent');
+      expect(script).toContain('($completed % 50) -eq 0');
+      expect(script).toContain('$operationHandle = GetEntityHandle $entity');
+      expect(script).toContain('entityHandles = @($createdEntityHandles)');
+      expect(script).toContain('entityHandlesVerified = $entityHandlesVerified');
+      expect(script).toContain('$observedAfter = WaitForEntityCount $model $expectedAfter 5000');
+      expect(script).toContain('$resumeObservedCount -eq ($resumeExpectedCount + 1)');
       expect(script).toContain('UpdatePlaybackState $completed');
       expect(script).toContain('for ($operationIndex = $completed;');
       expect(script).toContain('refusing to duplicate the operation set');

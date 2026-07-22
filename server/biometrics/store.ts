@@ -47,6 +47,17 @@ export function saveVoiceprint(uid: string, template: Omit<VoiceprintTemplate, '
   return vp;
 }
 
+export function replaceVoiceprints(uid: string, template: Omit<VoiceprintTemplate, 'uid' | 'createdAt' | 'lastMatchedAt'>): VoiceprintTemplate {
+  const store = readStore(uid);
+  const now = new Date().toISOString();
+  const vp: VoiceprintTemplate = { ...template, uid, createdAt: now, lastMatchedAt: now };
+  // Replacement happens only after the new template has been fully produced,
+  // so a failed enrollment never destroys the user's working biometric data.
+  store.voiceprints = [vp];
+  writeStore(uid, store);
+  return vp;
+}
+
 export function getVoiceprints(uid: string): VoiceprintTemplate[] {
   return readStore(uid).voiceprints;
 }

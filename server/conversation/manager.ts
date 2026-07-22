@@ -2,9 +2,16 @@ import { readDB, writeDB } from '../../db_layer';
 import { estimateTokenCount } from '../llm/providers';
 import {
   buildConversationActionContinuationState,
+  classifyRecentActionFollowupIntent,
+  isUserObservedTaskCompletion,
   needsRecentActionContinuationContext,
+  normalizeConversationActionState,
+  prepareConversationActionTaskState,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
+import { taskCompletionFromReceipts } from '../cognition/task_execution_ledger';
+import { buildActionContract } from '../cognition/action_contract';
+import type { ToolPolicy } from '../personality/types';
 import {
   isolateLegacyGuardSummaryState,
   isGuardGeneratedAssistantText,
@@ -390,6 +397,194 @@ export function getUserConversations(userId: string, limit = 20, offset = 0, dom
   return conversations;
 }
 
+export function prepareConversationActionExecution(input: {
+  conversationId: string;
+  userId: string;
+  userText: string;
+  requestId: string;
+  toolPolicy: ToolPolicy;
+  forceResume?: boolean;
+}): ReturnType<typeof prepareConversationActionTaskState> {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === input.conversationId && item.userId === input.userId
+  ));
+  if (!conversation) return { state: null, kind: 'conversation' };
+  const prepared = prepareConversationActionTaskState(conversation.actionContinuationState, input);
+  if (prepared.state !== conversation.actionContinuationState) {
+    if (prepared.state) conversation.actionContinuationState = prepared.state;
+    else delete conversation.actionContinuationState;
+    conversation.lastActiveAt = new Date().toISOString();
+    writeDB(db);
+  }
+  return prepared;
+}
+
+export function cancelConversationActionExecution(
+  conversationId: string,
+  userId: string,
+  reason = 'Cancelled by the user.',
+  expectedRequestId?: string,
+): ConversationActionContinuationState | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === conversationId && item.userId === userId
+  ));
+  const previous = normalizeConversationActionState(conversation?.actionContinuationState);
+  if (!conversation || !previous) return null;
+  if (expectedRequestId && previous.activeRequestId !== expectedRequestId) return previous;
+  conversation.actionContinuationState = {
+    ...previous,
+    version: 2,
+    status: 'cancelled',
+    unfinished: false,
+    latestBlocker: '',
+    assistantState: reason,
+    activeRequestId: undefined,
+    revision: (previous.revision || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  delete conversation.pendingActionContinuation;
+  writeDB(db);
+  return conversation.actionContinuationState;
+}
+
+export function completeConversationActionFromUserObservation(
+  conversationId: string,
+  userId: string,
+  userText: string,
+): ConversationActionContinuationState | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === conversationId && item.userId === userId
+  ));
+  const previous = normalizeConversationActionState(conversation?.actionContinuationState);
+  if (!conversation || !previous || !isUserObservedTaskCompletion(userText, previous)) return null;
+  conversation.actionContinuationState = {
+    ...previous,
+    version: 2,
+    status: 'completed',
+    unfinished: false,
+    latestBlocker: '',
+    assistantState: userText.replace(/\s+/g, ' ').trim().slice(0, 700),
+    activeRequestId: undefined,
+    completionSource: 'user_observation',
+    revision: (previous.revision || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  writeDB(db);
+  return conversation.actionContinuationState;
+}
+
+/**
+ * Release the request lease after one foreground executor exits. A task can
+ * never remain "executing" when no request still owns it.
+ */
+export function settleConversationActionExecutionRequest(
+  conversationId: string,
+  userId: string,
+  requestId: string,
+  fallbackBlocker = 'The execution request ended without a terminal tool receipt.',
+): ConversationActionContinuationState | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === conversationId && item.userId === userId
+  ));
+  const previous = normalizeConversationActionState(conversation?.actionContinuationState);
+  if (!conversation || !previous || previous.activeRequestId !== requestId) return previous;
+
+  const completion = taskCompletionFromReceipts(previous.goal, previous.receipts || []);
+  const stillRunning = previous.status === 'planning' || previous.status === 'executing';
+  const status = completion.complete
+    ? 'completed'
+    : stillRunning
+      ? 'blocked'
+      : previous.status;
+  conversation.actionContinuationState = {
+    ...previous,
+    status,
+    unfinished: status !== 'completed' && status !== 'cancelled',
+    latestBlocker: status === 'blocked'
+      ? previous.latestBlocker || completion.blocker || fallbackBlocker
+      : '',
+    completionSource: completion.complete ? 'tool_receipt' : previous.completionSource,
+    activeRequestId: undefined,
+    revision: (previous.revision || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  writeDB(db);
+  return conversation.actionContinuationState;
+}
+
+/**
+ * Foreground request leases are process-local. After a backend restart there
+ * is no executor that can still own a persisted planning/executing state, and
+ * one-time confirmations have also expired from memory. Convert those states
+ * to resumable blockers instead of telling the next turn that old work is
+ * still running.
+ */
+export function recoverOrphanedConversationActionExecutions(
+  now = new Date().toISOString(),
+): number {
+  const db = readDB();
+  let recovered = 0;
+  for (const conversation of db.conversations || []) {
+    const previous = normalizeConversationActionState(conversation.actionContinuationState);
+    if (
+      !previous?.unfinished
+      || !['planning', 'executing', 'waiting_confirmation'].includes(previous.status || '')
+    ) continue;
+    const waitingForExpiredConfirmation = previous.status === 'waiting_confirmation';
+    conversation.actionContinuationState = {
+      ...previous,
+      version: 2,
+      status: 'blocked',
+      unfinished: true,
+      latestBlocker: waitingForExpiredConfirmation
+        ? 'The pending confirmation expired when the previous runtime ended.'
+        : 'The previous runtime ended before this task reached a terminal receipt.',
+      activeRequestId: undefined,
+      revision: (previous.revision || 0) + 1,
+      updatedAt: now,
+    };
+    delete conversation.pendingActionContinuation;
+    recovered += 1;
+  }
+  if (recovered > 0) writeDB(db);
+  return recovered;
+}
+
+export function setConversationActionExecutionStatus(
+  conversationId: string,
+  userId: string,
+  status: NonNullable<ConversationActionContinuationState['status']>,
+  options: { blocker?: string; assistantState?: string; requestId?: string } = {},
+): ConversationActionContinuationState | null {
+  const db = readDB();
+  const conversation = (db.conversations || []).find((item: Conversation) => (
+    item.id === conversationId && item.userId === userId
+  ));
+  const previous = normalizeConversationActionState(conversation?.actionContinuationState);
+  if (!conversation || !previous) return null;
+  conversation.actionContinuationState = {
+    ...previous,
+    version: 2,
+    status,
+    unfinished: status !== 'completed' && status !== 'cancelled',
+    latestBlocker: options.blocker !== undefined ? options.blocker : previous.latestBlocker,
+    assistantState: options.assistantState !== undefined
+      ? options.assistantState
+      : previous.assistantState,
+    activeRequestId: options.requestId !== undefined
+      ? options.requestId || undefined
+      : previous.activeRequestId,
+    revision: (previous.revision || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  writeDB(db);
+  return conversation.actionContinuationState;
+}
+
 export function addMessage(msg: {
   userId: string;
   agentId?: string;
@@ -410,6 +605,16 @@ export function addMessage(msg: {
   routeSequence?: number;
   receivedAt?: string;
   timestamp?: string;
+  /**
+   * Persist the accepted instruction before routing/tool selection finishes,
+   * while leaving creation of the real task state to the foreground executor.
+   */
+  deferActionPreparation?: boolean;
+  /**
+   * Side-channel progress/chat records must not replace the pending action
+   * pointer owned by the foreground task.
+   */
+  skipActionContinuation?: boolean;
 }): string {
   const db = readDB();
   const id = 'msg_' + crypto.randomUUID();
@@ -454,29 +659,89 @@ export function addMessage(msg: {
         conv.title = msg.content.trim().slice(0, 80);
       }
 
-      if (msg.role === 'user') {
+      if (!msg.skipActionContinuation && msg.role === 'user') {
         const userText = String(msg.content || '').trim();
         if (userText) {
-          // A concrete new turn supersedes the prior ordinary action pointer.
-          // Referential/status turns keep it until terminal evidence advances it.
-          if (!needsRecentActionContinuationContext(userText)) {
-            delete conv.actionContinuationState;
-          }
-          conv.pendingActionContinuation = {
+          const userObservedCompletion = isUserObservedTaskCompletion(
             userText,
-            messageId: id,
-            updatedAt: now,
-          };
+            conv.actionContinuationState,
+          );
+          const continuationTurn = needsRecentActionContinuationContext(userText);
+          const contract = buildActionContract(userText);
+          const actionTurn = contract.applies && contract.kind !== 'none';
+          const preparedSameTurn = Boolean(
+            conv.actionContinuationState
+            && conv.actionContinuationState.latestInstruction === userText
+            && ['planning', 'executing', 'waiting_confirmation'].includes(
+              conv.actionContinuationState.status || '',
+            ),
+          );
+          if (userObservedCompletion && conv.actionContinuationState) {
+            conv.actionContinuationState = {
+              ...conv.actionContinuationState,
+              version: 2,
+              status: 'completed',
+              unfinished: false,
+              latestBlocker: '',
+              assistantState: userText.replace(/\s+/g, ' ').trim().slice(0, 700),
+              activeRequestId: undefined,
+              completionSource: 'user_observation',
+              revision: (conv.actionContinuationState.revision || 0) + 1,
+              updatedAt: now,
+            };
+            delete conv.pendingActionContinuation;
+          } else {
+            // Ordinary conversation no longer destroys an unfinished task. A
+            // concrete new action is staged before execution by
+            // prepareConversationActionExecution; this fallback only covers
+            // non-socket callers and tests.
+            if (
+              actionTurn
+              && !preparedSameTurn
+              && !continuationTurn
+              && !msg.deferActionPreparation
+            ) {
+              const prepared = prepareConversationActionTaskState(conv.actionContinuationState, {
+                userText,
+                requestId: id,
+                toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 },
+              });
+              if (prepared.state) conv.actionContinuationState = prepared.state;
+            }
+            if (!actionTurn && !continuationTurn && !preparedSameTurn) {
+              // A finished pointer is useful for an immediate “打开它/结果呢”,
+              // but must not survive an unrelated topic indefinitely. Unfinished
+              // work remains resumable while ordinary conversation continues.
+              if (conv.actionContinuationState && !conv.actionContinuationState.unfinished) {
+                delete conv.actionContinuationState;
+              }
+            }
+            // This protects the integrity of every user/assistant turn at the
+            // rollover boundary. Action-state advancement below is still gated
+            // by the actual action contract and terminal receipts.
+            conv.pendingActionContinuation = {
+              userText,
+              messageId: id,
+              updatedAt: now,
+            };
+          }
         }
       } else if (
+        !msg.skipActionContinuation
+        &&
         msg.role === 'assistant'
         && msg.mode !== 'proactive'
         && conv.pendingActionContinuation
       ) {
         const pending = conv.pendingActionContinuation;
+        const pendingFollowupIntent = classifyRecentActionFollowupIntent(pending.userText);
+        const pendingContract = buildActionContract(pending.userText);
+        const pendingExpectsExecution = pendingFollowupIntent === 'execute'
+          || (pendingContract.applies && pendingContract.kind !== 'none');
         const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
         if (
-          normalizedToolCalls?.length
+          pendingExpectsExecution
+          && normalizedToolCalls?.length
           && Number.isFinite(pendingAgeMs)
           && pendingAgeMs >= 0
           && pendingAgeMs <= 30 * 60 * 1000
@@ -488,8 +753,23 @@ export function addMessage(msg: {
             toolCalls: normalizedToolCalls,
             updatedAt: now,
             evidenceMessageId: id,
+            requestId: conv.actionContinuationState?.activeRequestId,
+            toolPolicy: conv.actionContinuationState?.policySnapshot,
           });
           if (nextState) conv.actionContinuationState = nextState;
+        } else if (
+          conv.actionContinuationState?.unfinished
+          && pendingExpectsExecution
+        ) {
+          conv.actionContinuationState = {
+            ...conv.actionContinuationState,
+            version: 2,
+            status: 'blocked',
+            latestBlocker: 'No terminal tool receipt was recorded for the requested step.',
+            assistantState: String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 700),
+            revision: (conv.actionContinuationState.revision || 0) + 1,
+            updatedAt: now,
+          };
         }
         delete conv.pendingActionContinuation;
       }

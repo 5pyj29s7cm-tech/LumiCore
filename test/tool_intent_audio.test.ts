@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasClientActionOnlyIntent,
+  hasExplicitToolIntent,
   isCurrentClientDiagnosticRequest,
   isDiagnosticOrRepairRequest,
   isInformationOnlyQuestion,
@@ -10,6 +11,20 @@ import {
 } from '../server/cognition/tool_intent';
 
 describe('audio transcription tool intent', () => {
+  it('routes an explicit Lumi runtime mutation into the self-repair tool lane', () => {
+    const text = '\u91cd\u542f\u540e\u7aef\u8fdb\u7a0b\u3002';
+    expect(isInformationOnlyQuestion(text)).toBe(false);
+    expect(isDiagnosticOrRepairRequest(text)).toBe(true);
+    expect(shouldAllowToolUseForTurn(text, 'voice', 'assistant')).toBe(true);
+  });
+
+  it('treats a negated authorization as correction rather than execution', () => {
+    const correction = '\u6ca1\u6709\u4eba\u8ba9\u4f60\u6267\u884c\u963f\u9c81\u6587\u4ef6\u5939';
+    expect(isUserCorrectionOrExplanationQuestion(correction)).toBe(true);
+    expect(hasClientActionOnlyIntent(correction)).toBe(false);
+    expect(hasExplicitToolIntent(correction)).toBe(false);
+  });
+
   it('keeps transcript file requests out of pure chat and enables them in assistant mode', () => {
     const text = 'Please transcribe this audio recording and save it as a text file.';
     expect(shouldAllowToolUseForTurn(text, undefined, 'chat')).toBe(false);

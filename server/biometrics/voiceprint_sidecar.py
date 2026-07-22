@@ -37,10 +37,29 @@ def _load_model():
     try:
         import torch
         import torchaudio
+        # SpeechBrain 1.1 expects the torch.amp decorators introduced after the
+        # Torch build bundled with the local GPT-SoVITS runtime. The CUDA AMP
+        # implementations are API-compatible and keep CPU inference working.
+        if not hasattr(torch.amp, "custom_fwd") and hasattr(torch.cuda.amp, "custom_fwd"):
+            def _compat_custom_fwd(fwd=None, *, device_type="cuda", cast_inputs=None):
+                del device_type
+                decorator = torch.cuda.amp.custom_fwd(cast_inputs=cast_inputs)
+                return decorator(fwd) if fwd is not None else decorator
+            torch.amp.custom_fwd = _compat_custom_fwd
+        if not hasattr(torch.amp, "custom_bwd") and hasattr(torch.cuda.amp, "custom_bwd"):
+            def _compat_custom_bwd(bwd=None, *, device_type="cuda"):
+                del device_type
+                decorator = torch.cuda.amp.custom_bwd
+                return decorator(bwd) if bwd is not None else decorator
+            torch.amp.custom_bwd = _compat_custom_bwd
         try:
             from speechbrain.inference.speaker import EncoderClassifier
         except Exception:
             from speechbrain.pretrained import EncoderClassifier
+        try:
+            from speechbrain.utils.fetching import LocalStrategy
+        except Exception:
+            LocalStrategy = None
     except Exception as exc:
         return {
             "ok": False,
@@ -53,11 +72,16 @@ def _load_model():
     os.makedirs(savedir, exist_ok=True)
     _torch = torch
     _torchaudio = torchaudio
-    _classifier = EncoderClassifier.from_hparams(
-        source=MODEL_SOURCE,
-        savedir=savedir,
-        run_opts={"device": DEVICE},
-    )
+    load_options = {
+        "source": MODEL_SOURCE,
+        "savedir": savedir,
+        "run_opts": {"device": DEVICE},
+    }
+    if LocalStrategy is not None:
+        # Normal Windows users cannot create symlinks by default. Copying the
+        # small model bundle avoids an administrator-only enrollment path.
+        load_options["local_strategy"] = LocalStrategy.COPY
+    _classifier = EncoderClassifier.from_hparams(**load_options)
     return _classifier
 
 

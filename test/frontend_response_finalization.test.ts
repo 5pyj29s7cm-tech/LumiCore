@@ -103,15 +103,17 @@ describe('frontend dynamic output path audit', () => {
     expect(source).toContain('if (!shouldDisplayAgentResponse(delivery)) return');
   });
 
-  it('keeps browser TTS behind the response speech gate', () => {
+  it('does not keep a browser system-voice fallback in chat surfaces', () => {
     for (const relativePath of [
       'src/components/FloatingAgent.tsx',
       'src/components/UnifiedAgent.tsx',
     ]) {
       const source = read(relativePath);
-      expect(source, relativePath).toContain('shouldSpeakAgentResponse');
-      expect(source, relativePath).not.toMatch(/speak\(data\.text\);/);
+      expect(source, relativePath).not.toContain('useTTS');
+      expect(source, relativePath).not.toContain('shouldSpeakAgentResponse');
+      expect(source, relativePath).not.toMatch(/speechSynthesis|SpeechSynthesisUtterance/);
     }
+    expect(fs.existsSync(path.join(root, 'src/hooks/useTTS.ts'))).toBe(false);
   });
 
   it('does not turn transport idle into a completed workflow', () => {

@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Pause, Play, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload } from 'lucide-react';
+import { Send, Loader2, ArrowLeft, Ghost, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { useTTS } from '@/hooks/useTTS';
 import { GlassCard, PulseCounter } from './SharedUI';
 import { toast } from 'sonner';
 import { FoundersSanctuary } from './FoundersSanctuary';
@@ -556,7 +555,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [backgroundWorkflowTasks, setBackgroundWorkflowTasks] = useState<BackgroundWorkflowTask[]>([]);
   const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
-  const { speak, stop, pause, resume, isSpeaking, isPaused } = useTTS();
   const recognition = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agentNameRef = useRef<string>('Lumi');
@@ -1581,7 +1579,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       socket.off("agent:status", onStatus);
       socket.off("agent:error", onError);
       socket.off("chat:conversation_updated", onConversationUpdated);
-      stop();
     };
   }, [
     activeDomain,
@@ -1597,8 +1594,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
     pushChatProgress,
     scopedConversationUrl,
     socket,
-    speak,
-    stop,
     t.failedToRouteNeuralMesh,
     t.requestFailed,
     t.workflowAnalyzing,
@@ -1775,7 +1770,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       return next;
     });
     if (outgoingAttachments.length > 0) rememberAttachmentContext(outgoingAttachments);
-    stop();
     setIsTyping(true);
     const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     activeChatRequestIdRef.current = requestId;
@@ -2004,7 +1998,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
       }
       recognition.current?.stop();
     } else {
-      stop(); // Stop TTS if speaking
       const useBackendDictation = isElectron || !recognition.current;
       if (useBackendDictation) {
         if (callState !== 'idle') {
@@ -2472,7 +2465,7 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
             style={chatHeaderStyle}
           >
             <div className="flex items-center gap-3">
-              <div className={`w-2 h-2 rounded-full ${isSpeaking ? 'bg-celestial-nebula animate-ping' : 'bg-celestial-saturn animate-pulse'}`} />
+              <div className="w-2 h-2 rounded-full bg-celestial-saturn animate-pulse" />
               <span className="text-xs md:text-xs font-bold uppercase tracking-widest text-white/60">
                 Neural Link
               </span>
@@ -2491,38 +2484,6 @@ export function AgentChatPage({ t, user, agent, isOpen, onClose, prefillMessage,
                 >
                   {knowledgeLoading ? <Loader2 size={11} className="animate-spin" /> : <FileText size={11} />}
                   <span className="max-w-[180px] truncate">{knowledgeStatusText}</span>
-                </div>
-              )}
-              {isSpeaking && (
-                <div className="flex items-center gap-3 ml-2 md:ml-4 scale-75 md:scale-100 origin-left">
-                  <div className="flex items-end gap-1 h-4">
-                    {[...Array(5)].map((_, i) => (
-                      <motion.div
-                        key={i}
-                        animate={{ height: [4, 16, 4] }}
-                        transition={{ 
-                          duration: 0.5 + Math.random() * 0.5, 
-                          repeat: Infinity,
-                          ease: "easeInOut"
-                        }}
-                        className="w-1 bg-celestial-nebula rounded-full"
-                      />
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button 
-                      onClick={isPaused ? resume : pause}
-                      className="h-6 px-2 text-xs bg-white/10 text-white hover:bg-white/20 rounded-full border border-white/10 flex items-center gap-1"
-                    >
-                      {isPaused ? <Play size={10} /> : <Pause size={10} />}
-                    </Button>
-                    <Button 
-                      onClick={stop}
-                      className="h-6 px-2 text-xs bg-red-500/20 text-red-500 hover:bg-red-500/40 rounded-full border border-red-500/20 flex items-center gap-1"
-                    >
-                      <Square size={10} />
-                    </Button>
-                  </div>
                 </div>
               )}
             </div>

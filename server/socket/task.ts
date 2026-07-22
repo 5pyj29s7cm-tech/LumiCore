@@ -11,11 +11,22 @@ import { queryMemories, addMemory, addReminder, extractMemories, CONVERSATIONAL_
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, vectorMemoryBias } from "../personality/state";
 import { personalityRegistry } from "../personality";
 import { canOutputHolographic, textToHolographicOutput } from "../output/holographic";
-import { getConversationForScope, getOrCreateActiveConversation } from "../conversation/manager";
+import {
+  getConversationForScope,
+  getOrCreateActiveConversation,
+  getMessagesByTokenBudget,
+  addMessage,
+  extractTopics,
+  trackTopic,
+  getTopicContext,
+  getConversationSummary,
+  prepareConversationActionExecution,
+  cancelConversationActionExecution,
+  setConversationActionExecutionStatus,
+} from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
 import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggregateWithLLM, recordWorkflowPattern, shouldDistillSkill, buildSkillDescription } from "../agents/orchestrator";
 import { markLatestUserTurn } from "../agents/background_delivery";
-import { getMessagesByTokenBudget, addMessage, extractTopics, trackTopic, getTopicContext, getConversationSummary } from "../conversation/manager";
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
 import { shouldExposeAgentWork } from "../cognition/tool_intent";
 import { formatClientSelfPrompt } from "../client/self_model";
@@ -45,9 +56,19 @@ import {
   recordPendingConfirmation,
 } from "../tools/pending_confirmation";
 import type { ToolExecutionRecord } from "../tools/types";
+import {
+  buildRecentActionContinuationBridge,
+  classifyConversationActionFollowupIntent,
+  formatConversationActionTaskStatus,
+} from "../cognition/action_continuation";
+import {
+  coalesceToolExecutionRecords,
+  taskReceiptsToRecords,
+} from "../cognition/task_execution_ledger";
 import { createDesktopRelay } from "./desktop_relay";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
+import { CN_TASK_EXECUTION_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import {
   beginChatExecution,
   getChatExecution,
@@ -135,6 +156,15 @@ export function registerTaskHandler(
       requestId: snapshot.requestId,
     });
     active.cancel();
+    try {
+      const conversation = getOrCreateActiveConversation(
+        uid,
+        '',
+        resolvedScope.domain,
+        resolvedScope.orgId,
+      );
+      cancelConversationActionExecution(conversation.id, uid);
+    } catch {}
     try { ack?.({ ok: true, requestId: snapshot.requestId, status: 'cancelling' }); } catch {}
   });
 
@@ -175,6 +205,37 @@ export function registerTaskHandler(
       return;
     }
 
+    const runningTask = activeTaskCancellations.get(executionKey);
+    const activeConversationForStatus = runningTask
+      ? getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId)
+      : null;
+    if (
+      runningTask
+      && classifyConversationActionFollowupIntent(
+        data.text,
+        activeConversationForStatus?.actionContinuationState,
+      ) === 'status'
+    ) {
+      const activeConversation = activeConversationForStatus!;
+      const statusText = activeConversation.actionContinuationState
+        ? formatConversationActionTaskStatus(activeConversation.actionContinuationState)
+        : CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
+      try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+      socket.emit('agent:response', {
+        text: statusText,
+        agentName: 'Lumi',
+        source: 'task',
+        requestId,
+        sidecar: true,
+        finalized: true,
+        blocked: false,
+        reason: '',
+      });
+      addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'user', content: data.text, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
+      addMessage({ userId: uid, agentId: '', conversationId: activeConversation.id, role: 'assistant', content: statusText, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
+      return;
+    }
+
     const previous = activeTaskCancellations.get(executionKey);
     if (previous) previous.cancel();
     const superseded = beginChatExecution(executionScope, requestId);
@@ -204,7 +265,16 @@ export function registerTaskHandler(
     const pendingConfirmationPrompt = pendingConfirmation
       ? formatPendingConfirmationPrompt(pendingConfirmation)
       : '';
-    const routedTaskText = [data.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+    const selectedConversation = data.conversationId
+      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
+      : null;
+    const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
+    const taskActionBridge = buildRecentActionContinuationBridge(
+      data.text,
+      getMessagesByTokenBudget(convForHistory.id).slice(-24),
+      convForHistory.actionContinuationState,
+    );
+    const routedTaskText = [data.text, taskActionBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
     const interactionId = crypto.randomUUID();
     const exposeAgentWork = shouldExposeAgentWork(routedTaskText);
 
@@ -268,7 +338,32 @@ export function registerTaskHandler(
       toolDeclarations: toolRegistry.getToolDeclarations(),
       toolRegistry,
       personalityToolPolicy: personality.toolPolicy,
+      actionTaskState: convForHistory.actionContinuationState,
     });
+    const actionFollowupIntent = classifyConversationActionFollowupIntent(
+      data.text,
+      convForHistory.actionContinuationState,
+    );
+    const actionTaskExecution = prepareConversationActionExecution({
+      conversationId: convForHistory.id,
+      userId: uid,
+      userText: data.text,
+      requestId,
+      toolPolicy: executionDecision.toolPolicy,
+      forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
+    });
+    const priorTaskRecords = actionTaskExecution.kind === 'resume'
+      ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
+      : [];
+    const taskAwareRecords = (records: ToolExecutionRecord[]) => (
+      coalesceToolExecutionRecords([...priorTaskRecords, ...records])
+    );
+    if (
+      executionDecision.allowToolUse
+      && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
+    ) {
+      setConversationActionExecutionStatus(convForHistory.id, uid, 'executing', { requestId });
+    }
     const deferTaskModelOutput =
       executionDecision.allowToolUse
       || shouldDeferModelOutputUntilFinalized({
@@ -342,10 +437,6 @@ export function registerTaskHandler(
     if (visionRoutingOverlay) {
       effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
     }
-    const selectedConversation = data.conversationId
-      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
-      : null;
-    const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
     const voiceHistory: NormalizedMessage[] = [];
     if (convForHistory) {
       const summaryContext = getConversationSummary(convForHistory.id);
@@ -371,6 +462,16 @@ export function registerTaskHandler(
       ...voiceHistory,
       { role: 'user', content: routedTaskText },
     ];
+    const desktopRelay = createDesktopRelay({
+      io,
+      userId: uid,
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      source: 'task',
+      requestSocket: socket,
+      cancelOnRequestSocketDisconnect: false,
+      signal: taskAbortController.signal,
+    });
     const persistTaskLearning = (
       assistantText: string,
       options: {
@@ -422,6 +523,91 @@ export function registerTaskHandler(
       return executionWriteback;
     };
 
+    if (actionFollowupIntent === 'status' && convForHistory.actionContinuationState) {
+      const statusText = formatConversationActionTaskStatus(convForHistory.actionContinuationState);
+      emitAgent('agent:response', {
+        text: statusText,
+        agentName: personality.name,
+        source: 'task_status',
+        finalized: true,
+        blocked: false,
+        reason: '',
+      });
+      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
+      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: statusText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'task_status' });
+      io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
+      emitAgent('agent:status', { status: 'idle' });
+      releaseTask();
+      return;
+    }
+
+    if (pendingConfirmation) {
+      const confirmedTask = pendingConfirmation.actionIntent || data.text;
+      const confirmedArgs = pendingConfirmation.exactArgs || {};
+      const confirmationRecord: ToolExecutionRecord = {
+        id: `task-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: pendingConfirmation.toolName,
+        arguments: confirmedArgs,
+        result: '',
+      };
+      const consumed = consumePendingConfirmation(
+        uid,
+        pendingConfirmation.id,
+        pendingConfirmation.toolName,
+        confirmedArgs,
+      );
+      if (!consumed) {
+        confirmationRecord.error = 'The one-time confirmation expired before execution.';
+      } else {
+        try {
+          confirmationRecord.result = await toolRegistry.execute(
+            confirmationRecord.name,
+            confirmedArgs,
+            {
+              userId: uid,
+              domain: taskScope.domain,
+              orgId: taskScope.orgId,
+              desktopRelay,
+              llmGetters,
+              source: 'task_confirmation',
+              supervisedExternalCommits: true,
+              isCancelled: () => taskAbortController.signal.aborted,
+              userConfirmed: true,
+              actionIntent: confirmedTask,
+              routedTaskText: confirmedTask,
+              toolPolicy: executionDecision.toolPolicy,
+            },
+          );
+        } catch (error: any) {
+          confirmationRecord.error = error?.message || String(error);
+        }
+      }
+      const finalConfirmation = finalizeLumiResponse({
+        taskText: confirmedTask,
+        responseText: confirmationRecord.error
+          ? CN_TASK_EXECUTION_MESSAGES.confirmationFailed(confirmationRecord.error)
+          : CN_TASK_EXECUTION_MESSAGES.confirmationExecuted,
+        toolRecords: taskAwareRecords([confirmationRecord]),
+        source: 'task_confirmation',
+        flow: { ...turnFlow, routeText: confirmedTask },
+      });
+      emitAgent('agent:response', {
+        text: finalConfirmation.text,
+        agentName: personality.name,
+        source: 'task_confirmation',
+        finalized: true,
+        blocked: finalConfirmation.blocked,
+        reason: finalConfirmation.reason || '',
+      });
+      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'confirmation' });
+      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalConfirmation.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: [confirmationRecord], cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation' });
+      persistTaskExecutionWriteback(finalConfirmation.text, [confirmationRecord], `${interactionId}_confirmation`);
+      if (!finalConfirmation.blocked) persistTaskLearning(finalConfirmation.text, { toolRecords: [confirmationRecord], logLabel: 'task confirmation' });
+      emitAgent('agent:status', { status: 'idle' });
+      releaseTask();
+      return;
+    }
+
     let cognition: CognitiveResult | undefined;
 
     try {
@@ -465,7 +651,7 @@ export function registerTaskHandler(
         const finalDirect = finalizeLumiResponse({
           taskText: data.text,
           responseText: cognition.responseText,
-          toolRecords: directToolRecords,
+          toolRecords: taskAwareRecords(directToolRecords),
           source: 'task',
           flow: turnFlow,
         });
@@ -499,6 +685,8 @@ export function registerTaskHandler(
           orgId: taskScope.orgId,
         } as any);
         writeDB(db);
+        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
+        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: directResponseText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: directToolRecords.length ? directToolRecords : undefined });
         persistTaskExecutionWriteback(directResponseText, directToolRecords, `${interactionId}_direct`);
         persistTaskLearning(directResponseText, {
           toolRecords: directToolRecords,
@@ -507,17 +695,6 @@ export function registerTaskHandler(
         releaseTask();
         return;
       }
-
-      // ── Desktop relay: must be defined before orchestrator path so OCR tools work ──
-      const desktopRelay = createDesktopRelay({
-        io,
-        userId: uid,
-        domain: taskScope.domain,
-        orgId: taskScope.orgId,
-        source: 'task',
-        requestSocket: socket,
-        cancelOnRequestSocketDisconnect: false,
-      });
 
       // ── Orchestrator: decompose complex tasks into sub-tasks for worker agents ──
       let orchestratedText = '';
@@ -607,7 +784,7 @@ export function registerTaskHandler(
         const finalOrchestrated = finalizeLumiResponse({
           taskText: data.text,
           responseText: orchestratedText,
-          toolRecords: orchestratedToolRecords,
+          toolRecords: taskAwareRecords(orchestratedToolRecords),
           source: 'task',
           flow: turnFlow,
         });
@@ -636,6 +813,8 @@ export function registerTaskHandler(
           userId: uid, conversationId: conv.id, domain: taskScope.domain, orgId: taskScope.orgId,
         } as any);
         writeDB(db);
+        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
+        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: orchestratedText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: orchestratedToolRecords.length ? orchestratedToolRecords : undefined });
 
         // Update emotional state
         let updatedState = updateEmotionalState(emotionalState, { type: 'interaction', userId: uid, timestamp: new Date().toISOString() });
@@ -661,6 +840,10 @@ export function registerTaskHandler(
         }
         if (canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })) return true;
         const pending = recordPendingConfirmation(uid, toolName, args, 'task');
+        setConversationActionExecutionStatus(convForHistory.id, uid, 'waiting_confirmation', {
+          assistantState: formatPendingConfirmationPrompt(pending),
+          requestId,
+        });
         console.warn(`[TaskHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
         return false;
       };
@@ -734,7 +917,7 @@ export function registerTaskHandler(
       const finalTaskResponse = finalizeLumiResponse({
         taskText: data.text,
         responseText: finalTaskText,
-        toolRecords: result.toolCalls,
+        toolRecords: taskAwareRecords(result.toolCalls),
         source: 'task',
         flow: turnFlow,
       });
@@ -855,7 +1038,7 @@ export function registerTaskHandler(
       if (convForHistory) {
         addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
         if (finalTaskText) {
-          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
+          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: result.toolCalls.length ? result.toolCalls : undefined });
         }
         try {
           const topics = extractTopics(data.text + ' ' + finalTaskText);

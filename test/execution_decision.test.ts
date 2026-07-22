@@ -35,6 +35,7 @@ const declarations = [
   'cad_generate_dxf',
   'cad_prepare_autocad_operations',
   'mcp_cad-drafting_autocad_playback_file',
+  'cad_draw_floorplan_in_autocad',
   'mcp_cad-drafting_cad_renovation_folder_workflow',
   'mcp_filesystem_read_media_file',
   'mcp_filesystem_read_file',
@@ -529,6 +530,63 @@ describe('Lumi execution decision', () => {
     expect(decision.allowToolUse).toBe(true);
     expect(decision.toolRoute?.categories).not.toContain('task_center');
     expect(decision.toolRoute?.categories).not.toContain('work_takeover');
+  });
+
+  it('replaces a legacy low-level CAD snapshot with the composite workflow hard boundary', async () => {
+    const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
+    const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
+    const text = '读取一下桌面上的阿路平面图，把它画进 AutoCAD 里。';
+    const taskId = 'task_legacy_cad';
+    const continuationContext = [
+      '## Recent action continuation context',
+      'Recovered structured action state:',
+      '- followupIntent: execute',
+      `- taskId: ${taskId}`,
+      '- originalGoal: 读取桌面上的阿路平面图，画进 AutoCAD 里。',
+      '- unfinished: yes',
+    ].join('\n');
+    const dispatch = buildLumiTurnDispatch({
+      userId: 'execution_decision_composite_cad_user',
+      text,
+      continuationContext,
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    const decision = buildLumiExecutionDecision({
+      flow: dispatch.flow,
+      text,
+      toolDeclarations: declarations,
+      actionTaskState: {
+        version: 2,
+        taskId,
+        status: 'blocked',
+        goal: '读取桌面上的阿路平面图，画进 AutoCAD 里。',
+        latestInstruction: text,
+        appTarget: 'AutoCAD',
+        sourcePaths: ['C:\\Users\\me\\Desktop\\阿陆平面图.jpg'],
+        latestBlocker: 'legacy OCR timeout',
+        unfinished: true,
+        evidenceTools: ['desktop_list_files', 'floorplan_extract_geometry', 'ocr_image_file'],
+        assistantState: '',
+        toolSummaries: [],
+        updatedAt: '2026-07-22T00:00:00.000Z',
+        policySnapshot: {
+          allowedTools: ['desktop_list_files', 'floorplan_extract_geometry', 'ocr_image_file'],
+          requireConfirmation: [],
+          forbiddenTools: [],
+          maxIterations: 12,
+        },
+      },
+    });
+
+    expect(decision.toolRoute?.hardAllowlist).toBe(true);
+    expect(decision.toolRoute?.toolNames).toEqual(['cad_draw_floorplan_in_autocad']);
+    expect(decision.toolPolicy.allowedTools).toEqual(['cad_draw_floorplan_in_autocad']);
+    expect(decision.maxIterations).toBe(2);
+    expect(decision.promptOverlay).toContain('one composite CAD skill');
+    expect(decision.promptOverlay).not.toContain('Do not generate files, prepare CAD operations, open or operate AutoCAD');
   });
 
   it('continues an in-app WPS command with the recovered app route', async () => {

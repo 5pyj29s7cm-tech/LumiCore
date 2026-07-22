@@ -142,4 +142,56 @@ describe('floor-plan extraction pipeline', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('accepts an honest uncalibrated topology result and reports the missing dimensions once', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_floorplan_uncalibrated_'));
+    process.env.LUMI_DATA_DIR = dir;
+    try {
+      const sourcePath = path.join(dir, 'source.png');
+      fs.writeFileSync(sourcePath, PNG_1X1);
+      vi.mocked(analyzeScreen).mockResolvedValueOnce(JSON.stringify({
+        projectName: 'Uncalibrated source',
+        confidence: 0.9,
+        inferredScale: true,
+        unit: 'mm',
+        physicalWidth: null,
+        physicalHeight: null,
+        wallThicknessMm: null,
+        coordinateSystem: 'normalized_top_left_y_down',
+        sourceTopology: { isRectangular: true, outerVertexCount: 4, visibleNotches: 0, visibleProjections: 0 },
+        outerBoundary: [
+          { x: 0, y: 0 },
+          { x: 1000, y: 0 },
+          { x: 1000, y: 1000 },
+          { x: 0, y: 1000 },
+        ],
+        dimensions: [],
+        assumptions: [],
+        missingForPrecision: ['overall width', 'overall height'],
+      }));
+
+      const registry = new ToolRegistry();
+      registerOCRTools(registry);
+      const raw = await registry.execute('floorplan_extract_geometry', {
+        imagePath: sourcePath,
+      }, {
+        userId: 'uncalibrated-test',
+        llmGetters: { getQwen: () => ({}) },
+      } as any);
+      const result = JSON.parse(raw);
+
+      expect(analyzeScreen).toHaveBeenCalledTimes(1);
+      expect(vectorizeFloorplanLinework).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        parsed: false,
+        failedStage: 'calibration',
+        geometryReady: false,
+        geometryVerified: false,
+        executableGeometryAvailable: false,
+      });
+      expect(result.next).toContain('overall horizontal dimension');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

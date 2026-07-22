@@ -1,6 +1,23 @@
+import { randomUUID } from 'node:crypto';
 import { matchesCnActionContinuation } from '../regions/packs/cn/action_continuation';
+import {
+  CN_TASK_EXECUTION_MESSAGES,
+  formatCnToolFailureDetail,
+} from '../regions/packs/cn/voice_fast_path_messages';
 import { isGuardGeneratedConversationRecord } from '../conversation/guard_history';
 import { buildActionContract } from './action_contract';
+import type { ToolPolicy } from '../personality/types';
+import {
+  coalesceToolExecutionRecords,
+  applyTaskPolicySnapshot,
+  mergeTaskReceipts,
+  snapshotTaskPolicy,
+  taskCompletionFromReceipts,
+  toolRecordSucceeded,
+  type ConversationTaskPolicySnapshot,
+  type ConversationTaskReceipt,
+  type ConversationTaskStatus,
+} from './task_execution_ledger';
 
 export interface ActionContinuationHistoryItem {
   role?: string;
@@ -28,12 +45,23 @@ export interface RecentActionContinuationState {
  * can never create or advance this state without terminal tool records.
  */
 export interface ConversationActionContinuationState extends RecentActionContinuationState {
-  version: 1;
+  version: 1 | 2;
+  /** Stable identity shared by every turn that advances the same task. */
+  taskId?: string;
+  status?: ConversationTaskStatus;
+  /** Capability envelope selected from the original complete instruction. */
+  policySnapshot?: ConversationTaskPolicySnapshot;
+  /** Coalesced terminal receipts. A successful retry supersedes its failure. */
+  receipts?: ConversationTaskReceipt[];
+  activeRequestId?: string;
+  supersededTaskId?: string;
+  revision?: number;
   latestInstruction: string;
   assistantState: string;
   toolSummaries: string[];
   updatedAt: string;
   evidenceMessageId?: string;
+  completionSource?: 'tool_receipt' | 'user_observation';
 }
 
 export interface ConversationActionContinuationUpdate {
@@ -43,6 +71,8 @@ export interface ConversationActionContinuationUpdate {
   toolCalls: unknown;
   updatedAt?: string;
   evidenceMessageId?: string;
+  requestId?: string;
+  toolPolicy?: ToolPolicy;
 }
 
 const ENGLISH_SHORT_CONTINUATION_RE =
@@ -59,7 +89,7 @@ const CURRENT_APP_WINDOW_ACTION_RE =
   /(?:\u6700\u5927\u5316|\u6700\u5c0f\u5316|\u8fd8\u539f\u7a97\u53e3|\u6062\u590d\u7a97\u53e3|\u6536\u5230\u4efb\u52a1\u680f|\u94fa\u6ee1\u5c4f\u5e55)|\b(?:maximi[sz]e|minimi[sz]e|restore)\b.{0,12}\b(?:it|that|this|window|app|application)?\b/iu;
 
 const CURRENT_APP_DOCUMENT_CREATE_RE =
-  /^(?:\u65b0\u5efa|\u521b\u5efa)(?:\u4e00\u4e2a|\u4e00\u4efd)?(?:\u7a7a\u767d)?(?:Word|WPS)?(?:\u6587\u6863|\u9875\u9762|\u8868\u683c|\u6f14\u793a\u6587\u7a3f)|^(?:new|create)(?:\s+a)?\s+(?:blank\s+)?(?:document|page|workbook|presentation)$/iu;
+  /^(?:\u65b0\u5efa|\u521b\u5efa)(?:(?:\u4e00\u4e2a|\u4e00\u4efd|\u4e00\u9875|\u6211\u7684|\u65b0\u7684?)\s*)?(?:\u7a7a\u767d)?(?:Word|WPS)?(?:\u6587\u6863|\u9875\u9762|\u8868\u683c|\u6f14\u793a\u6587\u7a3f)|^(?:new|create)(?:\s+(?:a|my|the))?\s+(?:blank\s+)?(?:document|page|workbook|presentation)$/iu;
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const CONCRETE_LOCAL_SOURCE_RE =
@@ -121,6 +151,10 @@ function collectPathValues(value: unknown, paths: Set<string>, depth = 0): void 
   }
 }
 
+function resultCarriesDirectSourcePath(toolName: string): boolean {
+  return !/^(?:desktop_list_files|desktop_list_apps|desktop_running_processes)$/i.test(toolName);
+}
+
 function toolCallName(call: any): string {
   return compact(call?.name || call?.toolName, 120);
 }
@@ -150,6 +184,7 @@ function toolCallFailure(call: any): string {
     : {};
   const status = compact(
     payload?.status
+      || payload?.verificationStatus
       || verification.status
       || call?.status,
     120,
@@ -159,6 +194,10 @@ function toolCallFailure(call: any): string {
   const structuredFailure = Boolean(payload && (
     payload.ok === false
     || payload.success === false
+    || payload.sent === false
+    || payload.opened === false
+    || payload.saved === false
+    || payload.targetMatched === false
     || payload.failed === true
     || payload.completed === false
     || payload.verified === false
@@ -177,6 +216,7 @@ function toolCallFailure(call: any): string {
       payload?.error
       || payload?.reason
       || payload?.blocker
+      || payload?.verificationReason
       || verification.error
       || verification.reason
       || status
@@ -189,20 +229,28 @@ function toolCallFailure(call: any): string {
 }
 
 function toolCallSucceeded(call: any): boolean {
-  if (!toolCallName(call) || toolCallFailure(call)) return false;
-  const result = toolCallResult(call);
-  if (result && typeof result === 'object') {
-    if ((result as any).ok === false || (result as any).success === false) return false;
-    const status = compact((result as any).status || (result as any)?.verification?.status, 80);
-    if (/^(?:failed|error|blocked|denied|forbidden|timeout|timed_out|cancelled|canceled|incomplete|needs_confirmation|not_ready|partial|pending|queued|requires_confirmation|requires_setup|submitted_unverified|unverified)$/i.test(status)) return false;
-    if ((result as any).ok === true || (result as any).success === true) return true;
-    if (/^(?:ok|success|succeeded|completed|opened|verified|done)$/i.test(status)) return true;
-  }
-  return Boolean(compact(call?.result, 240));
+  const name = toolCallName(call);
+  if (!name) return false;
+  const result = typeof call?.result === 'string'
+    ? call.result
+    : JSON.stringify(call?.result ?? '');
+  return toolRecordSucceeded({
+    id: compact(call?.id, 180),
+    name,
+    arguments: toolCallArguments(call),
+    result,
+    error: compact(call?.error, 700) || undefined,
+  });
+}
+
+function normalizeApplicationTarget(value: unknown): string {
+  return compact(value, 500)
+    .replace(/[\s。！？.!?，,；;：:、]+$/gu, '')
+    .trim();
 }
 
 function looksLikeApplicationTarget(value: string): boolean {
-  const clean = compact(value, 500);
+  const clean = normalizeApplicationTarget(value);
   if (!clean || /^https?:\/\//i.test(clean)) return false;
   if (/\.(?:png|jpe?g|gif|webp|bmp|pdf|docx?|xlsx?|pptx?|txt|md|csv|dxf|dwg|json)$/i.test(clean)) return false;
   return true;
@@ -226,7 +274,7 @@ function successfulApplicationTarget(call: any): string {
       payload.applicationTarget,
       payload.target,
       payload.resolvedTarget,
-    ].map(value => compact(value, 500)).filter(Boolean);
+    ].map(normalizeApplicationTarget).filter(Boolean);
     const explicitTarget = candidates.find(looksLikeApplicationTarget);
     if (explicitTarget) return explicitTarget;
   }
@@ -252,10 +300,21 @@ function successfulApplicationTarget(call: any): string {
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const STATUS_FOLLOWUP_RE =
-  /^(?:在执行吗|有没有在执行(?:(?:这个|那个)?任务)?|执行了吗|做了吗|完成了吗|好了没|结果呢|怎么还没|(?:我问你)?(?:你)?为什么(?:没(?:有)?(?:完成|执行)|不(?:去)?执行)(?:[，,。！？?!\s]*(?:你)?为什么不(?:去)?执行)?|我刚刚给你了什么任务|我刚才给你的任务是什么|你在搞什么|你在干嘛|回答我)[啊呀吧嘛呢，,。！？?!]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /^(?:在执行吗|有没有在执行(?:(?:这个|那个)?任务)?|执行了吗|做了吗|完成了吗|好了没|结果呢|怎么样了|怎么还没|为什么(?:会)?失败|怎么(?:会)?失败|失败(?:在)?哪里|(?:我问你)?(?:你)?为什么(?:没(?:有)?(?:完成|执行)|不(?:去)?执行)(?:[，,。！？?!\s]*(?:你)?为什么不(?:去)?执行)?|我刚刚给你了什么任务|我刚才给你的任务是什么|你在搞什么|你在干嘛|回答我)[啊呀吧嘛呢，,。！？?!]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+
+// i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+const CN_SHORT_EXECUTION_CONTINUATION_RE =
+  /^(?:确认|确定|继续|继续执行|接着做|执行|开始|开始执行|重试|再试|再来一次|建立|创建|打开|保存|发送|提交|就这么做|按这个做|做吧|弄吧)[。！？.!?]*$/u; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 const ENGLISH_STATUS_FOLLOWUP_RE =
   /^(?:are you (?:doing|running) it|did you do it|is it (?:done|running)|what(?:'s| is) the result|why (?:didn'?t|haven'?t) you|what was my task)[.!?]*$/i;
+
+// A short failure question becomes task status only while a durable task is
+// unfinished. The state check prevents stale completed work from hijacking
+// an unrelated conversational question.
+// i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+const AMBIGUOUS_UNFINISHED_TASK_STATUS_RE =
+  /^(?:怎么回事|什么情况|出什么问题了|哪里(?:出|有)问题了|卡在哪(?:里)?|为什么(?:停了|没继续|没完成|没做完)|what happened|what went wrong|where (?:is|was) it blocked)[啊呀吧嘛呢，,。！？?!\s]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const STATUS_RESULT_DEMAND_RE =
@@ -315,6 +374,7 @@ export function classifyRecentActionFollowupIntent(text: string): RecentActionFo
   ) return 'status';
   if (
     matchesCnActionContinuation(clean)
+    || CN_SHORT_EXECUTION_CONTINUATION_RE.test(clean)
     || isCurrentAppEditingRequest(clean)
     || ENGLISH_SHORT_CONTINUATION_RE.test(clean)
     || ENGLISH_REFERENTIAL_ACTION_RE.test(clean)
@@ -386,7 +446,9 @@ export function extractRecentActionContinuationState(
       const name = toolCallName(call);
       if (name) evidenceTools.push(name);
       collectPathValues(toolCallArguments(call), sourcePaths);
-      collectPathValues(toolCallResult(call), sourcePaths);
+      if (resultCarriesDirectSourcePath(name)) {
+        collectPathValues(toolCallResult(call), sourcePaths);
+      }
       const openedTarget = successfulApplicationTarget(call);
       if (openedTarget) appTarget = openedTarget;
       const failure = toolCallFailure(call);
@@ -453,14 +515,55 @@ function summarizeToolCalls(history: ActionContinuationHistoryItem[]): string[] 
   return Array.from(new Set(summaries)).slice(-10);
 }
 
-function normalizeConversationActionState(
+export function normalizeConversationActionState(
   value: ConversationActionContinuationState | null | undefined,
 ): ConversationActionContinuationState | null {
   if (!value || typeof value !== 'object') return null;
   const goal = compact(value.goal, 700);
   if (!goal) return null;
+  const statusValue = compact(value.status, 40) as ConversationTaskStatus;
+  const status: ConversationTaskStatus = [
+    'planning',
+    'executing',
+    'waiting_confirmation',
+    'blocked',
+    'completed',
+    'cancelled',
+  ].includes(statusValue)
+    ? statusValue
+    : value.unfinished ? 'blocked' : 'completed';
+  const receipts = (Array.isArray(value.receipts) ? value.receipts : [])
+    .map((receipt: any): ConversationTaskReceipt | null => {
+      const name = compact(receipt?.name, 160);
+      const key = compact(receipt?.key, 1000);
+      if (!name || !key) return null;
+      return {
+        id: compact(receipt?.id, 180) || key,
+        key,
+        name,
+        arguments: receipt?.arguments && typeof receipt.arguments === 'object' && !Array.isArray(receipt.arguments)
+          ? receipt.arguments
+          : {},
+        result: compact(receipt?.result, 3000),
+        error: compact(receipt?.error, 700),
+        outcome: receipt?.outcome === 'success' ? 'success' : 'failure',
+        recordedAt: compact(receipt?.recordedAt, 80) || new Date(0).toISOString(),
+      };
+    })
+    .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt))
+    .slice(-40);
+  const receiptCompletion = receipts.length > 0
+    ? taskCompletionFromReceipts(goal, receipts)
+    : null;
   return {
-    version: 1,
+    version: Number(value.version) === 1 && !value.taskId ? 1 : 2,
+    taskId: compact(value.taskId, 180) || undefined,
+    status,
+    policySnapshot: snapshotTaskPolicy(value.policySnapshot as ToolPolicy) || undefined,
+    receipts,
+    activeRequestId: compact(value.activeRequestId, 180) || undefined,
+    supersededTaskId: compact(value.supersededTaskId, 180) || undefined,
+    revision: Math.max(0, Math.trunc(Number(value.revision) || 0)),
     goal,
     latestInstruction: compact(value.latestInstruction || goal, 700),
     appTarget: compact(value.appTarget, 160),
@@ -468,7 +571,9 @@ function normalizeConversationActionState(
       .map(path => compact(path, 500))
       .filter(Boolean)
       .slice(0, 8),
-    latestBlocker: compact(value.latestBlocker, 380),
+    latestBlocker: status === 'completed'
+      ? ''
+      : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
     unfinished: Boolean(value.unfinished),
     evidenceTools: Array.from(new Set(Array.isArray(value.evidenceTools) ? value.evidenceTools : []))
       .map(name => compact(name, 120))
@@ -481,7 +586,23 @@ function normalizeConversationActionState(
       .slice(-10),
     updatedAt: compact(value.updatedAt, 80) || new Date(0).toISOString(),
     evidenceMessageId: compact(value.evidenceMessageId, 160) || undefined,
+    completionSource: value.completionSource === 'user_observation'
+      ? 'user_observation'
+      : value.completionSource === 'tool_receipt'
+        ? 'tool_receipt'
+        : undefined,
   };
+}
+
+export function classifyConversationActionFollowupIntent(
+  text: string,
+  state?: ConversationActionContinuationState | null,
+): RecentActionFollowupIntent {
+  const direct = classifyRecentActionFollowupIntent(text);
+  if (direct !== 'none') return direct;
+  const durableState = normalizeConversationActionState(state);
+  if (!durableState?.unfinished) return 'none';
+  return AMBIGUOUS_UNFINISHED_TASK_STATUS_RE.test(compact(text, 500)) ? 'status' : 'none';
 }
 
 /**
@@ -494,26 +615,60 @@ export function buildConversationActionContinuationState(
 ): ConversationActionContinuationState | null {
   const userText = compact(input.userText, 700);
   const assistantText = compact(input.assistantText, 700);
-  const calls = parseToolCalls({ toolCalls: input.toolCalls })
+  const calls = coalesceToolExecutionRecords(parseToolCalls({ toolCalls: input.toolCalls }))
     .filter(call => toolCallName(call) && (toolCallFailure(call) || compact(call?.result, 240)));
   if (!userText || calls.length === 0) return null;
 
   const previous = normalizeConversationActionState(input.previous);
-  const followupIntent = classifyRecentActionFollowupIntent(userText);
-  const inheritsPrevious = followupIntent !== 'none' && Boolean(previous);
+  const followupIntent = classifyConversationActionFollowupIntent(userText, previous);
+  const samePreparedTurn = Boolean(
+    previous
+    && previous.latestInstruction === userText
+    && ['planning', 'executing', 'waiting_confirmation'].includes(previous.status || ''),
+  );
+  const inheritsPrevious = (followupIntent !== 'none' || samePreparedTurn) && Boolean(previous);
   const currentHistory: ActionContinuationHistoryItem[] = [
     { role: 'user', message: userText },
     { role: 'assistant', message: assistantText, toolCalls: calls },
   ];
   const current = extractRecentActionContinuationState(currentHistory);
   const currentSummaries = summarizeToolCalls(currentHistory);
-  const hasFailure = Boolean(current.latestBlocker);
-  const hasSuccess = calls.some(toolCallSucceeded);
-  const preserveStatusBlocker = followupIntent === 'status' && Boolean(previous?.latestBlocker);
+  const goal = inheritsPrevious ? previous!.goal : userText;
+  const receipts = mergeTaskReceipts(
+    inheritsPrevious ? previous?.receipts || [] : [],
+    calls,
+    input.updatedAt || new Date().toISOString(),
+  );
+  // A terse confirmation/continue turn advances the original contract. Using
+  // "确认" itself as the contract makes one confirmed sub-step look like the
+  // whole task completed. Only a concrete action-bearing extension replaces
+  // the completion target for this turn.
+  const completionGoal = inheritsPrevious
+    && followupIntent === 'execute'
+    && isActionBearingGoal(userText)
+    ? userText
+    : goal;
+  const completion = taskCompletionFromReceipts(completionGoal, receipts);
+  const currentFailure = [...calls].reverse().find(record => !toolCallSucceeded(record));
+  const hasFailure = completion.records.some(record => !toolCallSucceeded(record));
+  const status: ConversationTaskStatus = followupIntent === 'status' && currentFailure
+    ? 'blocked'
+    : completion.complete
+    ? 'completed'
+    : hasFailure
+      ? 'blocked'
+      : 'executing';
 
   return normalizeConversationActionState({
-    version: 1,
-    goal: inheritsPrevious ? previous!.goal : userText,
+    version: 2,
+    taskId: inheritsPrevious && previous?.taskId ? previous.taskId : `task_${randomUUID()}`,
+    status,
+    policySnapshot: snapshotTaskPolicy(input.toolPolicy) || (inheritsPrevious ? previous?.policySnapshot : undefined),
+    receipts,
+    activeRequestId: input.requestId || (inheritsPrevious ? previous?.activeRequestId : undefined),
+    supersededTaskId: !inheritsPrevious && previous?.unfinished ? previous.taskId : undefined,
+    revision: (inheritsPrevious ? previous?.revision || 0 : 0) + 1,
+    goal,
     latestInstruction: followupIntent === 'status' && previous
       ? previous.latestInstruction
       : userText,
@@ -522,11 +677,8 @@ export function buildConversationActionContinuationState(
       ...(inheritsPrevious ? previous!.sourcePaths : []),
       ...current.sourcePaths,
     ])).slice(0, 8),
-    latestBlocker: current.latestBlocker
-      || (preserveStatusBlocker ? previous!.latestBlocker : ''),
-    unfinished: hasFailure
-      || (followupIntent === 'status' && Boolean(previous?.unfinished))
-      || (!hasSuccess && current.unfinished),
+    latestBlocker: completion.blocker || (currentFailure ? toolCallFailure(currentFailure) : ''),
+    unfinished: status !== 'completed',
     evidenceTools: Array.from(new Set([
       ...(inheritsPrevious ? previous!.evidenceTools : []),
       ...current.evidenceTools,
@@ -538,7 +690,124 @@ export function buildConversationActionContinuationState(
     ])).slice(-10),
     updatedAt: input.updatedAt || new Date().toISOString(),
     evidenceMessageId: input.evidenceMessageId,
+    completionSource: completion.complete
+      ? 'tool_receipt'
+      : inheritsPrevious
+        ? previous?.completionSource
+        : undefined,
   });
+}
+
+export function prepareConversationActionTaskState(
+  previousValue: ConversationActionContinuationState | null | undefined,
+  input: {
+    userText: string;
+    requestId: string;
+    toolPolicy: ToolPolicy;
+    forceResume?: boolean;
+    now?: string;
+  },
+): { state: ConversationActionContinuationState | null; kind: 'new' | 'resume' | 'status' | 'conversation' } {
+  const userText = compact(input.userText, 700);
+  const previous = normalizeConversationActionState(previousValue);
+  const followupIntent = classifyConversationActionFollowupIntent(userText, previous);
+  const resume = Boolean(previous && previous.unfinished && (input.forceResume || followupIntent === 'execute'));
+  if (followupIntent === 'status' && previous) return { state: previous, kind: 'status' };
+  const contract = buildActionContract(userText);
+  const isAction = contract.applies && contract.kind !== 'none';
+  if (!resume && !isAction) return { state: previous, kind: 'conversation' };
+
+  const now = input.now || new Date().toISOString();
+  if (resume && previous) {
+    return {
+      kind: 'resume',
+      state: normalizeConversationActionState({
+        ...previous,
+        version: 2,
+        status: previous.status === 'waiting_confirmation' ? 'waiting_confirmation' : 'planning',
+        latestInstruction: userText,
+        activeRequestId: input.requestId,
+        policySnapshot: snapshotTaskPolicy(
+          applyTaskPolicySnapshot(input.toolPolicy, previous.policySnapshot),
+        ) || previous.policySnapshot,
+        revision: (previous.revision || 0) + 1,
+        updatedAt: now,
+      }),
+    };
+  }
+
+  return {
+    kind: 'new',
+    state: normalizeConversationActionState({
+      version: 2,
+      taskId: `task_${randomUUID()}`,
+      status: 'planning',
+      policySnapshot: snapshotTaskPolicy(input.toolPolicy),
+      receipts: [],
+      activeRequestId: input.requestId,
+      supersededTaskId: previous?.unfinished ? previous.taskId : undefined,
+      revision: 1,
+      goal: userText,
+      latestInstruction: userText,
+      appTarget: '',
+      sourcePaths: [],
+      latestBlocker: '',
+      unfinished: true,
+      evidenceTools: [],
+      assistantState: '',
+      toolSummaries: [],
+      updatedAt: now,
+    }),
+  };
+}
+
+export function formatConversationActionTaskStatus(
+  value: ConversationActionContinuationState | null | undefined,
+): string {
+  const state = normalizeConversationActionState(value);
+  if (!state) return CN_TASK_EXECUTION_MESSAGES.noResumableTask;
+  const rootGoal = state.goal.slice(0, 80);
+  const latestInstruction = state.latestInstruction.slice(0, 80);
+  const goal = latestInstruction && latestInstruction !== rootGoal
+    ? CN_TASK_EXECUTION_MESSAGES.goalWithCurrentStep(rootGoal, latestInstruction)
+    : rootGoal;
+  const successes = (state.receipts || []).filter(receipt => receipt.outcome === 'success').length;
+  if (state.status === 'completed' || !state.unfinished) {
+    if (state.completionSource === 'user_observation') {
+      return CN_TASK_EXECUTION_MESSAGES.completedFromUserObservation(goal);
+    }
+    return CN_TASK_EXECUTION_MESSAGES.completed(goal, successes);
+  }
+  if (state.status === 'waiting_confirmation') {
+    return CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(goal);
+  }
+  if (state.latestBlocker) {
+    const detail = state.latestBlocker.replace(/^[A-Za-z0-9_.:-]+:\s*/, '');
+    return CN_TASK_EXECUTION_MESSAGES.blocked(goal, formatCnToolFailureDetail(detail));
+  }
+  return CN_TASK_EXECUTION_MESSAGES.executing(goal, successes);
+}
+
+/**
+ * The person at the computer can be the final visible-state verifier. This is
+ * only accepted as a declarative correction for an unfinished task that
+ * already has an actuation receipt; questions, negations, and bare praise do
+ * not alter execution state.
+ */
+export function isUserObservedTaskCompletion(
+  text: string,
+  value: ConversationActionContinuationState | null | undefined,
+): boolean {
+  const state = normalizeConversationActionState(value);
+  const clean = compact(text, 260);
+  if (!state?.unfinished || !(state.receipts || []).length || !clean) return false;
+  if (/[？?]/u.test(clean)) return false;
+  // i18n-allow: Chinese user-observation recognition; not user-visible copy.
+  if (/(?:没有|没|未|并未|不是|并不是|不算|并不)|\b(?:not|didn'?t|hasn'?t|isn'?t|wasn'?t)\b/iu.test(clean)) return false;
+  const cnObservationCue = /(?:^|[，,\s])(?:你|它|这个|那个|消息|文件|文档|窗口|页面|软件|任务|实际|其实|确实|已经|刚才|刚刚|都)/u; // i18n-allow: Chinese input recognition.
+  const cnCompletedAction = /(?:完成|做完|执行完|发(?:送)?(?:出)?(?:去)?|打开|保存|写入|生成|创建|关闭|最大化|最小化)(?:成功|好|完|出去|出来)?了[。！!\s]*$/u; // i18n-allow: Chinese input recognition.
+  return (cnObservationCue.test(clean) && cnCompletedAction.test(clean))
+    || /^(?:you|it|that|the\s+(?:message|file|window|task))\s+(?:already\s+)?(?:did|has|was|is)?[^.!?]{0,24}(?:completed|finished|sent|opened|saved|created|closed|maximized|minimized)(?:\s+successfully)?[.!\s]*$/iu.test(clean);
 }
 
 export function needsRecentActionContinuationContext(userText: string): boolean {
@@ -577,15 +846,15 @@ export function buildRecentActionContinuationBridge(
   persistedState?: ConversationActionContinuationState | null,
 ): string {
   const durableState = normalizeConversationActionState(persistedState);
+  const currentText = compact(userText, 700);
+  const followupIntent = classifyConversationActionFollowupIntent(currentText, durableState);
   if (
-    !needsRecentActionContinuationContext(userText)
+    !(needsRecentActionContinuationContext(userText) || followupIntent !== 'none')
     || ((!Array.isArray(history) || history.length === 0) && !durableState)
   ) {
     return '';
   }
 
-  const currentText = compact(userText, 700);
-  const followupIntent = classifyRecentActionFollowupIntent(currentText);
   const recent = (Array.isArray(history) ? history : [])
     .slice(-18)
     .filter(item => ['user', 'assistant', 'agent'].includes(recordRole(item)) && recordText(item))
@@ -633,6 +902,8 @@ export function buildRecentActionContinuationBridge(
     'The current message is referential or underspecified. Resolve it against the recent task below before routing, delegating, or choosing tools.',
     'Recovered structured action state:',
     `- followupIntent: ${followupIntent}`,
+    durableState?.taskId ? `- taskId: ${durableState.taskId}` : '',
+    durableState?.status ? `- taskStatus: ${durableState.status}` : '',
     state.goal ? `- originalGoal: ${state.goal}` : '',
     durableState?.latestInstruction ? `- latestInstruction: ${durableState.latestInstruction}` : '',
     state.appTarget ? `- appTarget: ${state.appTarget}` : '',
@@ -648,6 +919,8 @@ export function buildRecentActionContinuationBridge(
     ...toolSummaries.map(summary => `- ${summary}`),
     'Rules:',
     '- Continue the same target, application, files, and acceptance criteria unless the user clearly starts a new task.',
+    '- Preserve this task id and its original capability envelope for execute/confirmation follow-ups. Do not recalculate a narrower permission set from the short follow-up alone.',
+    '- A tool retry is one logical step: a later successful receipt for the same tool and arguments supersedes its earlier failed attempt.',
     // i18n-allow: Quoted Chinese phrases are input examples inside an internal routing prompt.
     '- appTarget is recovered only from a successful desktop_open receipt. For wording like "在这里面 / 这个软件里 / 刚打开的里面", continue inside that application with active-window and UI typing/control tools.',
     '- This is conversation-scoped persisted execution state, not a task-center record. Do not route to work_takeover/task-center tools unless the evidence above explicitly contains a work_takeover tool or task id.',

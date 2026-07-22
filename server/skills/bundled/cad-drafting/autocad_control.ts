@@ -36,6 +36,7 @@ export interface AutocadPlaybackOptions {
   resumeCompleted?: number;
   resumeStartingEntityCount?: number;
   resumeDocument?: string;
+  resumeEntityHandles?: string[];
 }
 
 function finite(value: unknown): value is number {
@@ -145,9 +146,7 @@ export function buildAutocadNewDocumentScript(): string {
     '$applicationReady = $false',
     'while ((Get-Date) -lt $readyDeadline -and -not $applicationReady) {',
     '  try {',
-    '    $acad.Visible = $true',
     '    [void]$acad.Documents.Count',
-    "    if (-not [bool]$acad.GetAcadState().IsQuiescent) { throw 'AutoCAD is still busy.' }",
     '    $applicationReady = $true',
     '  } catch { Start-Sleep -Milliseconds 500 }',
     '}',
@@ -193,6 +192,9 @@ export function buildAutocadComPlaybackScript(
   const resumeCompleted = Math.max(0, Math.min(Math.floor(Number(options.resumeCompleted) || 0), payload.operations.length));
   const resumeStartingEntityCount = Math.max(0, Math.floor(Number(options.resumeStartingEntityCount) || 0));
   const resumeDocument = String(options.resumeDocument || '');
+  const resumeEntityHandles = Array.from(new Set((options.resumeEntityHandles || [])
+    .map(handle => String(handle || '').trim())
+    .filter(handle => /^[0-9a-f]+$/i.test(handle))));
   const savePath = options.savePath ? path.resolve(options.savePath) : '';
   const requestedDelay = Number(options.strokeDelayMs);
   const delayMs = Number.isFinite(requestedDelay)
@@ -214,6 +216,7 @@ export function buildAutocadComPlaybackScript(
     `$resumeCompleted = ${resumeCompleted}`,
     `$resumeStartingEntityCount = ${resumeStartingEntityCount}`,
     `$resumeDocument = ${psLiteral(resumeDocument)}`,
+    `$resumeEntityHandles = @(${resumeEntityHandles.map(psLiteral).join(', ')})`,
     `$savePath = ${psLiteral(savePath)}`,
     `$title = ${psLiteral(payload.title)}`,
     `$operationSetId = ${psLiteral(payload.operationSetId)}`,
@@ -258,6 +261,7 @@ export function buildAutocadComPlaybackScript(
     '    completed = $completed',
     '    document = $document',
     '    startingEntityCount = $startingEntityCount',
+    '    entityHandles = @($createdEntityHandles)',
     '    heartbeatAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
     '  }',
     '  if ($lockPath) { $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $lockPath -Encoding UTF8 }',
@@ -266,6 +270,52 @@ export function buildAutocadComPlaybackScript(
     '    if ($progressDirectory) { [void](New-Item -ItemType Directory -Force -Path $progressDirectory) }',
     '    $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $progressPath -Encoding UTF8',
     '  }',
+    '}',
+    'function WaitForEntityCount($model, [int]$expected, [int]$timeoutMs = 5000) {',
+    '  $deadline = (Get-Date).AddMilliseconds([Math]::Max(0, $timeoutMs))',
+    '  $observed = [int]$model.Count',
+    '  while ($observed -lt $expected -and (Get-Date) -lt $deadline) {',
+    '    Start-Sleep -Milliseconds 100',
+    '    $observed = [int]$model.Count',
+    '  }',
+    '  return $observed',
+    '}',
+    'function WaitForDocumentReady($doc, [string]$documentName, [int]$timeoutMs = 5000) {',
+    '  $deadline = (Get-Date).AddMilliseconds([Math]::Max(0, $timeoutMs))',
+    '  do {',
+    '    try {',
+    '      if ([string]$doc.Name -eq $documentName -and $null -ne $doc.ModelSpace) { return $true }',
+    '    } catch {}',
+    '    Start-Sleep -Milliseconds 100',
+    '  } while ((Get-Date) -lt $deadline)',
+    '  return $false',
+    '}',
+    'function WaitForAcadQuiescent($acad, [int]$timeoutMs = 15000) {',
+    '  $deadline = (Get-Date).AddMilliseconds([Math]::Max(0, $timeoutMs))',
+    '  do {',
+    '    try { if ([bool]$acad.GetAcadState().IsQuiescent) { return $true } } catch {}',
+    '    Start-Sleep -Milliseconds 100',
+    '  } while ((Get-Date) -lt $deadline)',
+    '  return $false',
+    '}',
+    'function GetEntityHandle($entity) {',
+    "  if ($null -eq $entity) { return '' }",
+    "  try { return [string]$entity.Handle } catch { return '' }",
+    '}',
+    'function WaitForEntityHandles($doc, $handles, [int]$timeoutMs = 3000) {',
+    '  $deadline = (Get-Date).AddMilliseconds([Math]::Max(0, $timeoutMs))',
+    '  do {',
+    '    $allResolved = $true',
+    '    foreach ($handle in @($handles)) {',
+    '      try {',
+    '        $resolvedEntity = $doc.HandleToObject([string]$handle)',
+    '        if ($null -eq $resolvedEntity) { $allResolved = $false; break }',
+    '      } catch { $allResolved = $false; break }',
+    '    }',
+    '    if ($allResolved) { return $true }',
+    '    Start-Sleep -Milliseconds 100',
+    '  } while ((Get-Date) -lt $deadline)',
+    '  return $false',
     '}',
     '$acad = $null',
     '$startedNewApplication = $false',
@@ -286,38 +336,45 @@ export function buildAutocadComPlaybackScript(
     "  if ($null -eq $acad) { throw 'AutoCAD started, but its COM automation object was not registered within 120 seconds.' }",
     '}',
     '$applicationReady = $false',
+    "$applicationReadyError = ''",
     '$applicationDeadline = (Get-Date).AddSeconds(120)',
     'while ((Get-Date) -lt $applicationDeadline -and -not $applicationReady) {',
     '  try {',
-    '    $acad.Visible = $true',
     '    [void]$acad.Documents.Count',
-    "    if (-not [bool]$acad.GetAcadState().IsQuiescent) { throw 'AutoCAD is still busy.' }",
     '    $applicationReady = $true',
     '  } catch {',
+    '    $applicationReadyError = $_.Exception.Message',
     '    Start-Sleep -Milliseconds 500',
     '  }',
     '}',
-    "if (-not $applicationReady) { throw 'AutoCAD registered its COM object, but remained busy for more than 120 seconds.' }",
+    'if (-not $applicationReady) { throw "AutoCAD registered its COM object, but did not become automation-ready within 120 seconds: $applicationReadyError" }',
+    '$targetDoc = $null',
     'if ($resumeCompleted -gt 0) {',
     '  $resumeDoc = $null',
-    '  for ($documentIndex = 0; $documentIndex -lt [int]$acad.Documents.Count; $documentIndex += 1) {',
+    '  $resumeDocumentDeadline = (Get-Date).AddSeconds(120)',
+    '  while ($null -eq $resumeDoc -and (Get-Date) -lt $resumeDocumentDeadline) {',
     '    try {',
-    '      $candidateResumeDoc = $acad.Documents.Item($documentIndex)',
-    '      if ([string]$candidateResumeDoc.Name -eq $resumeDocument) { $resumeDoc = $candidateResumeDoc; break }',
+    '      for ($documentIndex = 0; $documentIndex -lt [int]$acad.Documents.Count; $documentIndex += 1) {',
+    '        $candidateResumeDoc = $acad.Documents.Item($documentIndex)',
+    '        if ([string]$candidateResumeDoc.Name -eq $resumeDocument) { $resumeDoc = $candidateResumeDoc; break }',
+    '      }',
     '    } catch {}',
+    '    if ($null -eq $resumeDoc) { Start-Sleep -Milliseconds 500 }',
     '  }',
     "  if ($null -eq $resumeDoc) { throw 'The partial AutoCAD playback document is no longer open; refusing to duplicate the operation set.' }",
     '  $resumeDoc.Activate()',
+    '  $targetDoc = $resumeDoc',
     '  $createNewDocument = $false',
     '}',
-    '$needsDocument = $createNewDocument -and -not $startedNewApplication',
+    '$needsDocument = $createNewDocument',
     'try { if ($null -eq $acad.ActiveDocument) { $needsDocument = $true } } catch { $needsDocument = $true }',
     'if ($needsDocument) {',
     '  $documentCreated = $false',
     '  $createDeadline = (Get-Date).AddSeconds(120)',
     '  while ((Get-Date) -lt $createDeadline -and -not $documentCreated) {',
     '    try {',
-    '      [void]$acad.Documents.Add()',
+    '      $targetDoc = $acad.Documents.Add()',
+    '      $targetDoc.Activate()',
     '      $documentCreated = $true',
     '    } catch {',
     '      Start-Sleep -Milliseconds 500',
@@ -325,12 +382,13 @@ export function buildAutocadComPlaybackScript(
     '  }',
     "  if (-not $documentCreated) { throw 'AutoCAD opened, but Lumi could not create a drawing document within 120 seconds.' }",
     '}',
+    'if ($null -eq $targetDoc) { $targetDoc = $acad.ActiveDocument }',
     '$doc = $null',
     '$model = $null',
     '$readyDeadline = (Get-Date).AddSeconds(120)',
     'while ((Get-Date) -lt $readyDeadline) {',
     '  try {',
-    '    $candidateDoc = $acad.ActiveDocument',
+    '    $candidateDoc = $targetDoc',
     '    $candidateModel = $null',
     '    if ($null -ne $candidateDoc) { $candidateModel = $candidateDoc.ModelSpace }',
     '    $isQuiescent = $true',
@@ -351,19 +409,35 @@ export function buildAutocadComPlaybackScript(
     '} catch {}',
     '$completed = $resumeCompleted',
     '$startingEntityCount = if ($resumeCompleted -gt 0) { $resumeStartingEntityCount } else { [int]$model.Count }',
+    '$createdEntityHandles = @($resumeEntityHandles)',
     'if ($resumeCompleted -gt 0) {',
     '  if ([string]$doc.Name -ne $resumeDocument) { throw "AutoCAD resume document mismatch. Expected $resumeDocument, found $([string]$doc.Name)." }',
+    '  if ($createdEntityHandles.Count -gt 0 -and $createdEntityHandles.Count -ne $resumeCompleted) { throw "AutoCAD progress receipt has $($createdEntityHandles.Count) handles for $resumeCompleted completed operations." }',
     '  $resumeExpectedCount = $startingEntityCount + $resumeCompleted',
-    '  if ([int]$model.Count -ne $resumeExpectedCount) { throw "AutoCAD partial-playback state changed. Expected $resumeExpectedCount entities, found $([int]$model.Count)." }',
+    '  $resumeObservedCount = WaitForEntityCount $model $resumeExpectedCount 1500',
+    '  if ($resumeObservedCount -eq ($resumeExpectedCount + 1) -and $completed -lt $operations.Count) {',
+    '    # The COM entity was committed after the last progress write. Advance exactly one operation instead of drawing it twice.',
+    '    $completed += 1',
+    '    $resumeExpectedCount = $startingEntityCount + $completed',
+    '  } elseif ($resumeObservedCount -ne $resumeExpectedCount) {',
+    '    throw "AutoCAD partial-playback state changed. Expected $resumeExpectedCount entities, found $resumeObservedCount."',
+    '  }',
+    '  while ($createdEntityHandles.Count -lt $completed) {',
+    '    $resumeHandleIndex = $startingEntityCount + $createdEntityHandles.Count',
+    "    try { $createdEntityHandles += GetEntityHandle $model.Item($resumeHandleIndex) } catch { throw 'AutoCAD could not reconstruct the partial-playback entity receipt.' }",
+    '  }',
+    '  if ($createdEntityHandles.Count -ne $completed -or -not (WaitForEntityHandles $doc $createdEntityHandles 5000)) { throw "AutoCAD partial-playback entities no longer exist in $resumeDocument." }',
     '}',
     'UpdatePlaybackState $completed ([string]$doc.Name) $startingEntityCount',
     'for ($operationIndex = $completed; $operationIndex -lt $operations.Count; $operationIndex += 1) {',
     '  $op = $operations[$operationIndex]',
     '  $index = $operationIndex + 1',
     '  $expectedBefore = $startingEntityCount + $completed',
-    '  if ([int]$model.Count -ne $expectedBefore) { throw "AutoCAD entity count drifted before operation $index. Expected $expectedBefore, found $([int]$model.Count)." }',
+    '  $observedBefore = WaitForEntityCount $model $expectedBefore 1500',
+    '  if ($observedBefore -ne $expectedBefore) { throw "AutoCAD entity count drifted before operation $index. Expected $expectedBefore, found $observedBefore." }',
     '  $drawn = $false',
     '  $operationError = $null',
+    "  $operationHandle = ''",
     '  for ($attempt = 1; $attempt -le 20 -and -not $drawn; $attempt += 1) {',
     '    try {',
     '      try { $doc.Activate() } catch {}',
@@ -391,15 +465,24 @@ export function buildAutocadComPlaybackScript(
     '      }',
     '      if ($null -ne $entity) { $entity.Update() }',
     '      $doc.Regen(1)',
+    '      $operationHandle = GetEntityHandle $entity',
+    "      if ([string]::IsNullOrWhiteSpace($operationHandle)) { throw 'AutoCAD created an entity without a persistent handle.' }",
+    '      if (-not (WaitForEntityHandles $doc @($operationHandle) 3000)) { throw "AutoCAD entity $operationHandle was not committed to the dedicated drawing." }',
     '      $drawn = $true',
     '    } catch {',
     '      $operationError = $_.Exception.Message',
     '      $expectedAfter = $startingEntityCount + $completed + 1',
-    '      if ([int]$model.Count -eq $expectedAfter) {',
+    '      $observedAfterError = WaitForEntityCount $model $expectedAfter 2500',
+    '      if ($observedAfterError -eq $expectedAfter) {',
+    '        $operationHandle = GetEntityHandle $entity',
+    '        if ([string]::IsNullOrWhiteSpace($operationHandle)) {',
+    '          try { $operationHandle = GetEntityHandle $model.Item($expectedAfter - 1) } catch {}',
+    '        }',
+    '        if ([string]::IsNullOrWhiteSpace($operationHandle) -or -not (WaitForEntityHandles $doc @($operationHandle) 3000)) { break }',
     '        $drawn = $true',
     '        break',
     '      }',
-    '      if ([int]$model.Count -gt $expectedAfter) { throw "AutoCAD operation $index created duplicate entities." }',
+    '      if ($observedAfterError -gt $expectedAfter) { throw "AutoCAD operation $index created duplicate entities." }',
     "      $retryable = $operationError -match 'rejected by callee|call was rejected|busy|not ready|Null|RPC_E_CALL_REJECTED|0x80010001'",
     '      if (-not $retryable -or $attempt -eq 20) { break }',
     '      Start-Sleep -Milliseconds 500',
@@ -408,22 +491,30 @@ export function buildAutocadComPlaybackScript(
     '  if (-not $drawn) {',
     "    throw \"AutoCAD operation $index ($($op.kind)) failed: $operationError\"",
     '  }',
+    '  $createdEntityHandles += $operationHandle',
     '  $completed += 1',
     '  $expectedAfter = $startingEntityCount + $completed',
-    '  if ([int]$model.Count -ne $expectedAfter) { throw "AutoCAD entity-count verification failed after operation $completed. Expected $expectedAfter, found $([int]$model.Count)." }',
+    '  $observedAfter = WaitForEntityCount $model $expectedAfter 5000',
+    '  if ($observedAfter -ne $expectedAfter) { throw "AutoCAD entity-count verification failed after operation $completed. Expected $expectedAfter, found $observedAfter." }',
+    '  if ($createdEntityHandles.Count -ne $completed -or -not (WaitForEntityHandles $doc @($operationHandle) 3000)) { throw "AutoCAD handle verification failed after operation $completed." }',
     '  UpdatePlaybackState $completed ([string]$doc.Name) $startingEntityCount',
-    '  if ($completed -le 6 -or ($completed % 8) -eq 0) { try { $acad.ZoomExtents() } catch {} }',
+    '  if ($completed -eq 1 -or ($completed % 50) -eq 0) {',
+    '    try { $acad.ZoomExtents() } catch {}',
+    '    [void](WaitForAcadQuiescent $acad 15000)',
+    '  }',
     '  Start-Sleep -Milliseconds $delayMs',
     '}',
     'try { $acad.ZoomExtents() } catch {}',
+    '[void](WaitForAcadQuiescent $acad 15000)',
     'if ($savePath) {',
     '  $saveDirectory = Split-Path -Parent $savePath',
     '  if ($saveDirectory) { [void](New-Item -ItemType Directory -Force -Path $saveDirectory) }',
     '  $doc.SaveAs($savePath)',
     '}',
-    '$endingEntityCount = [int]$model.Count',
+    '$endingEntityCount = WaitForEntityCount $model ($startingEntityCount + $operations.Count) 5000',
     '$entitiesAdded = $endingEntityCount - $startingEntityCount',
-    '$entityCountMatches = $entitiesAdded -eq $operations.Count -and $completed -eq $operations.Count',
+    '$entityHandlesVerified = $createdEntityHandles.Count -eq $operations.Count -and (WaitForEntityHandles $doc $createdEntityHandles 10000)',
+    '$entityCountMatches = $entitiesAdded -eq $operations.Count -and $completed -eq $operations.Count -and $entityHandlesVerified',
     "if (-not $entityCountMatches) { throw 'AutoCAD entity-count verification failed; completion marker was not written.' }",
     '$result = [pscustomobject]@{',
     "  status = 'completed'",
@@ -441,6 +532,8 @@ export function buildAutocadComPlaybackScript(
     '  endingEntityCount = $endingEntityCount',
     '  entitiesAdded = $entitiesAdded',
     '  entityCountMatches = $entityCountMatches',
+    '  entityHandlesVerified = $entityHandlesVerified',
+    '  createdEntityHandleCount = $createdEntityHandles.Count',
     '  strokeDelayMs = $delayMs',
     '  completionMarkerPath = $markerPath',
     '  completionMarkerExists = $false',
@@ -572,12 +665,17 @@ function readVerifiedCompletionMarker(
 function readPlaybackProgress(
   progressPath: string,
   payload: AutocadOperationPayload,
-): { completed: number; startingEntityCount: number; document: string } | null {
+): { completed: number; startingEntityCount: number; document: string; entityHandles: string[] } | null {
   if (!progressPath || !fs.existsSync(progressPath)) return null;
   const progress = parseJsonFile(progressPath);
   const completed = Number(progress?.completed);
   const startingEntityCount = Number(progress?.startingEntityCount);
   const document = String(progress?.document || '').trim();
+  const entityHandles = Array.isArray(progress?.entityHandles)
+    ? Array.from(new Set(progress.entityHandles
+      .map((handle: unknown) => String(handle || '').trim())
+      .filter((handle: string) => /^[0-9a-f]+$/i.test(handle)))) as string[]
+    : [];
   const valid = progress?.operationSetId === payload.operationSetId
     && Number.isInteger(completed)
     && completed > 0
@@ -585,7 +683,8 @@ function readPlaybackProgress(
     && Number.isInteger(startingEntityCount)
     && startingEntityCount >= 0
     && Boolean(document);
-  return valid ? { completed, startingEntityCount, document } : null;
+  const handlesValid = entityHandles.length === 0 || entityHandles.length === completed;
+  return valid && handlesValid ? { completed, startingEntityCount, document, entityHandles } : null;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -685,7 +784,14 @@ export async function runAutocadComPlayback(options: AutocadPlaybackOptions): Pr
       operationsPath: path.resolve(options.operationsPath),
     };
   }
-  const resume = readPlaybackProgress(progressPath, payload);
+  // `createNewDocument: true` is an explicit fresh-run boundary. A stale
+  // partial checkpoint must never silently override it and attach to the old
+  // drawing. Omitted/false preserves the resumable behavior.
+  const resetPartialPlayback = options.createNewDocument === true;
+  if (resetPartialPlayback && fs.existsSync(progressPath)) {
+    try { fs.rmSync(progressPath, { force: true }); } catch {}
+  }
+  const resume = resetPartialPlayback ? null : readPlaybackProgress(progressPath, payload);
   if (!resume && fs.existsSync(progressPath)) {
     try { fs.rmSync(progressPath, { force: true }); } catch {}
   }
@@ -701,6 +807,7 @@ export async function runAutocadComPlayback(options: AutocadPlaybackOptions): Pr
       resumeCompleted: resume?.completed,
       resumeStartingEntityCount: resume?.startingEntityCount,
       resumeDocument: resume?.document,
+      resumeEntityHandles: resume?.entityHandles,
     });
     const output = await executePowerShell(script, timeoutMs);
     const jsonLine = output.split(/\r?\n/).reverse().find(line => line.trim().startsWith('{'));

@@ -5,7 +5,7 @@ import rateLimit from "express-rate-limit";
 import { readDB, writeDB } from "../../db_layer";
 import { syncUserToSupabase } from "../config/supabase";
 import { getMember, listUserOrgs } from "../org/db";
-import { saveVoiceprint, saveFace, getVoiceprints, getFaces, deleteVoiceprint, deleteFace } from "../biometrics/store";
+import { saveVoiceprint, replaceVoiceprints, saveFace, getVoiceprints, getFaces, deleteVoiceprint, deleteFace } from "../biometrics/store";
 import { verifyVoiceprintAudio } from "../biometrics/voiceprint_verify";
 import { extractSpeechBrainEmbedding } from "../biometrics/voiceprint_provider";
 import { getLocalAdminPassword, isLoopbackAddress } from "../config/local_identity";
@@ -283,7 +283,7 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
           code: 'PERSONAL_CONTEXT_REQUIRED',
         });
       }
-      const { label, mfccFeatures, sampleCount, sampleRate } = req.body || {};
+      const { label, mfccFeatures, sampleCount, sampleRate, replaceExisting, requireEmbedding } = req.body || {};
       const audioPcm16Base64 = req.body?.audioPcm16Base64 || req.body?.pcm16Base64;
       const labelText = typeof label === 'string' ? label.trim() : '';
       const sanitizedMfccFeatures = sanitizeVoiceprintFrames(mfccFeatures);
@@ -294,6 +294,13 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
         pcm16Base64: audioPcm16Base64,
         sampleRate: Number(sampleRate) || 16000,
       });
+      if (requireEmbedding === true && !embeddingResult.ok) {
+        return res.status(503).json({
+          error: "Speaker embedding is unavailable; the existing voiceprint was not changed",
+          reason: embeddingResult.reason || 'speaker_embedding_unavailable',
+          install: embeddingResult.install,
+        });
+      }
       const hasUsableMfcc = sanitizedMfccFeatures.length >= VOICEPRINT_MIN_ENROLL_FRAMES;
       if (!hasUsableMfcc && !embeddingResult.ok) {
         return res.status(400).json({
@@ -301,7 +308,8 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
           reason: "not_enough_voiceprint_frames",
         });
       }
-      const vp = saveVoiceprint(decoded.uid, {
+      const persistVoiceprint = replaceExisting === true ? replaceVoiceprints : saveVoiceprint;
+      const vp = persistVoiceprint(decoded.uid, {
         voiceprintId: `vp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         label: labelText,
         mfccFeatures: sanitizedMfccFeatures,

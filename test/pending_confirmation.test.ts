@@ -44,6 +44,27 @@ describe('One-time pending tool confirmations', () => {
     expect(pending.exactArgs).toEqual({ command: 'safe-example' });
   });
 
+  it('does not let a re-plan replace the pending boundary of the same task', () => {
+    const original = recordPendingConfirmation(
+      'u1',
+      'wechat_send_message',
+      { recipient: '文件传输助手', text: '原始消息' },
+      'voice',
+      { channelId: 'voice-1', taskId: 'task-1', actionIntent: '发送原始消息' },
+    );
+    const replanned = recordPendingConfirmation(
+      'u1',
+      'desktop_keyboard_press',
+      { keys: ['ENTER'] },
+      'voice',
+      { channelId: 'voice-1', taskId: 'task-1', actionIntent: '模型改写后的动作' },
+    );
+
+    expect(replanned.id).toBe(original.id);
+    expect(replanned.toolName).toBe('wechat_send_message');
+    expect(replanned.exactArgs).toEqual({ recipient: '文件传输助手', text: '原始消息' });
+  });
+
   it('isolates confirmations by remote channel and data scope', () => {
     const personal = recordPendingConfirmation(
       'u1',
@@ -85,6 +106,9 @@ describe('One-time pending tool confirmations', () => {
   it('recognizes a concise confirmation without treating ordinary messages as approval', () => {
     expect(isExplicitConfirmationReply('确认')).toBe(true);
     expect(isExplicitConfirmationReply('确认执行')).toBe(true);
+    expect(isExplicitConfirmationReply('同意')).toBe(true);
+    expect(isExplicitConfirmationReply('好的')).toBe(true);
+    expect(isExplicitConfirmationReply('可以')).toBe(true);
     expect(isExplicitConfirmationReply('确认一下这个文件内容')).toBe(false);
   });
 });

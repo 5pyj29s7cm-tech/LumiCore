@@ -311,12 +311,12 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     stateKeys: ['workDomain', 'org', 'orgWorkspace', 'knowledge'],
   },
   {
-    id: 'workspace.runtime_log',
-    label: 'Runtime log',
+    id: 'workspace.runtime_diagnostics',
+    label: 'Runtime diagnostics',
     kind: 'runtime',
     actions: ['open_runtime_log'],
-    notes: 'Live run log for startup, server traces, and runtime errors.',
-    stateKeys: ['runtimeLog', 'runtime', 'errors'],
+    notes: 'Runtime health and adaptation evidence are shown in the unified Kernel monitor; the former standalone run-log window no longer exists.',
+    stateKeys: ['runtime', 'errors'],
   },
   {
     id: 'workspace.knowledge',
@@ -673,9 +673,9 @@ const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
   },
   {
     id: 'runtime-log',
-    label: 'Runtime log',
+    label: 'Runtime diagnostics',
     actions: ['open_runtime_log'],
-    useWhen: 'Show live execution, startup traces, tool progress, errors, or self-repair evidence.',
+    useWhen: 'Show runtime health, errors, and self-repair evidence in the unified Kernel monitor.',
     closeAfterUse: true,
   },
   {
@@ -1334,7 +1334,7 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       setSurface('meeting', 'meeting notes');
       break;
     case 'open_runtime_log':
-      setSurface('runtime-log', 'runtime log');
+      setSurface('kernel', 'runtime diagnostics');
       break;
     case 'show_knowledge_base':
     case 'open_files':

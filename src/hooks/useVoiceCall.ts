@@ -117,6 +117,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const lastPassiveSilenceKeepAlive = useRef(0);
   const activeStartPayload = useRef<VoiceStartPayload | null>(null);
   const activeVoiceRequestIdRef = useRef<string | null>(null);
+  const activeWorkRequestIdRef = useRef<string | null>(null);
   const socketRef = useRef(socket);
   const callGenerationRef = useRef(0);
   const playbackGenerationRef = useRef(0);
@@ -133,16 +134,19 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     }
   }, []);
 
-  const scheduleThinkingWatchdog = useCallback(() => {
+  const scheduleThinkingWatchdog = useCallback((lane: 'turn' | 'work' = 'turn') => {
     clearThinkingWatchdog();
     const startedAt = Date.now();
     thinkingWatchdogStartedAt.current = startedAt;
     thinkingWatchdogRef.current = setTimeout(() => {
       if (thinkingWatchdogStartedAt.current !== startedAt) return;
       const requestId = activeVoiceRequestIdRef.current;
-      console.warn('[VoiceCall] thinking state timed out; cancelling server turn');
+      // This timer protects the UI from looking frozen; it is not the owner of
+      // a server task lease. A slow model/tool may still be healthy, so probe
+      // status and reopen the microphone without cancelling real work.
+      console.warn(`[VoiceCall] ${lane} status is stale; probing server without cancelling the turn`);
       if (requestId) {
-        socketRef.current?.emit('audio:cancel_turn', { requestId, reason: 'thinking_watchdog' });
+        socketRef.current?.emit('audio:work_status_probe', { requestId, lane });
       }
       setCallState(prev => {
         if (prev !== 'thinking') return prev;
@@ -161,7 +165,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const nextStartTime = useRef(0);  // When the next chunk should start playing
   const ttsStartedAt = useRef(0);
-  const fallbackSpeechPendingRef = useRef(0);
 
   const ensureTtsContext = useCallback(() => {
     if (!ttsContext.current || ttsContext.current.state === 'closed') {
@@ -179,8 +182,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   const stopAllPlayback = useCallback(() => {
     playbackGenerationRef.current++;
     playbackStartTime.current = 0;
-    fallbackSpeechPendingRef.current = 0;
-    try { window.speechSynthesis?.cancel(); } catch {}
     // Clear sentence audio queue
     audioQueue.current = [];
     // Stop proactive speech (greetings, check-ins) — now interruptible
@@ -223,6 +224,9 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
   }, [stopAllPlayback]);
 
   const cleanupCapture = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: false } }));
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -256,6 +260,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     });
     activeStartPayload.current = null;
     activeVoiceRequestIdRef.current = null;
+    activeWorkRequestIdRef.current = null;
     disposePlaybackContexts();
     cleanupCapture();
 
@@ -319,6 +324,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         && data.requestId === activeVoiceRequestIdRef.current
         && (data.status === 'listening' || data.status === 'idle')
       ) {
+        if (activeWorkRequestIdRef.current === data.requestId) activeWorkRequestIdRef.current = null;
         activeVoiceRequestIdRef.current = null;
       }
     };
@@ -419,50 +425,6 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       playAudioChunk(actualBuffer, actualGain, actualLane);
     };
 
-    const onTtsFallback = (data: { text?: string; requestId?: string; fallbackId?: string }) => {
-      const text = String(data?.text || '').trim();
-      if (!isCallActive.current || !text) return;
-      if (data.requestId && data.requestId !== activeVoiceRequestIdRef.current) return;
-      if (!('speechSynthesis' in window)) {
-        if (data.requestId && data.fallbackId) socket.emit('audio:tts_fallback_done', data);
-        return;
-      }
-      const playbackGeneration = playbackGenerationRef.current;
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'zh-CN';
-      fallbackSpeechPendingRef.current += 1;
-      isTtsPlaying.current = true;
-      ttsStartedAt.current = Date.now();
-      clearThinkingWatchdog();
-      setCallState('speaking');
-      utterance.onstart = () => {
-        if (playbackGeneration !== playbackGenerationRef.current) return;
-        isTtsPlaying.current = true;
-        setCallState('speaking');
-      };
-      let completed = false;
-      const finish = () => {
-        if (completed) return;
-        completed = true;
-        if (data.requestId && data.fallbackId) {
-          socket.emit('audio:tts_fallback_done', {
-            requestId: data.requestId,
-            fallbackId: data.fallbackId,
-          });
-        }
-        fallbackSpeechPendingRef.current = Math.max(0, fallbackSpeechPendingRef.current - 1);
-        if (playbackGeneration !== playbackGenerationRef.current) return;
-        if (fallbackSpeechPendingRef.current === 0) {
-          isTtsPlaying.current = false;
-          ttsStartedAt.current = 0;
-          setCallState(prev => prev === 'speaking' ? 'listening' : prev);
-        }
-      };
-      utterance.onend = finish;
-      utterance.onerror = finish;
-      window.speechSynthesis.speak(utterance);
-    };
-
     const onAudioTranscript = (data: { text: string; isFinal: boolean } & VoiceTranscriptMeta) => {
       if (!isCallActive.current) return;
       // Reset passive timer — user is speaking
@@ -497,6 +459,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       isCallActive.current = false;
       activeStartPayload.current = null;
       activeVoiceRequestIdRef.current = null;
+      activeWorkRequestIdRef.current = null;
       setError(data.message);
       clearThinkingWatchdog();
       cleanupCapture();
@@ -509,6 +472,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       if (data?.workContinues) {
         if (data.requestId) activeVoiceRequestIdRef.current = data.requestId;
       } else {
+        activeWorkRequestIdRef.current = null;
         activeVoiceRequestIdRef.current = null;
       }
       clearThinkingWatchdog();
@@ -521,11 +485,28 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       endCall();
     };
 
-    const onAudioSidecarResponse = (data: { text?: string }) => {
+    const onAudioSidecarResponse = (data: { text?: string; requestId?: string; workRequestId?: string }) => {
       if (!isCallActive.current || !data.text?.trim()) return;
+      const workRequestId = data.workRequestId || data.requestId;
+      if (!workRequestId || workRequestId !== activeVoiceRequestIdRef.current) return;
       setTranscript('');
       setResponseText(data.text.trim());
       onResponse?.(data.text.trim());
+    };
+
+    const onAudioWorkProgress = (data: { text?: string; requestId?: string; active?: boolean }) => {
+      if (!isCallActive.current || !data.text?.trim()) return;
+      if (!data.requestId || data.requestId !== activeVoiceRequestIdRef.current) return;
+      if (data.active === false) {
+        if (activeWorkRequestIdRef.current === data.requestId) activeWorkRequestIdRef.current = null;
+        clearThinkingWatchdog();
+      } else {
+        activeWorkRequestIdRef.current = data.requestId;
+        scheduleThinkingWatchdog('work');
+      }
+      // This is a live task indicator, not an assistant chat turn. Keep it in
+      // the call surface without feeding it back into conversation history.
+      setResponseText(data.text.trim());
     };
 
     const onAudioProactiveSpeak = (data: { audioBuffer: ArrayBuffer; text: string; timestamp: string }) => {
@@ -579,26 +560,26 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     socket.on('audio:status', onAudioStatus);
     socket.on('audio:confirm', onAudioConfirm);
     socket.on('audio:response', onAudioResponse);
-    socket.on('audio:tts_fallback', onTtsFallback);
     socket.on('audio:transcript', onAudioTranscript);
     socket.on('agent:response', onAgentResponse);
     socket.on('audio:error', onAudioError);
     socket.on('audio:interrupt-ack', onAudioInterruptAck);
     socket.on('audio:end-call-request', onAudioEndCallRequest);
     socket.on('audio:sidecar_response', onAudioSidecarResponse);
+    socket.on('audio:work_progress', onAudioWorkProgress);
     socket.on('audio:proactive_speak', onAudioProactiveSpeak);
 
     return () => {
       socket.off('audio:status', onAudioStatus);
       socket.off('audio:confirm', onAudioConfirm);
       socket.off('audio:response', onAudioResponse);
-      socket.off('audio:tts_fallback', onTtsFallback);
       socket.off('audio:transcript', onAudioTranscript);
       socket.off('agent:response', onAgentResponse);
       socket.off('audio:error', onAudioError);
       socket.off('audio:interrupt-ack', onAudioInterruptAck);
       socket.off('audio:end-call-request', onAudioEndCallRequest);
       socket.off('audio:sidecar_response', onAudioSidecarResponse);
+      socket.off('audio:work_progress', onAudioWorkProgress);
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
       clearThinkingWatchdog();
     };
@@ -609,6 +590,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     const onDisconnect = () => {
       if (!isCallActive.current) return;
       activeVoiceRequestIdRef.current = null;
+      activeWorkRequestIdRef.current = null;
       setConnectionQuality('poor');
       setCallState('connecting');
       clearThinkingWatchdog();
@@ -649,6 +631,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     startInFlightRef.current = true;
     try {
       activeVoiceRequestIdRef.current = null;
+      activeWorkRequestIdRef.current = null;
       setError(null);
       setCallState('connecting');
       transcriptionOnlyRef.current = options.transcriptionOnly === true;
@@ -667,6 +650,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
         return;
       }
       streamRef.current = stream;
+      window.dispatchEvent(new CustomEvent('lumi:voice-capture-state', { detail: { active: true } }));
 
       // Set up audio level monitoring at the realtime STT sample rate.
       audioContext.current = new AudioContext({ sampleRate: 16000 });
@@ -730,6 +714,11 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
               stopAllPlayback();
               ttsStartedAt.current = 0;
               setCallState('listening');
+              if (!transcriptionOnlyRef.current) {
+                window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
+                  detail: { samples: new Float32Array(input), rms: frameRms },
+                }));
+              }
             }
           }
           return;
@@ -737,6 +726,15 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
 
         const micAllowed = transcriptionOnlyRef.current || (canSendMicAudioRef.current?.() ?? true);
         if (!micAllowed) return;
+
+        if (!transcriptionOnlyRef.current) {
+          // Feed speaker verification from the exact PCM stream sent to STT.
+          // A second getUserMedia stream drifts across utterance boundaries and
+          // can accidentally authorize loudspeaker audio with a stale match.
+          window.dispatchEvent(new CustomEvent('lumi:voice-pcm-frame', {
+            detail: { samples: new Float32Array(input), rms: frameRms },
+          }));
+        }
 
         if (!transcriptionOnlyRef.current && callStateRef.current === 'passive' && frameRms < 0.004) {
           const now = Date.now();
@@ -774,6 +772,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       cleanupCapture();
       activeStartPayload.current = null;
       activeVoiceRequestIdRef.current = null;
+      activeWorkRequestIdRef.current = null;
       isCallActive.current = false;
       transcriptionOnlyRef.current = false;
       setError(err.message || 'Failed to start voice call');
@@ -792,6 +791,15 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       stopAllPlayback();
     }
   }, [socket, callState, stopAllPlayback]);
+
+  useEffect(() => {
+    const stopVoiceOutput = () => {
+      if (isCallActive.current) socketRef.current?.emit('audio:interrupt');
+      stopAllPlayback();
+    };
+    window.addEventListener('lumi:stop-voice-output', stopVoiceOutput);
+    return () => window.removeEventListener('lumi:stop-voice-output', stopVoiceOutput);
+  }, [stopAllPlayback]);
 
   const switchPersonality = useCallback((personalityId: string) => {
     if (callState !== 'idle') {
@@ -820,6 +828,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     isCallActive.current = false;
     activeStartPayload.current = null;
     activeVoiceRequestIdRef.current = null;
+    activeWorkRequestIdRef.current = null;
     cleanupCapture();
     disposePlaybackContexts();
   }, [cleanupCapture, disposePlaybackContexts]);

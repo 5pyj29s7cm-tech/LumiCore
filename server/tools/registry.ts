@@ -23,6 +23,7 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^model_configuration_(?:update|test)$/i.test(name)) return 2 * 60_000;
   if (name === 'transcribe_audio_to_text_file') return 60 * 60_000;
   if (/^mcp_cad-drafting_autocad_playback_file$/i.test(name)) return 30 * 60_000;
+  if (name === 'cad_draw_floorplan_in_autocad') return 45 * 60_000;
   if (/^cad_prepare_autocad_operations$/i.test(name)) return 5 * 60_000;
   if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 5 * 60_000;
   if (name === 'legal_refresh_authoritative_sources') return 3 * 60_000;
@@ -31,7 +32,7 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
   if (/^desktop_/i.test(name)) return 90_000;
   if (/^floorplan_extract_geometry$/i.test(name)) return 10 * 60_000;
-  if (/^(ocr_|cad_generate_dxf)$/i.test(name)) return 90_000;
+  if (/^ocr_/i.test(name) || name === 'cad_generate_dxf') return 90_000;
   return 30_000;
 }
 

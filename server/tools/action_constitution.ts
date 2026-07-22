@@ -207,7 +207,7 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (name === 'desktop_capability_status' || name === 'desktop_system_info' || name === 'desktop_list_files' || name === 'desktop_list_apps' || name === 'desktop_path_info' || name === 'desktop_show_lumi_window' || name === 'desktop_idle_time' || name === 'desktop_poll_activity' || name === 'desktop_active_window' || name === 'get_active_window_info' || name === 'desktop_running_processes' || name === 'desktop_ui_snapshot' || name === 'desktop_capture_screen' || name === 'desktop_clipboard_read') return 'observe';
   if (isTrustedDesktopRunCommand(toolName, args)) return 'desktop_control';
   if (name === 'cad_prepare_autocad_operations') return 'local_write';
-  if (name === 'mcp_cad-drafting_autocad_playback_file' || name === 'mcp_cad-drafting_autocad_new_document') return 'desktop_control';
+  if (name === 'mcp_cad-drafting_autocad_playback_file' || name === 'mcp_cad-drafting_autocad_new_document' || name === 'cad_draw_floorplan_in_autocad') return 'desktop_control';
   if (name.includes('run_command') || name.includes('terminal') || name.includes('shell') || name.includes('code_execution')) return 'system';
   if (name.includes('wechat') || name.includes('feishu') || name.includes('wecom') || name.includes('message')) return 'messaging';
   if (name === 'computer_use' || name.startsWith('desktop_') || name.includes('mouse') || name.includes('keyboard') || name.includes('screenshot')) return 'desktop_control';
@@ -267,7 +267,8 @@ function isTrustedDesktopRunCommand(toolName: string, args: Record<string, any> 
 function isAutocadPlaybackAction(toolName: string, _args: Record<string, any> = {}): boolean {
   const name = toolName.toLowerCase();
   return name === 'mcp_cad-drafting_autocad_playback_file'
-    || name === 'mcp_cad-drafting_autocad_new_document';
+    || name === 'mcp_cad-drafting_autocad_new_document'
+    || name === 'cad_draw_floorplan_in_autocad';
 }
 
 function hasSecretCredentialArgs(args: Record<string, any> = {}): boolean {

@@ -337,7 +337,9 @@ describe('finalized output paths', () => {
     expect(chat).toContain("from \"../conversation/summary_scheduler\"");
     expect(voice).toContain("from \"../conversation/summary_scheduler\"");
     expect(chat).toContain('scheduleChatSummary(conversationId)');
-    expect(voice.match(/scheduleVoiceSummary\([^)]*\.id\)/g)?.length || 0).toBeGreaterThanOrEqual(8);
+    expect(voice).toContain('const persistVoiceAssistantMessage = (');
+    expect(voice).toContain('scheduleVoiceSummary(conversationId)');
+    expect(voice.match(/persistVoiceAssistantMessage\([^)]*\.id/g)?.length || 0).toBeGreaterThanOrEqual(10);
     expect(ambient).toContain('Auto-summary eligible for conversation');
     expect(ambient).not.toContain('Triggered auto-summary');
   });

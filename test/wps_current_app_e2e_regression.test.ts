@@ -285,7 +285,7 @@ describe('WPS current-app end-to-end regression', () => {
     ]));
   });
 
-  it('exposes the WPS COM tool only for a recovered WPS create-and-type continuation', () => {
+  it('exposes the WPS COM tool for explicit and recovered WPS create requests', () => {
     const saveOnly = buildScenario('\u5728\u8fd9\u91cc\u9762\u4fdd\u5b58\u5f53\u524d\u6587\u6863\u3002');
     expect(saveOnly.decision.toolPolicy.allowedTools).not.toContain(WPS_CREATE_DOCUMENT_TOOL);
     expect(saveOnly.decision.toolRoute?.toolNames).not.toContain(WPS_CREATE_DOCUMENT_TOOL);
@@ -303,8 +303,8 @@ describe('WPS current-app end-to-end regression', () => {
       text: directDispatch.flow.routeText,
       toolDeclarations: TOOL_NAMES,
     });
-    expect(directDecision.toolRoute?.toolNames).not.toContain(WPS_CREATE_DOCUMENT_TOOL);
-    expect(directDecision.toolPolicy.allowedTools).not.toContain(WPS_CREATE_DOCUMENT_TOOL);
+    expect(directDecision.toolRoute?.toolNames).toContain(WPS_CREATE_DOCUMENT_TOOL);
+    expect(directDecision.toolPolicy.allowedTools).toContain(WPS_CREATE_DOCUMENT_TOOL);
   });
 
   it('keeps both the foreground turn and an orchestrated worker on WPS UI tools', () => {
@@ -631,5 +631,27 @@ describe('WPS current-app end-to-end regression', () => {
       newVisibleInstance: false,
     })];
     expect(hasCoreActionEvidence(contract, inconsistentInstance, executionTaskText)).toBe(false);
+  });
+
+  it('uses a verified native WPS receipt for a direct blank Word request without recovered app context', () => {
+    const blankRecord = verifiedWpsComRecord({
+      bodyText: '\r',
+      bodyTextWithoutTerminalParagraph: '',
+      charactersRequested: 0,
+      charactersReadBack: 0,
+    });
+    blankRecord.arguments.text = '';
+
+    const finalized = finalizeLumiResponse({
+      taskText: '\u65b0\u5efaWord\u6587\u6863\u3002',
+      responseText: 'WPS \u6587\u6863\u6ca1\u6709\u521b\u5efa\u6210\u529f\u3002',
+      toolRecords: [blankRecord],
+      source: 'voice',
+    });
+
+    expect(finalized.blocked).toBe(false);
+    expect(finalized.text).toContain('\u5df2\u5728 WPS \u4e2d\u65b0\u5efa\u53ef\u89c1\u7a7a\u767d\u6587\u6863');
+    expect(finalized.text).toContain('\u5f53\u524d\u672a\u4fdd\u5b58');
+    expect(finalized.text).toContain('wps.exe (PID 43210)');
   });
 });

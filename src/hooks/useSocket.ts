@@ -7,6 +7,8 @@ const isTauri = isTauriRuntime();
 let registeredSocket: Socket | null = null;
 let deviceConnectHandler: (() => void) | null = null;
 let cursorGlowWatchdog: ReturnType<typeof setTimeout> | null = null;
+const activeDesktopExecutions = new Set<string>();
+const cancelledDesktopExecutions = new Set<string>();
 
 function normalizeCursorGlowPoint(args: Record<string, any>) {
   const rawX = Number(args.x) || 0;
@@ -33,6 +35,7 @@ function registerSharedSocketHandlers(socket: Socket) {
   if (registeredSocket) {
     if (deviceConnectHandler) registeredSocket.off('connect', deviceConnectHandler);
     registeredSocket.off('tool:desktop_exec', desktopExecHandler);
+    registeredSocket.off('tool:desktop_cancel', desktopCancelHandler);
   }
 
   const registerDevice = () => {
@@ -52,10 +55,23 @@ function registerSharedSocketHandlers(socket: Socket) {
 
   socket.on('connect', registerDevice);
   socket.on('tool:desktop_exec', desktopExecHandler);
+  socket.on('tool:desktop_cancel', desktopCancelHandler);
   if (socket.connected) registerDevice();
 
   registeredSocket = socket;
   deviceConnectHandler = registerDevice;
+}
+
+function desktopCancelHandler(data: { correlationId?: string; name?: string }) {
+  const correlationId = String(data?.correlationId || '').trim();
+  if (!correlationId) return;
+  cancelledDesktopExecutions.add(correlationId);
+  window.setTimeout(() => cancelledDesktopExecutions.delete(correlationId), 5 * 60 * 1000);
+  if (data?.name === 'desktop_run_command' && activeDesktopExecutions.has(correlationId) && isTauri) {
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('cancel_command', { commandId: correlationId }))
+      .catch(() => {});
+  }
 }
 
 function desktopExecHandler(data: {
@@ -91,6 +107,7 @@ async function handleDesktopExec(socket: Socket, data: {
     return;
   }
 
+  activeDesktopExecutions.add(correlationId);
   try {
     // Dynamic import — @tauri-apps/api only exists in Tauri context
     const { invoke } = await import('@tauri-apps/api/core');
@@ -182,6 +199,7 @@ async function handleDesktopExec(socket: Socket, data: {
           command: cmd,
           cwd: cwd.trim() || null,
           timeoutMs,
+          commandId: correlationId,
         });
         if (!result.success) {
           throw new Error(result.output || `Command failed: ${cmd}`);
@@ -371,9 +389,16 @@ async function handleDesktopExec(socket: Socket, data: {
         return;
     }
 
-    socket.emit(`tool:desktop_result:${correlationId}`, { output });
+    if (!cancelledDesktopExecutions.has(correlationId)) {
+      socket.emit(`tool:desktop_result:${correlationId}`, { output });
+    }
   } catch (err: any) {
-    socket.emit(`tool:desktop_result:${correlationId}`, { error: err.message || String(err) });
+    if (!cancelledDesktopExecutions.has(correlationId)) {
+      socket.emit(`tool:desktop_result:${correlationId}`, { error: err.message || String(err) });
+    }
+  } finally {
+    activeDesktopExecutions.delete(correlationId);
+    cancelledDesktopExecutions.delete(correlationId);
   }
 }
 

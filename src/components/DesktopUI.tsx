@@ -134,7 +134,6 @@ const NotificationCenter = lazy(() => import('./NotificationCenter').then(m => (
 const OrgPortal = lazy(() => import('./OrgPortal').then(m => ({ default: m.OrgPortal })));
 const PersonalityEditor = lazy(() => import('./PersonalityEditor').then(m => ({ default: m.PersonalityEditor })));
 const ReminderPanel = lazy(() => import('./ReminderPanel').then(m => ({ default: m.ReminderPanel })));
-const RuntimeLogPanel = lazy(() => import('./RuntimeLogPanel').then(m => ({ default: m.RuntimeLogPanel })));
 const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanctuary })));
 const Settings = lazy(() => import('./Settings').then(m => ({ default: m.Settings })));
 const SkillCenter = lazy(() => import('./SkillCenter').then(m => ({ default: m.SkillCenter })));
@@ -1721,7 +1720,7 @@ export function DesktopUI({
 
   // Desktop icon layout: absolute positioning with viewport-aware columns.
   const desktopIcons = [
-    { id: 'runtime-log', labelKey: 'runtimeLog', icon: <TerminalIcon size={24} />, colorClass: 'from-teal-500 to-cyan-600', windowId: 'runtime-log' },
+    { id: 'chat', labelKey: 'chat', icon: <MessageSquare size={24} />, colorClass: 'from-green-500 to-emerald-600', windowId: 'chat' },
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
     { id: 'team', labelKey: 'team', icon: <Bot size={24} />, colorClass: 'from-cyan-500 to-blue-600', windowId: 'team' },
@@ -2053,12 +2052,23 @@ export function DesktopUI({
     if (!voiceprint.templatesLoaded) return false;
     if (voiceprint.enrolledCount === 0) return true;
     if (!voiceprint.hasUsableTemplates) return false;
-    return voiceprint.result.isOwnerSpeaking && voiceprint.result.confidence >= 0.68;
+    return Boolean(
+      voiceprint.result.isOwnerSpeaking
+      && voiceprint.result.confidence >= (voiceprint.result.source === 'speechbrain' ? 0.66 : 0.82)
+      && Number(voiceprint.result.frameCount || 0) >= 3
+      && (
+        voiceprint.result.source === 'speechbrain'
+        || Number(voiceprint.result.quality || 0) >= 0.55
+      )
+    );
   }, [
     voiceprint.enrolledCount,
     voiceprint.hasUsableTemplates,
     voiceprint.result.confidence,
+    voiceprint.result.frameCount,
     voiceprint.result.isOwnerSpeaking,
+    voiceprint.result.quality,
+    voiceprint.result.source,
     voiceprint.templatesLoaded,
   ]);
   useAmbientPoller(socket); // Ambient awareness: polls window, clipboard, idle state
@@ -2146,8 +2156,6 @@ export function DesktopUI({
   const isSpacebarRecording = useRef(false);
   const callStateRef = useRef(callState);
   useEffect(() => { callStateRef.current = callState; }, [callState]);
-  const runtimeLogOpenRef = useRef(openWindows.includes('runtime-log'));
-  useEffect(() => { runtimeLogOpenRef.current = openWindows.includes('runtime-log'); }, [openWindows]);
   // Wake word detection — server-side Qwen ASR (DASHSCOPE_API_KEY), falls back to Picovoice
   // Default off — user must explicitly enable in Settings to avoid continuous ASR charges
   const [wakeEnabled, setWakeEnabled] = useState(() => localStorage.getItem('lumi_wake_word_enabled') === 'true');
@@ -3413,7 +3421,7 @@ export function DesktopUI({
       }
       if (e.key === ' ' && !e.repeat) {
         if (isInputFocused()) return;
-        if (runtimeLogOpenRef.current || isSearchOpen || isControlCenterOpen) return;
+        if (isSearchOpen || isControlCenterOpen) return;
         if (meetingModeRef.current) return;
         e.preventDefault();
         const cs = callStateRef.current;
@@ -3717,6 +3725,7 @@ export function DesktopUI({
         if (value === 'memory') return 'knowledge';
         if (value === 'files') return 'knowledge';
         if (value === 'sync') return 'devices';
+        if (value === 'runtime-log') return 'kernel';
         if (value === 'avatar-studio' || value === 'sound') return 'personalization';
         if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
         return value;
@@ -4192,7 +4201,6 @@ export function DesktopUI({
   ]);
 
   const appIcons = [
-    { id: 'chat', label: t.chat || 'Chat', icon: <MessageSquare size={24} />, color: 'from-green-500 to-emerald-600' },
     { id: 'personality', label: t.personality || 'Personality Lab', icon: <UserIcon size={24} />, color: 'from-violet-500 to-fuchsia-600' },
     { id: 'kernel', label: t.kernelMonitor || 'Kernel Monitor', icon: <Activity size={24} />, color: 'from-orange-500 to-red-600' },
     { id: 'devices', label: t.devices || 'Devices', icon: <Cpu size={24} />, color: 'from-blue-600 to-cyan-400' },
@@ -4248,13 +4256,12 @@ export function DesktopUI({
     if (windowId === 'skills') return { w: '900px', h: '700px' };
     if (windowId === 'personalization') return { w: '1050px', h: '720px' };
     if (windowId === 'terminal') return { w: '900px', h: '600px' };
-    if (windowId === 'runtime-log') return { w: '980px', h: '680px' };
     return { w: '900px', h: '700px' };
   };
   const dockApps = [
     ...appIcons,
     ...openWindows
-      .filter(windowId => !appIcons.some(app => app.id === windowId))
+      .filter(windowId => windowId !== 'chat' && windowId !== 'runtime-log' && !appIcons.some(app => app.id === windowId))
       .map(getWindowMeta),
   ];
   const operationModeOptions = [
@@ -5019,8 +5026,8 @@ export function DesktopUI({
               {desktopIcons.map((def, i) => {
                 const { x, y } = getDefaultDesktopIconPosition(i);
                 const label = (t as any)[def.labelKey] || def.labelKey;
-                const isIconOpen = openWindows.includes(def.windowId);
-                const isIconFocused = focusedWindow === def.windowId;
+                const isIconOpen = openWindows.includes(def.windowId) || (def.windowId === 'chat' && chatOpen);
+                const isIconFocused = focusedWindow === def.windowId || (def.windowId === 'chat' && chatOpen);
                 const handleClick = () => {
                   toggleWindow(def.windowId);
                 };
@@ -5486,8 +5493,6 @@ export function DesktopUI({
                     <ReminderPanel t={t} />
                   ) : windowId === 'plans' ? (
                     <ExecutionWorkQueue t={t} />
-                  ) : windowId === 'runtime-log' ? (
-                    <RuntimeLogPanel t={t} />
                   ) : windowId === 'devices' ? (
                     <DeviceSyncCenter t={t} />
                   ) : windowId === 'tokens' ? (

@@ -123,7 +123,7 @@ describe('SQLite persistence indexes', () => {
     expect(persisted.lastSummaryMessageCount).toBe(0);
   });
 
-  it('persists only evidence-backed action continuation state across an atomic snapshot write', async () => {
+  it('persists the durable task identity and terminal receipts across an atomic snapshot write', async () => {
     const userId = `action-continuation-persistence-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
     addMessage({
@@ -151,10 +151,14 @@ describe('SQLite persistence indexes', () => {
 
     const persisted = await readConversationSummaryState(conversation.id);
     expect(JSON.parse(persisted.actionContinuationState)).toMatchObject({
-      version: 1,
+      version: 2,
       goal: '打开 WPS。',
       appTarget: 'WPS',
+      status: 'completed',
+      unfinished: false,
       evidenceTools: ['desktop_open'],
+      receipts: [{ name: 'desktop_open', outcome: 'success' }],
     });
+    expect(JSON.parse(persisted.actionContinuationState).taskId).toMatch(/^task_/);
   });
 });

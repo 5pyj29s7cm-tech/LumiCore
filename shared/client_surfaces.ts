@@ -219,11 +219,11 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
   },
   {
     id: 'runtime-log',
-    label: 'Runtime log',
-    target: 'runtime-log',
+    label: 'Runtime diagnostics',
+    target: 'kernel',
     actions: ['open_runtime_log'],
-    useWhen: 'Inspect live execution, startup traces, tool progress, and runtime errors.',
-    launcherIds: ['runtime-log'],
+    useWhen: 'Inspect runtime health and adaptation evidence in the unified Kernel monitor. The former standalone run-log window no longer exists.',
+    launcherIds: [],
   },
   {
     id: 'skills',

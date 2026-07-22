@@ -138,6 +138,7 @@ const DECLARATIONS = [
   'cad_generate_dxf',
   'cad_prepare_autocad_operations',
   'mcp_cad-drafting_autocad_playback_file',
+  'cad_draw_floorplan_in_autocad',
   'generate_image',
   'generate_video',
   'mcp_sales-customer-ops_lead_score',
@@ -703,8 +704,9 @@ describe('tool router', () => {
 
     expect(route.categories).toContain('cad_design');
     expect(route.categories).not.toContain('messaging');
-    expect(route.toolNames).toContain('cad_prepare_autocad_operations');
-    expect(route.toolNames).toContain('mcp_cad-drafting_autocad_playback_file');
+    expect(route.toolNames).toContain('cad_draw_floorplan_in_autocad');
+    expect(route.toolNames).not.toContain('cad_prepare_autocad_operations');
+    expect(route.toolNames).not.toContain('mcp_cad-drafting_autocad_playback_file');
     expect(route.toolNames).not.toContain('cad_generate_dxf');
     expect(route.toolNames).not.toContain('wechat_send_message');
   });
@@ -732,24 +734,23 @@ describe('tool router', () => {
     expect(route.toolNames.indexOf('cad_prepare_autocad_operations')).toBeLessThan(route.toolNames.indexOf('mcp_cad-drafting_autocad_playback_file'));
   });
 
-  it('routes a desktop image-to-AutoCAD sequence through built-in OCR/geometry without filesystem or shell fallbacks', () => {
+  it('routes a desktop image-to-AutoCAD request through one verified CAD skill without exposing its low-level stages', () => {
     const route = routeToolsForTurn(
       '桌面上有一张叫设计草稿.jpg的图片，把它画到 AutoCAD 里。',
       DECLARATIONS,
     );
 
     expect(route.categories).toContain('cad_design');
-    expect(route.toolNames).toEqual(expect.arrayContaining([
+    expect(route.toolNames).toEqual(['cad_draw_floorplan_in_autocad']);
+    expect(route.hardAllowlist).toBe(true);
+    expect(route.maxIterations).toBe(2);
+    for (const forbidden of [
       'desktop_list_files',
       'desktop_path_info',
       'floorplan_extract_geometry',
       'ocr_image_file',
       'cad_prepare_autocad_operations',
       'mcp_cad-drafting_autocad_playback_file',
-    ]));
-    expect(route.toolNames.indexOf('desktop_list_files')).toBeLessThan(route.toolNames.indexOf('floorplan_extract_geometry'));
-    expect(route.toolNames.indexOf('floorplan_extract_geometry')).toBeLessThan(route.toolNames.indexOf('cad_prepare_autocad_operations'));
-    for (const forbidden of [
       'mcp_filesystem_read_media_file',
       'read_file',
       'run_command',
@@ -759,7 +760,7 @@ describe('tool router', () => {
     ]) {
       expect(route.toolNames).not.toContain(forbidden);
     }
-    expect(route.reasons.join(' ')).toContain('shell/base64 fallbacks are excluded');
+    expect(route.reasons.join(' ')).toContain('one composite CAD skill owns');
   });
 
   it('hard-limits extraction-only desktop images to geometry read and observation tools', () => {

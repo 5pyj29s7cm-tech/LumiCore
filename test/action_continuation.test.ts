@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildConversationActionContinuationState,
   buildRecentActionContinuationBridge,
+  classifyConversationActionFollowupIntent,
   classifyRecentActionFollowupIntent,
   extractRecentActionContinuationState,
   getRecoveredApplicationContinuationTarget,
@@ -31,6 +32,7 @@ describe('recent action continuation', () => {
     expect(needsRecentActionContinuationContext('去呀快点啊')).toBe(true);
     expect(needsRecentActionContinuationContext('你在搞什么东西啊去执行这个任务')).toBe(true);
     expect(classifyRecentActionFollowupIntent('有没有在执行')).toBe('status');
+    expect(classifyRecentActionFollowupIntent('怎么回事')).toBe('none');
     expect(classifyRecentActionFollowupIntent('为什么没有完成')).toBe('status');
     expect(classifyRecentActionFollowupIntent('我问你为什么没有完成？你为什么不去执行？')).toBe('status');
     expect(classifyRecentActionFollowupIntent('我让你帮我看下桌面上多少软件你倒是跟我说呀')).toBe('status');
@@ -38,6 +40,52 @@ describe('recent action continuation', () => {
     expect(classifyRecentActionFollowupIntent('你在搞什么东西啊去执行这个任务')).toBe('execute');
     expect(classifyRecentActionFollowupIntent('慢个屁')).toBe('execute');
     expect(classifyRecentActionFollowupIntent('别光说，快做')).toBe('execute');
+  });
+
+  it('treats an ambiguous failure question as status only for an unfinished durable task', () => {
+    const unfinished = buildConversationActionContinuationState({
+      userText: '读取桌面平面图并画进 AutoCAD。',
+      assistantText: 'AutoCAD 绘制被阻塞。',
+      toolCalls: [{
+        name: 'cad_draw_floorplan_in_autocad',
+        arguments: { sourceName: '平面图' },
+        result: JSON.stringify({ status: 'blocked', stage: 'autocad_playback', blocker: 'entity verification failed' }),
+      }],
+    });
+    const completed = { ...unfinished!, status: 'completed' as const, unfinished: false };
+
+    expect(classifyConversationActionFollowupIntent('怎么回事？', unfinished)).toBe('status');
+    expect(classifyConversationActionFollowupIntent('怎么回事？', completed)).toBe('none');
+    expect(buildRecentActionContinuationBridge('怎么回事？', [], unfinished)).toContain('- followupIntent: status');
+  });
+
+  it('keeps the executed source path instead of bulk desktop-list samples', () => {
+    const state = extractRecentActionContinuationState([
+      { role: 'user', message: '读取桌面上的阿陆平面图画进 AutoCAD。' },
+      {
+        role: 'assistant',
+        message: '正在处理。',
+        toolCalls: JSON.stringify([
+          {
+            name: 'desktop_list_files',
+            arguments: { path: '~/Desktop' },
+            result: JSON.stringify([
+              { path: 'C:\\Users\\me\\Desktop\\unrelated-1.txt' },
+              { path: 'C:\\Users\\me\\Desktop\\unrelated-2.png' },
+              { path: 'C:\\Users\\me\\Desktop\\阿陆平面图.jpg' },
+            ]),
+          },
+          {
+            name: 'floorplan_extract_geometry',
+            arguments: { imagePath: 'C:\\Users\\me\\Desktop\\阿陆平面图.jpg' },
+            result: JSON.stringify({ status: 'blocked', parseError: 'calibration required' }),
+          },
+        ]),
+      },
+    ]);
+
+    expect(state.sourcePaths).toContain('C:\\Users\\me\\Desktop\\阿陆平面图.jpg');
+    expect(state.sourcePaths).not.toContain('C:\\Users\\me\\Desktop\\unrelated-1.txt');
   });
 
   it('keeps a result demand on the latest desktop observation instead of an older WeChat task', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyActiveVoiceWorkInput,
   classifyVoiceWorkInterruption,
   isSpeechClearlyDirectedAwayFromLumi,
   isVoiceCorrectionContinuation,
@@ -75,7 +76,15 @@ describe('voice interruption state', () => {
 
   it('keeps voice work running for progress questions and ordinary side chat', () => {
     expect(classifyVoiceWorkInterruption('\u505a\u5230\u54ea\u4e86\uff1f')).toBe('progress_query');
+    expect(classifyVoiceWorkInterruption('怎么回事？')).toBe('progress_query');
     expect(classifyVoiceWorkInterruption('\u4f60\u89c9\u5f97\u8fd9\u4e2a\u989c\u8272\u600e\u4e48\u6837\uff1f')).toBe('side_chat');
+    expect(classifyVoiceWorkInterruption('任务执行的怎么样？', {
+      hasExplicitToolIntent: true,
+    })).toBe('progress_query');
+    expect(classifyVoiceWorkInterruption('现在到哪一步了？', {
+      hasExplicitToolIntent: true,
+    })).toBe('progress_query');
+    expect(isVoiceCurrentActivityQuestion('任务执行得怎么样？')).toBe(true);
   });
 
   it('classifies an independent tool request as queued work when the shared intent gate confirms it', () => {
@@ -85,6 +94,26 @@ describe('voice interruption state', () => {
     expect(classifyVoiceWorkInterruption('你觉得这个颜色怎么样', {
       hasExplicitToolIntent: false,
     })).toBe('side_chat');
+  });
+
+  it('keeps repeats and new commands from silently replacing active work', () => {
+    const active = '读取桌面上的阿陆平面图画进 AutoCAD 里';
+    expect(classifyActiveVoiceWorkInput(active, '读取桌面上的阿陆平面图画进AutoCAD里。', {
+      hasExplicitToolIntent: true,
+    })).toMatchObject({
+      kind: 'progress_query',
+      keepActiveWork: true,
+      queueIncomingWork: false,
+      repeatedInstruction: true,
+    });
+    expect(classifyActiveVoiceWorkInput(active, '打开浏览器', {
+      hasExplicitToolIntent: true,
+    })).toMatchObject({
+      kind: 'new_work',
+      keepActiveWork: true,
+      queueIncomingWork: true,
+      repeatedInstruction: false,
+    });
   });
 
   it('separates stopping speech from cancelling or modifying the active work', () => {

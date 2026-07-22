@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   buildActionContract,
   hasCoreActionEvidence,
@@ -21,6 +21,11 @@ import type { ToolExecutionRecord } from '../server/tools/types';
 function declaration(name: string, description = name) {
   return { type: 'function' as const, function: { name, description, parameters: { type: 'object', properties: {} } } };
 }
+
+beforeAll(async () => {
+  const { initDatabase } = await import('../db_layer');
+  await initDatabase();
+});
 
 const persistedWps: ConversationActionContinuationState = {
   version: 1,
@@ -133,5 +138,81 @@ describe('receipt-backed current application control', () => {
       arguments: { text: 'model invented text' },
       toolRecords: [],
     })).toMatchObject({ allowed: true, normalizedArguments: { text: '' } });
+  });
+
+  it('routes a direct open-and-create WPS request to the visible WPS path', () => {
+    const instruction = '\u6253\u5f00WPS\u65b0\u5efaWord\u6587\u6863';
+    const tools = [
+      declaration('wps_create_document_with_text'),
+      declaration('desktop_active_window'),
+      declaration('desktop_ui_snapshot'),
+      declaration('desktop_open'),
+      declaration('create_docx'),
+    ];
+    const route = routeToolsForTurn(instruction, tools);
+
+    expect(buildActionContract(instruction).kind).toBe('desktop_operation');
+    expect(isRecoveredWpsCreateTask(instruction)).toBe(true);
+    expect(route.toolNames).toContain('wps_create_document_with_text');
+    expect(route.toolNames).not.toContain('create_docx');
+    expect(guardCurrentAppToolCall({
+      taskText: instruction,
+      toolName: 'wps_create_document_with_text',
+      arguments: { text: 'invented' },
+      toolRecords: [],
+    })).toMatchObject({ allowed: true, normalizedArguments: { text: '' } });
+  });
+
+  it('recognizes a possessive short document request as a WPS continuation', () => {
+    const instruction = '\u65b0\u5efa\u6211\u7684\u6587\u6863';
+    const bridge = buildRecentActionContinuationBridge(instruction, [], persistedWps);
+    expect(bridge).toContain('Recent action continuation context');
+    expect(isRecoveredWpsCreateTask(`${instruction}\n\n${bridge}`)).toBe(true);
+  });
+
+  it('reports verified partial progress instead of erasing a successful open', () => {
+    const result = finalizeLumiResponse({
+      taskText: '\u6253\u5f00\u7f51\u6613\u4e91\u97f3\u4e50\uff0c\u7ee7\u7eed\u64ad\u653e',
+      responseText: '\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\u3002',
+      toolRecords: [{
+        name: 'desktop_open',
+        arguments: { target: '\u7f51\u6613\u4e91\u97f3\u4e50' },
+        result: JSON.stringify({ ok: true, status: 'opened', target: '\u7f51\u6613\u4e91\u97f3\u4e50' }),
+      }],
+      source: 'voice',
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('\u5df2\u6253\u5f00\u7f51\u6613\u4e91\u97f3\u4e50');
+    expect(result.text).toContain('\u540e\u7eed\u64cd\u4f5c');
+  });
+
+  it('blocks bracketed internal tool protocol and removes false current-mode claims', async () => {
+    const leaked = finalizeLumiResponse({
+      taskText: '\u5438\u6536\u672c\u5730\u77e5\u8bc6\u5e93',
+      responseText: '[\u5207\u6362\u52a9\u624b\u6a21\u5f0f] set_client_mode(assistant)',
+      toolRecords: [],
+      source: 'voice',
+    });
+    expect(leaked.blocked).toBe(true);
+    expect(leaked.text).not.toContain('set_client_mode');
+
+    const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+    const flow = buildLumiTurnFlow({
+      userId: 'mode-grounding-user',
+      text: '\u8c01\u5728\u8bf4\u8bdd',
+      channel: 'voice',
+      source: 'voice',
+      operationMode: 'assistant',
+    });
+    const grounded = finalizeLumiResponse({
+      taskText: '\u8c01\u5728\u8bf4\u8bdd',
+      responseText: '\u521a\u624d\u662f\u6211\u5728\u8bf4\u8bdd\u3002\u4e0d\u8fc7\u6211\u73b0\u5728\u662f\u5bf9\u8bdd\u6a21\u5f0f\u3002\u8981\u6267\u884c\u9700\u8981\u5148\u5207\u6362\u5230\u52a9\u624b\u6a21\u5f0f\u3002',
+      toolRecords: [],
+      source: 'voice',
+      flow,
+    });
+    expect(grounded.text).toContain('\u521a\u624d\u662f\u6211\u5728\u8bf4\u8bdd');
+    expect(grounded.text).not.toContain('\u5bf9\u8bdd\u6a21\u5f0f');
+    expect(grounded.text).not.toContain('\u5207\u6362\u5230\u52a9\u624b');
   });
 });

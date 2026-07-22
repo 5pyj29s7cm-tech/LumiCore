@@ -26,7 +26,7 @@ import {
   formatMemoriesForContext,
   queryMemories,
 } from '../server/memory/store';
-import { normalizeVoiceHistoryRecord } from '../server/socket/voice';
+import { normalizeVoiceHistory, normalizeVoiceHistoryRecord } from '../server/socket/voice';
 import { registerExternalAppTools } from '../server/tools/definitions/external_app_tools';
 import { isToolNameAllowedByPolicy, ToolRegistry, toolRegistry } from '../server/tools/registry';
 
@@ -40,6 +40,15 @@ describe('systematic naturalness regressions', () => {
       channel: 'voice',
       text: '打开浏览器并放到主屏幕',
       complexity: 'moderate',
+      allowToolUse: true,
+      clientActionOnly: false,
+      selfRepair: false,
+      directDesktop: true,
+    })).toBe(false);
+    expect(shouldAttemptOrchestration({
+      channel: 'voice',
+      text: '打开 WPS，读取文档，再把结论写入当前页面',
+      complexity: 'complex',
       allowToolUse: true,
       clientActionOnly: false,
       selfRepair: false,
@@ -248,6 +257,30 @@ describe('systematic naturalness regressions', () => {
       message: '我们接着聊。',
       toolCalls: [],
     })).toEqual([{ role: 'assistant', content: '我们接着聊。' }]);
+    expect(normalizeVoiceHistory([
+      { role: 'user', message: '打开 AutoCAD 并画图' },
+      {
+        role: 'assistant',
+        message: '已打开 AutoCAD。',
+        toolCalls: [{ name: 'desktop_open', result: '{"status":"opened"}' }],
+      },
+      { role: 'user', message: '你的音频怎么降级了？' },
+      { role: 'assistant', message: '当前语音没有切换备用音色。', toolCalls: [] },
+    ])).toEqual([
+      { role: 'user', content: '你的音频怎么降级了？' },
+      { role: 'assistant', content: '当前语音没有切换备用音色。' },
+    ]);
+  });
+
+  it('blocks a zero-receipt old-task activity claim in ordinary conversation', () => {
+    const result = finalizeLumiResponse({
+      taskText: '你的音频怎么降级了？',
+      responseText: '工具链路已经恢复，我现在开始处理 WPS 和网易云音乐。',
+      toolRecords: [],
+      source: 'voice',
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('混入了旧任务内容');
   });
 
   it('filters generated growth/proactive traces from ordinary memory recall', () => {

@@ -63,6 +63,41 @@ describe('desktop capability alignment', () => {
     expect(result).toContain('screenRecording=granted');
   });
 
+  it('lets a complete current-turn client snapshot override an ambiguous fabricated diagnosis', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const records = [{
+      name: 'client_health_check',
+      arguments: {},
+      result: JSON.stringify({
+        report: { level: 'healthy', findings: [] },
+        scope: { domain: 'personal' },
+      }),
+    }, {
+      name: 'client_get_state',
+      arguments: {},
+      result: JSON.stringify({
+        state: { mode: 'assistant', activeTab: 'chat' },
+        stateDigest: { mode: 'assistant', activeTab: 'chat' },
+        health: { level: 'healthy', findings: [] },
+        scope: { domain: 'personal' },
+      }),
+    }];
+
+    const result = finalizeLumiResponse({
+      taskText: '\u600e\u4e48\u56de\u4e8b\uff1f',
+      responseText: '\u540e\u7aef\u6ca1\u6709\u542f\u52a8\uff0c\u622a\u56fe\u5df2\u6267\u884c 300 \u6b65\u3002',
+      toolRecords: records,
+      source: 'voice',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('\u672c\u8f6e\u771f\u5b9e\u5de5\u5177\u56de\u6267');
+    expect(result.text).toContain('client_health_check');
+    expect(result.text).toContain('client_get_state');
+    expect(result.text).not.toContain('\u540e\u7aef\u6ca1\u6709\u542f\u52a8');
+    expect(result.text).not.toContain('300');
+  });
+
   it('lets vision computer use follow the active desktop/autonomy tool policy', async () => {
     const { resolveComputerUseSteps } = await import('../server/tools/definitions/computer_use_tool');
 

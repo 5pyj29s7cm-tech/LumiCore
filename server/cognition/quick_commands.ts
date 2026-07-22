@@ -87,7 +87,12 @@ export function buildQuickCommandToolPolicy(
 }
 
 function normalizeQuickOpenTarget(value: string): string | null {
-  let target = String(value || '').trim().replace(/[。！？.!?]+$/u, '').trim();
+  let target = String(value || '')
+    .trim()
+    // Realtime ASR commonly terminates an app name with an ASCII comma. It is
+    // punctuation, not part of the application/window identity.
+    .replace(/[。！？.!?，,；;：:、]+$/u, '')
+    .trim();
   if (!target) return null;
 
   // “打开正在运行的微信，不要启动新的微信” means focus the existing

@@ -19,6 +19,8 @@ type PendingDesktopRelay = {
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   onDisconnect?: () => void;
+  onAbort?: () => void;
+  signal?: AbortSignal;
   requestSocket?: Socket;
   targetSocketId?: string;
 };
@@ -42,6 +44,7 @@ export type DesktopRelayOptions = {
   formatResultForLifecycle?: (output: string) => string;
   timeoutMs?: number;
   cancelOnRequestSocketDisconnect?: boolean;
+  signal?: AbortSignal;
 };
 
 const pendingDesktopRelays = new Map<string, PendingDesktopRelay>();
@@ -63,10 +66,11 @@ export function isCoLocatedWindowsDesktopRuntime(
 async function runLocalDesktopUiTool(
   toolName: string,
   args: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   if (process.platform !== 'win32') return null;
   if (toolName === 'desktop_ui_snapshot') {
-    return JSON.stringify(await captureWindowsUiSnapshot(args), null, 2);
+    return JSON.stringify(await captureWindowsUiSnapshot({ ...args, signal }), null, 2);
   }
   const action = {
     desktop_ui_focus: 'focus',
@@ -75,7 +79,7 @@ async function runLocalDesktopUiTool(
     desktop_ui_type: 'type',
   }[toolName] as 'focus' | 'click' | 'invoke' | 'type' | undefined;
   if (!action) return null;
-  return JSON.stringify(await runWindowsUiAction({ ...args, action }), null, 2);
+  return JSON.stringify(await runWindowsUiAction({ ...args, action, signal }), null, 2);
 }
 
 function normalizeDesktopScope(domain?: string, orgId?: string) {
@@ -129,6 +133,9 @@ export function handleDesktopRelayResult(correlationId: string, data: DesktopRel
   if (pending.requestSocket && pending.onDisconnect) {
     pending.requestSocket.off('disconnect', pending.onDisconnect);
   }
+  if (pending.signal && pending.onAbort) {
+    pending.signal.removeEventListener('abort', pending.onAbort);
+  }
 
   if (data.error) pending.reject(new Error(data.error));
   else pending.resolve(data.output || '');
@@ -145,6 +152,9 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
   const scope = normalizeDesktopScope(options.domain, options.orgId);
 
   return async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
+    if (options.signal?.aborted) {
+      throw new Error(`Desktop tool "${toolName}" cancelled before execution`);
+    }
     if (LOCAL_DESKTOP_UI_TOOLS.has(toolName) && !isCoLocatedWindowsDesktopRuntime()) {
       throw new Error(
         `Desktop UI Automation tool "${toolName}" is blocked because the server is not proven to share the selected desktop's Windows session. Use computer_use on the connected desktop instead.`,
@@ -153,7 +163,7 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
     if (isCoLocatedWindowsDesktopRuntime() && LOCAL_DESKTOP_UI_TOOLS.has(toolName)) {
       const localUiCorrelationId = `desktop-${options.source}_${randomUUID()}`;
       try {
-        const localUiResult = await runLocalDesktopUiTool(toolName, args);
+        const localUiResult = await runLocalDesktopUiTool(toolName, args, options.signal);
         if (localUiResult !== null) {
           options.emitToolLifecycle?.({
             correlationId: localUiCorrelationId,
@@ -201,6 +211,9 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
           if (pending.requestSocket && pending.onDisconnect) {
             pending.requestSocket.off('disconnect', pending.onDisconnect);
           }
+          if (pending.signal && pending.onAbort) {
+            pending.signal.removeEventListener('abort', pending.onAbort);
+          }
         }
         options.emitToolLifecycle?.({ correlationId: uiCid, name: toolName, arguments: args, error: message });
         reject(new Error(message));
@@ -212,6 +225,17 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
 
       const onDisconnect = () => {
         finishWithError(`Desktop tool "${toolName}" cancelled: requesting client disconnected before returning a result`);
+      };
+
+      const onAbort = () => {
+        const targetSocketId = pendingDesktopRelays.get(cid)?.targetSocketId;
+        if (targetSocketId) {
+          options.io.sockets.sockets.get(targetSocketId)?.emit('tool:desktop_cancel', {
+            correlationId: cid,
+            name: toolName,
+          });
+        }
+        finishWithError(`Desktop tool "${toolName}" cancelled because the active task was stopped or superseded`);
       };
 
       pendingDesktopRelays.set(cid, {
@@ -234,6 +258,8 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
         },
         timeout,
         onDisconnect: cancelOnDisconnect ? onDisconnect : undefined,
+        onAbort: options.signal ? onAbort : undefined,
+        signal: options.signal,
         requestSocket: cancelOnDisconnect ? options.requestSocket : undefined,
       });
 
@@ -249,6 +275,13 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
 
       if (cancelOnDisconnect && options.requestSocket) {
         options.requestSocket.once('disconnect', onDisconnect);
+      }
+      if (options.signal) {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+        if (options.signal.aborted) {
+          onAbort();
+          return;
+        }
       }
 
       const preferredSocketId = getPreferredDesktopSocketId(options.userId, scope.domain, scope.orgId);

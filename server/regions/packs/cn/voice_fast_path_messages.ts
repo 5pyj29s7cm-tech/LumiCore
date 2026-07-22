@@ -7,6 +7,9 @@ export function isInternalExecutionDetail(value: string): boolean {
 export function formatCnToolFailureDetail(error: string): string {
   const raw = String(error || '').trim();
   if (!raw) return '系统没有返回可核实的失败原因。';
+  if (/previous runtime ended|pending confirmation expired/i.test(raw)) {
+    return '上一次客户端运行结束时任务尚未收尾，已停在最后一个可验证步骤，可以从这里继续。';
+  }
   if (isInternalExecutionDetail(raw)) {
     return '这一步没有拿到可执行的入口或可验证的结果，已停止，没有冒充完成。';
   }
@@ -24,9 +27,12 @@ export function formatCnToolFailureDetail(error: string): string {
 }
 
 export const CN_VOICE_FAST_PATH_MESSAGES = {
+  genericToolAction: '请求的操作',
   audible: '能听见。你说。',
   opening: (target: string) => `正在打开${target}。`,
   opened: (target: string) => `已打开${target}。`,
+  partialOpen: (target: string) => `已打开${target}，但后续操作还没有验证成功。`,
+  partialArtifact: (path: string) => `文件已生成：${path}。但没有在目标应用中完成对应操作。`,
   openFailed: (target: string, error: string) => `这次没能打开${target}：${formatCnToolFailureDetail(error)}`,
   openReceiptMissing: (target: string) => `这次没有拿到${target}的启动回执。`,
   openConfirmedByUser: '好，已经打开了。',
@@ -67,6 +73,7 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
 } as const;
 
 export const CN_VOICE_WORK_MESSAGES = {
+  workAccepted: '已收到任务，正在分析并准备执行。',
   queuedWork: '收到，这个操作已经排在当前任务后面，当前任务完成后我会自动接着执行。',
   coordinatingParallelWork: '正在协调并行任务',
   executingCurrentStep: '正在执行当前步骤',
@@ -88,10 +95,26 @@ export const CN_VOICE_WORK_MESSAGES = {
   processingTimedOut: '这次处理超时，已经停止，不会在后台继续。',
 } as const;
 
+export const CN_TASK_EXECUTION_MESSAGES = {
+  noResumableTask: '现在没有可续接的工作任务。',
+  goalWithCurrentStep: (goal: string, step: string) => `${goal}；当前步骤：${step}`,
+  completed: (goal: string, receiptCount: number) => `“${goal}”已完成${receiptCount ? `，已核对${receiptCount}个执行回执` : ''}。`,
+  completedFromUserObservation: (goal: string) => `好，以你看到的桌面结果为准，“${goal}”记为已完成。`,
+  waitingConfirmation: (goal: string) => `“${goal}”正在等你确认下一步；确认后会续接原任务，不会重新路由。`,
+  blocked: (goal: string, detail: string) => `“${goal}”还没完成。最后阻塞在：${detail}我会从这一步继续，不需要你重新描述。`,
+  executing: (goal: string, receiptCount: number) => `“${goal}”还在执行链上${receiptCount ? `，已完成${receiptCount}个可验证步骤` : ''}。`,
+  activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
+  cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
+  confirmationFailed: (detail: string) => `确认的操作执行失败：${detail}`,
+  confirmationExecuted: '已执行刚才确认的操作。',
+} as const;
+
 export const CN_RESULT_GROUNDING_MESSAGES = {
   priorDiagnosticUnsupported: '刚才没有可核实的客户端自检工具回执。我不能把延迟解释成“在跑自检”；只能确认那一轮没有记录到客户端自检。',
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',
   toolProtocolBlocked: '这轮工具请求没有被执行，内部协议文本已拦截。',
+  unverifiedExecutionActivity: '这轮没有启动新的执行任务；刚才的回复混入了旧任务内容。',
+  actionNotStarted: '这轮没有任何工具执行回执；刚才只说了方案，实际还没开始。不能把计划当成执行结果。',
   desktopSoftwareShortcutCount: (count: number) => `桌面上有 ${count} 个软件快捷方式。`,
   desktopSnapshotIntro: '本轮桌面状态读取已完成，结果来自当前桌面客户端的本次采样。',
   processSnapshot: (count: number, names: string[]) => `运行快照：已读取 ${count} 条活跃进程记录${names.length ? `，前几项为 ${names.join('、')}` : ''}。`,

@@ -149,13 +149,18 @@ export function formatClientDiagnosticResult(
   const substantiveRecords = diagnosticRecords.filter(record => (
     isSubstantiveClientDiagnosticToolName(record.name)
   ));
-  // Tool presence alone must not turn an unrelated action into a self-check
-  // report. This is especially important when an old continuation bridge
-  // contains client diagnostic wording.
+  // One incidental diagnostic record must not turn unrelated work into a
+  // self-check report. A complete, successful state+health snapshot produced
+  // in this turn is different: it is stronger than ambiguous model prose and
+  // must own the final answer so the model cannot invent an outage or repair.
+  const hasSuccessfulCoreSnapshot = (
+    diagnosticRecords.some(record => /^client_get_state$/i.test(record.name) && isSuccessfulDiagnosticRecord(record))
+    && diagnosticRecords.some(record => /^client_health_check$/i.test(record.name) && isSuccessfulDiagnosticRecord(record))
+  );
   const confirmationOfRecordedDiagnostic = /^(?:\u786e\u8ba4|\u786e\u5b9a|\u662f|\u597d|\u597d\u7684|\u53ef\u4ee5|\u7ee7\u7eed|confirm|yes|ok|okay)[\u3002\uFF01\uFF1F.!?]*$/iu.test(String(taskText || '').trim())
     && diagnosticRecords.some(record => /^client_/i.test(String(record.name || '')))
     && /(?:client_get_state|client_health_check|client_self_repair|client_repair_skill)/i.test(responseText);
-  if (!isCurrentClientDiagnosticRequest(taskText) && !confirmationOfRecordedDiagnostic) return null;
+  if (!isCurrentClientDiagnosticRequest(taskText) && !confirmationOfRecordedDiagnostic && !hasSuccessfulCoreSnapshot) return null;
   // A window title, UIA tree, process list, or screenshot can supplement a
   // client self-check, but cannot establish one by itself.
   if (substantiveRecords.length === 0) {

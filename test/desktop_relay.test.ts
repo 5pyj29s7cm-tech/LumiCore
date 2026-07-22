@@ -171,4 +171,32 @@ describe('desktop relay routing', () => {
     expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'org-window' }, 'scope_org_socket')).toBe(true);
     await expect(promise).resolves.toBe('org-window');
   });
+
+  it('cancels a pending desktop action and tells the selected desktop client to stop it', async () => {
+    const userId = `relay_abort_${Date.now()}`;
+    const sent: any[] = [];
+    const desktopSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    deviceRegistry.register(userId, 'scope_abort_socket', {
+      name: 'Abort Desktop', type: 'desktop', domain: 'personal', orgId: '', deviceFingerprint: userId,
+    });
+    const { io } = mockIo({ scope_abort_socket: desktopSocket });
+    const controller = new AbortController();
+    const relay = createDesktopRelay({
+      io,
+      userId,
+      source: 'chat',
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+
+    const promise = relay('desktop_keyboard_type', { text: 'do not finish' });
+    expect(sent[0].event).toBe('tool:desktop_exec');
+    controller.abort();
+    await expect(promise).rejects.toThrow(/cancelled/i);
+    expect(sent.some(item => item.event === 'tool:desktop_cancel')).toBe(true);
+    expect(getPendingDesktopRelayCount()).toBe(0);
+  });
 });

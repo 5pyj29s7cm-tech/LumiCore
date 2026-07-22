@@ -46,6 +46,11 @@ export function BiometricsEnrollPanel() {
     if (voiceStatus === 'recording') return;
     setVoiceStatus('recording');
     setVoiceProgress(0);
+    window.dispatchEvent(new CustomEvent('lumi:stop-voice-output'));
+    // Let WebAudio output and the microphone echo canceller settle before the
+    // enrollment buffer begins. This prevents Lumi's own voice being stored as
+    // the owner template.
+    await new Promise(resolve => setTimeout(resolve, 250));
 
     // Animate progress over ~6 seconds
     const startTime = Date.now();

@@ -1,5 +1,6 @@
 import {
   detectRequestedOperationMode,
+  isPureOperationModeSwitchRequest,
   normalizeOperationMode,
   type OperationMode,
 } from './operation_modes';
@@ -191,6 +192,22 @@ const CLIENT_INTEGRATION_DIAGNOSTIC_RE =
   /(?:(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b).{0,24}(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b).{0,16}(?:\u72b6\u6001|\u5065\u5eb7|\u8fde\u63a5|\u63a5\u5165|\u5f02\u5e38|\u95ee\u9898|\b(?:status|health|connection|integration|problem)\b)|(?:MCP|\u6280\u80fd|\u63d2\u4ef6|\u9002\u914d\u5668|\b(?:skill|plugin|adapter)\b).{0,16}(?:\u72b6\u6001|\u5065\u5eb7|\u8fde\u63a5|\u63a5\u5165|\u5f02\u5e38|\u95ee\u9898|\b(?:status|health|connection|integration|problem)\b).{0,24}(?:\u68c0\u67e5|\u6392\u67e5|\u68c0\u6d4b|\u8bca\u65ad|\bcheck\b|\binspect\b|\bdiagnos(?:e|is|tic)\b))/iu;
 const CLIENT_OR_APP_RUNTIME_FAILURE_RE =
   /(?:(?:Lumi|\u5ba2\u6237\u7aef|\u8fd0\u884c\u65f6).{0,40}(?:\u6545\u969c|\u62a5\u9519|\u9519\u8bef|\u5931\u8d25|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u767d\u5c4f|\u9ed1\u5c4f|\u6ca1\u53cd\u5e94|\u4e0d\u751f\u6548|\u6253\u4e0d\u5f00|\u6ca1\u58f0\u97f3|\u6709\u95ee\u9898)|(?:AutoCAD|CAD|WPS|\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|WeChat|Weixin|Chrome|Edge|Revit).{0,40}(?:\u6253\u4e0d\u5f00|\u542f\u52a8\u5931\u8d25|\u8fd0\u884c\u5931\u8d25|\u5d29\u6e83|\u5361\u4f4f|\u5361\u6b7b|\u6ca1\u53cd\u5e94|\u767d\u5c4f|\u9ed1\u5c4f|\u6ca1\u58f0\u97f3)|\b(?:lumi|client|runtime)\b.{0,50}\b(?:error|failed|failure|broken|crash(?:ed)?|stuck|hang(?:ing)?|not\s+responding|blank|not\s+working)\b|\b(?:autocad|cad|wps|wechat|weixin|chrome|edge|revit)\b.{0,50}\b(?:failed\s+to\s+(?:open|start|run)|crash(?:ed)?|stuck|hang(?:ing)?|not\s+responding)\b)/iu;
+const CLIENT_RUNTIME_MUTATION_ACTION_RE =
+  /(?:\u91cd\u542f|\u91cd\u65b0\u542f\u52a8|\u91cd\u8fde|\u91cd\u65b0\u8fde\u63a5|\u5237\u65b0|\u6062\u590d|\u4fee\u590d)|\b(?:restart|reboot|reconnect|refresh|recover|repair)\b/iu;
+const CLIENT_RUNTIME_MUTATION_TARGET_RE =
+  /(?:Lumi|\u5ba2\u6237\u7aef|\u540e\u7aef|\u670d\u52a1|\u8fdb\u7a0b|\u8fd0\u884c\u65f6|MCP|\u6280\u80fd|\u63d2\u4ef6)|\b(?:client|backend|server|service|process|runtime|mcp|skill|plugin)\b/iu;
+
+/** Explicit mutation of Lumi's own runtime is an execution request even when
+ * it contains a status noun such as "process". It must enter the diagnostic
+ * tool lane rather than being answered as ordinary conversation. */
+export function isClientRuntimeMutationRequest(text: string): boolean {
+  const normalized = String(text || '').trim();
+  return Boolean(
+    normalized
+    && CLIENT_RUNTIME_MUTATION_ACTION_RE.test(normalized)
+    && CLIENT_RUNTIME_MUTATION_TARGET_RE.test(normalized)
+  );
+}
 
 /**
  * Identifies a current-turn request to inspect Lumi's own client/runtime.
@@ -231,6 +248,12 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
   if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return true;
+  // A negated authorization is feedback about the preceding action, never a
+  // fresh command. Keep this semantic and verb-based so corrections do not
+  // need to be enumerated one sentence at a time.
+  if (
+    /^(?:(?:(?:\u6211|\u6211\u4eec)?(?:\u6ca1\u6709|\u6ca1|\u5e76\u6ca1\u6709|\u4ece\u6ca1)|\u6ca1\u6709\u4eba|\u8c01\u90fd\u6ca1\u6709)(?:\u8ba9|\u53eb|\u8981\u6c42|\u6388\u6743|\u540c\u610f)|(?:\u6211\u8bf4\u7684|\u6211\u7684\u610f\u601d)?\u4e0d\u662f(?:\u8ba9|\u53eb|\u8981)|(?:\u522b|\u4e0d\u8981)\u518d).{0,80}(?:\u6267\u884c|\u64cd\u4f5c|\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u53d1\u9001|\u521b\u5efa|\u65b0\u5efa|\u5220\u9664|\u5173\u95ed)|^(?:I|we|nobody)\s+(?:did(?:\s+not|n't)|never)\s+(?:ask|tell|authorize|approve)|^(?:I\s+)?did(?:\s+not|n't)\s+mean\s+to\s+(?:ask|tell)/iu.test(normalized)
+  ) return true;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   if (/(?:修复|处理|排查|检查|诊断|重新|重试|再试|fix|repair|diagnose|retry)/iu.test(normalized)) return false;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -353,7 +376,8 @@ export function hasClientActionOnlyIntent(text: string): boolean {
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
-  if (detectRequestedOperationMode(normalized)) return true;
+  const requestedMode = detectRequestedOperationMode(normalized);
+  if (requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode)) return true;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)) return true;
   return CLIENT_ACTION_ONLY_PATTERNS.some((pattern) => pattern.test(normalized));
@@ -363,6 +387,7 @@ export function isDiagnosticOrRepairRequest(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
   if (isUserCorrectionOrExplanationQuestion(normalized)) return false;
+  if (isClientRuntimeMutationRequest(normalized)) return true;
   if (isCurrentClientDiagnosticRequest(normalized)) return true;
   if (
     CLIENT_SELF_DIAGNOSTIC_ARTIFACT_RE.test(normalized)
@@ -439,8 +464,11 @@ export function traceToolIntentDecision(text: string, source?: string, operation
 
   const explicitToolIntent = structuredToolRules.length > 0 || legacyToolRules.length > 0;
   const clientActionIntent = Boolean(requestedMode) || structuredClientRules.length > 0 || clientActionRules.length > 0;
+  const pureOperationModeSwitch = Boolean(
+    requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode),
+  );
   const clientActionOnlyIntent = !externalDesktopOrTeamExecution
-    && (Boolean(requestedMode) || structuredClientRules.length > 0 || clientActionOnlyRules.length > 0);
+    && (pureOperationModeSwitch || structuredClientRules.length > 0 || clientActionOnlyRules.length > 0);
   const autonomousTask = autonomousTaskRules.length > 0;
 
   let allowToolUse = false;

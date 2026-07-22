@@ -16,6 +16,20 @@ export interface VoiceWorkInterruptionOptions {
   hasExplicitToolIntent?: boolean;
 }
 
+export interface ActiveVoiceWorkInputDecision {
+  kind: VoiceWorkInterruptionKind;
+  keepActiveWork: boolean;
+  queueIncomingWork: boolean;
+  repeatedInstruction: boolean;
+}
+
+function voiceInstructionKey(text: string): string {
+  return String(text || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
 const CORRECTION_CONTINUATION_PATTERNS: RegExp[] = [
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
   /(?:\u4e0d\u662f|\u4e0d\u5bf9|\u9519\u4e86|\u641e\u9519\u4e86|\u5f04\u9519\u4e86|\u542c\u9519\u4e86|\u8bc6\u522b\u9519\u4e86|\u5bf9\u8c61\u9519\u4e86|\u4eba\u540d\u9519\u4e86|\u540d\u5b57\u9519\u4e86|\u5e94\u8be5\u662f|\u6539\u6210|\u66f4\u6b63\u4e3a|\u6211\u8bf4\u7684\u662f).{0,80}(?:\u4e0d\u662f|\u800c\u662f|\u662f|\u95ee|\u53d1|\u6253\u5f00|\u641c\u7d22|\u8054\u7cfb\u4eba|\u5bf9\u8c61|\u4eba\u540d|\u540d\u5b57)/u,
@@ -72,7 +86,15 @@ export function classifyVoiceWorkInterruption(
   ) return 'cancel_work';
   if (
     isVoiceCurrentActivityQuestion(normalized)
+    || /^(?:怎么回事|什么情况)[？?。！!\s]*$/u.test(normalized) // i18n-allow: Chinese active-work interruption recognition.
     || /(?:\u8fdb\u5ea6|\u505a\u5230\u54ea|\u5e72\u5230\u54ea|\u5b8c\u6210\u591a\u5c11|\u8fd8\u5728\u505a|\u8fd8\u5728\u5904\u7406)/u.test(normalized)
+    // A progress question can itself contain action words such as “执行”. It
+    // must win over the generic tool-intent gate below or it will replace the
+    // task whose status the user is asking about.
+    || /(?:任务|工作|这个|它)?(?:执行|进行|处理|运行|做)(?:的|得)?(?:怎么样|怎样|如何|到哪(?:一步)?|什么状态|还顺利吗|还在继续吗|完了吗|好了没)/u.test(compact) // i18n-allow: Chinese active-work progress recognition.
+    || /(?:怎么样|怎样|如何)(?:了|啦)?$/u.test(compact) && /(?:任务|执行|进行|处理|运行|进度)/u.test(compact) // i18n-allow: Chinese active-work progress recognition.
+    || /(?:有没有|是否|还在)(?:正常)?(?:执行|进行|处理|运行|继续)(?:这个|该)?(?:任务|工作)?/u.test(compact) // i18n-allow: Chinese active-work progress recognition.
+    || /(?:现在|目前)?(?:到哪(?:一步)?|什么状态|什么进度)/u.test(compact) // i18n-allow: Chinese active-work progress recognition.
     || /\b(?:progress|how(?:'s| is) (?:it|the task) going|where are you (?:at|up to))\b/i.test(normalized)
   ) return 'progress_query';
   if (isVoiceTaskContinuation(normalized)) return 'modify_work';
@@ -84,12 +106,42 @@ export function classifyVoiceWorkInterruption(
   return 'side_chat';
 }
 
+/**
+ * One admission decision for speech received while a task owns the work lane.
+ * Repeating the active instruction asks about that same task; a genuinely new
+ * action is queued and can never silently replace the running task.
+ */
+export function classifyActiveVoiceWorkInput(
+  activeInstruction: string,
+  incomingText: string,
+  options: VoiceWorkInterruptionOptions = {},
+): ActiveVoiceWorkInputDecision {
+  const activeKey = voiceInstructionKey(activeInstruction);
+  const incomingKey = voiceInstructionKey(incomingText);
+  const repeatedInstruction = Boolean(activeKey && incomingKey && activeKey === incomingKey);
+  const kind = repeatedInstruction
+    ? 'progress_query'
+    : classifyVoiceWorkInterruption(incomingText, options);
+  return {
+    kind,
+    keepActiveWork: kind !== 'cancel_work' && kind !== 'modify_work',
+    queueIncomingWork: kind === 'new_work',
+    repeatedInstruction,
+  };
+}
+
 export function isVoiceCurrentActivityQuestion(text: string): boolean {
   const normalized = String(text || '')
     .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001]+/gu, '')
     .trim()
     .toLowerCase();
   if (!normalized || normalized.length > 40) return false;
+  if (
+    /^(?:任务|工作|这个任务|这个工作|它)?(?:执行|进行|处理|运行|做)(?:的|得)?(?:怎么样|怎样|如何|到哪(?:一步)?|什么状态|还顺利吗|还在继续吗|完了吗|好了没)(?:了|啦)?$/u.test(normalized) // i18n-allow: Chinese current-activity recognition.
+    || /^(?:任务|工作|执行|进行|处理|运行|进度)(?:怎么样|怎样|如何)(?:了|啦)?$/u.test(normalized) // i18n-allow: Chinese current-activity recognition.
+    || /^(?:有没有|是否|还在)(?:正常)?(?:执行|进行|处理|运行|继续)(?:这个|该)?(?:任务|工作)?(?:呢|吗)?$/u.test(normalized) // i18n-allow: Chinese current-activity recognition.
+    || /^(?:现在|目前)?(?:到哪(?:一步)?|什么状态|什么进度)(?:了|啦|呢)?$/u.test(normalized) // i18n-allow: Chinese current-activity recognition.
+  ) return true;
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   return /^(?:你)?(?:刚才|刚刚|现在)?(?:有|还|是否|是不是)?(?:在)?(?:干嘛|干什么|做什么|忙什么|处理什么|跑什么|弄什么|搞什么|执行|处理|做|运行)(?:这个|那个|刚才的|当前的)?(?:任务|操作|工作)?(?:呢|吗)?$/u.test(normalized)
     // i18n-allow: Chinese current-activity recognition; not user-visible copy.

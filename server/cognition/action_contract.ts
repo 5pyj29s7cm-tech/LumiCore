@@ -78,6 +78,11 @@ const CURRENT_APP_REFERENCE_RE =
 const CURRENT_APP_MUTATION_INTENT_RE =
   /(?:\u65b0\u5efa|\u521b\u5efa|\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\u5199|\u7f16\u8f91|\u4fee\u6539|\u4fdd\u5b58)|\b(?:new|create|write|type|paste|edit|modify|save)\b/iu;
 
+const AUTHORING_APP_TARGET_RE =
+  /(?:\bWPS(?:\s+Office)?\b|\bMicrosoft\s+Word\b|\bWord\b|\bExcel\b|\bPowerPoint\b|\bAutoCAD\b|\bCAD\b|\u91d1\u5c71\u6587\u5b57|\u753b\u56fe)/iu;
+const APP_OPEN_INTENT_RE =
+  /(?:\u6253\u5f00|\u542f\u52a8|\u8fd0\u884c|\u8fdb\u5165)|\b(?:open|launch|start|run)\b/iu;
+
 export type DesktopWindowAction = 'maximize' | 'minimize' | 'restore';
 
 export function requestedDesktopWindowAction(input: string): DesktopWindowAction | null {
@@ -92,9 +97,16 @@ export function requiresCurrentAppUiMutation(input: string): boolean {
   const raw = String(input || '');
   const primary = compact(extractPrimaryTaskText(input));
   const hasRecoveredTarget = /(?:^|\r?\n)\s*-\s*appTarget:\s*(?!none|null|unknown|n\/a)[^\r\n]+/i.test(raw);
+  const authoringTarget = primary.match(AUTHORING_APP_TARGET_RE);
+  const openIntent = primary.match(APP_OPEN_INTENT_RE);
+  const hasNamedAuthoringSequence = Boolean(
+    authoringTarget
+    && openIntent
+    && (openIntent.index ?? Number.MAX_SAFE_INTEGER) < (authoringTarget.index ?? -1),
+  );
   return Boolean(
     primary
-    && (CURRENT_APP_REFERENCE_RE.test(primary) || hasRecoveredTarget)
+    && (CURRENT_APP_REFERENCE_RE.test(primary) || hasRecoveredTarget || hasNamedAuthoringSequence)
     && CURRENT_APP_MUTATION_INTENT_RE.test(primary)
   );
 }
@@ -348,7 +360,7 @@ export function hasVisibleAutoCadExecutionEvidence(
   const successful = records.filter(record => !record.error && String(record.result || '').trim());
   if (successful.length === 0) return false;
   return successful.some(record => {
-    if (!/^mcp_cad-drafting_autocad_playback_file$/i.test(record.name)) return false;
+    if (!/^(?:mcp_cad-drafting_autocad_playback_file|cad_draw_floorplan_in_autocad)$/i.test(record.name)) return false;
     const payload = parseRecordJson(record);
     return payload?.status === 'completed'
       && payload?.transport === 'mcp_autocad_com'
@@ -814,10 +826,10 @@ export function buildActionContract(input: string): LumiActionContract {
       coreAction: '\u751f\u6210\u6216\u64cd\u4f5c CAD \u56fe\u7eb8\uff0c\u786e\u8ba4\u6587\u4ef6\u4ea7\u7269\u6216\u53ef\u89c1\u8f6f\u4ef6\u7ed8\u5236\u7ed3\u679c',
       preparationIsNotCompletion: ['\u8ba1\u7b97\u65b9\u6848', '\u5199\u51fa\u811a\u672c', '\u6253\u5f00 CAD \u8f6f\u4ef6', '\u67e5\u770b\u6587\u4ef6\u5939', '\u53ea\u751f\u6210 DXF/\u65b9\u6848\u5305'],
       requiredEvidence: visibleAutoCad
-        ? ['source geometry receipt with geometryVerified=true', 'created operations JSON with a verified operationSetId', 'mcp_cad-drafting_autocad_playback_file completion marker with exact operationCount, expectedEntityCount, and entitiesAdded equality']
+        ? ['one verified cad_draw_floorplan_in_autocad receipt, or source geometry plus an operation set and AutoCAD completion marker with exact operationCount, expectedEntityCount, and entitiesAdded equality']
         : ['created CAD/DXF file path with nonzero size and successful file verification'],
       preferredTools: visibleAutoCad
-        ? ['desktop_list_apps', 'floorplan_extract_geometry', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
+        ? ['cad_draw_floorplan_in_autocad', 'desktop_list_apps', 'desktop_open', 'desktop_running_processes', 'desktop_active_window', 'floorplan_extract_geometry', 'cad_prepare_autocad_operations', 'mcp_cad-drafting_autocad_playback_file', 'desktop_path_info', 'desktop_capture_screen']
         : ['floorplan_extract_geometry', 'cad_generate_dxf', 'desktop_path_info', 'work_product_verify'],
       verificationTools: ['desktop_path_info', 'work_product_verify', 'desktop_capture_screen', 'desktop_active_window'],
       nextStep: visibleAutoCad
@@ -1527,7 +1539,7 @@ function hasEcommerceOperationsEvidence(records: ToolExecutionRecord[], taskText
 }
 
 function hasSourceInspectionEvidence(records: ToolExecutionRecord[]): boolean {
-  return records.some(record => /^(?:read_file|read_files_batch|read_pdf|read_docx|extract_document_text|ocr_image_file|floorplan_extract_geometry)$/i.test(record.name));
+  return records.some(record => /^(?:read_file|read_files_batch|read_pdf|read_docx|extract_document_text|ocr_image_file|floorplan_extract_geometry|cad_draw_floorplan_in_autocad)$/i.test(record.name));
 }
 
 function requiresSourceGrounding(taskText: string): boolean {
@@ -1536,6 +1548,13 @@ function requiresSourceGrounding(taskText: string): boolean {
 
 function hasGroundedCadGeometryEvidence(records: ToolExecutionRecord[]): boolean {
   return records.some(record => {
+    if (record.name === 'cad_draw_floorplan_in_autocad') {
+      const payload = parseRecordJson(record);
+      return !record.error
+        && payload?.status === 'completed'
+        && Boolean(String(payload?.geometryReceiptPath || '').trim())
+        && Boolean(String(payload?.geometryHash || '').trim());
+    }
     if (record.name === 'floorplan_extract_geometry') {
       const payload = parseRecordJson(record);
       const geometry = payload?.cadGenerateDxfArgs && typeof payload.cadGenerateDxfArgs === 'object'

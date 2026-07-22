@@ -90,12 +90,11 @@ export function shouldAttemptOrchestration(input: OrchestrationTurnGateInput): b
   const explicitTeamExecution = hasExplicitTeamExecutionRequest(input.text);
 
   if (input.channel === 'voice') {
-    if (!explicitTeamExecution && input.artifactFirst && !input.directDesktop) return false;
-    // Moderate single-lane actions (open, inspect, type, create one file)
-    // are faster and more reliable in Lumi's foreground tool loop. Bring in
-    // workers only for genuinely complex work or when the user asks for a
-    // team explicitly.
-    return explicitTeamExecution || input.complexity === 'complex';
+    // Live voice owns one foreground executor. Automatic worker decomposition
+    // introduces a second task/stream authority and breaks correction,
+    // confirmation, and ordered completion. A team is used only when the user
+    // explicitly asks for one.
+    return explicitTeamExecution;
   }
 
   if (input.responseReady || input.hasPreflightContext) return false;

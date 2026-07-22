@@ -276,7 +276,7 @@ async function ocrRegion(args: Record<string, any>, context?: any): Promise<stri
   }
 }
 
-async function ocrImageFile(args: Record<string, any>, context?: any): Promise<string> {
+export async function ocrImageFile(args: Record<string, any>, context?: any): Promise<string> {
   const imagePath = resolveReadableImagePath(args.imagePath || args.path || args.filePath);
   const query = args.query || args.prompt || 'Analyze this image in detail. If it is a drawing, extract dimensions, layout, labels, and any structure that can guide a CAD draft.';
 
@@ -763,7 +763,7 @@ async function runFloorplanVisionPass(input: {
   return { analysis, parsed: null, attempts: 2, diagnostics };
 }
 
-async function floorplanExtractGeometry(args: Record<string, any>, context?: any): Promise<string> {
+export async function floorplanExtractGeometry(args: Record<string, any>, context?: any): Promise<string> {
   const imagePath = resolveReadableImagePath(args.imagePath || args.path || args.filePath);
   const g = context?.llmGetters || {};
   const provider = resolveVisionProvider(args, context);
@@ -873,9 +873,14 @@ async function floorplanExtractGeometry(args: Record<string, any>, context?: any
     });
     const userId = context?.userId || 'anonymous';
     const topologyRequiredKeys = ['physicalWidth', 'physicalHeight', 'coordinateSystem', 'sourceTopology', 'outerBoundary', 'dimensions'];
-    const validateTopology = (candidate: Record<string, any>) => (
-        positiveNumber(candidate.physicalWidth) !== null
-        && positiveNumber(candidate.physicalHeight) !== null
+    const validateTopology = (candidate: Record<string, any>) => {
+      const hasPhysicalCalibration = positiveNumber(candidate.physicalWidth) !== null
+        && positiveNumber(candidate.physicalHeight) !== null;
+      const explicitlyUncalibrated = candidate.inferredScale === true
+        && candidate.physicalWidth == null
+        && candidate.physicalHeight == null;
+      return (
+        (hasPhysicalCalibration || explicitlyUncalibrated)
         && candidate.coordinateSystem === 'normalized_top_left_y_down'
         && candidate.sourceTopology
         && typeof candidate.sourceTopology === 'object'
@@ -884,6 +889,7 @@ async function floorplanExtractGeometry(args: Record<string, any>, context?: any
         && candidate.outerBoundary.length >= 3
         && Array.isArray(candidate.dimensions)
       );
+    };
     const confirmedWidth = positiveNumber(args.physicalWidth ?? args.overallWidth);
     const confirmedHeight = positiveNumber(args.physicalHeight ?? args.overallHeight);
     const suppliedCalibration = confirmedWidth && confirmedHeight ? {

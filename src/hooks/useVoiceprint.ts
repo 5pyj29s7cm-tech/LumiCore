@@ -232,6 +232,8 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   const templatesRef = useRef<VoiceprintTemplate[]>([]);
   const frameBufferRef = useRef<Float32Array[]>([]);
   const lastCheckTimeRef = useRef(0);
+  const utteranceEpochRef = useRef(0);
+  const sharedCaptureActiveRef = useRef(false);
   const isEnrollingRef = useRef(false);
   const enrollmentFramesRef = useRef<number[][]>([]);
   const enrollmentPcmFramesRef = useRef<Float32Array[]>([]);
@@ -247,6 +249,23 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   const submitEnrollmentRef = useRef<(label: string) => Promise<{ success: boolean; voiceprintId?: string }>>(
     async () => ({ success: false }),
   );
+
+  const acceptVoicedFrame = useCallback((buffer: Float32Array, rms: number) => {
+    if (rms <= 0.01) return;
+    frameBufferRef.current.push(new Float32Array(buffer));
+    // Speaker identity should come from the current utterance, not a rolling
+    // five-second mixture that can lend one person's identity to the next.
+    if (frameBufferRef.current.length > 20) frameBufferRef.current.shift();
+
+    const now = Date.now();
+    if (now - lastCheckTimeRef.current > 320 && frameBufferRef.current.length >= 3) {
+      lastCheckTimeRef.current = now;
+      const mfccFrames = getRecentMFCCFrames();
+      if (mfccFrames.length >= 3) {
+        void verifyRecentSpeechRef.current(mfccFrames, rms);
+      }
+    }
+  }, []);
 
   // ── Load enrolled templates from server ──
   const loadTemplates = useCallback(async () => {
@@ -291,6 +310,42 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     return () => window.removeEventListener('lumi:biometrics-updated', onBiometricsUpdated);
   }, [loadTemplates]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onSharedCaptureState = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+      sharedCaptureActiveRef.current = detail?.active === true;
+      if (!sharedCaptureActiveRef.current) frameBufferRef.current = [];
+    };
+    const onSharedPcmFrame = (event: Event) => {
+      const detail = (event as CustomEvent<{ samples?: Float32Array; rms?: number }>).detail;
+      if (!(detail?.samples instanceof Float32Array)) return;
+      acceptVoicedFrame(detail.samples, Number(detail.rms) || 0);
+    };
+    window.addEventListener('lumi:voice-capture-state', onSharedCaptureState);
+    window.addEventListener('lumi:voice-pcm-frame', onSharedPcmFrame);
+    return () => {
+      window.removeEventListener('lumi:voice-capture-state', onSharedCaptureState);
+      window.removeEventListener('lumi:voice-pcm-frame', onSharedPcmFrame);
+    };
+  }, [acceptVoicedFrame]);
+
+  useEffect(() => {
+    const activeSocket = options?.socket;
+    if (!activeSocket) return;
+    const onUtteranceReset = (data: { epoch?: number }) => {
+      const epoch = Number(data?.epoch);
+      if (!Number.isInteger(epoch) || epoch < 0) return;
+      utteranceEpochRef.current = epoch;
+      frameBufferRef.current = [];
+      lastCheckTimeRef.current = 0;
+      // Invalidate an async result computed from the preceding utterance.
+      verifySeqRef.current += 1;
+    };
+    activeSocket.on('voiceprint:utterance_reset', onUtteranceReset);
+    return () => activeSocket.off('voiceprint:utterance_reset', onUtteranceReset);
+  }, [options?.socket]);
+
   const startListening = useCallback(async () => {
     if (audioContextRef.current) return true; // already running
     try {
@@ -310,25 +365,12 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       processorRef.current = processor;
 
       processor.onaudioprocess = (event) => {
+        if (sharedCaptureActiveRef.current) return;
         const input = event.inputBuffer.getChannelData(0);
         const buffer = new Float32Array(input.length);
         buffer.set(input);
         const rms = computeRMS(buffer);
-        if (rms > 0.01) {
-          frameBufferRef.current.push(new Float32Array(buffer));
-          // Keep only last ~5s of speech.
-          if (frameBufferRef.current.length > 40) frameBufferRef.current.shift();
-
-          // Check every ~650ms.
-          const now = Date.now();
-          if (now - lastCheckTimeRef.current > 650 && frameBufferRef.current.length >= 5) {
-            lastCheckTimeRef.current = now;
-            const mfccFrames = getRecentMFCCFrames();
-            if (mfccFrames.length >= 5) {
-              void verifyRecentSpeechRef.current(mfccFrames, rms);
-            }
-          }
-        }
+        acceptVoicedFrame(buffer, rms);
       };
 
       source.connect(processor);
@@ -341,7 +383,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       // Microphone is unavailable; voiceprint capture should fail softly.
       return false;
     }
-  }, []);
+  }, [acceptVoicedFrame]);
 
   const stopListening = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -384,8 +426,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     return btoa(binary);
   }
 
-  function getAveragedMFCC(): number[] | null {
-    const mfccFrames = getRecentMFCCFrames();
+  function getAveragedMFCC(mfccFrames = getRecentMFCCFrames()): number[] | null {
     if (mfccFrames.length < 3) return null;
     const avg = new Array(13).fill(0);
     for (const mfcc of mfccFrames) {
@@ -399,18 +440,24 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     if (verifyingRef.current) return;
     verifyingRef.current = true;
     const seq = ++verifySeqRef.current;
+    const utteranceEpoch = utteranceEpochRef.current;
+    const pcmFrames = frameBufferRef.current.slice(-20);
     let matchResult: VoiceprintResult | null = null;
 
     try {
+      const hasEmbeddingTemplate = templatesRef.current.some(template => template.hasEmbedding === true);
       const res = await fetch('/api/auth/biometric/voiceprint/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           mfccFeatures: mfccFrames,
-          audioPcm16Base64: framesToPcm16Base64(frameBufferRef.current, 18),
+          // Do not invoke the slower embedding provider when the enrolled
+          // template itself has no embedding to compare against.
+          ...(hasEmbeddingTemplate ? { audioPcm16Base64: framesToPcm16Base64(pcmFrames, 20) } : {}),
           sampleRate: SAMPLE_RATE,
-          minFrames: 5,
+          minFrames: 3,
+          threshold: hasEmbeddingTemplate ? 0.66 : 0.82,
         }),
       });
       if (res.ok) {
@@ -439,13 +486,13 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     }
 
     if (!matchResult) {
-      const averagedMFCC = getAveragedMFCC();
+      const averagedMFCC = getAveragedMFCC(mfccFrames);
       matchResult = averagedMFCC
         ? { ...compareWithTemplates(averagedMFCC), rms, source: 'client-local', frameCount: mfccFrames.length }
         : { isOwnerSpeaking: false, confidence: 0, speakerLabel: null, threshold: 'reject', rms, source: 'none', frameCount: mfccFrames.length };
     }
 
-    if (seq !== verifySeqRef.current) return;
+    if (seq !== verifySeqRef.current || utteranceEpoch !== utteranceEpochRef.current) return;
     setResult(matchResult);
     onVoiceprintResultRef.current?.(matchResult);
     socketRef.current?.emit('voiceprint:result', {
@@ -454,7 +501,9 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       speakerLabel: matchResult.speakerLabel,
       source: matchResult.source,
       quality: matchResult.quality,
+      frameCount: matchResult.frameCount,
       reason: matchResult.reason,
+      utteranceEpoch,
     });
   }
   verifyRecentSpeechRef.current = verifyRecentSpeech;
@@ -489,6 +538,11 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
 
   // ── Enrollment ──
   const startEnrollment = useCallback(async (label: string) => {
+    // Enrollment must never reuse ambient/TTS frames collected before the user
+    // deliberately pressed the record button.
+    frameBufferRef.current = [];
+    lastCheckTimeRef.current = 0;
+    verifySeqRef.current += 1;
     isEnrollingRef.current = true;
     enrollmentFramesRef.current = [];
     enrollmentPcmFramesRef.current = [];
@@ -562,6 +616,8 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
           audioPcm16Base64,
           sampleRate: SAMPLE_RATE,
           sampleCount: frames.length,
+          replaceExisting: templatesRef.current.length > 0,
+          requireEmbedding: true,
         }),
       });
       if (res.ok) {
