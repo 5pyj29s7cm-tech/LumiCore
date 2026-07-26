@@ -4,6 +4,7 @@ import {
   listPersonalWeChatFileTargets,
   sendLocalFileToFeishu,
 } from '../../messaging/file_transfer';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 export function registerMessagingTools(registry: ToolRegistry): void {
   registry.register({
@@ -69,5 +70,28 @@ export function registerMessagingTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'messaging.feishu.file.send',
+      family: 'messaging',
+      lane: 'messaging',
+      operation: 'communicate',
+      risk: 'high',
+      sideEffects: [{ type: 'external_communication', scope: 'explicit bound Feishu destination and local file', reversible: false }],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['sent', 'messageId', 'fileName', 'fileSize', 'destination'],
+        requiredValues: { sent: true },
+        successStatuses: [],
+        successSignals: ['Feishu returned a message id for the exact uploaded file and bound destination'],
+        limitations: ['Provider acceptance does not prove the recipient opened the file.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'messaging.feishu.file.send',
+      operation: 'communicate',
+      subjectArgument: 'filePath',
+      limitations: ['The destination must be an explicitly bound organization chat.'],
+    }),
   });
 }

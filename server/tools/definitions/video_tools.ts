@@ -7,6 +7,7 @@ import {
   getUserPreferredGenerationModels,
   type VideoGenerationProvider,
 } from '../../llm/generation_preferences';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
@@ -78,6 +79,8 @@ function completedResult(input: {
       ? [{ type: 'video_url', url: input.videoUrl }]
       : [];
   return JSON.stringify({
+    ok: true,
+    status: 'generated',
     success: true,
     provider: input.provider,
     model: input.model,
@@ -327,5 +330,31 @@ export function registerVideoTools(registry: ToolRegistry): void {
     handler: (args, context) => generateVideo(args, context),
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'media.video.generate',
+      family: 'media-generation',
+      lane: 'media',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'external_state_change', scope: 'configured video generation provider task', reversible: false },
+        { type: 'local_write', scope: 'generated MP4 when provider output can be downloaded', reversible: true },
+      ],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'model', 'taskId', 'artifacts'],
+        requiredValues: { ok: true },
+        successStatuses: ['generated'],
+        failureStatuses: ['failed', 'timed_out'],
+        successSignals: ['provider task completed and returned a local artifact or remote video reference'],
+        limitations: ['A remote video URL is provider completion evidence, not proof of a durable local MP4.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'media.video.generate',
+      operation: 'create',
+      limitations: ['If local download fails, completion is limited to the provider result and must be reported as such.'],
+    }),
   });
 }

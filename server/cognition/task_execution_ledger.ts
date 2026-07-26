@@ -23,8 +23,13 @@ export interface ConversationTaskReceipt {
   name: string;
   arguments: Record<string, unknown>;
   result: string;
+  /** Exact machine receipt used by capability verification, bounded for persistence. */
+  receipt?: unknown;
   error: string;
-  outcome: 'success' | 'failure';
+  /** Handler success and task-level verification are deliberately separate. */
+  outcome: 'success' | 'partial' | 'failure';
+  terminalVerification?: ToolExecutionRecord['terminalVerification'];
+  capability?: ToolExecutionRecord['capability'];
   recordedAt: string;
 }
 
@@ -84,6 +89,138 @@ function stableValue(value: unknown, depth = 0): unknown {
   );
 }
 
+const CAPABILITY_LANES = new Set([
+  'client', 'files', 'desktop', 'web', 'cad', 'messaging', 'office',
+  'media', 'knowledge', 'memory', 'agents', 'system', 'industry', 'general',
+]);
+const CAPABILITY_OPERATIONS = new Set(['observe', 'test', 'mutate', 'create', 'communicate', 'unknown']);
+const CAPABILITY_RISKS = new Set(['none', 'low', 'medium', 'high', 'critical']);
+const CAPABILITY_STRATEGIES = new Set([
+  'terminal_receipt', 'state_diff', 'artifact', 'provider_ack', 'visual',
+  'measured', 'none',
+]);
+const CAPABILITY_SIDE_EFFECTS = new Set([
+  'local_read', 'local_write', 'local_state_change', 'desktop_control',
+  'network_read', 'external_state_change', 'external_communication',
+  'credential_access', 'process_execution', 'installation', 'none',
+]);
+
+function cloneCapability(
+  value: unknown,
+): ToolExecutionRecord['capability'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, any>;
+  const capabilityId = compact(candidate.capabilityId, 240);
+  const lane = compact(candidate.lane, 40);
+  const operation = compact(candidate.operation, 40);
+  const risk = compact(candidate.risk, 40);
+  const verification = candidate.verification;
+  const strategy = compact(verification?.strategy, 60);
+  if (
+    !capabilityId
+    || !CAPABILITY_LANES.has(lane)
+    || !CAPABILITY_OPERATIONS.has(operation)
+    || !CAPABILITY_RISKS.has(risk)
+    || !verification
+    || typeof verification !== 'object'
+    || !CAPABILITY_STRATEGIES.has(strategy)
+  ) return undefined;
+
+  const sideEffects = (Array.isArray(candidate.sideEffects) ? candidate.sideEffects : [])
+    .map((effect: any) => {
+      const type = compact(effect?.type, 60);
+      if (!CAPABILITY_SIDE_EFFECTS.has(type)) return null;
+      return {
+        type,
+        scope: compact(effect?.scope, 300),
+        reversible: effect?.reversible === true,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 30);
+  const strings = (input: unknown, limit = 80) => Array.from(new Set(
+    (Array.isArray(input) ? input : []).map(item => compact(item, 300)).filter(Boolean),
+  )).slice(0, limit);
+  const optionalStrings = (input: unknown) => {
+    const values = strings(input);
+    return values.length > 0 ? values : undefined;
+  };
+
+  return {
+    capabilityId,
+    lane: lane as NonNullable<ToolExecutionRecord['capability']>['lane'],
+    operation: operation as NonNullable<ToolExecutionRecord['capability']>['operation'],
+    risk: risk as NonNullable<ToolExecutionRecord['capability']>['risk'],
+    sideEffects: sideEffects as NonNullable<ToolExecutionRecord['capability']>['sideEffects'],
+    verification: {
+      strategy: strategy as NonNullable<ToolExecutionRecord['capability']>['verification']['strategy'],
+      required: verification.required === true,
+      requiredFields: strings(verification.requiredFields),
+      ...(verification.requiredValues && typeof verification.requiredValues === 'object'
+        ? { requiredValues: stableValue(verification.requiredValues) as Record<string, unknown> }
+        : {}),
+      ...(optionalStrings(verification.successStatuses)
+        ? { successStatuses: optionalStrings(verification.successStatuses) }
+        : {}),
+      ...(optionalStrings(verification.failureStatuses)
+        ? { failureStatuses: optionalStrings(verification.failureStatuses) }
+        : {}),
+      ...(optionalStrings(verification.requiredArtifacts)
+        ? { requiredArtifacts: optionalStrings(verification.requiredArtifacts) }
+        : {}),
+      ...(optionalStrings(verification.requiredArtifactCollections)
+        ? { requiredArtifactCollections: optionalStrings(verification.requiredArtifactCollections) }
+        : {}),
+      successSignals: strings(verification.successSignals),
+      limitations: strings(verification.limitations),
+    },
+  };
+}
+
+function cloneTerminalVerification(
+  value: unknown,
+): ToolExecutionRecord['terminalVerification'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, any>;
+  const status = compact(candidate.status, 40);
+  const strategy = compact(candidate.strategy, 60);
+  if (!['verified', 'unverified', 'failed'].includes(status) || !CAPABILITY_STRATEGIES.has(strategy)) {
+    return undefined;
+  }
+  return {
+    status: status as NonNullable<ToolExecutionRecord['terminalVerification']>['status'],
+    strategy: strategy as NonNullable<ToolExecutionRecord['terminalVerification']>['strategy'],
+    reason: compact(candidate.reason, 1000),
+  };
+}
+
+export function normalizeConversationTaskReceipt(value: unknown): ConversationTaskReceipt | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, any>;
+  const name = compact(candidate.name, 160);
+  const key = compact(candidate.key, 1000);
+  if (!name || !key) return null;
+  return {
+    id: compact(candidate.id, 180) || key,
+    key,
+    name,
+    arguments: candidate.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments)
+      ? stableValue(candidate.arguments) as Record<string, unknown>
+      : {},
+    result: compact(candidate.result, 3000),
+    ...(candidate.receipt !== undefined ? { receipt: stableValue(candidate.receipt) } : {}),
+    error: compact(candidate.error, 700),
+    outcome: candidate.outcome === 'success'
+      ? 'success'
+      : candidate.outcome === 'partial'
+      ? 'partial'
+      : 'failure',
+    terminalVerification: cloneTerminalVerification(candidate.terminalVerification),
+    capability: cloneCapability(candidate.capability),
+    recordedAt: compact(candidate.recordedAt, 80) || new Date(0).toISOString(),
+  };
+}
+
 function parseResult(value: unknown): Record<string, any> | null {
   let parsed = value;
   for (let depth = 0; depth < 3 && typeof parsed === 'string' && parsed.trim(); depth += 1) {
@@ -100,6 +237,7 @@ function parseResult(value: unknown): Record<string, any> | null {
 
 export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
   if (!record?.name || compact(record.error, 600)) return false;
+  if (record.terminalVerification?.status === 'failed') return false;
   const result = compact(record.result, 4000);
   if (!result) return false;
   const payload = parseResult(record.result);
@@ -129,6 +267,12 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
     ) return false;
   }
   return !/(?:requires? (?:user )?confirmation|permission denied|not allowed|forbidden|timed out|(?:^|\b)(?:failed|error|blocked)(?:\b|:))/i.test(result);
+}
+
+export function toolRecordVerifiedForCompletion(record: ToolExecutionRecord): boolean {
+  if (!toolRecordSucceeded(record)) return false;
+  if (!record.capability?.verification.required) return true;
+  return record.terminalVerification?.status === 'verified';
 }
 
 export function toolRecordKey(record: Pick<ToolExecutionRecord, 'name' | 'arguments'>): string {
@@ -258,8 +402,16 @@ export function recordsToTaskReceipts(
     name: compact(record.name, 160),
     arguments: stableValue(record.arguments || {}) as Record<string, unknown>,
     result: compact(record.result, 3000),
+    ...(record.receipt !== undefined ? { receipt: stableValue(record.receipt) } : {}),
     error: toolRecordSucceeded(record) ? '' : toolRecordFailureDetail(record),
-    outcome: toolRecordSucceeded(record) ? 'success' : 'failure',
+    outcome: !toolRecordSucceeded(record)
+      ? 'failure'
+      : record.capability?.verification.required
+        && record.terminalVerification?.status !== 'verified'
+      ? 'partial'
+      : 'success',
+    terminalVerification: cloneTerminalVerification(record.terminalVerification),
+    capability: cloneCapability(record.capability),
     recordedAt,
   }));
 }
@@ -275,7 +427,8 @@ export function mergeTaskReceipts(
     if (!receipt?.key || !receipt.name) continue;
     if (!merged.has(receipt.key)) order.push(receipt.key);
     const prior = merged.get(receipt.key);
-    if (!prior || receipt.outcome === 'success' || prior.outcome !== 'success') merged.set(receipt.key, receipt);
+    const rank = { failure: 0, partial: 1, success: 2 } as const;
+    if (!prior || rank[receipt.outcome] >= rank[prior.outcome]) merged.set(receipt.key, receipt);
   }
   return order
     .map(key => merged.get(key))
@@ -284,13 +437,20 @@ export function mergeTaskReceipts(
 }
 
 export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []): ToolExecutionRecord[] {
-  return receipts.map(receipt => ({
+  return receipts.map((rawReceipt): ToolExecutionRecord | null => {
+    const receipt = normalizeConversationTaskReceipt(rawReceipt);
+    if (!receipt) return null;
+    return {
     id: receipt.id,
     name: receipt.name,
     arguments: receipt.arguments || {},
     result: receipt.result || '',
+    ...(receipt.receipt !== undefined ? { receipt: stableValue(receipt.receipt) } : {}),
     error: receipt.outcome === 'failure' ? receipt.error || 'Tool execution failed.' : undefined,
-  }));
+    terminalVerification: cloneTerminalVerification(receipt.terminalVerification),
+    capability: cloneCapability(receipt.capability),
+    };
+  }).filter((record): record is ToolExecutionRecord => Boolean(record));
 }
 
 export function taskCompletionFromReceipts(
@@ -307,7 +467,7 @@ export function taskCompletionFromReceipts(
   ));
   const complete = contract.applies
     ? hasCoreActionEvidence(contract, records, goal) || legacyVerifiedWpsCreate
-    : records.some(toolRecordSucceeded);
+    : records.some(toolRecordVerifiedForCompletion);
   const failures = [...records].reverse().filter(record => !toolRecordSucceeded(record));
   // A later policy/routing rejection is useful diagnostic evidence, but it
   // must not replace the domain failure that actually stopped the task. Keep
@@ -316,9 +476,46 @@ export function taskCompletionFromReceipts(
     compact(record.error, 700),
   ));
   const latestFailure = substantiveFailure || failures[0];
+  const latestUnverified = [...records].reverse().find(record => (
+    toolRecordSucceeded(record)
+    && record.capability?.verification.required
+    && record.terminalVerification?.status !== 'verified'
+  ));
   return {
     complete,
-    blocker: complete ? '' : compact(latestFailure?.error, 500),
+    blocker: complete
+      ? ''
+      : compact(
+          latestFailure?.error
+            || latestUnverified?.terminalVerification?.reason
+            || 'The task has no verified completion receipt.',
+          500,
+        ),
     records,
   };
+}
+
+/**
+ * A confirmed action may be only one boundary inside a larger task. Continue
+ * automatically when the exact confirmed receipt succeeded but the original
+ * action contract is still incomplete.
+ */
+export function confirmedStepNeedsContinuation(
+  goal: string,
+  records: ToolExecutionRecord[] = [],
+): boolean {
+  if (records.length === 0 || !toolRecordSucceeded(records[records.length - 1])) return false;
+  return !taskCompletionFromReceipts(goal, recordsToTaskReceipts(records)).complete;
+}
+
+export function buildConfirmedStepContinuationNote(
+  record: ToolExecutionRecord,
+): string {
+  return [
+    'The user-confirmed step below already executed successfully in this turn.',
+    `Tool: ${compact(record.name, 160)}`,
+    `Arguments: ${compact(JSON.stringify(record.arguments || {}), 1200)}`,
+    `Result: ${compact(record.result, 1600)}`,
+    'Do not repeat this step. Continue the original task until its acceptance criteria are complete, a real blocker is proven, or another confirmation boundary is reached.',
+  ].join('\n');
 }

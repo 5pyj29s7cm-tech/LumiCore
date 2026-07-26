@@ -552,7 +552,7 @@ describe('Lumi capability selection', () => {
     ];
 
     for (const source of sources) {
-      expect(source).toContain('buildLumiCapabilitySelection');
+      expect(source).toContain('buildLumiExecutionPipeline');
       expect(source).toContain('agent:capability_selection');
     }
   });

@@ -12,6 +12,38 @@
     "requiresSetup": true,
     "setupNote": "Requires ComfyUI + Pixelle MCP. Visit github.com/AIDC-AI/Pixelle-MCP for setup guide.",
     "runCommand": "python",
-    "runArgs": ["-m", "pixelle_mcp"]
+    "runArgs": [
+      "-m",
+      "pixelle_mcp"
+    ],
+    "capabilityDefault": {
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "external_state_change",
+          "scope": "configured ComfyUI/Pixelle generation queue",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "configured Pixelle or ComfyUI output directory",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [],
+        "successSignals": [
+          "non-empty MCP terminal receipt"
+        ],
+        "limitations": [
+          "Output locations and job completion depend on the connected Pixelle/ComfyUI server."
+        ]
+      },
+      "trust": "official",
+      "lane": "media"
+    }
   }
 }

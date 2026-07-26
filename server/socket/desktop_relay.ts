@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import type { Server, Socket } from "socket.io";
 import { deviceRegistry } from "../devices";
-import { captureWindowsUiSnapshot, runWindowsUiAction } from "../external_control/windows_uia";
+import { captureNativeUiSnapshot, runNativeUiAction } from "../external_control/native_ui";
 
 type DesktopRelayPayload = {
   correlationId: string;
@@ -56,11 +56,12 @@ const LOCAL_DESKTOP_UI_TOOLS = new Set([
   'desktop_ui_type',
 ]);
 
-export function isCoLocatedWindowsDesktopRuntime(
+export function isCoLocatedNativeDesktopRuntime(
   platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return platform === 'win32' && (env.LUMI_DESKTOP === '1' || env.LUMI_LOCAL_DESKTOP_UIA === '1');
+  return (platform === 'win32' || platform === 'darwin')
+    && env.LUMI_DESKTOP === '1';
 }
 
 async function runLocalDesktopUiTool(
@@ -68,9 +69,9 @@ async function runLocalDesktopUiTool(
   args: Record<string, any>,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  if (process.platform !== 'win32') return null;
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return null;
   if (toolName === 'desktop_ui_snapshot') {
-    return JSON.stringify(await captureWindowsUiSnapshot({ ...args, signal }), null, 2);
+    return JSON.stringify(await captureNativeUiSnapshot({ ...args, signal }), null, 2);
   }
   const action = {
     desktop_ui_focus: 'focus',
@@ -79,7 +80,7 @@ async function runLocalDesktopUiTool(
     desktop_ui_type: 'type',
   }[toolName] as 'focus' | 'click' | 'invoke' | 'type' | undefined;
   if (!action) return null;
-  return JSON.stringify(await runWindowsUiAction({ ...args, action, signal }), null, 2);
+  return JSON.stringify(await runNativeUiAction({ ...args, action, signal }), null, 2);
 }
 
 function normalizeDesktopScope(domain?: string, orgId?: string) {
@@ -155,12 +156,12 @@ export function createDesktopRelay(options: DesktopRelayOptions) {
     if (options.signal?.aborted) {
       throw new Error(`Desktop tool "${toolName}" cancelled before execution`);
     }
-    if (LOCAL_DESKTOP_UI_TOOLS.has(toolName) && !isCoLocatedWindowsDesktopRuntime()) {
+    if (LOCAL_DESKTOP_UI_TOOLS.has(toolName) && !isCoLocatedNativeDesktopRuntime()) {
       throw new Error(
-        `Desktop UI Automation tool "${toolName}" is blocked because the server is not proven to share the selected desktop's Windows session. Use computer_use on the connected desktop instead.`,
+        `Native desktop UI tool "${toolName}" is blocked because the server is not proven to share the selected Windows/macOS desktop session. Use computer_use on the connected desktop instead.`,
       );
     }
-    if (isCoLocatedWindowsDesktopRuntime() && LOCAL_DESKTOP_UI_TOOLS.has(toolName)) {
+    if (isCoLocatedNativeDesktopRuntime() && LOCAL_DESKTOP_UI_TOOLS.has(toolName)) {
       const localUiCorrelationId = `desktop-${options.source}_${randomUUID()}`;
       try {
         const localUiResult = await runLocalDesktopUiTool(toolName, args, options.signal);

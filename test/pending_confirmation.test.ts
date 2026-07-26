@@ -103,6 +103,49 @@ describe('One-time pending tool confirmations', () => {
     )).toBe(true);
   });
 
+  it('does not let chat, voice, and task confirmations consume each other', () => {
+    const chat = recordPendingConfirmation(
+      'u1',
+      'desktop_open',
+      { target: 'WPS' },
+      'chat',
+      { domain: 'personal', channelId: 'chat-1', taskId: 'task-chat' },
+    );
+    const voice = recordPendingConfirmation(
+      'u1',
+      'desktop_open',
+      { target: 'AutoCAD' },
+      'voice',
+      { domain: 'personal', channelId: 'voice-1', taskId: 'task-voice' },
+    );
+
+    expect(getPendingConfirmation('u1', {
+      source: 'task',
+      domain: 'personal',
+      channelId: 'task-1',
+      taskId: 'task-chat',
+    })).toBeNull();
+    expect(consumePendingConfirmation(
+      'u1',
+      chat.id,
+      chat.toolName,
+      chat.exactArgs,
+      { source: 'voice', domain: 'personal', channelId: 'voice-1', taskId: 'task-chat' },
+    )).toBe(false);
+    expect(getPendingConfirmation('u1', {
+      source: 'chat',
+      domain: 'personal',
+      channelId: 'chat-1',
+      taskId: 'task-chat',
+    })?.id).toBe(chat.id);
+    expect(getPendingConfirmation('u1', {
+      source: 'voice',
+      domain: 'personal',
+      channelId: 'voice-1',
+      taskId: 'task-voice',
+    })?.id).toBe(voice.id);
+  });
+
   it('recognizes a concise confirmation without treating ordinary messages as approval', () => {
     expect(isExplicitConfirmationReply('确认')).toBe(true);
     expect(isExplicitConfirmationReply('确认执行')).toBe(true);

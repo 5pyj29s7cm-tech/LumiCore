@@ -11,6 +11,7 @@ import {
   coalesceToolExecutionRecords,
   applyTaskPolicySnapshot,
   mergeTaskReceipts,
+  normalizeConversationTaskReceipt,
   snapshotTaskPolicy,
   taskCompletionFromReceipts,
   toolRecordSucceeded,
@@ -533,23 +534,7 @@ export function normalizeConversationActionState(
     ? statusValue
     : value.unfinished ? 'blocked' : 'completed';
   const receipts = (Array.isArray(value.receipts) ? value.receipts : [])
-    .map((receipt: any): ConversationTaskReceipt | null => {
-      const name = compact(receipt?.name, 160);
-      const key = compact(receipt?.key, 1000);
-      if (!name || !key) return null;
-      return {
-        id: compact(receipt?.id, 180) || key,
-        key,
-        name,
-        arguments: receipt?.arguments && typeof receipt.arguments === 'object' && !Array.isArray(receipt.arguments)
-          ? receipt.arguments
-          : {},
-        result: compact(receipt?.result, 3000),
-        error: compact(receipt?.error, 700),
-        outcome: receipt?.outcome === 'success' ? 'success' : 'failure',
-        recordedAt: compact(receipt?.recordedAt, 80) || new Date(0).toISOString(),
-      };
-    })
+    .map((receipt: any): ConversationTaskReceipt | null => normalizeConversationTaskReceipt(receipt))
     .filter((receipt): receipt is ConversationTaskReceipt => Boolean(receipt))
     .slice(-40);
   const receiptCompletion = receipts.length > 0

@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const IMAGE_EXTS = /\.(png|jpg|jpeg|svg|gif|webp)$/i;
@@ -58,18 +59,20 @@ async function pythonExec(args: Record<string, any>): Promise<string> {
     });
 
     const newImages = detectNewImages(before);
-    const parts: string[] = [];
-    if (stdout.trim()) parts.push(stdout.trim());
-    if (newImages.length > 0) parts.push(formatImages(newImages));
-    if (parts.length === 0) parts.push('(Code executed successfully with no output)');
-    return parts.join('\n\n');
+    const artifacts = newImages.map(image => ({ type: 'image', path: path.join(OUTPUT_DIR, image) }));
+    return JSON.stringify({
+      ok: true,
+      status: 'completed',
+      exitCode: 0,
+      stdout: stdout.trim(),
+      artifacts,
+    });
   } catch (err: any) {
     const newImages = detectNewImages(before);
     const errorMsg = err.stderr || err.message || String(err);
-    const parts: string[] = [`**Error:**\n\`\`\`\n${errorMsg.slice(0, 2000)}\n\`\`\``];
-    if (err.stdout?.trim()) parts.push(`**Output:**\n\`\`\`\n${err.stdout.trim().slice(0, 2000)}\n\`\`\``);
-    if (newImages.length > 0) parts.push(formatImages(newImages));
-    return parts.join('\n\n');
+    const partialArtifacts = newImages.map(image => path.join(OUTPUT_DIR, image));
+    const partial = partialArtifacts.length > 0 ? ` Partial artifacts: ${partialArtifacts.join(', ')}.` : '';
+    throw new Error(`Python execution failed: ${String(errorMsg).slice(0, 2000)}.${partial}`);
   } finally {
     try { fs.unlinkSync(scriptPath); } catch {}
   }
@@ -89,8 +92,13 @@ async function pythonPackageInstall(args: Record<string, any>): Promise<string> 
       maxBuffer: 1024 * 1024,
       windowsHide: true,
     });
-    const already = stdout.includes('already satisfied') ? ' (already installed)' : '';
-    return `Package \`${safePkg}\` installed successfully${already}.\n\`\`\`\n${stdout.trim().slice(-800)}\n\`\`\``;
+    const alreadyInstalled = stdout.includes('already satisfied');
+    return JSON.stringify({
+      ok: true,
+      status: alreadyInstalled ? 'already_installed' : 'installed',
+      package: safePkg,
+      stdout: stdout.trim().slice(-800),
+    });
   } catch (err: any) {
     const msg = err.stderr || err.message || String(err);
     throw new Error(`Failed to install ${safePkg}: ${msg}`);
@@ -113,6 +121,33 @@ export function registerPythonTools(registry: ToolRegistry): void {
     handler: pythonExec,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'system.python.execute',
+      family: 'code-execution',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'process_execution', scope: 'local Python interpreter', reversible: false },
+        { type: 'local_write', scope: 'Python-generated outputs in Lumi output directory', reversible: true },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'exitCode', 'artifacts'],
+        requiredValues: { ok: true, status: 'completed', exitCode: 0 },
+        successStatuses: ['completed'],
+        failureStatuses: ['failed', 'timed_out'],
+        successSignals: ['Python process exits with code zero'],
+        limitations: ['Process success does not validate the semantic correctness of arbitrary user code output.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'system.python.execute',
+      operation: 'mutate',
+      subjectArgument: 'code',
+      limitations: ['Exit code zero is execution evidence, not proof that arbitrary output satisfies the task.'],
+    }),
   });
 
   registry.register({
@@ -129,5 +164,33 @@ export function registerPythonTools(registry: ToolRegistry): void {
     handler: pythonPackageInstall,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'system.python.package.install',
+      family: 'package-management',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'installation', scope: 'active Python environment', reversible: true },
+        { type: 'process_execution', scope: 'pip package installer', reversible: false },
+        { type: 'network_read', scope: 'configured Python package index', reversible: true },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'package'],
+        requiredValues: { ok: true },
+        successStatuses: ['installed', 'already_installed'],
+        failureStatuses: ['failed'],
+        successSignals: ['pip exits successfully for the exact validated package name'],
+        limitations: ['Installer success does not prove the package imports correctly in every runtime.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'system.python.package.install',
+      operation: 'mutate',
+      subjectArgument: 'package',
+      limitations: ['Package import compatibility must be verified separately when required.'],
+    }),
   });
 }

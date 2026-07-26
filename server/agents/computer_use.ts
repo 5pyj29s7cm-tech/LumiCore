@@ -164,6 +164,22 @@ function isCancelled(options: Pick<ComputerUseOptions, 'isCancelled'>): boolean 
   return options.isCancelled?.() === true;
 }
 
+function terminalComputerUseReceipt(
+  status: 'blocked' | 'cancelled' | 'unverified',
+  message: string,
+  steps: number,
+  actionHistory: string[],
+): string {
+  return JSON.stringify({
+    ok: false,
+    status,
+    completionVerified: false,
+    steps,
+    message,
+    lastActions: actionHistory.slice(-3),
+  });
+}
+
 export function parseDesktopWindowFingerprint(raw: string): DesktopWindowFingerprint | null {
   try {
     const parsed = JSON.parse(raw);
@@ -433,7 +449,7 @@ export async function computerUseLoop(
   try {
     for (let i = 0; i < maxIter; i++) {
     if (isCancelled(options)) {
-      return `Task cancelled by user after ${i} step(s). Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
+      return terminalComputerUseReceipt('cancelled', 'The user cancelled desktop control.', i, actionHistory);
     }
 
     // ── 1. Capture screenshot ──
@@ -458,14 +474,14 @@ export async function computerUseLoop(
     } catch (err: any) {
       options.onProgress?.(`[${i + 1}/${maxIter}] Screenshot failed: ${err.message}`);
       consecutiveErrors++;
-      if (consecutiveErrors >= 3) return 'Failed to capture screenshot 3 times in a row. Is the desktop app running?';
+      if (consecutiveErrors >= 3) return terminalComputerUseReceipt('blocked', 'Desktop capture failed three times.', i + 1, actionHistory);
       await sleep(1000);
       continue;
     }
 
     // 2. World-model action planning
     if (isCancelled(options)) {
-      return `Task cancelled after screenshot capture. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
+      return terminalComputerUseReceipt('cancelled', 'The user cancelled after desktop capture.', i + 1, actionHistory);
     }
 
     let responseText: string;
@@ -475,7 +491,7 @@ export async function computerUseLoop(
       options.onProgress?.(`[${i + 1}/${maxIter}] World model call failed: ${err.message}`);
       consecutiveErrors++;
       if (consecutiveErrors >= 3) {
-        return `World model failed 3 times: ${err.message}`;
+        return terminalComputerUseReceipt('blocked', `The desktop-action model failed three times: ${err.message}`, i + 1, actionHistory);
       }
       await sleep(2000);
       continue;
@@ -483,14 +499,14 @@ export async function computerUseLoop(
 
     // ── 3. Parse action ──
     if (isCancelled(options)) {
-      return `Task cancelled after world-model analysis. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
+      return terminalComputerUseReceipt('cancelled', 'The user cancelled after desktop-action analysis.', i + 1, actionHistory);
     }
 
     let action = extractActionJSON(responseText);
     if (!action) {
       options.onProgress?.(`[${i + 1}/${maxIter}] Could not parse action from: ${responseText.slice(0, 80)}`);
       consecutiveErrors++;
-      if (consecutiveErrors >= 5) return 'Too many parse failures. The vision model is not returning valid JSON actions.';
+      if (consecutiveErrors >= 5) return terminalComputerUseReceipt('blocked', 'The desktop-action model returned five invalid action plans.', i + 1, actionHistory);
       continue;
     }
 
@@ -537,7 +553,7 @@ export async function computerUseLoop(
 
     try {
       if (isCancelled(options)) {
-        return `Task cancelled before desktop action. Last actions: ${actionHistory.slice(-3).join('; ') || 'none'}`;
+        return terminalComputerUseReceipt('cancelled', 'The user cancelled before the next desktop action.', i + 1, actionHistory);
       }
       if (actionRequiresStableForeground(action)) {
         const currentWindow = await readDesktopWindowFingerprint(options.desktopRelay);
@@ -558,7 +574,7 @@ export async function computerUseLoop(
     }
   }
 
-  return `需要复核：已执行 ${maxIter} 步，还没有稳定完成。最后动作：${actionHistory.slice(-2).join('；') || '无'}`;
+  return terminalComputerUseReceipt('unverified', 'The iteration limit was reached without stable completion evidence.', maxIter, actionHistory);
   } finally {
     await options.desktopRelay('desktop_cursor_glow_hide', {}).catch(() => undefined);
     if (wallpaperModeEnabled) {

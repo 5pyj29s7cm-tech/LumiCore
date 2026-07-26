@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ToolRegistry, isToolNameAllowedByPolicy } from '../tools/registry';
+import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage } from '../tools/types';
 import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback, type LLMResponseFormat } from './providers';
 import { recordTokenUsage } from './token_tracker';
@@ -10,9 +10,8 @@ import { guardCompletionClaims, needsCompletionEvidence } from '../work_product/
 import { hasVisibleAutoCadExecutionEvidence, requiresVisibleAutoCadExecution } from '../cognition/action_contract';
 import { guardCurrentAppToolCall } from '../cognition/current_app_execution';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
-import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
+import { executeToolCall } from '../tools/execution_engine';
 import {
-  buildToolEvidenceRecord,
   GENERIC_TOOL_PLANNING_PROMPT,
   GENERIC_TOOL_REPLAN_PROMPT,
   hasRelevantEvidenceTool,
@@ -475,20 +474,6 @@ function buildReadyWorkProductSummary(messages: NormalizedMessage[], executionLo
   ].filter(Boolean).join('\n');
 }
 
-function filterToolDeclarationsForPolicy(
-  declarations: ReturnType<ToolRegistry['getToolDeclarations']>,
-  context?: ToolContext,
-): ReturnType<ToolRegistry['getToolDeclarations']> {
-  const policy = context?.toolPolicy;
-  // Orchestrated workers must always receive an explicit routed/fail-closed
-  // policy from the orchestrator. Never silently expose the full registry.
-  if (!policy && context?.source === 'orchestrator') return [];
-  if (!policy) return declarations;
-  return declarations.filter(declaration => (
-    isToolNameAllowedByPolicy(declaration.function.name, policy)
-  ));
-}
-
 function isLocalDesktopCadImageTask(task: string): boolean {
   const raw = String(task || '');
   const hasLocalSource = /(?:[A-Za-z]:[\\/]|desktop|local|\u684c\u9762|\u672c\u5730|\u4e0b\u8f7d)/i.test(raw);
@@ -568,7 +553,10 @@ export async function runWithTools(
         usageRecords,
       };
     }
-    const toolDeclarations = filterToolDeclarationsForPolicy(toolRegistry.getToolDeclarations(), context);
+    const toolDeclarations = toolRegistry.getToolDeclarationsForPolicy(
+      context?.toolPolicy,
+      { failClosedWithoutPolicy: context?.source === 'orchestrator' },
+    );
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
 
     const llmStart = Date.now();
@@ -692,9 +680,6 @@ export async function runWithTools(
     });
 
     for (const tc of normalizedToolCalls) {
-      let result: string;
-      let error: string | undefined;
-
       if (!exposedToolNames.has(tc.name)) {
         conversationHistory.push({
           role: 'tool',
@@ -714,74 +699,34 @@ export async function runWithTools(
       const executionArguments = currentAppGuard.normalizedArguments
         || tc.arguments
         || {};
-      const safeExecutionArguments = sanitizeDiagnosticValue(executionArguments);
-      if (!currentAppGuard.allowed) {
-        const record: ToolExecutionRecord = {
-          id: tc.id,
-          name: tc.name,
-          arguments: safeExecutionArguments,
-          result: '',
-          error: currentAppGuard.reason,
-          evidence: buildToolEvidenceRecord(toolRegistry, tc.name, executionArguments),
-        };
-        executionLog.push(record);
-        onToolCall?.(record);
-        conversationHistory.push({
-          role: 'tool',
-          content: `Error: ${currentAppGuard.reason}`,
-          toolCallId: tc.id,
-          name: tc.name,
-        });
-        continue;
-      }
-
-      if (isForbiddenLocalCadImageFallback(primaryTask, tc.name, tc.arguments || {})) {
-        const record: ToolExecutionRecord = {
-          id: tc.id,
-          name: tc.name,
-          arguments: sanitizeDiagnosticValue(tc.arguments || {}),
-          result: '',
-          error: 'Blocked unsafe CAD image fallback. Use desktop_list_files/desktop_path_info followed by floorplan_extract_geometry or ocr_image_file; do not use project-scoped MCP filesystem or certutil/base64 shell conversion.',
-          evidence: buildToolEvidenceRecord(toolRegistry, tc.name, tc.arguments || {}),
-        };
-        executionLog.push(record);
-        onToolCall?.(record);
-        conversationHistory.push({
-          role: 'tool',
-          content: `Error: ${record.error}`,
-          toolCallId: tc.id,
-          name: tc.name,
-        });
-        continue;
-      }
-
-      try {
-        context?.onToolStart?.({ id: tc.id, name: tc.name, arguments: safeExecutionArguments });
-      } catch {}
-
-      try {
-        result = await toolRegistry.execute(tc.name, executionArguments, context);
-      } catch (e: any) {
-        result = '';
-        error = e.message;
-      }
-
-      const record: ToolExecutionRecord = {
+      const record = await executeToolCall({
+        registry: toolRegistry,
         id: tc.id,
         name: tc.name,
-        arguments: safeExecutionArguments,
-        result,
-        error,
-        evidence: buildToolEvidenceRecord(toolRegistry, tc.name, executionArguments),
-      };
+        arguments: executionArguments,
+        context,
+        preflight: () => {
+          if (!currentAppGuard.allowed) {
+            return { allowed: false, reason: currentAppGuard.reason, arguments: executionArguments };
+          }
+          if (isForbiddenLocalCadImageFallback(primaryTask, tc.name, tc.arguments || {})) {
+            return {
+              allowed: false,
+              arguments: executionArguments,
+              reason: 'Blocked unsafe CAD image fallback. Use desktop_list_files/desktop_path_info followed by floorplan_extract_geometry or ocr_image_file; do not use project-scoped MCP filesystem or certutil/base64 shell conversion.',
+            };
+          }
+          return { allowed: true, arguments: executionArguments };
+        },
+      });
       executionLog.push(record);
       onToolCall?.(record);
 
       conversationHistory.push({
         role: 'tool',
-        content: error
-          ? `Error: ${error}`
-          : wrapToolOutputForModel(tc.name, compactToolResultForModel(tc.name, result)),
+        content: record.error
+          ? `Error: ${record.error}`
+          : wrapToolOutputForModel(tc.name, compactToolResultForModel(tc.name, record.result)),
         toolCallId: tc.id,
         name: tc.name,
       });

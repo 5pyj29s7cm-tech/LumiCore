@@ -4,10 +4,17 @@
  * These tools let the LLM agent create new reusable tools from natural language
  * descriptions, inspect existing skills, and install skill packages from disk.
  */
+import fs from 'fs';
+import path from 'path';
 import { ToolRegistry } from '../registry';
-import { generateSkill } from '../../skills/generator';
+import {
+  generateSkill,
+  readGeneratedSkillDraft,
+  validateGeneratedSkillDraftForInstall,
+} from '../../skills/generator';
 import { mcpManager } from '../../mcp/client';
 import type { ToolContext } from '../types';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 // Module-level LLM getters, set during registration
 let _llmGetters: {
@@ -31,14 +38,14 @@ function hostSkillMutationBlocked(context?: ToolContext): string | null {
 
 async function generateSkillHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const blocked = hostSkillMutationBlocked(context);
-  if (blocked) return blocked;
+  if (blocked) throw new Error(blocked);
   if (!_llmGetters) {
-    return 'Skill generation is not available: LLM providers have not been initialized yet. The server may still be starting up.';
+    throw new Error('Skill generation is unavailable because LLM providers have not finished initializing.');
   }
 
   const description = String(args.description || '').trim();
   if (!description) {
-    return 'Error: Please provide a description of what the skill should do. Be specific about inputs, processing logic, and expected output.';
+    throw new Error('A specific skill description is required.');
   }
 
   const provider = (args.provider as string) || 'deepseek';
@@ -59,19 +66,33 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
   );
 
   if (!result.success) {
-    return `Skill generation failed: ${result.error || 'Unknown error'}`;
+    throw new Error(`Skill generation failed: ${result.error || 'Unknown error'}`);
   }
-
-  let response = `Skill "${result.skillName}" generated successfully.\n`;
-  response += `Directory: ${result.directory}\n`;
-  response += `Tool name: ${result.toolName}\n`;
-
-  if (result.error) {
-    response += `\nWarnings: ${result.error}\n`;
+  const draftDirectory = String(result.directory || '');
+  const manifestPath = path.join(draftDirectory, 'package.json');
+  const entryPath = path.join(draftDirectory, 'index.ts');
+  if (
+    !draftDirectory
+    || !result.review?.staticCheck.passed
+    || !result.review?.trialRun.passed
+    || !fs.existsSync(manifestPath)
+    || !fs.existsSync(entryPath)
+  ) {
+    throw new Error('Skill generation returned without a complete reviewed draft artifact.');
   }
-
-  response += `\nThe skill is ready at ${result.directory}. Use install_skill to register it, or it will be auto-installed on next server restart.`;
-  return response;
+  return JSON.stringify({
+    ok: true,
+    status: 'draft',
+    executable: false,
+    installed: false,
+    skillName: result.skillName,
+    toolName: result.toolName,
+    draftDirectory,
+    manifestPath,
+    entryPath,
+    review: result.review,
+    warnings: result.error ? [result.error] : [],
+  });
 }
 
 async function listSkillsHandler(): Promise<string> {
@@ -88,24 +109,60 @@ async function listSkillsHandler(): Promise<string> {
 
     return `Installed skills (${skills.length} total):\n\n${lines.join('\n')}`;
   } catch (err: any) {
-    return `Failed to list skills: ${err.message}`;
+    throw new Error(`Skill listing failed: ${err.message || String(err)}`);
   }
 }
 
 async function installSkillHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const blocked = hostSkillMutationBlocked(context);
-  if (blocked) return blocked;
+  if (blocked) throw new Error(blocked);
   const dir = String(args.directory || '').trim();
   if (!dir) {
-    return 'Error: "directory" parameter is required. Provide the absolute path to the skill directory containing index.ts and package.json.';
+    throw new Error('An absolute skill source directory is required.');
   }
 
-  const name = String(args.name || '').trim() || dir.split(/[/\\]/).pop() || 'unknown';
-
   try {
-    const destDir = mcpManager.installSkill(name, dir);
-    return `Skill "${name}" installed successfully at ${destDir}. It will be available as a tool after reconnecting MCP servers (or on next server restart).`;
+    const generatedDraft = readGeneratedSkillDraft(dir);
+    if (generatedDraft && context?.userConfirmed !== true) {
+      throw new Error('Generated skill installation requires approval of its reviewed permissions, risk, side effects, and trial result.');
+    }
+    const validation = generatedDraft
+      ? await validateGeneratedSkillDraftForInstall(dir)
+      : null;
+    if (validation && !validation.valid) {
+      throw new Error(`Generated skill draft validation failed: ${validation.errors.join(' | ')}`);
+    }
+    const name = String(args.name || '').trim()
+      || validation?.skillName
+      || dir.split(/[/\\]/).pop()
+      || 'unknown';
+    const destDir = await mcpManager.installSkillValidated(
+      name,
+      dir,
+      validation?.review
+        ? {
+            approvedGeneratedDraft: {
+              approvedAt: new Date().toISOString(),
+              review: validation.review as unknown as Record<string, unknown>,
+            },
+          }
+        : undefined,
+    );
+    const manifestPath = path.join(destDir, 'package.json');
+    if (!fs.existsSync(manifestPath) || fs.statSync(manifestPath).size === 0) {
+      throw new Error('Skill installer returned without a non-empty installed package manifest.');
+    }
+    return JSON.stringify({
+      ok: true,
+      status: 'installed',
+      skillName: name,
+      installDirectory: destDir,
+      manifestPath,
+      runtimeStatus: 'restart_required',
+      generatedDraft: Boolean(generatedDraft),
+    });
   } catch (err: any) {
+    throw new Error(`Skill installation failed: ${err.message || String(err)}`);
     return `Install failed: ${err.message}. The skill may already be installed — check with list_skills.`;
   }
 }
@@ -114,10 +171,9 @@ export function registerSkillTools(registry: ToolRegistry): void {
   registry.register({
     name: 'generate_skill',
     description:
-      'Generate a new reusable MCP skill (tool) from a natural language description. ' +
-      'The skill becomes a standalone MCP server with a fully implemented handler function. ' +
-      'Use this when you notice a repeating workflow pattern or when the user asks for automation. ' +
-      'The generated skill will be available as mcp_{skillName}_{toolName} after installation.',
+      'Generate an isolated, non-executable MCP skill draft from an explicit user request. ' +
+      'The draft receives static analysis, a permission/side-effect declaration, type validation, and an isolated startup trial. ' +
+      'It is never scanned or installed automatically; install_skill requires a separate explicit approval.',
     parameters: {
       type: 'object',
       properties: {
@@ -141,6 +197,44 @@ export function registerSkillTools(registry: ToolRegistry): void {
     handler: (args, context) => generateSkillHandler(args, context),
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'skills.draft.generate',
+      family: 'skill-lifecycle',
+      lane: 'system',
+      operation: 'create',
+      risk: 'high',
+      sideEffects: [
+        { type: 'external_state_change', scope: 'configured LLM generation request', reversible: false },
+        { type: 'local_write', scope: 'isolated non-executable skill draft in user data', reversible: true },
+        { type: 'process_execution', scope: 'isolated static/type/startup validation trial', reversible: false },
+      ],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['ok', 'status', 'executable', 'installed', 'skillName', 'toolName', 'draftDirectory', 'manifestPath', 'entryPath', 'review'],
+        requiredValues: {
+          ok: true,
+          status: 'draft',
+          executable: false,
+          installed: false,
+          'review.status': 'draft',
+          'review.staticCheck.passed': true,
+          'review.trialRun.passed': true,
+          'review.requiresUserApproval': true,
+        },
+        successStatuses: ['draft'],
+        failureStatuses: ['failed', 'installed'],
+        requiredArtifacts: ['manifestPath', 'entryPath'],
+        successSignals: ['reviewed draft artifacts exist only in the isolated draft directory'],
+        limitations: ['Draft validation does not authorize installation or prove production safety.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'skills.draft.generate',
+      operation: 'create',
+      subjectArgument: 'description',
+      limitations: ['The generated result is intentionally non-executable and requires a separate reviewed installation.'],
+    }),
   });
 
   registry.register({
@@ -162,8 +256,8 @@ export function registerSkillTools(registry: ToolRegistry): void {
   registry.register({
     name: 'install_skill',
     description:
-      'Install an MCP skill from a local directory into ~/lumi_skills/ so it becomes available as a tool. ' +
-      'The directory must contain index.ts and package.json for a valid MCP server.',
+      'Validate and install an MCP skill from a local directory into ~/lumi_skills/. ' +
+      'Generated Lumi drafts are rechecked for source integrity, declared permissions, static safety, type correctness, and an isolated startup trial, then require explicit user confirmation.',
     parameters: {
       type: 'object',
       properties: {
@@ -181,5 +275,35 @@ export function registerSkillTools(registry: ToolRegistry): void {
     handler: (args, context) => installSkillHandler(args, context),
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'skills.package.install',
+      family: 'skill-lifecycle',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'installation', scope: 'user-maintained Lumi skills directory', reversible: true },
+        { type: 'local_state_change', scope: 'MCP skill runtime configuration', reversible: true },
+        { type: 'process_execution', scope: 'dependency preparation and skill validation', reversible: false },
+        { type: 'network_read', scope: 'package registries required by declared dependencies', reversible: true },
+      ],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['ok', 'status', 'skillName', 'installDirectory', 'manifestPath', 'runtimeStatus'],
+        requiredValues: { ok: true, status: 'installed', runtimeStatus: 'restart_required' },
+        successStatuses: ['installed'],
+        failureStatuses: ['failed', 'blocked'],
+        requiredArtifacts: ['manifestPath'],
+        successSignals: ['installed package manifest exists and runtime restart requirement is explicit'],
+        limitations: ['Installation does not prove the skill has connected or completed a real task.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'skills.package.install',
+      operation: 'mutate',
+      subjectArgument: 'directory',
+      limitations: ['Runtime availability requires a later MCP reconnect/startup receipt.'],
+    }),
   });
 }

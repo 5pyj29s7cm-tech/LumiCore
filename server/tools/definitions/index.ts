@@ -21,7 +21,6 @@ import { registerKnowledgeTools } from './knowledge_tools';
 import { registerWorkflowTools } from './workflow_tools';
 import { registerImageTools } from './image_tools';
 import { registerVideoTools } from './video_tools';
-import { registerUpgradeTools } from './upgrade_tools';
 import { registerInputTools } from './input_tools';
 import { registerComputerUseTool } from './computer_use_tool';
 import { registerPythonTools } from './python_tools';
@@ -79,7 +78,6 @@ export function registerAllTools(
   registerWorkflowTools(registry);
   registerImageTools(registry);
   registerVideoTools(registry);
-  registerUpgradeTools(registry);
   registerInputTools(registry);
   registerComputerUseTool(registry);
   registerPythonTools(registry);

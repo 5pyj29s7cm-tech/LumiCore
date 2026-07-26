@@ -1,10 +1,11 @@
 import { ToolRegistry } from '../registry';
-import { getGateConfig, saveGateConfig, SafetyGateConfig } from '../../autonomy/safety_gate';
+import { getGateConfig, loadGateConfig, saveGateConfig, SafetyGateConfig } from '../../autonomy/safety_gate';
 import {
   listAutonomousWorkflows,
   setAutonomousWorkflowEnabled,
   upsertAutonomousWorkflow,
 } from '../../autonomy/workflows';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const ALLOWED_KEYS = new Set<keyof SafetyGateConfig>([
   'autonomyLevel',
@@ -30,11 +31,9 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (_args, context) => {
-      const policy = { ...getGateConfig(context?.userId) } as Partial<SafetyGateConfig> & { externalAppAutomationEnabled?: boolean; externalAppAutomationGate?: string };
-      delete policy.externalAppAutomationEnabled;
-      policy.externalAppAutomationGate = 'removed';
       return JSON.stringify({
-        ...policy,
+        ...getGateConfig(context?.userId),
+        externalAppAutomationGate: 'removed',
       }, null, 2);
     },
     permission: 'user',
@@ -58,14 +57,47 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
         throw new Error('No autonomy policy fields were provided.');
       }
       const updated = saveGateConfig(patch, context?.userId);
+      const persistedPolicy = loadGateConfig(context?.userId);
+      const requestedLevel = patch.autonomyLevel;
+      if (requestedLevel && persistedPolicy.autonomyLevel !== requestedLevel) {
+        throw new Error('Autonomy policy was not persisted with the requested level.');
+      }
       return JSON.stringify({
+        ok: true,
+        status: 'updated',
+        persisted: true,
         updated,
+        persistedPolicy,
         reason: args.reason || '',
         note: 'Autonomy policy updated. Background execution still checks desktop mode, the active policy fields, token budget, confirmed workflows, and tool safety gates.',
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'autonomy.policy.update',
+      family: 'autonomy',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'autonomy safety policy', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'persistedPolicy.autonomyLevel'],
+        requiredValues: { ok: true, status: 'updated', persisted: true },
+        successStatuses: ['updated'],
+        failureStatuses: ['failed', 'unverified'],
+        successSignals: ['persisted autonomy policy reread matches the requested level'],
+        limitations: ['This changes policy only; every later action still passes its own permission and confirmation gates.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'autonomy.policy.update',
+      operation: 'mutate',
+      subjectArgument: 'autonomyLevel',
+      limitations: ['Does not execute an autonomous workflow by itself.'],
+    }),
   });
 
   registry.register({
@@ -112,7 +144,8 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       required: ['title', 'description', 'trigger'],
     },
     handler: async (args, context) => {
-      const workflow = upsertAutonomousWorkflow(context?.userId || 'anonymous', {
+      const userId = context?.userId || 'anonymous';
+      const workflow = upsertAutonomousWorkflow(userId, {
         id: args.id,
         title: args.title,
         description: args.description,
@@ -122,14 +155,45 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
         externalAppsAllowed: args.externalAppsAllowed,
         enabled: args.enabled,
       });
+      const persistedWorkflow = listAutonomousWorkflows(userId).find(item => item.id === workflow.id);
+      if (!persistedWorkflow || persistedWorkflow.updatedAt !== workflow.updatedAt) {
+        throw new Error('Autonomous workflow was not persisted.');
+      }
       return JSON.stringify({
-        workflow,
+        ok: true,
+        status: 'registered',
+        persisted: true,
+        workflow: persistedWorkflow,
         reason: args.reason || '',
         note: 'Workflow registered. Lumi can only auto-generate background tasks from enabled confirmed workflows and still obeys the autonomy policy gate.',
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'autonomy.workflow.register',
+      family: 'autonomy',
+      lane: 'system',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'confirmed autonomous workflow definition', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'workflow.id', 'workflow.updatedAt'],
+        requiredValues: { ok: true, status: 'registered', persisted: true },
+        successStatuses: ['registered'],
+        failureStatuses: ['failed', 'unverified'],
+        successSignals: ['workflow is present in the persisted user workflow list'],
+        limitations: ['Registration does not prove that a future trigger will run successfully.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'autonomy.workflow.register',
+      operation: 'create',
+      subjectArgument: 'title',
+      limitations: ['Creates or updates only the workflow definition.'],
+    }),
   });
 
   registry.register({
@@ -145,16 +209,48 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       required: ['id', 'enabled'],
     },
     handler: async (args, context) => {
-      const workflow = setAutonomousWorkflowEnabled(context?.userId || 'anonymous', String(args.id || ''), Boolean(args.enabled));
+      const userId = context?.userId || 'anonymous';
+      const requestedEnabled = Boolean(args.enabled);
+      const workflow = setAutonomousWorkflowEnabled(userId, String(args.id || ''), requestedEnabled);
       if (!workflow) {
         throw new Error(`Autonomous workflow not found: ${args.id}`);
       }
+      const persistedWorkflow = listAutonomousWorkflows(userId).find(item => item.id === workflow.id);
+      if (!persistedWorkflow || persistedWorkflow.enabled !== requestedEnabled) {
+        throw new Error('Autonomous workflow enabled state was not persisted.');
+      }
       return JSON.stringify({
-        workflow,
+        ok: true,
+        status: requestedEnabled ? 'enabled' : 'disabled',
+        persisted: true,
+        workflow: persistedWorkflow,
         reason: args.reason || '',
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'autonomy.workflow.set-enabled',
+      family: 'autonomy',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'autonomous workflow enabled state', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'workflow.id', 'workflow.enabled'],
+        requiredValues: { ok: true, persisted: true },
+        successStatuses: ['enabled', 'disabled'],
+        failureStatuses: ['failed', 'not_found', 'unverified'],
+        successSignals: ['persisted workflow enabled state matches the requested value'],
+        limitations: ['Enabling a workflow does not bypass per-action safety gates.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'autonomy.workflow.set-enabled',
+      operation: 'mutate',
+      subjectArgument: 'id',
+    }),
   });
 }

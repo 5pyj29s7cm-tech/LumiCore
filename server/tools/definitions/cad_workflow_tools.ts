@@ -330,6 +330,26 @@ export function registerCadWorkflowTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'cad.floorplan.autocad.visible_draw',
+      family: 'cad_drafting',
+      lane: 'cad',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'desktop_control', scope: 'active AutoCAD drawing', reversible: true },
+        { type: 'local_write', scope: 'audited CAD operation and completion receipts', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['status', 'completed', 'operationCount', 'expectedEntityCount', 'entitiesAdded', 'entityCountMatches'],
+        requiredValues: { status: 'completed', completed: true, entityCountMatches: true },
+        successStatuses: ['completed'],
+        successSignals: ['AutoCAD completion marker exists and exact entity-count delta matches the operation set'],
+        limitations: ['Success is limited to the traced source geometry and supplied calibration evidence.'],
+      },
+    },
     evidence: {
       capability: 'cad.floorplan.autocad.visible_draw',
       operation: 'create',

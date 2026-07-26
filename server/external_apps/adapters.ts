@@ -49,7 +49,7 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     status: 'requires_setup',
     actions: ['external_app_list_adapters', 'external_control_candidates', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'capability_research', 'computer_use'],
     safety: 'Use explicit tool or MCP integrations when available. Full UI control needs desktop automation confirmation.',
-    notes: 'Lumi can research integration candidates, inspect and operate native app controls through Windows UIA, then coordinate other AI tools through browser, files, clipboard, MCP, or confirmed computer-use sessions.',
+    notes: 'Lumi can research integration candidates, inspect and operate native app controls through the shared Windows UIA/macOS Accessibility contract, then coordinate other AI tools through browser, files, clipboard, MCP, or confirmed computer-use sessions.',
   },
 ];
 

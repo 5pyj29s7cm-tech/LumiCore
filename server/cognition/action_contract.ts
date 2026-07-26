@@ -1,4 +1,4 @@
-import type { ToolExecutionRecord } from '../tools/types';
+import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 import { isInformationOnlyQuestion } from './tool_intent';
 import {
@@ -34,8 +34,41 @@ export interface LumiActionContract {
   requiredEvidence: string[];
   preferredTools: string[];
   verificationTools: string[];
+  preferredCapabilities: ActionCapabilityRequirement[];
+  verificationCapabilities: ActionCapabilityRequirement[];
   nextStep: string;
   caution: string;
+}
+
+export interface ActionCapabilityRequirement {
+  lanes: CapabilityLane[];
+  operations?: CapabilityOperation[];
+  terms: string[];
+}
+
+const ACTION_CAPABILITY_REQUIREMENTS: Partial<Record<LumiActionContractKind, ActionCapabilityRequirement[]>> = {
+  messaging_read: [{ lanes: ['messaging', 'desktop'], operations: ['observe'], terms: ['message', 'wechat', 'chat', 'window', 'screen', 'ocr'] }],
+  messaging_send: [{ lanes: ['messaging', 'desktop'], operations: ['communicate', 'mutate'], terms: ['message', 'wechat', 'send', 'file', 'desktop'] }],
+  browser_account: [{ lanes: ['web', 'desktop'], operations: ['observe', 'mutate'], terms: ['login', 'session', 'account', 'browser', 'page'] }],
+  public_post: [{ lanes: ['web', 'desktop'], operations: ['communicate', 'mutate'], terms: ['post', 'publish', 'comment', 'browser', 'page'] }],
+  cad_document: [{ lanes: ['cad'], operations: ['create', 'mutate'], terms: ['autocad', 'document', 'drawing'] }],
+  cad_drafting: [{ lanes: ['cad', 'media', 'files', 'desktop'], operations: ['observe', 'create', 'mutate', 'test'], terms: ['cad', 'autocad', 'floorplan', 'geometry', 'drawing'] }],
+  customer_operations: [{ lanes: ['agents', 'messaging', 'office', 'industry'], terms: ['customer', 'sales', 'lead', 'takeover', 'message'] }],
+  ecommerce_operations: [{ lanes: ['industry', 'web', 'office', 'media'], terms: ['ecommerce', 'store', 'listing', 'inventory', 'campaign', 'content'] }],
+  design_delivery: [{ lanes: ['cad', 'media', 'office', 'files'], terms: ['design', 'cad', 'image', 'presentation', 'document'] }],
+  stock_monitor: [{ lanes: ['industry', 'web', 'agents'], operations: ['observe', 'create'], terms: ['stock', 'market', 'quote', 'watch', 'workflow'] }],
+  task_control: [{ lanes: ['system', 'agents'], operations: ['observe', 'mutate'], terms: ['runtime', 'task', 'work', 'status', 'cancel'] }],
+  legal_document: [{ lanes: ['industry', 'web', 'office'], terms: ['legal', 'law', 'case', 'citation', 'court', 'document'] }],
+  desktop_operation: [{ lanes: ['desktop'], operations: ['observe', 'mutate', 'test'], terms: ['desktop', 'window', 'application', 'native', 'screen', 'open'] }],
+  artifact_work: [{ lanes: ['files', 'office', 'media'], operations: ['observe', 'create', 'mutate', 'test'], terms: ['file', 'document', 'artifact', 'create', 'verify'] }],
+};
+
+function actionCapabilityRequirements(kind: LumiActionContractKind): ActionCapabilityRequirement[] {
+  return (ACTION_CAPABILITY_REQUIREMENTS[kind] || []).map(requirement => ({
+    lanes: [...requirement.lanes],
+    operations: requirement.operations ? [...requirement.operations] : undefined,
+    terms: [...requirement.terms],
+  }));
 }
 
 const NONE_CONTRACT: LumiActionContract = {
@@ -47,6 +80,8 @@ const NONE_CONTRACT: LumiActionContract = {
   requiredEvidence: [],
   preferredTools: [],
   verificationTools: [],
+  preferredCapabilities: [],
+  verificationCapabilities: [],
   nextStep: '',
   caution: '',
 };
@@ -423,7 +458,10 @@ export function hasAuthenticatedWebResultEvidence(records: ToolExecutionRecord[]
   });
 }
 
-function withDefaults(contract: Omit<LumiActionContract, 'applies'>): LumiActionContract {
+function withDefaults(
+  contract: Omit<LumiActionContract, 'applies' | 'preferredCapabilities' | 'verificationCapabilities'>,
+): LumiActionContract {
+  const preferredCapabilities = actionCapabilityRequirements(contract.kind);
   return {
     ...contract,
     applies: true,
@@ -431,6 +469,13 @@ function withDefaults(contract: Omit<LumiActionContract, 'applies'>): LumiAction
     requiredEvidence: unique(contract.requiredEvidence),
     preferredTools: unique(contract.preferredTools),
     verificationTools: unique(contract.verificationTools),
+    preferredCapabilities,
+    verificationCapabilities: preferredCapabilities.map(requirement => ({
+      ...requirement,
+      lanes: [...requirement.lanes],
+      operations: requirement.operations ? [...requirement.operations] : undefined,
+      terms: [...requirement.terms],
+    })),
   };
 }
 
@@ -948,7 +993,11 @@ export function buildActionContract(input: string): LumiActionContract {
 function expandSuccessfulRecords(records: ToolExecutionRecord[]): ToolExecutionRecord[] {
   const expanded: ToolExecutionRecord[] = [];
   for (const record of records) {
-    if (record.error || !String(record.result || '').trim()) continue;
+    if (
+      record.error
+      || !String(record.result || '').trim()
+      || (record.terminalVerification && record.terminalVerification.status !== 'verified')
+    ) continue;
     expanded.push(record);
     if (record.name !== 'work_takeover_task_run_suggested_tool') continue;
     const payload = parseRecordJson(record);
@@ -962,6 +1011,25 @@ function expandSuccessfulRecords(records: ToolExecutionRecord[]): ToolExecutionR
     });
   }
   return expanded;
+}
+
+function hasVerifiedManifestCapabilityEvidence(
+  contract: LumiActionContract,
+  records: ToolExecutionRecord[],
+): boolean {
+  return records.some(record => {
+    if (record.terminalVerification?.status !== 'verified' || !record.capability) return false;
+    const searchText = [
+      record.name,
+      record.capability.capabilityId,
+      record.evidence?.capability || '',
+    ].join(' ').toLowerCase();
+    return contract.verificationCapabilities.some(requirement => (
+      requirement.lanes.includes(record.capability!.lane)
+      && (!requirement.operations?.length || requirement.operations.includes(record.capability!.operation))
+      && requirement.terms.some(term => searchText.includes(term.toLowerCase()))
+    ));
+  });
 }
 
 function recordText(record: ToolExecutionRecord): string {
@@ -1679,18 +1747,21 @@ export function hasCoreActionEvidence(
   if (contract.kind === 'messaging_read') {
     return successful.some(record =>
       record.name === 'wechat_read_recent_chat' && /"read"\s*:\s*true|read:\s*true/i.test(String(record.result || ''))
-    ) || successful.some(record => /^(ocr_screen|desktop_capture_screen|desktop_ui_snapshot)$/i.test(record.name));
+    ) || successful.some(record => /^(ocr_screen|desktop_capture_screen|desktop_ui_snapshot)$/i.test(record.name))
+      || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'messaging_send') {
     return successful.some(record =>
       record.name === 'wechat_send_message' && /"sent"\s*:\s*true|sent:\s*true/i.test(String(record.result || ''))
-    ) || successful.some(record => hasRequestedMessagingFileEvidence(record, taskText));
+    ) || successful.some(record => hasRequestedMessagingFileEvidence(record, taskText))
+      || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'public_post') {
-    return hasPublicPostEvidence(successful);
+    return hasPublicPostEvidence(successful) || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'browser_account') {
-    return hasAuthenticatedWebResultEvidence(successful, taskText);
+    return hasAuthenticatedWebResultEvidence(successful, taskText)
+      || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'cad_document') {
     return hasBlankAutoCadDocumentEvidence(successful);
@@ -1725,10 +1796,12 @@ export function hasCoreActionEvidence(
     );
   }
   if (contract.kind === 'legal_document') {
-    return successful.some(record => /legal_|read_|create_docx|write_file|desktop_path_info|work_product_verify/i.test(record.name));
+    return successful.some(record => /legal_|read_|create_docx|write_file|desktop_path_info|work_product_verify/i.test(record.name))
+      || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'artifact_work') {
-    return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name));
+    return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name))
+      || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'desktop_operation') {
     if (requiresDesktopAiCollaboration(taskText)) {
@@ -1798,13 +1871,20 @@ export function hasCoreActionEvidence(
         return targetTerms.some(term => term.length >= 2 && evidence.includes(term));
       });
     }
-    return hasVerifiedGenericDesktopMutation(successful);
+    return hasVerifiedGenericDesktopMutation(successful)
+      || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   return successful.length > 0;
 }
 
 export function formatActionContractPrompt(contract: LumiActionContract): string {
   if (!contract.applies) return '';
+  const capabilityRequirements = contract.preferredCapabilities.map(requirement => {
+    const operations = requirement.operations?.length
+      ? `; operations=${requirement.operations.join('|')}`
+      : '';
+    return `lanes=${requirement.lanes.join('|')}${operations}; terms=${requirement.terms.join('|')}`;
+  });
   return [
     '## Lumi Action Contract',
     `Action type: ${contract.label}.`,
@@ -1815,8 +1895,9 @@ export function formatActionContractPrompt(contract: LumiActionContract): string
     contract.requiredEvidence.length
       ? `Required completion evidence: ${contract.requiredEvidence.join('; ')}.`
       : '',
-    contract.preferredTools.length ? `Preferred tools: ${contract.preferredTools.join(', ')}.` : '',
-    contract.verificationTools.length ? `Verification tools: ${contract.verificationTools.join(', ')}.` : '',
+    capabilityRequirements.length
+      ? `Capability requirements: ${capabilityRequirements.join('; ')}. Resolve actual tools from the current CapabilityManifest.`
+      : '',
     contract.caution ? `Caution: ${contract.caution}` : '',
     contract.nextStep ? `If blocked: ${contract.nextStep}` : '',
   ].filter(Boolean).join('\n');

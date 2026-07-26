@@ -8,7 +8,6 @@ import { runDreamCycle } from './memory/dream';
 import { buildTree, ensureBranch, moveNode } from './memory/tree';
 import { makeLLMCall } from './llm/providers';
 import { getWeatherBrief, getTimeGreeting } from './services/weather';
-import { autoGenerateSkill } from './skills/generator';
 import { autoGenerateWorkflows } from './agents/workflows';
 import { runHealthAudit, HealthReport } from './agents/health_audit';
 import { readDB, writeDB } from '../db_layer';
@@ -1194,29 +1193,6 @@ Rules:
         }
       }
       return messages.length > 0 ? messages.join('\n') : null;
-    },
-  });
-
-  // Auto skill generation (every 30 min) — detects repeatable workflows
-  scheduler.register({
-    id: 'auto_skill_gen',
-    cron: 'every_30m',
-    quiet: true,
-    lastRun: null,
-    handler: async () => {
-      for (const userId of getAllUserIds()) {
-        await autoGenerateSkill(
-          getDeepSeek,
-          getGemini,
-          getOpenAI,
-          getAnthropic,
-          getQwen,
-          userId,
-          'personal',
-          '',
-        );
-      }
-      return null;
     },
   });
 

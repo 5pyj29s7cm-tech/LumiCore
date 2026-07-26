@@ -730,28 +730,28 @@ exit 2
       actions: [
         { clientAction: { action: 'demo_open_surface', target: 'chat' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'chat' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'chat' } }],
     },
     {
       text: '这里是知识库和记忆。我会把文件、资料、对话和长期背景沉淀下来，减少你反复解释的成本。',
       actions: [
         { clientAction: { action: 'demo_open_surface', target: 'knowledge' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'knowledge' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'knowledge' } }],
     },
     {
       text: '这里是形象和声音。我可以有自己的视觉形象、语音和情绪反馈，让陪伴不只停在文字里。',
       actions: [
         { clientAction: { action: 'demo_open_surface', target: 'personalization' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'personalization' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'personalization' } }],
     },
     {
       text: '这里是技能。我可以把文档、网页、代码、数据、行业流程这些能力沉淀成可以复用的工作模块。',
       actions: [
         { clientAction: { action: 'demo_open_surface', target: 'skills' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'skills' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'skills' } }],
       pauseMs: 4600,
     },
     {
@@ -759,22 +759,22 @@ exit 2
       actions: [
         { clientAction: { action: 'demo_open_surface', target: 'tools' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'tools' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'tools' } }],
       pauseMs: 4600,
     },
     {
       text: '复杂任务不是黑箱。我会把工具调用、执行进度和结果证据展示出来，你能看见我正在做什么。',
       actions: [
-        { clientAction: { action: 'demo_open_surface', target: 'runtime-log' } },
+        { clientAction: { action: 'open_computer_adaptation' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'runtime-log' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'kernel' } }],
     },
     {
       text: '我也能组织多个子智能体协作。对个人，我是助理和伙伴；对团队，我可以扩展成 AI 工作系统。',
       actions: [
         { clientAction: { action: 'demo_open_surface', target: 'team' } },
       ],
-      postActions: [{ clientAction: { action: 'close_app', target: 'team' } }],
+      postActions: [{ clientAction: { action: 'close_client_surface', target: 'team' } }],
     },
     {
       text: '接下来我会离开自己的界面，操作真实桌面。比如打开办公软件写内容、打开浏览器查信息、再打开 Codex 做 AI 协作。',
@@ -789,8 +789,8 @@ exit 2
       postActions: [
         {
           clientAction: voiceScope.domain === 'work'
-            ? { action: 'close_app', target: 'org' }
-            : { action: 'close_app', target: 'plans' },
+            ? { action: 'close_client_surface', target: 'org' }
+            : { action: 'close_client_surface', target: 'plans' },
         },
       ],
       pauseMs: 6200,

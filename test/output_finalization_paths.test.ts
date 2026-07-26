@@ -36,7 +36,7 @@ describe('finalized output paths', () => {
     expect(task).toContain('shouldDeferModelOutputUntilFinalized');
     expect(task).toContain('createPreFinalizationTextGate');
     expect(task).toContain('const taskTextGate = createPreFinalizationTextGate()');
-    expect(task).toContain('if (!cancelled && !deferTaskModelOutput)');
+    expect(task).toContain('if (!taskLease.signal.aborted && !deferTaskModelOutput)');
     expect(task).toContain('const safeText = taskTextGate.push(chunk)');
     expect(task).toContain('taskTextGate.finish()');
     expect(task).toContain('const orchestratedToolRecords: ToolExecutionRecord[] = []');

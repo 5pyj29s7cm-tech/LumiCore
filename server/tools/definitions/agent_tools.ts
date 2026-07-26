@@ -2,6 +2,7 @@ import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { readDB, writeDB } from '../../../db_layer';
 import { validateExternalCommand } from '../../agents/external_runtime';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 function normalizeStringList(value: unknown, max = 20): string[] {
   const raw = Array.isArray(value)
@@ -30,7 +31,7 @@ function agentInToolScope(agent: any, context?: ToolContext): boolean {
 
 async function agentCreate(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const name = (args.name || '').trim();
-  if (!name) return 'Error: agent name is required.';
+  if (!name) throw new Error('Agent name is required.');
 
   const category = (args.category || 'general').trim().toLowerCase();
   const skillTags = normalizeStringList(args.skillTags);
@@ -45,11 +46,11 @@ async function agentCreate(args: Record<string, any>, context?: ToolContext): Pr
   const orgId = domain === 'work' ? (context?.orgId || '') : '';
 
   if (runtime === 'external' && !externalCommand) {
-    return 'Error: external agents must provide an externalCommand (e.g. "openclaw send --agent mybot --message \\"{task}\\"").';
+    throw new Error('External agents must provide an externalCommand.');
   }
   if (runtime === 'external' && externalCommand) {
     const validationError = validateExternalCommand(externalCommand);
-    if (validationError) return `Error: ${validationError}`;
+    if (validationError) throw new Error(validationError);
   }
 
   const id = `worker_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -85,11 +86,12 @@ async function agentCreate(args: Record<string, any>, context?: ToolContext): Pr
     writeDB(db);
     return JSON.stringify({
       ok: true,
+      status: 'created',
       agent: { id, name, category, skillTags, status: 'active' },
       message: `Worker agent "${name}" created and ready. ID: ${id}`,
     });
   } catch (err: any) {
-    return `Failed to create agent: ${err.message || String(err)}`;
+    throw new Error(`Failed to create agent: ${err.message || String(err)}`);
   }
 }
 
@@ -136,7 +138,7 @@ async function agentTerminate(args: Record<string, any>, context?: ToolContext):
         agentInToolScope(a, context)
       );
       if (activeAgents.length === 0) {
-        return 'No active agents to terminate in the current scope (built-in agents excluded).';
+        return JSON.stringify({ ok: true, status: 'no_op', terminated: 0, reason: 'No active agents in the current scope.' });
       }
       const activeIds = new Set(activeAgents.map((a: any) => a.id));
       const count = activeAgents.length;
@@ -149,25 +151,26 @@ async function agentTerminate(args: Record<string, any>, context?: ToolContext):
       writeDB(db);
       return JSON.stringify({
         ok: true,
+        status: 'terminated',
         terminated: count,
         message: `Terminated all ${count} active agents.`,
       });
     }
 
     if (!agentId) {
-      return 'Error: specify agentId or set all=true to terminate all agents.';
+      throw new Error('Specify agentId or set all=true to terminate all agents.');
     }
 
     if (BUILTIN_AGENT_IDS.includes(agentId)) {
-      return `Cannot terminate built-in agent "${agentId}".`;
+      throw new Error(`Cannot terminate built-in agent "${agentId}".`);
     }
 
     const agent = db.agents.find((a: any) => a.id === agentId && agentInToolScope(a, context));
     if (!agent) {
-      return `Agent "${agentId}" not found.`;
+      throw new Error(`Agent "${agentId}" not found.`);
     }
     if (agent.status === 'terminated') {
-      return `Agent "${agentId}" is already terminated.`;
+      return JSON.stringify({ ok: true, status: 'no_op', terminated: 0, agent: { id: agent.id, name: agent.name, status: 'terminated' } });
     }
 
     agent.status = 'terminated';
@@ -176,11 +179,13 @@ async function agentTerminate(args: Record<string, any>, context?: ToolContext):
 
     return JSON.stringify({
       ok: true,
+      status: 'terminated',
+      terminated: 1,
       agent: { id: agent.id, name: agent.name, status: 'terminated' },
       message: `Agent "${agent.name}" (${agent.id}) terminated.`,
     });
   } catch (err: any) {
-    return `Failed to terminate agent(s): ${err.message || String(err)}`;
+    throw new Error(`Failed to terminate agent(s): ${err.message || String(err)}`);
   }
 }
 
@@ -208,6 +213,30 @@ export function registerAgentTools(registry: ToolRegistry): void {
     handler: agentCreate,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'agents.worker.create',
+      family: 'agent-lifecycle',
+      lane: 'agents',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'persistent worker agent registry', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'agent.id', 'agent.status'],
+        requiredValues: { ok: true, status: 'created', 'agent.status': 'active' },
+        successStatuses: ['created'],
+        failureStatuses: ['failed'],
+        successSignals: ['persistent agent record exists with active status'],
+        limitations: ['Creation does not prove that an external agent runtime is online or capable.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'agents.worker.create',
+      operation: 'create',
+      subjectArgument: 'name',
+      limitations: ['External runtime health remains unverified until a task is accepted and completed.'],
+    }),
   });
 
   registry.register({
@@ -239,5 +268,29 @@ export function registerAgentTools(registry: ToolRegistry): void {
     handler: agentTerminate,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'agents.worker.terminate',
+      family: 'agent-lifecycle',
+      lane: 'agents',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [{ type: 'local_state_change', scope: 'persistent worker agent status', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'terminated'],
+        requiredValues: { ok: true },
+        successStatuses: ['terminated', 'no_op'],
+        failureStatuses: ['failed', 'not_found'],
+        successSignals: ['target agents are marked terminated or no active target exists'],
+        limitations: ['Termination updates the registry; external runtimes may require separate process shutdown.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'agents.worker.terminate',
+      operation: 'mutate',
+      subjectArgument: 'agentId',
+      limitations: ['External runtime process shutdown is outside this registry-state receipt.'],
+    }),
   });
 }

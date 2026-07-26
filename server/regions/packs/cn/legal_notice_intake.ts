@@ -1,4 +1,5 @@
 import { toolRegistry } from '../../../tools/registry';
+import { executeToolCallOrThrow } from '../../../tools/execution_engine';
 import * as LegalCases from '../../../org/legal_cases';
 import { getMember, listUserOrgs } from '../../../org/db';
 import { upsertPendingReminder } from '../../../memory';
@@ -11,6 +12,19 @@ import {
   type PendingLegalNotice,
   type PendingLegalNoticeCandidate,
 } from '../../../messaging/legal_notice_pending';
+
+function executeRegisteredTool(
+  name: string,
+  args: Record<string, any>,
+  context: Record<string, any>,
+): Promise<string> {
+  return executeToolCallOrThrow({
+    registry: toolRegistry,
+    name,
+    arguments: args,
+    context,
+  });
+}
 
 function text(value: unknown): string {
   return String(value || '').trim();
@@ -331,7 +345,7 @@ async function inspectPersonalNotice(msg: IncomingMessage, messageText: string):
   const url = extractFirstUrl(messageText);
   if (!url || !msg.boundUserId || !toolRegistry.get('legal_process_notice_link')) return '';
   try {
-    return await toolRegistry.execute('legal_process_notice_link', {
+    return await executeRegisteredTool('legal_process_notice_link', {
       userId: msg.boundUserId,
       url,
       message: messageText,
@@ -365,7 +379,7 @@ async function runOrganizationLegalIntake(
   msg.boundOrgId = target.orgId;
 
   if (toolRegistry.get('legal_message_intake_to_case')) {
-    const report = await toolRegistry.execute('legal_message_intake_to_case', {
+    const report = await executeRegisteredTool('legal_message_intake_to_case', {
       orgId: target.orgId,
       userId,
       platform: msg.platform,
@@ -398,7 +412,7 @@ async function runOrganizationLegalIntake(
     userId,
     message: messageText,
   });
-  const report = await toolRegistry.execute('legal_process_notice_link', {
+  const report = await executeRegisteredTool('legal_process_notice_link', {
     orgId: target.orgId,
     userId,
     caseId: caseFile.id,

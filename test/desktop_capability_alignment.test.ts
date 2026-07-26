@@ -111,7 +111,7 @@ describe('desktop capability alignment', () => {
     const { saveGateConfig } = await import('../server/autonomy/safety_gate');
     const { getAdapterRegistry } = await import('../server/adapters/registry');
 
-    saveGateConfig({ autonomyLevel: 'full', externalAppAutomationEnabled: false });
+    saveGateConfig({ autonomyLevel: 'full' });
     const report = getAdapterRegistry({ includePlanned: false });
     const computerUse = report.adapters.find(adapter => adapter.id === 'automation.computer_use');
     const accountReuse = report.adapters.find(adapter => adapter.id === 'automation.account_session_reuse');

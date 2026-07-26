@@ -1,6 +1,6 @@
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
-import { getOperationModeConfig } from './operation_modes';
+import { buildOperationModeToolPolicy } from './operation_modes';
 import { buildUnifiedLegalEntryPrompt } from './legal_entry';
 import {
   formatToolRouteForPrompt,
@@ -108,7 +108,7 @@ export function buildSelfRepairToolPolicy(text: string, registry?: ToolRegistry)
   if (SELF_REPAIR_ADAPTER_RE.test(requested)) {
     allowedTools.push('adapter_registry_list', 'adapter_health_check');
   }
-  if (explicitRecovery) allowedTools.push('client_self_repair');
+  if (explicitRecovery) allowedTools.push('client_self_repair', 'client_action');
   if (explicitSkillRepair) allowedTools.push('client_repair_skill');
   if (SELF_REPAIR_DESKTOP_RE.test(requested)) {
     allowedTools.push(
@@ -134,8 +134,12 @@ export function buildSelfRepairToolPolicy(text: string, registry?: ToolRegistry)
   };
 }
 
-function fallbackPolicy(flow: LumiTurnFlow, personalityToolPolicy?: ToolPolicy): ToolPolicy {
-  const opModePolicy = getOperationModeConfig(flow.effectiveOperationMode)?.toolPolicy;
+function fallbackPolicy(
+  flow: LumiTurnFlow,
+  personalityToolPolicy?: ToolPolicy,
+  registry?: ToolRegistry,
+): ToolPolicy {
+  const opModePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry);
   return flow.workSurfaceRoute.toolPolicy || opModePolicy || personalityToolPolicy || NO_TOOLS_POLICY;
 }
 
@@ -309,11 +313,12 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
       : clientActionToolPolicy
         ? clientActionToolPolicy
         : allowToolUse
-          ? fallbackPolicy(input.flow, input.personalityToolPolicy)
+          ? fallbackPolicy(input.flow, input.personalityToolPolicy, input.toolRegistry)
           : NO_TOOLS_POLICY;
   const rawToolRoute = allowToolUse && shouldRouteTools(input.flow, input.isSanctuary)
     ? routeToolsForTurn(input.flow.routeText || input.text, input.toolDeclarations, {
         maxTools: input.flow.channel === 'voice' ? 32 : 64,
+        capabilityManifest: input.toolRegistry?.getCapabilityManifest(baseToolPolicy),
       })
     : null;
   const toolRoute = rawToolRoute

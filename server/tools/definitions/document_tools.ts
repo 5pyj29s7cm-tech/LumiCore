@@ -6,7 +6,8 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
-import type { ToolContext } from '../types';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import type { ToolCapabilityMetadata, ToolContext, ToolDefinition } from '../types';
 import { ingestDocument } from '../../agents/rag';
 import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
@@ -17,6 +18,42 @@ import { extractPdfText } from '../../utils/pdf_text';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
+
+function documentArtifactCapability(
+  id: string,
+  family: string,
+  scope: string,
+): ToolCapabilityMetadata {
+  return capabilityContract({
+    id,
+    family,
+    lane: 'office',
+    operation: 'create',
+    risk: 'medium',
+    sideEffects: [{ type: 'local_write', scope, reversible: true }],
+    verification: {
+      strategy: 'artifact',
+      required: true,
+      requiredFields: ['ok', 'status', 'path'],
+      requiredValues: { ok: true },
+      successStatuses: ['created', 'modified', 'converted', 'completed'],
+      requiredArtifacts: ['path'],
+      successSignals: ['the exact returned artifact exists and is non-empty'],
+      limitations: ['Artifact existence does not independently prove semantic correctness of every document value.'],
+    },
+  });
+}
+
+function documentArtifactEvidence(
+  id: string,
+  subjectArgument: string,
+): NonNullable<ToolDefinition['evidence']> {
+  return capabilityEvidence({
+    id,
+    operation: 'create',
+    subjectArgument,
+  });
+}
 
 function ensureOutputDir(): string {
   if (!fs.existsSync(OUTPUT_DIR)) {
@@ -125,21 +162,18 @@ async function transcribeAudioToTextFile(args: Record<string, any>, context?: To
     fs.writeFileSync(outputPath, content, 'utf-8');
 
     const excerptLimit = Math.max(300, Math.min(Number(args.excerptLimit) || 1200, 5000));
-    const warnings = result.warnings?.length ? `\n- Provider fallbacks: ${result.warnings.join('; ')}` : '';
-    return [
-      '# Audio transcription result',
-      '',
-      '- Status: completed',
-      `- Source audio: ${resolvedPath}`,
-      `- Text file: ${outputPath}`,
-      `- Provider: ${result.provider}/${result.model}`,
-      `- Language: ${result.language}`,
-      `- Characters: ${result.text.length}`,
-      warnings,
-      '',
-      '## Transcript excerpt',
-      result.text.trim().slice(0, excerptLimit) || '(empty transcript)',
-    ].filter(line => line !== '').join('\n');
+    return JSON.stringify({
+      ok: true,
+      status: 'completed',
+      path: outputPath,
+      sourcePath: resolvedPath,
+      provider: result.provider,
+      model: result.model,
+      language: result.language,
+      characters: result.text.length,
+      warnings: result.warnings || [],
+      excerpt: result.text.trim().slice(0, excerptLimit),
+    }, null, 2);
   } catch (err: any) {
     if (isAudioTranscriptionUnavailable(err)) {
       throw new Error('No audio transcription provider is configured. Configure DashScope Fun-ASR, local Whisper, OpenAI Whisper, or Doubao Speech, then retry.');
@@ -247,7 +281,7 @@ async function ingestDocumentToRag(args: Record<string, any>, context?: any): Pr
   const text = await extractDocumentText({ filePath, password: args.password });
   const count = await ingestDocument(userId, agentId, title, text, { filePath });
 
-  return `Ingested "${title}" into agent ${agentId}: ${count} chunks stored.`;
+  return JSON.stringify({ ok: true, status: 'ingested', agentId, title, chunkCount: count }, null, 2);
 }
 
 // ── XLSX Creation & Modification ──
@@ -315,7 +349,7 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
   const safeName = (filename || 'spreadsheet').replace(/[\\/:*?"<>|]/g, '_');
   const outPath = path.join(outDir, `${safeName}_${Date.now()}.xlsx`);
   await wb.xlsx.writeFile(outPath);
-  return `XLSX created: ${outPath} (${wb.worksheets.length} sheet(s), styled)`;
+  return JSON.stringify({ ok: true, status: 'created', path: outPath, sheetCount: wb.worksheets.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
 async function modifyXlsx(args: Record<string, any>): Promise<string> {
@@ -330,7 +364,7 @@ async function modifyXlsx(args: Record<string, any>): Promise<string> {
 
   const outPath = filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`);
   await writeXlsxWorkbook(wb, outPath);
-  return `XLSX modified: ${outPath}`;
+  return JSON.stringify({ ok: true, status: 'modified', path: outPath, size: fs.statSync(outPath).size }, null, 2);
 }
 
 // ── DOCX Creation & Modification ──
@@ -418,7 +452,7 @@ async function createDocx(args: Record<string, any>): Promise<string> {
   const safeName = (filename || title || 'document').replace(/[\\/:*?"<>|]/g, '_');
   const outPath = path.join(outDir, `${safeName}_${Date.now()}.docx`);
   fs.writeFileSync(outPath, buffer);
-  return `DOCX created: ${outPath} (${buffer.length} bytes)`;
+  return JSON.stringify({ ok: true, status: 'created', path: outPath, size: buffer.length }, null, 2);
 }
 
 async function modifyDocx(args: Record<string, any>): Promise<string> {
@@ -437,7 +471,8 @@ async function modifyDocx(args: Record<string, any>): Promise<string> {
     `$find.Text = '${esc(k)}'\n$find.Replacement.Text = '${esc(v)}'\n$find.Execute($null, $null, $null, $null, $null, $null, $null, $null, $null, $null, 2)`
   ).join('\n');
 
-  const outPathEsc = esc(filePath.replace(/\.docx$/i, `_filled_${Date.now()}.docx`));
+  const outPath = filePath.replace(/\.docx$/i, `_filled_${Date.now()}.docx`);
+  const outPathEsc = esc(outPath);
   const psScript = `
 $word = New-Object -ComObject Word.Application
 $word.Visible = $false
@@ -457,9 +492,11 @@ Write-Output '${outPathEsc}'
       `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
       { timeout: 30000, encoding: 'utf-8' },
     );
-    return `DOCX modified: ${result.trim().split(/\r?\n/).pop()?.trim() || 'done'}`;
+    const reportedPath = result.trim().split(/\r?\n/).pop()?.trim() || outPath;
+    if (!fs.existsSync(outPath)) throw new Error(`Word did not create the expected output: ${reportedPath}`);
+    return JSON.stringify({ ok: true, status: 'modified', path: outPath, size: fs.statSync(outPath).size }, null, 2);
   } catch (err: any) {
-    return `DOCX modification failed: ${err.stderr || err.message}. Ensure Microsoft Word is installed.`;
+    throw new Error(`DOCX modification failed: ${err.stderr || err.message}. Ensure Microsoft Word is installed.`);
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
@@ -479,7 +516,7 @@ async function xlsxToCsv(args: Record<string, any>): Promise<string> {
   const csv = worksheetToCsv(ws);
   const outPath = outputPath || filePath.replace(/\.xlsx$/i, '.csv');
   fs.writeFileSync(outPath, csv, 'utf-8');
-  return `XLSX converted to CSV: ${outPath} (${csv.length} chars)`;
+  return JSON.stringify({ ok: true, status: 'converted', path: outPath, characters: csv.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
 async function docxToMarkdown(args: Record<string, any>): Promise<string> {
@@ -496,7 +533,7 @@ async function docxToMarkdown(args: Record<string, any>): Promise<string> {
 
   const outPath = outputPath || filePath.replace(/\.docx$/i, '.md');
   fs.writeFileSync(outPath, markdown, 'utf-8');
-  return `DOCX converted to Markdown: ${outPath} (${markdown.length} chars)`;
+  return JSON.stringify({ ok: true, status: 'converted', path: outPath, characters: markdown.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
 async function docxToPdf(args: Record<string, any>): Promise<string> {
@@ -521,9 +558,11 @@ Write-Output '${esc(outPath)}'
       `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
       { timeout: 30000, encoding: 'utf-8' },
     );
-    return `DOCX converted to PDF: ${result.trim().split(/\r?\n/).pop()?.trim() || outPath}`;
+    const reportedPath = result.trim().split(/\r?\n/).pop()?.trim() || outPath;
+    if (!fs.existsSync(outPath)) throw new Error(`Word did not create the expected output: ${reportedPath}`);
+    return JSON.stringify({ ok: true, status: 'converted', path: outPath, size: fs.statSync(outPath).size }, null, 2);
   } catch (err: any) {
-    return `DOCX to PDF conversion failed: ${err.stderr || err.message}. Ensure Microsoft Word is installed.`;
+    throw new Error(`DOCX to PDF conversion failed: ${err.stderr || err.message}. Ensure Microsoft Word is installed.`);
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
@@ -669,6 +708,28 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: ingestDocumentToRag,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'knowledge.agent.document.ingest',
+      family: 'knowledge_ingestion',
+      lane: 'knowledge',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'target agent knowledge-base chunks', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'agentId', 'title', 'chunkCount'],
+        requiredValues: { ok: true, status: 'ingested' },
+        successStatuses: ['ingested'],
+        successSignals: ['the target agent knowledge store returned a concrete stored chunk count'],
+        limitations: ['Ingestion does not prove the agent will rank every chunk for every future query.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'knowledge.agent.document.ingest',
+      operation: 'mutate',
+      subjectArgument: 'agentId',
+    }),
   });
 
   registry.register({
@@ -693,6 +754,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: transcribeAudioToTextFile,
     permission: 'user',
     securityLevel: 'safe',
+    capability: documentArtifactCapability('office.audio.transcript.create', 'transcription', 'saved audio transcript text file'),
+    evidence: documentArtifactEvidence('office.audio.transcript.create', 'filePath'),
   });
 
   registry.register({
@@ -713,6 +776,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: createXlsx,
     permission: 'user',
     securityLevel: 'safe',
+    capability: documentArtifactCapability('office.xlsx.create', 'spreadsheet', 'new XLSX workbook'),
+    evidence: documentArtifactEvidence('office.xlsx.create', 'filename'),
   });
 
   registry.register({
@@ -733,6 +798,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: modifyXlsx,
     permission: 'user',
     securityLevel: 'safe',
+    capability: documentArtifactCapability('office.xlsx.modify-copy', 'spreadsheet', 'modified XLSX workbook copy'),
+    evidence: documentArtifactEvidence('office.xlsx.modify-copy', 'filePath'),
   });
 
   registry.register({
@@ -753,6 +820,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: createDocx,
     permission: 'user',
     securityLevel: 'safe',
+    capability: documentArtifactCapability('office.docx.create', 'document', 'new DOCX document'),
+    evidence: documentArtifactEvidence('office.docx.create', 'filename'),
   });
 
   registry.register({
@@ -772,6 +841,11 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: modifyDocx,
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      ...documentArtifactCapability('office.docx.modify-copy', 'document', 'modified DOCX document copy'),
+      prerequisites: ['Microsoft Word COM automation on Windows'],
+    },
+    evidence: documentArtifactEvidence('office.docx.modify-copy', 'filePath'),
   });
 
   registry.register({
@@ -789,6 +863,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: xlsxToCsv,
     permission: 'user',
     securityLevel: 'safe',
+    capability: documentArtifactCapability('office.xlsx.convert-csv', 'spreadsheet', 'CSV conversion output'),
+    evidence: documentArtifactEvidence('office.xlsx.convert-csv', 'filePath'),
   });
 
   registry.register({
@@ -805,6 +881,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: docxToMarkdown,
     permission: 'user',
     securityLevel: 'safe',
+    capability: documentArtifactCapability('office.docx.convert-markdown', 'document', 'Markdown conversion output'),
+    evidence: documentArtifactEvidence('office.docx.convert-markdown', 'filePath'),
   });
 
   registry.register({
@@ -821,6 +899,11 @@ export function registerDocumentTools(registry: ToolRegistry): void {
     handler: docxToPdf,
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      ...documentArtifactCapability('office.docx.convert-pdf', 'document', 'PDF conversion output'),
+      prerequisites: ['Microsoft Word COM automation on Windows'],
+    },
+    evidence: documentArtifactEvidence('office.docx.convert-pdf', 'filePath'),
   });
 
   registry.register({

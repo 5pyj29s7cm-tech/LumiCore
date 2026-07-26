@@ -7,6 +7,7 @@ import { makeLLMCall } from '../llm/providers';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { pushNotification } from '../routes/notifications';
 import { toolRegistry } from '../tools/registry';
+import { executeToolCallOrThrow } from '../tools/execution_engine';
 import type { ToolContext } from '../tools/types';
 import { DESKTOP_WECHAT_WATCH_MESSAGES } from '../regions/packs/cn/desktop_wechat_watch_messages';
 
@@ -436,13 +437,18 @@ export class DesktopWechatWatchService {
     };
 
     try {
-      const result = await toolRegistry.execute('wechat_send_message', {
-        contact,
-        message,
-        applicationTarget: 'wechat',
-        useSearch: true,
-        useVirtualCursor: true,
-      }, context);
+      const result = await executeToolCallOrThrow({
+        registry: toolRegistry,
+        name: 'wechat_send_message',
+        arguments: {
+          contact,
+          message,
+          applicationTarget: 'wechat',
+          useSearch: true,
+          useVirtualCursor: true,
+        },
+        context,
+      });
       const parsed = parseDesktopJson(result);
       if (parsed?.sent !== true) {
         throw new Error(parsed?.verificationReason || 'The WeChat send attempt was not visibly verified.');
@@ -646,18 +652,23 @@ export class DesktopWechatWatchService {
     runtime.processingEventId = event.id;
     this.updateEvent(userId, event.id, { status: 'processing', error: '' });
     try {
-      const readResult = await toolRegistry.execute('wechat_read_recent_chat', {
-        contact: event.contact,
-        applicationTarget: 'wechat',
-        useSearch: true,
-        maxMessages: 10,
-      }, {
-        userId,
-        domain: 'personal',
-        desktopRelay,
-        llmGetters: this.requireDependencies().llmGetters,
-        source: 'wechat_desktop_watch',
-        actionIntent: `Read visible recent messages from the verified WeChat contact ${event.contact} and prepare a draft only.`,
+      const readResult = await executeToolCallOrThrow({
+        registry: toolRegistry,
+        name: 'wechat_read_recent_chat',
+        arguments: {
+          contact: event.contact,
+          applicationTarget: 'wechat',
+          useSearch: true,
+          maxMessages: 10,
+        },
+        context: {
+          userId,
+          domain: 'personal',
+          desktopRelay,
+          llmGetters: this.requireDependencies().llmGetters,
+          source: 'wechat_desktop_watch',
+          actionIntent: `Read visible recent messages from the verified WeChat contact ${event.contact} and prepare a draft only.`,
+        },
       });
       const parsed = parseDesktopJson(readResult);
       const summary = compact(parsed?.contentSummary || '', 3000);

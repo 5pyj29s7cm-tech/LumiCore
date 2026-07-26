@@ -111,7 +111,8 @@ describe('orchestration and replan tool policy', () => {
     )).toHaveLength(2);
     expect(orchestrator).toContain('context.toolPolicy');
     expect(orchestrator).toContain('toolPolicy: workerToolPolicy');
-    expect(adapter).toContain("if (!policy && context?.source === 'orchestrator') return []");
+    expect(adapter).toContain('getToolDeclarationsForPolicy(');
+    expect(adapter).toContain("failClosedWithoutPolicy: context?.source === 'orchestrator'");
   });
 
   it('distinguishes UI start events from terminal receipts', () => {

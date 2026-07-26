@@ -73,10 +73,11 @@ describe('Lumi runtime capability context', () => {
     });
 
     expect(prompt).toContain('Lumi Runtime Capability Context');
-    expect(prompt).toContain('client/ui=1');
-    expect(prompt).toContain('task=1');
-    expect(prompt).toContain('desktop=1');
-    expect(prompt).toContain('web/account=1');
+    expect(prompt).toContain('Capability manifest: 4 registered tools');
+    expect(prompt).toContain('builtin:client=1');
+    expect(prompt).toContain('builtin:work=1');
+    expect(prompt).toContain('builtin:desktop=1');
+    expect(prompt).toContain('builtin:web=1');
     expect(prompt).toContain('Execution governance:');
     expect(prompt).toContain('verify=');
     expect(prompt).toContain('delegation=');

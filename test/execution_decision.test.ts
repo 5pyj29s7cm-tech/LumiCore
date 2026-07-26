@@ -222,6 +222,7 @@ describe('Lumi execution decision', () => {
       'adapter_registry_list',
       'adapter_health_check',
       'client_self_repair',
+      'client_action',
       'client_repair_skill',
     ]);
     expect(skillRepair.requireConfirmation).toEqual(['client_repair_skill']);
@@ -420,8 +421,7 @@ describe('Lumi execution decision', () => {
     ];
 
     for (const source of sources) {
-      expect(source).toContain('buildLumiExecutionDecision');
-      expect(source).toContain('buildLumiIntentTrace');
+      expect(source).toContain('buildLumiExecutionPipeline');
       expect(source).toContain('agent:intent_trace');
       expect(source).not.toContain('routeToolsForTurn');
       expect(source).not.toContain('mergeToolPolicyWithRoute');

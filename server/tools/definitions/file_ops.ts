@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import type { ToolContext } from '../types';
 import { getDataPath } from '../../config/data_path';
 
@@ -343,6 +344,26 @@ export function registerFileOpsTools(registry: ToolRegistry): void {
     handler: writeFileHandler,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'files.text.write',
+      family: 'file_ops',
+      lane: 'files',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_write', scope: 'explicit local text file path', reversible: true }],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: [],
+        successSignals: ['the returned local file path exists and is non-empty'],
+        limitations: ['An intentionally empty file cannot satisfy the non-empty artifact verifier.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'files.text.write',
+      operation: 'create',
+      subjectArgument: 'path',
+    }),
   });
 
   registry.register({

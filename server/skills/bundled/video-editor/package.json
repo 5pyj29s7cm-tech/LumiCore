@@ -12,6 +12,43 @@
     "requiresSetup": true,
     "setupNote": "Requires Python 3.10+ with moviepy + yt-dlp. Run: pip install moviepy yt-dlp",
     "runCommand": "python",
-    "runArgs": ["-m", "video_edit_mcp"]
+    "runArgs": [
+      "-m",
+      "video_edit_mcp"
+    ],
+    "capabilityDefault": {
+      "operation": "mutate",
+      "risk": "high",
+      "sideEffects": [
+        {
+          "type": "local_read",
+          "scope": "user-selected video or audio inputs",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "video or audio output artifacts",
+          "reversible": true
+        },
+        {
+          "type": "process_execution",
+          "scope": "configured Python video-editing runtime",
+          "reversible": false
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [],
+        "successSignals": [
+          "non-empty MCP terminal receipt"
+        ],
+        "limitations": [
+          "Terminal output must be followed by local artifact verification."
+        ]
+      },
+      "trust": "official",
+      "lane": "media"
+    }
   }
 }

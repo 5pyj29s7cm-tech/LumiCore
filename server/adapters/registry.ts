@@ -7,6 +7,9 @@ import {
   PERSONAL_CLIENT_SURFACE_ACTIONS,
 } from '../../shared/client_surfaces';
 import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
+import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
+import { toolRegistry } from '../tools/registry';
+import { selectManifestCapabilities } from '../tools/capability_projection';
 
 export type AdapterStatus =
   | 'ready'
@@ -72,6 +75,7 @@ export interface AdapterRegistryOptions {
   userId?: string;
   clientState?: Record<string, any> | null;
   includePlanned?: boolean;
+  capabilityManifest?: CapabilityManifestEntry[];
 }
 
 interface SkillStats {
@@ -123,6 +127,17 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
   const stateAgeSeconds = getStateAgeSeconds(state);
   const hasState = Boolean(state);
   const staleState = stateAgeSeconds != null && stateAgeSeconds > 120;
+  const nativeUiSupported = process.platform === 'win32' || process.platform === 'darwin';
+  const macAccessibility = String(
+    state?.permissions?.accessibility_permission
+    || state?.permissions?.accessibilityPermission
+    || '',
+  ).toLowerCase();
+  const nativeUiStatus: AdapterStatus = !nativeUiSupported
+    ? 'requires_setup'
+    : process.platform === 'darwin' && macAccessibility && macAccessibility !== 'granted'
+      ? 'attention'
+      : 'ready';
   const adapters: AdapterCapability[] = [
     {
       id: 'client.action_router',
@@ -249,7 +264,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Background Runtime Awareness',
       category: 'system',
       status: !hasState ? 'requires_setup' : staleState ? 'attention' : 'ready',
-      actions: ['client_get_state', 'client_health_check', 'open_runtime_log', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
+      actions: ['client_get_state', 'client_health_check', 'open_computer_adaptation', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
       surfaces: ['kernel runtime diagnostics', 'background tray state', 'autostart', 'close-to-background', 'backend processes', 'autonomy policy', 'confirmed workflows'],
       requiresConfirmation: false,
       setup: hasState ? [] : ['Open Lumi desktop client so runtime state can report whether the client/server are alive.'],
@@ -285,7 +300,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Runtime Diagnostics',
       category: 'workspace',
       status: state?.runtimeLog?.status === 'attention' ? 'attention' : 'ready',
-      actions: ['open_runtime_log', 'client_self_repair(open_recovery_surface:runtime-log)'],
+      actions: ['open_computer_adaptation', 'client_self_repair(open_recovery_surface:runtime)'],
       surfaces: ['kernel monitor', 'runtime health', 'startup diagnostics'],
       diagnostics: [
         state?.runtimeLog?.open ? 'open=true' : 'open=false',
@@ -466,7 +481,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Model and Token Usage Monitoring',
       category: 'system',
       status: 'ready',
-      actions: ['usage_get_summary', 'open_app:tokens'],
+      actions: ['usage_get_summary', 'open_token_dashboard'],
       surfaces: ['Token dashboard', 'LLM usage records', 'client self-model'],
       diagnostics: ['Groups by provider, model, provider+model, mode, or day.'],
       notes: 'Use before answering questions about which model ran today, how many calls happened, and how many tokens were recorded.',
@@ -485,16 +500,20 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'This is Lumi using the computer, not the default route for Lumi client UI. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, commands, and vision computer_use. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are available to controlled workflows including foreground WeChat sends, desktop demos, and computer_use cleanup. For external desktop work, inspect active window controls with desktop_ui_snapshot when possible, use desktop_ui_focus/click/invoke/type for accessible controls, inspect screen pixels when needed, show and move the visible cursor before raw clicks, explain task intent briefly, verify with screenshot/window/process/file evidence, and report only results, blockers, and needed confirmations. Prefer restoring already-running taskbar/background windows before launching duplicates.',
     },
     {
-      id: 'automation.desktop_uia',
-      label: 'Windows UI Automation Snapshot',
+      id: 'automation.native_accessibility',
+      label: 'Native Semantic Accessibility',
       category: 'automation',
-      status: process.platform === 'win32' ? 'ready' : 'requires_setup',
+      status: nativeUiStatus,
       actions: ['desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_active_window', 'desktop_capture_screen', 'mouse_move', 'mouse_click', 'keyboard_type'],
-      surfaces: ['native Windows apps', 'WPS/Office', 'WeChat', 'CAD/Revit launchers', 'installers', 'dialogs'],
+      surfaces: ['native Windows/macOS apps', 'office suites', 'messaging apps', 'CAD/BIM launchers', 'installers', 'dialogs'],
       requiresConfirmation: false,
-      setup: process.platform === 'win32' ? [] : ['Run Lumi on Windows to use UI Automation snapshots.'],
+      setup: !nativeUiSupported
+        ? ['Run Lumi on Windows or macOS to use native semantic accessibility control.']
+        : process.platform === 'darwin' && macAccessibility !== 'granted'
+          ? ['Grant Lumi OS Accessibility permission in System Settings > Privacy & Security > Accessibility.']
+          : [],
       safety: 'Snapshot inspection plus low- and medium-risk focus/click/invoke/type can run under the active desktop mode. Foreground user-requested ordinary messages/comments/replies/posts and saved/authorized session reuse can proceed; payments, purchases, first-time login, security verification, credential storage, account switching, legal filings/signatures, ambiguous submits, and destructive actions remain confirmation-gated.',
-      notes: 'Use this before raw coordinate control so Lumi can identify and operate real controls, labels, input fields, enabled state, and bounding rectangles.',
+      notes: 'The capability definition is platform-independent. Windows uses UIA and macOS uses Accessibility behind the same desktop_ui_* tools, schemas, risk, evidence, and verification contracts.',
     },
     {
       id: 'automation.account_session_reuse',
@@ -669,9 +688,20 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
     },
   ];
 
-  const visibleAdapters = options.includePlanned === false
-    ? adapters.filter(adapter => adapter.status !== 'planned')
+  const effectiveManifest = options.capabilityManifest?.length
+    ? options.capabilityManifest
+    : toolRegistry.list().length
+      ? toolRegistry.getCapabilityManifest()
+      : [];
+  const manifestBackedAdapters = effectiveManifest.length
+    ? adapters.map(adapter => ({
+        ...adapter,
+        actions: actionsForAdapterFromManifest(adapter, effectiveManifest),
+      }))
     : adapters;
+  const visibleAdapters = options.includePlanned === false
+    ? manifestBackedAdapters.filter(adapter => adapter.status !== 'planned')
+    : manifestBackedAdapters;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -680,6 +710,48 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
     summary: summarizeAdapters(visibleAdapters),
     adapters: visibleAdapters,
   };
+}
+
+const ADAPTER_LANES: Record<AdapterCategory, CapabilityLane[]> = {
+  client: ['client'],
+  workspace: ['files', 'office'],
+  media: ['media'],
+  files: ['files'],
+  knowledge: ['knowledge'],
+  web: ['web'],
+  finance: ['industry'],
+  messaging: ['messaging'],
+  cad_bim: ['cad'],
+  ai: ['agents'],
+  automation: ['desktop'],
+  collaboration: ['agents', 'messaging'],
+  organization: ['agents', 'industry'],
+  memory: ['memory'],
+  system: ['system'],
+};
+
+function actionsForAdapterFromManifest(
+  adapter: AdapterCapability,
+  manifest: CapabilityManifestEntry[],
+): string[] {
+  const lanes = new Set(ADAPTER_LANES[adapter.category]);
+  const identityTerms = adapter.id
+    .toLowerCase()
+    .split(/[._-]+/)
+    .filter(term => term.length >= 3 && !['client', 'system', 'automation', 'workspace'].includes(term));
+  const laneEntries = selectManifestCapabilities(manifest, {
+    lanes: Array.from(lanes),
+  });
+  // Adapter identity is more specific than its broad UI category. Search the
+  // whole manifest first so, for example, a runtime-diagnostics workspace can
+  // discover a system-lane probe without duplicating that tool in this file.
+  const specific = identityTerms.length
+    ? selectManifestCapabilities(manifest, { terms: identityTerms })
+    : [];
+  const selected = specific.length > 0 ? specific : laneEntries;
+  return Array.from(new Set(selected.map(entry => entry.toolName))).sort((left, right) => (
+    left.localeCompare(right)
+  ));
 }
 
 export function getAdapterById(id: string, options: AdapterRegistryOptions = {}): AdapterCapability | null {

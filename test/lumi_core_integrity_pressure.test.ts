@@ -259,9 +259,9 @@ describe('Lumi core integrity pressure', () => {
     expect(context).toContain('Lumi Runtime Capability Context');
     expect(context).toContain('Lumi is the subject');
     expect(context).toContain('tools=available');
-    expect(context).toContain('Tool groups available:');
+    expect(context).toContain('Capability families available:');
     expect(context).toContain('desktop=');
-    expect(context).toContain('web/account=');
+    expect(context).toContain('builtin:web=');
     expect(context).toContain('MCP health gate:');
     expect(context).toContain('Skill workflows known:');
     expect(context).toContain('Relevant adapters/external systems:');

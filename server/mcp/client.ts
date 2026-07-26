@@ -12,6 +12,32 @@ import os from 'os';
 import { exec, execFile } from 'child_process';
 import { getDataPath } from '../config/data_path';
 import { loadKeys } from '../config/keys';
+import { runRuntimeCapabilityCleanup } from './runtime_cleanup';
+import type {
+  CapabilityLane,
+  CapabilityMode,
+  CapabilityOperation,
+  CapabilityRisk,
+  CapabilitySideEffect,
+  CapabilityTrust,
+  CapabilityVerification,
+} from '../tools/types';
+
+export interface MCPToolCapabilityDeclaration {
+  id?: string;
+  family?: string;
+  lane?: CapabilityLane;
+  operation: Exclude<CapabilityOperation, 'unknown'>;
+  domains?: string[];
+  tags?: string[];
+  intents?: string[];
+  modes?: CapabilityMode[];
+  risk: CapabilityRisk;
+  sideEffects: CapabilitySideEffect[];
+  verification: CapabilityVerification;
+  trust?: CapabilityTrust;
+  prerequisites?: string[];
+}
 
 export interface MCPServerConfig {
   command?: string;
@@ -30,6 +56,8 @@ export interface MCPServerConfig {
   apiKeyEnv?: string;                   // env/stored key name required by this server
   apiKeyUrl?: string;                   // provider console URL for setup UI
   cachedTools?: MCPToolDef[];            // persisted declarations for on-demand process startup
+  capabilityDefault?: MCPToolCapabilityDeclaration;
+  toolCapabilities?: Record<string, MCPToolCapabilityDeclaration>;
 }
 
 export interface MCPToolDef {
@@ -37,6 +65,14 @@ export interface MCPToolDef {
   name: string;
   description?: string;
   inputSchema: Record<string, any>;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
+  capability?: MCPToolCapabilityDeclaration;
 }
 
 export interface MCPCallOptions {
@@ -77,7 +113,6 @@ interface MCPConfigFile {
 
 const SKILLS_DIR = path.join(os.homedir(), 'lumi_skills');
 const DEFAULT_RUNTIME_CONFIG = 'mcp_config.json';
-const LEGACY_REPO_CONFIG = path.join(process.cwd(), 'server', 'mcp', 'config.json');
 const FACTORY_CONFIG = path.join(process.cwd(), 'server', 'mcp', 'config.example.json');
 const PROCESS_IDLE_TIMEOUT_MS = 60_000;
 const DEFAULT_CONFIG_FILE: MCPConfigFile = {
@@ -225,17 +260,27 @@ export class MCPClientManager {
   private activeCalls: Map<string, number> = new Map();
   private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private configPath: string;
-  private legacyConfigPath: string;
   private factoryConfigPath: string;
+  private cleanupSkillsDir: string;
+  private quarantineRoot: string;
+  private runtimeCleanupApplied = false;
   private crashTrackers: Map<string, CrashTracker> = new Map();
   private closingSet: Set<string> = new Set();
   private onServerRecovered?: (name: string, tools: MCPToolDef[]) => void;
   private ioRef?: any;
 
-  constructor(configPath?: string) {
+  constructor(
+    configPath?: string,
+    runtimePaths?: { skillsDir?: string; quarantineRoot?: string },
+  ) {
     this.configPath = configPath || getDataPath(DEFAULT_RUNTIME_CONFIG);
-    this.legacyConfigPath = LEGACY_REPO_CONFIG;
     this.factoryConfigPath = FACTORY_CONFIG;
+    this.cleanupSkillsDir = runtimePaths?.skillsDir
+      || (configPath ? path.join(path.dirname(configPath), 'lumi_skills') : SKILLS_DIR);
+    this.quarantineRoot = runtimePaths?.quarantineRoot
+      || (configPath
+        ? path.join(path.dirname(configPath), 'quarantine', 'generated-skills')
+        : path.dirname(getDataPath(path.join('quarantine', 'generated-skills', '.keep'))));
   }
 
   setSocketIO(io: any): void { this.ioRef = io; }
@@ -265,6 +310,39 @@ export class MCPClientManager {
     return this.configPath;
   }
 
+  syncFactoryCapabilityMetadata(): string[] {
+    if (!fs.existsSync(this.factoryConfigPath)) return [];
+    let factory: MCPConfigFile;
+    try {
+      factory = JSON.parse(fs.readFileSync(this.factoryConfigPath, 'utf8'));
+    } catch (error: any) {
+      console.warn('[MCP] Factory capability metadata could not be read:', error?.message || error);
+      return [];
+    }
+    const runtime = this.readConfigFile();
+    const updated: string[] = [];
+    for (const [name, factoryServer] of Object.entries(factory.mcpServers || {})) {
+      const runtimeServer = runtime.mcpServers?.[name];
+      if (!runtimeServer) continue;
+      const nextDefault = factoryServer.capabilityDefault;
+      const nextTools = factoryServer.toolCapabilities;
+      if (
+        JSON.stringify(runtimeServer.capabilityDefault || null) === JSON.stringify(nextDefault || null)
+        && JSON.stringify(runtimeServer.toolCapabilities || null) === JSON.stringify(nextTools || null)
+      ) continue;
+      if (nextDefault) runtimeServer.capabilityDefault = JSON.parse(JSON.stringify(nextDefault));
+      else delete runtimeServer.capabilityDefault;
+      if (nextTools) runtimeServer.toolCapabilities = JSON.parse(JSON.stringify(nextTools));
+      else delete runtimeServer.toolCapabilities;
+      updated.push(name);
+    }
+    const migrations = runtime.migrations || {};
+    const markerChanged = Number(migrations.mcpCapabilityDeclarationsV1 || 0) < 1;
+    if (markerChanged) runtime.migrations = { ...migrations, mcpCapabilityDeclarationsV1: 1 };
+    if (updated.length > 0 || markerChanged) this.saveConfigFile(runtime);
+    return updated.sort((left, right) => left.localeCompare(right));
+  }
+
   private readConfigFile(): MCPConfigFile {
     this.ensureRuntimeConfig();
     try {
@@ -275,27 +353,11 @@ export class MCPClientManager {
       const config = parsed.mcpServers && typeof parsed.mcpServers === 'object'
         ? parsed
         : { mcpServers: parsed && typeof parsed === 'object' ? parsed : {} };
-      this.migrateDesktopFilesystemConfig(config);
       return config;
-    } catch {
+    } catch (error: any) {
+      console.error(`[MCP] Unable to read runtime config "${this.configPath}":`, error?.message || error);
       return { mcpServers: {} };
     }
-  }
-
-  private migrateDesktopFilesystemConfig(config: MCPConfigFile): void {
-    if (process.env.LUMI_DESKTOP !== '1') return;
-    if (Number(config.migrations?.desktopBuiltinFilesystem || 0) >= 1) return;
-    const filesystem = config.mcpServers?.filesystem;
-    const isLegacyDefault = filesystem?.command === 'npx'
-      && Array.isArray(filesystem.args)
-      && filesystem.args.includes('@modelcontextprotocol/server-filesystem')
-      && filesystem.args.includes('.');
-    if (isLegacyDefault && filesystem) {
-      filesystem.enabled = false;
-      filesystem.description = 'Legacy external filesystem MCP disabled: Lumi desktop uses built-in native file tools without npx.';
-    }
-    config.migrations = { ...(config.migrations || {}), desktopBuiltinFilesystem: 1 };
-    this.saveConfigFile(config);
   }
 
   private saveConfigFile(config: MCPConfigFile): void {
@@ -305,21 +367,38 @@ export class MCPClientManager {
   }
 
   private ensureRuntimeConfig(): void {
-    if (fs.existsSync(this.configPath)) return;
+    if (!fs.existsSync(this.configPath)) {
+      const dir = path.dirname(this.configPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    const dir = path.dirname(this.configPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    const seedPath = fs.existsSync(this.legacyConfigPath)
-      ? this.legacyConfigPath
-      : this.factoryConfigPath;
-
-    if (seedPath && fs.existsSync(seedPath)) {
-      fs.copyFileSync(seedPath, this.configPath);
-      return;
+      if (fs.existsSync(this.factoryConfigPath)) {
+        fs.copyFileSync(this.factoryConfigPath, this.configPath);
+      } else {
+        this.saveConfigFile(DEFAULT_CONFIG_FILE);
+      }
     }
 
-    this.saveConfigFile(DEFAULT_CONFIG_FILE);
+    if (this.runtimeCleanupApplied) return;
+    this.runtimeCleanupApplied = true;
+    try {
+      const report = runRuntimeCapabilityCleanup({
+        configPath: this.configPath,
+        skillsDir: this.cleanupSkillsDir,
+        quarantineRoot: this.quarantineRoot,
+      });
+      if (report.applied) {
+        console.log(
+          `[MCP] Runtime cleanup applied: ${report.removedServerNames.length} generated servers removed, `
+          + `${report.quarantinedSkills.length} skill directories quarantined, `
+          + `filesystem ${report.filesystemDisabled ? 'disabled' : 'unchanged'}.`,
+        );
+      }
+      if (report.errors.length > 0) {
+        console.error(`[MCP] Runtime cleanup completed with ${report.errors.length} quarantine error(s).`);
+      }
+    } catch (error: any) {
+      console.error('[MCP] Runtime cleanup failed; original config was left available:', error?.message || error);
+    }
   }
 
   // ── Local skill directory management ──
@@ -365,6 +444,23 @@ export class MCPClientManager {
     return skills;
   }
 
+  private syncBundledCapabilityMetadata(name: string, lumi: Record<string, any>): void {
+    const config = this.getConfig();
+    const server = config[name];
+    if (!server) return;
+    const nextDefault = lumi.capabilityDefault;
+    const nextTools = lumi.toolCapabilities;
+    if (
+      JSON.stringify(server.capabilityDefault || null) === JSON.stringify(nextDefault || null)
+      && JSON.stringify(server.toolCapabilities || null) === JSON.stringify(nextTools || null)
+    ) return;
+    if (nextDefault) server.capabilityDefault = nextDefault;
+    else delete server.capabilityDefault;
+    if (nextTools) server.toolCapabilities = nextTools;
+    else delete server.toolCapabilities;
+    this.saveConfig(config);
+  }
+
   syncBundledSkillUpgrades(
     bundledRoot = path.join(process.cwd(), 'server', 'skills', 'bundled'),
   ): Array<{ name: string; fromVersion: string; toVersion: string }> {
@@ -383,6 +479,9 @@ export class MCPClientManager {
       const installedVersion = String(installedPkg.lumi?.installedVersion || installedPkg.version || '0.0.0');
       const samePackage = Boolean(sourcePkg.name) && sourcePkg.name === installedPkg.name;
       const managedInstall = Boolean(installedPkg.lumi?.installedVersion);
+      if (samePackage && managedInstall) {
+        this.syncBundledCapabilityMetadata(name, sourcePkg.lumi || {});
+      }
       if (!samePackage || !managedInstall || comparePackageVersions(sourceVersion, installedVersion) <= 0) continue;
       try {
         this.installSkill(name, sourceDir, true);
@@ -436,7 +535,16 @@ export class MCPClientManager {
   }
 
   /** Install a local skill as one transaction: stage, prepare, then atomically publish. */
-  async installSkillValidated(name: string, sourceDir: string): Promise<string> {
+  async installSkillValidated(
+    name: string,
+    sourceDir: string,
+    options?: {
+      approvedGeneratedDraft?: {
+        approvedAt: string;
+        review: Record<string, unknown>;
+      };
+    },
+  ): Promise<string> {
     this.ensureSkillsDir();
     const skillName = normalizeSkillInstallName(name);
     const destDir = path.join(SKILLS_DIR, skillName);
@@ -456,6 +564,21 @@ export class MCPClientManager {
       const hasRunCommand = Boolean(pkg.lumi?.runCommand);
       if (!hasIndex && !hasRunCommand) {
         throw new Error('Skill package must provide index.ts or lumi.runCommand');
+      }
+      if (options?.approvedGeneratedDraft) {
+        pkg.lumi = {
+          ...(pkg.lumi || {}),
+          autoGenerated: false,
+          generatedByLumi: true,
+          status: 'installed',
+          approvedAt: options.approvedGeneratedDraft.approvedAt,
+          draftReview: options.approvedGeneratedDraft.review,
+        };
+        fs.writeFileSync(
+          path.join(stagingDir, 'package.json'),
+          `${JSON.stringify(pkg, null, 2)}\n`,
+          'utf8',
+        );
       }
 
       await this.prepareLocalSkillDependenciesSync(stagingDir);
@@ -1013,6 +1136,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         requiresApiKey: lumi.requiresApiKey || false,
         apiKeyEnv: lumi.apiKeyEnv,
         apiKeyUrl: lumi.apiKeyUrl,
+        capabilityDefault: lumi.capabilityDefault,
+        toolCapabilities: lumi.toolCapabilities,
       };
     } else {
       const indexPath = toPortableSkillPath(path.join(skillDir, 'index.ts'));
@@ -1040,6 +1165,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
         requiresApiKey: lumi.requiresApiKey || false,
         apiKeyEnv: lumi.apiKeyEnv,
         apiKeyUrl: lumi.apiKeyUrl,
+        capabilityDefault: lumi.capabilityDefault,
+        toolCapabilities: lumi.toolCapabilities,
       };
     }
 
@@ -1092,6 +1219,8 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      annotations: tool.annotations,
+      capability: tool.capability,
     }));
     config[name].toolCount = tools.length;
     this.saveConfig(config);
@@ -1147,13 +1276,14 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       const skillDir = path.join(SKILLS_DIR, entry.name);
       const indexPath = path.join(skillDir, 'index.ts');
       if (!fs.existsSync(indexPath)) continue;
+      const pkg = this.readPkg(skillDir);
+      if (pkg?.lumi?.status === 'draft' || pkg?.lumi?.autoGenerated === true) {
+        console.warn(`[MCP] ${entry.name}: skipped unapproved generated skill draft`);
+        continue;
+      }
       this.ensureRuntimeNodeModulesLink(skillDir);
 
       if (!config[entry.name]) {
-        let pkg: any = {};
-        try {
-          pkg = JSON.parse(fs.readFileSync(path.join(skillDir, 'package.json'), 'utf-8'));
-        } catch {}
         this.registerLocalSkill(entry.name, skillDir, pkg);
       }
     }
@@ -1164,6 +1294,10 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
 
     for (const [serverName, serverConfig] of Object.entries(finalConfig)) {
       if (!serverConfig.enabled) continue;
+      if (serverConfig.autoGenerated === true) {
+        console.warn(`[MCP] ${serverName}: skipped unapproved auto-generated skill configuration`);
+        continue;
+      }
       if (this.isMissingRequiredApiKey(serverConfig)) {
         console.log(`[MCP] ${serverName}: skipped (missing ${serverConfig.apiKeyEnv})`);
         continue;
@@ -1210,6 +1344,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
           name: `mcp_${name}_${tool.name}`,
           description: tool.description || `${tool.name} (from MCP server: ${name})`,
           inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+          annotations: tool.annotations,
         }));
       } catch {
         // Stale connection — clean up and reconnect below
@@ -1316,6 +1451,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       name: `mcp_${name}_${tool.name}`,
       description: tool.description || `${tool.name} (from MCP server: ${name})`,
       inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+      annotations: tool.annotations,
     }));
   }
 

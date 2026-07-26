@@ -6,12 +6,17 @@ import {
   requestsBlankAutoCadDocument,
   requiresVisibleAutoCadExecution,
 } from './action_contract';
-import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn } from './legal_entry';
+import { isLegalEntryTurn } from './legal_entry';
 import {
   getRecoveredApplicationContinuationTarget,
   isRecoveredCurrentAppEditingContinuation,
 } from './action_continuation';
 import { CURRENT_APP_FORBIDDEN_TOOLS } from './current_app_execution';
+import {
+  toolRegistry,
+} from '../tools/registry';
+import { projectToolDeclarationForRouting } from '../tools/capability_projection';
+import type { CapabilityLane } from '../tools/types';
 
 export type LumiCapabilityLane =
   | 'conversation'
@@ -45,123 +50,6 @@ export interface LumiCapabilitySelection {
   promptOverlay: string;
 }
 
-const TOOL_HINTS: Record<LumiCapabilityLane, string[]> = {
-  conversation: [],
-  client_surface: ['client_get_state', 'client_action'],
-  self_repair: ['client_get_state', 'client_health_check', 'client_self_repair', 'desktop_capability_status', 'desktop_ui_snapshot'],
-  capability_learning: [
-    'capability_learning_list',
-    'self_extension_plan',
-    'capability_gap_autofix',
-    'list_skills',
-    'adapter_registry_list',
-    'external_app_list_adapters',
-  ],
-  skill_workflow: [],
-  task_center: [
-    'work_takeover_task_get',
-    'work_takeover_task_advance',
-    'work_takeover_task_autorun',
-    'work_takeover_task_verify_result',
-    'work_takeover_task_export_packet',
-  ],
-  work_takeover: [
-    'work_takeover_task_continue',
-    'work_takeover_task_advance',
-    'work_takeover_task_verify_result',
-    'work_takeover_task_export_packet',
-  ],
-  legal_casework: LEGAL_ENTRY_PREFERRED_TOOLS,
-  messaging: [
-    'messaging_list_file_targets',
-    'feishu_send_file',
-    'wechat_send_file',
-    'desktop_list_apps',
-    'desktop_open',
-    'desktop_active_window',
-    'desktop_ui_focus',
-    'desktop_ui_snapshot',
-    'desktop_capture_screen',
-    'ocr_screen',
-    'wechat_read_recent_chat',
-    'wechat_send_message',
-    'wechat_prepare_reply',
-    'wechat_copy_reply_draft',
-    'desktop_mouse_click_at',
-    'desktop_cursor_glow_show',
-    'desktop_cursor_glow_update',
-    'desktop_cursor_glow_click',
-    'desktop_cursor_glow_hide',
-    'desktop_keyboard_press',
-    'browser_open_task',
-    'external_app_list_adapters',
-  ],
-  internal_memory: [
-    'lumi_sleep_status',
-    'lumi_sleep_cycle',
-  ],
-  artifact_work: ['work_product_plan', 'create_docx', 'create_ppt', 'create_pdf', 'write_file', 'work_product_verify'],
-  design_cad: [
-    'desktop_path_info',
-    'desktop_list_files',
-    'desktop_list_apps',
-    'floorplan_extract_geometry',
-    'ocr_image_file',
-    'mcp_cad-drafting_cad_renovation_folder_workflow',
-    'cad_generate_dxf',
-    'cad_prepare_autocad_operations',
-    'mcp_cad-drafting_autocad_new_document',
-    'mcp_cad-drafting_autocad_playback_file',
-  ],
-  desktop_control: [
-    'desktop_capability_status',
-    'desktop_ai_list_targets',
-    'desktop_ai_discovery_plan',
-    'desktop_ai_roundtable',
-    'desktop_ai_ask',
-    'desktop_ai_collect_answer',
-    'desktop_ai_register_target',
-    'desktop_active_window',
-    'desktop_list_apps',
-    'desktop_open',
-    'desktop_ui_snapshot',
-    'desktop_ui_focus',
-    'desktop_ui_click',
-    'desktop_ui_type',
-    'desktop_ui_invoke',
-    'desktop_capture_screen',
-    'mouse_move',
-    'mouse_click',
-    'mouse_drag',
-    'keyboard_type',
-    'keyboard_press',
-    'read_clipboard',
-    'write_clipboard',
-    'computer_use',
-    'desktop_show_lumi_window',
-    'desktop_path_info',
-    'desktop_running_processes',
-    'desktop_idle_time',
-    'desktop_poll_activity',
-    'desktop_run_command',
-  ],
-  web_or_account: [
-    'web_login_profile_list',
-    'web_login_profile_save_from_preset',
-    'web_login_run',
-    'url_fetch_logged_in',
-    'web_search',
-    'browser_open_task',
-    'mcp_playwright_browser_snapshot',
-    'mcp_playwright_browser_navigate',
-    'mcp_playwright_browser_click',
-    'mcp_playwright_browser_fill_form',
-    'desktop_active_window',
-  ],
-  external_tool: ['desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_roundtable', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'desktop_ai_register_target', 'external_app_list_adapters', 'adapter_registry_list'],
-  blocked_no_tools: [],
-};
-
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -182,10 +70,51 @@ function routeHasTool(input: LumiCapabilitySelectionInput, pattern: RegExp): boo
 function availablePreferredTools(input: LumiCapabilitySelectionInput, lane: LumiCapabilityLane): string[] {
   const routeTools = input.execution.toolRoute?.toolNames || [];
   const allowedNames = (input.execution.toolPolicy.allowedTools || []).filter(name => name && name !== '*');
-  const available = new Set(allowedNames.length ? allowedNames : routeTools);
-  const hints = TOOL_HINTS[lane].filter(name => available.has(name));
-  const directRoute = routeTools.filter(name => TOOL_HINTS[lane].some(hint => name === hint || name.startsWith(`${hint}_`)));
-  return unique([...hints, ...directRoute, ...routeTools.slice(0, 8)]).slice(0, 18);
+  // The turn route is already the manifest-derived narrow capability set.
+  // Personality policy is only a fallback when no route exists; using the
+  // whole policy here reintroduces unrelated tools and hides the useful ones
+  // behind the preferred-tool cap.
+  const available = new Set(routeTools.length ? routeTools : allowedNames);
+  const manifestLane: Partial<Record<LumiCapabilityLane, CapabilityLane[]>> = {
+    client_surface: ['client'],
+    self_repair: ['client', 'system', 'desktop'],
+    capability_learning: ['agents'],
+    skill_workflow: ['agents'],
+    task_center: ['agents'],
+    work_takeover: ['agents'],
+    legal_casework: ['industry', 'web', 'office'],
+    messaging: ['messaging', 'desktop'],
+    internal_memory: ['memory'],
+    artifact_work: ['files', 'office', 'media'],
+    design_cad: ['cad', 'media', 'files', 'desktop'],
+    desktop_control: ['desktop'],
+    web_or_account: ['web'],
+    external_tool: ['agents', 'desktop', 'web'],
+  };
+  const lanes = new Set(manifestLane[lane] || []);
+  const runtimeManifest = toolRegistry.getCapabilityManifest(input.execution.toolPolicy, {
+    executableOnly: true,
+  });
+  const manifest = runtimeManifest.length > 0
+    ? runtimeManifest
+    : routeTools.map(name => projectToolDeclarationForRouting({
+        function: { name, description: name.replace(/_/g, ' ') },
+      }));
+  const manifestMatches = manifest
+    .filter(entry => (
+      available.has(entry.toolName)
+      && !entry.deprecated
+      && (lanes.size === 0 || lanes.has(entry.lane))
+    ))
+    .map(entry => entry.toolName);
+  if (manifestMatches.length > 0) {
+    const routeOrder = new Map(routeTools.map((name, index) => [name, index]));
+    return unique(manifestMatches).sort((left, right) => (
+      (routeOrder.get(left) ?? Number.MAX_SAFE_INTEGER)
+      - (routeOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
+    )).slice(0, 48);
+  }
+  return unique(routeTools.filter(name => available.has(name))).slice(0, 48);
 }
 
 function fallbackPrimary(input: LumiCapabilitySelectionInput): string {
@@ -461,7 +390,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     ].includes(name))
     && (!recoveredCurrentAppEdit
       || !(CURRENT_APP_FORBIDDEN_TOOLS as readonly string[]).includes(name))
-  )).slice(0, 22);
+  )).slice(0, 48);
   const routeCategories = input.execution.toolRoute?.categories || [];
   const promptOverlay = [
     '## Lumi Capability Selection',

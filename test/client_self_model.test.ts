@@ -6,6 +6,7 @@ import {
   formatClientSelfPrompt,
   getClientActionExpectation,
   getClientCapabilities,
+  getClientHealthReport,
   getClientInterfaceSurfaces,
   getClientSelfAwarenessReport,
   getClientStateForScope,
@@ -14,6 +15,12 @@ import {
   verifyClientActionResult,
 } from '../server/client/self_model';
 import type { ClientStateSnapshot } from '../server/client/self_model';
+import {
+  CLIENT_SETTINGS_SECTIONS,
+  PERSONAL_CLIENT_LAUNCHER_IDS,
+  PERSONAL_CLIENT_SURFACES,
+  PERSONAL_CLIENT_SURFACE_ACTIONS,
+} from '../shared/client_surfaces';
 
 describe('Lumi client self model', () => {
   beforeEach(async () => {
@@ -88,14 +95,87 @@ describe('Lumi client self model', () => {
     });
 
     const verified = verifyClientActionResult(
-      { action: 'close_app', target: 'knowledge' },
+      { action: 'close_client_surface', target: 'knowledge' },
       before,
       after,
-      { ok: true, action: 'close_app', target: 'knowledge' },
+      { ok: true, action: 'close_client_surface', target: 'knowledge' },
     );
 
     expect(verified.status).toBe('verified');
     expect(verified.matched).toContain('surface:knowledge:closed');
+  });
+
+  it('verifies merged runtime diagnostics through the visible Kernel surface', () => {
+    const before = updateClientState('client_self_model_runtime_surface_user', {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'home',
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: { runtimeLogOpen: false, openSurfaceIds: ['home'] },
+    });
+    const after = updateClientState('client_self_model_runtime_surface_user', {
+      platform: 'desktop',
+      mode: 'assistant',
+      activeTab: 'kernel',
+      windows: { open: ['kernel'], focused: 'kernel', minimized: [] },
+      surfaces: {
+        runtimeLogOpen: true,
+        openSurfaceIds: ['computer-adaptation'],
+      },
+    });
+
+    const verified = verifyClientActionResult(
+      { action: 'open_computer_adaptation' },
+      before,
+      after,
+      { ok: true, action: 'open_computer_adaptation', target: 'kernel' },
+    );
+
+    expect(verified.status).toBe('verified');
+    expect(verified.after?.openSurfaces).toEqual(expect.arrayContaining([
+      'computer-adaptation',
+      'kernel',
+    ]));
+  });
+
+  it('detects desktop/server interface registry drift from live state', () => {
+    const completeManifest = {
+      surfaceIds: PERSONAL_CLIENT_SURFACES.map(surface => surface.id),
+      actions: [...PERSONAL_CLIENT_SURFACE_ACTIONS],
+      settingsSections: CLIENT_SETTINGS_SECTIONS.map(section => section.id),
+      launcherIds: [...PERSONAL_CLIENT_LAUNCHER_IDS],
+    };
+    updateClientState('client_self_model_matching_manifest_user', {
+      platform: 'desktop',
+      activeTab: 'home',
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: { openSurfaceIds: ['home'] },
+      uiManifest: completeManifest,
+    });
+    updateClientState('client_self_model_drifted_manifest_user', {
+      platform: 'desktop',
+      activeTab: 'home',
+      windows: { open: [], focused: null, minimized: [] },
+      surfaces: { openSurfaceIds: ['home'] },
+      uiManifest: {
+        ...completeManifest,
+        surfaceIds: completeManifest.surfaceIds.filter(id => id !== 'personalization'),
+      },
+    });
+
+    expect(getClientHealthReport('client_self_model_matching_manifest_user').findings)
+      .not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'client_ui.manifest_mismatch' }),
+      ]));
+    expect(getClientHealthReport('client_self_model_drifted_manifest_user')).toMatchObject({
+      level: 'degraded',
+      findings: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'client_ui.manifest_mismatch',
+          evidence: expect.stringContaining('personalization'),
+        }),
+      ]),
+    });
   });
 
   it('includes real client and organization surfaces in the interface map', () => {
@@ -164,7 +244,7 @@ describe('Lumi client self model', () => {
     expect(backgroundRuntime?.actions).toEqual(expect.arrayContaining([
       'client_get_state',
       'client_health_check',
-      'open_runtime_log',
+      'open_computer_adaptation',
       'desktop_idle_time',
       'desktop_poll_activity',
       'autonomy_list_workflows',
@@ -207,7 +287,7 @@ describe('Lumi client self model', () => {
       },
       {
         name: 'open runtime diagnostics',
-        args: { action: 'open_runtime_log' },
+        args: { action: 'open_computer_adaptation' },
         after: {
           activeTab: 'kernel',
           windows: { open: ['kernel'], focused: 'kernel', minimized: [] },

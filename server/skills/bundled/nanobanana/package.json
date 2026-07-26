@@ -4,8 +4,13 @@
   "description": "Nano Banana — fast, affordable AI image generation via SiliconFlow API. Supports Kwai-Kolors, Stable Diffusion 3.5, and more.",
   "type": "module",
   "main": "index.ts",
-  "scripts": { "start": "npx tsx index.ts" },
-  "dependencies": { "@modelcontextprotocol/sdk": "^1.0.0", "zod": "^3.22.0" },
+  "scripts": {
+    "start": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
   "lumi": {
     "displayName": "Nano Banana",
     "category": "Creative",
@@ -16,6 +21,43 @@
     "apiKeyEnv": "SILICONFLOW_API_KEY",
     "apiKeyUrl": "https://cloud.siliconflow.cn",
     "setupNote": "Requires a SiliconFlow API key. Save SILICONFLOW_API_KEY in Settings before using Nano Banana image generation.",
-    "envKeys": ["SILICONFLOW_API_KEY"]
+    "envKeys": [
+      "SILICONFLOW_API_KEY"
+    ],
+    "capabilityDefault": {
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "credential_access",
+          "scope": "configured SiliconFlow API credential",
+          "reversible": true
+        },
+        {
+          "type": "external_state_change",
+          "scope": "provider image-generation job and quota",
+          "reversible": false
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "success",
+          "images"
+        ],
+        "successSignals": [
+          "non-empty MCP terminal receipt"
+        ],
+        "limitations": [
+          "The provider may charge quota and may reject prompts."
+        ],
+        "requiredValues": {
+          "success": true
+        }
+      },
+      "trust": "official",
+      "lane": "media"
+    }
   }
 }

@@ -1,4 +1,5 @@
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 async function desktopSystemInfo(_args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
@@ -156,6 +157,22 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopOpen,
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.target.open',
+      family: 'desktop',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'desktop_control', scope: 'requested local target', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['target'],
+        successSignals: ['requested application, file, folder, or URL is visibly active'],
+        limitations: ['A launch request alone is not proof that the requested target became active.'],
+      },
+      intents: ['open or focus a named local target'],
+    },
     evidence: { capability: 'desktop_target', operation: 'mutate', assurance: 'observed', subjectArgument: 'target' },
   });
 
@@ -189,6 +206,26 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopShowLumiWindow,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'client.window.focus',
+      family: 'client',
+      lane: 'client',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'desktop_control', scope: 'Lumi main window only', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: [],
+        successSignals: ['the native client confirms the Lumi main window is foreground'],
+        limitations: ['A focus request receipt is not proof that another application remained unchanged.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'client.window.focus',
+      operation: 'mutate',
+      assurance: 'observed',
+    }),
   });
 
   registry.register({
@@ -223,6 +260,28 @@ export function registerDesktopTools(registry: ToolRegistry): void {
     handler: desktopRunCommand,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'desktop.command.run',
+      family: 'desktop',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [{ type: 'process_execution', scope: 'real host shell command', reversible: false }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: [],
+        successSignals: ['the native host command adapter returned without a non-zero or transport error'],
+        limitations: ['Command completion does not independently verify every filesystem, application, or network side effect.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'desktop.command.run',
+      operation: 'mutate',
+      assurance: 'observed',
+      subjectArgument: 'command',
+      limitations: ['Use a domain verifier for claimed artifacts or application state.'],
+    }),
   });
 
   registry.register({

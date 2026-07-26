@@ -48,6 +48,51 @@ describe('global Memory Firewall', () => {
 });
 
 describe('Action Constitution', () => {
+  it('uses CapabilityManifest semantics even when the implementation name carries no policy hints', () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'opaque_adapter_17',
+      description: 'An implementation whose name intentionally has no routing or policy meaning.',
+      parameters: { type: 'object', properties: {} },
+      permission: 'user',
+      securityLevel: 'safe',
+      capability: {
+        id: 'desktop.opaque-control',
+        lane: 'desktop',
+        operation: 'mutate',
+        risk: 'high',
+        sideEffects: [{ type: 'desktop_control', scope: 'active window', reversible: true }],
+        verification: {
+          strategy: 'state_diff',
+          required: true,
+          requiredFields: ['verification.status'],
+          successSignals: ['verified post-state'],
+          limitations: [],
+        },
+      },
+      evidence: {
+        capability: 'desktop.opaque-control',
+        operation: 'mutate',
+        assurance: 'verified',
+      },
+      handler: async () => JSON.stringify({ ok: true }),
+    });
+    const manifestEntry = registry.getCapabilityManifestEntry('opaque_adapter_17');
+
+    expect(classifyAction('opaque_adapter_17', {}, manifestEntry)).toBe('desktop_control');
+    expect(classifyActionRisk('opaque_adapter_17', {}, undefined, manifestEntry)).toBe('high');
+    expect(evaluateActionConstitution(
+      'opaque_adapter_17',
+      {},
+      'safe',
+      undefined,
+      manifestEntry,
+    )).toMatchObject({
+      level: 'confirm',
+      domain: 'desktop_control',
+    });
+  });
+
   it('classifies risky action domains', () => {
     expect(classifyAction('web_search')).toBe('network');
     expect(classifyAction('write_file')).toBe('local_write');

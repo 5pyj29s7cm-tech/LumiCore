@@ -5,6 +5,7 @@ import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
 import { getUserPreferredGenerationModels } from '../../llm/generation_preferences';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
@@ -57,6 +58,8 @@ async function generateImageOpenAI(args: Record<string, any>, selectedModel: str
   if (images.length === 0) throw new Error('OpenAI image generation returned no image data');
 
   return JSON.stringify({
+    ok: true,
+    status: 'generated',
     success: true,
     prompt,
     images,
@@ -116,9 +119,12 @@ async function generateImageDashScope(args: Record<string, any>, selectedModel: 
       const urls = results.map((result: any) => result.url).filter(Boolean);
       if (urls.length === 0) throw new Error('Image generation completed but no URLs returned');
       return JSON.stringify({
+        ok: true,
+        status: 'generated',
         success: true,
         prompt,
         images: urls,
+        artifacts: urls.map((url: string) => ({ type: 'image_url', url })),
         taskId,
         provider: 'qwen',
         model,
@@ -163,6 +169,8 @@ async function generateImageSiliconFlow(args: Record<string, any>, selectedModel
   if (urls.length === 0) throw new Error('SiliconFlow image generation returned no image URLs');
 
   return JSON.stringify({
+    ok: true,
+    status: 'generated',
     success: true,
     prompt,
     images: urls,
@@ -281,10 +289,13 @@ async function editImage(args: Record<string, any>): Promise<string> {
   await image.toFormat(ext).toFile(outPath);
 
   return JSON.stringify({
+    ok: true,
+    status: 'created',
     success: true,
     action,
     outputPath: outPath,
     originalPath: filePath,
+    artifacts: [{ type: 'image', path: outPath }],
   });
 }
 
@@ -308,6 +319,32 @@ export function registerImageTools(registry: ToolRegistry): void {
     handler: (args, context) => generateImage(args, context),
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'media.image.generate',
+      family: 'media-generation',
+      lane: 'media',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'external_state_change', scope: 'configured image generation provider task', reversible: false },
+        { type: 'local_write', scope: 'generated image when the provider returns image bytes', reversible: true },
+      ],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'model', 'images'],
+        requiredValues: { ok: true },
+        successStatuses: ['generated'],
+        failureStatuses: ['failed', 'timed_out'],
+        successSignals: ['provider completed the image generation task and returned at least one image reference'],
+        limitations: ['Remote image URLs are provider acknowledgements, not proof of a durable local file.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'media.image.generate',
+      operation: 'create',
+      limitations: ['A remote image URL may expire and must not be reported as a saved local artifact.'],
+    }),
   });
 
   registry.register({
@@ -327,6 +364,32 @@ export function registerImageTools(registry: ToolRegistry): void {
     handler: generateImageDalle,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'media.image.generate.openai',
+      family: 'media-generation',
+      lane: 'media',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'external_state_change', scope: 'OpenAI image generation request', reversible: false },
+        { type: 'local_write', scope: 'generated image when the provider returns image bytes', reversible: true },
+      ],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'model', 'images'],
+        requiredValues: { ok: true, provider: 'openai' },
+        successStatuses: ['generated'],
+        failureStatuses: ['failed', 'timed_out'],
+        successSignals: ['OpenAI returned at least one generated image reference'],
+        limitations: ['Provider completion does not prove a remote image URL was saved locally.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'media.image.generate.openai',
+      operation: 'create',
+      limitations: ['A remote image URL may expire and must not be reported as a saved local artifact.'],
+    }),
   });
 
   registry.register({
@@ -347,5 +410,30 @@ export function registerImageTools(registry: ToolRegistry): void {
     handler: editImage,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'media.image.edit',
+      family: 'media-editing',
+      lane: 'media',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_write', scope: 'edited image output in Lumi output directory', reversible: true }],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['ok', 'status', 'action', 'outputPath'],
+        requiredValues: { ok: true },
+        successStatuses: ['created'],
+        failureStatuses: ['failed'],
+        requiredArtifacts: ['outputPath'],
+        successSignals: ['edited image exists and is non-empty'],
+        limitations: ['File existence does not by itself prove subjective visual quality.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'media.image.edit',
+      operation: 'create',
+      subjectArgument: 'filePath',
+      limitations: ['The receipt verifies the output file, not subjective visual quality.'],
+    }),
   });
 }

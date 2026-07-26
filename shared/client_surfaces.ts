@@ -7,6 +7,8 @@ export interface PersonalClientSurfaceDefinition {
   closeAfterUse?: boolean;
   settingsSection?: string;
   launcherIds?: readonly string[];
+  organizationView?: string;
+  organizationViewByAction?: Readonly<Record<string, string>>;
 }
 
 export interface ClientSettingsSectionDefinition {
@@ -14,6 +16,25 @@ export interface ClientSettingsSectionDefinition {
   label: string;
   aliases: readonly string[];
   useWhen: string;
+}
+
+export interface PersonalClientSurfaceVisibilityState {
+  activeTab?: string;
+  viewMode?: string;
+  workDomain?: string;
+  focusedWindow?: string | null;
+  openWindows?: readonly string[];
+  settingsSection?: string;
+  appLauncherOpen?: boolean;
+  knowledgeOpen?: boolean;
+  chatOpen?: boolean;
+  notificationsOpen?: boolean;
+  memoryAvatarOpen?: boolean;
+  meetingOpen?: boolean;
+  wallpaperMode?: boolean;
+  widgetMode?: boolean;
+  organizationWorkspaceVisible?: boolean;
+  organizationWorkspaceView?: string;
 }
 
 const DATA_SOURCE_SETTINGS_ALIASES = [
@@ -218,14 +239,6 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     launcherIds: ['mcp'],
   },
   {
-    id: 'runtime-log',
-    label: 'Runtime diagnostics',
-    target: 'kernel',
-    actions: ['open_runtime_log'],
-    useWhen: 'Inspect runtime health and adaptation evidence in the unified Kernel monitor. The former standalone run-log window no longer exists.',
-    launcherIds: [],
-  },
-  {
     id: 'skills',
     label: 'Skill Hall',
     target: 'skills',
@@ -353,6 +366,134 @@ export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[
     useWhen: 'Open the founder-facing private workspace when it is available to the current user.',
     launcherIds: [],
   },
+  {
+    id: 'org',
+    label: 'Organization workspace',
+    target: 'org',
+    actions: ['open_organization_workspace'],
+    organizationView: 'dashboard',
+    useWhen: 'Enter the role-scoped organization overlay for the same Lumi identity.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-dashboard',
+    label: 'Organization dashboard',
+    target: 'org',
+    actions: ['open_organization_dashboard'],
+    organizationView: 'dashboard',
+    useWhen: 'Show organization status, shared work, and the main organization destinations.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-knowledge',
+    label: 'Organization knowledge base',
+    target: 'org',
+    actions: ['open_organization_knowledge'],
+    organizationView: 'kb',
+    useWhen: 'Browse role-authorized organization articles, uploaded sources, and indexing health.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-lumi',
+    label: 'Lumi in the organization workspace',
+    target: 'org',
+    actions: ['open_organization_chat'],
+    organizationView: 'chat',
+    useWhen: 'Chat with the same Lumi under the active organization scope.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-messaging',
+    label: 'Organization messaging',
+    target: 'org',
+    actions: ['open_organization_messaging'],
+    organizationView: 'messaging',
+    useWhen: 'Manage role-authorized organization message connections and routed messages.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-templates',
+    label: 'Agent templates and review',
+    target: 'org',
+    actions: ['open_organization_templates', 'open_organization_review'],
+    organizationView: 'templates',
+    organizationViewByAction: { open_organization_review: 'review' },
+    useWhen: 'Use organization templates and open the role-authorized review queue.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-governance',
+    label: 'Members, permissions, and audit',
+    target: 'org',
+    actions: ['open_organization_members', 'open_organization_audit'],
+    organizationView: 'members',
+    organizationViewByAction: { open_organization_audit: 'audit' },
+    useWhen: 'Administer members, permissions, and audit records when the active role allows it.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-settings',
+    label: 'Organization settings and branch connection',
+    target: 'org',
+    actions: ['open_organization_settings', 'open_organization_branch'],
+    organizationView: 'settings',
+    organizationViewByAction: { open_organization_branch: 'branch' },
+    useWhen: 'Open organization settings or branch connection.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-legal',
+    label: 'Law firm workspace',
+    target: 'org',
+    actions: ['open_organization_legal'],
+    organizationView: 'legal',
+    useWhen: 'Open organization-scoped cases, evidence, legal research, and delivery gates.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-spatial-design',
+    label: 'Spatial and architecture workspace',
+    target: 'org',
+    actions: ['open_organization_spatial_design'],
+    organizationView: 'spatial-design',
+    useWhen: 'Open spatial, architecture, CAD, and design-delivery work.',
+    launcherIds: [],
+  },
+  {
+    id: 'org-brand-design',
+    label: 'Brand and creative workspace',
+    target: 'org',
+    actions: ['open_organization_brand_design'],
+    organizationView: 'brand-design',
+    useWhen: 'Open organization brand, campaign, visual, and creative-delivery work.',
+    launcherIds: [],
+  },
+  {
+    id: 'meeting',
+    label: 'Meeting mode and notes',
+    target: 'meeting',
+    actions: ['start_meeting_mode', 'end_meeting_mode', 'open_meeting_notes'],
+    useWhen: 'Capture meeting transcription, notes, and reports after explicit user intent.',
+    closeAfterUse: false,
+    launcherIds: [],
+  },
+  {
+    id: 'wallpaper',
+    label: 'Wallpaper mode',
+    target: 'wallpaper',
+    actions: ['set_wallpaper_mode'],
+    useWhen: 'Make visible external-application work immersive while keeping state explicit.',
+    launcherIds: [],
+  },
+  {
+    id: 'widget',
+    label: 'Desktop widget mode',
+    target: 'widget',
+    actions: ['enter_widget_mode', 'show_desktop_widget', 'exit_widget_mode', 'expand_from_widget'],
+    useWhen: 'Collapse Lumi into or expand Lumi out of the desktop widget shell.',
+    closeAfterUse: false,
+    launcherIds: [],
+  },
 ];
 
 const settingsSectionByAlias = new Map<string, string>();
@@ -366,8 +507,13 @@ for (const alias of DATA_SOURCE_SETTINGS_ALIASES) settingsConnectionTabByAlias.s
 for (const alias of APPLICATION_SETTINGS_ALIASES) settingsConnectionTabByAlias.set(alias, 'applications');
 
 const surfaceByAction = new Map<string, PersonalClientSurfaceDefinition>();
+const surfaceByTarget = new Map<string, PersonalClientSurfaceDefinition>();
 for (const surface of PERSONAL_CLIENT_SURFACES) {
   for (const action of surface.actions) surfaceByAction.set(action, surface);
+  if (!surfaceByTarget.has(surface.target)) surfaceByTarget.set(surface.target, surface);
+  for (const launcherId of surface.launcherIds || []) {
+    if (!surfaceByTarget.has(launcherId)) surfaceByTarget.set(launcherId, surface);
+  }
 }
 
 export const PERSONAL_CLIENT_SURFACE_ACTIONS = Array.from(surfaceByAction.keys());
@@ -377,6 +523,34 @@ export const PERSONAL_CLIENT_LAUNCHER_IDS = Array.from(new Set(
 
 export function getPersonalClientSurfaceByAction(action?: string): PersonalClientSurfaceDefinition | undefined {
   return surfaceByAction.get(String(action || '').trim());
+}
+
+export function getPersonalClientSurfaceByTarget(target?: string): PersonalClientSurfaceDefinition | undefined {
+  return surfaceByTarget.get(String(target || '').trim().toLowerCase());
+}
+
+/**
+ * Data-migration helper for persisted workflows created before the explicit
+ * surface registry. Runtime client_action does not accept these legacy names.
+ */
+export function migratePersistedClientActionName(value: unknown): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (raw === 'open_runtime_log') return 'open_computer_adaptation';
+  if (raw === 'set_mode') return 'set_client_mode';
+  if (raw === 'close_app') return 'close_client_surface';
+  const legacyOpen = raw.match(/^open_app(?::(.+))?$/);
+  if (!legacyOpen) return raw;
+  const legacyTarget = String(legacyOpen[1] || '').toLowerCase();
+  const explicitLegacyTargets: Record<string, string> = {
+    'runtime-log': 'open_computer_adaptation',
+    kernel: 'open_computer_adaptation',
+    sound: 'open_sound_studio',
+    'avatar-studio': 'open_avatar_studio',
+  };
+  if (explicitLegacyTargets[legacyTarget]) return explicitLegacyTargets[legacyTarget];
+  const surface = getPersonalClientSurfaceByTarget(legacyTarget);
+  return surface?.actions[0] || null;
 }
 
 export function normalizeClientSettingsSection(value?: string): string | null {
@@ -390,4 +564,46 @@ export function normalizeClientSettingsSection(value?: string): string | null {
 export function isComputerAdaptationSettingsTarget(value?: string): boolean {
   const normalized = String(value || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
   return ['computer', 'kernel', 'computer-adaptation', 'adaptation'].includes(normalized);
+}
+
+/**
+ * Resolve visible personal-client surfaces from the same registry used by the
+ * action router. This prevents hand-maintained state flags from drifting away
+ * from renamed or merged UI destinations.
+ */
+export function getOpenPersonalClientSurfaceIds(
+  state: PersonalClientSurfaceVisibilityState,
+): string[] {
+  const openWindows = new Set(state.openWindows || []);
+  const targetVisible = (target: string): boolean => (
+    state.activeTab === target
+    || state.focusedWindow === target
+    || openWindows.has(target)
+  );
+
+  return PERSONAL_CLIENT_SURFACES
+    .filter(surface => {
+      if (surface.id === 'personal-workspace') {
+        return state.workDomain === 'personal' && state.activeTab === 'home';
+      }
+      if (surface.id === 'nexus') return state.viewMode === 'world';
+      if (surface.id === 'app-launcher') return Boolean(state.appLauncherOpen);
+      if (surface.id === 'knowledge') return Boolean(state.knowledgeOpen);
+      if (surface.id === 'chat') return Boolean(state.chatOpen);
+      if (surface.id === 'notifications') return Boolean(state.notificationsOpen);
+      if (surface.id === 'memory-avatar') return Boolean(state.memoryAvatarOpen);
+      if (surface.id === 'meeting') return Boolean(state.meetingOpen);
+      if (surface.id === 'wallpaper') return Boolean(state.wallpaperMode);
+      if (surface.id === 'widget') return Boolean(state.widgetMode);
+      if (surface.organizationView) {
+        if (!state.organizationWorkspaceVisible) return false;
+        if (surface.id === 'org') return true;
+        return state.organizationWorkspaceView === surface.organizationView;
+      }
+      if (surface.settingsSection) {
+        return targetVisible(surface.target) && state.settingsSection === surface.settingsSection;
+      }
+      return targetVisible(surface.target);
+    })
+    .map(surface => surface.id);
 }

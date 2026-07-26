@@ -6,9 +6,43 @@ import path from 'path';
 import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
 import { extractPdfTextContent } from '../../utils/pdf_text';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import type { ToolCapabilityMetadata, ToolDefinition } from '../types';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
 const require = createRequire(import.meta.url);
+
+function pdfArtifactCapability(
+  id: string,
+  scope: string,
+  status: 'created' | 'converted' | 'merged' = 'created',
+): ToolCapabilityMetadata {
+  return capabilityContract({
+    id,
+    family: 'pdf',
+    lane: 'office',
+    operation: 'create',
+    risk: 'medium',
+    sideEffects: [{ type: 'local_write', scope, reversible: true }],
+    verification: {
+      strategy: 'artifact',
+      required: true,
+      requiredFields: ['ok', 'status', 'path'],
+      requiredValues: { ok: true, status },
+      successStatuses: [status],
+      requiredArtifacts: ['path'],
+      successSignals: ['the exact PDF/text artifact exists and is non-empty'],
+      limitations: ['Artifact existence does not independently prove layout fidelity.'],
+    },
+  });
+}
+
+function pdfArtifactEvidence(
+  id: string,
+  subjectArgument: string,
+): NonNullable<ToolDefinition['evidence']> {
+  return capabilityEvidence({ id, operation: 'create', subjectArgument });
+}
 
 function ensureOutputDir(): string {
   if (!fs.existsSync(OUTPUT_DIR)) {
@@ -50,7 +84,7 @@ async function pdfToText(args: Record<string, any>): Promise<string> {
   // Save extracted text alongside the PDF
   const outPath = filePath.replace(/\.pdf$/i, '.txt');
   fs.writeFileSync(outPath, data.text, 'utf-8');
-  return `Extracted ${data.text.length} characters to: ${outPath}`;
+  return JSON.stringify({ ok: true, status: 'converted', path: outPath, characters: data.text.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
 async function createPdf(args: Record<string, any>): Promise<string> {
@@ -204,7 +238,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
   const outPath = path.join(outDir, fileName);
   const pdfBytes = await doc.save();
   fs.writeFileSync(outPath, pdfBytes);
-  return `PDF created: ${outPath} (${pages.length} page(s), ${pdfBytes.length} bytes)`;
+  return JSON.stringify({ ok: true, status: 'created', path: outPath, pageCount: pages.length, size: pdfBytes.length }, null, 2);
 }
 
 async function mergePdf(args: Record<string, any>): Promise<string> {
@@ -228,7 +262,7 @@ async function mergePdf(args: Record<string, any>): Promise<string> {
   const outPath = path.join(outDir, `merged_${Date.now()}.pdf`);
   const pdfBytes = await merged.save();
   fs.writeFileSync(outPath, pdfBytes);
-  return `Merged ${filePaths.length} PDFs → ${outPath} (${merged.getPageCount()} pages)`;
+  return JSON.stringify({ ok: true, status: 'merged', path: outPath, sourceCount: filePaths.length, pageCount: merged.getPageCount(), size: pdfBytes.length }, null, 2);
 }
 
 async function splitPdf(args: Record<string, any>): Promise<string> {
@@ -252,7 +286,13 @@ async function splitPdf(args: Record<string, any>): Promise<string> {
     results.push(outPath);
   }
 
-  return `Split ${pageCount} pages into:\n${results.join('\n')}`;
+  return JSON.stringify({
+    ok: true,
+    status: 'split',
+    sourcePath: filePath,
+    pageCount,
+    artifacts: results.map((artifactPath, index) => ({ page: index + 1, path: artifactPath, size: fs.statSync(artifactPath).size })),
+  }, null, 2);
 }
 
 async function convertToPdf(args: Record<string, any>): Promise<string> {
@@ -282,13 +322,14 @@ async function convertToPdf(args: Record<string, any>): Promise<string> {
     const outDir = ensureOutputDir();
     const outPath = path.join(outDir, path.basename(filePath, ext) + '.pdf');
     fs.writeFileSync(outPath, await doc.save());
-    return `Converted to PDF: ${outPath}`;
+    return JSON.stringify({ ok: true, status: 'converted', path: outPath, sourcePath: filePath, size: fs.statSync(outPath).size }, null, 2);
   }
 
   // Text/markdown → PDF
   if (['.txt', '.md', '.markdown'].includes(ext)) {
     const content = fs.readFileSync(filePath, 'utf-8');
-    return createPdf({ content, title: path.basename(filePath, ext) });
+    const created = JSON.parse(await createPdf({ content, title: path.basename(filePath, ext) }));
+    return JSON.stringify({ ...created, status: 'converted', sourcePath: filePath }, null, 2);
   }
 
   throw new Error(`Unsupported source format: ${ext}`);
@@ -405,6 +446,8 @@ export function registerPdfTools(registry: ToolRegistry): void {
     handler: pdfToText,
     permission: 'user',
     securityLevel: 'safe',
+    capability: pdfArtifactCapability('office.pdf.extract-text-file', 'plain-text extraction from PDF', 'converted'),
+    evidence: pdfArtifactEvidence('office.pdf.extract-text-file', 'filePath'),
   });
 
   registry.register({
@@ -437,6 +480,8 @@ export function registerPdfTools(registry: ToolRegistry): void {
     handler: createPdf,
     permission: 'user',
     securityLevel: 'safe',
+    capability: pdfArtifactCapability('office.pdf.create', 'new PDF document', 'created'),
+    evidence: pdfArtifactEvidence('office.pdf.create', 'title'),
   });
 
   registry.register({
@@ -452,6 +497,8 @@ export function registerPdfTools(registry: ToolRegistry): void {
     handler: mergePdf,
     permission: 'user',
     securityLevel: 'safe',
+    capability: pdfArtifactCapability('office.pdf.merge', 'merged PDF document', 'merged'),
+    evidence: pdfArtifactEvidence('office.pdf.merge', 'filePaths'),
   });
 
   registry.register({
@@ -467,6 +514,25 @@ export function registerPdfTools(registry: ToolRegistry): void {
     handler: splitPdf,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'office.pdf.split',
+      family: 'pdf',
+      lane: 'office',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_write', scope: 'one PDF artifact per source page', reversible: true }],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['ok', 'status', 'pageCount', 'artifacts'],
+        requiredValues: { ok: true, status: 'split' },
+        successStatuses: ['split'],
+        requiredArtifactCollections: ['artifacts'],
+        successSignals: ['every page artifact exists and is non-empty'],
+        limitations: ['The split preserves pages but does not validate their visual content.'],
+      },
+    }),
+    evidence: pdfArtifactEvidence('office.pdf.split', 'filePath'),
   });
 
   registry.register({
@@ -482,6 +548,8 @@ export function registerPdfTools(registry: ToolRegistry): void {
     handler: convertToPdf,
     permission: 'user',
     securityLevel: 'safe',
+    capability: pdfArtifactCapability('office.pdf.convert', 'PDF conversion output', 'converted'),
+    evidence: pdfArtifactEvidence('office.pdf.convert', 'filePath'),
   });
 
   registry.register({

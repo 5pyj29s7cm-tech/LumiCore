@@ -188,13 +188,11 @@ export function getWorkProductPlan(userId: string, planId: string): WorkProductP
 }
 
 function persistPlan(plan: WorkProductPlan): void {
-  try {
-    const db = readDB();
-    if (!db.workProductPlans) db.workProductPlans = [];
-    db.workProductPlans.push(plan);
-    db.workProductPlans = db.workProductPlans.slice(-200);
-    writeDB(db);
-  } catch {}
+  const db = readDB();
+  if (!db.workProductPlans) db.workProductPlans = [];
+  db.workProductPlans.push(plan);
+  db.workProductPlans = db.workProductPlans.slice(-200);
+  writeDB(db);
 }
 
 function inferDeliverableType(task: string): DeliverableType {

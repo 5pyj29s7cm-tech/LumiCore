@@ -12,7 +12,6 @@ describe('external app permission boundaries', () => {
     saveGateConfig({
       autonomyLevel: 'reactive',
       autoProcessEnabled: false,
-      externalAppAutomationEnabled: false,
       messagingSendRequiresConfirmation: true,
     });
   });
@@ -79,7 +78,7 @@ describe('external app permission boundaries', () => {
     const { saveGateConfig } = await import('../server/autonomy/safety_gate');
     const { ToolRegistry } = await import('../server/tools/registry');
     const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
-    saveGateConfig({ autonomyLevel: 'full', externalAppAutomationEnabled: false });
+    saveGateConfig({ autonomyLevel: 'full' });
 
     const registry = new ToolRegistry();
     registerExternalAppTools(registry);
@@ -106,7 +105,7 @@ describe('external app permission boundaries', () => {
     const { saveGateConfig } = await import('../server/autonomy/safety_gate');
     const { ToolRegistry } = await import('../server/tools/registry');
     const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
-    saveGateConfig({ autonomyLevel: 'reactive', externalAppAutomationEnabled: false });
+    saveGateConfig({ autonomyLevel: 'reactive' });
 
     const registry = new ToolRegistry();
     registerExternalAppTools(registry);

@@ -1,6 +1,7 @@
 import { ToolRegistry } from '../registry';
 import { getSleepCycleState, runDreamCycle } from '../../memory/dream';
 import { getUserPreferredLLMConfig } from '../../llm/user_preferences';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 function requireDreamGetters(context: any) {
   const getters = context?.llmGetters || {};
@@ -75,9 +76,46 @@ export function registerSleepTools(registry: ToolRegistry): void {
         },
         requireDreamGetters(context),
       );
-      return JSON.stringify(report, null, 2);
+      const state = getSleepCycleState(userId, domain, orgId);
+      if (state.lastReport?.startedAt !== report.startedAt || state.lastReport?.status !== report.status) {
+        throw new Error('Sleep cycle report was not persisted to Lumi memory state.');
+      }
+      const ok = report.status === 'dreamed' || report.status === 'skipped';
+      return JSON.stringify({
+        ok,
+        status: report.status,
+        persisted: true,
+        report,
+        state,
+      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'memory.sleep-cycle.run',
+      family: 'memory-maintenance',
+      lane: 'memory',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'memory consolidation and sleep-cycle state', reversible: false },
+        { type: 'network_read', scope: 'configured LLM provider synthesis when a dream runs', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'report.startedAt', 'report.completedAt', 'state.status', 'state.lastReport.status'],
+        requiredValues: { ok: true, persisted: true },
+        successStatuses: ['dreamed', 'skipped'],
+        failureStatuses: ['partial', 'failed'],
+        successSignals: ['persisted sleep-cycle state contains the same terminal report'],
+        limitations: ['A skipped cycle is a verified no-op, not evidence that memories were consolidated.', 'A partial cycle is reported as failure for task finalization even when some internal artifacts were created.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'memory.sleep-cycle.run',
+      operation: 'mutate',
+      limitations: ['Original memories are retained; synthesis quality still depends on the configured model.'],
+    }),
   });
 }

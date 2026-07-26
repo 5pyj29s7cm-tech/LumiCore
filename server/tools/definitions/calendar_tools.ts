@@ -1,344 +1,291 @@
+import { getProductivityAdapter } from '../../adapters/productivity';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { ToolRegistry } from '../registry';
-import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import type { ToolCapabilityMetadata } from '../types';
 
-/**
- * Windows Calendar & Email tools using Outlook COM automation via PowerShell.
- * These are safe-level tools that read and compose from the user's Outlook.
- */
-
-function esc(s: string): string {
-  return s.replace(/'/g, "''");
-}
-
-async function outlookCalendarToday(_args: Record<string, any>, _context?: any): Promise<string> {
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$ns = $outlook.GetNamespace("MAPI")
-$calendar = $ns.GetDefaultFolder(9)
-$today = (Get-Date).Date
-$tomorrow = $today.AddDays(1)
-$items = $calendar.Items
-$items.IncludeRecurrences = $true
-$items.Sort("[Start]")
-$found = @()
-foreach ($item in $items) {
-  if ($item.Start -ge $today -and $item.Start -lt $tomorrow) {
-    $found += [PSCustomObject]@{
-      Subject = $item.Subject
-      Start = $item.Start.ToString("HH:mm")
-      End = $item.End.ToString("HH:mm")
-      Location = $item.Location
-      Duration = [math]::Round(($item.End - $item.Start).TotalMinutes)
-    }
-  }
-}
-if ($found.Count -eq 0) { Write-Output "No events scheduled for today." }
-else { $found | ConvertTo-Json -Compress }
-$outlook.Quit()
-`;
-  return runPowerShell(psScript, 'calendar_today');
-}
-
-async function outlookUpcomingEvents(args: Record<string, any>, _context?: any): Promise<string> {
-  const days = args.days || 7;
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$ns = $outlook.GetNamespace("MAPI")
-$calendar = $ns.GetDefaultFolder(9)
-$today = (Get-Date).Date
-$end = $today.AddDays(${days})
-$items = $calendar.Items
-$items.IncludeRecurrences = $true
-$items.Sort("[Start]")
-$found = @()
-foreach ($item in $items) {
-  if ($item.Start -ge $today -and $item.Start -lt $end) {
-    $found += [PSCustomObject]@{
-      Subject = $item.Subject
-      Start = $item.Start.ToString("yyyy-MM-dd HH:mm")
-      End = $item.End.ToString("yyyy-MM-dd HH:mm")
-      Location = $item.Location
-    }
-  }
-  if ($found.Count -ge 30) { break }
-}
-if ($found.Count -eq 0) { Write-Output "No upcoming events in the next ${days} days." }
-else { $found | ConvertTo-Json -Compress }
-$outlook.Quit()
-`;
-  return runPowerShell(psScript, 'upcoming_events');
-}
-
-async function outlookSendEmail(args: Record<string, any>, _context?: any): Promise<string> {
-  const to = (args.to || '').replace(/'/g, "''");
-  const subject = (args.subject || 'No Subject').replace(/'/g, "''");
-  const body = (args.body || '').replace(/'/g, "''");
-
-  // Escape for PowerShell here-string
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$mail = $outlook.CreateItem(0)
-$mail.To = '${to}'
-$mail.Subject = '${subject}'
-$mail.Body = @'
-${body}
-'@
-$mail.Save()
-$mail.Send()
-$outlook.Quit()
-Write-Output "Email sent to ${to}"
-`;
-  return runPowerShell(psScript, 'send_email');
-}
-
-async function outlookRecentEmails(args: Record<string, any>, _context?: any): Promise<string> {
-  const limit = Math.min(args.limit || 5, 20);
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$ns = $outlook.GetNamespace("MAPI")
-$inbox = $ns.GetDefaultFolder(6)
-$items = $inbox.Items
-$items.Sort("[ReceivedTime]", $true)
-$found = @()
-$count = 0
-foreach ($item in $items) {
-  if ($count -ge ${limit}) { break }
-  $found += [PSCustomObject]@{
-    From = $item.SenderName
-    Subject = $item.Subject
-    Received = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm")
-    Unread = $item.UnRead
-  }
-  $count++
-}
-if ($found.Count -eq 0) { Write-Output "Inbox is empty." }
-else { $found | ConvertTo-Json -Compress }
-$outlook.Quit()
-`;
-  return runPowerShell(psScript, 'recent_emails');
-}
-
-async function outlookCreateEvent(args: Record<string, any>, _context?: any): Promise<string> {
-  const subject = (args.subject || 'Untitled Event').replace(/'/g, "''");
-  const startStr = args.start || '';
-  const endStr = args.end || '';
-  const location = (args.location || '').replace(/'/g, "''");
-  const body = (args.body || '').replace(/'/g, "''");
-  const reminderMinutes = args.reminderMinutes ?? 15;
-  const allDay = args.allDay === true;
-
-  if (!startStr || !endStr) throw new Error('start and end (ISO 8601 datetime strings) are required');
-
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$item = $outlook.CreateItem(1)
-$item.Subject = '${subject}'
-$item.Start = [DateTime]::Parse('${startStr}')
-$item.End = [DateTime]::Parse('${endStr}')
-$item.Location = '${location}'
-$item.Body = @'
-${body}
-'@
-$item.ReminderSet = $true
-$item.ReminderMinutesBeforeStart = ${reminderMinutes}
-${allDay ? '$item.AllDayEvent = $true' : ''}
-$item.Save()
-$outlook.Quit()
-Write-Output "Calendar event created: ${subject} (${startStr} - ${endStr})"
-`;
-  return runPowerShell(psScript, 'calendar_create');
-}
-
-async function outlookModifyEvent(args: Record<string, any>, _context?: any): Promise<string> {
-  const { subject, newSubject, newStart, newEnd, newLocation, newBody } = args;
-  if (!subject) throw new Error('subject (to find the event) is required');
-
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$ns = $outlook.GetNamespace("MAPI")
-$calendar = $ns.GetDefaultFolder(9)
-$calendar.Items.IncludeRecurrences = $true
-$found = $null
-foreach ($item in $calendar.Items) {
-  if ($item.Subject -eq '${esc(subject)}' -and $item.Start -ge [DateTime]::Now.AddDays(-1)) {
-    $found = $item; break
-  }
-}
-if (-not $found) { Write-Output "No recent event found with subject: ${subject}"; $outlook.Quit(); exit }
-${newSubject ? `$found.Subject = '${esc(newSubject)}'` : ''}
-${newStart ? `$found.Start = [DateTime]::Parse('${newStart}')` : ''}
-${newEnd ? `$found.End = [DateTime]::Parse('${newEnd}')` : ''}
-${newLocation ? `$found.Location = '${esc(newLocation)}'` : ''}
-${newBody ? `$found.Body = @'\n${newBody.replace(/'/g, "''")}\n'@` : ''}
-$found.Save()
-$outlook.Quit()
-Write-Output "Event updated: $($found.Subject)"
-`;
-  return runPowerShell(psScript, 'calendar_modify');
-}
-
-async function outlookDeleteEvent(args: Record<string, any>, _context?: any): Promise<string> {
-  const { subject, confirmDelete } = args;
-  if (!subject) throw new Error('subject is required');
-  if (confirmDelete !== true) {
-    return `Safety check: to delete "${subject}", set confirmDelete: true.`;
-  }
-
-  const psScript = `
-$outlook = New-Object -ComObject Outlook.Application
-$ns = $outlook.GetNamespace("MAPI")
-$calendar = $ns.GetDefaultFolder(9)
-$calendar.Items.IncludeRecurrences = $true
-$found = $null
-foreach ($item in $calendar.Items) {
-  if ($item.Subject -eq '${esc(subject)}') { $found = $item; break }
-}
-if (-not $found) { Write-Output "No event found with subject: ${subject}"; $outlook.Quit(); exit }
-$found.Delete()
-$outlook.Quit()
-Write-Output "Event deleted: ${subject}"
-`;
-  return runPowerShell(psScript, 'calendar_delete');
-}
-
-function runPowerShell(script: string, toolName: string): string {
-  const tmpFile = join(tmpdir(), `lumi_${toolName}_${Date.now()}.ps1`);
-  try {
-    writeFileSync(tmpFile, script, 'utf-8');
-    const result = execSync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
-      { timeout: 20000, encoding: 'utf-8', maxBuffer: 1024 * 1024 },
-    );
-    return result.trim() || `Tool "${toolName}" completed with no output.`;
-  } catch (err: any) {
-    const msg = err.stderr || err.message || 'Unknown error';
-    if (msg.includes('Outlook') || msg.includes('COM')) {
-      return `Outlook is not available. Please ensure Microsoft Outlook is installed and configured. (${msg.slice(0, 100)})`;
-    }
-    return `Calendar/email tool error: ${msg.slice(0, 200)}`;
-  } finally {
-    try { unlinkSync(tmpFile); } catch {}
-  }
+function withProductivityAdapter(
+  operation: string,
+  capability: ToolCapabilityMetadata,
+): ToolCapabilityMetadata {
+  return {
+    ...capability,
+    adapter: {
+      id: 'productivity.calendar-mail',
+      operations: [operation],
+      implementations: {
+        windows: 'windows.outlook_com',
+        macos: 'macos.calendar_mail_jxa',
+      },
+    },
+  };
 }
 
 export function registerCalendarTools(registry: ToolRegistry): void {
   registry.register({
     name: 'calendar_today',
-    description:
-      'Get today\'s calendar events from Microsoft Outlook. Returns a list of scheduled meetings and appointments with times and locations.',
+    description: 'Get today\'s events from the platform calendar provider. Windows uses Outlook COM and macOS uses Calendar automation under the same capability contract.',
     parameters: { type: 'object', properties: {}, required: [] },
-    handler: outlookCalendarToday,
+    handler: async () => JSON.stringify(await getProductivityAdapter().calendarToday(), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: withProductivityAdapter('calendar.read_today', {
+      id: 'calendar.events.today',
+      family: 'calendar',
+      lane: 'office',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'local_read', scope: 'default calendar events for today', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'items'],
+        requiredValues: { ok: true, status: 'observed' },
+        successStatuses: ['observed'],
+        successSignals: ['the platform calendar provider returned an event collection'],
+        limitations: ['The default calendar may not include every external account.'],
+      },
+    }),
+    evidence: capabilityEvidence({ id: 'calendar.events.today', operation: 'observe' }),
   });
 
   registry.register({
     name: 'upcoming_events',
-    description:
-      'Get upcoming calendar events from Microsoft Outlook for the specified number of days. Default is 7 days. Useful for checking what\'s coming up.',
+    description: 'Get upcoming events from the platform calendar provider for up to 30 days.',
     parameters: {
       type: 'object',
-      properties: {
-        days: { type: 'number', description: 'Number of days to look ahead (default: 7, max: 30)' },
-      },
+      properties: { days: { type: 'number', description: 'Number of days to look ahead, default 7 and maximum 30.' } },
       required: [],
     },
-    handler: outlookUpcomingEvents,
+    handler: async args => {
+      const days = Math.min(Math.max(Number(args.days) || 7, 1), 30);
+      return JSON.stringify(await getProductivityAdapter().upcomingEvents(days), null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
+    capability: withProductivityAdapter('calendar.read_upcoming', {
+      id: 'calendar.events.upcoming',
+      family: 'calendar',
+      lane: 'office',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'local_read', scope: 'default calendar upcoming events', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'items'],
+        requiredValues: { ok: true, status: 'observed' },
+        successStatuses: ['observed'],
+        successSignals: ['the platform calendar provider returned an event collection'],
+        limitations: ['Results are bounded to the requested interval and adapter limit.'],
+      },
+    }),
+    evidence: capabilityEvidence({ id: 'calendar.events.upcoming', operation: 'observe', subjectArgument: 'days' }),
   });
 
   registry.register({
     name: 'send_email',
-    description:
-      'Compose and send an email via Microsoft Outlook. Requires Outlook to be installed and configured with an email account.',
+    description: 'Send a plain-text email through the platform mail provider. Windows uses Outlook and macOS uses Mail.',
     parameters: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Recipient email address' },
-        subject: { type: 'string', description: 'Email subject line' },
-        body: { type: 'string', description: 'Email body content (plain text)' },
+        to: { type: 'string', description: 'Recipient email address.' },
+        subject: { type: 'string', description: 'Email subject line.' },
+        body: { type: 'string', description: 'Plain-text email body.' },
       },
       required: ['to', 'subject', 'body'],
     },
-    handler: outlookSendEmail,
+    handler: async args => JSON.stringify(await getProductivityAdapter().sendEmail({
+      to: String(args.to || ''),
+      subject: String(args.subject || ''),
+      body: String(args.body || ''),
+    }), null, 2),
     permission: 'user',
     securityLevel: 'confirm',
+    capability: withProductivityAdapter('mail.send', capabilityContract({
+      id: 'mail.message.send',
+      family: 'mail',
+      lane: 'messaging',
+      operation: 'communicate',
+      risk: 'high',
+      sideEffects: [{ type: 'external_communication', scope: 'explicit email recipient and message', reversible: false }],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['ok', 'status', 'sent', 'provider', 'recipient'],
+        requiredValues: { ok: true, status: 'sent', sent: true },
+        successStatuses: ['sent'],
+        successSignals: ['the platform mail provider acknowledged sending to the exact recipient'],
+        limitations: ['Provider acceptance does not prove human reading or downstream delivery.'],
+      },
+    })),
+    evidence: capabilityEvidence({
+      id: 'mail.message.send',
+      operation: 'communicate',
+      subjectArgument: 'to',
+      limitations: ['The receipt proves provider acceptance, not recipient engagement.'],
+    }),
   });
 
   registry.register({
     name: 'recent_emails',
-    description:
-      'List recent emails from the Microsoft Outlook inbox. Returns sender, subject, and received time.',
+    description: 'List recent messages from the platform inbox without changing read state.',
     parameters: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Number of emails to retrieve (default: 5, max: 20)' },
-      },
+      properties: { limit: { type: 'number', description: 'Number of emails to retrieve, default 5 and maximum 20.' } },
       required: [],
     },
-    handler: outlookRecentEmails,
+    handler: async args => {
+      const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 20);
+      return JSON.stringify(await getProductivityAdapter().recentEmails(limit), null, 2);
+    },
     permission: 'user',
     securityLevel: 'safe',
+    capability: withProductivityAdapter('mail.read_recent', {
+      id: 'mail.messages.recent',
+      family: 'mail',
+      lane: 'messaging',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'local_read', scope: 'recent default inbox message metadata', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'provider', 'items'],
+        requiredValues: { ok: true, status: 'observed' },
+        successStatuses: ['observed'],
+        successSignals: ['the platform inbox returned a bounded message collection'],
+        limitations: ['Only sender, subject, time, and unread state are returned.'],
+      },
+    }),
+    evidence: capabilityEvidence({ id: 'mail.messages.recent', operation: 'observe', subjectArgument: 'limit' }),
   });
 
   registry.register({
     name: 'calendar_create',
-    description: 'Create a new calendar event in Microsoft Outlook. Set start/end times as ISO 8601 strings (e.g. 2026-06-15T14:00:00). Supports all-day events, location, description, and custom reminder minutes.',
+    description: 'Create a real event in the platform default calendar using one cross-platform schema.',
     parameters: {
       type: 'object',
       properties: {
-        subject: { type: 'string', description: 'Event title/subject' },
-        start: { type: 'string', description: 'Start time — ISO 8601, e.g. 2026-06-15T14:00:00' },
-        end: { type: 'string', description: 'End time — ISO 8601' },
-        location: { type: 'string', description: 'Event location (optional)' },
-        body: { type: 'string', description: 'Event description/notes (optional)' },
-        reminderMinutes: { type: 'number', description: 'Reminder minutes before start (default 15)' },
-        allDay: { type: 'boolean', description: 'Set true for an all-day event' },
+        subject: { type: 'string', description: 'Event title.' },
+        start: { type: 'string', description: 'ISO 8601 start time.' },
+        end: { type: 'string', description: 'ISO 8601 end time.' },
+        location: { type: 'string', description: 'Optional location.' },
+        body: { type: 'string', description: 'Optional notes.' },
+        reminderMinutes: { type: 'number', description: 'Reminder lead time, default 15 minutes.' },
+        allDay: { type: 'boolean', description: 'Whether this is an all-day event.' },
       },
       required: ['subject', 'start', 'end'],
     },
-    handler: outlookCreateEvent,
+    handler: async args => JSON.stringify(await getProductivityAdapter().createEvent({
+      subject: String(args.subject || ''),
+      start: String(args.start || ''),
+      end: String(args.end || ''),
+      location: args.location === undefined ? undefined : String(args.location),
+      body: args.body === undefined ? undefined : String(args.body),
+      reminderMinutes: Number(args.reminderMinutes ?? 15),
+      allDay: args.allDay === true,
+    }), null, 2),
     permission: 'user',
     securityLevel: 'confirm',
+    capability: withProductivityAdapter('calendar.create', capabilityContract({
+      id: 'calendar.event.create',
+      family: 'calendar',
+      lane: 'office',
+      operation: 'create',
+      risk: 'high',
+      sideEffects: [{ type: 'external_state_change', scope: 'platform default calendar event', reversible: true }],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['ok', 'status', 'created', 'provider', 'eventId', 'subject'],
+        requiredValues: { ok: true, status: 'created', created: true },
+        successStatuses: ['created'],
+        successSignals: ['the calendar provider returned a stable event id'],
+        limitations: ['The adapter writes to the platform default calendar.'],
+      },
+    })),
+    evidence: capabilityEvidence({ id: 'calendar.event.create', operation: 'create', subjectArgument: 'subject' }),
   });
 
   registry.register({
     name: 'calendar_modify',
-    description: 'Modify an existing calendar event in Outlook. Finds the event by subject (within recent events) and updates the specified fields.',
+    description: 'Modify a real event in the platform default calendar, matched by its current subject.',
     parameters: {
       type: 'object',
       properties: {
-        subject: { type: 'string', description: 'Current event subject to search for' },
-        newSubject: { type: 'string', description: 'New subject (optional)' },
-        newStart: { type: 'string', description: 'New start time — ISO 8601 (optional)' },
-        newEnd: { type: 'string', description: 'New end time — ISO 8601 (optional)' },
-        newLocation: { type: 'string', description: 'New location (optional)' },
-        newBody: { type: 'string', description: 'New description body (optional)' },
+        subject: { type: 'string', description: 'Current event subject.' },
+        newSubject: { type: 'string', description: 'Optional replacement subject.' },
+        newStart: { type: 'string', description: 'Optional ISO 8601 start time.' },
+        newEnd: { type: 'string', description: 'Optional ISO 8601 end time.' },
+        newLocation: { type: 'string', description: 'Optional replacement location.' },
+        newBody: { type: 'string', description: 'Optional replacement notes.' },
       },
       required: ['subject'],
     },
-    handler: outlookModifyEvent,
+    handler: async args => JSON.stringify(await getProductivityAdapter().modifyEvent({
+      subject: String(args.subject || ''),
+      newSubject: args.newSubject === undefined ? undefined : String(args.newSubject),
+      newStart: args.newStart === undefined ? undefined : String(args.newStart),
+      newEnd: args.newEnd === undefined ? undefined : String(args.newEnd),
+      newLocation: args.newLocation === undefined ? undefined : String(args.newLocation),
+      newBody: args.newBody === undefined ? undefined : String(args.newBody),
+    }), null, 2),
     permission: 'user',
     securityLevel: 'confirm',
+    capability: withProductivityAdapter('calendar.modify', capabilityContract({
+      id: 'calendar.event.modify',
+      family: 'calendar',
+      lane: 'office',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [{ type: 'external_state_change', scope: 'matched platform calendar event', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'updated', 'provider', 'eventId', 'subject'],
+        requiredValues: { ok: true, status: 'updated', updated: true },
+        successStatuses: ['updated'],
+        successSignals: ['the calendar provider acknowledged the event update and returned its id'],
+        limitations: ['Subject matching can be ambiguous when duplicate event subjects exist.'],
+      },
+    })),
+    evidence: capabilityEvidence({ id: 'calendar.event.modify', operation: 'mutate', subjectArgument: 'subject' }),
   });
 
   registry.register({
     name: 'calendar_delete',
-    description: 'Delete a calendar event from Outlook by subject. Requires confirmDelete: true for safety.',
+    description: 'Delete a real event from the platform default calendar by subject after explicit confirmation.',
     parameters: {
       type: 'object',
       properties: {
-        subject: { type: 'string', description: 'Event subject to search for and delete' },
-        confirmDelete: { type: 'boolean', description: 'Set to true to confirm deletion (required safety check)' },
+        subject: { type: 'string', description: 'Event subject to match.' },
+        confirmDelete: { type: 'boolean', description: 'Must be true after the user confirms deletion.' },
       },
       required: ['subject', 'confirmDelete'],
     },
-    handler: outlookDeleteEvent,
+    handler: async args => {
+      if (args.confirmDelete !== true) throw new Error('Calendar deletion requires confirmDelete=true.');
+      return JSON.stringify(await getProductivityAdapter().deleteEvent({ subject: String(args.subject || '') }), null, 2);
+    },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: withProductivityAdapter('calendar.delete', capabilityContract({
+      id: 'calendar.event.delete',
+      family: 'calendar',
+      lane: 'office',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [{ type: 'external_state_change', scope: 'matched platform calendar event', reversible: false }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'deleted', 'provider', 'eventId', 'subject'],
+        requiredValues: { ok: true, status: 'deleted', deleted: true },
+        successStatuses: ['deleted'],
+        successSignals: ['the calendar provider acknowledged deletion of the matched event id'],
+        limitations: ['Deletion is not automatically recoverable by Lumi.'],
+      },
+    })),
+    evidence: capabilityEvidence({ id: 'calendar.event.delete', operation: 'mutate', subjectArgument: 'subject' }),
   });
 }

@@ -1,5 +1,5 @@
 import { getExternalControlCandidate, listExternalControlCandidates } from '../../external_control/candidates';
-import { captureWindowsUiSnapshot, runWindowsUiAction } from '../../external_control/windows_uia';
+import { captureNativeUiSnapshot, runNativeUiAction } from '../../external_control/native_ui';
 import {
   createVisibleWpsDocumentWithText,
   WPS_CREATE_DOCUMENT_TOOL,
@@ -7,6 +7,7 @@ import {
 import { mcpManager, recoverServerTools } from '../../mcp';
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const UI_TARGET_PROPERTIES = {
   root: { type: 'string', enum: ['active', 'focused', 'desktop'], description: 'Search root. Defaults active foreground window.' },
@@ -44,16 +45,42 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     ),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'office.wps.document.create-visible',
+      family: 'wps',
+      lane: 'office',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'visible WPS Writer document', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'automation', 'processId', 'documentCreated', 'exactTextMatch'],
+        requiredValues: {
+          ok: true,
+          status: 'verified',
+          automation: 'KWPS.Application',
+          visible: true,
+          documentCreated: true,
+          exactTextMatch: true,
+        },
+        successStatuses: ['verified'],
+        successSignals: ['visible WPS document exists and exact body text readback matches'],
+        limitations: ['The document remains unsaved.'],
+      },
+    },
     evidence: {
-      capability: 'wps_document',
+      capability: 'office.wps.document.create-visible',
       operation: 'create',
       assurance: 'verified',
+      subjectArgument: 'text',
+      limitations: ['Creates and verifies an unsaved visible WPS document.'],
     },
   });
 
   registry.register({
     name: 'external_control_candidates',
-    description: 'List curated general-purpose external-control upgrades for Lumi, such as Playwright MCP for browser DOM control and Windows UI Automation for native desktop apps.',
+    description: 'List curated general-purpose external-control upgrades for Lumi, such as Playwright MCP for browser DOM control and the platform-native semantic accessibility adapter for desktop apps.',
     parameters: {
       type: 'object',
       properties: {
@@ -67,7 +94,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
         layer: args.layer,
         industry: args.industry,
       }),
-      note: 'Prefer browser DOM/Playwright for web platforms, Windows UIA for native apps, and vision computer_use only as a fallback.',
+      note: 'Prefer browser DOM/Playwright for web platforms, the Windows UIA or macOS Accessibility adapter for native apps, and vision computer_use only as a fallback.',
     }, null, 2),
     permission: 'user',
     securityLevel: 'safe',
@@ -94,7 +121,10 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       if (!candidate) throw new Error(`Unknown external control candidate: ${args.candidateId}`);
       if (!candidate.mcp) {
         return JSON.stringify({
+          ok: true,
+          status: 'not_applicable',
           configured: false,
+          persisted: false,
           candidate,
           note: 'This candidate is native or policy-only and does not require MCP configuration.',
         }, null, 2);
@@ -109,6 +139,10 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       };
       config[serverName] = nextServer;
       mcpManager.saveConfig(config);
+      const persistedConfig = mcpManager.getConfig()[serverName];
+      if (!persistedConfig || JSON.stringify(persistedConfig) !== JSON.stringify(nextServer)) {
+        throw new Error(`External control candidate configuration was not persisted for ${serverName}.`);
+      }
 
       let restarted = false;
       let tools: unknown[] = [];
@@ -116,12 +150,22 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
         tools = await mcpManager.restartServer(serverName);
         await recoverServerTools(serverName, tools as any);
         restarted = true;
+        if (!Array.isArray(tools) || tools.length === 0) {
+          throw new Error(`External control candidate ${serverName} restarted without exposing any tools.`);
+        }
       } else if (args.restart === true && !nextServer.enabled) {
         await mcpManager.disconnectServer(serverName);
       }
 
+      const status = nextServer.enabled
+        ? restarted ? 'connected' : 'restart_required'
+        : args.restart === true ? 'disconnected' : 'configured_disabled';
       return JSON.stringify({
+        ok: true,
+        status,
         configured: true,
+        persisted: true,
+        candidate,
         serverName,
         enabled: nextServer.enabled,
         restarted,
@@ -133,12 +177,40 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       }, null, 2);
     },
     permission: 'user',
-    securityLevel: 'safe',
+    securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'external-control.candidate.configure',
+      family: 'external-control',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'host MCP server configuration', reversible: true },
+        { type: 'process_execution', scope: 'optional MCP server restart or disconnect', reversible: true },
+        { type: 'installation', scope: 'candidate package resolved by configured MCP command', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'configured', 'persisted', 'candidate.id'],
+        requiredValues: { ok: true },
+        successStatuses: ['not_applicable', 'connected', 'restart_required', 'disconnected', 'configured_disabled'],
+        failureStatuses: ['failed', 'unverified'],
+        successSignals: ['MCP configuration reread matches the requested candidate configuration', 'enabled restart exposes at least one tool'],
+        limitations: ['Native and policy-only candidates require no MCP write and return not_applicable.', 'A restart_required receipt means configuration is durable but the tools are not yet available.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'external-control.candidate.configure',
+      operation: 'mutate',
+      subjectArgument: 'candidateId',
+      limitations: ['Configuration alone does not prove a target website or desktop application can be controlled.'],
+    }),
   });
 
   registry.register({
     name: 'desktop_ui_snapshot',
-    description: 'Capture a read-only Windows UI Automation tree for the active/focused/desktop window, including control names, types, automation ids, enabled/offscreen state, and bounding boxes. A desktop-root snapshot can target a specific native window by accessible identity without foregrounding it. Use this before clicking native apps so Lumi can reason about real controls instead of only screen pixels.',
+    description: 'Capture a read-only platform-native semantic accessibility tree for the active/focused/desktop window, including control names, types, identifiers, enabled/focused state, and bounding boxes. Windows uses UI Automation and macOS uses Accessibility. Use this before clicking native apps so Lumi can reason about real controls instead of only screen pixels.',
     parameters: {
       type: 'object',
       properties: {
@@ -158,7 +230,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       },
       required: [],
     },
-    handler: async (args) => JSON.stringify(await captureWindowsUiSnapshot({
+    handler: async (args) => JSON.stringify(await captureNativeUiSnapshot({
       root: args.root,
       name: args.name,
       nameContains: args.nameContains,
@@ -175,37 +247,107 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
     }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.native_ui.snapshot',
+      family: 'desktop-native-ui',
+      lane: 'desktop',
+      source: 'adapter',
+      provider: 'desktop.native',
+      operation: 'observe',
+      domains: ['desktop'],
+      intents: ['inspect native controls', 'read application accessibility tree'],
+      modes: ['assistant', 'autonomous'],
+      risk: 'low',
+      adapter: {
+        id: 'desktop.native',
+        operations: ['snapshot'],
+        implementations: {
+          windows: 'windows-uia',
+          macos: 'macos-accessibility',
+        },
+      },
+    },
+    evidence: {
+      capability: 'desktop.native_ui.snapshot',
+      operation: 'observe',
+      assurance: 'observed',
+      limitations: ['Only controls exposed by the target application accessibility framework are visible.'],
+    },
   });
 
   registry.register({
     name: 'desktop_ui_focus',
-    description: 'Focus a native Windows UI Automation control selected by name, AutomationId, control type, class name, process id, or handle. Use desktop_ui_snapshot first to choose a precise target.',
+    description: 'Focus a platform-native accessible control selected by name, identifier, control type, class/role, process id, or handle where supported. Windows uses UI Automation and macOS uses Accessibility. Use desktop_ui_snapshot first.',
     parameters: {
       type: 'object',
       properties: UI_TARGET_PROPERTIES,
       required: [],
     },
-    handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'focus' }), null, 2),
+    handler: async (args) => JSON.stringify(await runNativeUiAction({ ...args, action: 'focus' }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.native_ui.focus',
+      family: 'desktop-native-ui',
+      lane: 'desktop',
+      source: 'adapter',
+      provider: 'desktop.native',
+      operation: 'mutate',
+      modes: ['assistant', 'autonomous'],
+      risk: 'low',
+      sideEffects: [{ type: 'desktop_control', scope: 'focus', reversible: true }],
+      adapter: {
+        id: 'desktop.native',
+        operations: ['focus'],
+        implementations: { windows: 'windows-uia', macos: 'macos-accessibility' },
+      },
+    },
+    evidence: {
+      capability: 'desktop.native_ui.focus',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['Focus verification does not prove a later application action succeeded.'],
+    },
   });
 
   registry.register({
     name: 'desktop_ui_click',
-    description: 'Click the center of a native Windows UI Automation control selected by accessible properties. Prefer this over raw coordinates for WPS, WeChat, CAD/Revit dialogs, installers, and normal Windows apps. Use desktop_ui_snapshot first.',
+    description: 'Activate a platform-native accessible control selected by semantic properties. Prefer this over raw coordinates for office, messaging, CAD/BIM dialogs, installers, and normal desktop apps. Use desktop_ui_snapshot first.',
     parameters: {
       type: 'object',
       properties: UI_TARGET_PROPERTIES,
       required: [],
     },
-    handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'click' }), null, 2),
+    handler: async (args) => JSON.stringify(await runNativeUiAction({ ...args, action: 'click' }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.native_ui.click',
+      family: 'desktop-native-ui',
+      lane: 'desktop',
+      source: 'adapter',
+      provider: 'desktop.native',
+      operation: 'mutate',
+      modes: ['assistant', 'autonomous'],
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'selected accessible control', reversible: true }],
+      adapter: {
+        id: 'desktop.native',
+        operations: ['click'],
+        implementations: { windows: 'windows-uia', macos: 'macos-accessibility' },
+      },
+    },
+    evidence: {
+      capability: 'desktop.native_ui.click',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['The accessibility action must be followed by target-state verification.'],
+    },
   });
 
   registry.register({
     name: 'desktop_ui_invoke',
-    description: 'Invoke a native Windows UI Automation control through InvokePattern, falling back to a center click by default. Use for buttons/menu items when the target supports accessibility invocation.',
+    description: 'Invoke a platform-native accessible button or menu item through UIA Invoke/Press on Windows or AXPress on macOS.',
     parameters: {
       type: 'object',
       properties: {
@@ -214,14 +356,36 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       },
       required: [],
     },
-    handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'invoke' }), null, 2),
+    handler: async (args) => JSON.stringify(await runNativeUiAction({ ...args, action: 'invoke' }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.native_ui.invoke',
+      family: 'desktop-native-ui',
+      lane: 'desktop',
+      source: 'adapter',
+      provider: 'desktop.native',
+      operation: 'mutate',
+      modes: ['assistant', 'autonomous'],
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'selected accessible action', reversible: true }],
+      adapter: {
+        id: 'desktop.native',
+        operations: ['invoke'],
+        implementations: { windows: 'windows-uia', macos: 'macos-accessibility' },
+      },
+    },
+    evidence: {
+      capability: 'desktop.native_ui.invoke',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['The accessibility action must be followed by target-state verification.'],
+    },
   });
 
   registry.register({
     name: 'desktop_ui_type',
-    description: 'Type or set text into a native Windows UI Automation text control. Uses ValuePattern when available and falls back to focused keyboard input. Use desktop_ui_snapshot first; foreground user-requested ordinary messages/comments can proceed, while payments, account-security transitions, legal/contractual submits, and ambiguous external submits still require confirmation.',
+    description: 'Type or set text in a platform-native accessible text control. Uses UIA ValuePattern on Windows or AXValue on macOS, with focused keyboard input only as an adapter fallback. Use desktop_ui_snapshot first; high-consequence external submits still require confirmation.',
     parameters: {
       type: 'object',
       properties: {
@@ -231,8 +395,30 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
       },
       required: ['text'],
     },
-    handler: async (args) => JSON.stringify(await runWindowsUiAction({ ...args, action: 'type', text: String(args.text || '') }), null, 2),
+    handler: async (args) => JSON.stringify(await runNativeUiAction({ ...args, action: 'type', text: String(args.text || '') }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.native_ui.type',
+      family: 'desktop-native-ui',
+      lane: 'desktop',
+      source: 'adapter',
+      provider: 'desktop.native',
+      operation: 'mutate',
+      modes: ['assistant', 'autonomous'],
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'selected accessible text control', reversible: true }],
+      adapter: {
+        id: 'desktop.native',
+        operations: ['type'],
+        implementations: { windows: 'windows-uia', macos: 'macos-accessibility' },
+      },
+    },
+    evidence: {
+      capability: 'desktop.native_ui.type',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['Typed text must be read back or otherwise verified before reporting success.'],
+    },
   });
 }

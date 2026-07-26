@@ -10,10 +10,10 @@ import { readDB, writeDB } from "../../db_layer";
 import { logger } from "../../logger";
 import { NormalizedMessage, makeLLMCallStreaming, makeLLMCall } from "../llm/providers";
 import { compactToolResultForModel, runWithTools } from "../llm/adapter";
-import { isToolNameAllowedByPolicy, toolRegistry } from "../tools/registry";
+import { toolRegistry } from "../tools/registry";
 import { ToolExecutionRecord } from "../tools/types";
+import { executeToolCall } from "../tools/execution_engine";
 import {
-  buildToolEvidenceRecord,
   GENERIC_TOOL_PLANNING_PROMPT,
   GENERIC_TOOL_REPLAN_PROMPT,
   hasRelevantEvidenceTool,
@@ -69,10 +69,7 @@ import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/op
 import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
-import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
-import { buildLumiExecutionDecision } from "../cognition/execution_decision";
-import { buildLumiIntentTrace } from "../cognition/intent_trace";
-import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
+import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
@@ -140,12 +137,9 @@ import {
   shouldDeferModelOutputUntilFinalized,
   shouldForwardPreFinalizationProgress,
 } from "../cognition/response_delivery";
-import {
-  isGuardGeneratedAssistantText,
-  isGuardGeneratedConversationRecord,
-} from "../conversation/guard_history";
-import { isUnverifiedExecutionAssistantRecord } from "../conversation/summary_grounding";
 import { normalizeSpeechCommand, speechCommandKey } from '../cognition/speech_normalization';
+import { normalizeVoiceHistory } from './voice_history';
+export { normalizeVoiceHistory, normalizeVoiceHistoryRecord } from './voice_history';
 
 interface AudioSession {
   sttSession: ReturnType<typeof createStreamingSession> | null;
@@ -322,6 +316,7 @@ function cancelActiveVoiceTurn(
   session: AudioSession,
   preserveInterruptedTurn = false,
   preserveDurableTask = false,
+  preserveInputQueue = false,
 ): void {
   if (preserveInterruptedTurn && session.activeRoutingText.trim()) {
     session.pendingInterruptedTurn = {
@@ -351,7 +346,7 @@ function cancelActiveVoiceTurn(
   session.isSpeaking = false;
   session.isProcessing = false;
   session.isOrchestrating = false;
-  session.inputQueue = [];
+  if (!preserveInputQueue) session.inputQueue = [];
   session.accumulatedText = '';
   if (session.bargeinTimer) {
     clearTimeout(session.bargeinTimer);
@@ -388,6 +383,20 @@ function cancelActiveVoiceTurn(
   }
 }
 
+/**
+ * Confirmation and correction are priority continuations of the active durable
+ * task. Keep unrelated queued work, but reserve the transport lane immediately
+ * so the aborted pipeline's finalizer cannot dequeue and overtake the priority
+ * continuation during the 160 ms transcript handoff window.
+ */
+export function reservePriorityVoiceHandoff(
+  session: AudioSession,
+  preserveInterruptedTurn: boolean,
+): void {
+  cancelActiveVoiceTurn(session, preserveInterruptedTurn, true, true);
+  session.isProcessing = true;
+}
+
 export function isVoiceCallEndCommand(text: string): boolean {
   const normalized = normalizeSpeechText(text);
   // Ending the call is a transport command. It must not enter the LLM/tool
@@ -414,66 +423,6 @@ function interruptVoiceSpeech(session: AudioSession): void {
   if (pendingDecayCount > 0) {
     ttsSpeakingCount = Math.max(0, ttsSpeakingCount - pendingDecayCount);
   }
-}
-
-export function normalizeVoiceHistoryRecord(m: any): NormalizedMessage[] {
-  const hasToolCalls = Array.isArray(m?.toolCalls)
-    ? m.toolCalls.length > 0
-    : Boolean(String(m?.toolCalls || '').trim());
-  // Tool-bearing assistant turns are execution receipts, not conversational
-  // priming. Continuation state carries their compact evidence separately;
-  // excluding the prose prevents an old process snapshot or failure from
-  // being appended to an unrelated new reply.
-  if (m?.role === 'tool' || m?.mode === 'proactive' || hasToolCalls || m?.tool_call_id) return [];
-  const role = m?.role === 'assistant' ? 'assistant' : m?.role === 'user' ? 'user' : '';
-  if (!role) return [];
-  if (role === 'assistant' && isGuardGeneratedConversationRecord(m)) return [];
-  if (role === 'assistant' && isUnverifiedExecutionAssistantRecord(m)) return [];
-  const message = typeof m?.message === 'string' ? m.message.trim() : '';
-  const response = typeof m?.response === 'string' ? m.response.trim() : '';
-  const responseIsGuard = String(m?.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
-    || isGuardGeneratedAssistantText(response);
-  const entries: NormalizedMessage[] = [];
-  if (message) entries.push({ role, content: message });
-  if (response && role === 'user' && !responseIsGuard) {
-    entries.push({ role: 'assistant', content: response });
-  }
-  return entries;
-}
-
-/**
- * Build conversational voice history as completed user/assistant pairs.
- *
- * Tool-bearing and unverified assistant records are intentionally excluded by
- * normalizeVoiceHistoryRecord. Their preceding user command must be excluded
- * with them; otherwise the model sees a backlog of apparently unanswered old
- * commands and starts replaying AutoCAD/WPS/browser work in an unrelated turn.
- */
-export function normalizeVoiceHistory(records: any[]): NormalizedMessage[] {
-  const output: NormalizedMessage[] = [];
-  let pendingUser: any | null = null;
-
-  for (const record of Array.isArray(records) ? records : []) {
-    const role = String(record?.role || '').toLowerCase();
-    if (role === 'user') {
-      // A second user row means the previous turn never reached a trustworthy
-      // assistant terminal response. Do not prime a later model with it.
-      pendingUser = record;
-      continue;
-    }
-    if (role !== 'assistant') continue;
-
-    const assistant = normalizeVoiceHistoryRecord(record);
-    if (pendingUser) {
-      const user = normalizeVoiceHistoryRecord(pendingUser);
-      if (user.length > 0 && assistant.length > 0) output.push(...user, ...assistant);
-      pendingUser = null;
-      continue;
-    }
-    if (assistant.length > 0) output.push(...assistant);
-  }
-
-  return output.slice(-20);
 }
 
 function buildVoiceReplyStyleOverlay(): string {
@@ -1482,21 +1431,29 @@ async function processVoiceInput(
     return 'assistant';
   })();
   const requestedMode = requestedModeHint;
-  const turnDispatch = buildLumiTurnDispatch({
-    userId: session.userId,
-    text: actionIntentText,
-    continuationContext: [actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt]
-      .filter(Boolean)
-      .join('\n\n'),
-    channel: 'voice',
+  const executionPipeline = buildLumiExecutionPipeline({
+    dispatch: {
+      userId: session.userId,
+      text: actionIntentText,
+      continuationContext: [actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt]
+        .filter(Boolean)
+        .join('\n\n'),
+      channel: 'voice',
+      source: 'voice',
+      domain: voiceScope.domain,
+      orgId: voiceScope.orgId,
+      surface: 'voice',
+      operationMode,
+      requestedMode,
+      targetIsLumi: true,
+    },
+    registry: toolRegistry,
+    personalityToolPolicy: personality.toolPolicy,
+    actionTaskState: conversationTurn.conversation.actionContinuationState,
+    traceText: actionIntentText,
     source: 'voice',
-    domain: voiceScope.domain,
-    orgId: voiceScope.orgId,
-    surface: 'voice',
-    operationMode,
-    requestedMode,
-    targetIsLumi: true,
   });
+  const turnDispatch = executionPipeline.turnIntent;
   const turnFlow = turnDispatch.flow;
   const effectiveOperationMode = turnFlow.effectiveOperationMode;
   const selfRepairTurn = turnFlow.selfRepairTurn;
@@ -1504,14 +1461,7 @@ async function processVoiceInput(
   const workSurfaceRoute = turnFlow.workSurfaceRoute;
   const visionIntent = turnFlow.visionIntent;
   const exposeAgentWork = turnFlow.exposeAgentWork;
-  const executionDecision = buildLumiExecutionDecision({
-    flow: turnFlow,
-    text: turnFlow.routeText,
-    toolDeclarations: toolRegistry.getToolDeclarations(),
-    toolRegistry,
-    personalityToolPolicy: personality.toolPolicy,
-    actionTaskState: conversationTurn.conversation.actionContinuationState,
-  });
+  const executionDecision = executionPipeline.execution;
   session.isBackgroundWork = executionDecision.allowToolUse;
   session.activeWorkStatus = executionDecision.allowToolUse ? 'planning' : 'idle';
   if (executionDecision.allowToolUse && !session.workHeartbeatTimer) {
@@ -1520,17 +1470,8 @@ async function processVoiceInput(
   } else if (!executionDecision.allowToolUse) {
     stopVoiceWorkHeartbeat(session);
   }
-  const intentTrace = buildLumiIntentTrace({
-    dispatch: turnDispatch,
-    execution: executionDecision,
-    text: actionIntentText,
-    source: 'voice',
-  });
-  const capabilitySelection = buildLumiCapabilitySelection({
-    dispatch: turnDispatch,
-    execution: executionDecision,
-    text: turnFlow.routeText,
-  });
+  const intentTrace = executionPipeline.intentTrace;
+  const capabilitySelection = executionPipeline.capabilityPlan;
   const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
     channel: 'voice',
     text: turnFlow.routeText,
@@ -2186,43 +2127,39 @@ async function processVoiceInput(
       confirmedArgs,
       confirmationScope,
     );
-    const confirmationRecord: ToolExecutionRecord = {
-      id: `voice-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: pendingConfirmation.toolName,
-      arguments: confirmedArgs,
-      result: '',
-      evidence: buildToolEvidenceRecord(toolRegistry, pendingConfirmation.toolName, confirmedArgs),
-    };
+    const confirmationRecordId =
+      `voice-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     session.isBackgroundWork = true;
     session.activeWorkStatus = 'executing';
     session.activeWorkStep = `Running ${pendingConfirmation.toolName}`;
-    if (!confirmationConsumed) {
-      confirmationRecord.error = 'The one-time confirmation expired before execution.';
-    } else {
-      try {
-        if (!isDirectDesktopTool(confirmationRecord.name)) {
-          emitToolLifecycle({
-            correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
-            name: confirmationRecord.name,
-            arguments: confirmedArgs,
-          });
-        }
-        confirmationRecord.result = await toolRegistry.execute(
-          confirmationRecord.name,
-          confirmedArgs,
-          {
-            ...toolContext,
-            toolPolicy: routedToolPolicy,
-            userConfirmed: true,
-            requestConfirmation: undefined,
-            actionIntent: confirmedTask,
-            routedTaskText: confirmedTask,
-          },
-        );
-      } catch (err: any) {
-        confirmationRecord.error = err?.message || String(err);
-      }
+    if (!isDirectDesktopTool(pendingConfirmation.toolName)) {
+      emitToolLifecycle({
+        correlationId: confirmationRecordId,
+        name: pendingConfirmation.toolName,
+        arguments: confirmedArgs,
+      });
     }
+    const confirmationRecord = await executeToolCall({
+      registry: toolRegistry,
+      id: confirmationRecordId,
+      name: pendingConfirmation.toolName,
+      arguments: confirmedArgs,
+      context: {
+        ...toolContext,
+        toolPolicy: routedToolPolicy,
+        userConfirmed: true,
+        requestConfirmation: undefined,
+        actionIntent: confirmedTask,
+        routedTaskText: confirmedTask,
+      },
+      preflight: () => confirmationConsumed
+        ? { allowed: true, arguments: confirmedArgs }
+        : {
+            allowed: false,
+            arguments: confirmedArgs,
+            reason: 'The one-time confirmation expired before execution.',
+          },
+    });
     if (!isCurrentTurn()) return;
     if (!isDirectDesktopTool(confirmationRecord.name)) {
       if (confirmationRecord.error) {
@@ -2634,39 +2571,38 @@ async function processVoiceInput(
       let quickToolRecord: ToolExecutionRecord | null = null;
       if (quickResult.toolCall && session.isActive) {
         const correlationId = `qc-${Date.now()}`;
-        try {
-          const tcResult = await toolRegistry.execute(quickResult.toolCall.name, quickResult.toolCall.arguments, {
+        quickToolRecord = await executeToolCall({
+          registry: toolRegistry,
+          id: correlationId,
+          name: quickResult.toolCall.name,
+          arguments: quickResult.toolCall.arguments,
+          context: {
             ...toolContext,
             toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
-          });
-          quickToolResult = tcResult || '';
+          },
+        });
+        quickToolResult = quickToolRecord.result || '';
+        quickToolError = quickToolRecord.error;
+        if (quickToolRecord.error) {
           emitAgent("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,
             arguments: quickResult.toolCall.arguments,
-            result: tcResult?.slice(0, 500) || '',
+            error: quickToolRecord.error,
           });
-        } catch (toolErr: any) {
+        } else {
           emitAgent("agent:tool_call", {
             correlationId,
             name: quickResult.toolCall.name,
             arguments: quickResult.toolCall.arguments,
-            error: toolErr.message,
+            result: quickToolRecord.result?.slice(0, 500) || '',
           });
-          quickToolError = toolErr.message || String(toolErr);
         }
         if (quickResult.formatToolResult) {
           quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
         } else if (quickToolError) {
           quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
         }
-        quickToolRecord = {
-          id: correlationId,
-          name: quickResult.toolCall.name,
-          arguments: quickResult.toolCall.arguments,
-          result: quickToolResult,
-          error: quickToolError,
-        };
       }
       const quickFinalized = finalizeLumiResponse({
         taskText: actionIntentText,
@@ -2738,7 +2674,14 @@ async function processVoiceInput(
     emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs });
     let directSendVerified = false;
     try {
-      toolRecord.result = await toolRegistry.execute(toolName, foregroundWeChatSendArgs, toolContext) || '';
+      Object.assign(toolRecord, await executeToolCall({
+        registry: toolRegistry,
+        id: correlationId,
+        name: toolName,
+        arguments: foregroundWeChatSendArgs,
+        context: toolContext,
+      }));
+      if (toolRecord.error) throw new Error(toolRecord.error);
       if (!isCurrentTurn()) return;
       emitToolLifecycle({
         correlationId,
@@ -3031,9 +2974,7 @@ async function processVoiceInput(
 
       logger.info(`[Audio] LLM iter ${iter + 1}/${maxIterations}: provider=${provider} model=${effectiveModel}`);
       const toolDeclarations = executionDecision.allowToolUse
-        ? toolRegistry.getToolDeclarations().filter(declaration => (
-            isToolNameAllowedByPolicy(declaration.function.name, routedToolPolicy)
-          ))
+        ? toolRegistry.getToolDeclarationsForPolicy(routedToolPolicy)
         : [];
 
       const streamResult = await makeLLMCallStreaming(
@@ -3112,43 +3053,39 @@ async function processVoiceInput(
           emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: executionArguments });
         }
 
-        let execResult: string;
-        let execError: string | undefined;
-        if (!currentAppGuard.allowed) {
-          execResult = '';
-          execError = currentAppGuard.reason;
-        } else {
-          try {
-            execResult = await toolRegistry.execute(tc.name, executionArguments, toolContext);
-          } catch (execErr: any) {
-            execResult = '';
-            execError = execErr.message?.slice(0, 200) || 'Tool execution failed';
-          }
-        }
-        if (!isCurrentTurn()) return;
-
-        const executionRecord: ToolExecutionRecord = {
+        const executionRecord = await executeToolCall({
+          registry: toolRegistry,
           id: tc.id,
           name: tc.name,
           arguments: executionArguments,
-          result: execResult,
-          error: execError,
-          evidence: buildToolEvidenceRecord(toolRegistry, tc.name, executionArguments),
-        };
+          context: toolContext,
+          preflight: () => currentAppGuard.allowed
+            ? { allowed: true, arguments: executionArguments }
+            : {
+                allowed: false,
+                arguments: executionArguments,
+                reason: currentAppGuard.reason,
+              },
+        });
+        if (!isCurrentTurn()) return;
         toolResults.push(executionRecord);
 
         if (!isDirectDesktopTool(tc.name)) {
-          if (execError) {
-            emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: executionArguments, error: execError });
+          if (executionRecord.error) {
+            emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: executionArguments, error: executionRecord.error });
           } else {
-            const short = typeof execResult === 'string' ? execResult.slice(0, toolResultPreviewLimit) : JSON.stringify(execResult).slice(0, toolResultPreviewLimit);
+            const short = typeof executionRecord.result === 'string'
+              ? executionRecord.result.slice(0, toolResultPreviewLimit)
+              : JSON.stringify(executionRecord.result).slice(0, toolResultPreviewLimit);
             emitToolLifecycle({ correlationId: cid, name: tc.name, arguments: executionArguments, result: short });
           }
         }
 
         messages.push({
           role: 'tool',
-          content: execError ? `Error: ${execError}` : compactToolResultForModel(tc.name, execResult),
+          content: executionRecord.error
+            ? `Error: ${executionRecord.error}`
+            : compactToolResultForModel(tc.name, executionRecord.result),
           toolCallId: tc.id,
           name: tc.name,
         });
@@ -3685,7 +3622,7 @@ export function registerVoiceHandlers(
                   // Replace only the transport owner. The durable task and its
                   // exact pending action remain intact for the confirmation
                   // turn that starts immediately below.
-                  cancelActiveVoiceTurn(session, false, true);
+                  reservePriorityVoiceHandoff(session, false);
                   socket.emit('audio:status', { status: 'interrupted' });
                   socket.emit('audio:interrupt-ack', { workContinues: false });
                   // Fall through to the normal pipeline, which executes the
@@ -3716,7 +3653,11 @@ export function registerVoiceHandlers(
                   return;
                 }
                 if (interruptionKind === 'modify_work') {
-                  cancelActiveVoiceTurn(session, true);
+                  // Replace the transport turn so the running model cannot
+                  // keep acting on stale instructions, but preserve the
+                  // durable task id, receipts, permission snapshot, and
+                  // pending confirmation for the corrected continuation.
+                  reservePriorityVoiceHandoff(session, true);
                   socket.emit("audio:status", { status: "interrupted" });
                   socket.emit("audio:interrupt-ack", { workContinues: false });
                   // Fall through: the correction is merged into a replacement work turn.

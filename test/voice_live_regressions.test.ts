@@ -8,8 +8,52 @@ import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { parseWeChatConversationReadyVerification } from '../server/tools/definitions/external_app_tools';
 import { describeRecentActionsFromHistory } from '../server/socket/voice_action_history';
 import { resolveWeChatRecipientFromHistory } from '../server/socket/voice_messaging_context';
+import { reservePriorityVoiceHandoff } from '../server/socket/voice';
 
 describe('live voice regression cases', () => {
+  it('preserves queued work and reserves the lane for confirmation or correction handoff', () => {
+    const pipelineAbortController = new AbortController();
+    const queued = [
+      { text: 'next task one', queuedAt: '2026-07-26T00:00:00.000Z', voiceAuthorized: true },
+      { text: 'next task two', queuedAt: '2026-07-26T00:00:01.000Z', voiceAuthorized: true },
+    ];
+    const session = {
+      activeRoutingText: 'current durable task',
+      pendingInterruptedTurn: null,
+      activeTaskConversationId: 'conversation-1',
+      activeTaskRequestId: 'request-1',
+      userId: 'voice-user',
+      bgGeneration: 1,
+      isSpeaking: true,
+      isProcessing: true,
+      isOrchestrating: false,
+      inputQueue: queued,
+      accumulatedText: '',
+      bargeinTimer: null,
+      ttsAbortController: null,
+      pipelineAbortController,
+      sidecarAbortController: null,
+      sidecarGeneration: 0,
+      sidecarHistory: [],
+      isBackgroundWork: true,
+      activeWorkStatus: 'waiting_confirmation',
+      activeWorkStep: 'waiting',
+      activeWorkToolCalls: 1,
+      workHeartbeatTimer: null,
+      activeTurnRequestId: 'request-1',
+      ttsDecayTimers: [],
+    };
+
+    reservePriorityVoiceHandoff(session as any, false);
+
+    expect(session.inputQueue).toBe(queued);
+    expect(session.inputQueue.map(item => item.text)).toEqual(['next task one', 'next task two']);
+    expect(session.isProcessing).toBe(true);
+    expect(pipelineAbortController.signal.aborted).toBe(true);
+    expect(session.activeTaskConversationId).toBe('conversation-1');
+    expect(session.activeTaskRequestId).toBe('request-1');
+  });
+
   it('keeps combined WeChat inquiry out of the generic app-open quick path', async () => {
     expect(await matchQuickCommand('打开微信，问一下阿陆在干嘛。', 'u1')).toBeNull();
     expect(await matchQuickCommand('打开微信看下我有多少个联系人，把这些联系人的名字都记住。', 'u1')).toBeNull();

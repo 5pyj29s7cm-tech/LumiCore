@@ -1,4 +1,5 @@
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 async function readClipboard(_args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
@@ -43,5 +44,26 @@ export function registerClipboardTools(registry: ToolRegistry): void {
     handler: writeClipboard,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'desktop.clipboard.write-text',
+      family: 'clipboard',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'local_state_change', scope: 'system clipboard text', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: [],
+        successSignals: ['the native clipboard adapter accepted the exact text payload'],
+        limitations: ['The receipt does not prove another application pasted the clipboard text.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'desktop.clipboard.write-text',
+      operation: 'mutate',
+      assurance: 'observed',
+      subjectArgument: 'text',
+    }),
   });
 }

@@ -1,4 +1,6 @@
 import { ToolRegistry } from '../registry';
+import { executeToolCallOrThrow } from '../execution_engine';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import {
   getClientActionExpectation,
   getClientCapabilities,
@@ -11,22 +13,20 @@ import {
   getVisibleExecutionHabits,
   verifyClientActionResult,
 } from '../../client/self_model';
+import { getLumiTechnicalArchitecture } from '../../../shared/technical_architecture';
 import { getGateConfig } from '../../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../../autonomy/workflows';
 import { mcpManager } from '../../mcp';
 import { isExplicitSensitiveClientActionRequest } from '../action_constitution';
 import { PERSONAL_CLIENT_SURFACE_ACTIONS } from '../../../shared/client_surfaces';
 import {
-  redactDiagnosticSecrets,
   safeRuntimeError,
   sanitizeDiagnosticValue,
 } from '../../client/diagnostic_sanitizer';
 
 const ACTIONS = Array.from(new Set([
-  'open_app',
-  'close_app',
-  'set_mode',
   'set_client_mode',
+  'close_client_surface',
   'focus_home',
   'enter_widget_mode',
   'show_desktop_widget',
@@ -42,23 +42,23 @@ const ACTIONS = Array.from(new Set([
   'set_wallpaper_mode',
 ]));
 
-const RECOVERY_SURFACE_TARGETS: Record<string, string> = {
-  skills: 'skills',
-  skill: 'skills',
-  logs: 'runtime-log',
-  log: 'runtime-log',
-  runtime: 'runtime-log',
-  'runtime-log': 'runtime-log',
-  knowledge: 'knowledge',
-  files: 'knowledge',
-  settings: 'settings',
-  kernel: 'kernel',
-  computer: 'kernel',
-  plans: 'plans',
-  autonomy: 'plans',
-  org: 'org',
-  organization: 'org',
-  voice: 'settings',
+const RECOVERY_SURFACE_ACTIONS: Record<string, { action: string; section?: string }> = {
+  skills: { action: 'open_skills' },
+  skill: { action: 'open_skills' },
+  logs: { action: 'open_computer_adaptation' },
+  log: { action: 'open_computer_adaptation' },
+  runtime: { action: 'open_computer_adaptation' },
+  'runtime-log': { action: 'open_computer_adaptation' },
+  knowledge: { action: 'show_knowledge_base' },
+  files: { action: 'show_knowledge_base' },
+  settings: { action: 'open_settings' },
+  kernel: { action: 'open_computer_adaptation' },
+  computer: { action: 'open_computer_adaptation' },
+  plans: { action: 'open_plans' },
+  autonomy: { action: 'open_plans' },
+  org: { action: 'open_organization_workspace' },
+  organization: { action: 'open_organization_workspace' },
+  voice: { action: 'open_voice_forge' },
 };
 
 const ACTIONS_WITH_INTERNAL_REFRESH = new Set(['refresh_client_state']);
@@ -72,13 +72,6 @@ function parseRelayOutput(output: string): any {
   } catch {
     return output;
   }
-}
-
-function sanitizeRelayOutput(output: string): string {
-  const parsed = parseRelayOutput(output);
-  return typeof parsed === 'string'
-    ? redactDiagnosticSecrets(parsed)
-    : JSON.stringify(sanitizeDiagnosticValue(parsed));
 }
 
 async function waitForClientStateAfter(userId: string, previousUpdatedAt: number, timeoutMs = 1200) {
@@ -126,10 +119,8 @@ function getSkillRuntimeFindings() {
 }
 
 function getAutonomyDiagnosticPolicy(userId: string) {
-  const policy = { ...getGateConfig(userId) } as Record<string, any>;
-  delete policy.externalAppAutomationEnabled;
   return {
-    ...policy,
+    ...getGateConfig(userId),
     externalAppAutomationGate: 'removed',
     externalAppExecutionScope: 'foreground_user_requests_use_registered_adapters',
   };
@@ -144,6 +135,26 @@ function getAutonomyWorkflowDiagnostics(userId: string) {
       backgroundExternalAppsAllowed: externalAppsAllowed,
     };
   });
+}
+
+function getCapabilityRuntimeSummary(registry: ToolRegistry) {
+  const manifest = registry.getCapabilityManifest();
+  const countBy = (key: 'source' | 'operation' | 'configuredSecurityLevel') => (
+    Object.fromEntries(
+      Array.from(manifest.reduce((counts, entry) => {
+        const value = entry[key];
+        counts.set(value, (counts.get(value) || 0) + 1);
+        return counts;
+      }, new Map<string, number>()).entries()).sort(([left], [right]) => left.localeCompare(right)),
+    )
+  );
+  return {
+    registeredTools: manifest.length,
+    evidenceContracts: manifest.filter(entry => entry.hasEvidenceContract).length,
+    bySource: countBy('source'),
+    byOperation: countBy('operation'),
+    bySecurity: countBy('configuredSecurityLevel'),
+  };
 }
 
 export function registerClientSelfTools(registry: ToolRegistry): void {
@@ -161,10 +172,12 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       const isWork = context?.domain === 'work' && Boolean(context?.orgId);
       const state = getClientStateForScope(userId, scope);
       return JSON.stringify(sanitizeDiagnosticValue({
+        architecture: getLumiTechnicalArchitecture(),
         selfAwareness: getClientSelfAwarenessReport(userId, scope),
-        capabilities: getClientCapabilities(),
+        capabilities: getClientCapabilities(registry.getCapabilityManifest(context?.toolPolicy)),
         interfaceSurfaces: getClientInterfaceSurfaces(),
         visibleExecutionHabits: getVisibleExecutionHabits(),
+        capabilityRuntime: getCapabilityRuntimeSummary(registry),
         state: sanitizeDiagnosticValue(state),
         stateDigest: getClientStateDigest(state),
         health: getClientHealthReport(userId, scope),
@@ -179,11 +192,92 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
   });
 
   registry.register({
+    name: 'client_capability_manifest',
+    description: 'Inspect the authoritative runtime capability manifest shared by Lumi tool discovery, model exposure, permission checks, execution, and diagnostics. Use this instead of guessing whether a tool or Skill exists.',
+    routingHints: ['capability manifest', 'available tools and skills', 'Lumi execution capabilities'],
+    capability: {
+      id: 'client_capability_inventory',
+      family: 'client',
+      source: 'builtin',
+      operation: 'observe',
+      domains: ['client', 'runtime'],
+    },
+    evidence: {
+      capability: 'client_capability_inventory',
+      operation: 'observe',
+      assurance: 'observed',
+      subjectArgument: 'query',
+      limitations: ['Registered runtime capabilities only; disabled or uninstalled integrations are reported elsewhere.'],
+    },
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Optional capability, tool, Skill, provider, family, or domain search text.',
+        },
+        source: {
+          type: 'string',
+          enum: ['builtin', 'mcp', 'skill', 'adapter'],
+          description: 'Optional runtime source filter.',
+        },
+        executableOnly: {
+          type: 'boolean',
+          description: 'When true, return only capabilities executable under the current turn policy.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum matching entries to return. Defaults to 50 and is capped at 200.',
+        },
+      },
+      required: [],
+    },
+    handler: async (args, context) => {
+      const installed = registry.getCapabilityManifest();
+      const turnExecutable = new Set(
+        registry.getCapabilityManifest(context?.toolPolicy, { executableOnly: true })
+          .map(entry => entry.toolName),
+      );
+      const query = String(args.query || '').trim().toLowerCase();
+      const source = String(args.source || '').trim();
+      const limit = Math.max(1, Math.min(200, Number(args.limit) || 50));
+      const matches = installed
+        .filter(entry => !source || entry.source === source)
+        .filter(entry => !args.executableOnly || turnExecutable.has(entry.toolName))
+        .filter(entry => {
+          if (!query) return true;
+          return [
+            entry.toolName,
+            entry.capabilityId,
+            entry.family,
+            entry.source,
+            entry.provider || '',
+            entry.description,
+            ...entry.domains,
+            ...entry.routingTerms,
+          ].join(' ').toLowerCase().includes(query);
+        });
+      return JSON.stringify(sanitizeDiagnosticValue({
+        summary: getCapabilityRuntimeSummary(registry),
+        query: query || null,
+        source: source || null,
+        matched: matches.length,
+        returned: Math.min(matches.length, limit),
+        capabilities: matches.slice(0, limit).map(entry => ({
+          ...entry,
+          executableThisTurn: turnExecutable.has(entry.toolName),
+        })),
+      }), null, 2);
+    },
+    permission: 'user',
+    securityLevel: 'safe',
+  });
+
+  registry.register({
     name: 'client_action',
     description: [
       'Safely control Lumi client UI surfaces through the client action router.',
       'Use the explicit action from the complete personal-client interface registry, including personality, notifications, reminders, devices, token usage, terminal, profile, MCP settings, Voice Forge, skill generation, app launcher, knowledge, organization, meeting, and runtime surfaces.',
-      'Legacy open_app/close_app/set_mode are still accepted for compatibility.',
       'This does not use mouse/keyboard control and should be preferred over computer_use for Lumi client UI navigation.',
     ].join(' '),
     parameters: {
@@ -196,12 +290,12 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         target: {
           type: 'string',
-          description: 'Target app/surface for backward-compatible open_app or close_app. Prefer a registered explicit action when opening a Lumi interface.',
+          description: 'Target surface id for close_client_surface.',
         },
         mode: {
           type: 'string',
           enum: ['meeting', 'chat', 'assistant', 'autonomous'],
-          description: 'Target Lumi mode for set_mode or set_client_mode.',
+          description: 'Target Lumi mode for set_client_mode.',
         },
         task: {
           type: 'string',
@@ -291,6 +385,34 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'client.surface.action',
+      family: 'client',
+      lane: 'client',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{
+        type: 'desktop_control',
+        scope: 'Lumi client surface state only',
+        reversible: true,
+      }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['verification.status'],
+        successSignals: ['verified client state or explicit not_applicable result'],
+        limitations: ['A routed action without the refreshed client-state verification remains pending.'],
+      },
+      domains: ['client'],
+      intents: ['navigate or change a registered Lumi client surface'],
+    },
+    evidence: {
+      capability: 'client.surface.action',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'action',
+      limitations: ['Sensitive meeting and wallpaper actions still follow their explicit intent boundary.'],
+    },
   });
 
   registry.register({
@@ -322,7 +444,7 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
     description: [
       'Perform safe Lumi client self-repair actions that do not write user files or operate external apps.',
       'Use refresh_client_state to force a state relay refresh.',
-      'Use open_recovery_surface to open the relevant Lumi surface (skills, runtime-log, settings, kernel, plans, knowledge, org).',
+      'Use open_recovery_surface to open the relevant registered Lumi surface (skills, computer adaptation, settings, plans, knowledge, or organization).',
       'For skill package repair use client_repair_skill, which requires confirmation.',
     ].join(' '),
     parameters: {
@@ -335,29 +457,74 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
         },
         surface: {
           type: 'string',
-          description: 'Recovery surface for open_recovery_surface: skills, runtime-log, settings, kernel, plans, knowledge, org. Legacy files opens knowledge.',
+          description: 'Recovery surface for open_recovery_surface: skills, logs/runtime, settings, kernel/computer, plans/autonomy, knowledge/files, organization, or voice.',
         },
       },
       required: ['action'],
     },
     handler: async (args, context) => {
-      if (!context?.desktopRelay) {
+      if (!context?.desktopRelay || !context.toolRegistry) {
         throw new Error('Client self-repair requires the Lumi desktop client relay.');
       }
+      let clientAction: Record<string, unknown>;
       if (args.action === 'refresh_client_state') {
-        const result = await context.desktopRelay('client_action', { action: 'refresh_client_state' });
-        return sanitizeRelayOutput(result);
-      }
-      if (args.action === 'open_recovery_surface') {
+        clientAction = JSON.parse(await executeToolCallOrThrow({
+          registry: context.toolRegistry,
+          name: 'client_action',
+          arguments: { action: 'refresh_client_state' },
+          context,
+        }));
+      } else if (args.action === 'open_recovery_surface') {
         const surface = String(args.surface || 'settings').toLowerCase();
-        const target = RECOVERY_SURFACE_TARGETS[surface] || surface;
-        const result = await context.desktopRelay('client_action', { action: 'open_app', target });
-        return sanitizeRelayOutput(result);
+        const recovery = RECOVERY_SURFACE_ACTIONS[surface];
+        if (!recovery) throw new Error(`Unknown recovery surface: ${surface}`);
+        clientAction = JSON.parse(await executeToolCallOrThrow({
+          registry: context.toolRegistry,
+          name: 'client_action',
+          arguments: recovery,
+          context,
+        }));
+      } else {
+        throw new Error(`Unsupported client_self_repair action: ${args.action}`);
       }
-      throw new Error(`Unsupported client_self_repair action: ${args.action}`);
+      return JSON.stringify(sanitizeDiagnosticValue({
+        ok: true,
+        status: 'verified',
+        requestedRepair: args.action,
+        delegatedCapability: 'client.surface.action',
+        clientAction,
+      }), null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      ...capabilityContract({
+        id: 'client.recovery.surface',
+        family: 'client-recovery',
+        lane: 'client',
+        operation: 'mutate',
+        risk: 'low',
+        sideEffects: [{ type: 'desktop_control', scope: 'Lumi client recovery surface state', reversible: true }],
+        verification: {
+          strategy: 'state_diff',
+          required: true,
+          requiredFields: ['ok', 'status', 'requestedRepair', 'delegatedCapability', 'clientAction.verification.status'],
+          requiredValues: { ok: true, status: 'verified', delegatedCapability: 'client.surface.action' },
+          successStatuses: ['verified'],
+          failureStatuses: ['failed', 'unverified'],
+          successSignals: ['authoritative client_action receipt contains verified refreshed state'],
+          limitations: ['Opening a recovery surface does not prove the underlying issue was repaired.'],
+        },
+      }),
+      deprecated: true,
+      replacedBy: 'client.surface.action',
+    },
+    evidence: capabilityEvidence({
+      id: 'client.recovery.surface',
+      operation: 'mutate',
+      subjectArgument: 'action',
+      limitations: ['The compatibility wrapper delegates to client.surface.action and must not be selected for new plans.'],
+    }),
   });
 
   registry.register({
@@ -380,9 +547,50 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       if (!result.success) {
         throw new Error(safeRuntimeError(result.reason) || `Skill "${skillName}" repair failed.`);
       }
-      return JSON.stringify(sanitizeDiagnosticValue(result), null, 2);
+      const toolCount = Number(result.toolCount || 0);
+      if (!result.action || toolCount < 1) {
+        throw new Error(`Skill "${skillName}" repair returned without a connected tool inventory.`);
+      }
+      return JSON.stringify(sanitizeDiagnosticValue({
+        ok: true,
+        status: 'repaired',
+        skillName,
+        action: result.action,
+        directory: result.directory,
+        runtimeStatus: 'connected',
+        toolCount,
+      }), null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'skills.runtime.repair',
+      family: 'skill-lifecycle',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'installation', scope: 'installed skill dependencies or package source when repair requires reinstall', reversible: true },
+        { type: 'local_state_change', scope: 'MCP skill runtime configuration', reversible: true },
+        { type: 'process_execution', scope: 'local MCP skill process restart', reversible: true },
+        { type: 'network_read', scope: 'declared package or repository source when reinstall is required', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'skillName', 'action', 'runtimeStatus', 'toolCount'],
+        requiredValues: { ok: true, status: 'repaired', runtimeStatus: 'connected' },
+        successStatuses: ['repaired'],
+        failureStatuses: ['failed', 'not_found', 'unverified'],
+        successSignals: ['restarted MCP process connected and returned at least one tool'],
+        limitations: ['Connection and tool enumeration do not prove a real user task will succeed.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'skills.runtime.repair',
+      operation: 'mutate',
+      subjectArgument: 'skillName',
+      limitations: ['A separate real task is required to validate functional behavior after repair.'],
+    }),
   });
 }

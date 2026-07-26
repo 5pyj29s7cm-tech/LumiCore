@@ -164,8 +164,37 @@ describe('complete personal-client surface contract', () => {
 
     for (const surface of PERSONAL_CLIENT_SURFACES) {
       const action = surface.actions[0];
-      const args = { action };
+      const args: Record<string, unknown> = {
+        action,
+        ...(action === 'set_wallpaper_mode' ? { enabled: true } : {}),
+      };
       const after = openStateFor(surface.target, surface.settingsSection);
+      if (surface.organizationView) {
+        after.workDomain = 'work';
+        after.activeTab = 'org';
+        after.orgWorkspace = {
+          visible: true,
+          activeView: surface.organizationViewByAction?.[action] || surface.organizationView,
+        };
+        after.surfaces = {
+          ...after.surfaces,
+          openSurfaceIds: [
+            'org',
+            surface.id,
+          ],
+        };
+      }
+      if (action === 'start_meeting_mode') {
+        after.mode = 'meeting';
+        after.surfaces = { ...after.surfaces, meetingOpen: true };
+        after.meeting = { active: true };
+      }
+      if (action === 'set_wallpaper_mode') {
+        after.surfaces = { ...after.surfaces, wallpaperMode: true };
+      }
+      if (action === 'enter_widget_mode') {
+        after.surfaces = { ...after.surfaces, widgetMode: true };
+      }
       const expectation = getClientActionExpectation(args);
       const result = verifyClientActionResult(args, before, after, {
         ok: true,

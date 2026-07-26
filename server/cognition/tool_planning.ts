@@ -74,26 +74,7 @@ export function buildToolEvidenceRecord(
   toolName: string,
   args: Record<string, any>,
 ): ToolExecutionRecord['evidence'] | undefined {
-  const descriptor = registry.getEvidenceDescriptor(toolName);
-  if (!descriptor) return undefined;
-  const schema = normalizedSchema(registry, toolName);
-  const subjectArgument = descriptor.subjectArgument;
-  const declaredScope = subjectArgument
-    ? schema.properties?.[subjectArgument]?.enum
-    : undefined;
-  const selected = subjectArgument ? args?.[subjectArgument] : undefined;
-  const scope = selected !== undefined && selected !== null && String(selected).trim()
-    ? [String(selected)]
-    : Array.isArray(declaredScope)
-      ? declaredScope.map(value => String(value))
-      : [];
-  return {
-    capability: descriptor.capability,
-    operation: descriptor.operation,
-    assurance: descriptor.assurance,
-    scope,
-    ...(descriptor.limitations?.length ? { limitations: [...descriptor.limitations] } : {}),
-  };
+  return registry.buildEvidenceRecord(toolName, args);
 }
 
 export const GENERIC_TOOL_PLANNING_PROMPT = [

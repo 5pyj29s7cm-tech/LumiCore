@@ -157,7 +157,7 @@ export function MCPSettings({ t }: { t?: any }) {
           <h3 className="text-xl font-bold text-white/90">{uiMessage('mcpsettings.mcp-runtime.84b64d94d2', isZh ? 'zh' : 'en')}</h3>
         </div>
         <Button
-          onClick={() => window.dispatchEvent(new CustomEvent('lumi:client-action', { detail: { action: 'open_app', target: 'skills' } }))}
+          onClick={() => window.dispatchEvent(new CustomEvent('lumi:client-action', { detail: { action: 'open_skills' } }))}
           className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-xs font-semibold text-white/70 hover:bg-white/10"
         >
           <Wrench size={14} className="mr-2" />

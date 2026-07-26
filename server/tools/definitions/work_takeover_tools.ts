@@ -1,4 +1,8 @@
+import fs from 'fs';
 import { ToolRegistry } from '../registry';
+import { executeToolCallOrThrow } from '../execution_engine';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import type { CapabilityOperation, CapabilityRisk, CapabilitySideEffect } from '../types';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import {
   continueWorkTakeoverTask,
@@ -52,6 +56,52 @@ function executionHistory(task: any, execution: ReturnType<typeof executeWorkTak
 function toolRunHistory(task: any, run: any): any[] {
   const current = task?.metadata?.workTakeoverToolRuns;
   return [...(Array.isArray(current) ? current.slice(-30) : []), run];
+}
+
+function requirePersistedTask(userId: string, task: any): any {
+  const persisted = task?.id ? getWorkTakeoverTask(userId, String(task.id)) : null;
+  if (!persisted || persisted.updatedAt !== task.updatedAt) {
+    throw new Error(`Work takeover task state was not persisted${task?.id ? `: ${task.id}` : '.'}`);
+  }
+  return persisted;
+}
+
+function taskStateContract(input: {
+  id: string;
+  operation: Exclude<CapabilityOperation, 'unknown'>;
+  successStatuses: string[];
+  risk?: Exclude<CapabilityRisk, 'none'>;
+  sideEffects?: CapabilitySideEffect[];
+  requiredFields?: string[];
+  limitations?: string[];
+}) {
+  return capabilityContract({
+    id: input.id,
+    family: 'work-takeover',
+    lane: 'general',
+    operation: input.operation,
+    risk: input.risk || 'medium',
+    sideEffects: input.sideEffects || [{ type: 'local_state_change', scope: 'persistent work takeover task ledger', reversible: true }],
+    verification: {
+      strategy: 'state_diff',
+      required: true,
+      requiredFields: ['ok', 'status', 'persisted', 'task.id', 'task.updatedAt', ...(input.requiredFields || [])],
+      requiredValues: { ok: true },
+      successStatuses: input.successStatuses,
+      failureStatuses: ['blocked', 'failed', 'unverified'],
+      successSignals: ['returned task state was reread from the persistent work takeover ledger'],
+      limitations: input.limitations || ['A task-ledger update does not prove the external work outcome is complete.'],
+    },
+  });
+}
+
+function taskStateEvidence(id: string, operation: Exclude<CapabilityOperation, 'unknown'>, subjectArgument = 'id') {
+  return capabilityEvidence({
+    id,
+    operation,
+    subjectArgument,
+    limitations: ['This receipt proves the task state transition only; external completion requires domain-tool evidence.'],
+  });
 }
 
 function recordStepExecution(userId: string, task: any, plan: any, execution: ReturnType<typeof executeWorkTakeoverPlanStep>): any {
@@ -177,10 +227,13 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         risks: asStringArray(args.risks),
         metadata: parsedParameters ? { industryParameters: parsedParameters } : undefined,
       } as any);
-      return JSON.stringify({ task, note: 'Work takeover task created and can be continued later.' }, null, 2);
+      const persistedTask = requirePersistedTask(userId, task);
+      return JSON.stringify({ ok: true, status: 'created', persisted: true, task: persistedTask, note: 'Work takeover task created and can be continued later.' }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({ id: 'work-takeover.task.create', operation: 'create', successStatuses: ['created'] }),
+    evidence: taskStateEvidence('work-takeover.task.create', 'create', 'title'),
   });
 
   registry.register({
@@ -215,14 +268,20 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         sourceMessage: message,
         title: args.title ? String(args.title) : undefined,
       });
+      const persistedTask = requirePersistedTask(userId, task);
       return JSON.stringify({
+        ok: true,
+        status: 'created',
+        persisted: true,
         intake,
-        task,
+        task: persistedTask,
         note: 'WeChat/message intake has been promoted into a persistent work takeover task. Drafts are prepared only; sending remains confirmation-gated.',
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({ id: 'work-takeover.task.create-from-message', operation: 'create', successStatuses: ['created'] }),
+    evidence: taskStateEvidence('work-takeover.task.create-from-message', 'create', 'message'),
   });
 
   registry.register({
@@ -258,14 +317,28 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         sourceMessage: message,
         title: args.title ? String(args.title) : undefined,
       });
+      const persistedTask = requirePersistedTask(userId, task);
       return JSON.stringify({
+        ok: true,
+        status: 'created',
+        persisted: true,
         intake,
-        task,
+        task: persistedTask,
         note: 'Clipboard message has been promoted into a persistent work takeover task. Drafts are prepared only; sending remains confirmation-gated.',
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({
+      id: 'work-takeover.task.create-from-clipboard',
+      operation: 'create',
+      successStatuses: ['created'],
+      sideEffects: [
+        { type: 'local_read', scope: 'desktop clipboard text', reversible: true },
+        { type: 'local_state_change', scope: 'persistent work takeover task ledger', reversible: true },
+      ],
+    }),
+    evidence: taskStateEvidence('work-takeover.task.create-from-clipboard', 'create'),
   });
 
   registry.register({
@@ -361,10 +434,13 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         note: args.note,
       } as any);
       if (!task) throw new Error(`Work takeover task not found: ${args.id}`);
-      return JSON.stringify({ task, note: 'Work takeover task updated.' }, null, 2);
+      const persistedTask = requirePersistedTask(context?.userId || 'anonymous', task);
+      return JSON.stringify({ ok: true, status: 'updated', persisted: true, task: persistedTask, note: 'Work takeover task updated.' }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({ id: 'work-takeover.task.update', operation: 'mutate', successStatuses: ['updated'] }),
+    evidence: taskStateEvidence('work-takeover.task.update', 'mutate'),
   });
 
   registry.register({
@@ -380,10 +456,13 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     handler: async (args, context) => {
       const result = continueWorkTakeoverTask(context?.userId || 'anonymous', args.id ? String(args.id) : undefined);
       if (!result) throw new Error('No active work takeover task found.');
-      return JSON.stringify(result, null, 2);
+      const task = requirePersistedTask(context?.userId || 'anonymous', result.task);
+      return JSON.stringify({ ok: true, status: 'continued', persisted: true, ...result, task }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({ id: 'work-takeover.task.continue', operation: 'mutate', successStatuses: ['continued'] }),
+    evidence: taskStateEvidence('work-takeover.task.continue', 'mutate'),
   });
 
   registry.register({
@@ -431,7 +510,13 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         } as any) || task;
       }
 
+      if (shouldRecord) updatedTask = requirePersistedTask(userId, updatedTask);
+      const status = plan.blockers.length ? 'blocked' : shouldRecord ? 'orchestrated' : 'planned';
+
       return JSON.stringify({
+        ok: status !== 'blocked',
+        status,
+        persisted: shouldRecord,
         task: updatedTask,
         plan,
         nextStep: plan.nextStep,
@@ -442,6 +527,14 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({
+      id: 'work-takeover.task.orchestrate',
+      operation: 'mutate',
+      successStatuses: ['planned', 'orchestrated'],
+      requiredFields: ['plan.generatedAt'],
+      limitations: ['The orchestration plan selects routes but does not execute its suggested domain tools.'],
+    }),
+    evidence: taskStateEvidence('work-takeover.task.orchestrate', 'mutate'),
   });
 
   registry.register({
@@ -476,9 +569,19 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
 
       if (shouldRecord) {
         updatedTask = recordStepExecution(userId, task, plan, execution);
+        updatedTask = requirePersistedTask(userId, updatedTask);
       }
 
+      const status = execution.status === 'blocked'
+        ? 'blocked'
+        : execution.status === 'waiting_confirmation'
+          ? 'waiting_confirmation'
+          : shouldRecord ? 'step_recorded' : 'step_prepared';
+
       return JSON.stringify({
+        ok: status !== 'blocked',
+        status,
+        persisted: shouldRecord,
         task: updatedTask,
         plan,
         execution,
@@ -489,6 +592,14 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({
+      id: 'work-takeover.task.execute-step',
+      operation: 'mutate',
+      successStatuses: ['step_prepared', 'step_recorded', 'waiting_confirmation'],
+      requiredFields: ['execution.step.id', 'execution.status'],
+      limitations: ['This executes a local preparation step only; suggested external tools remain separate verified calls.'],
+    }),
+    evidence: taskStateEvidence('work-takeover.task.execute-step', 'mutate'),
   });
 
   registry.register({
@@ -533,8 +644,15 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
               updatedAt: packet.createdAt,
             },
           });
+          updatedTask = requirePersistedTask(userId, updatedTask);
+        }
+        if (!fs.existsSync(packet.folderPath)) {
+          throw new Error(`Work takeover packet was not created: ${packet.folderPath}`);
         }
         return JSON.stringify({
+          ok: true,
+          status: 'packet_exported',
+          persisted: shouldRecord,
           task: updatedTask,
           plan,
           progress,
@@ -547,8 +665,17 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const execution = executeWorkTakeoverPlanStep(task, plan, {
         stepId: progress.nextStep?.id,
       });
-      const updatedTask = shouldRecord ? recordStepExecution(userId, task, plan, execution) : task;
+      let updatedTask = shouldRecord ? recordStepExecution(userId, task, plan, execution) : task;
+      if (shouldRecord) updatedTask = requirePersistedTask(userId, updatedTask);
+      const status = execution.status === 'blocked'
+        ? 'blocked'
+        : execution.status === 'waiting_confirmation'
+          ? 'waiting_confirmation'
+          : shouldRecord ? 'step_recorded' : 'step_prepared';
       return JSON.stringify({
+        ok: status !== 'blocked',
+        status,
+        persisted: shouldRecord,
         task: updatedTask,
         plan,
         progress,
@@ -561,6 +688,17 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({
+      id: 'work-takeover.task.advance',
+      operation: 'mutate',
+      successStatuses: ['step_prepared', 'step_recorded', 'waiting_confirmation', 'packet_exported'],
+      requiredFields: ['action'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'persistent work takeover task ledger', reversible: true },
+        { type: 'local_write', scope: 'optional exported work takeover packet', reversible: true },
+      ],
+    }),
+    evidence: taskStateEvidence('work-takeover.task.advance', 'mutate'),
   });
 
   registry.register({
@@ -591,14 +729,21 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
         plan,
       });
+      if (!fs.existsSync(packet.folderPath)) {
+        throw new Error(`Work takeover packet was not created: ${packet.folderPath}`);
+      }
       const shouldRecord = args.record !== false;
       let updatedTask = task;
 
       if (shouldRecord) {
         updatedTask = recordPacket(userId, task, plan, packet);
+        updatedTask = requirePersistedTask(userId, updatedTask);
       }
 
       return JSON.stringify({
+        ok: true,
+        status: 'exported',
+        persisted: shouldRecord,
         task: updatedTask,
         plan,
         packet,
@@ -609,6 +754,23 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({
+      id: 'work-takeover.task.export-packet',
+      operation: 'create',
+      successStatuses: ['exported'],
+      requiredFields: ['packet.folderPath', 'packet.createdAt'],
+      sideEffects: [
+        { type: 'local_write', scope: 'work takeover task packet files', reversible: true },
+        { type: 'local_state_change', scope: 'optional task packet receipt', reversible: true },
+      ],
+      limitations: ['The packet is a local coordination artifact and is not evidence of external delivery.'],
+    }),
+    evidence: capabilityEvidence({
+      id: 'work-takeover.task.export-packet',
+      operation: 'create',
+      subjectArgument: 'outputDirectory',
+      limitations: ['Exports local packet files only.'],
+    }),
   });
 
   registry.register({
@@ -873,6 +1035,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
             },
           });
         }
+        if (!fs.existsSync(packet.folderPath)) {
+          throw new Error(`Work takeover autorun packet was not created: ${packet.folderPath}`);
+        }
       } else if (shouldRecord) {
         currentTask = updateWorkTakeoverTask(userId, currentTask.id, {
           metadata: {
@@ -889,6 +1054,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
           note: `Autorun completed ${executions.length} safe step(s).`,
         } as any) || currentTask;
       }
+
+      const persisted = shouldRecord || createdTask;
+      if (persisted) currentTask = requirePersistedTask(userId, currentTask);
 
       const report = {
         createdTask,
@@ -909,7 +1077,16 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         packetPath: packet?.folderPath,
       };
 
+      const status = report.stopReasons.includes('blocked')
+        ? 'blocked'
+        : report.stopReasons.includes('waiting_confirmation')
+          ? 'waiting_confirmation'
+          : progress.complete ? 'safe_loop_complete' : 'bounded_progress';
+
       return JSON.stringify({
+        ok: status !== 'blocked',
+        status,
+        persisted,
         intake,
         task: currentTask,
         plan,
@@ -922,6 +1099,20 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: taskStateContract({
+      id: 'work-takeover.task.autorun',
+      operation: 'mutate',
+      successStatuses: ['safe_loop_complete', 'bounded_progress', 'waiting_confirmation'],
+      requiredFields: ['report.taskId', 'report.stopReasons', 'progress.remainingStepIds'],
+      risk: 'medium',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'bounded work takeover task coordination', reversible: true },
+        { type: 'local_write', scope: 'optional work takeover packet', reversible: true },
+        { type: 'local_read', scope: 'optional clipboard intake', reversible: true },
+      ],
+      limitations: ['Autorun covers bounded local coordination only; it cannot substitute for real domain-tool execution or verification.'],
+    }),
+    evidence: taskStateEvidence('work-takeover.task.autorun', 'mutate'),
   });
 
   registry.register({
@@ -1022,9 +1213,14 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const startedAt = new Date().toISOString();
       let result = '';
       try {
-        result = await registry.execute(toolName, toolArgs, {
-          ...(context || {}),
-          source: 'work_takeover_task_run_suggested_tool',
+        result = await executeToolCallOrThrow({
+          registry,
+          name: toolName,
+          arguments: toolArgs,
+          context: {
+            ...(context || {}),
+            source: 'work_takeover_task_run_suggested_tool',
+          },
         });
       } catch (err: any) {
         const failure = {
@@ -1081,9 +1277,14 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
           },
           note: `Suggested tool executed: ${toolName}`,
         } as any) || task;
+        updatedTask = requirePersistedTask(userId, updatedTask);
       }
 
       return JSON.stringify({
+        ok: true,
+        status: 'executed',
+        persisted: shouldRecord,
+        verified: true,
         task: updatedTask,
         plan,
         step,
@@ -1095,5 +1296,27 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: taskStateContract({
+      id: 'work-takeover.task.run-suggested-tool',
+      operation: 'mutate',
+      successStatuses: ['executed'],
+      risk: 'high',
+      requiredFields: ['verified', 'run.id', 'run.toolName', 'run.status'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'work takeover execution ledger', reversible: true },
+        { type: 'local_write', scope: 'selected tool output when applicable', reversible: false },
+        { type: 'desktop_control', scope: 'selected suggested tool when applicable', reversible: false },
+        { type: 'external_state_change', scope: 'selected suggested tool when applicable', reversible: false },
+        { type: 'external_communication', scope: 'selected suggested tool when applicable', reversible: false },
+        { type: 'process_execution', scope: 'selected suggested tool when applicable', reversible: false },
+      ],
+      limitations: ['Only tools explicitly suggested by the current plan step may run, and their own manifest contract remains authoritative.'],
+    }),
+    evidence: capabilityEvidence({
+      id: 'work-takeover.task.run-suggested-tool',
+      operation: 'mutate',
+      subjectArgument: 'toolName',
+      limitations: ['The nested tool receipt proves its own operation; this receipt proves it was also attached to the task ledger.'],
+    }),
   });
 }

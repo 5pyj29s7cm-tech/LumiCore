@@ -3,6 +3,8 @@ import { runCapabilityGapAutofix } from '../../self_extension/autofix';
 import { listCapabilityLearningRecords, summarizeCapabilityRecord } from '../../self_extension/capability_memory';
 import { getClientStateForScope } from '../../client/self_model';
 import { ToolRegistry } from '../registry';
+import { executeToolCallOrThrow } from '../execution_engine';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 export function registerSelfExtensionTools(registry: ToolRegistry): void {
   registry.register({
@@ -38,10 +40,38 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
         tools: registry.list(),
       });
-      return JSON.stringify(plan, null, 2);
+      return JSON.stringify({
+        ok: true,
+        status: 'planned',
+        ...plan,
+      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'self-extension.plan',
+      family: 'self-extension',
+      lane: 'system',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'none', scope: 'read-only capability planning', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'goal', 'readiness', 'resolution.decision'],
+        requiredValues: { ok: true, status: 'planned' },
+        successStatuses: ['planned'],
+        failureStatuses: ['failed'],
+        successSignals: ['plan reports current coverage and a bounded next route'],
+        limitations: ['Planning does not install, execute, or prove a new capability.'],
+      },
+    },
+    evidence: capabilityEvidence({
+      id: 'self-extension.plan',
+      operation: 'observe',
+      subjectArgument: 'goal',
+      limitations: ['The returned plan is advisory and does not mutate the runtime.'],
+    }),
   });
 
   registry.register({
@@ -85,12 +115,72 @@ export function registerSelfExtensionTools(registry: ToolRegistry): void {
         record: args.record !== false,
         clientState: getClientStateForScope(userId, { domain: context?.domain, orgId: context?.orgId }) as Record<string, any> | null,
         tools: registry.list(),
-        executeTool: (name, toolArgs) => registry.execute(name, toolArgs, context),
+        executeTool: (name, toolArgs) => executeToolCallOrThrow({
+          registry,
+          name,
+          arguments: toolArgs,
+          context,
+        }),
       });
-      return JSON.stringify(result, null, 2);
+      const shouldPersist = args.record !== false;
+      let persisted = false;
+      if (shouldPersist) {
+        persisted = listCapabilityLearningRecords({
+          userId,
+          scopeDomain: context?.domain === 'work' && context?.orgId ? 'work' : 'personal',
+          orgId: context?.domain === 'work' ? context?.orgId : '',
+          limit: 250,
+        }).some(record => record.id === result.record.id);
+        if (!persisted && !result.reusedExistingCoverage) {
+          throw new Error('Capability learning route was not persisted.');
+        }
+      }
+      const status = result.experiment.status === 'blocked'
+        ? 'blocked'
+        : result.reusedExistingCoverage
+          ? 'reused'
+          : result.experiment.status === 'passed'
+            ? 'experiment_passed'
+            : result.experiment.status === 'prepared'
+              ? 'experiment_prepared'
+              : 'learned';
+      return JSON.stringify({
+        ok: status !== 'blocked',
+        status,
+        persisted,
+        ...result,
+      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'self-extension.capability-gap.autofix',
+      family: 'self-extension',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'capability learning memory', reversible: true },
+        { type: 'desktop_control', scope: 'optional minimal external-app verification experiment', reversible: true },
+        { type: 'process_execution', scope: 'optional capability verification adapter', reversible: true },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'selectedRoute.id', 'experiment.status', 'record.id'],
+        requiredValues: { ok: true },
+        successStatuses: ['reused', 'learned', 'experiment_prepared', 'experiment_passed'],
+        failureStatuses: ['blocked', 'failed'],
+        successSignals: ['existing route reused or a bounded capability route recorded', 'any minimal experiment reports its own terminal status'],
+        limitations: ['A prepared experiment is not proof that the external capability works.', 'This capability never authorizes third-party installation or core-code mutation by itself.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'self-extension.capability-gap.autofix',
+      operation: 'mutate',
+      subjectArgument: 'goal',
+      limitations: ['Only experiment_passed proves the selected external route was exercised successfully.'],
+    }),
   });
 
   registry.register({

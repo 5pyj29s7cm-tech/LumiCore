@@ -27,7 +27,6 @@ describe('public client diagnostics secret redaction', () => {
       workDomain: 'personal',
       runtime: { lastError: 'backend failed: Bearer TOPSECRET' },
       runtimeLog: { open: true, status: 'attention', lastError: 'token=TOPSECRET' },
-      music: { lastError: 'api_key=TOPSECRET' },
       knowledge: { domain: 'personal', lastError: 'password: TOPSECRET' },
       errors: [{ source: 'provider', message: 'secret=TOPSECRET', code: 'auth' }],
     });
@@ -56,16 +55,16 @@ describe('public client diagnostics secret redaction', () => {
       registry.execute('client_health_check', {}, { userId: USER_ID }),
       registry.execute('adapter_registry_list', {}, { userId: USER_ID }),
       registry.execute('adapter_health_check', {}, { userId: USER_ID }),
-      registry.execute('client_self_repair', { action: 'refresh_client_state' }, {
+    ]);
+    const selfRepair = registry.execute('client_self_repair', { action: 'refresh_client_state' }, {
         userId: USER_ID,
         desktopRelay: async () => JSON.stringify({ ok: false, error: 'Bearer TOPSECRET' }),
-      }),
-    ]);
+      });
 
     for (const output of outputs) {
       expect(output).not.toContain('TOPSECRET');
     }
-    expect(JSON.parse(outputs[4])).toEqual({ ok: false, error: 'Bearer [redacted]' });
+    await expect(selfRepair).rejects.not.toThrow(/TOPSECRET/);
     expect(outputs.join('\n')).toContain('[redacted]');
   });
 

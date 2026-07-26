@@ -1,6 +1,7 @@
 import { exec } from 'child_process';
 import os from 'os';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const DEFAULT_ALLOWED_COMMANDS = new Set([
   'ls', 'dir', 'cat', 'type', 'echo', 'find', 'grep',
@@ -44,9 +45,21 @@ async function runCommandHandler(args: Record<string, any>): Promise<string> {
       cwd: process.cwd(),
     }, (error, stdout, stderr) => {
       if (error) {
-        resolve(`Exit code: ${error.code}\n${stderr || stdout || error.message}`);
+        resolve(JSON.stringify({
+          ok: false,
+          status: 'failed',
+          exitCode: typeof error.code === 'number' ? error.code : null,
+          stdout,
+          stderr: stderr || error.message,
+        }, null, 2));
       } else {
-        resolve(stdout || stderr || '(no output)');
+        resolve(JSON.stringify({
+          ok: true,
+          status: 'completed',
+          exitCode: 0,
+          stdout,
+          stderr,
+        }, null, 2));
       }
     });
   });
@@ -84,6 +97,29 @@ export function registerSystemOpsTools(registry: ToolRegistry): void {
     handler: runCommandHandler,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'system.command.run',
+      family: 'system_command',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [{ type: 'process_execution', scope: 'allowlisted local command', reversible: false }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'exitCode'],
+        requiredValues: { ok: true, status: 'completed', exitCode: 0 },
+        successStatuses: ['completed'],
+        successSignals: ['the allowlisted process exited with code zero'],
+        limitations: ['Exit code zero does not independently verify every external state change made by the command.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'system.command.run',
+      operation: 'mutate',
+      subjectArgument: 'command',
+      limitations: ['Command-specific artifacts or state changes require a stronger follow-up capability.'],
+    }),
   });
 
   registry.register({

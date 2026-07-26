@@ -58,7 +58,7 @@ describe('skill model-service settings classification', () => {
   it('keeps MCP lifecycle management in Skill Hall and diagnostics in Tool Runtimes', () => {
     const runtimeSettings = fs.readFileSync(path.join(process.cwd(), 'src/components/MCPSettings.tsx'), 'utf8');
     const skillHall = fs.readFileSync(path.join(process.cwd(), 'src/components/SkillCenter.tsx'), 'utf8');
-    expect(runtimeSettings).toContain("detail: { action: 'open_app', target: 'skills' }");
+    expect(runtimeSettings).toContain("detail: { action: 'open_skills' }");
     expect(runtimeSettings).toContain("fetch(`/api/mcp/restart/${name}`");
     expect(runtimeSettings).not.toContain('/api/mcp/github/search');
     expect(runtimeSettings).not.toContain('toggleServer');

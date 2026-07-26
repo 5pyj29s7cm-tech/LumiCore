@@ -1,4 +1,5 @@
 import { readDB, writeDB } from '../../db_layer';
+import { migratePersistedClientActionName } from '../../shared/client_surfaces';
 
 export interface AutonomousWorkflow {
   id: string;
@@ -17,11 +18,29 @@ export interface AutonomousWorkflow {
 type WorkflowInput = Partial<Omit<AutonomousWorkflow, 'id' | 'userId' | 'createdAt' | 'updatedAt'>>;
 
 export const DEFAULT_LEARNING_WORKFLOW_ID = 'workflow_lumi_continuous_learning';
+export const CLIENT_ACTION_WORKFLOW_MIGRATION = 'clientSurfaceActionsV1';
 
 function allWorkflows(): AutonomousWorkflow[] {
   try {
     const db = readDB();
-    return Array.isArray(db.autonomousWorkflows) ? db.autonomousWorkflows : [];
+    const workflows = Array.isArray(db.autonomousWorkflows) ? db.autonomousWorkflows : [];
+    const migrations = typeof db.migrations === 'object' && db.migrations
+      ? db.migrations as Record<string, number>
+      : {};
+    if (Number(migrations[CLIENT_ACTION_WORKFLOW_MIGRATION] || 0) < 1) {
+      const migrated = workflows.map((workflow: AutonomousWorkflow) => ({
+        ...workflow,
+        allowedActions: normalizeActions(workflow.allowedActions),
+      }));
+      db.autonomousWorkflows = migrated;
+      db.migrations = {
+        ...migrations,
+        [CLIENT_ACTION_WORKFLOW_MIGRATION]: 1,
+      };
+      writeDB(db);
+      return migrated;
+    }
+    return workflows;
   } catch {
     return [];
   }
@@ -43,8 +62,9 @@ function normalizeModes(value: unknown): Array<'analysis' | 'desktop' | 'termina
 function normalizeActions(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
-    .map(item => String(item || '').trim())
+    .map(item => migratePersistedClientActionName(item))
     .filter(Boolean)
+    .map(item => String(item))
     .slice(0, 20);
 }
 

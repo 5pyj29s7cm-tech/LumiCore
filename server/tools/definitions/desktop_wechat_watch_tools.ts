@@ -1,5 +1,6 @@
 import { desktopWechatWatchService } from '../../messaging/desktop_wechat_watch';
 import type { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 export function registerDesktopWechatWatchTools(registry: ToolRegistry): void {
   registry.register({
@@ -29,13 +30,52 @@ export function registerDesktopWechatWatchTools(registry: ToolRegistry): void {
       },
       required: [],
     },
-    handler: async (args, context) => JSON.stringify({
-      updated: true,
-      config: desktopWechatWatchService.updateConfig(context?.userId || 'anonymous', args),
-      status: desktopWechatWatchService.status(context?.userId || 'anonymous'),
-    }, null, 2),
+    handler: async (args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const config = desktopWechatWatchService.updateConfig(userId, args);
+      const watchStatus = desktopWechatWatchService.status(userId);
+      if (watchStatus.config.updatedAt !== config.updatedAt) {
+        throw new Error('Desktop WeChat watch configuration was not persisted.');
+      }
+      return JSON.stringify({
+        ok: true,
+        status: 'updated',
+        persisted: true,
+        updated: true,
+        config: watchStatus.config,
+        watchStatus,
+      }, null, 2);
+    },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'messaging.wechat.desktop-watch.update',
+      family: 'wechat-desktop-watch',
+      lane: 'messaging',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'desktop WeChat duty-mode configuration', reversible: true },
+        { type: 'desktop_control', scope: 'periodic read-only WeChat foreground inspection when enabled', reversible: true },
+        { type: 'network_read', scope: 'configured vision/reasoning provider for visible chat analysis', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'config.updatedAt', 'watchStatus.config.updatedAt', 'watchStatus.runtime.state'],
+        requiredValues: { ok: true, status: 'updated', persisted: true },
+        successStatuses: ['updated'],
+        failureStatuses: ['failed', 'unverified'],
+        successSignals: ['configuration was reread from the dedicated desktop WeChat watch store'],
+        limitations: ['Enabling watch mode does not prove WeChat is accessible or that any unread message was read.', 'Drafts are never sent automatically.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'messaging.wechat.desktop-watch.update',
+      operation: 'mutate',
+      subjectArgument: 'enabled',
+      limitations: ['This receipt covers watch configuration only.'],
+    }),
   });
 
   registry.register({
@@ -62,16 +102,54 @@ export function registerDesktopWechatWatchTools(registry: ToolRegistry): void {
       },
       required: ['eventId'],
     },
-    handler: async (args, context) => JSON.stringify(
-      await desktopWechatWatchService.approveReply(
-        context?.userId || 'anonymous',
+    handler: async (args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const event = await desktopWechatWatchService.approveReply(
+        userId,
         String(args.eventId || ''),
         args.draft === undefined ? undefined : String(args.draft),
-      ),
-      null,
-      2,
-    ),
+      );
+      const persistedEvent = desktopWechatWatchService.status(userId).events.find(item => item.id === event.id);
+      if (!persistedEvent || persistedEvent.updatedAt !== event.updatedAt) {
+        throw new Error(`Desktop WeChat watch event was not persisted: ${event.id}`);
+      }
+      return JSON.stringify({
+        ok: persistedEvent.status === 'sent',
+        status: persistedEvent.status,
+        sent: persistedEvent.status === 'sent',
+        persisted: true,
+        event: persistedEvent,
+      }, null, 2);
+    },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'messaging.wechat.desktop-watch.approve-reply',
+      family: 'wechat-desktop-watch',
+      lane: 'messaging',
+      operation: 'communicate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'external_communication', scope: 'one exact prepared desktop WeChat reply', reversible: false },
+        { type: 'desktop_control', scope: 'verified desktop WeChat contact and composer', reversible: false },
+        { type: 'local_state_change', scope: 'desktop WeChat watch event ledger', reversible: true },
+      ],
+      verification: {
+        strategy: 'visual',
+        required: true,
+        requiredFields: ['ok', 'status', 'sent', 'persisted', 'event.id', 'event.contact', 'event.status', 'event.updatedAt'],
+        requiredValues: { ok: true, status: 'sent', sent: true, persisted: true, 'event.status': 'sent' },
+        successStatuses: ['sent'],
+        failureStatuses: ['failed', 'blocked', 'unverified'],
+        successSignals: ['nested WeChat send tool visibly verifies the exact contact and message', 'sent event was reread from the watch ledger'],
+        limitations: ['A failed send remains failed even though the event ledger was updated.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'messaging.wechat.desktop-watch.approve-reply',
+      operation: 'communicate',
+      subjectArgument: 'eventId',
+      limitations: ['Only status=sent with nested visible send evidence is successful.'],
+    }),
   });
 }

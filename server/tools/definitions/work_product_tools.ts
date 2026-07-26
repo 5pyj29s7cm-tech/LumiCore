@@ -1,6 +1,7 @@
-import { createWorkProductPlan, verifyWorkProduct } from '../../work_product/supervisor';
+import { createWorkProductPlan, getWorkProductPlan, verifyWorkProduct } from '../../work_product/supervisor';
 import { getLumiPersonalityConstitution } from '../../personality/constitution';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 export function registerWorkProductTools(registry: ToolRegistry): void {
   registry.register({
@@ -41,20 +42,56 @@ export function registerWorkProductTools(registry: ToolRegistry): void {
       required: ['task'],
     },
     handler: async (args, context) => {
+      const userId = context?.userId || 'anonymous';
+      const shouldPersist = args.persist !== false;
       const plan = createWorkProductPlan({
-        userId: context?.userId || 'anonymous',
+        userId,
         task: String(args.task || ''),
         deliverableType: args.deliverableType,
         finalOutput: args.finalOutput,
         acceptanceCriteria: args.acceptanceCriteria,
         expectedArtifacts: args.expectedArtifacts,
         maxRepairCycles: args.maxRepairCycles,
-        persist: args.persist !== false,
+        persist: shouldPersist,
       });
-      return JSON.stringify(plan, null, 2);
+      const persistedPlan = shouldPersist ? getWorkProductPlan(userId, plan.id) : null;
+      if (shouldPersist && !persistedPlan) {
+        throw new Error('Work product plan was not persisted.');
+      }
+      return JSON.stringify({
+        ok: true,
+        status: shouldPersist ? 'persisted' : 'planned',
+        persisted: Boolean(persistedPlan),
+        ...plan,
+        plan: persistedPlan || plan,
+      }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'work-product.plan.create',
+      family: 'work-product',
+      lane: 'general',
+      operation: 'create',
+      risk: 'low',
+      sideEffects: [{ type: 'local_state_change', scope: 'work-product supervision plan', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'plan.id', 'plan.acceptanceCriteria', 'plan.verificationActions'],
+        requiredValues: { ok: true },
+        successStatuses: ['planned', 'persisted'],
+        failureStatuses: ['failed', 'unverified'],
+        successSignals: ['plan contains acceptance criteria, verification actions, and stop conditions', 'persisted plans are reread by id'],
+        limitations: ['Creating a plan is not evidence that any work step or deliverable is complete.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'work-product.plan.create',
+      operation: 'create',
+      subjectArgument: 'task',
+      limitations: ['The plan supervises later work but does not execute it.'],
+    }),
   });
 
   registry.register({

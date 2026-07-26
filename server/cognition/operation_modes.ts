@@ -8,6 +8,7 @@
  * Meeting is a voice capture surface, not a fourth permission tier.
  */
 import { ToolPolicy } from '../personality/types';
+import type { ToolRegistry } from '../tools/registry';
 
 export type OperationMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 
@@ -19,18 +20,6 @@ export interface OperationModeConfig {
   promptOverlay: string;
   toolPolicy: ToolPolicy;
 }
-
-const HIGH_PERMISSION_OVERRIDES: NonNullable<ToolPolicy['securityOverrides']> = {
-  desktop_run_command: 'safe',
-  run_command: 'safe',
-  write_file: 'safe',
-  create_docx: 'safe',
-  create_pdf: 'safe',
-  create_ppt: 'safe',
-  create_xlsx: 'safe',
-  cad_prepare_autocad_operations: 'safe',
-  'mcp_cad-drafting_autocad_playback_file': 'safe',
-};
 
 export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> = {
   chat: {
@@ -74,7 +63,6 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       allowedTools: ['*'],
       requireConfirmation: [],
       forbiddenTools: [],
-      securityOverrides: HIGH_PERMISSION_OVERRIDES,
       maxIterations: 80,
     },
   },
@@ -98,7 +86,6 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       allowedTools: ['*'],
       requireConfirmation: [],
       forbiddenTools: [],
-      securityOverrides: HIGH_PERMISSION_OVERRIDES,
       maxIterations: 240,
     },
   },
@@ -137,6 +124,51 @@ export function parseStoredOperationMode(value: unknown): OperationMode {
 
 export function getOperationModeConfig(mode?: string): OperationModeConfig {
   return OPERATION_MODE_CONFIGS[normalizeOperationMode(mode)];
+}
+
+/**
+ * Build mode permissions from the same runtime capability manifest used by
+ * model exposure and execution. Chat/meeting stay tool-free; executable tools
+ * opt into assistant/autonomous through their capability metadata.
+ */
+export function buildOperationModeToolPolicy(
+  mode: string | undefined,
+  registry?: ToolRegistry,
+): ToolPolicy {
+  const normalized = normalizeOperationMode(mode);
+  const fallback = OPERATION_MODE_CONFIGS[normalized].toolPolicy;
+  if (!registry || normalized === 'chat' || normalized === 'meeting') {
+    return {
+      ...fallback,
+      allowedTools: [...fallback.allowedTools],
+      forbiddenTools: [...fallback.forbiddenTools],
+      requireConfirmation: [...fallback.requireConfirmation],
+      securityOverrides: fallback.securityOverrides
+        ? { ...fallback.securityOverrides }
+        : undefined,
+    };
+  }
+
+  const manifest = registry.getCapabilityManifest()
+    .filter(entry => (
+      !entry.deprecated
+      && entry.executable
+      && entry.modes.includes(normalized)
+    ));
+  const securityOverrides = Object.fromEntries(
+    manifest
+      .map(entry => [entry.toolName, entry.modeSecurity[normalized]] as const)
+      .filter((entry): entry is readonly [string, 'safe' | 'confirm' | 'forbidden'] => Boolean(entry[1])),
+  );
+  return {
+    allowedTools: manifest.map(entry => entry.toolName),
+    forbiddenTools: [],
+    requireConfirmation: manifest
+      .filter(entry => entry.requiresConfirmation)
+      .map(entry => entry.toolName),
+    ...(Object.keys(securityOverrides).length ? { securityOverrides } : {}),
+    maxIterations: fallback.maxIterations,
+  };
 }
 
 function normalizeModeCommandText(text: string): string {

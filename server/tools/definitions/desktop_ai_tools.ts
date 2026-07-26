@@ -3,6 +3,7 @@ import type { ToolContext } from '../types';
 import { analyzeScreen } from '../../llm/adapter';
 import { getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
 import { readDB, writeDB } from '../../../db_layer';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 type DesktopAiSurface = 'desktop_app' | 'browser_app' | 'local_runtime' | 'developer_tool';
 
@@ -246,7 +247,11 @@ function storedTargetsKey(userId: string): string {
   return `${STORED_TARGETS_SETTING_PREFIX}${userId || 'anonymous'}`;
 }
 
-function normalizeStoredTarget(raw: Record<string, any>, existing?: StoredDesktopAiTarget): StoredDesktopAiTarget {
+function normalizeStoredTarget(
+  raw: Record<string, any>,
+  existing?: StoredDesktopAiTarget,
+  touchUpdatedAt = true,
+): StoredDesktopAiTarget {
   const label = String(raw.label || raw.name || existing?.label || '').trim().slice(0, 80);
   const id = normalizeTargetId(String(raw.id || raw.name || label || existing?.id || ''));
   const openTargets = listArg(raw.openTargets || raw.openTarget || raw.target || raw.url || raw.path || existing?.openTargets);
@@ -266,7 +271,9 @@ function normalizeStoredTarget(raw: Record<string, any>, existing?: StoredDeskto
     notes: String(raw.notes || raw.note || existing?.notes || '').trim().slice(0, 1000),
     enabled: raw.enabled === undefined ? existing?.enabled !== false : raw.enabled !== false,
     createdAt: existing?.createdAt || now,
-    updatedAt: now,
+    updatedAt: touchUpdatedAt
+      ? now
+      : String(raw.updatedAt || existing?.updatedAt || now),
   };
 }
 
@@ -297,7 +304,7 @@ function loadStoredTargetRecords(userId = 'anonymous'): StoredDesktopAiTarget[] 
     if (!Array.isArray(parsed)) return [];
     return parsed
       .map((item: any) => {
-        try { return normalizeStoredTarget(item, item); } catch { return null; }
+        try { return normalizeStoredTarget(item, item, false); } catch { return null; }
       })
       .filter((item): item is StoredDesktopAiTarget => Boolean(item));
   } catch {
@@ -796,12 +803,13 @@ async function focusTarget(
 
 async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
-  if (!question) return 'Error: question is required.';
+  if (!question) throw new Error('question is required.');
   const desktopRelay = requireDesktopRelay(context);
   const customTargets = runtimeTargetsFromContext(args, context);
   const { targets, selection } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
   if (targets.length === 0) return JSON.stringify({
     ok: false,
+    status: 'blocked',
     error: 'No available desktop AI targets matched.',
     targetSelection: selection,
     next: 'Name one or more targets explicitly, start an installed desktop AI app, or register a local target.',
@@ -899,8 +907,11 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
     });
   }
 
+  const ok = results.some(result => result.status === 'submitted_unverified' || result.status === 'prepared');
+  const status = !ok ? 'blocked' : send ? 'submitted_unverified' : 'prepared';
   return JSON.stringify({
-    ok: results.some(result => result.status === 'submitted_unverified' || result.status === 'prepared'),
+    ok,
+    status,
     question,
     send,
     submittedCount: results.filter(result => result.status === 'submitted_unverified').length,
@@ -1015,12 +1026,13 @@ async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolC
 
 async function desktopAiRoundtable(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
-  if (!question) return 'Error: question is required.';
+  if (!question) throw new Error('question is required.');
   const desktopRelay = requireDesktopRelay(context);
   const customTargets = runtimeTargetsFromContext(args, context);
   const { targets, selection } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
   if (targets.length === 0) return JSON.stringify({
     ok: false,
+    status: 'blocked',
     error: 'No available desktop AI targets matched.',
     targetSelection: selection,
     next: 'Name one or more targets explicitly, start an installed desktop AI app, or register a local target.',
@@ -1080,17 +1092,26 @@ async function desktopAiRoundtable(args: Record<string, any>, context?: ToolCont
   }
 
   const collectedAnswers = answers.filter(answer => answer?.status === 'collected' && String(answer?.answerText || '').trim());
+  const pendingCount = answers.filter(answer => answer?.status === 'pending').length;
+  const blockedCount = answers.filter(answer => answer?.status === 'blocked').length;
+  const needsVisionSetupCount = answers.filter(answer => answer?.status === 'needs_vision_setup').length;
+  const status = collectedAnswers.length > 0
+    ? 'collected'
+    : pendingCount > 0
+      ? 'waiting_for_answers'
+      : needsVisionSetupCount > 0 ? 'needs_vision_setup' : 'blocked';
   return JSON.stringify({
     ok: collectedAnswers.length > 0,
+    status,
     question,
     targets: targets.map(target => ({ id: target.id, label: target.label })),
     targetSelection: selection,
     ask,
     answers,
     collectedCount: collectedAnswers.length,
-    pendingCount: answers.filter(answer => answer?.status === 'pending').length,
-    blockedCount: answers.filter(answer => answer?.status === 'blocked').length,
-    needsVisionSetupCount: answers.filter(answer => answer?.status === 'needs_vision_setup').length,
+    pendingCount,
+    blockedCount,
+    needsVisionSetupCount,
     synthesisInput: collectedAnswers.map(answer => ({
       target: answer.label || answer.target,
       answer: answer.answerText,
@@ -1158,6 +1179,8 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
             openTargets: target.openTargets,
           }));
       return JSON.stringify({
+        ok: true,
+        status: 'planned',
         focus,
         knownTargets,
         suggestedQueries: DISCOVERY_QUERIES.map(query => `${focus} ${query}`),
@@ -1182,6 +1205,30 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop-ai.discovery.plan',
+      family: 'desktop-ai',
+      lane: 'desktop',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'none', scope: 'read-only desktop AI discovery planning', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'focus', 'suggestedQueries', 'candidateSchema'],
+        requiredValues: { ok: true, status: 'planned' },
+        successStatuses: ['planned'],
+        failureStatuses: ['failed'],
+        successSignals: ['source-grounded discovery queries and candidate schema returned'],
+        limitations: ['The plan does not install, register, open, or validate a target.'],
+      },
+    },
+    evidence: capabilityEvidence({
+      id: 'desktop-ai.discovery.plan',
+      operation: 'observe',
+      subjectArgument: 'focus',
+      limitations: ['Planning alone creates no desktop capability.'],
+    }),
   });
 
   registry.register({
@@ -1209,14 +1256,40 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
       if (existingIndex >= 0) existing[existingIndex] = target;
       else existing.push(target);
       saveStoredTargetRecords(userId, existing);
+      const persistedTarget = loadStoredTargetRecords(userId).find(item => item.id === target.id);
+      if (!persistedTarget || persistedTarget.updatedAt !== target.updatedAt) {
+        throw new Error(`Desktop AI target was not persisted: ${target.id}`);
+      }
       return JSON.stringify({
+        ok: true,
+        status: 'registered',
+        persisted: true,
         registered: true,
-        target,
+        target: persistedTarget,
         note: 'Target registered locally. Future desktop_ai_list_targets, desktop_ai_ask, and desktop_ai_collect_answer calls can resolve it by id, label, alias, or open target.',
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'desktop-ai.target.register',
+      family: 'desktop-ai',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'registered desktop AI target catalog', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['ok', 'status', 'persisted', 'target.id', 'target.updatedAt'],
+        requiredValues: { ok: true, status: 'registered', persisted: true },
+        successStatuses: ['registered'],
+        failureStatuses: ['failed', 'unverified'],
+        successSignals: ['registered target was reread from the local target catalog'],
+        limitations: ['Registration does not prove the target is installed, signed in, reachable, or controllable.'],
+      },
+    }),
+    evidence: capabilityEvidence({ id: 'desktop-ai.target.register', operation: 'mutate', subjectArgument: 'label' }),
   });
 
   registry.register({
@@ -1243,6 +1316,34 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
     handler: desktopAiAsk,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'desktop-ai.question.prepare-or-submit',
+      family: 'desktop-ai',
+      lane: 'desktop',
+      operation: 'communicate',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'desktop_control', scope: 'selected desktop AI target windows', reversible: true },
+        { type: 'local_state_change', scope: 'system clipboard question text', reversible: true },
+        { type: 'external_communication', scope: 'question submitted to selected AI targets when send=true', reversible: false },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'question', 'send', 'submittedCount', 'preparedCount', 'sentCount', 'results'],
+        requiredValues: { ok: true, sentCount: 0, verifiedSentCount: 0 },
+        successStatuses: ['prepared', 'submitted_unverified'],
+        failureStatuses: ['blocked', 'failed'],
+        successSignals: ['target remained foreground while the question was pasted', 'submission is explicitly unverified until visible answer evidence is collected'],
+        limitations: ['submitted_unverified proves only that the shortcut was pressed; it does not prove provider receipt or answer generation.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'desktop-ai.question.prepare-or-submit',
+      operation: 'communicate',
+      subjectArgument: 'question',
+      limitations: ['No send is claimed as verified until answer collection observes a response.'],
+    }),
   });
 
   registry.register({
@@ -1266,6 +1367,33 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
     handler: desktopAiRoundtable,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'desktop-ai.roundtable.run',
+      family: 'desktop-ai',
+      lane: 'desktop',
+      operation: 'communicate',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'desktop_control', scope: 'multiple desktop AI target windows', reversible: true },
+        { type: 'local_state_change', scope: 'system clipboard question text', reversible: true },
+        { type: 'external_communication', scope: 'question submitted to selected AI targets', reversible: false },
+      ],
+      verification: {
+        strategy: 'visual',
+        required: true,
+        requiredFields: ['ok', 'status', 'question', 'ask.status', 'answers', 'collectedCount', 'pendingCount', 'blockedCount'],
+        successStatuses: ['collected', 'waiting_for_answers'],
+        failureStatuses: ['blocked', 'needs_vision_setup', 'failed'],
+        successSignals: ['collected answers include visible-screen evidence', 'waiting state remains explicit and cannot be summarized as completed'],
+        limitations: ['A waiting_for_answers receipt is a resumable pause, not a completed roundtable.', 'Visible answers may be partial when content is off-screen.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'desktop-ai.roundtable.run',
+      operation: 'communicate',
+      subjectArgument: 'question',
+      limitations: ['Only entries with status=collected may be used as answer evidence.'],
+    }),
   });
 
   registry.register({

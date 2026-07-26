@@ -1,6 +1,36 @@
-import { ToolDefinition, ToolPermission, SecurityLevel, ToolContext } from './types';
+import {
+  CapabilityAdapterContract,
+  CapabilityLane,
+  CapabilityManifestEntry,
+  CapabilityMode,
+  CapabilityOperation,
+  CapabilityRisk,
+  CapabilitySideEffect,
+  CapabilityTrust,
+  CapabilityVerification,
+  ToolDefinition,
+  ToolExecutionRecord,
+  ToolPermission,
+  SecurityLevel,
+  ToolContext,
+} from './types';
 import { ToolPolicy } from '../personality/types';
 import { evaluateActionConstitution } from './action_constitution';
+import {
+  inferCapabilityFamily,
+  inferCapabilityLane,
+  inferCapabilityOperation,
+  projectToolDeclarationForRouting,
+  type CapabilityRoutingProjection,
+} from './capability_projection';
+
+export {
+  inferCapabilityFamily,
+  inferCapabilityLane,
+  inferCapabilityOperation,
+  projectToolDeclarationForRouting,
+};
+export type { CapabilityRoutingProjection };
 
 export type EffectiveSecurity = { level: SecurityLevel; reason: string };
 
@@ -66,6 +96,164 @@ function normalizeJsonSchema(params: Record<string, any>): Record<string, any> {
   return schema;
 }
 
+function defaultCapabilityModes(): CapabilityMode[] {
+  return ['assistant', 'autonomous'];
+}
+
+function inferCapabilitySideEffects(
+  toolName: string,
+  lane: CapabilityLane,
+  operation: CapabilityOperation,
+  securityLevel: SecurityLevel,
+): CapabilitySideEffect[] {
+  if (operation === 'observe' || operation === 'test') return [];
+  if (operation === 'communicate') {
+    return [{
+      type: 'external_communication',
+      scope: lane,
+      reversible: false,
+    }];
+  }
+  if (/\b(?:install|upgrade|package)\b/i.test(toolName)) {
+    return [{
+      type: 'installation',
+      scope: lane,
+      reversible: true,
+    }];
+  }
+  if (/\b(?:run_command|exec|code_execution|python_exec)\b/i.test(toolName)) {
+    return [{
+      type: 'process_execution',
+      scope: lane,
+      reversible: false,
+    }];
+  }
+  if (lane === 'desktop') {
+    return [{
+      type: 'desktop_control',
+      scope: 'active desktop session',
+      reversible: true,
+    }];
+  }
+  if (lane === 'files' || lane === 'office' || lane === 'cad' || lane === 'media') {
+    return [{
+      type: 'local_write',
+      scope: lane,
+      reversible: operation === 'create',
+    }];
+  }
+  if (lane === 'web' || lane === 'messaging' || lane === 'industry') {
+    return [{
+      type: 'external_state_change',
+      scope: lane,
+      reversible: false,
+    }];
+  }
+  if (operation === 'unknown' && securityLevel !== 'safe') {
+    return [{
+      type: 'external_state_change',
+      scope: 'unknown until provider metadata is supplied',
+      reversible: false,
+    }];
+  }
+  return operation === 'mutate' || operation === 'create'
+    ? [{
+        type: 'local_write',
+        scope: lane,
+        reversible: operation === 'create',
+      }]
+    : [];
+}
+
+function inferCapabilityRisk(
+  operation: CapabilityOperation,
+  securityLevel: SecurityLevel,
+  sideEffects: CapabilitySideEffect[],
+): CapabilityRisk {
+  if (securityLevel === 'forbidden') return 'critical';
+  if (securityLevel === 'confirm') return 'high';
+  if (operation === 'observe' || operation === 'test') return 'low';
+  if (sideEffects.some(effect => !effect.reversible)) return 'high';
+  if (sideEffects.length > 0) return 'medium';
+  return operation === 'unknown' ? 'medium' : 'none';
+}
+
+function inferCapabilityVerification(
+  lane: CapabilityLane,
+  operation: CapabilityOperation,
+  assurance: CapabilityManifestEntry['assurance'],
+): CapabilityVerification {
+  if (operation === 'observe' || operation === 'test') {
+    return {
+      strategy: assurance === 'measured' ? 'measured' : 'terminal_receipt',
+      required: true,
+      requiredFields: ['status'],
+      successSignals: ['terminal tool receipt'],
+      limitations: assurance === 'none'
+        ? ['The receipt proves observation returned, not that the observed external state is complete.']
+        : [],
+    };
+  }
+  if (operation === 'communicate') {
+    return {
+      strategy: 'provider_ack',
+      required: true,
+      requiredFields: ['status'],
+      successSignals: ['provider or target acknowledgement'],
+      limitations: ['Draft creation, clipboard writes, and submit-button presses are not delivery acknowledgement.'],
+    };
+  }
+  if (operation === 'create' && ['files', 'office', 'cad', 'media'].includes(lane)) {
+    return {
+      strategy: 'artifact',
+      required: true,
+      requiredFields: ['status'],
+      successSignals: ['artifact exists and matches the requested output'],
+      limitations: ['A path alone is not content or application-state verification.'],
+    };
+  }
+  if (lane === 'desktop') {
+    return {
+      strategy: 'state_diff',
+      required: true,
+      requiredFields: ['status'],
+      successSignals: ['post-action native state or visual evidence differs as intended'],
+      limitations: ['An input event alone is not proof that the target application accepted it.'],
+    };
+  }
+  return {
+    strategy: 'terminal_receipt',
+    required: true,
+    requiredFields: ['status'],
+    successSignals: ['terminal tool receipt'],
+    limitations: operation === 'unknown'
+      ? ['Provider did not declare semantic side effects; completion claims must remain conservative.']
+      : [],
+  };
+}
+
+function inferCapabilityTrust(source: CapabilityManifestEntry['source']): CapabilityTrust {
+  if (source === 'builtin') return 'core';
+  if (source === 'adapter') return 'official';
+  if (source === 'skill') return 'user-reviewed';
+  return 'third-party';
+}
+
+function defaultAdapterContract(
+  lane: CapabilityLane,
+  operation: CapabilityOperation,
+): CapabilityAdapterContract | undefined {
+  if (lane !== 'desktop') return undefined;
+  return {
+    id: 'desktop.native',
+    operations: [operation],
+    implementations: {
+      windows: 'windows-native-desktop',
+      macos: 'macos-native-desktop',
+    },
+  };
+}
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
 
@@ -84,6 +272,44 @@ export class ToolRegistry {
 
   getEvidenceDescriptor(name: string): ToolDefinition['evidence'] | undefined {
     return this.tools.get(name)?.evidence;
+  }
+
+  getCapabilityManifestEntry(
+    name: string,
+    policy?: ToolPolicy,
+  ): CapabilityManifestEntry | undefined {
+    const tool = this.tools.get(name);
+    return tool ? this.buildCapabilityManifestEntry(tool, policy) : undefined;
+  }
+
+  /** Build the evidence envelope attached to a terminal tool receipt. */
+  buildEvidenceRecord(
+    name: string,
+    args: Record<string, any>,
+  ): ToolExecutionRecord['evidence'] | undefined {
+    const tool = this.get(name);
+    if (!tool) return undefined;
+    const manifestEvidence = this.buildCapabilityManifestEntry(tool).evidence;
+    const descriptor = tool.evidence || manifestEvidence;
+    if (!descriptor) return undefined;
+    const schema = normalizeJsonSchema(tool.parameters || {});
+    const subjectArgument = tool.evidence?.subjectArgument;
+    const declaredScope = subjectArgument
+      ? schema.properties?.[subjectArgument]?.enum
+      : undefined;
+    const selected = subjectArgument ? args?.[subjectArgument] : undefined;
+    const scope = selected !== undefined && selected !== null && String(selected).trim()
+      ? [String(selected)]
+      : Array.isArray(declaredScope)
+        ? declaredScope.map(value => String(value))
+        : [];
+    return {
+      capability: descriptor.capability,
+      operation: descriptor.operation,
+      assurance: descriptor.assurance,
+      scope,
+      ...(descriptor.limitations?.length ? { limitations: [...descriptor.limitations] } : {}),
+    };
   }
 
   /**
@@ -149,6 +375,140 @@ export class ToolRegistry {
     return all.filter(t => t.permission === filterPermission || t.permission === 'public');
   }
 
+  private buildCapabilityManifestEntry(
+    tool: ToolDefinition,
+    policy?: ToolPolicy,
+  ): CapabilityManifestEntry {
+    const effective = this.resolveSecurity(tool.name, policy);
+    const source = tool.capability?.source || 'builtin';
+    const provider = tool.capability?.provider;
+    const family = String(tool.capability?.family || provider || inferCapabilityFamily(tool.name));
+    const operation: CapabilityOperation = tool.evidence?.operation
+      || tool.capability?.operation
+      || inferCapabilityOperation(tool.name);
+    const lane = tool.capability?.lane || inferCapabilityLane(tool.name, family);
+    const modes = Array.from(new Set(
+      tool.capability?.modes?.length ? tool.capability.modes : defaultCapabilityModes(),
+    ));
+    const sideEffects = tool.capability?.sideEffects
+      ? [...tool.capability.sideEffects]
+      : inferCapabilitySideEffects(tool.name, lane, operation, tool.securityLevel);
+    const risk = tool.capability?.risk
+      || inferCapabilityRisk(operation, tool.securityLevel, sideEffects);
+    const capabilityId = tool.capability?.id || tool.evidence?.capability || tool.name;
+    const assurance = tool.evidence?.assurance || 'none';
+    const conservativeEvidenceOperation = operation === 'unknown' ? 'mutate' : operation;
+    const evidence = tool.evidence
+      ? {
+          capability: tool.evidence.capability,
+          operation: tool.evidence.operation,
+            assurance: tool.evidence.assurance,
+            limitations: [...(tool.evidence.limitations || [])],
+            declarationSource: 'tool_definition' as const,
+            explicit: true,
+          }
+      : sideEffects.length > 0
+        ? {
+            capability: capabilityId,
+            operation: conservativeEvidenceOperation as Exclude<CapabilityOperation, 'unknown'>,
+            assurance: 'declared' as const,
+            limitations: [
+              'The terminal receipt proves the handler returned; task-level verification is still required.',
+              ...(operation === 'unknown'
+                ? ['The provider did not declare its semantic operation; it is treated conservatively as a mutation.']
+                : []),
+              ],
+            declarationSource: 'manifest_policy' as const,
+            explicit: false,
+          }
+        : null;
+    const verification = tool.capability?.verification
+      || inferCapabilityVerification(lane, operation, assurance);
+    const provenance: CapabilityManifestEntry['provenance'] = {
+      kind: tool.capability?.provenance?.kind || source,
+      provider: tool.capability?.provenance?.provider || provider || source,
+      trust: tool.capability?.provenance?.trust || inferCapabilityTrust(source),
+    };
+    const deprecated = tool.capability?.deprecated === true;
+    const schema = normalizeJsonSchema(tool.parameters);
+    const nameTerms = tool.name.split(/[_\-\s]+/).filter(Boolean);
+    const routingTerms = Array.from(new Set([
+      ...nameTerms,
+      ...(tool.routingHints || []),
+      ...(tool.capability?.tags || []),
+    ].map(term => String(term).trim()).filter(Boolean)));
+
+    return {
+      toolName: tool.name,
+      capabilityId,
+      family,
+      lane,
+      source,
+      provider,
+      description: tool.description,
+      permission: tool.permission,
+      configuredSecurityLevel: tool.securityLevel,
+      effectiveSecurityLevel: effective.level,
+      effectiveSecurityReason: effective.reason,
+      executable: effective.level !== 'forbidden' && !deprecated,
+      requiresConfirmation: effective.level === 'confirm',
+      operation,
+      modes,
+      risk,
+      sideEffects,
+      metadataSources: {
+        operation: tool.evidence?.operation || tool.capability?.operation
+          ? 'tool_definition'
+          : 'manifest_policy',
+        lane: tool.capability?.lane ? 'tool_definition' : 'manifest_policy',
+        risk: tool.capability?.risk ? 'tool_definition' : 'manifest_policy',
+        sideEffects: tool.capability?.sideEffects ? 'tool_definition' : 'manifest_policy',
+        evidence: tool.evidence
+          ? 'tool_definition'
+          : sideEffects.length > 0
+            ? 'manifest_policy'
+            : 'not_required',
+        verification: tool.capability?.verification ? 'tool_definition' : 'manifest_policy',
+      },
+      assurance,
+      hasEvidenceContract: Boolean(evidence),
+      evidence,
+      verification,
+      fallbacks: [...(tool.capability?.fallbacks || [])].sort((left, right) => left.order - right.order),
+      provenance,
+      trust: provenance.trust,
+      deprecated,
+      ...(tool.capability?.replacedBy ? { replacedBy: tool.capability.replacedBy } : {}),
+      ...(tool.capability?.adapter || defaultAdapterContract(lane, operation)
+        ? { adapter: tool.capability?.adapter || defaultAdapterContract(lane, operation) }
+        : {}),
+      modeSecurity: { ...(tool.capability?.modeSecurity || {}) },
+      domains: Array.from(new Set(
+        tool.capability?.domains?.length ? tool.capability.domains : [family],
+      )),
+      intents: Array.from(new Set([
+        ...(tool.capability?.intents || []),
+        ...(tool.routingHints || []),
+        ...(tool.capability?.tags || []),
+      ].map(term => String(term).trim()).filter(Boolean))),
+      routingTerms,
+      prerequisites: Array.from(new Set(tool.capability?.prerequisites || [])),
+      parameterNames: Object.keys(schema.properties || {}),
+    };
+  }
+
+  /**
+   * Authoritative runtime capability inventory. This is derived from the same
+   * definitions and effective policy used by the executor.
+   */
+  getCapabilityManifest(
+    policy?: ToolPolicy,
+    options?: { executableOnly?: boolean },
+  ): CapabilityManifestEntry[] {
+    const entries = this.list().map(tool => this.buildCapabilityManifestEntry(tool, policy));
+    return options?.executableOnly ? entries.filter(entry => entry.executable) : entries;
+  }
+
   getToolDeclarations(): Array<{
     type: 'function';
     function: { name: string; description: string; parameters: Record<string, any> };
@@ -161,6 +521,25 @@ export class ToolRegistry {
         parameters: normalizeJsonSchema(t.parameters),
       },
     }));
+  }
+
+  /**
+   * Policy-filtered declarations for models and planners. The executor uses
+   * the same resolveSecurity() decision, so a forbidden tool cannot remain
+   * visible to the model while failing only after selection.
+   */
+  getToolDeclarationsForPolicy(
+    policy?: ToolPolicy,
+    options?: { failClosedWithoutPolicy?: boolean },
+  ): ReturnType<ToolRegistry['getToolDeclarations']> {
+    if (!policy && options?.failClosedWithoutPolicy) return [];
+    const executable = new Set(
+      this.getCapabilityManifest(policy, { executableOnly: true })
+        .map(entry => entry.toolName),
+    );
+    return this.getToolDeclarations().filter(declaration => (
+      executable.has(declaration.function.name)
+    ));
   }
 
   /** Resolve effective security level for a tool given a personality's policy */
@@ -205,7 +584,14 @@ export class ToolRegistry {
       throw new Error(`Tool "${name}" is forbidden: ${effective.reason}.`);
     }
 
-    const constitutional = evaluateActionConstitution(name, args, effective.level, context);
+    const capability = this.buildCapabilityManifestEntry(tool, policy);
+    const constitutional = evaluateActionConstitution(
+      name,
+      args,
+      effective.level,
+      context,
+      capability,
+    );
     if (constitutional.level === 'forbidden') {
       throw new Error(`Tool "${name}" is forbidden: ${constitutional.reason}.`);
     }
@@ -230,13 +616,12 @@ export class ToolRegistry {
     // Wrap with timeouts to prevent hanging. Vision/CAD extraction needs more room than simple tools.
     const timeoutMs = getToolExecutionTimeoutMs(name);
     let timedOut = false;
-    const executionContext = context
-      ? {
-          ...context,
-          userConfirmed: context.userConfirmed === true || userConfirmed,
-          isCancelled: () => timedOut || context.isCancelled?.() === true,
-        }
-      : context;
+    const executionContext: ToolContext = {
+      ...(context || {}),
+      toolRegistry: this,
+      userConfirmed: context?.userConfirmed === true || userConfirmed,
+      isCancelled: () => timedOut || context?.isCancelled?.() === true,
+    };
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     try {
       const result = await Promise.race([

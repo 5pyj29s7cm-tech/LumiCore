@@ -1,6 +1,8 @@
 import { ToolRegistry } from '../registry';
+import { executeToolCallOrThrow } from '../execution_engine';
 import { saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, captureRecentAsWorkflow } from '../../agents/workflows';
 import { getRecentWorkflows } from '../../skills/worklog';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 function workflowScope(context?: any): { domain: 'personal' | 'work'; orgId: string } {
   if (context?.domain === 'work' && context?.orgId) {
@@ -19,7 +21,7 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
   if (!steps.length) throw new Error('At least one step is required');
 
   const wf = saveWorkflow(userId, name, description, steps, undefined, args.category, workflowScope(context));
-  return `Workflow "${wf.name}" saved with ${wf.steps.length} steps.`;
+  return JSON.stringify({ ok: true, status: 'saved', workflowId: wf.id, name: wf.name, stepCount: wf.steps.length }, null, 2);
 }
 
 async function handleListWorkflows(_args: Record<string, any>, context?: any): Promise<string> {
@@ -44,7 +46,7 @@ async function handleDeleteWorkflow(args: Record<string, any>, context?: any): P
   const userId = context?.userId || 'system';
   const name: string = args.name || '';
   const ok = deleteWorkflow(userId, name, workflowScope(context));
-  return ok ? `Deleted workflow "${name}"` : `Workflow "${name}" not found`;
+  return JSON.stringify({ ok, status: ok ? 'deleted' : 'not_found', name }, null, 2);
 }
 
 async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: any): Promise<string> {
@@ -77,25 +79,55 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
   const wf = getWorkflow(userId, name, workflowScope(context));
   if (!wf) throw new Error(`Workflow "${name}" not found. Use list_workflows to see available workflows.`);
 
-  const results: string[] = [`Running workflow "${wf.name}" — ${wf.steps.length} steps:`];
+  const stepReceipts: Array<Record<string, unknown>> = [];
 
   for (let i = 0; i < wf.steps.length; i++) {
     const step = wf.steps[i];
-    results.push(`  Step ${i + 1}: ${step.tool || step.description}`);
-    if (step.tool && context?.toolRegistry) {
-      try {
-        const result = await context.toolRegistry.execute(step.tool, step.args || {}, context);
-        results.push(`    → ${(result || 'OK').slice(0, 200)}`);
-      } catch (e: any) {
-        results.push(`    → Error: ${e.message}`);
-        results.push(`Workflow "${name}" stopped at step ${i + 1} due to error.`);
-        break;
-      }
+    if (!step.tool || !context?.toolRegistry) {
+      return JSON.stringify({
+        ok: false,
+        status: 'blocked',
+        workflowId: wf.id,
+        name: wf.name,
+        completedSteps: stepReceipts.length,
+        totalSteps: wf.steps.length,
+        failedStep: i + 1,
+        blocker: !step.tool ? 'The workflow step has no executable capability.' : 'The tool registry is unavailable.',
+        steps: stepReceipts,
+      }, null, 2);
+    }
+    try {
+      const result = await executeToolCallOrThrow({
+        registry: context.toolRegistry,
+        name: step.tool,
+        arguments: step.args || {},
+        context,
+      });
+      stepReceipts.push({ index: i + 1, capability: step.tool, status: 'completed', result });
+    } catch (e: any) {
+      return JSON.stringify({
+        ok: false,
+        status: 'failed',
+        workflowId: wf.id,
+        name: wf.name,
+        completedSteps: stepReceipts.length,
+        totalSteps: wf.steps.length,
+        failedStep: i + 1,
+        blocker: e.message,
+        steps: [...stepReceipts, { index: i + 1, capability: step.tool, status: 'failed', error: e.message }],
+      }, null, 2);
     }
   }
 
-  results.push(`Workflow "${name}" complete.`);
-  return results.join('\n');
+  return JSON.stringify({
+    ok: true,
+    status: 'completed',
+    workflowId: wf.id,
+    name: wf.name,
+    completedSteps: stepReceipts.length,
+    totalSteps: wf.steps.length,
+    steps: stepReceipts,
+  }, null, 2);
 }
 
 export function registerWorkflowTools(registry: ToolRegistry): void {
@@ -126,6 +158,18 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
     handler: handleSaveWorkflow,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'workflow.definition.save', family: 'workflow', lane: 'agents', operation: 'mutate', risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'named workflow definition', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt', required: true,
+        requiredFields: ['ok', 'status', 'workflowId', 'name', 'stepCount'],
+        requiredValues: { ok: true, status: 'saved' }, successStatuses: ['saved'],
+        successSignals: ['the workflow store returned a stable id and exact step count'],
+        limitations: ['Saving does not execute or validate workflow steps.'],
+      },
+    }),
+    evidence: capabilityEvidence({ id: 'workflow.definition.save', operation: 'mutate', subjectArgument: 'name' }),
   });
 
   registry.register({
@@ -169,6 +213,17 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
     handler: handleDeleteWorkflow,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'workflow.definition.delete', family: 'workflow', lane: 'agents', operation: 'mutate', risk: 'high',
+      sideEffects: [{ type: 'local_state_change', scope: 'named workflow definition', reversible: false }],
+      verification: {
+        strategy: 'terminal_receipt', required: true,
+        requiredFields: ['ok', 'status', 'name'], requiredValues: { ok: true, status: 'deleted' },
+        successStatuses: ['deleted'], successSignals: ['the workflow store acknowledged deletion'],
+        limitations: ['Deleted workflow definitions are not automatically recoverable.'],
+      },
+    }),
+    evidence: capabilityEvidence({ id: 'workflow.definition.delete', operation: 'mutate', subjectArgument: 'name' }),
   });
 
   registry.register({
@@ -198,6 +253,24 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
     },
     handler: handleRunWorkflow,
     permission: 'user',
-    securityLevel: 'safe',
+    securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'workflow.execution.run', family: 'workflow', lane: 'agents', operation: 'mutate', risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'workflow run ledger', reversible: true },
+        { type: 'external_state_change', scope: 'declared saved workflow step capabilities', reversible: false },
+      ],
+      verification: {
+        strategy: 'terminal_receipt', required: true,
+        requiredFields: ['ok', 'status', 'workflowId', 'completedSteps', 'totalSteps', 'steps'],
+        requiredValues: { ok: true, status: 'completed' }, successStatuses: ['completed'],
+        successSignals: ['every declared step completed through the unified execution engine'],
+        limitations: ['Each nested step still requires its own capability receipt and permission policy.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'workflow.execution.run', operation: 'mutate', subjectArgument: 'name',
+      limitations: ['A failed nested step returns failed or blocked and never appends a false completion marker.'],
+    }),
   });
 }

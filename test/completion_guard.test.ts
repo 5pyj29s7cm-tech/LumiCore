@@ -84,6 +84,64 @@ describe('completion guard desktop action handling', () => {
 });
 
 describe('completion guard generic execution claims', () => {
+  const stateDiffCapability = {
+    capabilityId: 'desktop.open',
+    lane: 'desktop' as const,
+    operation: 'mutate' as const,
+    risk: 'medium' as const,
+    sideEffects: [{ type: 'desktop_control' as const, scope: 'desktop', reversible: true }],
+    verification: {
+      strategy: 'state_diff' as const,
+      required: true,
+      requiredFields: ['verification.status'],
+      successSignals: ['verified post-state'],
+      limitations: [],
+    },
+  };
+
+  it('does not turn a successful handler return into a completed action without terminal verification', () => {
+    const result = guardCompletionClaims({
+      task: 'launch an external desktop program',
+      response: 'The task is completed successfully.',
+      toolCalls: [{
+        name: 'unclassified_desktop_adapter',
+        arguments: { target: 'Example' },
+        result: JSON.stringify({ ok: true, action: 'launch-requested' }),
+        capability: stateDiffCapability,
+        terminalVerification: {
+          status: 'unverified',
+          strategy: 'state_diff',
+          reason: 'No verified target window was observed.',
+        },
+      }],
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain('No verified target window was observed');
+  });
+
+  it('allows a generic completion claim after the same capability receipt is verified', () => {
+    const response = 'The task is completed successfully.';
+    const result = guardCompletionClaims({
+      task: 'launch an external desktop program',
+      response,
+      toolCalls: [{
+        name: 'unclassified_desktop_adapter',
+        arguments: { target: 'Example' },
+        result: JSON.stringify({ ok: true, targetMatched: true }),
+        capability: stateDiffCapability,
+        terminalVerification: {
+          status: 'verified',
+          strategy: 'state_diff',
+          reason: 'The target window was observed.',
+        },
+      }],
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe(response);
+  });
+
   it.each([
     '\u5df2\u5b8c\u6210\u3002',
     '\u5199\u597d\u4e86\u3002',

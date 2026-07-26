@@ -3,6 +3,9 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 import { ToolRegistry } from '../../../tools/registry';
+import { capabilityContract, capabilityEvidence } from '../../../tools/capability_contracts';
+import { encodeToolResult } from '../../../tools/result_envelope';
+import type { CapabilityOperation, CapabilityRisk, CapabilitySideEffect } from '../../../tools/types';
 import { parseDocument, extractLegalMetadata } from '../../../legal/parser';
 import {
   createLegalArticle, indexLegalArticle,
@@ -19,6 +22,7 @@ import { generateEmbedding } from '../../../memory/store';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import * as LegalCases from '../../../org/legal_cases';
+import * as EDB from '../../../org/db';
 import {
   formatStatuteAuthorityRefreshReport,
   refreshAuthoritativeStatuteSources,
@@ -140,21 +144,27 @@ function textArg(args: Record<string, any>, key: string): string {
 }
 
 function legalWorkspaceId(args: Record<string, any>, context?: any): string {
-  if (context) {
-    if (context.domain === 'work') {
-      const orgId = String(context.orgId || '').trim();
-      if (!orgId) throw new Error('Organization legal work requires an active organization context.');
-      return orgId;
-    }
+  if (context?.domain === 'work') {
+    const orgId = String(context.orgId || '').trim();
+    if (!orgId) throw new Error('Organization legal work requires an active organization context.');
+    return orgId;
+  }
+  if (context?.domain === 'personal') {
     const userId = String(context.userId || textArg(args, 'userId') || 'anonymous')
       .trim()
       .replace(/[^a-zA-Z0-9_.@-]+/g, '_');
     return `personal:${userId || 'anonymous'}`;
   }
 
+  // ToolRegistry always injects runtime services into context. Their presence
+  // alone does not select a personal data domain; preserve an explicit legacy
+  // organization id unless the caller supplied an authoritative domain.
   const explicit = textArg(args, 'orgId');
   if (explicit) return explicit;
-  const userId = textArg(args, 'userId').replace(/[^a-zA-Z0-9_.@-]+/g, '_');
+  const contextualOrgId = String(context?.orgId || '').trim();
+  if (contextualOrgId) return contextualOrgId;
+  const userId = String(context?.userId || textArg(args, 'userId') || '')
+    .replace(/[^a-zA-Z0-9_.@-]+/g, '_');
   return `personal:${userId || 'anonymous'}`;
 }
 
@@ -5465,10 +5475,28 @@ async function refreshAuthoritativeSourcesHandler(args: Record<string, any>): Pr
     ? Math.max(2_000, Math.min(30_000, Number(args.timeoutMs)))
     : undefined;
   const result = await refreshAuthoritativeStatuteSources({ timeoutMs });
-  return [
+  const content = [
     formatStatuteAuthorityRefreshReport(result),
     result.archivePath ? `\n巡检记录：${result.archivePath}` : '',
   ].filter(Boolean).join('\n');
+  const state = loadStatuteAuthorityRefreshState();
+  if (state.lastRunAt !== result.completedAt) {
+    throw new Error('Authoritative legal source refresh state was not persisted.');
+  }
+  const artifacts = result.archivePath && fs.existsSync(result.archivePath)
+    ? [path.resolve(result.archivePath)]
+    : [];
+  return encodeToolResult(content, {
+    ok: true,
+    status: 'refreshed',
+    persisted: true,
+    result,
+    state,
+    changedCaseIds: [],
+    articleIds: [],
+    artifacts,
+    content,
+  });
 }
 
 async function authoritySourceStatusHandler(): Promise<string> {
@@ -5528,6 +5556,142 @@ async function importJudgmentHandler(args: Record<string, any>, context?: any): 
 - 索引状态: ${indexed} 个文本块已向量化
 
 该文书已录入组织知识库，可通过类案检索查询。`;
+}
+
+type LegalToolHandler = (args: Record<string, any>, context?: any) => Promise<string>;
+
+interface LegalReceiptProfile {
+  status: string;
+  expectCaseMutation?: 'always' | 'when_requested' | 'when_case_id';
+  requireArtifacts?: boolean | ((args: Record<string, any>) => boolean);
+  requireArticleMutation?: boolean;
+  classify?: (content: string, args: Record<string, any>) => { ok: boolean; status: string };
+}
+
+function legalCaseSnapshot(orgId: string): Map<string, string> {
+  return new Map(LegalCases.listCases(orgId, '', 200).map(caseFile => [
+    caseFile.id,
+    JSON.stringify({
+      updatedAt: caseFile.updatedAt,
+      title: caseFile.title,
+      stage: caseFile.stage,
+      materials: caseFile.materials.map(material => [material.id, material.createdAt, material.localPath]),
+    }),
+  ]));
+}
+
+function changedLegalCaseIds(before: Map<string, string>, after: Map<string, string>): string[] {
+  return Array.from(after.entries())
+    .filter(([id, fingerprint]) => before.get(id) !== fingerprint)
+    .map(([id]) => id);
+}
+
+function legalArticleIds(orgId: string): Set<string> {
+  return new Set(EDB.listKbArticles(orgId).map(article => article.id));
+}
+
+function existingLegalOutputPaths(content: string): string[] {
+  const paths = new Set<string>();
+  for (const rawLine of String(content || '').split(/\r?\n/)) {
+    const line = rawLine.trim().replace(/^[-*]\s*/, '');
+    const separator = Math.max(line.indexOf('：'), line.indexOf(': '));
+    if (separator < 0) continue;
+    const candidate = line.slice(separator + (line[separator] === '：' ? 1 : 2)).trim().replace(/^`|`$/g, '');
+    if (!candidate || candidate.length > 1_000) continue;
+    try {
+      const resolved = path.resolve(expandLocalPath(candidate));
+      if (fs.existsSync(resolved)) paths.add(resolved);
+    } catch {}
+  }
+  return Array.from(paths);
+}
+
+function legalInputBlocked(content: string): boolean {
+  return /^(?:请提供|无法解析文件|链接格式无效|仅支持 http|出于安全原因)/.test(String(content || '').trim());
+}
+
+function shouldExpectCaseMutation(args: Record<string, any>, mode?: LegalReceiptProfile['expectCaseMutation']): boolean {
+  if (!mode || args.persistCase === false) return false;
+  if (mode === 'always') return true;
+  if (mode === 'when_case_id') return Boolean(textArg(args, 'caseId'));
+  return args.persistCase === true || Boolean(textArg(args, 'caseId') || textArg(args, 'caseName') || textArg(args, 'title'));
+}
+
+function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceiptProfile): LegalToolHandler {
+  return async (args, context) => {
+    const orgId = legalWorkspaceId(args, context);
+    const beforeCases = legalCaseSnapshot(orgId);
+    const beforeArticles = legalArticleIds(orgId);
+    const content = await handler(args, context);
+    const afterCases = legalCaseSnapshot(orgId);
+    const afterArticles = legalArticleIds(orgId);
+    const changedCaseIds = changedLegalCaseIds(beforeCases, afterCases);
+    const articleIds = Array.from(afterArticles).filter(id => !beforeArticles.has(id));
+    const artifacts = existingLegalOutputPaths(content);
+    const classified = profile.classify?.(content, args)
+      || (legalInputBlocked(content) ? { ok: false, status: 'blocked' } : { ok: true, status: profile.status });
+    const expectedCaseMutation = shouldExpectCaseMutation(args, profile.expectCaseMutation);
+    if (classified.ok && expectedCaseMutation && changedCaseIds.length === 0) {
+      throw new Error('Legal work product was not persisted to the requested case workspace.');
+    }
+    const requireArtifacts = typeof profile.requireArtifacts === 'function'
+      ? profile.requireArtifacts(args)
+      : profile.requireArtifacts === true;
+    if (classified.ok && requireArtifacts && artifacts.length === 0) {
+      throw new Error('Legal work product did not produce a verifiable local artifact.');
+    }
+    if (classified.ok && profile.requireArticleMutation && articleIds.length === 0) {
+      throw new Error('Legal knowledge-base import did not persist an article.');
+    }
+    return encodeToolResult(content, {
+      ok: classified.ok,
+      status: classified.status,
+      persisted: changedCaseIds.length > 0 || articleIds.length > 0,
+      changedCaseIds,
+      articleIds,
+      artifacts,
+      content,
+    });
+  };
+}
+
+function legalCapability(input: {
+  id: string;
+  operation: Exclude<CapabilityOperation, 'unknown'>;
+  risk: Exclude<CapabilityRisk, 'none'>;
+  sideEffects: CapabilitySideEffect[];
+  successStatuses: string[];
+  requireArtifacts?: boolean;
+  limitations?: string[];
+}) {
+  return capabilityContract({
+    id: input.id,
+    family: 'legal-workflow',
+    lane: 'industry',
+    operation: input.operation,
+    risk: input.risk,
+    sideEffects: input.sideEffects,
+    verification: {
+      strategy: input.requireArtifacts ? 'artifact' : 'terminal_receipt',
+      required: true,
+      requiredFields: ['ok', 'status', 'persisted', 'changedCaseIds', 'articleIds', 'artifacts', 'content'],
+      requiredValues: { ok: true },
+      successStatuses: input.successStatuses,
+      failureStatuses: ['blocked', 'failed', 'unverified'],
+      requiredArtifactCollections: input.requireArtifacts ? ['artifacts'] : undefined,
+      successSignals: ['structured legal receipt reports case, knowledge-base, and file effects separately'],
+      limitations: input.limitations || ['Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published.'],
+    },
+  });
+}
+
+function legalEvidence(
+  id: string,
+  operation: Exclude<CapabilityOperation, 'unknown'>,
+  subjectArgument?: string,
+  limitations?: string[],
+) {
+  return capabilityEvidence({ id, operation, subjectArgument, limitations });
 }
 
 // ── Register All ────────────────────────────────────────────────────────
@@ -5595,9 +5759,18 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: generateBidHandler,
+    handler: withLegalReceipt(generateBidHandler, { status: 'generated', expectCaseMutation: 'when_requested' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.bid.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case work-product archive', reversible: true },
+        { type: 'local_read', scope: 'optional tender files and folders', reversible: true },
+        { type: 'network_read', scope: 'configured legal drafting model', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.bid.generate', 'create', 'projectName'),
   });
 
   registry.register({
@@ -5639,9 +5812,17 @@ export function registerLegalTools(registry: ToolRegistry): void {
       },
       required: ['type'],
     },
-    handler: draftContractHandler,
+    handler: withLegalReceipt(draftContractHandler, { status: 'generated', expectCaseMutation: 'when_requested' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.contract.draft', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case contract draft archive', reversible: true },
+        { type: 'network_read', scope: 'configured legal drafting model', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.contract.draft', 'create', 'type'),
   });
 
   registry.register({
@@ -5702,9 +5883,17 @@ export function registerLegalTools(registry: ToolRegistry): void {
       },
       required: ['facts'],
     },
-    handler: caseStrategyHandler,
+    handler: withLegalReceipt(caseStrategyHandler, { status: 'generated', expectCaseMutation: 'when_requested' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.case.strategy.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case strategy archive', reversible: true },
+        { type: 'network_read', scope: 'legal model and authority search context', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.case.strategy.generate', 'create', 'facts'),
   });
 
   registry.register({
@@ -5738,9 +5927,14 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: caseWorkspaceHandler,
+    handler: withLegalReceipt(caseWorkspaceHandler, { status: 'updated', expectCaseMutation: 'always' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.case.workspace.update', operation: 'mutate', risk: 'medium', successStatuses: ['updated'],
+      sideEffects: [{ type: 'local_state_change', scope: 'organization legal case workspace', reversible: true }],
+    }),
+    evidence: legalEvidence('legal.case.workspace.update', 'mutate', 'caseId'),
   });
 
   registry.register({
@@ -5810,9 +6004,14 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: legalMessageIntakeToCaseHandler,
+    handler: withLegalReceipt(legalMessageIntakeToCaseHandler, { status: 'archived', expectCaseMutation: 'always' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.case.message-intake.archive', operation: 'create', risk: 'medium', successStatuses: ['archived'],
+      sideEffects: [{ type: 'local_state_change', scope: 'legal case message intake and material archive', reversible: true }],
+    }),
+    evidence: legalEvidence('legal.case.message-intake.archive', 'create', 'message'),
   });
 
   registry.register({
@@ -5839,9 +6038,19 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: meetingMinutesToCaseHandler,
+    handler: withLegalReceipt(meetingMinutesToCaseHandler, {
+      status: 'generated', expectCaseMutation: 'always', requireArtifacts: true,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.case.meeting-minutes.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'], requireArtifacts: true,
+      sideEffects: [
+        { type: 'local_state_change', scope: 'legal case meeting archive', reversible: true },
+        { type: 'local_write', scope: 'meeting minutes, action items, and case update files', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.case.meeting-minutes.generate', 'create', 'transcript'),
   });
 
   registry.register({
@@ -5875,9 +6084,21 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: reasoningMatrixHandler,
+    handler: withLegalReceipt(reasoningMatrixHandler, {
+      status: 'generated',
+      expectCaseMutation: 'always',
+      requireArtifacts: args => args.writeFiles !== false && args.writeFile !== false,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.case.reasoning-matrix.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'legal case reasoning archive', reversible: true },
+        { type: 'local_write', scope: 'optional legal reasoning matrix file', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.case.reasoning-matrix.generate', 'create', 'caseName'),
   });
 
   registry.register({
@@ -5906,9 +6127,22 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: generateLitigationPacketHandler,
+    handler: withLegalReceipt(generateLitigationPacketHandler, {
+      status: 'generated',
+      expectCaseMutation: 'when_requested',
+      requireArtifacts: args => args.writeFiles !== false && args.writeFile !== false,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.litigation.packet.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case litigation packet archive', reversible: true },
+        { type: 'local_write', scope: 'litigation packet Markdown and optional DOCX files', reversible: true },
+        { type: 'network_read', scope: 'configured legal drafting model', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.litigation.packet.generate', 'create', 'caseName'),
   });
 
   registry.register({
@@ -5932,9 +6166,15 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认 system' },
       },
     },
-    handler: prepareFilingHandoffHandler,
+    handler: withLegalReceipt(prepareFilingHandoffHandler, { status: 'prepared', expectCaseMutation: 'when_requested' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.filing.handoff.prepare', operation: 'create', risk: 'medium', successStatuses: ['prepared'],
+      sideEffects: [{ type: 'local_state_change', scope: 'optional legal case filing handoff archive', reversible: true }],
+      limitations: ['Prepares a filing handoff only; it never logs in, submits, signs, pays, or confirms service.'],
+    }),
+    evidence: legalEvidence('legal.filing.handoff.prepare', 'create', 'caseName'),
   });
 
   registry.register({
@@ -5987,9 +6227,17 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: generateArgumentOrOpinionHandler,
+    handler: withLegalReceipt(generateArgumentOrOpinionHandler, { status: 'generated', expectCaseMutation: 'when_requested' }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.argument-or-opinion.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case argument or opinion archive', reversible: true },
+        { type: 'network_read', scope: 'configured legal drafting model', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.argument-or-opinion.generate', 'create', 'documentType'),
   });
 
   registry.register({
@@ -6045,9 +6293,21 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '导入人 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: importMaterialsToKbHandler,
+    handler: withLegalReceipt(importMaterialsToKbHandler, {
+      status: 'imported',
+      requireArticleMutation: true,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.materials.import-to-kb', operation: 'create', risk: 'medium', successStatuses: ['imported'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'organization legal knowledge base and vector index', reversible: true },
+        { type: 'local_read', scope: 'selected legal files, folders, or pasted content', reversible: true },
+        { type: 'network_read', scope: 'configured embedding provider when indexing', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.materials.import-to-kb', 'create', 'folderPath'),
   });
 
   registry.register({
@@ -6070,9 +6330,27 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '导入人 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: processNoticeLinkHandler,
+    handler: withLegalReceipt(processNoticeLinkHandler, {
+      status: 'downloaded',
+      expectCaseMutation: 'when_requested',
+      classify: content => legalInputBlocked(content)
+        ? { ok: false, status: 'blocked' }
+        : /已直接读取并保存|已下载|原始文件：/.test(content)
+          ? { ok: true, status: 'downloaded' }
+          : { ok: true, status: 'browser_handoff' },
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.notice-link.process', operation: 'create', risk: 'medium', successStatuses: ['downloaded', 'browser_handoff'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case or knowledge-base notice archive', reversible: true },
+        { type: 'local_write', scope: 'downloaded notice/document and source trace files when directly accessible', reversible: true },
+        { type: 'network_read', scope: 'provided public notice or document URL', reversible: true },
+      ],
+      limitations: ['browser_handoff means the link needs authorized visible login or verification; no download is claimed.'],
+    }),
+    evidence: legalEvidence('legal.notice-link.process', 'create', 'url'),
   });
 
   registry.register({
@@ -6209,9 +6487,21 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: generateCitationVerificationReportHandler,
+    handler: withLegalReceipt(generateCitationVerificationReportHandler, {
+      status: 'generated',
+      requireArtifacts: true,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.citation-verification-report.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'], requireArtifacts: true,
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal knowledge-base verification report', reversible: true },
+        { type: 'local_write', scope: 'citation verification report file', reversible: true },
+        { type: 'local_read', scope: 'optional source legal document', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.citation-verification-report.generate', 'create', 'filePath'),
   });
 
   registry.register({
@@ -6242,9 +6532,28 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户 ID，默认上下文 userId 或 system' },
       },
     },
-    handler: finalizeDeliveryPackageHandler,
+    handler: withLegalReceipt(finalizeDeliveryPackageHandler, {
+      status: 'generated',
+      expectCaseMutation: 'when_case_id',
+      requireArtifacts: true,
+      classify: content => legalInputBlocked(content)
+        ? { ok: false, status: 'blocked' }
+        : /正式交付包未生成/.test(content)
+          ? { ok: false, status: 'blocked' }
+          : { ok: true, status: 'generated' },
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.delivery-package.finalize', operation: 'create', risk: 'medium', successStatuses: ['generated'], requireArtifacts: true,
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case delivery archive or gate-block record', reversible: true },
+        { type: 'local_write', scope: 'formal-review legal package, verification, source, and checklist files', reversible: true },
+        { type: 'process_execution', scope: 'optional Microsoft Word PDF conversion', reversible: true },
+      ],
+      limitations: ['A generated package remains a lawyer-review draft and is never automatically filed, signed, sent, paid, or served.'],
+    }),
+    evidence: legalEvidence('legal.delivery-package.finalize', 'create', 'outputDir'),
   });
 
   registry.register({
@@ -6267,9 +6576,21 @@ export function registerLegalTools(registry: ToolRegistry): void {
         orgId: { type: 'string', description: '组织 ID，默认上下文 orgId 或 default' },
       },
     },
-    handler: prepareExternalBrowserWorkspaceHandler,
+    handler: withLegalReceipt(prepareExternalBrowserWorkspaceHandler, {
+      status: 'prepared',
+      requireArtifacts: true,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.external-browser-workspace.prepare', operation: 'create', risk: 'medium', successStatuses: ['prepared'], requireArtifacts: true,
+      sideEffects: [
+        { type: 'local_state_change', scope: 'local legal browser-workspace runbook state', reversible: true },
+        { type: 'local_write', scope: 'browser runbook, source register, and login command files', reversible: true },
+      ],
+      limitations: ['Prepares commands and records only; it does not log in, bypass verification, scrape, or download.'],
+    }),
+    evidence: legalEvidence('legal.external-browser-workspace.prepare', 'create', 'outputDir'),
   });
 
   registry.register({
@@ -6284,6 +6605,15 @@ export function registerLegalTools(registry: ToolRegistry): void {
     handler: refreshAuthoritativeSourcesHandler,
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.authoritative-sources.refresh', operation: 'mutate', risk: 'medium', successStatuses: ['refreshed'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'authoritative statute source refresh state and history', reversible: true },
+        { type: 'network_read', scope: 'official national law and regulation sources', reversible: true },
+      ],
+      limitations: ['Network failure or changed official records are recorded for review and are never treated as valid law evidence.'],
+    }),
+    evidence: legalEvidence('legal.authoritative-sources.refresh', 'mutate', 'timeoutMs'),
   });
 
   registry.register({
@@ -6323,8 +6653,20 @@ export function registerLegalTools(registry: ToolRegistry): void {
         userId: { type: 'string', description: '操作用户ID' },
       },
     },
-    handler: importJudgmentHandler,
+    handler: withLegalReceipt(importJudgmentHandler, {
+      status: 'imported',
+      requireArticleMutation: true,
+    }),
     permission: 'user',
     securityLevel: 'safe',
+    capability: legalCapability({
+      id: 'legal.judgment.import', operation: 'create', risk: 'medium', successStatuses: ['imported'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'organization judgment knowledge base and vector index', reversible: true },
+        { type: 'local_read', scope: 'selected judgment file or pasted content', reversible: true },
+        { type: 'network_read', scope: 'configured embedding provider when indexing', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.judgment.import', 'create', 'filePath'),
   });
 }

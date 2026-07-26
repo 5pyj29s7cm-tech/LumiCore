@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Secure code execution sandbox — run Python and JavaScript in isolated cloud containers. Powered by E2B.",
   "type": "module",
-  "dependencies": { "@e2b/mcp-server": "^1.0.0" },
+  "dependencies": {
+    "@e2b/mcp-server": "^1.0.0"
+  },
   "lumi": {
     "displayName": "Code Sandbox",
     "category": "Dev Tools",
@@ -15,6 +17,46 @@
     "apiKeyUrl": "https://e2b.dev",
     "setupNote": "Requires an E2B API key. Save E2B_API_KEY in Settings before enabling this skill; it will stay disconnected until the key is configured.",
     "runCommand": "npx",
-    "runArgs": ["-y", "@e2b/mcp-server"]
+    "runArgs": [
+      "-y",
+      "@e2b/mcp-server"
+    ],
+    "capabilityDefault": {
+      "operation": "mutate",
+      "risk": "high",
+      "sideEffects": [
+        {
+          "type": "credential_access",
+          "scope": "configured E2B API credential",
+          "reversible": true
+        },
+        {
+          "type": "process_execution",
+          "scope": "isolated cloud sandbox command",
+          "reversible": false
+        },
+        {
+          "type": "external_state_change",
+          "scope": "cloud sandbox state and quota",
+          "reversible": false
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [],
+        "successSignals": [
+          "non-empty MCP terminal receipt"
+        ],
+        "limitations": [
+          "A sandbox receipt does not prove changes outside that isolated environment."
+        ]
+      },
+      "trust": "official",
+      "lane": "system",
+      "domains": [
+        "code"
+      ]
+    }
   }
 }

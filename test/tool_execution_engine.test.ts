@@ -1,0 +1,193 @@
+import { describe, expect, it, vi } from 'vitest';
+import { executeToolCall, executeToolCallOrThrow } from '../server/tools/execution_engine';
+import { ToolRegistry } from '../server/tools/registry';
+import { toolRecordSucceeded } from '../server/cognition/task_execution_ledger';
+import { encodeToolResult } from '../server/tools/result_envelope';
+
+function registryWithTool() {
+  const registry = new ToolRegistry();
+  const handler = vi.fn(async (args: Record<string, any>) => JSON.stringify({
+    ok: true,
+    status: 'observed',
+    target: args.target,
+  }));
+  registry.register({
+    name: 'read_demo',
+    description: 'Read a demo target.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string' },
+        apiToken: { type: 'string' },
+      },
+      required: ['target'],
+    },
+    permission: 'public',
+    securityLevel: 'safe',
+    evidence: {
+      capability: 'demo_read',
+      operation: 'observe',
+      assurance: 'observed',
+      subjectArgument: 'target',
+    },
+    handler,
+  });
+  return { registry, handler };
+}
+
+describe('unified tool execution engine', () => {
+  it('returns one redacted evidence-bearing receipt for successful execution', async () => {
+    const { registry, handler } = registryWithTool();
+    const onToolStart = vi.fn();
+    const record = await executeToolCall({
+      registry,
+      id: 'call-1',
+      name: 'read_demo',
+      arguments: { target: 'desktop', apiToken: 'secret-value' },
+      context: { onToolStart },
+    });
+
+    expect(record.arguments).toEqual({ target: 'desktop', apiToken: '[redacted]' });
+    expect(record.evidence).toEqual({
+      capability: 'demo_read',
+      operation: 'observe',
+      assurance: 'observed',
+      scope: ['desktop'],
+    });
+    expect(toolRecordSucceeded(record)).toBe(true);
+    expect(handler).toHaveBeenCalledWith(
+      { target: 'desktop', apiToken: 'secret-value' },
+      expect.anything(),
+    );
+    expect(onToolStart).toHaveBeenCalledWith({
+      id: 'call-1',
+      name: 'read_demo',
+      arguments: { target: 'desktop', apiToken: '[redacted]' },
+    });
+  });
+
+  it('records policy and preflight failures instead of leaking divergent throw paths', async () => {
+    const { registry, handler } = registryWithTool();
+    const preflight = await executeToolCall({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+      preflight: () => ({ allowed: false, reason: 'Target is stale.' }),
+    });
+    const forbidden = await executeToolCall({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+      context: {
+        toolPolicy: {
+          allowedTools: [],
+          forbiddenTools: ['*'],
+          requireConfirmation: [],
+          maxIterations: 0,
+        },
+      },
+    });
+
+    expect(preflight.error).toBe('Target is stale.');
+    expect(forbidden.error).toMatch(/forbidden/i);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('keeps string-or-throw callers on the same receipt-producing execution path', async () => {
+    const { registry } = registryWithTool();
+    await expect(executeToolCallOrThrow({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+    })).resolves.toContain('"ok":true');
+    await expect(executeToolCallOrThrow({
+      registry,
+      name: 'read_demo',
+      arguments: { target: 'desktop' },
+      preflight: () => ({ allowed: false, reason: 'blocked before start' }),
+    })).rejects.toMatchObject({
+      message: 'blocked before start',
+      toolRecord: expect.objectContaining({
+        name: 'read_demo',
+        error: 'blocked before start',
+      }),
+    });
+  });
+
+  it('throws when execution returned but terminal verification did not pass', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'unverified_demo',
+      description: 'Returns a relay result without post-state evidence.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      permission: 'public',
+      securityLevel: 'safe',
+      capability: {
+        id: 'demo.unverified',
+        family: 'demo',
+        lane: 'client',
+        operation: 'mutate',
+        risk: 'low',
+        sideEffects: [{ type: 'desktop_control', scope: 'test state', reversible: true }],
+        verification: {
+          strategy: 'state_diff',
+          required: true,
+          requiredFields: ['ok'],
+          requiredValues: { ok: true },
+          successSignals: ['verified post-state'],
+          limitations: [],
+        },
+      },
+      handler: async () => JSON.stringify({ ok: true, status: 'relayed' }),
+    });
+
+    await expect(executeToolCallOrThrow({ registry, name: 'unverified_demo' })).rejects.toMatchObject({
+      message: expect.stringMatching(/no verified post-action state/i),
+      toolRecord: expect.objectContaining({
+        terminalVerification: expect.objectContaining({ status: 'unverified' }),
+      }),
+    });
+  });
+
+  it('separates backward-compatible human output from the terminal receipt', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'enveloped_demo',
+      description: 'Returns readable content plus exact terminal evidence.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      permission: 'public',
+      securityLevel: 'safe',
+      capability: {
+        id: 'demo.enveloped',
+        family: 'demo',
+        lane: 'industry',
+        operation: 'mutate',
+        risk: 'medium',
+        sideEffects: [{ type: 'local_state_change', scope: 'test state', reversible: true }],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: ['ok', 'status', 'persisted'],
+          requiredValues: { ok: true, persisted: true },
+          successStatuses: ['updated'],
+          successSignals: ['persisted receipt'],
+          limitations: [],
+        },
+      },
+      handler: async () => encodeToolResult('Readable result\n- Item ID: demo-1', {
+        ok: true,
+        status: 'updated',
+        persisted: true,
+      }),
+    });
+
+    const direct = await registry.execute('enveloped_demo', {});
+    expect(direct).toContain('Readable result\n- Item ID: demo-1');
+
+    const record = await executeToolCall({ registry, name: 'enveloped_demo' });
+    expect(record.result).toBe('Readable result\n- Item ID: demo-1');
+    expect(record.result).not.toContain('LUMI_TOOL_RECEIPT');
+    expect(record.receipt).toEqual({ ok: true, status: 'updated', persisted: true });
+    expect(record.terminalVerification?.status).toBe('verified');
+  });
+});

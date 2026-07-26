@@ -1,5 +1,6 @@
 import vm from 'vm';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 async function codeExecutionHandler(args: Record<string, any>): Promise<string> {
   const code = String(args.code || '');
@@ -60,20 +61,22 @@ async function codeExecutionHandler(args: Record<string, any>): Promise<string> 
       new Promise((_, reject) => setTimeout(() => reject(new Error('Execution timed out')), timeout)),
     ]);
 
-    if (output.length > 0) {
-      return output.join('\n');
-    }
-
-    if (result !== undefined) {
-      return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-    }
-
-    return output.length > 0 ? output.join('\n') : '(code executed with no output)';
+    return JSON.stringify({
+      ok: true,
+      status: 'completed',
+      output: output.length > 0
+        ? output.join('\n')
+        : result !== undefined
+          ? result
+          : null,
+    }, null, 2);
   } catch (err: any) {
-    if (output.length > 0) {
-      return output.join('\n') + `\n\nExecution error: ${err.message}`;
-    }
-    return `Execution error: ${err.message}`;
+    return JSON.stringify({
+      ok: false,
+      status: 'failed',
+      output: output.join('\n'),
+      error: err.message,
+    }, null, 2);
   }
 }
 
@@ -92,5 +95,27 @@ export function registerCodeOpsTools(registry: ToolRegistry): void {
     handler: codeExecutionHandler,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'code.javascript.sandbox.execute',
+      family: 'code_execution',
+      lane: 'system',
+      operation: 'test',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'ephemeral isolated JavaScript VM', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'output'],
+        requiredValues: { ok: true, status: 'completed' },
+        successStatuses: ['completed'],
+        successSignals: ['the isolated VM completed without an exception or timeout'],
+        limitations: ['Completion proves sandbox execution, not correctness of the supplied program.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'code.javascript.sandbox.execute',
+      operation: 'test',
+      subjectArgument: 'code',
+    }),
   });
 }

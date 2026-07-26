@@ -65,6 +65,27 @@ describe('systematic naturalness regressions', () => {
     })).toBe(false);
   });
 
+  it('uses the same orchestration gate for task sockets', () => {
+    expect(shouldAttemptOrchestration({
+      channel: 'task',
+      text: 'open WPS, read the document, and update the current page',
+      complexity: 'complex',
+      allowToolUse: true,
+      clientActionOnly: false,
+      selfRepair: false,
+      directDesktop: true,
+      capabilityLane: 'desktop_control',
+    })).toBe(false);
+    expect(shouldAttemptOrchestration({
+      channel: 'task',
+      text: 'use a team of agents to research, compare, and independently verify three technical options',
+      complexity: 'complex',
+      allowToolUse: true,
+      clientActionOnly: false,
+      selfRepair: false,
+    })).toBe(true);
+  });
+
   it('recognizes a natural running-software count and answers from one process receipt', () => {
     const text = '你看一下现在后台有多少个软件在运行';
     expect(buildDesktopObservationPlan(text)).toEqual([

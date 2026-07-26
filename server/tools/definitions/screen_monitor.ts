@@ -109,7 +109,7 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
     permission: 'user',
     securityLevel: 'safe',
     evidence: {
-      capability: 'desktop_window',
+      capability: 'desktop.window.observe',
       operation: 'observe',
       assurance: 'observed',
     },
@@ -131,8 +131,23 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
     handler: controlActiveWindow,
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.window.control',
+      family: 'desktop',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'desktop_control', scope: 'verified foreground window', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['verification.status'],
+        successSignals: ['foreground window state matches the requested state'],
+        limitations: ['The target identity must match before the native state change is accepted.'],
+      },
+    },
     evidence: {
-      capability: 'desktop_window',
+      capability: 'desktop.window.control',
       operation: 'mutate',
       assurance: 'verified',
       subjectArgument: 'expectedTarget',

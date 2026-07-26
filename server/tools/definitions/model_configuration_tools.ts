@@ -158,6 +158,30 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'model.configuration.update',
+      family: 'model_configuration',
+      lane: 'client',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'Lumi model-role preferences', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['saved', 'status', 'updated'],
+        requiredValues: { saved: true },
+        successStatuses: ['saved_and_verified', 'saved_unverified'],
+        successSignals: ['the selected role was persisted and the connected client refresh was attempted'],
+        limitations: ['saved_unverified proves the configuration write, not provider reachability.'],
+      },
+    },
+    evidence: {
+      capability: 'model.configuration.update',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'role',
+      limitations: ['Provider availability is separate from persistence of the selected route.'],
+    },
   });
 
   registry.register({

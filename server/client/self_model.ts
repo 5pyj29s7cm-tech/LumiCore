@@ -14,12 +14,21 @@ import {
 } from '../../shared/org_workspace';
 import {
   CLIENT_SETTINGS_SECTIONS,
+  PERSONAL_CLIENT_LAUNCHER_IDS,
   PERSONAL_CLIENT_SURFACES,
   PERSONAL_CLIENT_SURFACE_ACTIONS,
+  getOpenPersonalClientSurfaceIds,
   getPersonalClientSurfaceByAction,
   isComputerAdaptationSettingsTarget,
   normalizeClientSettingsSection,
 } from '../../shared/client_surfaces';
+import {
+  LUMI_TECHNICAL_ARCHITECTURE,
+  type LumiTechnicalArchitecture,
+} from '../../shared/technical_architecture';
+import { toolRegistry } from '../tools/registry';
+import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
+import { selectManifestCapabilities } from '../tools/capability_projection';
 
 export type ClientMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 export type ClientCapabilityKind =
@@ -101,30 +110,20 @@ export interface ClientStateSnapshot {
     memoryAvatarOpen?: boolean;
     runtimeLogOpen?: boolean;
     meetingOpen?: boolean;
-    /** Legacy client-state input; the built-in music surface is no longer registered. */
-    musicLayerVisible?: boolean;
     wallpaperMode?: boolean;
     widgetMode?: boolean;
     nexusOpen?: boolean;
+    /** Surface ids derived from the authoritative shared client registry. */
+    openSurfaceIds?: string[];
+  };
+  uiManifest?: {
+    surfaceIds?: string[];
+    actions?: string[];
+    settingsSections?: string[];
+    launcherIds?: string[];
   };
   settings?: { activeSection?: string };
   voice?: { state?: string; muted?: boolean };
-  /** Legacy client-state input retained so older desktop builds can report state during upgrade. */
-  music?: {
-    visible?: boolean;
-    isPlaying?: boolean;
-    trackName?: string;
-    artists?: string[];
-    album?: string;
-    source?: string | null;
-    progress?: number;
-    duration?: number;
-    volume?: number;
-    mood?: string;
-    hasLyrics?: boolean;
-    layerVisible?: boolean;
-    lastError?: string;
-  };
   meeting?: {
     active?: boolean;
     noteCount?: number;
@@ -237,6 +236,7 @@ export interface ClientActionVerification {
 export interface ClientSelfAwarenessReport {
   level: 'live' | 'stale' | 'missing';
   bodySummary: string;
+  architecture: LumiTechnicalArchitecture;
   currentState: ClientStateDigest | null;
   knows: string[];
   gaps: string[];
@@ -274,7 +274,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'mode.autonomous',
     label: 'Autonomy mode',
     kind: 'mode',
-    actions: ['set_client_mode(autonomous)', 'open_runtime_log'],
+    actions: ['set_client_mode(autonomous)', 'open_computer_adaptation'],
     notes: 'Same practical permissions as Assistant, plus 24h continuous/background operation, proactive questions, monitoring, memory absorption, local-machine body learning, industry-habit-aware public-source web learning, sorting, task checkpoints, and ultra-long continuation.',
     stateKeys: ['mode', 'runtimeLog', 'tools'],
   },
@@ -282,7 +282,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.manager',
     label: 'Desktop window manager',
     kind: 'window',
-    actions: ['open_app', 'close_app', 'focus_home', 'open_nexus', 'close_nexus'],
+    actions: ['focus_home', 'close_client_surface', 'open_nexus', 'close_nexus'],
     notes: 'Manages Lumi desktop windows and full-screen surfaces through routed client actions rather than mouse/keyboard control.',
     stateKeys: ['windows', 'surfaces'],
   },
@@ -298,7 +298,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.chat',
     label: 'Side chat window',
     kind: 'window',
-    actions: ['open_chat', 'close_app:chat'],
+    actions: ['open_chat', 'close_client_surface(chat)'],
     notes: 'Compact chat surface for direct conversation inside the desktop client.',
     stateKeys: ['surfaces.chatOpen'],
   },
@@ -314,7 +314,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'workspace.runtime_diagnostics',
     label: 'Runtime diagnostics',
     kind: 'runtime',
-    actions: ['open_runtime_log'],
+    actions: ['open_computer_adaptation'],
     notes: 'Runtime health and adaptation evidence are shown in the unified Kernel monitor; the former standalone run-log window no longer exists.',
     stateKeys: ['runtime', 'errors'],
   },
@@ -330,7 +330,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.device_sync',
     label: 'Device sync center',
     kind: 'window',
-    actions: ['open_app:devices'],
+    actions: ['open_devices'],
     notes: 'Device pairing and synchronization center for local and connected devices.',
     stateKeys: ['windows'],
   },
@@ -338,7 +338,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.avatar_sound',
     label: 'Personalization surface',
     kind: 'window',
-    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio', 'open_memory_avatar', 'open_app:personalization', 'open_app:avatar-studio', 'open_app:sound', 'open_app:memory-avatar'],
+    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio', 'open_memory_avatar'],
     notes: 'One personalization window contains avatar appearance and voice/sound controls; the memory avatar lab remains a separate surface.',
     stateKeys: ['windows'],
   },
@@ -362,7 +362,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'runtime.background_residency',
     label: 'Background runtime awareness',
     kind: 'runtime',
-    actions: ['client_get_state', 'client_health_check', 'open_runtime_log', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
+    actions: ['client_get_state', 'client_health_check', 'open_computer_adaptation', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
     notes: 'Lumi distinguishes visible window state, hidden-to-background resident client state, backend process health, launch-at-login, close-to-background, and autonomous workflow execution. Resident background availability requires the desktop client/server to be alive; autonomous background work follows the desktop mode/autonomy policy, token budget, and enabled workflow rules. Assistant is low-friction for user-present work; Autonomy is for continuous execution. Verify runtime state before promising that Lumi will keep working after the window is hidden or after restart.',
     requiresConfirmation: false,
     stateKeys: ['runtime', 'runtimeLog', 'autonomy', 'mode', 'permissions', 'tools'],
@@ -492,7 +492,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'window.advanced',
     label: 'Advanced windows',
     kind: 'window',
-    actions: ['open_app:terminal', 'open_app:tokens', 'open_app:notifications', 'open_app:reminders'],
+    actions: ['open_terminal', 'open_token_dashboard', 'open_notifications', 'open_reminders'],
     notes: 'Terminal, measured token usage, notification, and reminder windows remain available when the user asks for them.',
     stateKeys: ['windows'],
   },
@@ -567,7 +567,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     id: 'system.usage_monitoring',
     label: 'Model and token usage monitoring',
     kind: 'system',
-    actions: ['usage_get_summary', 'open_app:tokens'],
+    actions: ['usage_get_summary', 'open_token_dashboard'],
     notes: 'Summarizes recorded provider/model/mode token usage. Use this before answering questions about today model consumption or API usage.',
     stateKeys: ['tools'],
   },
@@ -643,192 +643,6 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
 ];
 
-const LEGACY_CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
-  {
-    id: 'home',
-    label: 'Home / desktop shell',
-    actions: ['focus_home', 'desktop_show_lumi_window'],
-    useWhen: 'Return to Lumi base state, orient the user, or recover from scattered windows.',
-  },
-  {
-    id: 'nexus',
-    label: 'Nexus / central world',
-    actions: ['open_nexus', 'close_nexus'],
-    useWhen: 'Show the central world view / Nexus entrance in the LumiOS client.',
-    closeAfterUse: false,
-  },
-  {
-    id: 'chat',
-    label: 'Side chat',
-    actions: ['open_chat', 'close_app:chat'],
-    useWhen: 'Hold an ongoing conversation beside other work without taking over the whole client.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'knowledge',
-    label: 'Knowledge base and memory',
-    actions: ['show_knowledge_base', 'open_files'],
-    useWhen: 'Show knowledge, imported files, memories, and indexing health for the currently active personal or organization workspace.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'runtime-log',
-    label: 'Runtime diagnostics',
-    actions: ['open_runtime_log'],
-    useWhen: 'Show runtime health, errors, and self-repair evidence in the unified Kernel monitor.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'skills',
-    label: 'Skill hall',
-    actions: ['open_skills'],
-    useWhen: 'Show installed skills, MCP servers, extension points, or repair/install surfaces.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'tools',
-    label: 'Tools catalog',
-    actions: ['open_tools'],
-    useWhen: 'Show what executable tools Lumi can call and how tool status is exposed.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'team',
-    label: 'Agent team',
-    actions: ['open_team'],
-    useWhen: 'Show sub-agents, orchestration, delegation, and multi-agent collaboration.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'personalization',
-    label: 'Personalization',
-    actions: ['open_personalization', 'open_avatar_studio', 'open_sound_studio'],
-    useWhen: 'Show Lumi avatar appearance and voice or sound configuration in the unified personalization window.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org',
-    label: 'Organization workspace',
-    actions: ['open_organization_workspace'],
-    useWhen: 'Enter the role-scoped organization overlay for the same Lumi identity; use a section-specific action for a concrete destination.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-dashboard',
-    label: 'Organization dashboard',
-    actions: ['open_organization_workspace(section=dashboard)'],
-    useWhen: 'Show organization status, shared work, and the main organization destinations.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-knowledge',
-    label: 'Organization knowledge base',
-    actions: ['open_organization_workspace(section=kb)'],
-    useWhen: 'Browse role-authorized organization articles, uploaded sources, and post-ingestion index health.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-lumi',
-    label: 'Lumi in the organization workspace',
-    actions: ['open_organization_workspace(section=chat)'],
-    useWhen: 'Chat with the same Lumi under the active organization overlay and organization knowledge scope.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-messaging',
-    label: 'Organization messaging',
-    actions: ['open_organization_workspace(section=messaging)'],
-    useWhen: 'Manage Feishu and WeCom organization access and routed organization messages; viewer roles cannot open it.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-templates',
-    label: 'Agent templates and review',
-    actions: ['open_organization_workspace(section=templates)', 'open_organization_workspace(section=review)'],
-    useWhen: 'Use the organization template marketplace; review is available only to owners and administrators.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-governance',
-    label: 'Members, permissions, and audit',
-    actions: ['open_organization_workspace(section=members)', 'open_organization_workspace(section=audit)'],
-    useWhen: 'Administer members, permissions, and audit records; available only to owners and administrators.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-settings',
-    label: 'Organization settings and branch connection',
-    actions: ['open_organization_workspace(section=settings)', 'open_organization_workspace(section=branch)'],
-    useWhen: 'Open organization settings or branch connection without creating a separate organization client.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-legal',
-    label: 'Law firm workspace',
-    actions: ['open_organization_workspace(section=legal)'],
-    useWhen: 'Open organization-scoped cases, evidence, legal research, documents, delivery gates, and filing handoff.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-spatial-design',
-    label: 'Spatial and architecture workspace',
-    actions: ['open_organization_workspace(section=spatial-design)'],
-    useWhen: 'Open spatial, interior, architecture, CAD, and design-delivery work.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'org-brand-design',
-    label: 'Brand and creative workspace',
-    actions: ['open_organization_workspace(section=brand-design)'],
-    useWhen: 'Open brand identity, campaign, visual, and creative-delivery work separately from spatial design.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'plans',
-    label: 'Plans and work queue',
-    actions: ['open_plans', 'open_work_queue'],
-    useWhen: 'Show always-online workflows, queued work, recurring tasks, and autonomy agreements.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    actions: ['open_settings'],
-    useWhen: 'Show provider, voice, permission, startup, autonomy, and advanced configuration.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'meeting',
-    label: 'Meeting mode and notes',
-    actions: ['start_meeting_mode', 'end_meeting_mode', 'open_meeting_notes'],
-    useWhen: 'Capture meeting transcription, notes, and reports after explicit user intent.',
-    closeAfterUse: false,
-  },
-  {
-    id: 'wallpaper',
-    label: 'Wallpaper mode',
-    actions: ['set_wallpaper_mode', 'desktop_cursor_glow_show', 'desktop_cursor_glow_update', 'desktop_cursor_glow_click'],
-    useWhen: 'Make desktop work immersive and visible while Lumi operates external applications.',
-    closeAfterUse: true,
-  },
-  {
-    id: 'widget',
-    label: 'Desktop widget mode',
-    actions: ['enter_widget_mode', 'show_desktop_widget', 'exit_widget_mode', 'expand_from_widget'],
-    useWhen: 'Collapse Lumi into or expand Lumi out of the desktop widget shell.',
-    closeAfterUse: false,
-  },
-  {
-    id: 'computer-adaptation',
-    label: 'Computer adaptation center',
-    actions: ['open_computer_adaptation'],
-    useWhen: 'Show system profile, common apps, permissions, local readiness, and setup recommendations.',
-    closeAfterUse: true,
-  },
-];
-
-const registeredPersonalSurfaceIds = new Set<string>(PERSONAL_CLIENT_SURFACES.map(surface => surface.id));
-const registeredSettingsSurfaceIds = new Set<string>(CLIENT_SETTINGS_SECTIONS.map(section => `settings-${section.id}`));
 const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
   ...PERSONAL_CLIENT_SURFACES.map(surface => ({
     id: surface.id,
@@ -844,10 +658,6 @@ const CLIENT_INTERFACE_SURFACES: ClientInterfaceSurface[] = [
     useWhen: section.useWhen,
     closeAfterUse: true,
   })),
-  ...LEGACY_CLIENT_INTERFACE_SURFACES.filter(surface => (
-    !registeredPersonalSurfaceIds.has(surface.id)
-    && !registeredSettingsSurfaceIds.has(surface.id)
-  )),
 ];
 
 const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
@@ -887,8 +697,65 @@ const VISIBLE_EXECUTION_HABITS: VisibleExecutionHabit[] = [
 
 const stateByUser = new Map<string, ClientStateSnapshot>();
 
-export function getClientCapabilities(): ClientCapability[] {
-  return CLIENT_CAPABILITIES;
+function isClientNativeAction(action: string): boolean {
+  const name = action.split('(')[0];
+  return PERSONAL_CLIENT_SURFACE_ACTIONS.includes(name)
+    || name === 'set_client_mode'
+    || name === 'close_client_surface'
+    || name === 'refresh_client_state'
+    || name.startsWith('lap.');
+}
+
+const CLIENT_CAPABILITY_LANES: Partial<Record<ClientCapabilityKind, CapabilityLane[]>> = {
+  workspace: ['client', 'files', 'knowledge', 'agents'],
+  tool_surface: ['client', 'system', 'agents'],
+  media: ['media'],
+  meeting: ['client', 'media'],
+  organization: ['agents', 'industry', 'knowledge', 'messaging'],
+  knowledge: ['knowledge', 'files', 'memory'],
+  runtime: ['system', 'client'],
+  settings: ['client', 'system'],
+  permission: ['client', 'system'],
+  system: ['system', 'client', 'agents', 'memory'],
+  external_app: ['desktop', 'web', 'messaging', 'cad', 'agents'],
+  collaboration: ['agents', 'messaging'],
+};
+
+const CLIENT_CAPABILITY_TERM_STOPWORDS = new Set([
+  'client', 'system', 'workspace', 'window', 'mode', 'external', 'app', 'apps',
+  'tool', 'tools', 'surface', 'adapter', 'registry', 'advanced',
+]);
+
+function clientCapabilityManifestActions(
+  capability: ClientCapability,
+  manifest: CapabilityManifestEntry[],
+): string[] {
+  const terms = `${capability.id} ${capability.label}`
+    .toLowerCase()
+    .split(/[._\-\s/]+/)
+    .map(term => term.trim())
+    .filter(term => term.length >= 3 && !CLIENT_CAPABILITY_TERM_STOPWORDS.has(term));
+  if (terms.length === 0) return [];
+  return selectManifestCapabilities(manifest, {
+    lanes: CLIENT_CAPABILITY_LANES[capability.kind],
+    terms,
+  }).map(entry => entry.toolName);
+}
+
+export function getClientCapabilities(
+  capabilityManifest: CapabilityManifestEntry[] = toolRegistry.getCapabilityManifest(),
+): ClientCapability[] {
+  if (!capabilityManifest.length) return CLIENT_CAPABILITIES;
+  const availableTools = new Set(capabilityManifest
+    .filter(entry => entry.executable && !entry.deprecated)
+    .map(entry => entry.toolName));
+  return CLIENT_CAPABILITIES.map(capability => ({
+    ...capability,
+    actions: Array.from(new Set([
+      ...capability.actions.filter(isClientNativeAction),
+      ...clientCapabilityManifestActions(capability, capabilityManifest),
+    ])).filter(action => isClientNativeAction(action) || availableTools.has(action.split('(')[0])),
+  }));
 }
 
 export function getClientInterfaceSurfaces(): ClientInterfaceSurface[] {
@@ -900,8 +767,25 @@ export function getVisibleExecutionHabits(): VisibleExecutionHabit[] {
 }
 
 export function updateClientState(userId: string, state: ClientStateSnapshot): ClientStateSnapshot {
+  const compactList = (values?: string[]) => Array.from(new Set(
+    (values || []).map(value => String(value || '').trim()).filter(Boolean),
+  )).slice(0, 300);
   const snapshot: ClientStateSnapshot = {
     ...state,
+    surfaces: state.surfaces
+      ? {
+          ...state.surfaces,
+          openSurfaceIds: compactList(state.surfaces.openSurfaceIds),
+        }
+      : state.surfaces,
+    uiManifest: state.uiManifest
+      ? {
+          surfaceIds: compactList(state.uiManifest.surfaceIds),
+          actions: compactList(state.uiManifest.actions),
+          settingsSections: compactList(state.uiManifest.settingsSections),
+          launcherIds: compactList(state.uiManifest.launcherIds),
+        }
+      : undefined,
     updatedAt: Date.now(),
   };
   stateByUser.set(userId || 'anonymous', snapshot);
@@ -979,6 +863,46 @@ export function getClientHealthReport(
     });
   }
 
+  if (state?.platform === 'desktop') {
+    const reported = state.uiManifest;
+    if (!reported) {
+      add({
+        id: 'client_ui.manifest_missing',
+        level: 'attention',
+        area: 'client_ui',
+        message: 'The desktop client has not reported its interface manifest; UI capability claims may be stale.',
+        safeActions: ['client_self_repair(refresh_client_state)'],
+      });
+    } else {
+      const missingSurfaces = PERSONAL_CLIENT_SURFACES
+        .map(surface => surface.id)
+        .filter(id => !(reported.surfaceIds || []).includes(id));
+      const missingActions = PERSONAL_CLIENT_SURFACE_ACTIONS
+        .filter(action => !(reported.actions || []).includes(action));
+      const missingSettings = CLIENT_SETTINGS_SECTIONS
+        .map(section => section.id)
+        .filter(id => !(reported.settingsSections || []).includes(id));
+      const missingLauncherIds = PERSONAL_CLIENT_LAUNCHER_IDS
+        .filter(id => !(reported.launcherIds || []).includes(id));
+      if (missingSurfaces.length || missingActions.length || missingSettings.length || missingLauncherIds.length) {
+        add({
+          id: 'client_ui.manifest_mismatch',
+          level: 'degraded',
+          area: 'client_ui',
+          message: 'The running desktop interface does not match the server capability registry.',
+          evidence: [
+            `surfaces=${missingSurfaces.join(',') || 'ok'}`,
+            `actions=${missingActions.join(',') || 'ok'}`,
+            `settings=${missingSettings.join(',') || 'ok'}`,
+            `launcher=${missingLauncherIds.join(',') || 'ok'}`,
+          ].join('; '),
+          safeActions: ['client_self_repair(refresh_client_state)'],
+          confirmationActions: ['Restart the desktop client after updating it to the same source version as the server.'],
+        });
+      }
+    }
+  }
+
   if (state?.knowledge?.lastError) {
     add({
       id: 'knowledge.refresh_error',
@@ -1043,7 +967,7 @@ export function getClientHealthReport(
         'Refresh client state.',
         'Research candidate libraries, MCP servers, and skills for a requested capability.',
         'Run a sleep/dream memory consolidation pass when resting or when the user asks.',
-        'Open Lumi recovery surfaces such as Music Center, Runtime Log, Skills, Settings, Plans, or Computer Adaptation.',
+        'Open Lumi recovery surfaces such as Runtime Diagnostics, Skills, Settings, Plans, or Computer Adaptation.',
         'Retry non-destructive client actions when the cause is clear.',
       ],
       confirmFirst: [
@@ -1200,7 +1124,7 @@ export function normalizeClientActionTarget(value?: string): string {
 export function getClientStateDigest(state: ClientStateSnapshot | null | undefined): ClientStateDigest | null {
   if (!state) return null;
   const openWindows = [...(state.windows?.open || [])];
-  const openSurfaces: string[] = [];
+  const openSurfaces: string[] = [...(state.surfaces?.openSurfaceIds || [])];
   if (state.activeTab) openSurfaces.push(`tab:${state.activeTab}`);
   if (state.viewMode) openSurfaces.push(`view:${state.viewMode}`);
   if (state.viewMode === 'world' || state.surfaces?.nexusOpen) openSurfaces.push('nexus');
@@ -1288,9 +1212,6 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       naturalCompletion = 'Nexus / central world is closed.';
       naturalPending = 'I asked to close Nexus / central world, but I still need a fresh client state to confirm it.';
       break;
-    case 'open_app':
-      setSurface(target || 'home', target || 'home');
-      break;
     case 'enter_widget_mode':
     case 'show_desktop_widget':
       expectedState = ['surface:widget:open'];
@@ -1305,13 +1226,12 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       naturalCompletion = 'Desktop widget mode is closed.';
       naturalPending = 'I asked to leave desktop widget mode, but I still need fresh state to confirm it.';
       break;
-    case 'close_app':
+    case 'close_client_surface':
       expectedState = target ? [`surface:${target}:closed`] : [];
-      verification = target ? `The ${target} surface should no longer be open.` : 'A target surface is required for close_app.';
+      verification = target ? `The ${target} surface should no longer be open.` : 'A target surface is required for close_client_surface.';
       naturalCompletion = target ? `${target} is closed.` : 'The close request completed.';
       naturalPending = target ? `${target} was asked to close, but I still need fresh state to confirm it.` : 'The close request was sent.';
       break;
-    case 'set_mode':
     case 'set_client_mode':
       expectedState = mode ? [`mode:${mode}`] : [];
       verification = mode ? `Client mode should become ${mode}.` : 'A target mode is required.';
@@ -1332,9 +1252,6 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
       break;
     case 'open_meeting_notes':
       setSurface('meeting', 'meeting notes');
-      break;
-    case 'open_runtime_log':
-      setSurface('kernel', 'runtime diagnostics');
       break;
     case 'show_knowledge_base':
     case 'open_files':
@@ -1405,6 +1322,14 @@ export function getClientActionExpectation(args: Record<string, any> = {}): Clie
     default:
       if (registeredSurface) {
         setSurface(registeredSurface.target, registeredSurface.label);
+        const registeredOrganizationView = normalizeOrganizationWorkspaceView(
+          registeredSurface.organizationViewByAction?.[action]
+          || registeredSurface.organizationView,
+        );
+        if (registeredOrganizationView) {
+          expectedState.push(`org-view:${registeredOrganizationView}`);
+          verification = `${registeredSurface.label} should be visible on the ${registeredOrganizationView} organization view.`;
+        }
         if (registeredSurface.settingsSection) {
           expectedState.push(`settings-section:${registeredSurface.settingsSection}`);
           verification = `${registeredSurface.label} should be visible in the ${registeredSurface.settingsSection} settings section.`;
@@ -1509,6 +1434,7 @@ export function getClientSelfAwarenessReport(
   return {
     level,
     bodySummary,
+    architecture: LUMI_TECHNICAL_ARCHITECTURE,
     currentState: digest,
     knows: [
       'the complete registered personal-client surface map and each native client_action route',
@@ -1534,19 +1460,38 @@ export function getClientSelfAwarenessReport(
       'Report only done, blocked, and needs-confirmation items for takeover work.',
     ],
     nextBestActions: state && !stale
-      ? ['Use client_action for Lumi UI changes and verify the returned status.', 'Use desktop_system_info, desktop_running_processes, desktop_active_window, desktop_ui_snapshot, or desktop_capture_screen for machine/desktop claims.', 'Use client_health_check or open_runtime_log before background/runtime claims.']
+      ? ['Use client_action for Lumi UI changes and verify the returned status.', 'Use desktop_system_info, desktop_running_processes, desktop_active_window, desktop_ui_snapshot, or desktop_capture_screen for machine/desktop claims.', 'Use client_health_check or open_computer_adaptation before background/runtime claims.']
       : ['Call client_self_repair(refresh_client_state).', 'Ask the user to open/reconnect the Lumi desktop client if no state arrives.'],
   };
 }
 
 function isConfirmationSensitiveClientAction(action: string, mode?: string): boolean {
   if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return true;
-  return (action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting';
+  return action === 'set_client_mode' && mode === 'meeting';
 }
 
 function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: string): boolean {
   if (!state) return false;
   const target = normalizeClientActionTarget(surface);
+  const registryVisible = new Set(state.surfaces?.openSurfaceIds || getOpenPersonalClientSurfaceIds({
+    activeTab: state.activeTab,
+    viewMode: state.viewMode,
+    workDomain: state.workDomain,
+    focusedWindow: state.windows?.focused,
+    openWindows: state.windows?.open,
+    settingsSection: state.settings?.activeSection,
+    appLauncherOpen: state.surfaces?.appLauncherOpen,
+    knowledgeOpen: state.surfaces?.knowledgeOpen,
+    chatOpen: state.surfaces?.chatOpen,
+    notificationsOpen: state.surfaces?.notificationsOpen,
+    memoryAvatarOpen: state.surfaces?.memoryAvatarOpen,
+    meetingOpen: state.surfaces?.meetingOpen || state.meeting?.active,
+    wallpaperMode: state.surfaces?.wallpaperMode,
+    widgetMode: state.surfaces?.widgetMode,
+    organizationWorkspaceVisible: state.orgWorkspace?.visible,
+    organizationWorkspaceView: state.orgWorkspace?.activeView,
+  }));
+  if (registryVisible.has(surface) || registryVisible.has(target)) return true;
   const openWindows = state.windows?.open || [];
   if (target === 'home') return state.activeTab === 'home';
   if (target === 'nexus') return state.viewMode === 'world' || Boolean(state.surfaces?.nexusOpen);
@@ -1556,7 +1501,6 @@ function surfaceIsOpen(state: ClientStateSnapshot | null | undefined, surface: s
   if (target === 'chat') return Boolean(state.surfaces?.chatOpen) || openWindows.includes('chat');
   if (target === 'notifications') return Boolean(state.surfaces?.notificationsOpen) || openWindows.includes('notifications');
   if (target === 'memory-avatar') return Boolean(state.surfaces?.memoryAvatarOpen) || openWindows.includes('memory-avatar');
-  if (target === 'runtime-log') return Boolean(state.surfaces?.runtimeLogOpen || state.runtimeLog?.open) || openWindows.includes('runtime-log');
   if (target === 'meeting') return Boolean(state.surfaces?.meetingOpen || state.meeting?.active) || openWindows.includes('meeting');
   if (target === 'wallpaper') return Boolean(state.surfaces?.wallpaperMode);
   if (target === 'widget') return Boolean(state.surfaces?.widgetMode);
@@ -1678,6 +1622,7 @@ export function formatClientSelfPrompt(
     bodySummary: isWork
       ? 'No live desktop state has been verified for this member in the active organization.'
       : 'No live desktop client state has been reported yet.',
+    architecture: LUMI_TECHNICAL_ARCHITECTURE,
     knows: [],
     gaps: [],
     habits: [],
@@ -1697,7 +1642,7 @@ export function formatClientSelfPrompt(
     domain: isWork ? 'work' : 'personal',
     orgId: isWork ? String(scope.orgId || '') : '',
   });
-  const capabilityLines = CLIENT_CAPABILITIES.map(cap => (
+  const capabilityLines = getClientCapabilities().map(cap => (
     `- ${cap.label} [${cap.kind}]: ${cap.notes} Actions: ${cap.actions.join(', ')}${cap.requiresConfirmation ? ' (hard-boundary-sensitive)' : ''}`
   ));
   const interfaceLines = CLIENT_INTERFACE_SURFACES.map(surface => (
@@ -1752,6 +1697,13 @@ export function formatClientSelfPrompt(
     ...awareness.gaps.slice(0, 4).map(gap => `- Gap: ${gap}`),
     ...awareness.nextBestActions.slice(0, 3).map(action => `- Next: ${action}`),
   ];
+  const architectureLines = [
+    `- Product: ${awareness.architecture.product}; topology=${awareness.architecture.topology}; schema=${awareness.architecture.schemaVersion}`,
+    ...awareness.architecture.components.map(component => (
+      `- ${component.label} [${component.layer}]: ${component.technologies.join(', ')} — ${component.responsibility}`
+    )),
+    ...awareness.architecture.invariants.map(invariant => `- Invariant: ${invariant}`),
+  ];
   const workspaceIdentityLines = isWork ? [
     '- Identity: this is the same Lumi personality and capability core serving the authenticated member, with an organization overlay for the active workspace; it is not a second or replacement Lumi.',
     `- Active organization scope: ${scope.orgId}. Use only organization data allowed by the authenticated member role and keep every action attributed to that member.`,
@@ -1778,7 +1730,7 @@ export function formatClientSelfPrompt(
     'Use the client_action tool for UI/client actions when tools are available. Do not pretend a window changed if you did not call the action or ask the user.',
     'A tool omitted by the current turn mode is not a missing capability. Never infer your global capability inventory from the tools exposed on one turn: explicit action requests in Chat transition to Assistant, and the registered runtime, adapter, and health maps determine what is actually available.',
     'For client-native actions, the natural loop is: read current state -> call client_action -> use the returned verification.status. Say success only when verification.status is verified, report pending when state has not caught up, and report failed when the action result says it failed.',
-    'Use the registered explicit client action for every Lumi interface, including personality, notifications, reminders, devices, tokens, terminal, profile, MCP settings, Voice Forge, skill generation, and the app launcher. Use open_app only as backward compatibility, never as a guess about an undocumented target.',
+    'Use the registered explicit client action for every Lumi interface, including personality, notifications, reminders, devices, tokens, terminal, profile, MCP settings, Voice Forge, skill generation, and the app launcher.',
     'When you operate visibly, behave like a present desktop partner: name the task, choose the right interface, inspect the screen/window, move the visible cursor before desktop clicks, verify outcomes, and close temporary surfaces when they are no longer useful.',
     'Use client_health_check when you need to understand your own body/client health. Use client_self_repair for safe client recovery actions such as refreshing state or opening the right recovery surface. Use client_repair_skill only with confirmation when a skill package or MCP server needs repair.',
     'Use client_get_state or client_health_check before claiming local machine, desktop, or background runtime status. Use desktop_system_info, desktop_list_apps, desktop_list_files, desktop_path_info, desktop_running_processes, desktop_active_window, desktop_ui_snapshot, and desktop_capture_screen to refresh the OS/desktop layer.',
@@ -1819,6 +1771,9 @@ export function formatClientSelfPrompt(
     '',
     '### Present-Moment Client Awareness',
     ...awarenessLines,
+    '',
+    '### Technical Architecture',
+    ...architectureLines,
     '',
     '### Client Action Verification Contract',
     '- client_action returns the routed action result plus before/after client state digests and a verification status.',

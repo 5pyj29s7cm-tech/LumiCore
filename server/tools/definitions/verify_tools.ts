@@ -1,5 +1,6 @@
 import { exec } from 'child_process';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const REPO_ROOT = process.cwd();
 
@@ -15,12 +16,12 @@ async function typeCheckHandler(args: Record<string, any>): Promise<string> {
       const output = (stdout + '\n' + stderr).trim();
 
       if (!error && !output) {
-        resolve('Type check passed. No errors.');
+        resolve(JSON.stringify({ ok: true, status: 'passed', errorCount: 0, output: '' }, null, 2));
         return;
       }
 
       if (!output) {
-        resolve('Type check failed with no output.');
+        resolve(JSON.stringify({ ok: false, status: 'failed', errorCount: null, output: '', error: error?.message || 'Type check failed with no output.' }, null, 2));
         return;
       }
 
@@ -43,7 +44,12 @@ async function typeCheckHandler(args: Record<string, any>): Promise<string> {
       }
 
       if (byFile.size === 0) {
-        resolve(output.slice(0, 2000));
+        resolve(JSON.stringify({
+          ok: !error,
+          status: error ? 'failed' : 'passed',
+          errorCount: error ? null : 0,
+          output: output.slice(0, 2000),
+        }, null, 2));
         return;
       }
 
@@ -54,7 +60,13 @@ async function typeCheckHandler(args: Record<string, any>): Promise<string> {
         if (msgs.length > 15) result.push(`  ... and ${msgs.length - 15} more errors`);
         result.push('');
       }
-      resolve(result.join('\n'));
+      resolve(JSON.stringify({
+        ok: false,
+        status: 'failed',
+        errorCount: Array.from(byFile.values()).reduce((total, messages) => total + messages.length, 0),
+        fileCount: byFile.size,
+        output: result.join('\n'),
+      }, null, 2));
     });
   });
 }
@@ -72,7 +84,7 @@ async function runTestsHandler(args: Record<string, any>): Promise<string> {
       const output = (stdout + '\n' + stderr).trim();
 
       if (error && !output) {
-        resolve(`Tests failed: ${error.message}`);
+        resolve(JSON.stringify({ ok: false, status: 'failed', exitCode: error.code ?? null, output: '', error: error.message }, null, 2));
         return;
       }
 
@@ -82,9 +94,9 @@ async function runTestsHandler(args: Record<string, any>): Promise<string> {
         : output;
 
       if (error) {
-        resolve(`Tests FAILED (exit code: ${error.code})\n\n${truncated}`);
+        resolve(JSON.stringify({ ok: false, status: 'failed', exitCode: error.code ?? null, output: truncated }, null, 2));
       } else {
-        resolve(`Tests PASSED\n\n${truncated}`);
+        resolve(JSON.stringify({ ok: true, status: 'passed', exitCode: 0, output: truncated }, null, 2));
       }
     });
   });
@@ -104,6 +116,28 @@ export function registerVerifyTools(registry: ToolRegistry): void {
     handler: typeCheckHandler,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'code.typescript.type-check',
+      family: 'verification',
+      lane: 'system',
+      operation: 'test',
+      risk: 'low',
+      sideEffects: [{ type: 'local_state_change', scope: 'ephemeral TypeScript checker process and cache', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'errorCount'],
+        requiredValues: { ok: true, status: 'passed', errorCount: 0 },
+        successStatuses: ['passed'],
+        successSignals: ['the TypeScript checker exited without diagnostics'],
+        limitations: ['Type correctness does not prove runtime behavior.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'code.typescript.type-check',
+      operation: 'test',
+      subjectArgument: 'path',
+    }),
   });
 
   registry.register({
@@ -120,5 +154,27 @@ export function registerVerifyTools(registry: ToolRegistry): void {
     handler: runTestsHandler,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'code.test-suite.run',
+      family: 'verification',
+      lane: 'system',
+      operation: 'test',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'workspace test process and generated test caches', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'exitCode'],
+        requiredValues: { ok: true, status: 'passed', exitCode: 0 },
+        successStatuses: ['passed'],
+        successSignals: ['the selected test command exited with code zero'],
+        limitations: ['A passing selected suite only covers the tests that command actually ran.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'code.test-suite.run',
+      operation: 'test',
+      subjectArgument: 'command',
+    }),
   });
 }

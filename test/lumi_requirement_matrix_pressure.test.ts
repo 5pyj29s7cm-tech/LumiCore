@@ -93,7 +93,6 @@ describe('Lumi requirement matrix pressure', () => {
       autonomyLevel: 'full',
       autoProcessEnabled: true,
       alwaysOnline: true,
-      externalAppAutomationEnabled: false,
       messagingSendRequiresConfirmation: false,
     });
   });

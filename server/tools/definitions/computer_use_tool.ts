@@ -1,5 +1,6 @@
 import { ToolRegistry } from '../registry';
 import { computerUseLoop } from '../../agents/computer_use';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const DEFAULT_COMPUTER_USE_STEPS = 12;
 const MAX_COMPUTER_USE_STEPS = 50;
@@ -86,5 +87,29 @@ export function registerComputerUseTool(registry: ToolRegistry): void {
     handler: computerUse,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'desktop.vision.control-task',
+      family: 'computer_use',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'bounded visible desktop task', reversible: true }],
+      verification: {
+        strategy: 'visual',
+        required: true,
+        requiredFields: ['ok', 'status', 'completionVerified', 'observations', 'message'],
+        requiredValues: { ok: true, status: 'verified', completionVerified: true, observations: 2 },
+        successStatuses: ['verified'],
+        successSignals: ['two fresh desktop observations independently agree that the requested state is visible'],
+        limitations: ['Visual completion cannot prove hidden server-side effects without a provider or artifact receipt.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'desktop.vision.control-task',
+      operation: 'mutate',
+      assurance: 'verified',
+      subjectArgument: 'task',
+      limitations: ['Use provider acknowledgements for sends and artifact checks for files.'],
+    }),
   });
 }

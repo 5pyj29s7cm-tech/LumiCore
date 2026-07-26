@@ -1,6 +1,7 @@
 import { exec } from 'child_process';
 import path from 'path';
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const REPO_ROOT = process.cwd();
 
@@ -47,7 +48,7 @@ async function gitStageHandler(args: Record<string, any>): Promise<string> {
 
   const fileList = files.map(f => `"${f}"`).join(' ');
   await git(`add ${fileList}`);
-  return `Staged ${files.length} file(s):\n${files.map(f => `  ${f}`).join('\n')}`;
+  return JSON.stringify({ ok: true, status: 'staged', fileCount: files.length, files }, null, 2);
 }
 
 async function gitCommitHandler(args: Record<string, any>): Promise<string> {
@@ -62,7 +63,8 @@ async function gitCommitHandler(args: Record<string, any>): Promise<string> {
 
   const body = args.body ? `-m "${String(args.body).replace(/"/g, '\\"')}"` : '';
   await git(`commit -m "${message.replace(/"/g, '\\"')}" ${body}`.trim());
-  return `Committed: "${message}"`;
+  const revision = (await git('rev-parse HEAD')).trim();
+  return JSON.stringify({ ok: true, status: 'committed', message, revision }, null, 2);
 }
 
 export function registerGitTools(registry: ToolRegistry): void {
@@ -104,6 +106,28 @@ export function registerGitTools(registry: ToolRegistry): void {
     handler: gitStageHandler,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'git.index.stage',
+      family: 'git',
+      lane: 'system',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_write', scope: 'current repository Git index', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'fileCount', 'files'],
+        requiredValues: { ok: true, status: 'staged' },
+        successStatuses: ['staged'],
+        successSignals: ['git add completed for every explicit file path'],
+        limitations: ['The receipt does not claim a commit was created.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'git.index.stage',
+      operation: 'mutate',
+      subjectArgument: 'files',
+    }),
   });
 
   registry.register({
@@ -120,5 +144,28 @@ export function registerGitTools(registry: ToolRegistry): void {
     handler: gitCommitHandler,
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'git.commit.create',
+      family: 'git',
+      lane: 'system',
+      operation: 'create',
+      risk: 'high',
+      sideEffects: [{ type: 'local_write', scope: 'current repository commit history', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'message', 'revision'],
+        requiredValues: { ok: true, status: 'committed' },
+        successStatuses: ['committed'],
+        successSignals: ['git commit completed and HEAD resolves to the returned revision'],
+        limitations: ['The receipt does not claim the commit was pushed.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'git.commit.create',
+      operation: 'create',
+      subjectArgument: 'message',
+      limitations: ['Local commit creation is distinct from remote publication.'],
+    }),
   });
 }

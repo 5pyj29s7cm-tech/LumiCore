@@ -37,7 +37,7 @@ describe('autonomy levels', () => {
   it('keeps semi mode low-friction without adding extra external-app gates', async () => {
     const { isAutonomousWorkAllowed, saveGateConfig } = await import('../server/autonomy/safety_gate');
 
-    const config = saveGateConfig({ autonomyLevel: 'semi', externalAppAutomationEnabled: false });
+    const config = saveGateConfig({ autonomyLevel: 'semi' });
 
     expect(config.autonomyLevel).toBe('semi');
     expect(config.autoProcessEnabled).toBe(true);
@@ -45,7 +45,7 @@ describe('autonomy levels', () => {
     expect(config.allowedHours).toEqual([{ start: 0, end: 24 }]);
     expect(config.maxConsecutiveTasks).toBe(6);
     expect(config.messagingSendRequiresConfirmation).toBe(false);
-    expect(config.externalAppAutomationEnabled).toBe(false);
+    expect(config).not.toHaveProperty('externalAppAutomationEnabled');
     expect(isAutonomousWorkAllowed('level_semi_user').allowed).toBe(true);
   });
 

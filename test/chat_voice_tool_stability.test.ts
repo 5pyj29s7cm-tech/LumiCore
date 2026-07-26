@@ -9,17 +9,19 @@ describe('chat and voice tool-call stability', () => {
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
     const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+    const pipeline = readFileSync(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
 
     for (const source of [chat, voice, task]) {
-      expect(source).toContain('buildLumiTurnDispatch');
-      expect(source).toContain('buildLumiExecutionDecision');
-      expect(source).toContain('buildLumiCapabilitySelection');
+      expect(source).toContain('buildLumiExecutionPipeline');
       expect(source).toContain('buildDesktopExecutionStabilityPolicy');
       expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
       expect(source).toContain('toolPolicy');
       expect(source).toContain('requestConfirmation');
       expect(source).toContain('supervisedExternalCommits');
     }
+    expect(pipeline).toContain('buildLumiTurnDispatch');
+    expect(pipeline).toContain('buildLumiExecutionDecision');
+    expect(pipeline).toContain('buildLumiCapabilitySelection');
   });
 
   it('feeds the same persisted action pointer into text and voice continuation routing', () => {
@@ -70,7 +72,8 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('shouldArchiveLegalMeeting');
     expect(restChat).toContain("return isLegalMeeting && domain === 'work' && Boolean(orgId)");
     expect(restChat).toContain('const orgId = requestScope.orgId');
-    expect(restChat).toContain("toolRegistry.execute('legal_meeting_minutes_to_case'");
+    expect(restChat).toContain('executeToolCallOrThrow({');
+    expect(restChat).toContain("name: 'legal_meeting_minutes_to_case'");
     expect(restChat).toContain('shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)');
     expect(restChat).toContain("source: 'meeting-analyze'");
     expect(restChat).toContain('legalCasework');

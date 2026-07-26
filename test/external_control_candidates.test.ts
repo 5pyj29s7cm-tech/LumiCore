@@ -10,13 +10,13 @@ describe('external control candidates', () => {
 
     expect(ids).toEqual(expect.arrayContaining([
       'playwright-mcp',
-      'windows-uia-snapshot',
+      'native-accessibility',
       'vision-computer-use-loop',
     ]));
   });
 
-  it('includes UIA action tools for native desktop control', () => {
-    const candidate = getExternalControlCandidate('windows-uia-snapshot');
+  it('includes the shared native accessibility actions for Windows and macOS', () => {
+    const candidate = getExternalControlCandidate('native-accessibility');
 
     expect(candidate?.actions).toEqual(expect.arrayContaining([
       'desktop_ui_snapshot',
@@ -55,6 +55,7 @@ describe('external control candidates', () => {
       userId: 'organization-member',
       domain: 'work',
       orgId: 'organization-id',
+      userConfirmed: true,
     })).rejects.toThrow(/cannot change this computer's MCP configuration/i);
   });
 });

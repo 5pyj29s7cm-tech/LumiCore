@@ -10,7 +10,24 @@
       "enabled": false,
       "source": "external",
       "transport": "stdio",
-      "description": "Legacy external filesystem MCP. Desktop files use Lumi built-in native file tools without npx."
+      "description": "Legacy external filesystem MCP. Desktop files use Lumi built-in native file tools without npx.",
+      "capabilityDefault": {
+        "operation": "mutate",
+        "risk": "high",
+        "sideEffects": [
+          { "type": "local_read", "scope": "configured filesystem roots", "reversible": true },
+          { "type": "local_write", "scope": "configured filesystem roots", "reversible": false }
+        ],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": ["MCP terminal receipt"],
+          "limitations": ["This legacy server mixes read and write tools; Lumi built-in file tools should be used instead."]
+        },
+        "trust": "third-party",
+        "lane": "files"
+      }
     },
     "sqlite": {
       "command": "npx",
@@ -22,7 +39,24 @@
       "enabled": false,
       "source": "external",
       "transport": "stdio",
-      "description": "SQLite access for the local Lumi database."
+      "description": "SQLite access for the local Lumi database.",
+      "capabilityDefault": {
+        "operation": "mutate",
+        "risk": "high",
+        "sideEffects": [
+          { "type": "local_read", "scope": "configured SQLite database", "reversible": true },
+          { "type": "local_write", "scope": "configured SQLite database", "reversible": false }
+        ],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": ["MCP terminal receipt"],
+          "limitations": ["The server exposes mixed query and mutation operations; database state requires task-level verification."]
+        },
+        "trust": "third-party",
+        "lane": "memory"
+      }
     },
     "git": {
       "command": "npx",
@@ -34,7 +68,25 @@
       "enabled": false,
       "source": "external",
       "transport": "stdio",
-      "description": "Git repository inspection tools."
+      "description": "Git repository inspection tools.",
+      "capabilityDefault": {
+        "operation": "mutate",
+        "risk": "high",
+        "sideEffects": [
+          { "type": "local_read", "scope": "configured Git repository", "reversible": true },
+          { "type": "local_write", "scope": "configured Git repository and working tree", "reversible": false },
+          { "type": "process_execution", "scope": "Git command runtime", "reversible": false }
+        ],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": ["MCP terminal receipt"],
+          "limitations": ["The server mixes inspection and repository mutation tools; commits and remote operations need separate task verification."]
+        },
+        "trust": "third-party",
+        "lane": "files"
+      }
     },
     "playwright": {
       "command": "npx",
@@ -45,7 +97,26 @@
       "enabled": false,
       "source": "external",
       "transport": "stdio",
-      "description": "Playwright MCP structured browser automation for real websites and authenticated browser tasks."
+      "description": "Playwright MCP structured browser automation for real websites and authenticated browser tasks.",
+      "capabilityDefault": {
+        "operation": "mutate",
+        "risk": "high",
+        "sideEffects": [
+          { "type": "network_read", "scope": "user-requested websites", "reversible": true },
+          { "type": "credential_access", "scope": "user-authorized browser sessions", "reversible": true },
+          { "type": "external_state_change", "scope": "web forms, account state, and browser-visible actions", "reversible": false },
+          { "type": "external_communication", "scope": "website submissions, posts, and messages", "reversible": false }
+        ],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": ["Playwright MCP terminal receipt"],
+          "limitations": ["A single browser command is not task completion; state-changing work requires a later page snapshot or provider acknowledgement."]
+        },
+        "trust": "third-party",
+        "lane": "web"
+      }
     }
   },
   "remoteDevices": {}

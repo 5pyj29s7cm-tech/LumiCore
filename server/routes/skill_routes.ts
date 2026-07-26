@@ -2,7 +2,11 @@ import { Router, Request, Response, NextFunction } from "express";
 import path from "path";
 import { readDB, writeDB } from "../../db_layer";
 import { mcpManager, getMCPConfig, updateMCPConfig, normalizeSkillInstallName } from "../mcp";
-import { generateSkill } from "../skills/generator";
+import {
+  generateSkill,
+  readGeneratedSkillDraft,
+  validateGeneratedSkillDraftForInstall,
+} from "../skills/generator";
 import { getRecentWorkflows } from "../skills/worklog";
 import { loadKeys } from "../config/keys";
 import { requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
@@ -131,15 +135,11 @@ export function mountSkillRoutes(
       );
 
       if (result.success) {
-        await activateOrRollback(result.skillName!);
-        io.emit('skill:updated', { name: result.skillName });
-        createAgentForSkill(result.skillName, {
-          description: description || 'Auto-generated skill',
-          category: 'general',
-          installSource: 'generated',
-          scope: skillAgentScope(req),
-        }, io);
-        res.json(result);
+        res.json({
+          ...result,
+          activated: false,
+          note: 'Draft created in the isolated Lumi data directory. Review and explicitly install it before use.',
+        });
       } else {
         res.status(400).json(result);
       }
@@ -160,10 +160,42 @@ export function mountSkillRoutes(
         createAgentForSkill(skillName, { description: `Git install: ${url}`, category: 'general', installSource: 'git', scope: skillAgentScope(req) }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'local' && localPath) {
-        const skillName = normalizeSkillInstallName(name || path.basename(localPath));
-        const destDir = await mcpManager.installSkillValidated(skillName, localPath);
+        const generatedDraft = readGeneratedSkillDraft(localPath);
+        if (generatedDraft && req.body.approved !== true) {
+          return res.status(409).json({
+            error: 'Generated skill draft installation requires approved=true after reviewing permissions, risk, side effects, and trial results.',
+            draft: generatedDraft,
+          });
+        }
+        const validation = generatedDraft
+          ? await validateGeneratedSkillDraftForInstall(localPath)
+          : null;
+        if (validation && !validation.valid) {
+          return res.status(400).json({
+            error: 'Generated skill draft validation failed.',
+            details: validation.errors,
+          });
+        }
+        const skillName = normalizeSkillInstallName(name || validation?.skillName || path.basename(localPath));
+        const destDir = await mcpManager.installSkillValidated(
+          skillName,
+          localPath,
+          validation?.review
+            ? {
+                approvedGeneratedDraft: {
+                  approvedAt: new Date().toISOString(),
+                  review: validation.review as unknown as Record<string, unknown>,
+                },
+              }
+            : undefined,
+        );
         await activateOrRollback(skillName);
-        createAgentForSkill(skillName, { description: `Local install: ${localPath}`, category: 'general', installSource: 'local', scope: skillAgentScope(req) }, io);
+        createAgentForSkill(skillName, {
+          description: generatedDraft ? `Approved generated draft: ${localPath}` : `Local install: ${localPath}`,
+          category: 'general',
+          installSource: generatedDraft ? 'generated' : 'local',
+          scope: skillAgentScope(req),
+        }, io);
         res.json({ success: true, name: skillName, directory: destDir });
       } else if (source === 'npm' && pkgName) {
         const npmDir = await mcpManager.installFromNpm(pkgName);

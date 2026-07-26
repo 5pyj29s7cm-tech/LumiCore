@@ -11,8 +11,6 @@ export interface SafetyGateConfig {
   autonomyLevel: AutonomyLevel;
   alwaysOnline: boolean;
   autoProcessEnabled: boolean;
-  /** Legacy setting retained for old configs; it no longer gates external app execution. */
-  externalAppAutomationEnabled: boolean;
   messagingSendRequiresConfirmation: boolean;
   maxConsecutiveTasks: number;
   allowedHours: { start: number; end: number }[];  // e.g. [{start:9, end:18}]
@@ -28,7 +26,6 @@ const DEFAULT_CONFIG: SafetyGateConfig = {
   autonomyLevel: 'semi',
   alwaysOnline: true,
   autoProcessEnabled: true,
-  externalAppAutomationEnabled: false,
   messagingSendRequiresConfirmation: false,
   maxConsecutiveTasks: 6,
   allowedHours: [{ start: 0, end: 24 }],
@@ -118,24 +115,27 @@ export function saveGateConfig(partial: Partial<SafetyGateConfig>, userId?: stri
   const patch = level ? { ...AUTONOMY_LEVEL_PRESETS[level], ...partial, autonomyLevel: level } : partial;
   const config = normalizeGateConfig({ ...current, ...patch });
   configs.set(configScope(userId), config);
-  try {
-    const db = readDB();
-    const key = configDbKey(userId);
-    let setting = (db.settings || []).find((s: any) => s.key === key);
-    const value = JSON.stringify(config);
-    if (setting) {
-      setting.value = value;
-    } else {
-      if (!db.settings) db.settings = [];
-      db.settings.push({ key, value });
-    }
-    writeDB(db);
-  } catch {}
+  const db = readDB();
+  const key = configDbKey(userId);
+  let setting = (db.settings || []).find((s: any) => s.key === key);
+  const value = JSON.stringify(config);
+  if (setting) {
+    setting.value = value;
+  } else {
+    if (!db.settings) db.settings = [];
+    db.settings.push({ key, value });
+  }
+  writeDB(db);
   return { ...config };
 }
 
 function normalizeGateConfig(input: Partial<SafetyGateConfig>): SafetyGateConfig {
-  const next = { ...DEFAULT_CONFIG, ...input };
+  const supportedInput = {
+    ...(input as Partial<SafetyGateConfig> & { externalAppAutomationEnabled?: boolean }),
+  };
+  // Drop the removed global external-app switch when loading old configs.
+  delete supportedInput.externalAppAutomationEnabled;
+  const next = { ...DEFAULT_CONFIG, ...supportedInput };
   const explicitLevel = normalizeAutonomyLevel(input.autonomyLevel);
   const hasLegacyShape =
     Object.prototype.hasOwnProperty.call(input, 'autoProcessEnabled') ||
@@ -155,7 +155,6 @@ function normalizeGateConfig(input: Partial<SafetyGateConfig>): SafetyGateConfig
   next.maxConsecutiveTasks = Math.max(1, Math.min(50, Number(next.maxConsecutiveTasks) || DEFAULT_CONFIG.maxConsecutiveTasks));
   next.alwaysOnline = Boolean(next.alwaysOnline);
   next.autoProcessEnabled = Boolean(next.autoProcessEnabled);
-  next.externalAppAutomationEnabled = Boolean(next.externalAppAutomationEnabled);
   next.messagingSendRequiresConfirmation = next.messagingSendRequiresConfirmation !== false;
   next.requireIdle = Boolean(next.requireIdle);
   next.quietHoursEnabled = Boolean(next.quietHoursEnabled);

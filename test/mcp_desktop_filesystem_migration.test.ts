@@ -5,11 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MCPClientManager } from '../server/mcp/client';
 
 const tempPaths: string[] = [];
-const originalDesktopFlag = process.env.LUMI_DESKTOP;
 
 afterEach(() => {
-  if (originalDesktopFlag === undefined) delete process.env.LUMI_DESKTOP;
-  else process.env.LUMI_DESKTOP = originalDesktopFlag;
   for (const target of tempPaths.splice(0)) fs.rmSync(target, { recursive: true, force: true });
 });
 
@@ -29,11 +26,9 @@ describe('desktop filesystem MCP migration', () => {
         },
       },
     }));
-    process.env.LUMI_DESKTOP = '1';
-
     const manager = new MCPClientManager(configPath);
     expect(manager.getConfig().filesystem.enabled).toBe(false);
     const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(persisted.migrations.desktopBuiltinFilesystem).toBe(1);
+    expect(persisted.migrations.desktopBuiltinFilesystem).toBe(2);
   });
 });

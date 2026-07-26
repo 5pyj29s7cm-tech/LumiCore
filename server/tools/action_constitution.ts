@@ -1,7 +1,7 @@
 import { getGateConfig, isMessagingSendConfirmationRequired } from '../autonomy/safety_gate';
-import type { SecurityLevel, ToolContext } from './types';
+import type { CapabilityManifestEntry, SecurityLevel, ToolContext } from './types';
 
-export type ActionDomain = 'observe' | 'draft' | 'local_write' | 'desktop_control' | 'external_app' | 'messaging' | 'system' | 'network' | 'destructive';
+export type ActionDomain = 'observe' | 'draft' | 'local_write' | 'local_state' | 'desktop_control' | 'external_app' | 'messaging' | 'system' | 'network' | 'destructive';
 export type ActionRisk = 'low' | 'medium' | 'high';
 
 export interface ActionConstitutionDecision {
@@ -60,11 +60,12 @@ export function evaluateActionConstitution(
   args: Record<string, any>,
   currentLevel: SecurityLevel,
   context?: ToolContext,
+  capability?: CapabilityManifestEntry,
 ): ActionConstitutionDecision {
-  const domain = classifyAction(toolName, args);
+  const domain = classifyAction(toolName, args, capability);
   const argText = JSON.stringify(args || {});
   const actionText = buildActionText(toolName, args, context);
-  const risk = classifyActionRisk(toolName, args, context);
+  const risk = classifyActionRisk(toolName, args, context, capability);
 
   const sensitiveClientAction = getSensitiveClientAction(args);
   if (toolName === 'client_action' && sensitiveClientAction) {
@@ -136,7 +137,15 @@ export function evaluateActionConstitution(
   if (
     domain === 'local_write' &&
     context?.allowLocalFileWrites === true &&
-    TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE.test(toolName)
+    (
+      TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE.test(toolName)
+      || (
+        capability?.metadataSources.sideEffects === 'tool_definition'
+        && capability.sideEffects.some(effect => effect.type === 'local_write')
+        && capability.risk !== 'high'
+        && capability.risk !== 'critical'
+      )
+    )
   ) {
     return {
       level: 'safe',
@@ -147,9 +156,6 @@ export function evaluateActionConstitution(
   }
 
   if (currentLevel === 'safe') {
-    if (domain === 'system') {
-      return confirm(domain, 'System actions require confirmation by Action Constitution');
-    }
     if (domain === 'local_write') {
       return confirm(domain, 'Local write actions require confirmation unless the current turn explicitly requested a local deliverable');
     }
@@ -163,12 +169,25 @@ export function evaluateActionConstitution(
   };
 }
 
-export function classifyActionRisk(toolName: string, args: Record<string, any> = {}, context?: Pick<ToolContext, 'actionIntent'>): ActionRisk {
-  const domain = classifyAction(toolName, args);
+export function classifyActionRisk(
+  toolName: string,
+  args: Record<string, any> = {},
+  context?: Pick<ToolContext, 'actionIntent'>,
+  capability?: CapabilityManifestEntry,
+): ActionRisk {
+  const domain = classifyAction(toolName, args, capability);
   const name = toolName.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
   const actionText = buildActionText(toolName, args, context);
   const externalStateChanging = isExternalStateChangingDomain(domain);
+  // Conservative manifest-policy inference is useful for discovery and for
+  // forcing metadata completion, but it must not silently change a tool's
+  // runtime permission before the owner has declared the semantic risk. The
+  // declared ToolDefinition security level remains authoritative during the
+  // migration; once risk metadata is explicit, every consumer uses it.
+  const manifestRisk = capability?.metadataSources.risk === 'tool_definition'
+    ? capability.risk
+    : undefined;
 
   // Skill repair may delete/reinstall a package, refresh dependencies, mutate
   // MCP configuration, and restart a process. Its built-in confirmation must
@@ -182,6 +201,8 @@ export function classifyActionRisk(toolName: string, args: Record<string, any> =
   if (externalStateChanging && isHighConsequenceExternalCommit(actionText, toolName)) return 'high';
   if (externalStateChanging && GENERIC_EXTERNAL_COMMIT_PATTERN.test(actionText) && !isSocialContentCommit(actionText, toolName)) return 'high';
   if (externalStateChanging && isSocialContentCommit(actionText, toolName)) return 'medium';
+  if (manifestRisk === 'critical' || manifestRisk === 'high') return 'high';
+  if (manifestRisk === 'medium') return 'medium';
   if (domain === 'system') return 'high';
   if (domain === 'desktop_control' || domain === 'external_app' || domain === 'messaging' || domain === 'local_write') return 'medium';
   return 'low';
@@ -194,9 +215,19 @@ export function canAutoApproveAction(toolName: string, args: Record<string, any>
   return !['system', 'destructive'].includes(domain);
 }
 
-export function classifyAction(toolName: string, args: Record<string, any> = {}): ActionDomain {
+export function classifyAction(
+  toolName: string,
+  args: Record<string, any> = {},
+  capability?: CapabilityManifestEntry,
+): ActionDomain {
   const name = toolName.toLowerCase();
   const argText = JSON.stringify(args || {}).toLowerCase();
+
+  const manifestDomain = capabilityDomain(capability);
+  if (manifestDomain) {
+    if (DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'destructive';
+    return manifestDomain;
+  }
 
   if (name === 'legal_message_intake_to_case') return 'observe';
   if (name === 'client_action') return getSensitiveClientAction(args) ? 'desktop_control' : 'observe';
@@ -220,6 +251,40 @@ export function classifyAction(toolName: string, args: Record<string, any> = {})
   if (name.includes('web_search') || name.includes('url_fetch') || name.includes('search')) return 'network';
   if (name.includes('draft') || name.includes('prepare')) return 'draft';
   return 'observe';
+}
+
+function capabilityDomain(
+  capability?: CapabilityManifestEntry,
+): ActionDomain | null {
+  if (!capability) return null;
+  const hasDeclaredSemantics = capability.metadataSources.sideEffects === 'tool_definition'
+    || capability.metadataSources.operation === 'tool_definition';
+  if (!hasDeclaredSemantics) return null;
+  const effectTypes = new Set(capability.sideEffects.map(effect => effect.type));
+  if (effectTypes.has('installation') || effectTypes.has('process_execution')) return 'system';
+  if (effectTypes.has('external_communication')) return 'messaging';
+  if (effectTypes.has('desktop_control')) return 'desktop_control';
+  if (effectTypes.has('credential_access')) return 'external_app';
+  if (effectTypes.has('external_state_change')) return 'external_app';
+  if (effectTypes.has('local_state_change')) return 'local_state';
+  if (effectTypes.has('local_write')) return 'local_write';
+  if (capability.operation === 'observe' || capability.operation === 'test') {
+    return effectTypes.has('network_read') ? 'network' : 'observe';
+  }
+  // A pure in-memory draft can legitimately use the semantic `create`
+  // operation without creating a file or changing external state.  An
+  // explicitly empty side-effect list is authoritative and must not be
+  // projected back into the legacy `create => local_write` heuristic.
+  if (
+    capability.operation === 'create'
+    && capability.sideEffects.length === 0
+    && capability.risk === 'none'
+  ) {
+    return 'draft';
+  }
+  if (capability.operation === 'create') return 'local_write';
+  if (capability.operation === 'communicate') return 'messaging';
+  return null;
 }
 
 function confirm(domain: ActionDomain, reason: string): ActionConstitutionDecision {
@@ -329,7 +394,7 @@ function getSensitiveClientAction(args: Record<string, any> = {}): string {
   const mode = String(args.mode || '').trim();
   if (!action) return '';
   if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return action;
-  if ((action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting') {
+  if (action === 'set_client_mode' && mode === 'meeting') {
     return `${action}:${mode}`;
   }
   return '';
@@ -349,7 +414,7 @@ export function isExplicitSensitiveClientActionRequest(
   }
   const meetingAction = action === 'start_meeting_mode'
     || action === 'end_meeting_mode'
-    || ((action === 'set_mode' || action === 'set_client_mode') && mode === 'meeting');
+    || (action === 'set_client_mode' && mode === 'meeting');
   if (!meetingAction) return false;
   if (action === 'end_meeting_mode') {
     return /结束|停止|关闭|完成|end|stop|finish/i.test(intent);

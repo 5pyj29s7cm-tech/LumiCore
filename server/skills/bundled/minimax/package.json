@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "MiniMax multimodal AI — music generation, video creation, image synthesis, TTS, and voice cloning. A creative powerhouse.",
   "type": "module",
-  "dependencies": { "@minimax/mcp-js": "^1.0.0" },
+  "dependencies": {
+    "@minimax/mcp-js": "^1.0.0"
+  },
   "lumi": {
     "displayName": "MiniMax Studio",
     "category": "Creative",
@@ -15,6 +17,38 @@
     "apiKeyUrl": "https://platform.minimaxi.com",
     "setupNote": "Requires a MiniMax API key. Save MINIMAX_API_KEY in Settings before enabling this skill; it will stay disconnected until the key is configured.",
     "runCommand": "npx",
-    "runArgs": ["-y", "@minimax/mcp-js"]
+    "runArgs": [
+      "-y",
+      "@minimax/mcp-js"
+    ],
+    "capabilityDefault": {
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "credential_access",
+          "scope": "configured MiniMax API credential",
+          "reversible": true
+        },
+        {
+          "type": "external_state_change",
+          "scope": "provider media-generation job and quota",
+          "reversible": false
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [],
+        "successSignals": [
+          "non-empty MCP terminal receipt"
+        ],
+        "limitations": [
+          "Provider-specific generation tools may consume quota; terminal receipts require task-level artifact verification."
+        ]
+      },
+      "trust": "official",
+      "lane": "media"
+    }
   }
 }

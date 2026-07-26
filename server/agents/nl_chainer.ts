@@ -7,6 +7,7 @@
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
 import { isToolNameAllowedByPolicy, toolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext } from '../tools/types';
+import { executeToolCall } from '../tools/execution_engine';
 import { routeToolsForTurn } from '../cognition/tool_router';
 import type { ToolPolicy } from '../personality/types';
 
@@ -35,66 +36,6 @@ interface LlmGetters {
   getQwen: () => any;
 }
 
-// Map from user intent domain to tool category filters
-const DOMAIN_TOOL_HINTS: Record<string, string[]> = {
-  office:  ['search_files', 'read_file', 'write_file', 'list_directory',
-            'create_docx', 'create_xlsx',
-            'merge_pdf', 'pdf_to_text', 'read_pdf',
-            'create_ppt', 'create_pdf',
-            'calendar_create', 'calendar_today', 'upcoming_events',
-            'web_search', 'url_fetch',
-            'translate', 'ocr_screen', 'ocr_region', 'read_clipboard', 'write_clipboard',
-            'create_note', 'list_notes',
-            'stock_search', 'stock_quote', 'stock_kline', 'market_index', 'stock_news',
-            'email_assistant',
-            'shorten_url', 'generate_qrcode', 'get_weather'],
-  create:  ['create_docx', 'create_xlsx', 'create_ppt', 'create_pdf',
-            'merge_pdf', 'pdf_to_text',
-            'code_execution', 'generate_image',
-            'generate_qrcode', 'shorten_url'],
-  search:  ['web_search', 'url_fetch', 'search_files', 'list_directory', 'read_file',
-            'list_notes', 'stock_search', 'stock_quote', 'market_index', 'stock_news',
-            'get_weather'],
-  file:    ['search_files', 'read_file', 'write_file', 'list_directory',
-            'merge_pdf', 'pdf_to_text', 'read_pdf',
-            'create_docx', 'create_xlsx', 'create_pdf',
-            'ocr_screen', 'ocr_region',
-            'read_docx', 'read_xlsx', 'extract_document_text'],
-};
-
-const DIRECT_DESKTOP_RELAY_TOOLS = new Set([
-  'client_action',
-  'desktop_capability_status',
-  'desktop_system_info',
-  'desktop_list_files',
-  'desktop_list_apps',
-  'desktop_path_info',
-  'desktop_open',
-  'desktop_show_lumi_window',
-  'desktop_run_command',
-  'desktop_active_window',
-  'desktop_window_control',
-  'desktop_running_processes',
-  'desktop_capture_screen',
-  'desktop_clipboard_read',
-  'desktop_clipboard_write',
-  'desktop_idle_time',
-  'desktop_poll_activity',
-  'desktop_mouse_move',
-  'desktop_mouse_click',
-  'desktop_mouse_drag',
-  'desktop_mouse_click_at',
-  'desktop_mouse_double_click_at',
-  'desktop_mouse_right_click_at',
-  'desktop_keyboard_type',
-  'desktop_keyboard_press',
-  'desktop_set_wallpaper_mode',
-  'desktop_cursor_glow_show',
-  'desktop_cursor_glow_update',
-  'desktop_cursor_glow_click',
-  'desktop_cursor_glow_hide',
-]);
-
 export function filterChainerToolNamesByPolicy(
   toolNames: string[],
   policy?: ToolPolicy,
@@ -114,18 +55,6 @@ function compactChainerOutput(value: string, limit = 5000): string {
     text.slice(-tail),
   ].join('');
 }
-
-function getDomainHints(userTask: string): string[] | undefined {
-  const t = userTask.toLowerCase();
-  if (/文件|文档|pdf|ppt|表格|报告|整理|汇总|合并|提取/i.test(t)) return DOMAIN_TOOL_HINTS.file;
-  if (/搜索|查询|找|搜|什么|多少|怎么|查/i.test(t)) return DOMAIN_TOOL_HINTS.search;
-  if (/创建|制作|做|生成|写|画|新建/i.test(t)) return DOMAIN_TOOL_HINTS.create;
-  if (/股票|行情|报价|k线|板块|大盘|涨|跌|股价|财经/i.test(t)) return undefined; // use all tools, stockbot handles it
-  if (/邮件|翻译|日历|日程|二维码|短链接|天气|笔记/i.test(t)) return DOMAIN_TOOL_HINTS.office;
-  return undefined;
-}
-
-// ── Planning phase ──
 
 function cleanWeChatSlot(value: string): string {
   return String(value || '')
@@ -594,41 +523,24 @@ export async function runNLChainer(
     config.context?.toolPolicy,
   ));
   const allTools = registeredTools.filter(tool => policyAllowedNames.has(tool.function.name));
-  const domainHints = getDomainHints(userTask);
-  const routed = routeToolsForTurn(userTask, allTools);
+  const routed = routeToolsForTurn(userTask, allTools, {
+    capabilityManifest: toolRegistry.getCapabilityManifest(config.context?.toolPolicy),
+  });
 
-  // Filter tools: prefer the shared skill/tool router, then fall back to older domain hints.
+  // The shared capability route is the only category/tool source. If no
+  // structured route matches, generic manifest discovery keeps the planner
+  // useful without restoring a second domain-to-tool lookup table.
   let availableDecls = allTools;
   if (routed.categories.length > 0 && routed.toolNames.length > 0) {
     const routedNames = new Set(routed.toolNames);
     availableDecls = allTools.filter(t => routedNames.has(t.function.name));
-  } else if (domainHints) {
-    const hintSet = new Set(domainHints);
-    const filtered = allTools.filter(t => hintSet.has(t.function.name));
-    if (filtered.length > 0) {
-      // Include non-filtered tools that are always useful (like desktop tools)
-      const alwaysUseful = allTools.filter(t =>
-        /^desktop_|^computer_|^clipboard_/.test(t.function.name)
-      );
-      const allFiltered = [...filtered, ...alwaysUseful];
-      // Deduplicate
-      const seen = new Set<string>();
-      availableDecls = allFiltered.filter(t => {
-        if (seen.has(t.function.name)) return false;
-        seen.add(t.function.name);
-        return true;
-      });
-    }
-  }
-
-  // Dev-only ghost tool detection
-  if (process.env.NODE_ENV !== 'production') {
-    const registeredNames = new Set(registeredTools.map(d => d.function.name));
-    for (const [domain, hints] of Object.entries(DOMAIN_TOOL_HINTS)) {
-      const ghosts = hints.filter(h => !registeredNames.has(h));
-      if (ghosts.length > 0) {
-        console.warn(`[NLChainer] Ghost tools in DOMAIN_TOOL_HINTS.${domain}:`, ghosts);
-      }
+  } else {
+    const relevantNames = new Set(
+      toolRegistry.findRelevant(userTask, { limit: 24 }).map(tool => tool.name),
+    );
+    const relevant = allTools.filter(tool => relevantNames.has(tool.function.name));
+    if (relevant.length > 0) {
+      availableDecls = relevant;
     }
   }
 
@@ -685,23 +597,27 @@ If no suitable alternative exists, output: { "toolName": "" }`;
     return null;
   };
 
+  const toolRecords: ToolExecutionRecord[] = [];
   const executeTool = async (name: string, args: Record<string, any>): Promise<string> => {
     if (!availableToolNames.has(name)) {
       throw new Error(`Tool "${name}" is outside the inherited execution policy for this task.`);
     }
     const id = `chain_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     config.onTool?.({ id, name, arguments: args, result: '' });
-    // Handle desktop relay tools
-    try {
-      const output = config.desktopRelay && DIRECT_DESKTOP_RELAY_TOOLS.has(name)
-        ? await config.desktopRelay(name, args)
-        : await toolRegistry.execute(name, args, config.context);
-      config.onTool?.({ id, name, arguments: args, result: output });
-      return output;
-    } catch (err: any) {
-      config.onTool?.({ id, name, arguments: args, result: '', error: err?.message || String(err) });
-      throw err;
-    }
+    const record = await executeToolCall({
+      registry: toolRegistry,
+      id,
+      name,
+      arguments: args,
+      context: {
+        ...(config.context || {}),
+        desktopRelay: config.context?.desktopRelay || config.desktopRelay,
+      },
+    });
+    toolRecords.push(record);
+    config.onTool?.(record);
+    if (record.error) throw new Error(record.error);
+    return record.result;
   };
 
   const stepResults = await executePlan(plan, executeTool, config.context, onStep, replanFn);
@@ -713,7 +629,7 @@ If no suitable alternative exists, output: { "toolName": "" }`;
     llmGetters,
   );
 
-  return { plan, stepResults, finalResponse, toolRecords: [] };
+  return { plan, stepResults, finalResponse, toolRecords };
 }
 
 /**

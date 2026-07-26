@@ -3,6 +3,7 @@ import { getAdapterRegistry } from '../adapters/registry';
 import { mcpManager } from '../mcp/client';
 import { listSkillWorkflows } from '../skills/workflow_registry';
 import { getActiveWorkTakeoverTasksForContinuity } from '../work_takeover/continuity';
+import type { CapabilityManifestEntry } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
 
 export interface LumiRuntimeCapabilityContextInput {
@@ -18,23 +19,10 @@ function compact(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 }
 
-function groupTools(toolNames: string[]): string[] {
-  const groups: Array<[string, RegExp]> = [
-    ['client/ui', /^(client_|adapter_|external_app_)/],
-    ['task', /^(work_takeover_|work_product_)/],
-    ['desktop', /^(desktop_|computer_use$|capture_screen|get_active_window|get_running_processes|mouse_|keyboard_|read_clipboard|write_clipboard)/],
-    ['web/account', /^(web_|url_|browser_|mcp_playwright_|external_control_)/],
-    ['files/docs', /^(read_|write_|create_|extract_|pdf_|ocr_|transcribe_|list_|search_|grep_)/],
-    ['cad/design', /^(cad_|floorplan_|generate_image|edit_image)/],
-    ['legal/research', /^(legal_|authority_|capability_research)/],
-    ['code/git', /^(git_|run_tests|type_check|code_execution|python_exec|run_command)/],
-    ['calendar/message', /^(calendar_|send_email|recent_emails|wechat_|feishu_)/],
-    ['self-extension', /^(self_extension_|capability_gap_|capability_learning_|generate_skill|install_skill|client_repair_skill)/],
-  ];
+function groupCapabilities(manifest: CapabilityManifestEntry[]): string[] {
   const counts = new Map<string, number>();
-  for (const name of toolNames) {
-    const matched = groups.find(([, pattern]) => pattern.test(name));
-    const key = matched?.[0] || 'other';
+  for (const entry of manifest) {
+    const key = `${entry.source}:${entry.family}`;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   return Array.from(counts.entries())
@@ -42,12 +30,7 @@ function groupTools(toolNames: string[]): string[] {
     .map(([name, count]) => `${name}=${count}`);
 }
 
-function getMcpServerName(toolName: string): string | null {
-  const match = toolName.match(/^mcp_(.+?)_/);
-  return match?.[1] || null;
-}
-
-function mcpHealthGateLines(toolNames: string[]): string[] {
+function mcpHealthGateLines(manifest: CapabilityManifestEntry[]): string[] {
   try {
     const config = mcpManager.getConfig();
     const health = mcpManager.getServerHealth();
@@ -64,7 +47,12 @@ function mcpHealthGateLines(toolNames: string[]): string[] {
         const keyHint = cfg.requiresApiKey && cfg.apiKeyEnv ? `, needs ${cfg.apiKeyEnv}` : '';
         return `${name}(${status}${keyHint})`;
       });
-    const declaredMcpServers = Array.from(new Set(toolNames.map(getMcpServerName).filter(Boolean) as string[]));
+    const declaredMcpServers = Array.from(new Set(
+      manifest
+        .filter(entry => entry.source === 'mcp' || entry.source === 'skill')
+        .map(entry => entry.provider)
+        .filter(Boolean) as string[],
+    ));
     const staleDeclared = available.size
       ? declaredMcpServers.filter(name => !available.has(name))
       : [];
@@ -82,9 +70,13 @@ function mcpHealthGateLines(toolNames: string[]): string[] {
   }
 }
 
-function relevantAdapters(flow: LumiTurnFlow, userId: string): string[] {
+function relevantAdapters(
+  flow: LumiTurnFlow,
+  userId: string,
+  manifest: CapabilityManifestEntry[],
+): string[] {
   try {
-    const registry = getAdapterRegistry({ userId });
+    const registry = getAdapterRegistry({ userId, capabilityManifest: manifest });
     const desired = new Set<string>();
     if (flow.workTakeover.activeTasks.length || flow.surface === 'work') desired.add('automation');
     if (flow.workSurfaceRoute.directDesktop || flow.workSurfaceRoute.artifactFirst) desired.add('automation');
@@ -139,13 +131,12 @@ function skillLines(flow: LumiTurnFlow): string[] {
 }
 
 export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityContextInput): string {
-  const declarations = input.toolRegistry.getToolDeclarations();
-  const toolNames = declarations.map(declaration => declaration.function.name);
+  const manifest = input.toolRegistry.getCapabilityManifest();
   const taskLines = activeTaskLines(input);
-  const adapterLines = relevantAdapters(input.flow, input.userId);
+  const adapterLines = relevantAdapters(input.flow, input.userId, manifest);
   const workflows = skillLines(input.flow);
-  const toolGroups = groupTools(toolNames);
-  const mcpLines = mcpHealthGateLines(toolNames);
+  const capabilityGroups = groupCapabilities(manifest);
+  const mcpLines = mcpHealthGateLines(manifest);
 
   return [
     '## Lumi Runtime Capability Context',
@@ -153,7 +144,8 @@ export function buildLumiRuntimeCapabilityContext(input: LumiRuntimeCapabilityCo
     `Input surface=${input.flow.surface}; mode=${input.flow.operationMode}->${input.flow.effectiveOperationMode}; tools=${input.flow.allowToolUseForTurn ? 'available' : 'not for this turn'}; taskSignal=${input.flow.workTakeover.intent || 'none'}/${input.flow.workTakeover.strength}.`,
     'Per-turn tool access is a mode gate, not an installation inventory. Never claim a capability is absent only because its tools are hidden for this turn; an explicit action in Chat should move the turn to Assistant, while Autonomy remains the continuous 24-hour mode.',
     `Execution governance: verify=${input.flow.executionGovernance.verificationIntent}; delegation=${input.flow.executionGovernance.delegationIntent}; capabilityLearning=${input.flow.executionGovernance.capabilityLearningIntent}; inspectCapabilitiesFirst=${input.flow.executionGovernance.shouldInspectCapabilitiesFirst ? 'yes' : 'no'}.`,
-    `Tool groups available: ${toolGroups.join(', ') || 'none'}.`,
+    `Capability manifest: ${manifest.length} registered tools; ${manifest.filter(entry => entry.hasEvidenceContract).length} have declared evidence contracts (${manifest.filter(entry => entry.evidence?.declarationSource === 'tool_definition').length} tool-specific, remainder conservative manifest policy).`,
+    `Capability families available: ${capabilityGroups.join(', ') || 'none'}.`,
     ...mcpLines,
     `Skill workflows known: ${workflows.join(', ') || 'none'}.`,
     taskLines.length

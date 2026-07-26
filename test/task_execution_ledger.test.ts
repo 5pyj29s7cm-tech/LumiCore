@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   buildConversationActionContinuationState,
   formatConversationActionTaskStatus,
+  normalizeConversationActionState,
   prepareConversationActionTaskState,
 } from '../server/cognition/action_continuation';
 import {
   applyTaskPolicySnapshot,
   coalesceToolExecutionRecords,
+  confirmedStepNeedsContinuation,
   recordsToTaskReceipts,
+  taskCompletionFromReceipts,
+  taskReceiptsToRecords,
   toolRecordSucceeded,
 } from '../server/cognition/task_execution_ledger';
 
@@ -163,6 +167,32 @@ describe('durable conversation task execution ledger', () => {
     expect(afterConfirmedOpen?.unfinished).toBe(true);
   });
 
+  it('continues the original task after a confirmed boundary completes only one step', () => {
+    const confirmedOpen = {
+      name: 'desktop_open',
+      arguments: { target: 'WPS' },
+      result: JSON.stringify({
+        ok: true,
+        status: 'opened',
+        opened: true,
+        actualTarget: 'WPS',
+      }),
+    };
+
+    expect(confirmedStepNeedsContinuation(
+      'Open WPS and create a Word document',
+      [confirmedOpen],
+    )).toBe(true);
+    expect(confirmedStepNeedsContinuation(
+      'Open WPS',
+      [confirmedOpen],
+    )).toBe(false);
+    expect(confirmedStepNeedsContinuation(
+      'Open WPS and create a Word document',
+      [{ ...confirmedOpen, result: '', error: 'permission denied' }],
+    )).toBe(false);
+  });
+
   it('keeps the substantive workflow failure ahead of a later permission drift', () => {
     const state = buildConversationActionContinuationState({
       userText: '读取桌面上的阿陆平面图并画进 AutoCAD。',
@@ -183,5 +213,83 @@ describe('durable conversation task execution ledger', () => {
 
     expect(state?.latestBlocker).toContain('operation 33');
     expect(state?.latestBlocker).not.toContain('allowedTools');
+  });
+
+  it('persists handler success without verification as partial instead of completed', () => {
+    const record = {
+      name: 'custom_desktop_action',
+      arguments: { target: 'Example' },
+      result: JSON.stringify({ ok: true, action: 'requested' }),
+      receipt: {
+        status: 'observed',
+        target: { id: 'window-42', title: 'Target application' },
+      },
+      capability: {
+        capabilityId: 'desktop.custom-action',
+        lane: 'desktop' as const,
+        operation: 'mutate' as const,
+        risk: 'medium' as const,
+        sideEffects: [{ type: 'desktop_control' as const, scope: 'desktop', reversible: true }],
+        verification: {
+          strategy: 'state_diff' as const,
+          required: true,
+          requiredFields: ['verification.status'],
+          successSignals: ['verified post-state'],
+          limitations: [],
+        },
+      },
+      terminalVerification: {
+        status: 'unverified' as const,
+        strategy: 'state_diff' as const,
+        reason: 'No post-action state was observed.',
+      },
+    };
+    const receipts = recordsToTaskReceipts([record], '2026-07-26T00:00:00.000Z');
+
+    expect(receipts[0].outcome).toBe('partial');
+    expect(taskReceiptsToRecords(receipts)[0]).toMatchObject({
+      receipt: {
+        status: 'observed',
+        target: { id: 'window-42' },
+      },
+      terminalVerification: { status: 'unverified' },
+      capability: { capabilityId: 'desktop.custom-action' },
+    });
+    expect(taskCompletionFromReceipts('perform the requested custom operation', receipts)).toMatchObject({
+      complete: false,
+      blocker: 'No post-action state was observed.',
+    });
+
+    const reloaded = normalizeConversationActionState({
+      version: 2,
+      taskId: 'task-reload',
+      status: 'blocked',
+      goal: 'perform the requested custom operation',
+      latestInstruction: 'perform the requested custom operation',
+      appTarget: 'Target application',
+      sourcePaths: [],
+      latestBlocker: '',
+      unfinished: true,
+      evidenceTools: [],
+      assistantState: '',
+      toolSummaries: [],
+      receipts: JSON.parse(JSON.stringify(receipts)),
+      updatedAt: new Date().toISOString(),
+    });
+    expect(reloaded?.receipts?.[0]).toMatchObject({
+      receipt: { status: 'observed', target: { id: 'window-42' } },
+      terminalVerification: { status: 'unverified' },
+      capability: {
+        capabilityId: 'desktop.custom-action',
+        verification: { required: true },
+      },
+    });
+    expect(taskCompletionFromReceipts(
+      reloaded?.goal || '',
+      reloaded?.receipts || [],
+    )).toMatchObject({
+      complete: false,
+      blocker: 'No post-action state was observed.',
+    });
   });
 });

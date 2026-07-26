@@ -12,6 +12,10 @@ function remember(filePath: string): string {
 }
 
 function extractPath(result: string): string {
+  try {
+    const parsed = JSON.parse(result);
+    if (typeof parsed?.path === 'string' && parsed.path) return remember(parsed.path);
+  } catch {}
   const match = result.match(/[A-Z]:\\.+?\.xlsx|\/.+?\.xlsx/);
   if (!match) throw new Error(`No xlsx path found in result: ${result}`);
   return remember(match[0]);
@@ -56,7 +60,7 @@ describe('spreadsheet document tools', () => {
 
     const csvPath = remember(modifiedPath.replace(/\.xlsx$/i, '.csv'));
     const csv = await registry.execute('xlsx_to_csv', { filePath: modifiedPath, sheetName: 'Orders', outputPath: csvPath }, context);
-    expect(csv).toContain('XLSX converted to CSV');
+    expect(JSON.parse(csv)).toMatchObject({ ok: true, status: 'converted', path: csvPath });
     expect(fs.readFileSync(csvPath, 'utf-8')).toContain('A-1,3');
   });
 

@@ -7,6 +7,7 @@ import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
 import { runWithTools, LLMUsageRecord } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
+import { executeToolCall } from "../tools/execution_engine";
 import { queryMemories, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, vectorMemoryBias } from "../personality/state";
 import { personalityRegistry } from "../personality";
@@ -25,16 +26,24 @@ import {
   setConversationActionExecutionStatus,
 } from "../conversation/manager";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
-import { classifyComplexity, decomposeTask, matchWorkers, executeWorkflow, aggregateWithLLM, recordWorkflowPattern, shouldDistillSkill, buildSkillDescription } from "../agents/orchestrator";
+import {
+  buildSkillDescription,
+  classifyComplexity,
+  decomposeTask,
+  executeWorkflow,
+  isTerminalOrchestrationToolEvent,
+  matchWorkers,
+  aggregateWithLLM,
+  recordWorkflowPattern,
+  shouldAttemptOrchestration,
+  shouldDistillSkill,
+} from "../agents/orchestrator";
 import { markLatestUserTurn } from "../agents/background_delivery";
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
 import { shouldExposeAgentWork } from "../cognition/tool_intent";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
-import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
-import { buildLumiExecutionDecision } from "../cognition/execution_decision";
-import { buildLumiIntentTrace } from "../cognition/intent_trace";
-import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
+import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
@@ -62,8 +71,11 @@ import {
   formatConversationActionTaskStatus,
 } from "../cognition/action_continuation";
 import {
+  buildConfirmedStepContinuationNote,
   coalesceToolExecutionRecords,
+  confirmedStepNeedsContinuation,
   taskReceiptsToRecords,
+  toolRecordSucceeded,
 } from "../cognition/task_execution_ledger";
 import { createDesktopRelay } from "./desktop_relay";
 import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
@@ -76,13 +88,10 @@ import {
   recordChatExecutionEvent,
   type ChatExecutionScope,
 } from "./chat_execution_registry";
+import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
+import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
 
-type ActiveTaskCancellation = {
-  requestId: string;
-  cancel: () => void;
-};
-
-const activeTaskCancellations = new Map<string, ActiveTaskCancellation>();
+const taskExecutionQueue = new SerialExecutionQueue();
 
 function taskExecutionRoom(scope: ChatExecutionScope): string {
   return scope.domain === 'work' && scope.orgId
@@ -144,7 +153,10 @@ export function registerTaskHandler(
       }
       return;
     }
-    const active = activeTaskCancellations.get(taskExecutionKey(executionScope));
+    const active = taskExecutionQueue.getByRequestId(
+      taskExecutionKey(executionScope),
+      snapshot.requestId,
+    );
     if (!active || active.requestId !== snapshot.requestId) {
       try { ack?.({ ok: false, requestId: snapshot.requestId, error: 'Task cancellation handle is unavailable' }); } catch {}
       return;
@@ -205,17 +217,38 @@ export function registerTaskHandler(
       return;
     }
 
-    const runningTask = activeTaskCancellations.get(executionKey);
+
+    // A reconnected client can resend a request while it is still waiting
+    // behind another task. Keep one executor for that request id.
+    const queuedDuplicate = taskExecutionQueue.getByRequestId(executionKey, requestId);
+    if (queuedDuplicate) {
+      try {
+        ack?.({
+          ok: true,
+          requestId,
+          receivedAt: new Date().toISOString(),
+        });
+      } catch {}
+      socket.emit('agent:status', {
+        status: queuedDuplicate.state === 'active' ? 'thinking' : 'queued',
+        source: 'task',
+        requestId,
+        resumed: true,
+      });
+      return;
+    }
+
+    const runningTask = taskExecutionQueue.getCurrent(executionKey);
     const activeConversationForStatus = runningTask
       ? getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId)
       : null;
-    if (
-      runningTask
-      && classifyConversationActionFollowupIntent(
-        data.text,
-        activeConversationForStatus?.actionContinuationState,
-      ) === 'status'
-    ) {
+    const activeMessageRelation = runningTask
+      ? classifyActiveTaskMessage(
+          data.text,
+          activeConversationForStatus?.actionContinuationState,
+        )
+      : null;
+    if (runningTask && activeMessageRelation === 'status') {
       const activeConversation = activeConversationForStatus!;
       const statusText = activeConversation.actionContinuationState
         ? formatConversationActionTaskStatus(activeConversation.actionContinuationState)
@@ -236,31 +269,68 @@ export function registerTaskHandler(
       return;
     }
 
-    const previous = activeTaskCancellations.get(executionKey);
-    if (previous) previous.cancel();
+    const previous = taskExecutionQueue.getTail(executionKey);
+    let acknowledged = false;
+    if (previous && activeMessageRelation === 'cancel') {
+      try {
+        ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() });
+        acknowledged = true;
+      } catch {}
+      await taskExecutionQueue.cancelAll(executionKey);
+      socket.emit('agent:response', {
+        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+        agentName: 'Lumi',
+        source: 'task',
+        requestId,
+        sidecar: true,
+        finalized: true,
+        blocked: false,
+        reason: 'cancelled_by_user',
+      });
+      return;
+    }
+
+    if (previous && activeMessageRelation === 'replace') {
+      void taskExecutionQueue.cancelAll(executionKey);
+    }
+    const taskLease = taskExecutionQueue.reserve(executionKey, requestId);
+    const taskAbortController = taskLease.controller;
+    const releaseTask = () => taskLease.release();
+
+    if (previous) {
+      try {
+        ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() });
+        acknowledged = true;
+      } catch {}
+      io.to(executionRoom).emit('agent:status', {
+        status: activeMessageRelation === 'replace' ? 'replacing' : 'queued',
+        source: 'task',
+        requestId,
+        waitingForRequestId: previous.requestId,
+      });
+    }
+    if (!await taskLease.waitForTurn()) {
+      releaseTask();
+      return;
+    }
     const superseded = beginChatExecution(executionScope, requestId);
     if (superseded?.terminalEvent) {
       io.to(executionRoom).emit(superseded.terminalEvent.event, superseded.terminalEvent.payload);
     }
     markLatestUserTurn(executionScope, requestId);
-    let cancelled = false;
-    const taskAbortController = new AbortController();
-    const cancelTask = () => {
-      cancelled = true;
-      taskAbortController.abort();
-      console.log(`[Task] Cancelled by user for ${uid} (${requestId})`);
-    };
-    activeTaskCancellations.set(executionKey, { requestId, cancel: cancelTask });
-    const releaseTask = () => {
-      if (activeTaskCancellations.get(executionKey)?.requestId === requestId) {
-        activeTaskCancellations.delete(executionKey);
-      }
-    };
-    try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+    if (!acknowledged) {
+      try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+    }
     const taskStateKey = scopedEmotionalStateKey(uid, taskScope);
-    if (isConfirmationCancellation(data.text)) clearPendingConfirmation(uid);
+    const confirmationScope = {
+      source: 'task',
+      domain: taskScope.domain,
+      orgId: taskScope.orgId,
+      channelId: socket.id,
+    };
+    if (isConfirmationCancellation(data.text)) clearPendingConfirmation(uid, confirmationScope);
     const pendingConfirmation = isExplicitConfirmationReply(data.text)
-      ? getPendingConfirmation(uid)
+      ? getPendingConfirmation(uid, confirmationScope)
       : null;
     const pendingConfirmationPrompt = pendingConfirmation
       ? formatPendingConfirmationPrompt(pendingConfirmation)
@@ -318,28 +388,28 @@ export function registerTaskHandler(
     let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-v4-flash';
 
     // ── Load persisted conversation history (survives page reload) ──
-    const turnDispatch = buildLumiTurnDispatch({
-      userId: uid,
-      text: routedTaskText,
-      channel: 'task',
+    const executionPipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: uid,
+        text: routedTaskText,
+        channel: 'task',
+        source: 'task',
+        category: 'command',
+        operationMode: 'assistant',
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
+        targetIsLumi: personality.id === 'lumi',
+      },
+      registry: toolRegistry,
+      personalityToolPolicy: personality.toolPolicy,
+      actionTaskState: convForHistory.actionContinuationState,
       source: 'task',
-      category: 'command',
-      operationMode: 'assistant',
-      domain: taskScope.domain,
-      orgId: taskScope.orgId,
-      targetIsLumi: personality.id === 'lumi',
     });
+    const turnDispatch = executionPipeline.turnIntent;
     const turnFlow = turnDispatch.flow;
     const workSurfaceRoute = turnFlow.workSurfaceRoute;
     const visionIntent = turnFlow.visionIntent;
-    const executionDecision = buildLumiExecutionDecision({
-      flow: turnFlow,
-      text: routedTaskText,
-      toolDeclarations: toolRegistry.getToolDeclarations(),
-      toolRegistry,
-      personalityToolPolicy: personality.toolPolicy,
-      actionTaskState: convForHistory.actionContinuationState,
-    });
+    const executionDecision = executionPipeline.execution;
     const actionFollowupIntent = classifyConversationActionFollowupIntent(
       data.text,
       convForHistory.actionContinuationState,
@@ -371,17 +441,8 @@ export function registerTaskHandler(
         flow: turnFlow,
       });
     const taskTextGate = createPreFinalizationTextGate();
-    const intentTrace = buildLumiIntentTrace({
-      dispatch: turnDispatch,
-      execution: executionDecision,
-      text: routedTaskText,
-      source: 'task',
-    });
-    const capabilitySelection = buildLumiCapabilitySelection({
-      dispatch: turnDispatch,
-      execution: executionDecision,
-      text: routedTaskText,
-    });
+    const intentTrace = executionPipeline.intentTrace;
+    const capabilitySelection = executionPipeline.capabilityPlan;
     const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
       channel: 'task',
       text: routedTaskText,
@@ -522,6 +583,37 @@ export function registerTaskHandler(
       }
       return executionWriteback;
     };
+    let pendingConfirmationCreatedThisTurn: ReturnType<typeof recordPendingConfirmation> | null = null;
+    const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
+      if (
+        pendingConfirmation
+        && consumePendingConfirmation(
+          uid,
+          pendingConfirmation.id,
+          toolName,
+          args,
+          confirmationScope,
+        )
+      ) {
+        console.log(`[TaskHandler] Consumed one-time confirmation for "${toolName}".`);
+        return true;
+      }
+      if (canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })) return true;
+      const pending = recordPendingConfirmation(uid, toolName, args, 'task', {
+        domain: taskScope.domain,
+        orgId: taskScope.orgId,
+        channelId: socket.id,
+        taskId: actionTaskExecution.state?.taskId,
+        actionIntent: routedTaskText,
+      });
+      pendingConfirmationCreatedThisTurn = pending;
+      setConversationActionExecutionStatus(convForHistory.id, uid, 'waiting_confirmation', {
+        assistantState: formatPendingConfirmationPrompt(pending),
+        requestId,
+      });
+      console.warn(`[TaskHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
+      return false;
+    };
 
     if (actionFollowupIntent === 'status' && convForHistory.actionContinuationState) {
       const statusText = formatConversationActionTaskStatus(convForHistory.actionContinuationState);
@@ -544,50 +636,122 @@ export function registerTaskHandler(
     if (pendingConfirmation) {
       const confirmedTask = pendingConfirmation.actionIntent || data.text;
       const confirmedArgs = pendingConfirmation.exactArgs || {};
-      const confirmationRecord: ToolExecutionRecord = {
-        id: `task-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name: pendingConfirmation.toolName,
-        arguments: confirmedArgs,
-        result: '',
-      };
+      const confirmationRecordId =
+        `task-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const consumed = consumePendingConfirmation(
         uid,
         pendingConfirmation.id,
         pendingConfirmation.toolName,
         confirmedArgs,
+        confirmationScope,
       );
-      if (!consumed) {
-        confirmationRecord.error = 'The one-time confirmation expired before execution.';
-      } else {
-        try {
-          confirmationRecord.result = await toolRegistry.execute(
-            confirmationRecord.name,
-            confirmedArgs,
-            {
-              userId: uid,
-              domain: taskScope.domain,
-              orgId: taskScope.orgId,
-              desktopRelay,
-              llmGetters,
-              source: 'task_confirmation',
-              supervisedExternalCommits: true,
-              isCancelled: () => taskAbortController.signal.aborted,
-              userConfirmed: true,
-              actionIntent: confirmedTask,
-              routedTaskText: confirmedTask,
-              toolPolicy: executionDecision.toolPolicy,
+      const confirmationRecord = await executeToolCall({
+        registry: toolRegistry,
+        id: confirmationRecordId,
+        name: pendingConfirmation.toolName,
+        arguments: confirmedArgs,
+        context: {
+          userId: uid,
+          domain: taskScope.domain,
+          orgId: taskScope.orgId,
+          desktopRelay,
+          llmGetters,
+          source: 'task_confirmation',
+          supervisedExternalCommits: true,
+          isCancelled: () => taskAbortController.signal.aborted,
+          userConfirmed: true,
+          actionIntent: confirmedTask,
+          routedTaskText: confirmedTask,
+          toolPolicy: executionDecision.toolPolicy,
+        },
+        preflight: () => consumed
+          ? { allowed: true, arguments: confirmedArgs }
+          : {
+              allowed: false,
+              arguments: confirmedArgs,
+              reason: 'The one-time confirmation expired before execution.',
             },
+      });
+      emitAgent("agent:tool_call", {
+        name: confirmationRecord.name,
+        arguments: confirmationRecord.arguments,
+        result: confirmationRecord.result?.slice(0, 500),
+        error: confirmationRecord.error,
+      });
+      let confirmationRecords: ToolExecutionRecord[] = [confirmationRecord];
+      let confirmationResponse = toolRecordSucceeded(confirmationRecord)
+        ? CN_TASK_EXECUTION_MESSAGES.confirmationExecuted
+        : CN_TASK_EXECUTION_MESSAGES.confirmationFailed(
+            confirmationRecord.error || confirmationRecord.result,
           );
-        } catch (error: any) {
-          confirmationRecord.error = error?.message || String(error);
-        }
+      if (
+        confirmedStepNeedsContinuation(
+          confirmedTask,
+          taskAwareRecords([confirmationRecord]),
+        )
+        && !taskAbortController.signal.aborted
+      ) {
+        const continuation = await runWithTools(
+          [
+            { role: 'system', content: effectiveSystemPrompt },
+            { role: 'system', content: buildConfirmedStepContinuationNote(confirmationRecord) },
+            { role: 'user', content: confirmedTask },
+          ],
+          toolRegistry,
+          {
+            provider: activeProvider,
+            model: activeModel,
+            userId: uid,
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
+            signal: taskAbortController.signal,
+          },
+          record => {
+            emitAgent("agent:tool_call", {
+              name: record.name,
+              arguments: record.arguments,
+              result: record.result?.slice(0, 500),
+              error: record.error,
+            });
+          },
+          executionDecision.maxIterations || 25,
+          llmGetters.getDeepSeek,
+          llmGetters.getGemini,
+          llmGetters.getOpenAI,
+          llmGetters.getAnthropic,
+          llmGetters.getQwen,
+          undefined,
+          {
+            userId: uid,
+            domain: taskScope.domain,
+            orgId: taskScope.orgId,
+            desktopRelay,
+            requestConfirmation,
+            actionIntent: confirmedTask,
+            routedTaskText: confirmedTask,
+            toolPolicy: executionDecision.toolPolicy,
+            isCancelled: () => taskAbortController.signal.aborted,
+            llmGetters,
+            source: 'task_confirmation_resume',
+            supervisedExternalCommits: true,
+          },
+          llmGetters.getOllama,
+          llmGetters.getLmStudio,
+          llmGetters.getArk,
+          llmGetters.getXiaomi,
+          llmGetters.getKimi,
+          llmGetters.getGlm,
+          llmGetters.getRelay,
+        );
+        confirmationRecords = [confirmationRecord, ...(continuation.toolCalls || [])];
+        confirmationResponse = pendingConfirmationCreatedThisTurn
+          ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
+          : continuation.text || confirmationResponse;
       }
       const finalConfirmation = finalizeLumiResponse({
         taskText: confirmedTask,
-        responseText: confirmationRecord.error
-          ? CN_TASK_EXECUTION_MESSAGES.confirmationFailed(confirmationRecord.error)
-          : CN_TASK_EXECUTION_MESSAGES.confirmationExecuted,
-        toolRecords: taskAwareRecords([confirmationRecord]),
+        responseText: confirmationResponse,
+        toolRecords: taskAwareRecords(confirmationRecords),
         source: 'task_confirmation',
         flow: { ...turnFlow, routeText: confirmedTask },
       });
@@ -600,9 +764,9 @@ export function registerTaskHandler(
         reason: finalConfirmation.reason || '',
       });
       addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, cognitiveIntent: 'confirmation' });
-      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalConfirmation.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: [confirmationRecord], cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation' });
-      persistTaskExecutionWriteback(finalConfirmation.text, [confirmationRecord], `${interactionId}_confirmation`);
-      if (!finalConfirmation.blocked) persistTaskLearning(finalConfirmation.text, { toolRecords: [confirmationRecord], logLabel: 'task confirmation' });
+      addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalConfirmation.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: confirmationRecords, cognitiveIntent: finalConfirmation.blocked ? 'work_product_guard' : 'confirmation' });
+      persistTaskExecutionWriteback(finalConfirmation.text, confirmationRecords, `${interactionId}_confirmation`);
+      if (!finalConfirmation.blocked) persistTaskLearning(finalConfirmation.text, { toolRecords: confirmationRecords, logLabel: 'task confirmation' });
       emitAgent('agent:status', { status: 'idle' });
       releaseTask();
       return;
@@ -623,7 +787,7 @@ export function registerTaskHandler(
         isLLMAvailable: true,
       };
       cognition = await processInput(routedTaskText, cognitiveCtx);
-      if (cancelled) {
+      if (taskLease.signal.aborted) {
         const cancellationError = new Error('Task cancelled');
         cancellationError.name = 'AbortError';
         throw cancellationError;
@@ -709,7 +873,19 @@ export function registerTaskHandler(
           rootTaskText: routedTaskText,
         };
         const complexity = classifyComplexity(routedTaskText, orchestrationContext);
-        if (!workSurfaceRoute.forbidComputerUse && (complexity === 'complex' || complexity === 'moderate')) {
+        const shouldOrchestrate = shouldAttemptOrchestration({
+          channel: 'task',
+          text: turnFlow.routeText,
+          complexity,
+          allowToolUse: executionDecision.allowToolUse,
+          clientActionOnly: turnFlow.clientActionOnlyTurn,
+          selfRepair: turnFlow.selfRepairTurn,
+          artifactFirst: workSurfaceRoute.artifactFirst,
+          directDesktop: workSurfaceRoute.directDesktop,
+          capabilityLane: capabilitySelection.lane,
+          cognitionCategory: cognition.intent.category,
+        });
+        if (shouldOrchestrate) {
           const db = readDB();
           const availableAgents = (db.agents || []).filter((a: any) => {
             if (a.status === 'offline' || a.status === 'terminated') return false;
@@ -744,14 +920,8 @@ export function registerTaskHandler(
                     source: 'task',
                     worker: meta,
                   });
-                  if (record.result !== undefined || record.error !== undefined) {
-                    orchestratedToolRecords.push({
-                      id: record.id,
-                      name: record.name,
-                      arguments: record.arguments,
-                      result: record.result || '',
-                      error: record.error,
-                    });
+                  if (isTerminalOrchestrationToolEvent(record)) {
+                    orchestratedToolRecords.push({ ...record, result: record.result || '' });
                   }
                 },
               );
@@ -830,24 +1000,6 @@ export function registerTaskHandler(
         return;
       }
 
-      const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-        if (
-          pendingConfirmation
-          && consumePendingConfirmation(uid, pendingConfirmation.id, toolName, args)
-        ) {
-          console.log(`[TaskHandler] Consumed one-time confirmation for "${toolName}".`);
-          return true;
-        }
-        if (canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })) return true;
-        const pending = recordPendingConfirmation(uid, toolName, args, 'task');
-        setConversationActionExecutionStatus(convForHistory.id, uid, 'waiting_confirmation', {
-          assistantState: formatPendingConfirmationPrompt(pending),
-          requestId,
-        });
-        console.warn(`[TaskHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
-        return false;
-      };
-
       const result = await runWithTools(
         messages,
         toolRegistry,
@@ -863,7 +1015,7 @@ export function registerTaskHandler(
         executionDecision.maxIterations || 25,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         (chunk) => {
-          if (!cancelled && !deferTaskModelOutput) {
+          if (!taskLease.signal.aborted && !deferTaskModelOutput) {
             const safeText = taskTextGate.push(chunk);
             if (safeText) {
               emitTask("task:chunk", { text: safeText, agentName: personality.name });
@@ -871,7 +1023,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => cancelled, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -887,7 +1039,7 @@ export function registerTaskHandler(
       }
       taskTextGate.finish();
 
-      if (cancelled) {
+      if (taskLease.signal.aborted) {
         const cancelledResponse = finalizeLumiResponse({
           taskText: data.text,
           responseText: '任务已取消。',
@@ -1048,7 +1200,7 @@ export function registerTaskHandler(
       }
 
     } catch (err: any) {
-      if (cancelled || err?.name === 'AbortError') {
+      if (taskLease.signal.aborted || err?.name === 'AbortError') {
         emitAgent('agent:response', {
           text: 'Task cancelled.',
           agentName: personality.name,

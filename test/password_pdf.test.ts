@@ -46,7 +46,13 @@ describe('password-protected PDF support', () => {
 
     const pdfResult = await registry.execute('read_pdf', { filePath: pdfPath, password: 'open-sesame' });
     const documentResult = await registry.execute('extract_document_text', { filePath: pdfPath, password: 'open-sesame' });
-    const textExportResult = await registry.execute('pdf_to_text', { filePath: pdfPath, password: 'open-sesame' });
+    const textExportResult = await registry.execute('pdf_to_text', {
+      filePath: pdfPath,
+      password: 'open-sesame',
+    }, {
+      allowLocalFileWrites: true,
+      localWriteIntentReason: 'The test explicitly requests a plaintext export artifact.',
+    });
     const diffResult = await registry.execute('diff_documents', {
       filePath1: pdfPath,
       filePath2: pdfPath,
@@ -85,8 +91,9 @@ describe('password-protected PDF support', () => {
       password: '[redacted]',
     });
 
-    const adapterSource = fs.readFileSync(path.join(process.cwd(), 'server/llm/adapter.ts'), 'utf8');
-    expect(adapterSource).toContain('arguments: safeExecutionArguments');
-    expect(adapterSource).toContain('onToolStart?.({ id: tc.id, name: tc.name, arguments: safeExecutionArguments })');
+    const executionEngineSource = fs.readFileSync(path.join(process.cwd(), 'server/tools/execution_engine.ts'), 'utf8');
+    expect(executionEngineSource).toContain('SECRET_ARGUMENT_RE');
+    expect(executionEngineSource).toContain('arguments: receiptArguments');
+    expect(executionEngineSource).toContain('onToolStart?.({');
   });
 });

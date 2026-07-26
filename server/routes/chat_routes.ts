@@ -5,6 +5,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { runWithTools } from "../llm/adapter";
 import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
+import { executeToolCallOrThrow } from "../tools/execution_engine";
 import { recordLatency } from "../monitor/latency_store";
 import { optionalAuth, resolveDomain } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
@@ -468,12 +469,17 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       args.persistCase = true;
     }
 
-    const text = await toolRegistry.execute(toolName, args, {
-      userId,
-      domain,
-      orgId,
-      llmGetters: llm,
-      source: 'legal-direct-tool',
+    const text = await executeToolCallOrThrow({
+      registry: toolRegistry,
+      name: toolName,
+      arguments: args,
+      context: {
+        userId,
+        domain,
+        orgId,
+        llmGetters: llm,
+        source: 'legal-direct-tool',
+      },
     });
     return res.json({ text, toolName });
   }));
@@ -499,12 +505,17 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       court: String(req.body?.court || '').trim(),
       persistCase: req.body?.persistCase === true || Boolean(req.body?.caseId || req.body?.caseName),
     };
-    const llmReview = toolRegistry.execute('legal_review_contract', args, {
-      userId,
-      domain,
-      orgId,
-      llmGetters: llm,
-      source: 'legal-contract-review',
+    const llmReview = executeToolCallOrThrow({
+      registry: toolRegistry,
+      name: 'legal_review_contract',
+      arguments: args,
+      context: {
+        userId,
+        domain,
+        orgId,
+        llmGetters: llm,
+        source: 'legal-contract-review',
+      },
     });
     llmReview.catch(() => undefined);
 
@@ -519,11 +530,16 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       return res.json({ text, degraded: false });
     } catch (err: any) {
       console.warn('[LegalContractReview] Deep review unavailable:', err?.message || err);
-      const fallback = await toolRegistry.execute('legal_review_contract', args, {
-        userId,
-        domain,
-        orgId,
-        source: 'legal-contract-review-fallback',
+      const fallback = await executeToolCallOrThrow({
+        registry: toolRegistry,
+        name: 'legal_review_contract',
+        arguments: args,
+        context: {
+          userId,
+          domain,
+          orgId,
+          source: 'legal-contract-review-fallback',
+        },
       });
       return res.json({
         text: `${fallback}\n\n*提示：深度 LLM 审查暂未及时完成，已先返回本地规则审查结果。*`,
@@ -622,19 +638,24 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     let legalCaseworkError = '';
     if (shouldArchiveLegalMeeting(purpose, legalCase, domain, orgId)) {
       try {
-        legalCasework = await toolRegistry.execute('legal_meeting_minutes_to_case', buildLegalMeetingMinutesArgs({
-          transcript,
-          startedAt,
-          endedAt,
-          legalCase,
-          orgId,
-          userId,
-        }), {
-          userId,
-          domain,
-          orgId,
-          llmGetters: llm,
-          source: 'meeting-analyze',
+        legalCasework = await executeToolCallOrThrow({
+          registry: toolRegistry,
+          name: 'legal_meeting_minutes_to_case',
+          arguments: buildLegalMeetingMinutesArgs({
+            transcript,
+            startedAt,
+            endedAt,
+            legalCase,
+            orgId,
+            userId,
+          }),
+          context: {
+            userId,
+            domain,
+            orgId,
+            llmGetters: llm,
+            source: 'meeting-analyze',
+          },
         });
       } catch (err: any) {
         legalCaseworkError = err?.message || String(err);

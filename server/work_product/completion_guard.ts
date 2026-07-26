@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { ToolExecutionRecord } from '../tools/types';
 import {
+  buildActionContract,
   claimsCurrentAppSaveCompletion,
+  hasCoreActionEvidence,
   hasCurrentAppSaveEvidence,
   hasCurrentAppUiMutationEvidence,
   requiresCurrentAppUiMutation,
@@ -136,6 +138,10 @@ const OPEN_CLAIM_RE =
 const FILE_CREATION_CLAIM_RE =
   // i18n-allow: Chinese file-production claim recognition pattern; not user-visible copy.
   /(?:已经|已|都)?[^。！？\n]{0,18}(?:生成|新建|创建|保存|输出|写入|写好|写完|导出)|(?:生成好了|新建好了|创建好了|保存好了|输出好了|写好了|写完了)|\b(?:created|saved|exported|generated)\b/i;
+
+const COMMUNICATION_CLAIM_RE =
+  // i18n-allow: user-visible completion-claim recognition; not response copy.
+  /(?:已经|已|都)?[^。！？\n]{0,18}(?:发送|提交|发布|送达|回复)|(?:发送成功|提交成功|发布成功|已经回复)|\b(?:sent|submitted|published|delivered|replied)\b/i;
 
 const INSPECTION_ONLY_TOOL_RE =
   /^(read_|list_|search_|grep_|desktop_path_info|desktop_list_files|client_get_state|adapter_health_check|usage_get_summary|calendar_|lumi_constitution|agent_list|get_|path_info)/i;
@@ -388,11 +394,40 @@ function summarizeFailedToolCalls(failed: ToolExecutionRecord[], chinese = false
 }
 
 function isSuccessfulToolCall(call: ToolExecutionRecord): boolean {
+  if (call.terminalVerification?.status === 'failed') return false;
   if (call.error || !String(call.result || '').trim()) return false;
   const parsed = parseStructuredToolResult(call.result || '');
   if (parsed.payload) return !structuredToolFailureDetail(parsed.payload);
   if (parsed.parsed) return true;
   return !/requires user confirmation|requires confirmation|user confirmation|\u7528\u6237\u786e\u8ba4|\u9700\u8981\u786e\u8ba4/i.test(String(call.result || ''));
+}
+
+function hasMaterialSideEffect(call: ToolExecutionRecord): boolean {
+  return Boolean(call.capability?.sideEffects.some(effect => effect.type !== 'none'));
+}
+
+function unverifiedCompletionReceipts(
+  claimText: string,
+  successful: ToolExecutionRecord[],
+): ToolExecutionRecord[] {
+  const sideEffectCalls = successful.filter(hasMaterialSideEffect);
+  if (sideEffectCalls.length === 0) return [];
+
+  const expectedStrategies = new Set<NonNullable<ToolExecutionRecord['terminalVerification']>['strategy']>();
+  if (FILE_CREATION_CLAIM_RE.test(claimText)) expectedStrategies.add('artifact');
+  if (OPEN_CLAIM_RE.test(claimText)) {
+    expectedStrategies.add('state_diff');
+    expectedStrategies.add('visual');
+  }
+  if (COMMUNICATION_CLAIM_RE.test(claimText)) expectedStrategies.add('provider_ack');
+
+  const relevant = expectedStrategies.size > 0
+    ? sideEffectCalls.filter(call => (
+        call.terminalVerification
+        && expectedStrategies.has(call.terminalVerification.strategy)
+      ))
+    : sideEffectCalls;
+  return relevant.filter(call => call.terminalVerification?.status === 'unverified');
 }
 
 function buildExecutionStatusGuardedResponse(
@@ -509,6 +544,24 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     && !hasCurrentAppSaveEvidence(toolCalls, task)
   ) {
     const reason = 'Missing verified in-app save evidence.';
+    return {
+      text: buildGuardedResponse(task, reason, successful, failed),
+      blocked: true,
+      reason,
+    };
+  }
+
+  const actionContract = buildActionContract(task);
+  const hasDomainCompletionEvidence = actionContract.applies
+    && hasCoreActionEvidence(actionContract, toolCalls, task);
+  const unverifiedReceipts = hasDomainCompletionEvidence
+    ? []
+    : unverifiedCompletionReceipts(claimText, successful);
+  if (unverifiedReceipts.length > 0) {
+    const reason = unverifiedReceipts
+      .map(call => call.terminalVerification?.reason)
+      .filter(Boolean)
+      .join('; ') || 'The tool returned, but the capability verification contract was not satisfied.';
     return {
       text: buildGuardedResponse(task, reason, successful, failed),
       blocked: true,

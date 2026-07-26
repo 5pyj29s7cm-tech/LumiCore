@@ -11,6 +11,7 @@ import {
 import { getWebLoginSitePreset, listWebLoginSitePresets } from '../../web_login/legal_presets';
 import { getMember } from '../../org/db';
 import type { ToolContext } from '../types';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 function scopeFromContext(context?: { userId?: string; domain?: string; orgId?: string }): WebLoginScope {
   return {
@@ -78,6 +79,8 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
       if (!preset) throw new Error(`Unknown web login preset: ${args.presetId}`);
       const mergedNotes = [preset.notes, args.notes].filter(Boolean).join(' ');
       return JSON.stringify({
+        ok: true,
+        status: 'saved',
         profile: saveWebLoginProfile({
           id: args.id || preset.id,
           label: args.label || preset.label,
@@ -99,6 +102,32 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'web.login.profile.save-preset',
+      family: 'web_login',
+      lane: 'web',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'authorized website login profile', reversible: true },
+        { type: 'credential_access', scope: 'optional encrypted website credential', reversible: true },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'profile.id', 'profile.loginUrl', 'preset.id'],
+        requiredValues: { ok: true, status: 'saved' },
+        successStatuses: ['saved'],
+        successSignals: ['the preset-backed profile was persisted in the current scope'],
+        limitations: ['Profile persistence does not prove an authenticated browser session.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'web.login.profile.save-preset',
+      operation: 'mutate',
+      subjectArgument: 'presetId',
+      limitations: ['Credentials, when provided, remain encrypted and are never returned.'],
+    }),
   });
 
   registry.register({
@@ -145,6 +174,8 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     handler: async (args, context) => {
       assertCanMutateWebLoginProfile(context);
       return JSON.stringify({
+        ok: true,
+        status: 'saved',
         profile: saveWebLoginProfile({
           id: args.id,
           label: args.label,
@@ -163,6 +194,31 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'web.login.profile.save',
+      family: 'web_login',
+      lane: 'web',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'authorized website login profile', reversible: true },
+        { type: 'credential_access', scope: 'optional encrypted website credential', reversible: true },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'profile.id', 'profile.loginUrl'],
+        requiredValues: { ok: true, status: 'saved' },
+        successStatuses: ['saved'],
+        successSignals: ['the authorized profile was persisted in the current scope'],
+        limitations: ['Saving a profile does not log into the website.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'web.login.profile.save',
+      operation: 'mutate',
+      subjectArgument: 'loginUrl',
+    }),
   });
 
   registry.register({
@@ -215,6 +271,33 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'web.login.site.learn',
+      family: 'web_login',
+      lane: 'web',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'website login profile and learned selectors', reversible: true },
+        { type: 'credential_access', scope: 'authorized website session and optional encrypted credential', reversible: true },
+        { type: 'desktop_control', scope: 'persistent browser login session', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['status', 'loginState', 'profile.id', 'learned.profileId', 'url'],
+        requiredValues: { status: 'logged_in', loginState: 'authenticated' },
+        successStatuses: ['logged_in'],
+        successSignals: ['positive authenticated-session evidence and persisted learned profile metadata'],
+        limitations: ['Captcha, QR, OTP, passkey, and account authorization may leave the task awaiting the user.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'web.login.site.learn',
+      operation: 'mutate',
+      subjectArgument: 'url',
+      limitations: ['manual_required is a partial result, not a successful login.'],
+    }),
   });
 
   registry.register({
@@ -229,12 +312,41 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     },
     handler: async (args, context) => {
       assertCanMutateWebLoginProfile(context);
+      const deleted = deleteWebLoginProfile(String(args.id || ''), scopeFromContext(context));
       return JSON.stringify({
-        deleted: deleteWebLoginProfile(String(args.id || ''), scopeFromContext(context)),
+        ok: deleted,
+        status: deleted ? 'deleted' : 'not_found',
+        deleted,
+        profileId: String(args.id || ''),
       }, null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',
+    capability: capabilityContract({
+      id: 'web.login.profile.delete',
+      family: 'web_login',
+      lane: 'web',
+      operation: 'mutate',
+      risk: 'high',
+      sideEffects: [
+        { type: 'local_state_change', scope: 'website login profile and local browser session', reversible: false },
+        { type: 'credential_access', scope: 'stored encrypted website credential', reversible: false },
+      ],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'deleted', 'profileId'],
+        requiredValues: { ok: true, status: 'deleted', deleted: true },
+        successStatuses: ['deleted'],
+        successSignals: ['the profile and its local persistent session were removed'],
+        limitations: ['Deletion cannot recover the previous encrypted credential or browser session.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'web.login.profile.delete',
+      operation: 'mutate',
+      subjectArgument: 'id',
+    }),
   });
 
   registry.register({
@@ -266,6 +378,32 @@ export function registerWebLoginTools(registry: ToolRegistry): void {
     }, scopeFromContext(context)), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'web.login.session.run',
+      family: 'web_login',
+      lane: 'web',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [
+        { type: 'credential_access', scope: 'authorized saved website session', reversible: true },
+        { type: 'desktop_control', scope: 'persistent Chrome or Edge login session', reversible: true },
+      ],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['status', 'loginState', 'profile.id', 'url'],
+        requiredValues: { status: 'logged_in', loginState: 'authenticated' },
+        successStatuses: ['logged_in'],
+        successSignals: ['the site exposed positive authenticated-session evidence'],
+        limitations: ['manual_required means the browser opened but authentication is incomplete.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'web.login.session.run',
+      operation: 'mutate',
+      subjectArgument: 'profileId',
+      limitations: ['Opening a login page is not a successful authenticated session.'],
+    }),
   });
 
   registry.register({

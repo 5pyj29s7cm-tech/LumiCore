@@ -23,6 +23,7 @@ import type { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { hasExplicitTeamExecutionRequest } from './tool_intent';
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from './desktop_observation';
 import { formatDesktopObservationUnavailable } from '../i18n/naturalness_messages';
+import { executeToolCall } from '../tools/execution_engine';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -96,17 +97,13 @@ export async function processInput(
   if (desktopObservationPlan.length > 0 && toolContext) {
     const records: ToolExecutionRecord[] = [];
     for (const call of desktopObservationPlan) {
-      const record: ToolExecutionRecord = {
+      const record = await executeToolCall({
+        registry: toolRegistry,
         id: `cognition-observation-${Date.now()}-${records.length}`,
         name: call.name,
         arguments: call.arguments,
-        result: '',
-      };
-      try {
-        record.result = await toolRegistry.execute(call.name, call.arguments, toolContext);
-      } catch (err: any) {
-        record.error = err?.message || String(err);
-      }
+        context: toolContext,
+      });
       records.push(record);
     }
     const formatted = formatDesktopObservationResult(records, input);
@@ -133,20 +130,16 @@ export async function processInput(
     && intent.confidence >= 0.75
     && !intent.needsLLM
   ) {
-    try {
-      const toolResult = await toolRegistry.execute(
-        intent.directToolCall.name,
-        intent.directToolCall.args,
-        toolContext,
-      );
-
+    const toolRecord = await executeToolCall({
+      registry: toolRegistry,
+      id: `cognition-${Date.now()}`,
+      name: intent.directToolCall.name,
+      arguments: intent.directToolCall.args,
+      context: toolContext,
+    });
+    if (!toolRecord.error) {
+      const toolResult = toolRecord.result;
       const fallback = generateFallback(intent, toolResult);
-      const toolRecord: ToolExecutionRecord = {
-        id: `cognition-${Date.now()}`,
-        name: intent.directToolCall.name,
-        arguments: intent.directToolCall.args,
-        result: toolResult,
-      };
       return {
         responseText: fallback?.text || toolResult,
         intent,
@@ -157,18 +150,21 @@ export async function processInput(
         toolRecords: [toolRecord],
         isFallback: !!fallback,
       };
-    } catch (err: any) {
-      // Direct tool failed — fall through to LLM path
-      console.log(`[Cognition] Direct tool '${intent.directToolCall.name}' failed: ${err.message}, falling through to LLM`);
-      return {
-        responseText: '',
-        intent,
-        llmWasCalled: false,
-        directToolExecuted: false,
-        toolResult: err.message,
-        isFallback: false,
-      };
     }
+      // Direct tool failed — fall through to LLM path
+    console.log(
+      `[Cognition] Direct tool '${intent.directToolCall.name}' failed: ${toolRecord.error}, falling through to LLM`,
+    );
+    return {
+      responseText: '',
+      intent,
+      llmWasCalled: false,
+      directToolExecuted: false,
+      toolResult: toolRecord.error,
+      toolRecord,
+      toolRecords: [toolRecord],
+      isFallback: false,
+    };
   }
 
   // ── Path B: Needs LLM — signal caller to invoke LLM ──

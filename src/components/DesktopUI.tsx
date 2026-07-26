@@ -19,7 +19,6 @@ import {
   Wifi,
   Volume2,
   VolumeX,
-  Battery,
   Bluetooth,
   Moon,
   Minimize2,
@@ -54,6 +53,13 @@ import {
 import { toast } from 'sonner';
 import { GlassCard } from './SharedUI';
 import { VoicePicker } from './VoicePicker';
+import { DesktopPersonalizationSoundPanel } from './DesktopPersonalizationSoundPanel';
+import {
+  BatteryIndicator,
+  DayInkLandscape,
+  MeetingModeButton,
+  ThemeWidget,
+} from './DesktopShellAuxiliary';
 import { CursorGlow } from './CursorGlow';
 import { WorkModeSwitch } from './org/WorkModeSwitch';
 import { PetAvatar } from './SpriteAnimator';
@@ -70,7 +76,6 @@ import type { BackgroundWorkflowTask, WorkflowStep } from './WorkflowPanel';
 import { useWakeWord } from '../hooks/useWakeWord';
 import { ErrorBoundary } from './ErrorBoundary';
 import { appConfirm } from '@/lib/appConfirm';
-import { designVoice, listVoices, synthesizeSpeech } from '@/services/voiceService';
 import { useVoiceprint } from '../hooks/useVoiceprint';
 import { useFaceRecognition } from '../hooks/useFaceRecognition';
 import { usePresence } from '../hooks/usePresence';
@@ -102,6 +107,11 @@ import {
   type OrganizationWorkspaceView,
 } from '../../shared/org_workspace';
 import {
+  CLIENT_SETTINGS_SECTIONS,
+  PERSONAL_CLIENT_LAUNCHER_IDS,
+  PERSONAL_CLIENT_SURFACES,
+  PERSONAL_CLIENT_SURFACE_ACTIONS,
+  getOpenPersonalClientSurfaceIds,
   getPersonalClientSurfaceByAction,
   isComputerAdaptationSettingsTarget,
   normalizeClientSettingsSection,
@@ -142,7 +152,6 @@ const TeamHub = lazy(() => import('./TeamHub').then(m => ({ default: m.TeamHub }
 const TerminalWindow = lazy(() => import('./Terminal').then(m => ({ default: m.TerminalWindow })));
 const TokenDashboard = lazy(() => import('./TokenDashboard').then(m => ({ default: m.TokenDashboard })));
 const ToolPanel = lazy(() => import('./ToolPanel').then(m => ({ default: m.ToolPanel })));
-const VoiceForge = lazy(() => import('./VoiceForge').then(m => ({ default: m.VoiceForge })));
 const VoiceTrainingDialog = lazy(() => import('./VoiceTrainingDialog').then(m => ({ default: m.VoiceTrainingDialog })));
 const WorkflowPanel = lazy(() => import('./WorkflowPanel'));
 
@@ -2188,8 +2197,33 @@ export function DesktopUI({
         sensorPrimerSeen,
         biometricsPrimerSeen: sensorPrimerSeen,
       });
+      let nativeDesktop: ClientPermissionSnapshot = {};
+      if (isTauri) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const status = await invoke<Record<string, string | boolean | number | null>>(
+            'get_desktop_capability_status',
+          );
+          nativeDesktop = {
+            native_platform: status.platform || 'desktop',
+            native_shell_available: status.shell_available,
+            native_app_discovery_available: status.app_discovery_available,
+            native_app_launch_available: status.app_launch_available,
+            native_screen_capture_available: status.screen_capture_available,
+            native_input_available: status.input_available,
+            accessibility_permission: status.accessibility_permission,
+            screen_recording_permission: status.screen_recording_permission,
+          };
+        } catch {
+          nativeDesktop = {
+            native_platform: 'desktop',
+            accessibility_permission: 'unknown',
+            screen_recording_permission: 'unknown',
+          };
+        }
+      }
       if (disposed) return;
-      setClientPermissions({ ...snapshot });
+      setClientPermissions({ ...snapshot, ...nativeDesktop });
     };
 
     void refreshPermissions();
@@ -3725,7 +3759,6 @@ export function DesktopUI({
         if (value === 'memory') return 'knowledge';
         if (value === 'files') return 'knowledge';
         if (value === 'sync') return 'devices';
-        if (value === 'runtime-log') return 'kernel';
         if (value === 'avatar-studio' || value === 'sound') return 'personalization';
         if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
         return value;
@@ -3824,7 +3857,7 @@ export function DesktopUI({
 
       const closeSurface = (value: string) => {
         const windowId = normalizeTarget(value);
-        if (!windowId) throw new Error('close_app requires target');
+        if (!windowId) throw new Error('close_client_surface requires target');
         if (windowId === 'knowledge') {
           setKnowledgeOpen(false);
           return;
@@ -3869,6 +3902,48 @@ export function DesktopUI({
         }
       };
 
+      const openOrganizationSurface = async (
+        requestedView: OrganizationWorkspaceView,
+        requestedAction: string,
+      ) => {
+        if (orgConnection?.connected && !canAccessOrganizationWorkspaceView(orgConnection?.orgRole, requestedView)) {
+          respond({
+            ok: false,
+            action: requestedAction,
+            target: 'org',
+            section: requestedView,
+            reason: 'organization_role_not_allowed',
+          });
+          return;
+        }
+        queueOrganizationWorkspaceRoute(requestedView);
+        if (orgConnection?.connected && workDomain !== 'work') {
+          const switched = await switchDomain('work');
+          if (!switched.success) {
+            openSurface('org');
+            respond({
+              ok: false,
+              action: requestedAction,
+              target: 'org',
+              section: requestedView,
+              reason: switched.message || 'organization_domain_switch_failed',
+            });
+            return;
+          }
+        }
+        openSurface('org');
+        window.dispatchEvent(new CustomEvent('lumi:navigate', {
+          detail: { tab: 'org', sub: requestedView },
+        }));
+        respond({
+          ok: true,
+          action: requestedAction,
+          target: 'org',
+          section: requestedView,
+          domain: orgConnection?.connected ? 'work' : workDomain,
+        });
+      };
+
       try {
         if (action === 'refresh_model_configuration') {
           const roles = Array.isArray(detail.payload?.roles) ? detail.payload.roles : [];
@@ -3893,12 +3968,6 @@ export function DesktopUI({
           respond({ ok: true, action, widgetMode: false, target: target || undefined });
           return;
         }
-        if (action === 'open_app') {
-          if (isDesktopWidgetMode) void exitDesktopWidgetMode(target);
-          else openSurface(target);
-          respond({ ok: true, action, target });
-          return;
-        }
         if (action === 'demo_open_surface') {
           const surface = normalizeTarget(target || detail.surface || '');
           if (!surface) throw new Error('demo_open_surface requires target');
@@ -3913,12 +3982,12 @@ export function DesktopUI({
           })();
           return;
         }
-        if (action === 'close_app') {
+        if (action === 'close_client_surface') {
           closeSurface(target);
           respond({ ok: true, action, target });
           return;
         }
-        if (action === 'set_mode' || action === 'set_client_mode') {
+        if (action === 'set_client_mode') {
           setClientMode(mode);
           respond({ ok: true, action, mode });
           return;
@@ -3954,21 +4023,6 @@ export function DesktopUI({
           respond({ ok: true, action, target: 'settings', section: requestedSection });
           return;
         }
-        const registeredSurface = getPersonalClientSurfaceByAction(action);
-        if (registeredSurface) {
-          if (registeredSurface.settingsSection) setSettingsSection(registeredSurface.settingsSection);
-          if (action === 'open_avatar_studio') setPersonalizationSection('appearance');
-          if (action === 'open_sound_studio') setPersonalizationSection('voice');
-          openSurface(registeredSurface.target);
-          respond({
-            ok: true,
-            action,
-            target: registeredSurface.target,
-            surface: registeredSurface.id,
-            section: registeredSurface.settingsSection || '',
-          });
-          return;
-        }
         if (action === 'close_nexus') {
           setViewMode('personal');
           respond({ ok: true, action, target: 'nexus', viewMode: 'personal' });
@@ -3998,42 +4052,7 @@ export function DesktopUI({
         if (action === 'open_organization_workspace') {
           const requestedView = normalizeOrganizationWorkspaceView(section || (target !== 'org' ? target : '') || 'dashboard');
           if (!requestedView) throw new Error(`Unknown organization workspace section: ${section || target}`);
-          if (orgConnection?.connected && !canAccessOrganizationWorkspaceView(orgConnection?.orgRole, requestedView)) {
-            respond({
-              ok: false,
-              action,
-              target: 'org',
-              section: requestedView,
-              reason: 'organization_role_not_allowed',
-            });
-            return;
-          }
-          queueOrganizationWorkspaceRoute(requestedView);
-          if (orgConnection?.connected && workDomain !== 'work') {
-            const switched = await switchDomain('work');
-            if (!switched.success) {
-              openSurface('org');
-              respond({
-                ok: false,
-                action,
-                target: 'org',
-                section: requestedView,
-                reason: switched.message || 'organization_domain_switch_failed',
-              });
-              return;
-            }
-          }
-          openSurface('org');
-          window.dispatchEvent(new CustomEvent('lumi:navigate', {
-            detail: { tab: 'org', sub: requestedView },
-          }));
-          respond({
-            ok: true,
-            action,
-            target: 'org',
-            section: requestedView,
-            domain: orgConnection?.connected ? 'work' : workDomain,
-          });
+          await openOrganizationSurface(requestedView, action);
           return;
         }
         if (action === 'set_wallpaper_mode') {
@@ -4041,6 +4060,30 @@ export function DesktopUI({
           if (enabled && !confirmed) throw new Error('set_wallpaper_mode requires explicit user confirmation');
           applyWallpaperMode(enabled);
           respond({ ok: true, action, enabled });
+          return;
+        }
+        const registeredSurface = getPersonalClientSurfaceByAction(action);
+        if (registeredSurface?.organizationView) {
+          const requestedView = normalizeOrganizationWorkspaceView(
+            registeredSurface.organizationViewByAction?.[action]
+            || registeredSurface.organizationView,
+          );
+          if (!requestedView) throw new Error(`Unknown organization workspace section for action: ${action}`);
+          await openOrganizationSurface(requestedView, action);
+          return;
+        }
+        if (registeredSurface) {
+          if (registeredSurface.settingsSection) setSettingsSection(registeredSurface.settingsSection);
+          if (action === 'open_avatar_studio') setPersonalizationSection('appearance');
+          if (action === 'open_sound_studio') setPersonalizationSection('voice');
+          openSurface(registeredSurface.target);
+          respond({
+            ok: true,
+            action,
+            target: registeredSurface.target,
+            surface: registeredSurface.id,
+            section: registeredSurface.settingsSection || '',
+          });
           return;
         }
         throw new Error(`Unsupported client action: ${action}`);
@@ -4080,9 +4123,27 @@ export function DesktopUI({
         callError ? { source: 'voice', message: callError, at: Date.now() } : null,
         clientRuntime.lastError ? { source: 'runtime', message: clientRuntime.lastError, at: Date.now() } : null,
       ].filter(Boolean);
+      const openSurfaceIds = getOpenPersonalClientSurfaceIds({
+        activeTab,
+        viewMode,
+        workDomain,
+        focusedWindow,
+        openWindows,
+        settingsSection,
+        appLauncherOpen: isSearchOpen,
+        knowledgeOpen,
+        chatOpen,
+        notificationsOpen: isNotificationPanelOpen,
+        memoryAvatarOpen: memoryLabOpen,
+        meetingOpen: meetingNotesOpen || operationMode === 'meeting',
+        wallpaperMode: isWallpaperMode,
+        widgetMode: isDesktopWidgetMode,
+        organizationWorkspaceVisible: activeTab === 'org' && workDomain === 'work' && Boolean(orgConnection?.connected),
+        organizationWorkspaceView,
+      });
 
       socket.emit('client:state', {
-        platform: isTauri ? 'desktop' : 'web',
+        platform: String(clientPermissions.native_platform || (isTauri ? 'desktop' : 'web')),
         mode: operationMode,
         activeTab,
         viewMode,
@@ -4102,6 +4163,12 @@ export function DesktopUI({
         settings: {
           activeSection: settingsSection,
         },
+        uiManifest: {
+          surfaceIds: PERSONAL_CLIENT_SURFACES.map(surface => surface.id),
+          actions: PERSONAL_CLIENT_SURFACE_ACTIONS,
+          settingsSections: CLIENT_SETTINGS_SECTIONS.map(section => section.id),
+          launcherIds: PERSONAL_CLIENT_LAUNCHER_IDS,
+        },
         windows: {
           open: openWindows,
           focused: focusedWindow,
@@ -4113,11 +4180,12 @@ export function DesktopUI({
           chatOpen,
           notificationsOpen: isNotificationPanelOpen,
           memoryAvatarOpen: memoryLabOpen,
-          runtimeLogOpen: openWindows.includes('runtime-log'),
+          runtimeLogOpen: openWindows.includes('kernel'),
           meetingOpen: meetingNotesOpen,
           wallpaperMode: isWallpaperMode,
           widgetMode: isDesktopWidgetMode,
           nexusOpen: viewMode === 'world',
+          openSurfaceIds,
         },
         voice: {
           state: callState,
@@ -4132,7 +4200,7 @@ export function DesktopUI({
           reportGenerating: meetingReportGenerating,
         },
         runtimeLog: {
-          open: openWindows.includes('runtime-log'),
+          open: openWindows.includes('kernel'),
           status: clientRuntime.lastError ? 'attention' : 'ready',
           lastError: clientRuntime.lastError || '',
         },
@@ -4261,7 +4329,7 @@ export function DesktopUI({
   const dockApps = [
     ...appIcons,
     ...openWindows
-      .filter(windowId => windowId !== 'chat' && windowId !== 'runtime-log' && !appIcons.some(app => app.id === windowId))
+      .filter(windowId => windowId !== 'chat' && !appIcons.some(app => app.id === windowId))
       .map(getWindowMeta),
   ];
   const operationModeOptions = [
@@ -5552,7 +5620,7 @@ export function DesktopUI({
                             }}
                           />
                         ) : (
-                          <SoundPanel t={t} onOpenAppearance={() => setPersonalizationSection('appearance')} />
+                          <DesktopPersonalizationSoundPanel t={t} onOpenAppearance={() => setPersonalizationSection('appearance')} />
                         )}
                       </div>
                     </div>
@@ -5731,421 +5799,3 @@ export function DesktopUI({
     </div>
   );
 }
-
-function SoundPanel({ t, onOpenAppearance }: { t?: any; onOpenAppearance?: () => void }) {
-  const { selectedVoiceId } = useApp();
-  const [designPrompt, setDesignPrompt] = useState('');
-  const [designName, setDesignName] = useState('');
-  const [designing, setDesigning] = useState(false);
-  const [voiceRefresh, setVoiceRefresh] = useState(0);
-  const [voices, setVoices] = useState<{ cloned: any[]; premade: any[] }>({ cloned: [], premade: [] });
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    listVoices()
-      .then(d => setVoices({ cloned: d.cloned || [], premade: d.premade || [] }))
-      .catch(() => {});
-  }, [voiceRefresh]);
-
-  const handlePlay = async (voice: any, text?: string) => {
-    const voiceId = typeof voice === 'string' ? voice : voice.voiceId;
-    const provider = typeof voice === 'string' ? undefined : voice.provider;
-    const model = typeof voice === 'string' ? undefined : voice.model;
-    if (playingId === voiceId) {
-      audioRef.current?.pause();
-      setPlayingId(null);
-      return;
-    }
-    try {
-      const previewBuffer = await synthesizeSpeech(text || desktopWorkflowCopy().common.voicePreview, voiceId, provider, model);
-      const previewBlob = new Blob([previewBuffer], { type: 'audio/mp3' });
-      const previewUrl = URL.createObjectURL(previewBlob);
-      const previewAudio = new Audio(previewUrl);
-      audioRef.current = previewAudio;
-      previewAudio.onended = () => { setPlayingId(null); URL.revokeObjectURL(previewUrl); };
-      await previewAudio.play();
-      setPlayingId(voiceId);
-    } catch { toast.error('Playback failed'); }
-  };
-
-  const handleDesign = async () => {
-    if (!designPrompt.trim() || !designName.trim()) return;
-    setDesigning(true);
-    try {
-      const designed = await designVoice(designPrompt.trim(), designName.trim());
-      toast.success(`Voice "${designed.name}" created`);
-      setDesignPrompt('');
-      setDesignName('');
-      setVoiceRefresh(n => n + 1);
-    } catch (err: any) {
-      toast.error(err.message || 'Voice design failed');
-    } finally {
-      setDesigning(false);
-    }
-  };
-
-  const voiceIdentitySteps = [
-    {
-      id: 'design',
-      label: t?.voiceFlowDesign || 'Design',
-      desc: t?.voiceFlowDesignDesc || 'Generate a voice from description',
-      active: designing,
-      done: voices.cloned.length + voices.premade.length > 0,
-    },
-    {
-      id: 'clone',
-      label: t?.voiceFlowClone || 'Clone',
-      desc: t?.voiceFlowCloneDesc || 'Record or upload real samples',
-      active: false,
-      done: voices.cloned.length > 0,
-    },
-    {
-      id: 'select',
-      label: t?.voiceFlowSelect || 'Enable',
-      desc: t?.voiceFlowSelectDesc || 'Choose Lumi voice',
-      active: false,
-      done: Boolean(selectedVoiceId),
-    },
-    {
-      id: 'avatar',
-      label: t?.voiceFlowAvatar || 'Avatar',
-      desc: t?.voiceFlowAvatarDesc || 'Match voice with appearance',
-      active: false,
-      done: false,
-    },
-  ];
-
-  return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="p-3 bg-gradient-to-br from-sky-500 to-indigo-600 rounded-2xl shadow-lg">
-          <Volume2 size={24} className="text-white" />
-        </div>
-        <div>
-          <h3 className="text-xl font-bold uppercase tracking-tighter text-white/90">{t?.voiceStudio || 'Voice Studio'}</h3>
-          <p className="text-xs text-white/55 uppercase tracking-widest">{t?.voiceStudioDesc || 'Cloning & Design'}</p>
-        </div>
-        <div className="ml-auto">
-          <VoicePicker t={t} direction="down" refreshTrigger={voiceRefresh} />
-        </div>
-      </div>
-
-      <div className="grid shrink-0 grid-cols-4 gap-2 rounded-2xl border border-white/5 bg-white/[0.02] p-2">
-        {voiceIdentitySteps.map((step, index) => (
-          <button
-            key={step.id}
-            onClick={step.id === 'avatar' ? onOpenAppearance : undefined}
-            disabled={step.id !== 'avatar'}
-            className={`group min-w-0 rounded-xl border px-3 py-2 text-left transition-colors ${
-              step.done
-                ? 'border-emerald-400/20 bg-emerald-400/10'
-                : step.active
-                  ? 'border-sky-400/30 bg-sky-400/10'
-                  : step.id === 'avatar'
-                    ? 'border-cyan-400/20 bg-cyan-400/10 hover:bg-cyan-400/20'
-                    : 'border-white/5 bg-black/20'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
-                step.done ? 'bg-emerald-300 text-black' : step.active ? 'bg-sky-300 text-black' : 'bg-white/10 text-white/45'
-              }`}>
-                {step.done ? '✓' : index + 1}
-              </span>
-              <span className="truncate text-[11px] font-black uppercase tracking-[0.12em] text-white/72">{step.label}</span>
-            </div>
-            <p className="mt-1 truncate text-[10px] font-semibold text-white/35">{step.desc}</p>
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 grid grid-cols-2 gap-4 overflow-hidden">
-        {/* Left: Create */}
-        <div className="overflow-y-auto scrollbar-hide space-y-4">
-          {/* Voice Design — text → voice */}
-          <div className="rounded-2xl bg-white/[0.02] border border-white/5 p-4 space-y-4">
-            <h4 className="text-xs font-black uppercase tracking-widest text-white/55">{t?.voiceDesignTab || 'Voice Design'}</h4>
-            <p className="text-xs text-white/40">{t?.voiceDesignDesc || 'Describe the voice you want, and AI will generate it. No audio sample needed.'}</p>
-            <label className="text-xs font-black uppercase text-white/55">{t?.voiceDesignPrompt || 'Voice Description'}</label>
-            <textarea
-              value={designPrompt}
-              onChange={e => setDesignPrompt(e.target.value)}
-              placeholder={t?.voiceDesignPlaceholder || 'e.g. A warm, gentle female voice with a soft tone...'}
-              className="w-full h-20 bg-black/40 border border-white/10 rounded-2xl p-3 text-sm text-white/80 outline-none focus:border-sky-500/50 resize-none"
-            />
-            <label className="text-xs font-black uppercase text-white/55">{t?.voiceDesignName || 'Voice Name'}</label>
-            <input
-              value={designName}
-              onChange={e => setDesignName(e.target.value)}
-              placeholder="e.g. Storyteller_v1"
-              className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white/80 outline-none focus:border-sky-500/50"
-            />
-            <button
-              onClick={handleDesign}
-              disabled={designing || !designPrompt.trim() || !designName.trim()}
-              className="w-full py-3 bg-sky-500/20 border border-sky-500/30 rounded-2xl text-sm font-black uppercase tracking-widest text-sky-400 hover:bg-sky-500/30 disabled:opacity-70 disabled:cursor-not-allowed transition-all relative overflow-hidden"
-            >
-              {designing ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-sky-400/30 border-t-sky-400 rounded-full animate-spin" />
-                  {t?.generating || 'Generating...'}
-                </span>
-              ) : (
-                t?.generateVoice || 'Generate Voice'
-              )}
-            </button>
-            {designing && (
-              <div className="h-0.5 w-full bg-white/5 rounded-full overflow-hidden mt-1">
-                <motion.div
-                  className="h-full bg-gradient-to-r from-sky-400 to-indigo-400"
-                  initial={{ width: '0%' }}
-                  animate={{ width: '100%' }}
-                  transition={{ duration: 8, ease: 'easeInOut' }}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Voice Cloning — record/upload */}
-          <div className="rounded-2xl bg-white/[0.02] border border-white/5 p-4">
-            <h4 className="text-xs font-black uppercase tracking-widest text-white/55 mb-4">{t?.voiceCloning || 'Voice Cloning'}</h4>
-            <Suspense fallback={<LazyPanelFallback label={t?.loading || 'Loading'} />}>
-              <VoiceForge t={t} compact onCloneSuccess={() => setVoiceRefresh(n => n + 1)} />
-            </Suspense>
-          </div>
-        </div>
-
-        {/* Right: Voice List */}
-        <div className="overflow-y-auto scrollbar-hide rounded-2xl bg-white/[0.02] border border-white/5 p-4 space-y-6">
-          {voices.cloned.length > 0 && (
-            <section className="space-y-3">
-              <h4 className="text-xs font-black uppercase tracking-[0.3em] text-white/40">{t?.clonedVoices || 'Cloned Voices'}</h4>
-              <div className="space-y-2">
-                {voices.cloned.map((v: any) => (
-                  <VoiceCard key={v.voiceId} voice={v} isCloned isPlaying={playingId === v.voiceId} onPlay={() => handlePlay(v)} />
-                ))}
-              </div>
-            </section>
-          )}
-          <section className="space-y-3">
-            <h4 className="text-xs font-black uppercase tracking-[0.3em] text-white/40">{t?.premadeVoices || 'Premade Voices'}</h4>
-            <div className="space-y-2">
-              {voices.premade.map((v: any) => (
-                <VoiceCard key={v.voiceId} voice={v} isPlaying={playingId === v.voiceId} onPlay={() => handlePlay(v)} />
-              ))}
-            </div>
-          </section>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function VoiceCard({ voice, isCloned, isPlaying, onPlay }: { voice: any; isCloned?: boolean; isPlaying?: boolean; onPlay: () => void }) {
-  return (
-    <div className={`flex items-center gap-3 p-3 rounded-xl transition-all group ${
-      isPlaying ? 'bg-sky-500/10 border border-sky-500/20' : 'bg-white/[0.03] border border-white/[0.04] hover:bg-white/[0.06]'
-    }`}>
-      <button
-        onClick={onPlay}
-        className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
-          isPlaying ? 'bg-sky-500 text-white' : 'bg-white/10 text-white/50 group-hover:text-white'
-        }`}
-      >
-        {isPlaying ? <Pause size={14} /> : <Play size={14} />}
-      </button>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-bold text-white/80 truncate">{voice.name}</div>
-        <div className="text-[10px] text-white/40 uppercase">{voice.language || voice.provider || ''}</div>
-      </div>
-      {isCloned && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />}
-    </div>
-  );
-}
-
-function BatteryIndicator({ lang = 'zh' }: { lang?: 'en' | 'zh' }) {
-  const [level, setLevel] = useState<number | null>(null);
-  const [charging, setCharging] = useState(false);
-
-  useEffect(() => {
-    const nav = navigator as any;
-    if (nav.getBattery) {
-      nav.getBattery().then((b: any) => {
-        setLevel(Math.round(b.level * 100));
-        setCharging(b.charging);
-        b.addEventListener('levelchange', () => setLevel(Math.round(b.level * 100)));
-        b.addEventListener('chargingchange', () => setCharging(b.charging));
-      }).catch(() => setLevel(null));
-    }
-  }, []);
-
-  if (level === null) return <Battery size={14} />;
-
-  return (
-    <div
-      className="flex items-center gap-1"
-      title={formatUiMessage('desktop-ui.battery-value0-value1.18d968c4e5', { value0: level, value1: charging ? desktopWorkflowCopy(lang).common.chargingSuffix : '' }, (lang === 'zh') ? 'zh' : 'en')}
-    >
-      <Battery size={14} className={level <= 20 ? 'text-red-400' : level <= 50 ? 'text-yellow-400' : ''} />
-      <span className="text-xs font-bold">{level}%</span>
-    </div>
-  );
-}
-
-function MeetingModeButton({
-  t,
-  lang,
-  active,
-  live,
-  onClick,
-}: {
-  t?: any;
-  lang: 'en' | 'zh';
-  active: boolean;
-  live: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex min-w-[156px] items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-black uppercase tracking-[0.16em] transition-all ${
-        active
-          ? 'border-cyan-400/30 bg-cyan-400/15 text-cyan-100 shadow-[0_12px_32px_rgba(34,211,238,0.12)]'
-          : 'border-white/10 bg-white/[0.035] text-white/45 hover:bg-white/[0.075] hover:text-white/75'
-      }`}
-      title={t?.modeMeetingTitle || (uiMessage('desktop-ui.meeting-mode.958510fb80', (lang === 'zh') ? 'zh' : 'en'))}
-    >
-      <span className={`h-2 w-2 rounded-full ${live ? 'bg-cyan-300 animate-pulse' : active ? 'bg-cyan-300' : 'bg-white/25'}`} />
-      <FileText size={14} />
-      <span>{t?.modeMeeting || (uiMessage('desktop-ui.meeting.e16a90b510', (lang === 'zh') ? 'zh' : 'en'))}</span>
-    </button>
-  );
-}
-
-function DayInkLandscape({ variant }: { variant: 'celestial' | 'nebula' | 'cyber' }) {
-  return (
-    <div className="lumi-day-landscape" data-day-variant={variant} aria-hidden="true">
-      <div className="lumi-day-paper" />
-      <div className="lumi-day-mist lumi-day-mist-back" />
-      <div className="lumi-day-mountains lumi-day-mountains-back" />
-      <div className="lumi-day-mountains lumi-day-mountains-mid" />
-      <div className="lumi-day-ground" />
-      <div className="lumi-day-ink-lines" />
-      <div className="lumi-day-vignette" />
-    </div>
-  );
-}
-
-function ThemeWidget({
-  t,
-  lang,
-  theme,
-  setTheme,
-  operationMode,
-  onModeChange,
-}: {
-  t?: any;
-  lang: 'en' | 'zh';
-  theme: string;
-  setTheme: (value: string) => void;
-  operationMode: OperationMode;
-  onModeChange: (mode: OperationMode) => void;
-}) {
-  const themeOptions = [
-    {
-      id: 'celestial',
-      label: t?.celestial || 'Celestial',
-      mode: 'chat' as OperationMode,
-      modeLabel: t?.modeChat || (uiMessage('desktop-ui.chat.1594b2f45c', (lang === 'zh') ? 'zh' : 'en')),
-      accessLabel: uiMessage('desktop-ui.chat-only.083f4dceca', (lang === 'zh') ? 'zh' : 'en'),
-      icon: <Sparkles size={16} />,
-      glow: 'from-celestial-saturn/35 to-cyan-300/20',
-      orb: 'from-celestial-saturn to-cyan-200',
-      line: 'bg-celestial-saturn',
-    },
-    {
-      id: 'nebula',
-      label: t?.nebula || 'Nebula',
-      mode: 'assistant' as OperationMode,
-      modeLabel: t?.modeAssistant || (uiMessage('desktop-ui.assistant.90c4ae600c', (lang === 'zh') ? 'zh' : 'en')),
-      accessLabel: uiMessage('desktop-ui.foreground-full-access.05f024a485', (lang === 'zh') ? 'zh' : 'en'),
-      icon: <Moon size={16} />,
-      glow: 'from-indigo-500/35 to-fuchsia-400/20',
-      orb: 'from-indigo-500 to-fuchsia-400',
-      line: 'bg-indigo-400',
-    },
-    {
-      id: 'cyber',
-      label: t?.cyber || 'Cyber',
-      mode: 'autonomous' as OperationMode,
-      modeLabel: t?.modeAutonomy || t?.modeAutoExecute || (uiMessage('desktop-ui.autonomy.6aea974e38', (lang === 'zh') ? 'zh' : 'en')),
-      accessLabel: uiMessage('desktop-ui.24h-autonomous.1cd235aa0d', (lang === 'zh') ? 'zh' : 'en'),
-      icon: <Zap size={16} />,
-      glow: 'from-emerald-400/30 to-teal-300/20',
-      orb: 'from-emerald-400 to-teal-300',
-      line: 'bg-emerald-400',
-    },
-  ];
-
-  return (
-    <GlassCard className="lumi-mode-panel rounded-[1.6rem] border-white/5 bg-black/20 p-3">
-      <div className="grid grid-cols-3 gap-3">
-        {themeOptions.map((option) => {
-          const active = theme === option.id && operationMode === option.mode;
-          const visualActive = theme === option.id;
-          return (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => {
-                if (option.mode !== 'autonomous' || operationMode === 'autonomous') {
-                  setTheme(option.id);
-                }
-                onModeChange(option.mode);
-                sounds.playPulse();
-              }}
-              className={`lumi-mode-card group relative min-h-[134px] overflow-hidden rounded-[1.25rem] border p-3 text-left transition-all ${
-                active
-                  ? 'border-white/20 bg-white/[0.10] shadow-[0_18px_45px_rgba(0,0,0,0.28)]'
-                  : visualActive
-                    ? 'border-white/10 bg-white/[0.06]'
-                    : 'border-white/5 bg-black/20 hover:bg-white/[0.05]'
-              }`}
-            >
-              <div className={`lumi-mode-card-glow absolute inset-0 bg-gradient-to-br ${option.glow} transition-opacity group-hover:opacity-80 ${visualActive ? 'opacity-100' : 'opacity-40'}`} />
-              <div className="relative flex h-full flex-col justify-between">
-                <div className="flex items-start justify-between gap-2">
-                  <div className={`lumi-mode-orb flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${option.orb} text-black shadow-lg`}>
-                    {option.icon}
-                  </div>
-                  <span className={`h-2 w-2 rounded-full ${active ? option.line : 'bg-white/20'}`} />
-                </div>
-                <div>
-                  <div className="text-[11px] font-black uppercase tracking-[0.14em] text-white/85">
-                    {option.label}
-                  </div>
-                  <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/45">
-                    {option.modeLabel}
-                  </div>
-                  <div className="mt-2 min-h-[22px] rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/70">
-                    {option.accessLabel}
-                  </div>
-                  <div className="mt-2 h-1 rounded-full bg-white/10">
-                    <motion.div
-                      animate={{ width: active ? '100%' : visualActive ? '64%' : '28%' }}
-                      className={`h-full rounded-full ${option.line}`}
-                    />
-                  </div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </GlassCard>
-  );
-}
-
-

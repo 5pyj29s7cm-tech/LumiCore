@@ -67,6 +67,7 @@ vi.mock('../server/llm/adapter', () => ({
 vi.mock('../server/tools/registry', () => ({
   toolRegistry: {
     getToolDeclarations: vi.fn(() => mocks.declarations),
+    buildEvidenceRecord: vi.fn(() => undefined),
     execute: mocks.toolExecute,
   },
 }));

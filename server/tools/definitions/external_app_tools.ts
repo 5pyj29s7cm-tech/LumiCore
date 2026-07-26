@@ -1310,6 +1310,29 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'web.browser.open-task',
+      family: 'browser',
+      lane: 'web',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'desktop_control', scope: 'requested browser target', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['opened'],
+        successSignals: ['requested browser and target are visibly active'],
+        limitations: ['Preparing a URL or issuing an open request does not prove the target page is active.'],
+      },
+      intents: ['prepare or visibly open a browser task'],
+    },
+    evidence: {
+      capability: 'web.browser.open-task',
+      operation: 'mutate',
+      assurance: 'observed',
+      subjectArgument: 'url',
+      limitations: ['opened=false is preparation only; visible completion requires post-state evidence.'],
+    },
   });
 
   registry.register({
@@ -1333,6 +1356,27 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     }, null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'messaging.wechat.reply-draft',
+      family: 'messaging',
+      lane: 'messaging',
+      operation: 'create',
+      risk: 'none',
+      sideEffects: [],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['draft'],
+        successSignals: ['non-empty reply draft'],
+        limitations: ['A draft is not a sent message.'],
+      },
+    },
+    evidence: {
+      capability: 'messaging.wechat.reply-draft',
+      operation: 'create',
+      assurance: 'declared',
+      limitations: ['Creates text only and never sends.'],
+    },
   });
 
   registry.register({
@@ -1358,6 +1402,27 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     }), null, 2),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'messaging.wechat.intake-analyze',
+      family: 'messaging',
+      lane: 'messaging',
+      operation: 'observe',
+      risk: 'none',
+      sideEffects: [],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: [],
+        successSignals: ['structured intake analysis'],
+        limitations: ['Analysis does not modify a task or send a reply.'],
+      },
+    },
+    evidence: {
+      capability: 'messaging.wechat.intake-analyze',
+      operation: 'observe',
+      assurance: 'observed',
+      subjectArgument: 'message',
+    },
   });
 
   registry.register({
@@ -1388,6 +1453,26 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'messaging.wechat.clipboard-intake',
+      family: 'messaging',
+      lane: 'messaging',
+      operation: 'observe',
+      risk: 'low',
+      sideEffects: [{ type: 'local_read', scope: 'current clipboard text', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: [],
+        successSignals: ['clipboard text was read and analyzed'],
+        limitations: ['Clipboard intake does not send or modify a message.'],
+      },
+    },
+    evidence: {
+      capability: 'messaging.wechat.clipboard-intake',
+      operation: 'observe',
+      assurance: 'observed',
+    },
   });
 
   registry.register({
@@ -1422,6 +1507,27 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'messaging.wechat.copy-reply-draft',
+      family: 'messaging',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'desktop_control', scope: 'clipboard and optional WeChat launch', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['copied'],
+        successSignals: ['native clipboard write receipt'],
+        limitations: ['Clipboard preparation and opening WeChat are not message delivery.'],
+      },
+    },
+    evidence: {
+      capability: 'messaging.wechat.copy-reply-draft',
+      operation: 'mutate',
+      assurance: 'observed',
+      limitations: ['Never presses Send.'],
+    },
   });
 
   registry.register({
@@ -1750,6 +1856,28 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'messaging.wechat.send-message',
+      family: 'messaging',
+      lane: 'messaging',
+      operation: 'communicate',
+      risk: 'medium',
+      sideEffects: [{ type: 'external_communication', scope: 'explicit WeChat recipient and message', reversible: false }],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['sent', 'verificationStatus'],
+        successSignals: ['sent=true with exact outgoing-message evidence'],
+        limitations: ['A pressed shortcut or prepared clipboard is not delivery acknowledgement.'],
+      },
+    },
+    evidence: {
+      capability: 'messaging.wechat.send-message',
+      operation: 'communicate',
+      assurance: 'verified',
+      subjectArgument: 'contact',
+      limitations: ['Exact recipient and message evidence is required.'],
+    },
   });
 
   registry.register({
@@ -1955,6 +2083,28 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'messaging.wechat.send-file',
+      family: 'messaging',
+      lane: 'messaging',
+      operation: 'communicate',
+      risk: 'medium',
+      sideEffects: [{ type: 'external_communication', scope: 'explicit WeChat recipient and local file', reversible: false }],
+      verification: {
+        strategy: 'provider_ack',
+        required: true,
+        requiredFields: ['sent', 'verificationStatus'],
+        successSignals: ['sent=true with provider or exact filename evidence'],
+        limitations: ['Clipboard file preparation and send attempts are not delivery acknowledgement.'],
+      },
+    },
+    evidence: {
+      capability: 'messaging.wechat.send-file',
+      operation: 'communicate',
+      assurance: 'verified',
+      subjectArgument: 'contact',
+      limitations: ['Exact filename and target acknowledgement are required.'],
+    },
   });
 
   registry.register({
@@ -2146,6 +2296,29 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'cad.autocad.operations.prepare',
+      family: 'cad_drafting',
+      lane: 'cad',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_write', scope: 'audited AutoCAD operation and manifest files', reversible: true }],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['operationsPath', 'manifestPath', 'operationSetId', 'operationCount'],
+        requiredArtifacts: ['operationsPath', 'manifestPath'],
+        successSignals: ['operation and manifest artifacts both exist and are non-empty'],
+        limitations: ['Prepared operations are not evidence that AutoCAD drew the entities.'],
+      },
+    },
+    evidence: {
+      capability: 'cad.autocad.operations.prepare',
+      operation: 'create',
+      assurance: 'verified',
+      subjectArgument: 'geometryReceiptPath',
+      limitations: ['Visible drawing requires subsequent verified AutoCAD playback.'],
+    },
   });
 
   registry.register({
@@ -2297,5 +2470,29 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     },
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'cad.dxf.generate',
+      family: 'cad_drafting',
+      lane: 'cad',
+      operation: 'create',
+      risk: 'medium',
+      sideEffects: [{ type: 'local_write', scope: 'DXF drawing and SVG preview files', reversible: true }],
+      verification: {
+        strategy: 'artifact',
+        required: true,
+        requiredFields: ['path', 'previewPath', 'exists', 'size', 'previewExists', 'previewSize'],
+        requiredValues: { exists: true, previewExists: true },
+        requiredArtifacts: ['path', 'previewPath'],
+        successSignals: ['DXF and SVG preview artifacts both exist and are non-empty'],
+        limitations: ['Artifact existence does not establish dimensional correctness when source calibration was inferred.'],
+      },
+    },
+    evidence: {
+      capability: 'cad.dxf.generate',
+      operation: 'create',
+      assurance: 'verified',
+      subjectArgument: 'outputPath',
+      limitations: ['The receipt proves local artifacts, not an opened or saved AutoCAD document.'],
+    },
   });
 }

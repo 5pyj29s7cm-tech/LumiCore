@@ -24,11 +24,12 @@ import { recordWorkflow } from "../skills/worklog";
 import { personalityRegistry } from "../personality";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { executeExternalAgent, validateExternalCommand } from "./external_runtime";
-import { ToolExecutionRecord } from "../tools/types";
+import { CapabilityManifestEntry, ToolExecutionRecord } from "../tools/types";
 import { buildResponseLanguageInstruction } from "../utils/language";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import type { ToolPolicy } from "../personality/types";
 import type { ToolContext } from "../tools/types";
+import { executeToolCall } from "../tools/execution_engine";
 import { routeToolsForTurn } from "../cognition/tool_router";
 import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
 import {
@@ -60,12 +61,19 @@ export interface LlmGetters {
   getRelay?: () => any;
 }
 
+function currentCapabilityManifest(policy?: ToolPolicy): CapabilityManifestEntry[] | undefined {
+  const getter = (toolRegistry as any)?.getCapabilityManifest;
+  return typeof getter === 'function'
+    ? getter.call(toolRegistry, policy)
+    : undefined;
+}
+
 // ── Types ──
 
 export type TaskComplexity = 'simple' | 'moderate' | 'complex';
 
 export interface OrchestrationTurnGateInput {
-  channel: 'voice' | 'chat';
+  channel: 'voice' | 'chat' | 'task';
   text: string;
   complexity: TaskComplexity;
   allowToolUse: boolean;
@@ -98,6 +106,7 @@ export function shouldAttemptOrchestration(input: OrchestrationTurnGateInput): b
   }
 
   if (input.responseReady || input.hasPreflightContext) return false;
+  if (!explicitTeamExecution && (input.artifactFirst || input.directDesktop)) return false;
   if (!explicitTeamExecution && input.prefersSequentialWorkflow) return false;
   if (!explicitTeamExecution && input.capabilityLane === 'desktop_control') return false;
   if (explicitTeamExecution) return true;
@@ -259,6 +268,7 @@ function applyRootHardToolBoundary(
   const rootRoute = routeToolsForTurn(rootTask, declarations, {
     maxTools: 64,
     enableMcpHealthGate: false,
+    capabilityManifest: currentCapabilityManifest(policy),
   });
   if (!rootRoute.hardAllowlist) return policy;
 
@@ -382,6 +392,7 @@ export function buildOrchestrationWorkerToolPolicy(
   const route = routeToolsForTurn(task, declarations, {
     maxTools: 64,
     enableMcpHealthGate: false,
+    capabilityManifest: currentCapabilityManifest(inheritedPolicy),
   });
   const availableNames = declarations.map(declaration => declaration.function.name);
   const available = new Set(availableNames);
@@ -441,6 +452,7 @@ function strictDesktopObservationRoute(task: string) {
   const route = routeToolsForTurn(text, toolRegistry.getToolDeclarations(), {
     maxTools: 64,
     enableMcpHealthGate: false,
+    capabilityManifest: currentCapabilityManifest(),
   });
   return route.hardAllowlist && route.categories.includes('desktop_observation')
     ? route
@@ -495,14 +507,12 @@ async function runDeterministicDesktopObservation(
       arguments: call.arguments,
     }, meta);
 
-    const record: ToolExecutionRecord = {
+    const record = await executeToolCall({
+      registry: toolRegistry,
       id,
       name: call.name,
       arguments: call.arguments,
-      result: '',
-    };
-    try {
-      record.result = await toolRegistry.execute(call.name, call.arguments, {
+      context: {
         userId: context.userId,
         domain: context.domain,
         orgId: context.orgId,
@@ -515,10 +525,8 @@ async function runDeterministicDesktopObservation(
         isCancelled: context.isCancelled,
         llmGetters,
         toolPolicy,
-      });
-    } catch (error) {
-      record.error = error instanceof Error ? error.message : String(error);
-    }
+      },
+    });
     records.push(record);
     subTaskResults.push({
       subTaskId: meta.subTaskId,

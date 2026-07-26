@@ -1,4 +1,33 @@
 import { ToolRegistry } from '../registry';
+import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+
+function inputCapability(id: string, scope: string) {
+  return capabilityContract({
+    id,
+    family: 'desktop_input',
+    lane: 'desktop',
+    operation: 'mutate',
+    risk: 'medium',
+    sideEffects: [{ type: 'desktop_control', scope, reversible: true }],
+    verification: {
+      strategy: 'state_diff',
+      required: true,
+      requiredFields: [],
+      successSignals: ['a verified post-action desktop state matches the requested outcome'],
+      limitations: ['Native input dispatch alone is not proof that the target application reached the intended state.'],
+    },
+  });
+}
+
+function inputEvidence(id: string, subjectArgument?: string) {
+  return capabilityEvidence({
+    id,
+    operation: 'mutate',
+    assurance: 'observed',
+    subjectArgument,
+    limitations: ['The receipt proves input dispatch; task completion requires post-state verification.'],
+  });
+}
 
 async function mouseMove(args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) throw new Error('Mouse control requires the Tauri desktop app');
@@ -64,6 +93,21 @@ export function registerInputTools(registry: ToolRegistry): void {
     }, context),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.pointer.click',
+      family: 'desktop',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'visible foreground application', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['verification.status'],
+        successSignals: ['post-click target state matches the requested outcome'],
+        limitations: ['Input dispatch is not proof that the target application accepted the click.'],
+      },
+    },
     evidence: {
       capability: 'desktop.pointer.click',
       operation: 'mutate',
@@ -85,6 +129,21 @@ export function registerInputTools(registry: ToolRegistry): void {
     handler: (args, context) => relayDesktopInput('desktop_keyboard_press', { key: args.key }, context),
     permission: 'user',
     securityLevel: 'safe',
+    capability: {
+      id: 'desktop.keyboard.press',
+      family: 'desktop',
+      lane: 'desktop',
+      operation: 'mutate',
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'visible foreground application', reversible: true }],
+      verification: {
+        strategy: 'state_diff',
+        required: true,
+        requiredFields: ['verification.status'],
+        successSignals: ['post-key target state matches the requested outcome'],
+        limitations: ['Input dispatch is not proof that the target application accepted the key.'],
+      },
+    },
     evidence: {
       capability: 'desktop.keyboard.press',
       operation: 'mutate',
@@ -139,8 +198,23 @@ export function registerInputTools(registry: ToolRegistry): void {
       handler: (args, context) => relayDesktopInput(definition.name, args, context),
       permission: 'user',
       securityLevel: 'safe',
+      capability: {
+        id: `desktop.pointer.visibility.${definition.name.replace('desktop_cursor_glow_', '')}`,
+        family: 'desktop',
+        lane: 'desktop',
+        operation: 'mutate',
+        risk: 'low',
+        sideEffects: [{ type: 'desktop_control', scope: 'Lumi cursor visualization only', reversible: true }],
+        verification: {
+          strategy: 'terminal_receipt',
+          required: true,
+          requiredFields: [],
+          successSignals: ['native cursor-visualization adapter receipt'],
+          limitations: ['Cursor visualization does not verify any external application result.'],
+        },
+      },
       evidence: {
-        capability: 'desktop.pointer.visibility',
+        capability: `desktop.pointer.visibility.${definition.name.replace('desktop_cursor_glow_', '')}`,
         operation: 'mutate',
         assurance: 'observed',
         limitations: ['Cursor visualization is execution feedback, not proof of the target application result.'],
@@ -163,6 +237,8 @@ export function registerInputTools(registry: ToolRegistry): void {
     handler: mouseMove,
     permission: 'user',
     securityLevel: 'safe',
+    capability: inputCapability('desktop.pointer.move', 'visible pointer position'),
+    evidence: inputEvidence('desktop.pointer.move', 'x'),
   });
 
   registry.register({
@@ -179,6 +255,8 @@ export function registerInputTools(registry: ToolRegistry): void {
     handler: mouseClick,
     permission: 'user',
     securityLevel: 'safe',
+    capability: inputCapability('desktop.pointer.click-current', 'visible foreground application at current pointer position'),
+    evidence: inputEvidence('desktop.pointer.click-current', 'button'),
   });
 
   registry.register({
@@ -199,6 +277,8 @@ export function registerInputTools(registry: ToolRegistry): void {
     handler: mouseDrag,
     permission: 'user',
     securityLevel: 'safe',
+    capability: inputCapability('desktop.pointer.drag', 'visible foreground application drag path'),
+    evidence: inputEvidence('desktop.pointer.drag', 'from_x'),
   });
 
   registry.register({
@@ -215,6 +295,8 @@ export function registerInputTools(registry: ToolRegistry): void {
     handler: keyType,
     permission: 'user',
     securityLevel: 'safe',
+    capability: inputCapability('desktop.keyboard.type', 'currently focused desktop control'),
+    evidence: inputEvidence('desktop.keyboard.type', 'text'),
   });
 
   registry.register({
@@ -231,5 +313,7 @@ export function registerInputTools(registry: ToolRegistry): void {
     handler: keyPress,
     permission: 'user',
     securityLevel: 'safe',
+    capability: inputCapability('desktop.keyboard.press-legacy', 'currently focused desktop control'),
+    evidence: inputEvidence('desktop.keyboard.press-legacy', 'key'),
   });
 }

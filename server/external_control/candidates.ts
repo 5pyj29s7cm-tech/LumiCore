@@ -43,19 +43,21 @@ const PLAYWRIGHT_MCP: ExternalControlCandidate = {
   },
 };
 
-const WINDOWS_UIA: ExternalControlCandidate = {
-  id: 'windows-uia-snapshot',
-  label: 'Windows UI Automation snapshot',
+const NATIVE_ACCESSIBILITY: ExternalControlCandidate = {
+  id: 'native-accessibility',
+  label: 'Native semantic accessibility control',
   layer: 'desktop_ui',
-  status: process.platform === 'win32' ? 'ready' : 'requires_setup',
+  status: process.platform === 'win32' || process.platform === 'darwin' ? 'ready' : 'requires_setup',
   actions: ['desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'desktop_active_window', 'desktop_capture_screen', 'desktop_mouse_click_at', 'desktop_keyboard_type'],
   industries: ['ecommerce', 'short_video', 'account_management', 'legal', 'design_delivery', 'general_work'],
-  surfaces: ['native Windows apps', 'WPS/Office', 'WeChat', 'CAD/Revit launchers', 'installers', 'dialogs'],
+  surfaces: ['native Windows/macOS apps', 'office suites', 'messaging apps', 'CAD/BIM launchers', 'installers', 'dialogs'],
   safety: 'Read-only UI tree inspection is safe. Clicking, typing, sending, publishing, submitting, payment, and destructive app actions remain confirmation-gated.',
-  notes: 'Gives Lumi a structured control tree and direct UIA action path for the active window so she can identify, focus, invoke, click, and type into real buttons, fields, menus, and dialogs before falling back to raw mouse/keyboard.',
+  notes: 'Gives Lumi one structured native-control contract backed by Windows UIA or macOS Accessibility, so it can identify, focus, invoke, click, and type before falling back to raw mouse/keyboard.',
   setup: process.platform === 'win32'
     ? []
-    : ['Windows UI Automation is only available on Windows desktop hosts.'],
+    : process.platform === 'darwin'
+      ? ['Grant Lumi OS Accessibility permission in System Settings > Privacy & Security > Accessibility.']
+      : ['Native semantic accessibility control is available on Windows and macOS desktop hosts.'],
 };
 
 const DESKTOP_VISION_LOOP: ExternalControlCandidate = {
@@ -86,7 +88,7 @@ const THIRD_PARTY_MCP_SAFETY: ExternalControlCandidate = {
 
 export const EXTERNAL_CONTROL_CANDIDATES: ExternalControlCandidate[] = [
   PLAYWRIGHT_MCP,
-  WINDOWS_UIA,
+  NATIVE_ACCESSIBILITY,
   DESKTOP_VISION_LOOP,
   THIRD_PARTY_MCP_SAFETY,
 ];
