@@ -10,10 +10,11 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getKey } from '../config/keys';
+import { getDataDirectory } from '../config/data_path';
 
 // ── Cache ───────────────────────────────────────────────────────────────
 
-const CACHE_DIR = path.join(process.cwd(), 'data', 'legal_cache');
+const CACHE_DIR = getDataDirectory('legal_cache');
 function ensureCacheDir() {
   if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 }

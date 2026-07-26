@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
 // ── MFCC extraction (pure JS, 16kHz mono PCM) ──
 
@@ -388,7 +389,8 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   const stopListening = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
-    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+    void closeAudioContext(audioContextRef.current);
+    audioContextRef.current = null;
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     analyserRef.current = null;
     frameBufferRef.current = [];
@@ -652,7 +654,8 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (processorRef.current) processorRef.current.disconnect();
-      if (audioContextRef.current) audioContextRef.current.close();
+      void closeAudioContext(audioContextRef.current);
+      audioContextRef.current = null;
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     };
   }, []);

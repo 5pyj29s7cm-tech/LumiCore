@@ -10,8 +10,8 @@ This repository is the private release track for Lumi OS 3.x.
 
 ## Current Channel
 
-- App version: `3.0.0`
-- Release channel: `private-paid`
+- App version: `3.0.3`
+- Release channel: `internal` until every strict public gate passes
 - Official site: `https://lumiai.asia`
 - Support contact: `3565286431@qq.com`
 - Sales contact: `Cap_William`
@@ -19,8 +19,8 @@ This repository is the private release track for Lumi OS 3.x.
 These defaults are controlled by:
 
 ```env
-LUMI_APP_VERSION=3.0.0
-LUMI_RELEASE_CHANNEL=private-paid
+LUMI_APP_VERSION=3.0.3
+LUMI_RELEASE_CHANNEL=internal
 LUMI_OFFICIAL_URL=https://lumiai.asia
 LUMI_DOWNLOAD_URL=https://lumiai.asia/download
 LUMI_SUPPORT_EMAIL=3565286431@qq.com
@@ -63,7 +63,9 @@ Run this gate before handing a desktop build to testers or users:
 9. Confirm `src-tauri/target/release/bundle/release-manifest.json` lists every installer with SHA-256.
 10. Hand testers the generated `release-out/` bundle directory, not loose files from multiple folders.
 
-`npm run release:check` validates version sync, manifest freshness, artifact hashes, release bundle contents, release notes, updater endpoint shape, and download URL shape. For a public or paid distribution build, run `npm run release:check -- --strict-publish`; strict mode also blocks placeholder updater pubkeys, missing updater signing key, and missing Windows code-signing configuration.
+`npm run release:check` validates version sync, manifest freshness, artifact hashes, release bundle contents, release notes, updater endpoint shape, and download URL shape. For a public or paid distribution build, build with `LUMI_RELEASE_CHANNEL=public` and run `npm run release:check -- --strict-publish`. Strict mode blocks placeholder updater keys, missing updater signing or Windows Authenticode configuration, missing current-commit 50-run/24-hour evidence, missing `LUMI_COMMERCIAL_LICENSE_APPROVED=1`, and missing `LUMI_DEPENDENCY_RISK_APPROVED=1` for the signed low/moderate dependency risk register. Only the responsible owners may provide those approvals.
+
+Every 3.0.3 installer, checksum, manifest, and `release-out` directory must be generated from the same commit. The historical 3.0.0 manifest is not a template or fallback artifact.
 
 The automated packaged smoke test must prove:
 

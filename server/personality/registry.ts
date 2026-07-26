@@ -6,6 +6,7 @@ import { Memory } from '../memory/types';
 import { EmotionalState } from './state';
 import { EvolutionStep, EvolutionConfig, DEFAULT_EVOLUTION_CONFIG } from './evolution';
 import { readDB, writeDB } from '../../db_layer';
+import { getDataPath } from '../config/data_path';
 
 interface UserPersonalityState {
   schemaVersion: 1;
@@ -429,23 +430,16 @@ class PersonalityRegistry {
   /** Persist the current registry state to the user's state file (data/ — gitignored) */
   save(configPath?: string): void {
     // Always write to data/ so evolution survives git pulls
-    const userStatePath = path.join(process.cwd(), 'data', 'personalities.json');
-    const altUserStatePath = path.join(process.cwd(), '..', 'data', 'personalities.json');
-
-    // Ensure data directory exists
-    for (const p of [userStatePath, altUserStatePath]) {
-      try { fs.mkdirSync(path.dirname(p), { recursive: true }); } catch {}
-    }
+    const userStatePath = configPath || getDataPath('personalities.json');
+    try { fs.mkdirSync(path.dirname(userStatePath), { recursive: true }); } catch {}
 
     const configs = Array.from(this.personalities.values());
     const json = JSON.stringify(configs, null, 2);
 
-    for (const p of [userStatePath, altUserStatePath]) {
-      try {
-        fs.writeFileSync(p, json, 'utf-8');
-        return;
-      } catch {}
-    }
+    try {
+      fs.writeFileSync(userStatePath, json, 'utf-8');
+      return;
+    } catch {}
     console.error('[Personality] Failed to save config');
   }
 

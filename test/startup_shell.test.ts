@@ -83,6 +83,44 @@ describe('desktop startup shell', () => {
     expect(packagedSmoke).toContain("'packaged Lark SDK'");
   });
 
+  it('packages immutable runtime version metadata and verifies it on first run', () => {
+    const buildScript = fs.readFileSync(path.join(process.cwd(), 'scripts/build-server.mjs'), 'utf8');
+    const resourceScript = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-desktop-resources.mjs'), 'utf8');
+    const packagedSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts/smoke-packaged-first-run.mjs'), 'utf8');
+
+    expect(buildScript).toContain("dist-server/runtime-meta.json");
+    expect(buildScript).toContain('LUMI_RUNTIME_META_FILE');
+    expect(resourceScript).toContain("'runtime-meta.json'");
+    expect(resourceScript).toContain('await fs.rm(resolvedDest, { recursive: true, force: true })');
+    expect(packagedSmoke).toContain('Runtime metadata mismatch');
+    expect(packagedSmoke).toContain('does not match expected commit');
+    expect(packagedSmoke).toContain('socket.io/?EIO=4&transport=polling');
+    expect(packagedSmoke).toContain("path.join(dataRoot, 'data', 'lumi.db')");
+    expect(packagedSmoke).toContain('Packaged runtime wrote into its resource directory');
+  });
+
+  it('filters release artifacts by the current version and embeds runtime identity', () => {
+    const manifestWriter = fs.readFileSync(path.join(process.cwd(), 'scripts/write-release-manifest.mjs'), 'utf8');
+    expect(manifestWriter).toContain("path.basename(filePath).includes(tauri.version)");
+    expect(manifestWriter).toContain('runtime: runtimeMeta');
+  });
+
+  it('keeps public updates and commercial distribution behind explicit release gates', () => {
+    const rustEntry = fs.readFileSync(path.join(process.cwd(), 'src-tauri/src/lib.rs'), 'utf8');
+    const rustBuild = fs.readFileSync(path.join(process.cwd(), 'src-tauri/build.rs'), 'utf8');
+    const releaseCheck = fs.readFileSync(path.join(process.cwd(), 'scripts/check-release-readiness.mjs'), 'utf8');
+    expect(rustEntry).toContain('option_env!("LUMI_RELEASE_CHANNEL") == Some("public")');
+    expect(rustBuild).toContain('cargo:rerun-if-env-changed=LUMI_RELEASE_CHANNEL');
+    expect(rustBuild).toContain('cargo:rustc-env=LUMI_RELEASE_CHANNEL=');
+    expect(releaseCheck).toContain('LUMI_COMMERCIAL_LICENSE_APPROVED');
+    expect(releaseCheck).toContain('LUMI_DEPENDENCY_RISK_APPROVED');
+    expect(releaseCheck).toContain("runtimeMeta.channel !== 'public'");
+    expect(releaseCheck).toContain('Get-AuthenticodeSignature');
+    expect(releaseCheck).toContain('artifact.updater-signature');
+    const windowsWorkflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/build-windows.yml'), 'utf8');
+    expect(windowsWorkflow).toContain('createUpdaterArtifacts');
+  });
+
   it('packages Sharp native dependencies for the build host instead of Windows-only binaries', () => {
     const resourceScript = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-desktop-resources.mjs'), 'utf8');
     expect(resourceScript).toContain('sharp-darwin-${sharpArch}');

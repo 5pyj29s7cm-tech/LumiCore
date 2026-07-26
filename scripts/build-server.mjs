@@ -1,5 +1,24 @@
 import { build } from 'esbuild';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+
+const packageMeta = JSON.parse(readFileSync('package.json', 'utf8'));
+function git(args, fallback = 'development') {
+  try {
+    return execFileSync('git', args, { encoding: 'utf8', windowsHide: true }).trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const runtimeMeta = {
+  schemaVersion: 1,
+  name: packageMeta.name || 'lumi-os',
+  version: packageMeta.version,
+  buildId: process.env.LUMI_BUILD_ID || process.env.GIT_COMMIT || git(['rev-parse', 'HEAD']),
+  builtAt: new Date().toISOString(),
+  channel: process.env.LUMI_RELEASE_CHANNEL || 'internal',
+};
 
 await build({
   entryPoints: ['server.ts'],
@@ -26,7 +45,9 @@ await build({
 
 // Generate entry.cjs for CommonJS environments (Tauri node.exe, production serve)
 mkdirSync('dist-server', { recursive: true });
+writeFileSync('dist-server/runtime-meta.json', `${JSON.stringify(runtimeMeta, null, 2)}\n`);
 writeFileSync('dist-server/entry.cjs', `// CJS entry point - dynamically imports the ESM server bundle.
+process.env.LUMI_RUNTIME_META_FILE ||= require('path').join(__dirname, 'runtime-meta.json');
 
 // Monkey-patch child_process to hide console windows on Windows (desktop app)
 if (process.platform === 'win32') {
@@ -78,4 +99,5 @@ console.log('[build-server] Generated dist-server/hide-console.cjs');
 console.log('[build-server] Skipped hide-console.cjs (not Windows)');
 }
 
-console.log('[build-server] Generated dist-server/server.mjs + dist-server/entry.cjs + dist-server/hide-console.cjs');
+console.log(`[build-server] Generated runtime metadata ${runtimeMeta.version} ${runtimeMeta.buildId.slice(0, 7)} (${runtimeMeta.channel})`);
+console.log('[build-server] Generated dist-server/server.mjs + dist-server/entry.cjs + dist-server/runtime-meta.json + dist-server/hide-console.cjs');

@@ -68,15 +68,10 @@ export default defineConfig(({ mode }) => {
             const normalized = id.replace(/\\/g, '/');
             if (!normalized.includes('/node_modules/')) return;
 
-            if (normalized.includes('/node_modules/@react-three/drei/')) return 'vendor-r3-drei';
-            if (normalized.includes('/node_modules/@react-three/fiber/')) return 'vendor-r3-fiber';
-            if (normalized.includes('/node_modules/@react-three/postprocessing/') || normalized.includes('/node_modules/postprocessing/')) return 'vendor-r3-postprocessing';
-            if (normalized.includes('/node_modules/three/examples/')) return 'vendor-three-addons';
-            if (normalized.includes('/node_modules/three/')) return 'vendor-three-core';
-
-            if (normalized.includes('/node_modules/@picovoice/')) return 'vendor-picovoice';
-            if (normalized.includes('/node_modules/@mediapipe/')) return 'vendor-mediapipe';
-            if (normalized.includes('/node_modules/@xterm/')) return 'vendor-terminal';
+            // Heavy feature libraries are intentionally left to the route-level
+            // dynamic import graph. Forcing them into shared manual chunks makes
+            // Rollup hoist preload helpers across chunk boundaries and can pull
+            // 3D, MediaPipe, Picovoice, or terminal code into the desktop shell.
             if (normalized.includes('/node_modules/@tauri-apps/api/')) return 'vendor-tauri';
             if (normalized.includes('/node_modules/socket.io-client/') || normalized.includes('/node_modules/engine.io-client/')) return 'vendor-realtime';
 

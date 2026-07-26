@@ -13,10 +13,11 @@ import { extractPptxText } from '../../knowledge/pptx';
 import { extractRtfText } from '../../knowledge/rtf';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
 import type { STTProvider } from '../../stt/types';
-import { applySpreadsheetOperations, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, workbookToText, worksheetToCsv, writeXlsxWorkbook } from '../../utils/spreadsheet';
+import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, workbookToText, worksheetToCsv, writeXlsxWorkbook } from '../../utils/spreadsheet';
 import { extractPdfText } from '../../utils/pdf_text';
+import { getGeneratedOutputDir } from '../../config/data_path';
 
-const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
+const OUTPUT_DIR = getGeneratedOutputDir();
 const require = createRequire(import.meta.url);
 
 function documentArtifactCapability(
@@ -292,8 +293,7 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
     throw new Error('sheets (non-empty array) is required');
   }
 
-  const ExcelJS = require('exceljs');
-  const wb = new ExcelJS.Workbook();
+  const wb = await createXlsxWorkbook();
 
   if (Array.isArray(sheets)) {
     for (const sheetDef of sheets) {
@@ -348,7 +348,7 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
   const outDir = ensureOutputDir();
   const safeName = (filename || 'spreadsheet').replace(/[\\/:*?"<>|]/g, '_');
   const outPath = path.join(outDir, `${safeName}_${Date.now()}.xlsx`);
-  await wb.xlsx.writeFile(outPath);
+  await writeXlsxWorkbook(wb, outPath);
   return JSON.stringify({ ok: true, status: 'created', path: outPath, sheetCount: wb.worksheets.length, size: fs.statSync(outPath).size }, null, 2);
 }
 

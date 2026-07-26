@@ -1069,6 +1069,36 @@ export function isDbDirty(): boolean {
   return dbDirty;
 }
 
+/** Flush pending work and release the SQLite handle (tests and graceful shutdown). */
+export async function closeDatabase(): Promise<void> {
+  await flushDB();
+  if (writeDebounceTimer) {
+    clearTimeout(writeDebounceTimer);
+    writeDebounceTimer = null;
+  }
+  await writeLock.catch((err) => {
+    console.error('[DB] Previous write failed before close:', err);
+  });
+
+  const closingDb = db;
+  db = null;
+  memoryDB = null;
+  initPromise = null;
+  writeLock = Promise.resolve();
+  writeRevision = 0;
+  persistedRevision = 0;
+  writeInFlight = false;
+  dbDirty = false;
+
+  if (!closingDb) return;
+  await new Promise<void>((resolve, reject) => {
+    closingDb.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
 /**
  * Persist all in-memory data to SQLite using an atomic write-via-temp-table pattern.
  * Data is written to temp tables first, then the original tables are atomically

@@ -60,10 +60,18 @@ async function sha256(filePath) {
 async function main() {
   const pkg = await readJson(path.join(root, 'package.json'));
   const tauri = await readJson(path.join(root, 'src-tauri', 'tauri.conf.json'));
+  const head = git(['rev-parse', 'HEAD'], 'unknown');
+  const runtimeMetaPath = path.join(root, 'desktop-resources', 'dist-server', 'runtime-meta.json');
+  if (!existsSync(runtimeMetaPath)) throw new Error('Packaged runtime metadata is missing. Build desktop resources first.');
+  const runtimeMeta = await readJson(runtimeMetaPath);
+  if (runtimeMeta.version !== tauri.version || runtimeMeta.buildId !== head) {
+    throw new Error(`Packaged runtime metadata does not match ${tauri.version}/${head}`);
+  }
   const allFiles = await walk(bundleDir);
   const artifacts = allFiles
     .filter(filePath => artifactExts.has(path.extname(filePath).toLowerCase()))
     .filter(filePath => !filePath.toLowerCase().endsWith('.sha256'))
+    .filter(filePath => path.basename(filePath).includes(tauri.version))
     .sort((a, b) => a.localeCompare(b));
 
   if (artifacts.length === 0) {
@@ -91,10 +99,11 @@ async function main() {
     productName: tauri.productName || pkg.name,
     packageName: pkg.name,
     version: tauri.version || pkg.version,
+    runtime: runtimeMeta,
     generatedAt: new Date().toISOString(),
     git: {
       branch: git(['branch', '--show-current'], 'unknown'),
-      commit: git(['rev-parse', 'HEAD'], 'unknown'),
+      commit: head,
       status: git(['status', '--short'], ''),
     },
     artifacts: entries,

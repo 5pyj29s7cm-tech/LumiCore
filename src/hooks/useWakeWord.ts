@@ -3,6 +3,7 @@ import type { Socket } from 'socket.io-client';
 import { apiFetch } from '@/services/apiClient';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { translate } from '@/i18n/runtime';
+import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
 interface UseWakeWordOptions {
   /** Socket.IO connection for server-side Qwen ASR wake word detection */
@@ -139,10 +140,8 @@ export function useWakeWord({
       try { processorRef.current.disconnect(); } catch {}
       processorRef.current = null;
     }
-    if (ctxRef.current && ctxRef.current.state !== 'closed') {
-      ctxRef.current.close().catch(() => {});
-      ctxRef.current = null;
-    }
+    void closeAudioContext(ctxRef.current);
+    ctxRef.current = null;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;

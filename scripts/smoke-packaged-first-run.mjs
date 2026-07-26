@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
@@ -83,6 +83,20 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+async function fetchText(url, options = {}) {
+  const timeoutMs = options.timeoutMs || 5000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    const body = await res.text();
+    if (!res.ok) throw new Error(`${options.method || 'GET'} ${url} failed with ${res.status}: ${body.slice(0, 500)}`);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function waitFor(description, timeoutMs, intervalMs, fn) {
   const started = Date.now();
   let lastError;
@@ -114,6 +128,7 @@ async function main() {
   const nodePath = path.join(distServer, nodeBinaryName());
   const entryPath = path.join(distServer, 'entry.cjs');
   const serverBundle = path.join(distServer, 'server.mjs');
+  const runtimeMetaPath = path.join(distServer, 'runtime-meta.json');
   const bundledSkillsDir = path.join(distServer, 'server', 'skills', 'bundled');
   const mcpFactoryConfig = path.join(distServer, 'server', 'mcp', 'config.example.json');
   const mcpRuntimeConfig = path.join(distServer, 'server', 'mcp', 'config.json');
@@ -126,6 +141,7 @@ async function main() {
   await assertPath(nodePath, 'packaged Node runtime');
   await assertPath(entryPath, 'packaged entry.cjs');
   await assertPath(serverBundle, 'packaged server.mjs');
+  await assertPath(runtimeMetaPath, 'packaged runtime metadata');
   await assertPath(bundledSkillsDir, 'bundled skills directory');
   await assertPath(mcpFactoryConfig, 'factory MCP config');
   await assertPath(tsxCli, 'packaged tsx CLI');
@@ -135,6 +151,20 @@ async function main() {
 
   if (existsSync(mcpRuntimeConfig)) {
     throw new Error(`Packaged resources must not include user runtime MCP config: ${mcpRuntimeConfig}`);
+  }
+  const runtimeMeta = JSON.parse(await fs.readFile(runtimeMetaPath, 'utf8'));
+  if (runtimeMeta.schemaVersion !== 1 || runtimeMeta.version === '0.0.0') {
+    throw new Error(`Invalid packaged runtime metadata: ${JSON.stringify(runtimeMeta)}`);
+  }
+  for (const field of ['name', 'version', 'buildId', 'builtAt', 'channel']) {
+    if (!String(runtimeMeta[field] || '').trim()) throw new Error(`Packaged runtime metadata is missing ${field}`);
+  }
+  let expectedBuildId = process.env.LUMI_EXPECT_BUILD_ID || '';
+  if (!expectedBuildId) {
+    try { expectedBuildId = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim(); } catch {}
+  }
+  if (expectedBuildId && runtimeMeta.buildId !== expectedBuildId) {
+    throw new Error(`Packaged build ID ${runtimeMeta.buildId} does not match expected commit ${expectedBuildId}`);
   }
 
   const runRoot = path.join(root, '.codex-run', `packaged-first-run-${Date.now()}`);
@@ -153,6 +183,7 @@ async function main() {
     HOST: '127.0.0.1',
     LUMI_DESKTOP: '1',
     LUMI_DATA_DIR: dataRoot,
+    LUMI_LOG_FILE: path.join(dataRoot, 'logs', 'server.log'),
     USERPROFILE: homeDir,
     HOME: homeDir,
   };
@@ -172,10 +203,17 @@ async function main() {
   });
 
   try {
-    await waitFor('packaged backend health endpoint', args.timeoutMs, 500, async () => {
+    const health = await waitFor('packaged backend health endpoint', args.timeoutMs, 500, async () => {
       if (childExited) throw new Error('backend process exited before becoming healthy');
       return fetchJson(`${baseUrl}/health`, { timeoutMs: 2000 });
     });
+    if (health?.runtime?.version !== runtimeMeta.version || health?.runtime?.buildId !== runtimeMeta.buildId) {
+      throw new Error(`Runtime metadata mismatch. Expected ${runtimeMeta.version}/${runtimeMeta.buildId}, got ${health?.runtime?.version}/${health?.runtime?.buildId}`);
+    }
+    if (health?.database?.dirty !== false) throw new Error(`Packaged database is not clean: ${JSON.stringify(health?.database)}`);
+
+    const socketHandshake = await fetchText(`http://127.0.0.1:${port}/socket.io/?EIO=4&transport=polling`, { timeoutMs: 8000 });
+    if (!socketHandshake.startsWith('0{')) throw new Error(`Unexpected Socket.IO handshake: ${socketHandshake.slice(0, 120)}`);
 
     const bootstrap = await fetchJson(`${baseUrl}/auth/bootstrap`, { timeoutMs: 15000 });
     if (!bootstrap?.success || !bootstrap?.token) {
@@ -184,7 +222,10 @@ async function main() {
     const authHeaders = { Authorization: `Bearer ${bootstrap.token}` };
 
     const marketplace = await fetchJson(`${baseUrl}/marketplace/skills?lang=zh`, { timeoutMs: 8000 });
-    if (!Array.isArray(marketplace) || marketplace.length < 20) {
+    const bundledSkillCount = (await fs.readdir(bundledSkillsDir, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && existsSync(path.join(bundledSkillsDir, entry.name, 'package.json')))
+      .length;
+    if (!Array.isArray(marketplace) || bundledSkillCount !== 48 || marketplace.length < bundledSkillCount) {
       throw new Error(`Unexpected marketplace response. Skill count: ${Array.isArray(marketplace) ? marketplace.length : 'not-array'}`);
     }
 
@@ -231,11 +272,28 @@ async function main() {
 
     const runtimeConfigPath = path.join(dataRoot, 'data', 'mcp_config.json');
     await assertPath(runtimeConfigPath, 'generated runtime MCP config');
+    await assertPath(path.join(dataRoot, 'data', 'lumi.db'), 'isolated packaged database');
+    await assertPath(path.join(dataRoot, 'data', 'generated'), 'isolated generated-output directory');
+    await assertPath(path.join(dataRoot, 'logs', 'server.log'), 'isolated runtime log');
+    if (path.resolve(dataRoot).startsWith(path.resolve(distServer))) {
+      throw new Error(`Smoke data root must be isolated from packaged resources: ${dataRoot}`);
+    }
+    for (const forbiddenRuntimeWrite of [path.join(distServer, 'data'), path.join(distServer, 'lumi_output')]) {
+      if (existsSync(forbiddenRuntimeWrite)) {
+        throw new Error(`Packaged runtime wrote into its resource directory: ${forbiddenRuntimeWrite}`);
+      }
+    }
 
     const summary = {
       ok: true,
       distServer,
       port,
+      runtime: {
+        version: health.runtime.version,
+        buildId: health.runtime.buildId,
+        channel: runtimeMeta.channel,
+      },
+      socketHandshake: true,
       marketplaceCount: marketplaceAfterInstall.length,
       installedSkill: {
         id: args.skillId,

@@ -29,6 +29,7 @@ docs/
 gen_landing.py
 /tools/
 $null
+artifacts/runtime-reliability/*.json
 agent_shutdown_snapshot_*
 LumiOS_个人版_部署服务方案.pdf
 lumi_output/

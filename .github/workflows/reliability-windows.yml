@@ -1,0 +1,34 @@
+name: Windows 24-hour Reliability
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lumi-windows-soak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: 24-hour packaged runtime soak
+    runs-on: [self-hosted, Windows, X64, lumi-reference]
+    timeout-minutes: 1560
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build isolated internal runtime resources
+        env:
+          LUMI_RELEASE_CHANNEL: internal
+        run: npm run build:desktop
+      - run: npm run smoke:packaged
+      - name: Run 24-hour health, MCP, database and exception soak
+        run: npm run soak:runtime
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumi-runtime-soak
+          path: artifacts/runtime-reliability/soak.json
+          if-no-files-found: error
+          retention-days: 30

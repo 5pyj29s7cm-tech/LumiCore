@@ -291,10 +291,10 @@ function worksheetToCsv(worksheet: any): string {
 }
 
 async function extractXlsxText(filePath: string): Promise<string> {
-  const mod: any = await import('exceljs');
+  const mod: any = await import('exceljs/dist/exceljs.min.js');
   const ExcelJS = mod.default || mod;
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
+  await workbook.xlsx.load(fs.readFileSync(filePath));
   return workbook.worksheets.map((sheet: any) => `[${sheet.name}]\n${worksheetToCsv(sheet)}`).join('\n\n');
 }
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { uploadSamples, cloneVoice as apiCloneVoice, listVoices } from '../services/voiceService';
 import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
 interface VoiceCloneState {
   isRecording: boolean;
@@ -130,7 +131,7 @@ export function useVoiceCloning() {
         const hasData = chunks.current.some(c => c.size > 0);
         stream.getTracks().forEach(t => t.stop());
         activeStream.current = null;
-        if (audioContext.current) void audioContext.current.close().catch(() => {});
+        void closeAudioContext(audioContext.current);
         audioContext.current = null;
         cancelAnimationFrame(animationFrame.current);
         if (!hasData) {
@@ -153,7 +154,7 @@ export function useVoiceCloning() {
       cancelAnimationFrame(animationFrame.current);
       activeStream.current?.getTracks().forEach(track => track.stop());
       activeStream.current = null;
-      if (audioContext.current) void audioContext.current.close().catch(() => {});
+      void closeAudioContext(audioContext.current);
       audioContext.current = null;
       setState(prev => ({ ...prev, isRecording: false, audioLevel: 0, error: err.message || 'Microphone access denied' }));
     }
@@ -263,7 +264,7 @@ export function useVoiceCloning() {
     }
     activeStream.current?.getTracks().forEach(track => track.stop());
     activeStream.current = null;
-    if (audioContext.current) void audioContext.current.close().catch(() => {});
+    void closeAudioContext(audioContext.current);
     audioContext.current = null;
   }, [stopDurationTimer]);
 

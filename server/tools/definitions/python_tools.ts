@@ -3,8 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { getGeneratedOutputDir } from '../../config/data_path';
 
-const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
+const OUTPUT_DIR = getGeneratedOutputDir();
 const IMAGE_EXTS = /\.(png|jpg|jpeg|svg|gif|webp)$/i;
 
 function ensureOutputDir() {

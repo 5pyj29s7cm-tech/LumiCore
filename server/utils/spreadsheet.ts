@@ -1,4 +1,6 @@
 import path from 'path';
+import fs from 'fs/promises';
+import ExcelJSModule from 'exceljs/dist/exceljs.min.js';
 
 type Workbook = any;
 type Worksheet = any;
@@ -13,21 +15,21 @@ export function assertModernSpreadsheet(filePath: string): void {
   }
 }
 
-async function createWorkbook(): Promise<Workbook> {
-  const mod: any = await import('exceljs');
-  const ExcelJS = mod.default || mod;
+export async function createXlsxWorkbook(): Promise<Workbook> {
+  const ExcelJS: any = ExcelJSModule;
   return new ExcelJS.Workbook();
 }
 
 export async function loadXlsxWorkbook(filePath: string): Promise<Workbook> {
   assertModernSpreadsheet(filePath);
-  const workbook = await createWorkbook();
-  await workbook.xlsx.readFile(filePath);
+  const workbook = await createXlsxWorkbook();
+  await workbook.xlsx.load(await fs.readFile(filePath));
   return workbook;
 }
 
 export async function writeXlsxWorkbook(workbook: Workbook, filePath: string): Promise<void> {
-  await workbook.xlsx.writeFile(filePath);
+  const buffer = await workbook.xlsx.writeBuffer();
+  await fs.writeFile(filePath, Buffer.from(buffer));
 }
 
 function cellValueToText(value: any): string {

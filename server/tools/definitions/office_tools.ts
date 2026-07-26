@@ -7,9 +7,10 @@ import nodemailer from 'nodemailer';
 import PptxGenJS from 'pptxgenjs';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { ToolRegistry } from '../registry';
+import { getGeneratedOutputDir } from '../../config/data_path';
 
 const execFileAsync = promisify(execFile);
-const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
+const OUTPUT_DIR = getGeneratedOutputDir();
 
 let broadcastFn: ((event: string, data: any) => void) | null = null;
 

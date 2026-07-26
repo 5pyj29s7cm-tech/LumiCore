@@ -28,6 +28,7 @@ import {
   refreshAuthoritativeStatuteSources,
 } from '../../../legal/statute_authority_refresh';
 import { loadStatuteAuthorityRefreshState } from '../../../legal/statute_authority_store';
+import { getDataDirectory } from '../../../config/data_path';
 
 async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Promise<string | null> {
   const getters = context?.llmGetters;
@@ -280,21 +281,15 @@ function safeFileSegment(input: string, fallback = 'material'): string {
 }
 
 function ensureLegalIntakeDir(orgId: string): string {
-  const dir = path.join(process.cwd(), 'data', 'legal_intake', safeFileSegment(orgId || 'default', 'default'));
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return getDataDirectory(path.join('legal_intake', safeFileSegment(orgId || 'default', 'default')));
 }
 
 function ensureLegalDeliveryRoot(orgId: string): string {
-  const dir = path.join(process.cwd(), 'data', 'legal_delivery', safeFileSegment(orgId || 'default', 'default'));
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return getDataDirectory(path.join('legal_delivery', safeFileSegment(orgId || 'default', 'default')));
 }
 
 function ensureLegalExternalWorkspaceRoot(orgId: string): string {
-  const dir = path.join(process.cwd(), 'data', 'legal_external_workspaces', safeFileSegment(orgId || 'default', 'default'));
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return getDataDirectory(path.join('legal_external_workspaces', safeFileSegment(orgId || 'default', 'default')));
 }
 
 function uniqueLegalFolder(baseDir: string, caseName: string, suffix: string): string {

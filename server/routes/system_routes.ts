@@ -40,6 +40,7 @@ import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
 import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
 import { generateConfiguredEmbedding } from "../llm/embedding_provider";
 import { rerankConfiguredDocuments } from "../llm/rerank_provider";
+import { loadRuntimeBuildMetadata } from "../../shared/runtime_build_metadata";
 import {
   testLLMProviderConnection,
   testVisionProviderConnection,
@@ -91,15 +92,7 @@ function saveProviderProbe(probe: ProviderProbeRecord): void {
   } catch {}
 }
 
-function readPackageMeta(): { name?: string; version?: string } {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
-const packageMeta = readPackageMeta();
+const runtimeBuildMetadata = loadRuntimeBuildMetadata();
 
 function sanitizedProviderError(error: unknown): string {
   return String((error as any)?.message || error || 'Connection test failed')
@@ -108,11 +101,11 @@ function sanitizedProviderError(error: unknown): string {
     .slice(0, 400);
 }
 
-function getRuntimeVersionInfo() {
+export function getRuntimeVersionInfo() {
   return {
-    name: packageMeta.name || "lumiOS",
-    version: process.env.LUMI_VERSION || packageMeta.version || "0.0.0",
-    buildId: process.env.LUMI_BUILD_ID || process.env.GIT_COMMIT || null,
+    name: runtimeBuildMetadata.name,
+    version: runtimeBuildMetadata.version,
+    buildId: runtimeBuildMetadata.buildId,
     pid: process.pid,
     startedAt: serverStartedAt,
     uptimeSeconds: Math.round(process.uptime()),

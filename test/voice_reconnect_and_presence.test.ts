@@ -124,7 +124,8 @@ describe('voice reconnect and perception continuity', () => {
 
     expect(source).toContain('releaseAudioBufferSource(source)');
     expect(source).toContain('disposePlaybackContexts()');
-    expect(source).toContain('void context.close().catch');
+    expect(source).toContain('void closeAudioContext(context)');
+    expect(source).not.toMatch(/proactiveContext\.current\.close\(\)/);
     expect(source).not.toContain('audioQueueContext');
     expect(source).not.toContain('pendingAudio');
     expect(button).not.toContain('useLiveVoiceAudioLevel');

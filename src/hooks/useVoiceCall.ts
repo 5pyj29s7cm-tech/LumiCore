@@ -4,6 +4,7 @@ import {
   shouldDisplayAgentResponse,
   type AgentResponseDelivery,
 } from '@/lib/agentResponseDelivery';
+import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
 export type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'queued' | 'passive';
 
@@ -190,7 +191,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       proactiveSource.current = null;
     }
     if (proactiveContext.current) {
-      try { proactiveContext.current.close(); } catch {}
+      void closeAudioContext(proactiveContext.current);
       proactiveContext.current = null;
     }
     // Stop currently playing TTS source
@@ -218,9 +219,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
     const context = ttsContext.current;
     ttsContext.current = null;
     nextStartTime.current = 0;
-    if (context && context.state !== 'closed') {
-      void context.close().catch(() => {});
-    }
+    void closeAudioContext(context);
   }, [stopAllPlayback]);
 
   const cleanupCapture = useCallback(() => {
@@ -236,10 +235,8 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
       try { scriptProcessorRef.current.disconnect(); } catch {}
       scriptProcessorRef.current = null;
     }
-    if (audioContext.current) {
-      void audioContext.current.close().catch(() => {});
-      audioContext.current = null;
-    }
+    void closeAudioContext(audioContext.current);
+    audioContext.current = null;
     rawAudioLevelRef.current = 0;
   }, []);
 
@@ -517,7 +514,7 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
           proactiveSource.current = null;
         }
         if (proactiveContext.current) {
-          try { proactiveContext.current.close(); } catch {}
+          void closeAudioContext(proactiveContext.current);
           proactiveContext.current = null;
         }
         isTtsPlaying.current = true;
@@ -535,13 +532,13 @@ export function useVoiceCall({ socket, onTranscript, onResponse, canSendMicAudio
             if (proactiveSource.current === source) proactiveSource.current = null;
             if (proactiveContext.current === ctx) proactiveContext.current = null;
             isTtsPlaying.current = false;
-            void ctx.close().catch(() => {});
+            void closeAudioContext(ctx);
           };
           source.start(0);
         }, () => {
           if (proactiveContext.current === ctx) proactiveContext.current = null;
           isTtsPlaying.current = false;
-          void ctx.close().catch(() => {});
+          void closeAudioContext(ctx);
         });
         // Briefly show speaking state for visual feedback
         const prev = prevCallState.current;

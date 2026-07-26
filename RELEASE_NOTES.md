@@ -1,5 +1,16 @@
 # Lumi OS Release Notes
 
+## v3.0.3 stability and release candidate hardening
+
+- Added immutable runtime build metadata shared by source runs, bundled backend health/version APIs, desktop resources, manifests, and installer smoke tests.
+- Eliminated racing `AudioContext.close()` failures across calls, voiceprints, wake word, and voice cloning.
+- Enforced zero critical/high production dependency findings and documented the remaining MCP/Hono reachability decision.
+- Moved 3D, MediaPipe, Picovoice, and terminal code out of the desktop preload chain; initial desktop resources are capped at 750 KiB gzip.
+- Added PR/main CI gates, Windows packaged/installer lifecycle smoke tests, 50-run cold-start evidence, and a 24-hour reference-machine soak workflow.
+- Internal candidates use the `internal` channel and do not register the public updater. Public candidates require updater signing, Authenticode, HTTPS distribution, current-commit evidence, and explicit commercial-license approval.
+
+The old v3.0.0 manifest and `release-out` bundle are historical only. They must never be copied, renamed, or reused for v3.0.3; regenerate all artifacts from the current commit.
+
 ## v3.0.2 display-scaling adaptation
 
 - Added compact and tight desktop layouts for macOS/Windows display scaling.
@@ -16,7 +27,7 @@
 - Replaces the fragile default desktop `npx` Filesystem process with Lumi's built-in file tools and packages the correct macOS Sharp native runtime.
 - Adds optional Developer ID signing/notarization to the macOS workflow and verifies architecture, permissions metadata, native resources, and signature state.
 
-## v3.0.0 private-paid
+## v3.0.0 private-paid (historical)
 
 Release artifacts:
 

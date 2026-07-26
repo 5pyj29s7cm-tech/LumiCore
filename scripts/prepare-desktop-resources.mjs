@@ -19,7 +19,6 @@ const runtimePackageTrees = [
   'jszip',
   'mammoth',
   'pdf-parse',
-  'exceljs',
   'pdf-lib',
   'playwright-core',
 ];
@@ -165,7 +164,13 @@ async function prepareServer() {
     },
   ];
 
-  await fs.mkdir(dest, { recursive: true });
+  const resolvedOutDir = path.resolve(outDir);
+  const resolvedDest = path.resolve(dest);
+  if (!resolvedDest.startsWith(`${resolvedOutDir}${path.sep}`)) {
+    throw new Error(`Refusing to refresh desktop resources outside ${resolvedOutDir}: ${resolvedDest}`);
+  }
+  await fs.rm(resolvedDest, { recursive: true, force: true });
+  await fs.mkdir(resolvedDest, { recursive: true });
   const nodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node';
   const nodeBinaryPath = path.join(src, nodeBinaryName);
   if (!existsSync(nodeBinaryPath)) {
@@ -174,6 +179,7 @@ async function prepareServer() {
   await copyIfExists(path.join(src, nodeBinaryName), path.join(dest, nodeBinaryName));
   await copyIfExists(path.join(src, 'entry.cjs'), path.join(dest, 'entry.cjs'));
   await copyIfExists(path.join(src, 'server.mjs'), path.join(dest, 'server.mjs'));
+  await copyIfExists(path.join(src, 'runtime-meta.json'), path.join(dest, 'runtime-meta.json'));
   await copyIfExists(path.join(src, 'server.cjs'), path.join(dest, 'server.cjs'));
   await copyIfExists(path.join(src, 'package.json'), path.join(dest, 'package.json'));
   await copyIfExists(path.join(src, '.env'), path.join(dest, '.env'));
@@ -211,6 +217,20 @@ async function prepareServer() {
 
   for (const packageName of optionalRuntimePackageTrees) {
     await copyPackageDependencyTree(packageName, runtimePackageSearchEntries, new Set(), true);
+  }
+
+  const runtimeMetaPath = path.join(dest, 'runtime-meta.json');
+  if (!existsSync(runtimeMetaPath)) {
+    throw new Error('Missing runtime-meta.json in prepared desktop backend. Run npm run build:server first.');
+  }
+  const runtimeMeta = JSON.parse(await fs.readFile(runtimeMetaPath, 'utf8'));
+  for (const field of ['name', 'version', 'buildId', 'builtAt', 'channel']) {
+    if (!String(runtimeMeta[field] || '').trim()) {
+      throw new Error(`Invalid runtime-meta.json: missing ${field}`);
+    }
+  }
+  if (runtimeMeta.schemaVersion !== 1 || runtimeMeta.version === '0.0.0') {
+    throw new Error('Invalid runtime-meta.json schema or version');
   }
 }
 

@@ -6,8 +6,9 @@ import type { ToolContext } from '../types';
 import { loadKeys } from '../../config/keys';
 import { getUserPreferredGenerationModels } from '../../llm/generation_preferences';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { getGeneratedOutputDir } from '../../config/data_path';
 
-const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
+const OUTPUT_DIR = getGeneratedOutputDir();
 const require = createRequire(import.meta.url);
 
 function ensureOutputDir(): string {

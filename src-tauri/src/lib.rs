@@ -4109,7 +4109,7 @@ pub fn run() {
     let started_in_background = std::env::args()
         .any(|arg| arg == "--background" || arg == "--hidden" || arg == "--minimized");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -4122,8 +4122,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    // Internal/unsigned builds must never contact the public update service.
+    // The updater plugin is compiled into the command surface only for an
+    // explicitly public build; the release-readiness gate validates its keys.
+    let builder = if option_env!("LUMI_RELEASE_CHANNEL") == Some("public") {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+
+    builder
         .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None, python_config: None }))
         .manage(Mutex::new(ActiveDesktopCommands::default()))
         .manage(Mutex::new(WallpaperState::default()))

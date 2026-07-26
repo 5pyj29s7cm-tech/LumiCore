@@ -16,6 +16,11 @@ $Installer = [System.IO.Path]::GetFullPath($Installer)
 if (!(Test-Path $Installer)) {
   throw "Installer not found: $Installer"
 }
+$SourceRuntimeMetaPath = Join-Path $ProjectRoot "desktop-resources\dist-server\runtime-meta.json"
+if (!(Test-Path $SourceRuntimeMetaPath)) {
+  throw "Prepared runtime metadata not found: $SourceRuntimeMetaPath"
+}
+$ExpectedRuntimeMeta = Get-Content -LiteralPath $SourceRuntimeMetaPath -Raw | ConvertFrom-Json
 
 function Get-FreePort {
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
@@ -217,6 +222,7 @@ $OldEnv = @{
   HOST = $env:HOST
   LUMI_DESKTOP = $env:LUMI_DESKTOP
   LUMI_DATA_DIR = $env:LUMI_DATA_DIR
+  LUMI_LOG_FILE = $env:LUMI_LOG_FILE
   USERPROFILE = $env:USERPROFILE
   HOME = $env:HOME
 }
@@ -245,10 +251,26 @@ try {
     throw "Installed lumi-os.exe not found under $InstallDir"
   }
 
+  $InstalledRuntimeMetaFile = Get-ChildItem -LiteralPath $InstallDir -Filter "runtime-meta.json" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $InstalledRuntimeMetaFile) {
+    throw "Installed runtime metadata not found under $InstallDir"
+  }
+  $InstalledRuntimeMeta = Get-Content -LiteralPath $InstalledRuntimeMetaFile.FullName -Raw | ConvertFrom-Json
+  foreach ($Field in @("schemaVersion", "name", "version", "buildId", "builtAt", "channel")) {
+    if ([string]::IsNullOrWhiteSpace([string]$InstalledRuntimeMeta.$Field) -or $InstalledRuntimeMeta.$Field -ne $ExpectedRuntimeMeta.$Field) {
+      throw "Installed runtime metadata field '$Field' does not match prepared resources"
+    }
+  }
+  if ($InstalledRuntimeMeta.version -eq "0.0.0" -or $InstalledRuntimeMeta.channel -notin @("internal", "public")) {
+    throw "Installed runtime metadata version or channel is invalid"
+  }
+
   $env:PORT = [string]$Port
   $env:HOST = "127.0.0.1"
   $env:LUMI_DESKTOP = "1"
   $env:LUMI_DATA_DIR = $DataRoot
+  $RuntimeLog = Join-Path $DataRoot "logs\server.log"
+  $env:LUMI_LOG_FILE = $RuntimeLog
   $env:USERPROFILE = $HomeDir
   $env:HOME = $HomeDir
 
@@ -262,6 +284,7 @@ try {
 
   $BaseUrl = "http://127.0.0.1:$Port/api"
   $Ready = $false
+  $Health = $null
   $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $Deadline) {
     Start-Sleep -Milliseconds 500
@@ -269,13 +292,27 @@ try {
       throw "Installed app exited before backend became ready"
     }
     try {
-      Invoke-JsonRequest -Uri "$BaseUrl/health" -TimeoutSec 2 | Out-Null
+      $Health = Invoke-JsonRequest -Uri "$BaseUrl/health" -TimeoutSec 2
       $Ready = $true
       break
     } catch {}
   }
   if (-not $Ready) {
     throw "Installed app backend did not become ready on port $Port"
+  }
+  if ([string]::IsNullOrWhiteSpace($Health.runtime.version) -or $Health.runtime.version -eq "0.0.0" -or [string]::IsNullOrWhiteSpace($Health.runtime.buildId)) {
+    throw "Installed runtime metadata is incomplete"
+  }
+  if ($Health.runtime.version -ne $InstalledRuntimeMeta.version -or $Health.runtime.buildId -ne $InstalledRuntimeMeta.buildId) {
+    throw "Installed health identity does not match runtime-meta.json"
+  }
+  if ($Health.database.dirty -ne $false) {
+    throw "Installed database reports a dirty state"
+  }
+
+  $SocketHandshake = (Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/socket.io/?EIO=4&transport=polling" -TimeoutSec 8).Content
+  if (-not $SocketHandshake.StartsWith('0{')) {
+    throw "Installed Socket.IO handshake failed"
   }
 
   $Bootstrap = Invoke-JsonRequest -Uri "$BaseUrl/auth/bootstrap" -TimeoutSec 15
@@ -285,6 +322,9 @@ try {
   $AuthHeaders = @{ Authorization = "Bearer $($Bootstrap.token)" }
 
   $Marketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
+  if (@($Marketplace).Count -lt 48) {
+    throw "Installed marketplace contains fewer than 48 built-in skills"
+  }
   $Skill = @($Marketplace | Where-Object { $_.id -eq $SkillId })[0]
   if (-not $Skill) {
     throw "Skill not found in installed marketplace: $SkillId"
@@ -296,6 +336,7 @@ try {
   $InstallSkill = Invoke-JsonRequest `
     -Uri "$BaseUrl/marketplace/skills/acquire" `
     -Method "POST" `
+    -Headers $AuthHeaders `
     -TimeoutSec 30 `
     -Body @{
       skillId = $Skill.id
@@ -324,6 +365,82 @@ try {
 
   $SkillDir = Join-Path $HomeDir "lumi_skills\$DirName"
   $RuntimeConfig = Join-Path $DataRoot "data\mcp_config.json"
+  $DatabasePath = Join-Path $DataRoot "data\lumi.db"
+  $GeneratedOutputDir = Join-Path $DataRoot "data\generated"
+  if (!(Test-Path $SkillDir) -or !(Test-Path $RuntimeConfig) -or !(Test-Path $DatabasePath) -or !(Test-Path $GeneratedOutputDir) -or !(Test-Path $RuntimeLog)) {
+    throw "Installed skill, MCP config, database, generated-output directory, or runtime log was not persisted in the isolated profile"
+  }
+
+  # Restart with the same clean-user profile and verify skill/MCP persistence.
+  if ($App -and -not $App.HasExited) {
+    Stop-Process -Id $App.Id -Force -ErrorAction SilentlyContinue
+    try { $App.WaitForExit(5000) | Out-Null } catch {}
+  }
+  Stop-InstalledBackend -InstallDir $InstallDir -Port $Port
+  $App = Start-Process `
+    -FilePath $InstalledExe `
+    -WorkingDirectory (Split-Path $InstalledExe) `
+    -PassThru `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $LaunchOut `
+    -RedirectStandardError $LaunchErr
+
+  $Restarted = $false
+  $RestartHealth = $null
+  $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $Deadline) {
+    Start-Sleep -Milliseconds 500
+    if ($App.HasExited) { throw "Installed app exited during persistence restart" }
+    try {
+      $RestartHealth = Invoke-JsonRequest -Uri "$BaseUrl/health" -TimeoutSec 2
+      $Restarted = $true
+      break
+    } catch {}
+  }
+  if (-not $Restarted -or $RestartHealth.database.dirty -ne $false) {
+    throw "Installed app did not restart with a clean database"
+  }
+
+  $RestartBootstrap = Invoke-JsonRequest -Uri "$BaseUrl/auth/bootstrap" -TimeoutSec 15
+  $RestartHeaders = @{ Authorization = "Bearer $($RestartBootstrap.token)" }
+  $RestartMarketplace = Invoke-JsonRequest -Uri "$BaseUrl/marketplace/skills?lang=zh" -TimeoutSec 8
+  if (-not [bool](@($RestartMarketplace | Where-Object { $_.id -eq $SkillId -and $_.installed }).Count)) {
+    throw "Installed skill state did not persist across restart"
+  }
+  $RestartSkills = Invoke-JsonRequest -Uri "$BaseUrl/skills" -Headers $RestartHeaders -TimeoutSec 8
+  $PersistedSkill = @($RestartSkills.skills | Where-Object { $_.name -eq $DirName })[0]
+  if (-not $PersistedSkill -or -not $PersistedSkill.enabled -or $PersistedSkill.broken -or $PersistedSkill.consecutiveCrashes -ne 0 -or $PersistedSkill.toolCount -le 0) {
+    throw "Installed MCP configuration did not persist cleanly across restart"
+  }
+  $RestartHealthStatusBeforeActivation = $PersistedSkill.healthStatus
+
+  # Process-backed MCP skills are intentionally idle after startup when cached
+  # tool metadata is available. Explicitly activate the persisted skill to
+  # prove that its post-restart on-demand lifecycle is still functional.
+  if (-not $PersistedSkill.connected) {
+    $Activation = Invoke-JsonRequest `
+      -Uri "$BaseUrl/skills/$DirName/enable" `
+      -Method "POST" `
+      -Headers $RestartHeaders `
+      -TimeoutSec 30
+    if (-not $Activation.success) {
+      throw "Installed MCP skill activation failed after restart"
+    }
+  }
+
+  $Reconnected = $false
+  $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $Deadline) {
+    Start-Sleep -Seconds 1
+    $RestartSkills = Invoke-JsonRequest -Uri "$BaseUrl/skills" -Headers $RestartHeaders -TimeoutSec 8
+    $Reconnected = [bool](@($RestartSkills.skills | Where-Object { $_.name -eq $DirName -and $_.connected }).Count)
+    if ($Reconnected) { break }
+  }
+  if (-not $Reconnected) { throw "Installed MCP skill did not reconnect after restart" }
+
+  & node (Join-Path $ProjectRoot "scripts\check-sqlite-integrity.mjs") $DatabasePath
+  if ($LASTEXITCODE -ne 0) { throw "Installed SQLite integrity or foreign-key check failed" }
+
   $Succeeded = $true
   $Result = [pscustomobject]@{
     ok = $true
@@ -339,6 +456,18 @@ try {
     }
     skillDirExists = (Test-Path $SkillDir)
     runtimeConfigCreated = (Test-Path $RuntimeConfig)
+    generatedOutputIsolated = (Test-Path $GeneratedOutputDir)
+    runtimeLogIsolated = (Test-Path $RuntimeLog)
+    runtime = @{
+      version = $Health.runtime.version
+      buildId = $Health.runtime.buildId
+      channel = $InstalledRuntimeMeta.channel
+    }
+    socketHandshake = $true
+    restartPersistence = $true
+    restartHealthStatusBeforeActivation = $RestartHealthStatusBeforeActivation
+    restartReconnect = $Reconnected
+    sqliteIntegrity = $true
     cleanup = $(if ($Keep) { "kept" } else { "removed" })
     shortcutResidueRemoved = 0
     shortcutResidueRemaining = 0

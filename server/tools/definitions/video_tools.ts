@@ -8,8 +8,9 @@ import {
   type VideoGenerationProvider,
 } from '../../llm/generation_preferences';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { getGeneratedOutputDir } from '../../config/data_path';
 
-const OUTPUT_DIR = path.join(process.cwd(), 'lumi_output');
+const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
 const MAX_POLLS = 120;
 

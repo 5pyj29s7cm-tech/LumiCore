@@ -92,6 +92,7 @@ import { bootstrap } from "./server/runtime/bootstrap";
 import { lapRoutes } from "./server/lap/routes";
 import voiceRoutes from "./routes/voice";
 import fileRoutes, { configureKnowledgeFileRoutes } from "./routes/files";
+import { getGeneratedOutputDir } from "./server/config/data_path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,7 +101,7 @@ const { app, server, io, apiRouter, PORT, HOST, JWT_SECRET, getCookieOptions } =
 const llm = createLLMRuntime();
 
 // ── Static serve for lumi_output (charts, images, generated files) ──
-app.use('/lumi_output', express.static(path.join(process.cwd(), 'lumi_output')));
+app.use('/lumi_output', express.static(getGeneratedOutputDir()));
 
 // ── Shared routes (both roles) ──
 mountAllRoutes({ apiRouter, jwtSecret: JWT_SECRET, llm, getCookieOptions, io });

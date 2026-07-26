@@ -50,6 +50,10 @@ function isPlaceholder(value) {
   return !value || /REPLACE_WITH|YOUR_|PLACEHOLDER|TODO|TBD/i.test(String(value));
 }
 
+function powershellLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
 function add(checks, status, id, message, detail = undefined) {
   checks.push({ status, id, message, detail });
 }
@@ -79,7 +83,7 @@ function releaseBundleDir(productName, version, shortHead) {
   return path.join(root, 'release-out', `${slug}-v${version}-${shortHead}`);
 }
 
-async function checkArtifact(checks, manifest, artifact) {
+async function checkArtifact(checks, manifest, artifact, strictPublish) {
   const artifactPath = path.join(root, artifact.file);
   if (!existsSync(artifactPath)) {
     fail(checks, 'artifact.exists', `Missing artifact: ${artifact.file}`);
@@ -119,6 +123,62 @@ async function checkArtifact(checks, manifest, artifact) {
   } else {
     pass(checks, 'artifact.size', `Artifact size matches manifest: ${artifact.name}`);
   }
+
+  if (artifact.kind === 'windows-installer') {
+    const updaterSignaturePath = `${artifactPath}.sig`;
+    if (existsSync(updaterSignaturePath) && (await fs.stat(updaterSignaturePath)).size > 0) {
+      pass(checks, 'artifact.updater-signature', `Updater signature exists: ${relative(updaterSignaturePath)}`);
+    } else {
+      warnOrFail(checks, strictPublish, 'artifact.updater-signature', `Updater signature is missing: ${relative(updaterSignaturePath)}`);
+    }
+
+    if (process.platform === 'win32') {
+      let status = '';
+      try {
+        status = execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `(Get-AuthenticodeSignature -LiteralPath ${powershellLiteral(artifactPath)}).Status.ToString()`,
+        ], { encoding: 'utf8', windowsHide: true }).trim();
+      } catch (error) {
+        status = String(error?.message || error);
+      }
+      if (status === 'Valid') {
+        pass(checks, 'artifact.authenticode', `Authenticode signature is valid: ${artifact.name}`);
+      } else {
+        warnOrFail(checks, strictPublish, 'artifact.authenticode', `Authenticode signature is not valid: ${artifact.name}`, status || 'unknown');
+      }
+    } else {
+      warnOrFail(checks, strictPublish, 'artifact.authenticode', 'Authenticode verification must run on Windows');
+    }
+  }
+}
+
+async function checkReliabilityEvidence(checks, strict, head) {
+  const evidenceDir = path.join(root, 'artifacts', 'runtime-reliability');
+  const lifecyclePath = path.join(evidenceDir, 'lifecycle.json');
+  const soakPath = path.join(evidenceDir, 'soak.json');
+
+  if (existsSync(lifecyclePath)) {
+    const lifecycle = await readJson(lifecyclePath);
+    const valid = lifecycle.ok === true && lifecycle.buildId === head && lifecycle.iterations >= 50 && lifecycle.orphanProcesses === 0
+      && lifecycle.baselineMs > 0 && lifecycle.p95Ms <= lifecycle.baselineMs * 0.75;
+    if (valid) pass(checks, 'reliability.lifecycle', `50-run lifecycle P95 passed at ${lifecycle.p95Ms} ms`);
+    else warnOrFail(checks, strict, 'reliability.lifecycle', 'Lifecycle evidence must cover the current commit, 50 runs, zero orphans, and a 25% P95 improvement', lifecycle);
+  } else {
+    warnOrFail(checks, strict, 'reliability.lifecycle', 'Missing 50-run lifecycle evidence', relative(lifecyclePath));
+  }
+
+  if (existsSync(soakPath)) {
+    const soak = await readJson(soakPath);
+    const valid = soak.ok === true && soak.buildId === head && soak.requestedHours >= 24 && soak.elapsedMs >= 23.9 * 60 * 60 * 1000
+      && soak.backendRestarts === 0 && soak.mcpConsecutiveCrashes === 0 && soak.databaseDirty === false && soak.unhandledExceptions === 0;
+    if (valid) pass(checks, 'reliability.soak', '24-hour runtime soak evidence passed');
+    else warnOrFail(checks, strict, 'reliability.soak', 'Soak evidence must cover the current commit and a clean 24-hour run', soak);
+  } else {
+    warnOrFail(checks, strict, 'reliability.soak', 'Missing 24-hour runtime soak evidence', relative(soakPath));
+  }
 }
 
 async function main() {
@@ -132,6 +192,25 @@ async function main() {
   const head = git(['rev-parse', 'HEAD'], 'unknown');
   const shortHead = git(['rev-parse', '--short', 'HEAD'], 'unknown');
   const dirtyStatus = git(['status', '--short'], '');
+
+  await checkReliabilityEvidence(checks, args.strictPublish, head);
+
+  const runtimeMetaPath = path.join(root, 'desktop-resources', 'dist-server', 'runtime-meta.json');
+  if (!existsSync(runtimeMetaPath)) {
+    fail(checks, 'runtime-meta.exists', `Packaged runtime metadata missing: ${relative(runtimeMetaPath)}`);
+  } else {
+    const runtimeMeta = await readJson(runtimeMetaPath);
+    if (runtimeMeta.schemaVersion === 1 && runtimeMeta.version === pkg.version && runtimeMeta.buildId === head) {
+      pass(checks, 'runtime-meta.identity', `Packaged runtime metadata matches v${pkg.version} ${shortHead}`);
+    } else {
+      fail(checks, 'runtime-meta.identity', 'Packaged runtime metadata must match the current version and commit', runtimeMeta);
+    }
+    if (args.strictPublish && runtimeMeta.channel !== 'public') {
+      fail(checks, 'runtime-meta.channel', 'Strict publication requires a public runtime channel', runtimeMeta.channel || null);
+    } else {
+      pass(checks, 'runtime-meta.channel', `Runtime channel is ${runtimeMeta.channel || 'unknown'}`);
+    }
+  }
 
   if (pkg.version === tauri.version && tauri.version === cargoVersion) {
     pass(checks, 'version.sync', `Version synchronized at ${pkg.version}`);
@@ -170,6 +249,24 @@ async function main() {
     pass(checks, 'updater.private-key', 'Updater signing private key is available in the environment');
   } else {
     warnOrFail(checks, args.strictPublish, 'updater.private-key', 'TAURI_SIGNING_PRIVATE_KEY is not set for updater artifact signing');
+  }
+
+  if (tauri.bundle?.createUpdaterArtifacts === true) {
+    pass(checks, 'updater.artifacts-enabled', 'Tauri updater artifacts are enabled');
+  } else {
+    warnOrFail(checks, args.strictPublish, 'updater.artifacts-enabled', 'Public builds must enable bundle.createUpdaterArtifacts');
+  }
+
+  if (process.env.LUMI_COMMERCIAL_LICENSE_APPROVED === '1') {
+    pass(checks, 'license.commercial-distribution', 'Commercial distribution license approval is recorded for this build');
+  } else {
+    warnOrFail(checks, args.strictPublish, 'license.commercial-distribution', 'Set LUMI_COMMERCIAL_LICENSE_APPROVED=1 only after the responsible owner approves AGPL/commercial distribution');
+  }
+
+  if (process.env.LUMI_DEPENDENCY_RISK_APPROVED === '1') {
+    pass(checks, 'dependency.risk-approval', 'Tracked low/moderate production dependency findings have owner approval');
+  } else {
+    warnOrFail(checks, args.strictPublish, 'dependency.risk-approval', 'Set LUMI_DEPENDENCY_RISK_APPROVED=1 only after the release owner signs the current risk register');
   }
 
   const windowsBundle = tauri.bundle?.windows || {};
@@ -213,9 +310,18 @@ async function main() {
       });
     }
 
+    if (manifest.runtime?.version === tauri.version && manifest.runtime?.buildId === head) {
+      pass(checks, 'manifest.runtime', 'Manifest runtime identity matches the current build');
+    } else {
+      fail(checks, 'manifest.runtime', 'Manifest runtime metadata is missing or stale', manifest.runtime || null);
+    }
+    if (args.strictPublish && manifest.runtime?.channel !== 'public') {
+      fail(checks, 'manifest.channel', 'Public manifest must declare the public channel', manifest.runtime?.channel || null);
+    }
+
     if (Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0) {
       for (const artifact of manifest.artifacts) {
-        await checkArtifact(checks, manifest, artifact);
+        await checkArtifact(checks, manifest, artifact, args.strictPublish);
       }
     } else {
       fail(checks, 'manifest.artifacts', 'Manifest has no release artifacts');

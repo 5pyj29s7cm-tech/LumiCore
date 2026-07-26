@@ -8,13 +8,31 @@ import crypto from 'crypto';
 import express from 'express';
 import http from 'http';
 import cookieParser from 'cookie-parser';
+import { afterAll } from 'vitest';
 
-const tmpRoot = path.join(os.tmpdir(), `lumi_test_${crypto.randomUUID().slice(0, 8)}`);
+const testTempBase = process.env.LUMI_TEST_TMPDIR || os.tmpdir();
+const tmpRoot = path.join(testTempBase, `lumi_test_${crypto.randomUUID().slice(0, 8)}`);
 const dataDir = path.join(tmpRoot, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 fs.writeFileSync(path.join(dataDir, '.migration_skip'), '');
 process.env.LUMI_DATA_DIR = tmpRoot;
 process.env.JWT_SECRET = 'test-jwt-test-jwt'; // match JWT_SECRET constant below
+
+function cleanupTempRoot(): void {
+  try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
+}
+
+// Some suites do not create an HTTP app and therefore never call cleanup().
+// Close SQLite before removing the directory because Windows locks open files.
+afterAll(async () => {
+  try {
+    const { closeDatabase } = await import('../db_layer');
+    await closeDatabase();
+  } finally {
+    cleanupTempRoot();
+  }
+});
+process.once('exit', cleanupTempRoot);
 
 let dbReady: Promise<void> | null = null;
 
@@ -65,7 +83,7 @@ export async function makeApp(): Promise<{
     url: `http://127.0.0.1:${port}`,
     cleanup: () => {
       server.close();
-      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
+      cleanupTempRoot();
     },
   };
 }
