@@ -24,4 +24,16 @@ describe('voiceprint sidecar supervision', () => {
     expect(provider).toContain("proc.kill('SIGKILL')");
     expect(bootstrap).toContain('await stopVoiceprintRuntime()');
   });
+
+  it('samples the full process tree frequently enough to enforce memory budgets', () => {
+    const monitor = fs.readFileSync(
+      path.join(process.cwd(), 'server/runtime/process_resource_monitor.ts'),
+      'utf8',
+    );
+    expect(monitor).toContain('Get-CimInstance Win32_Process');
+    expect(monitor).toContain('collectLinuxProcessTree');
+    expect(monitor).toContain('peakPrivateBytes');
+    expect(monitor).toContain('privateBudgetBytes');
+    expect(provider).toContain('intervalMs: 5_000');
+  });
 });

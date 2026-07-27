@@ -374,6 +374,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
   let maxToolTimeoutRate = 0;
   let maxGptSovitsBudgetExceeded = 0;
   let maxVoiceprintBudgetExceeded = 0;
+  let maxGptSovitsPrivateBytes = 0;
+  let maxVoiceprintPrivateBytes = 0;
   let databaseDirtyObservations = 0;
   let gptSovitsInstalled = false;
   let ttsFixtureReady = false;
@@ -408,6 +410,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
     gptSovitsInstalled ||= gptRuntime.installed === true;
     maxGptSovitsBudgetExceeded = Math.max(maxGptSovitsBudgetExceeded, Number(gptRuntime.resources?.budgetExceededCount || 0));
     maxVoiceprintBudgetExceeded = Math.max(maxVoiceprintBudgetExceeded, Number(voiceprintRuntime.resources?.budgetExceededCount || 0));
+    maxGptSovitsPrivateBytes = Math.max(maxGptSovitsPrivateBytes, Number(gptRuntime.resources?.peakPrivateBytes || gptRuntime.resources?.privateBytes || 0));
+    maxVoiceprintPrivateBytes = Math.max(maxVoiceprintPrivateBytes, Number(voiceprintRuntime.resources?.peakPrivateBytes || voiceprintRuntime.resources?.privateBytes || 0));
     const sampledAt = Date.now();
     const ttsRssBytes = Number(gptRuntime.resources?.rssBytes || 0);
     if (ttsRssBytes > 0) ttsWorkingSetSamples.push({ at: sampledAt, rssBytes: ttsRssBytes });
@@ -462,7 +466,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
       prewarmComplete = true;
     });
     while (!prewarmComplete) {
-      const health = await fetchJson(`${runtime.baseUrl}/health`);
+      const health = await fetchJson(`${runtime.baseUrl}/health`, 10_000);
       if (!['ok', 'degraded'].includes(health.status) || health.runtime?.buildId !== runtimeMeta.buildId) {
         throw new Error('prewarm health or runtime identity invariant failed');
       }
@@ -597,7 +601,9 @@ async function runSoak(args, runRoot, runtimeMeta) {
     ttsProbeError: ttsProbeError || null,
     ttsWorkingSetSamples: ttsWorkingSetSamples.length,
     ttsWorkingSetPeakBytes: ttsWorkingSetSamples.reduce((max, sample) => Math.max(max, sample.rssBytes), 0),
+    ttsPrivateBytesPeak: maxGptSovitsPrivateBytes,
     ttsLastHourGrowthRate,
+    ttsGrowthGateApplied: args.durationHours >= 1,
     voiceprintCoverage: !ttsFixtureReady
       ? 'missing_fixture'
       : voiceprintProbeCount > 0 && voiceprintWorkingSetSamples.length >= 2
@@ -610,6 +616,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
     voiceprintProbeError: voiceprintProbeError || null,
     voiceprintWorkingSetSamples: voiceprintWorkingSetSamples.length,
     voiceprintWorkingSetPeakBytes: voiceprintWorkingSetSamples.reduce((max, sample) => Math.max(max, sample.rssBytes), 0),
+    voiceprintPrivateBytesPeak: maxVoiceprintPrivateBytes,
     sidecarBudgetExceeded: { gptSovits: maxGptSovitsBudgetExceeded, voiceprint: maxVoiceprintBudgetExceeded },
     gptSovitsIdleReclamationVerified,
     voiceprintIdleReclamationVerified,
@@ -624,8 +631,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
   const ttsStable = result.ttsCoverage === 'not_installed'
     || (result.ttsCoverage === 'observed'
       && result.ttsProbeFailureCount === 0
-      && result.ttsLastHourGrowthRate !== null
-      && result.ttsLastHourGrowthRate <= 0.1);
+      && (!result.ttsGrowthGateApplied
+        || (result.ttsLastHourGrowthRate !== null && result.ttsLastHourGrowthRate <= 0.1)));
   const voiceprintStable = result.voiceprintCoverage === 'observed'
     && result.voiceprintProbeCount > 0
     && result.voiceprintProbeFailureCount === 0

@@ -46,6 +46,7 @@ const MAX_PCM_BASE64_CHARS = 800000;
 const MAX_CONCURRENT_REQUESTS = Math.max(1, Number(process.env.LUMI_VOICEPRINT_CONCURRENCY) || 2);
 const SIDECAR_IDLE_MS = Math.max(30_000, Number(process.env.LUMI_VOICEPRINT_IDLE_MS) || 5 * 60_000);
 const SIDECAR_MEMORY_BUDGET_BYTES = Math.max(256, Number(process.env.LUMI_VOICEPRINT_MEMORY_BUDGET_MB) || 1_024) * 1024 * 1024;
+const SIDECAR_PRIVATE_MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.LUMI_VOICEPRINT_PRIVATE_MEMORY_BUDGET_MB) || 3_072) * 1024 * 1024;
 let providerCooldownUntil = 0;
 let providerCooldownReason = '';
 
@@ -88,10 +89,16 @@ class SpeechBrainSidecarClient {
   private lastUsedAt = '';
   private resourceMonitor = new SupervisedProcessResourceMonitor({
     budgetBytes: SIDECAR_MEMORY_BUDGET_BYTES,
+    privateBudgetBytes: SIDECAR_PRIVATE_MEMORY_BUDGET_BYTES,
+    intervalMs: 5_000,
     onBudgetExceeded: snapshot => {
       const proc = this.proc;
       if (!proc || proc.killed) return;
-      this.markUnavailable(new Error(`SpeechBrain working set ${snapshot.rssBytes} exceeded budget ${snapshot.budgetBytes}`));
+      const error = new Error(snapshot.rssBytes > snapshot.budgetBytes
+        ? `SpeechBrain working set ${snapshot.rssBytes} exceeded budget ${snapshot.budgetBytes}`
+        : `SpeechBrain private memory ${snapshot.privateBytes} exceeded budget ${snapshot.privateBudgetBytes}`);
+      logger.warn(`[Voiceprint] ${error.message}; stopping supervised process tree.`);
+      this.markUnavailable(error);
       this.resourceMonitor.stop();
       proc.kill();
     },
@@ -314,10 +321,13 @@ export function getVoiceprintRuntimeStatus() {
     lastError: '',
     resources: {
       pid: null,
+      processCount: 0,
       rssBytes: 0,
       privateBytes: 0,
       peakRssBytes: 0,
+      peakPrivateBytes: 0,
       budgetBytes: SIDECAR_MEMORY_BUDGET_BYTES,
+      privateBudgetBytes: SIDECAR_PRIVATE_MEMORY_BUDGET_BYTES,
       budgetExceededCount: 0,
       sampledAt: '',
       lastError: '',

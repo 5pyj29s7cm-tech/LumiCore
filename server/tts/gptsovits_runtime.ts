@@ -8,7 +8,11 @@ const HOST = '127.0.0.1';
 const PORT = 9880;
 const IDLE_MS = Math.max(30_000, Number(process.env.GPTSOVITS_IDLE_MS) || 5 * 60_000);
 const START_TIMEOUT_MS = Math.max(10_000, Number(process.env.GPTSOVITS_START_TIMEOUT_MS) || 90_000);
-const MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.GPTSOVITS_MEMORY_BUDGET_MB) || 5_120) * 1024 * 1024;
+// The supervised Windows process tree peaks around 6.2 GiB with the bundled
+// v1 checkpoints. Keep headroom for allocator variance while still enforcing
+// a hard ceiling and relying on idle reclamation to prevent long residency.
+const MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.GPTSOVITS_MEMORY_BUDGET_MB) || 7_168) * 1024 * 1024;
+const PRIVATE_MEMORY_BUDGET_BYTES = Math.max(1_024, Number(process.env.GPTSOVITS_PRIVATE_MEMORY_BUDGET_MB) || 12_288) * 1024 * 1024;
 
 let ownedProcess: ChildProcess | null = null;
 let startPromise: Promise<void> | null = null;
@@ -20,11 +24,16 @@ let lastUsedAt = '';
 let lastError = '';
 const resourceMonitor = new SupervisedProcessResourceMonitor({
   budgetBytes: MEMORY_BUDGET_BYTES,
+  privateBudgetBytes: PRIVATE_MEMORY_BUDGET_BYTES,
+  intervalMs: 5_000,
   onBudgetExceeded: snapshot => {
     const child = ownedProcess;
     if (!child || child.killed) return;
     restartCount += 1;
-    lastError = `working set ${snapshot.rssBytes} exceeded budget ${snapshot.budgetBytes}`;
+    lastError = snapshot.rssBytes > snapshot.budgetBytes
+      ? `working set ${snapshot.rssBytes} exceeded budget ${snapshot.budgetBytes}`
+      : `private memory ${snapshot.privateBytes} exceeded budget ${snapshot.privateBudgetBytes}`;
+    console.warn(`[GPT-SoVITS] ${lastError}; stopping supervised process tree.`);
     backoffUntil = Date.now() + Math.min(5 * 60_000, 2 ** Math.min(restartCount, 8) * 1_000);
     resourceMonitor.stop();
     child.kill();
