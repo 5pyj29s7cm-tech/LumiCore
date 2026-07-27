@@ -178,6 +178,7 @@ async function checkReliabilityEvidence(checks, strict, head) {
       && soak.sidecarBudgetExceeded?.gptSovits === 0 && soak.sidecarBudgetExceeded?.voiceprint === 0
       && soak.idleReclamationVerified === true
       && soak.gptSovitsIdleReclamationVerified === true && soak.voiceprintIdleReclamationVerified === true
+      && soak.ttsProbeFailureCount === 0 && soak.voiceprintProbeFailureCount === 0
       && soak.voiceprintCoverage === 'observed' && soak.voiceprintProbeCount >= 1 && soak.voiceprintWorkingSetSamples >= 2
       && (soak.ttsCoverage === 'not_installed' || (soak.ttsCoverage === 'observed' && soak.ttsWorkingSetSamples >= 2 && soak.ttsLastHourGrowthRate <= 0.1));
     if (valid) pass(checks, 'reliability.soak', 'Two-hour, 200-round runtime soak evidence passed');

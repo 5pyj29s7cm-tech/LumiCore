@@ -23,6 +23,7 @@ function parseArgs(argv) {
       : '',
     ttsProbeIntervalMs: 10 * 60_000,
     ttsProbeTimeoutMs: 3 * 60_000,
+    voiceprintProbeIntervalMs: 10 * 60_000,
     voiceprintProbeTimeoutMs: 3 * 60_000,
     baselineMs: Number(process.env.LUMI_COLD_START_BASELINE_MS || 0),
     keep: false,
@@ -41,6 +42,7 @@ function parseArgs(argv) {
     else if (value === '--tts-fixture-dir') args.ttsFixtureDir = path.resolve(argv[++i]);
     else if (value === '--tts-probe-interval-ms') args.ttsProbeIntervalMs = Number(argv[++i]);
     else if (value === '--tts-probe-timeout-ms') args.ttsProbeTimeoutMs = Number(argv[++i]);
+    else if (value === '--voiceprint-probe-interval-ms') args.voiceprintProbeIntervalMs = Number(argv[++i]);
     else if (value === '--voiceprint-probe-timeout-ms') args.voiceprintProbeTimeoutMs = Number(argv[++i]);
     else if (value === '--baseline-ms') args.baselineMs = Number(argv[++i]);
     else if (value === '--keep') args.keep = true;
@@ -55,6 +57,7 @@ function parseArgs(argv) {
     || args.pollMs < 100
     || args.ttsProbeIntervalMs < 1000
     || args.ttsProbeTimeoutMs < 1000
+    || args.voiceprintProbeIntervalMs < 1000
     || args.voiceprintProbeTimeoutMs < 1000
   ) throw new Error('Invalid reliability test limits');
   return args;
@@ -375,12 +378,17 @@ async function runSoak(args, runRoot, runtimeMeta) {
   let gptSovitsInstalled = false;
   let ttsFixtureReady = false;
   let ttsProbeCount = 0;
+  let ttsProbeAttemptCount = 0;
+  let ttsProbeFailureCount = 0;
   let ttsProbeAudioBytes = 0;
   let ttsProbeError = '';
   let voiceprintProbeCount = 0;
+  let voiceprintProbeAttemptCount = 0;
+  let voiceprintProbeFailureCount = 0;
   let voiceprintEmbeddingDim = 0;
   let voiceprintProbeError = '';
   let nextTtsProbeAt = 0;
+  let nextVoiceprintProbeAt = 0;
   let authToken = '';
   let gptSovitsIdleReclamationVerified = false;
   let voiceprintIdleReclamationVerified = false;
@@ -418,11 +426,13 @@ async function runSoak(args, runRoot, runtimeMeta) {
     const prewarmTasks = [];
     if (gptSovitsInstalled && authToken) {
       prewarmTasks.push((async () => {
+        ttsProbeAttemptCount += 1;
         try {
           ttsProbeAudioBytes += await synthesizeTtsProbe(runtime.baseUrl, authToken, args.ttsProbeTimeoutMs);
           ttsProbeCount += 1;
           functionalCalls += 1;
         } catch (error) {
+          ttsProbeFailureCount += 1;
           ttsProbeError = error?.message || String(error);
         }
         nextTtsProbeAt = Date.now() + args.ttsProbeIntervalMs;
@@ -430,6 +440,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
     }
     if (authToken) {
       prewarmTasks.push((async () => {
+        voiceprintProbeAttemptCount += 1;
         try {
           voiceprintEmbeddingDim = await runVoiceprintProbe(
             runtime.baseUrl,
@@ -440,8 +451,10 @@ async function runSoak(args, runRoot, runtimeMeta) {
           voiceprintProbeCount += 1;
           functionalCalls += 1;
         } catch (error) {
+          voiceprintProbeFailureCount += 1;
           voiceprintProbeError = error?.message || String(error);
         }
+        nextVoiceprintProbeAt = Date.now() + args.voiceprintProbeIntervalMs;
       })());
     }
     let prewarmComplete = prewarmTasks.length === 0;
@@ -464,16 +477,36 @@ async function runSoak(args, runRoot, runtimeMeta) {
     deadline = started + args.durationHours * 60 * 60 * 1000;
     while (Date.now() < deadline) {
       if (runtime.child.exitCode !== null || runtime.child.signalCode !== null) throw new Error(`backend restarted/exited with ${runtime.child.exitCode ?? runtime.child.signalCode}`);
-      if (authToken && Date.now() >= nextTtsProbeAt) {
+      if (gptSovitsInstalled && authToken && Date.now() >= nextTtsProbeAt) {
+        ttsProbeAttemptCount += 1;
         try {
           ttsProbeAudioBytes += await synthesizeTtsProbe(runtime.baseUrl, authToken, args.ttsProbeTimeoutMs);
           ttsProbeCount += 1;
           functionalCalls += 1;
           ttsProbeError = '';
         } catch (error) {
+          ttsProbeFailureCount += 1;
           ttsProbeError = error?.message || String(error);
         }
         nextTtsProbeAt = Date.now() + args.ttsProbeIntervalMs;
+      }
+      if (authToken && Date.now() >= nextVoiceprintProbeAt) {
+        voiceprintProbeAttemptCount += 1;
+        try {
+          voiceprintEmbeddingDim = await runVoiceprintProbe(
+            runtime.baseUrl,
+            authToken,
+            args.ttsFixtureDir,
+            args.voiceprintProbeTimeoutMs,
+          );
+          voiceprintProbeCount += 1;
+          functionalCalls += 1;
+          voiceprintProbeError = '';
+        } catch (error) {
+          voiceprintProbeFailureCount += 1;
+          voiceprintProbeError = error?.message || String(error);
+        }
+        nextVoiceprintProbeAt = Date.now() + args.voiceprintProbeIntervalMs;
       }
       const [health, mcp, providers, marketplace, socketHandshake] = await Promise.all([
         fetchJson(`${runtime.baseUrl}/health`),
@@ -558,6 +591,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
           ? 'observed'
           : 'missing_workload',
     ttsProbeCount,
+    ttsProbeAttemptCount,
+    ttsProbeFailureCount,
     ttsProbeAudioBytes,
     ttsProbeError: ttsProbeError || null,
     ttsWorkingSetSamples: ttsWorkingSetSamples.length,
@@ -569,6 +604,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
         ? 'observed'
         : 'missing_workload',
     voiceprintProbeCount,
+    voiceprintProbeAttemptCount,
+    voiceprintProbeFailureCount,
     voiceprintEmbeddingDim,
     voiceprintProbeError: voiceprintProbeError || null,
     voiceprintWorkingSetSamples: voiceprintWorkingSetSamples.length,
@@ -585,9 +622,13 @@ async function runSoak(args, runRoot, runtimeMeta) {
     completedAt: new Date().toISOString(),
   };
   const ttsStable = result.ttsCoverage === 'not_installed'
-    || (result.ttsCoverage === 'observed' && result.ttsLastHourGrowthRate !== null && result.ttsLastHourGrowthRate <= 0.1);
+    || (result.ttsCoverage === 'observed'
+      && result.ttsProbeFailureCount === 0
+      && result.ttsLastHourGrowthRate !== null
+      && result.ttsLastHourGrowthRate <= 0.1);
   const voiceprintStable = result.voiceprintCoverage === 'observed'
     && result.voiceprintProbeCount > 0
+    && result.voiceprintProbeFailureCount === 0
     && result.voiceprintWorkingSetSamples >= 2;
   if (
     mixedRounds < args.minMixedRounds

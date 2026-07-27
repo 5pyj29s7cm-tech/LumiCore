@@ -41,6 +41,8 @@ describe('runtime reliability evidence modes', () => {
     expect(reliabilityScript).toContain('voiceprintIdleReclamationVerified');
     expect(reliabilityScript).toContain('Promise.all(prewarmTasks)');
     expect(reliabilityScript).toContain('voiceprintWorkingSetPeakBytes');
+    expect(reliabilityScript).toContain('voiceprintProbeFailureCount');
+    expect(reliabilityScript).toContain('nextVoiceprintProbeAt');
     expect(releaseCheck).toContain("soak.voiceprintCoverage === 'observed'");
   });
 
