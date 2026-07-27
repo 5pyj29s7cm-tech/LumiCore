@@ -39,6 +39,8 @@ describe('runtime reliability evidence modes', () => {
     expect(reliabilityScript).toContain('requireEmbedding: true');
     expect(reliabilityScript).toContain("voiceprintCoverage: !ttsFixtureReady");
     expect(reliabilityScript).toContain('voiceprintIdleReclamationVerified');
+    expect(reliabilityScript).toContain('Promise.all(prewarmTasks)');
+    expect(reliabilityScript).toContain('voiceprintWorkingSetPeakBytes');
     expect(releaseCheck).toContain("soak.voiceprintCoverage === 'observed'");
   });
 

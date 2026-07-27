@@ -387,40 +387,79 @@ async function runSoak(args, runRoot, runtimeMeta) {
   let finalHealth = null;
   const ttsWorkingSetSamples = [];
   const voiceprintWorkingSetSamples = [];
+  const recordRuntimeHealth = health => {
+    finalHealth = health;
+    if (health.database?.dirty === true) databaseDirtyObservations += 1;
+    maxToolQueue = Math.max(maxToolQueue, Number(health.queues?.toolCallsInFlight || 0));
+    maxTtsQueue = Math.max(maxTtsQueue, Number(health.queues?.gptSovits?.queueLength || 0));
+    maxVoiceprintQueue = Math.max(maxVoiceprintQueue, Number(health.queues?.voiceprint?.queueLength || 0));
+    maxToolErrorRate = Math.max(maxToolErrorRate, Number(health.tools?.totals?.errorRate || 0));
+    maxToolTimeoutRate = Math.max(maxToolTimeoutRate, Number(health.tools?.totals?.timeoutRate || 0));
+    const gptRuntime = health.supervisedRuntimes?.gptSovits || {};
+    const voiceprintRuntime = health.supervisedRuntimes?.voiceprint || {};
+    gptSovitsInstalled ||= gptRuntime.installed === true;
+    maxGptSovitsBudgetExceeded = Math.max(maxGptSovitsBudgetExceeded, Number(gptRuntime.resources?.budgetExceededCount || 0));
+    maxVoiceprintBudgetExceeded = Math.max(maxVoiceprintBudgetExceeded, Number(voiceprintRuntime.resources?.budgetExceededCount || 0));
+    const sampledAt = Date.now();
+    const ttsRssBytes = Number(gptRuntime.resources?.rssBytes || 0);
+    if (ttsRssBytes > 0) ttsWorkingSetSamples.push({ at: sampledAt, rssBytes: ttsRssBytes });
+    const voiceprintRssBytes = Number(voiceprintRuntime.resources?.rssBytes || 0);
+    if (voiceprintRssBytes > 0) voiceprintWorkingSetSamples.push({ at: sampledAt, rssBytes: voiceprintRssBytes });
+  };
   try {
     const initialHealth = await waitForHealth(runtime.baseUrl, runtime.child, args.timeoutMs);
-    finalHealth = initialHealth;
-    gptSovitsInstalled = initialHealth.supervisedRuntimes?.gptSovits?.installed === true;
+    recordRuntimeHealth(initialHealth);
     ttsFixtureReady = Boolean(args.ttsFixtureDir);
     if (ttsFixtureReady) {
       const auth = await fetchJson(`${runtime.baseUrl}/auth/bootstrap`, 10_000);
       authToken = String(auth.token || '');
       if (!authToken) throw new Error('Local reliability identity bootstrap did not return a token');
     }
+    const prewarmTasks = [];
     if (gptSovitsInstalled && authToken) {
-      try {
-        ttsProbeAudioBytes += await synthesizeTtsProbe(runtime.baseUrl, authToken, args.ttsProbeTimeoutMs);
-        ttsProbeCount += 1;
-        functionalCalls += 1;
-      } catch (error) {
-        ttsProbeError = error?.message || String(error);
-      }
-      nextTtsProbeAt = Date.now() + args.ttsProbeIntervalMs;
+      prewarmTasks.push((async () => {
+        try {
+          ttsProbeAudioBytes += await synthesizeTtsProbe(runtime.baseUrl, authToken, args.ttsProbeTimeoutMs);
+          ttsProbeCount += 1;
+          functionalCalls += 1;
+        } catch (error) {
+          ttsProbeError = error?.message || String(error);
+        }
+        nextTtsProbeAt = Date.now() + args.ttsProbeIntervalMs;
+      })());
     }
     if (authToken) {
-      try {
-        voiceprintEmbeddingDim = await runVoiceprintProbe(
-          runtime.baseUrl,
-          authToken,
-          args.ttsFixtureDir,
-          args.voiceprintProbeTimeoutMs,
-        );
-        voiceprintProbeCount += 1;
-        functionalCalls += 1;
-      } catch (error) {
-        voiceprintProbeError = error?.message || String(error);
-      }
+      prewarmTasks.push((async () => {
+        try {
+          voiceprintEmbeddingDim = await runVoiceprintProbe(
+            runtime.baseUrl,
+            authToken,
+            args.ttsFixtureDir,
+            args.voiceprintProbeTimeoutMs,
+          );
+          voiceprintProbeCount += 1;
+          functionalCalls += 1;
+        } catch (error) {
+          voiceprintProbeError = error?.message || String(error);
+        }
+      })());
     }
+    let prewarmComplete = prewarmTasks.length === 0;
+    const prewarm = Promise.all(prewarmTasks).finally(() => {
+      prewarmComplete = true;
+    });
+    while (!prewarmComplete) {
+      const health = await fetchJson(`${runtime.baseUrl}/health`);
+      if (!['ok', 'degraded'].includes(health.status) || health.runtime?.buildId !== runtimeMeta.buildId) {
+        throw new Error('prewarm health or runtime identity invariant failed');
+      }
+      recordRuntimeHealth(health);
+      await Promise.race([
+        prewarm,
+        new Promise(resolve => setTimeout(resolve, 1_000)),
+      ]);
+    }
+    await prewarm;
     started = Date.now();
     deadline = started + args.durationHours * 60 * 60 * 1000;
     while (Date.now() < deadline) {
@@ -446,7 +485,6 @@ async function runSoak(args, runRoot, runtimeMeta) {
       if (!['ok', 'degraded'].includes(health.status) || health.runtime?.buildId !== runtimeMeta.buildId) {
         throw new Error('health or runtime identity invariant failed');
       }
-      if (health.database?.dirty === true) databaseDirtyObservations += 1;
       if (!socketHandshake.startsWith('0{')) throw new Error('Socket.IO mixed-round handshake failed');
       if (!providers?.providers || !Array.isArray(marketplace) || marketplace.length < 48) throw new Error('provider/marketplace functional probe failed');
       const unhealthy = Object.entries(mcp.servers || {}).filter(([, state]) => Number(state.consecutiveCrashes || 0) > 0 || ['crashed', 'failed', 'restarting'].includes(state.status));
@@ -454,21 +492,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
       polls += 1;
       mixedRounds += 1;
       functionalCalls += 5;
-      finalHealth = health;
-      maxToolQueue = Math.max(maxToolQueue, Number(health.queues?.toolCallsInFlight || 0));
-      maxTtsQueue = Math.max(maxTtsQueue, Number(health.queues?.gptSovits?.queueLength || 0));
-      maxVoiceprintQueue = Math.max(maxVoiceprintQueue, Number(health.queues?.voiceprint?.queueLength || 0));
-      maxToolErrorRate = Math.max(maxToolErrorRate, Number(health.tools?.totals?.errorRate || 0));
-      maxToolTimeoutRate = Math.max(maxToolTimeoutRate, Number(health.tools?.totals?.timeoutRate || 0));
-      const gptRuntime = health.supervisedRuntimes?.gptSovits || {};
-      const voiceprintRuntime = health.supervisedRuntimes?.voiceprint || {};
-      gptSovitsInstalled ||= gptRuntime.installed === true;
-      maxGptSovitsBudgetExceeded = Math.max(maxGptSovitsBudgetExceeded, Number(gptRuntime.resources?.budgetExceededCount || 0));
-      maxVoiceprintBudgetExceeded = Math.max(maxVoiceprintBudgetExceeded, Number(voiceprintRuntime.resources?.budgetExceededCount || 0));
-      const ttsRssBytes = Number(gptRuntime.resources?.rssBytes || 0);
-      if (ttsRssBytes > 0) ttsWorkingSetSamples.push({ at: Date.now(), rssBytes: ttsRssBytes });
-      const voiceprintRssBytes = Number(voiceprintRuntime.resources?.rssBytes || 0);
-      if (voiceprintRssBytes > 0) voiceprintWorkingSetSamples.push({ at: Date.now(), rssBytes: voiceprintRssBytes });
+      recordRuntimeHealth(health);
       await new Promise(resolve => setTimeout(resolve, Math.min(args.pollMs, Math.max(0, deadline - Date.now()))));
     }
 
@@ -480,7 +504,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
     const idleDeadline = Date.now() + Math.max(gptIdleTimeoutMs, voiceprintIdleTimeoutMs) + 30_000;
     while (Date.now() < idleDeadline && (!gptSovitsIdleReclamationVerified || !voiceprintIdleReclamationVerified)) {
       const health = await fetchJson(`${runtime.baseUrl}/health`);
-      finalHealth = health;
+      recordRuntimeHealth(health);
       const gptStatus = health.supervisedRuntimes?.gptSovits || {};
       const voiceprintStatus = health.supervisedRuntimes?.voiceprint || {};
       if (
@@ -505,8 +529,8 @@ async function runSoak(args, runRoot, runtimeMeta) {
   const logs = `${await fs.readFile(runtime.stdoutPath, 'utf8')}\n${await fs.readFile(runtime.stderrPath, 'utf8')}`;
   const unhandled = logs.match(/UnhandledPromiseRejection|ERR_UNHANDLED_REJECTION|uncaughtException/gi) || [];
   if (unhandled.length) throw new Error(`unhandled runtime exceptions found: ${unhandled.length}`);
-  const lastHourStart = deadline - 60 * 60 * 1000;
-  const lastHourSamples = ttsWorkingSetSamples.filter(sample => sample.at >= lastHourStart);
+  const lastHourStart = Math.max(started, deadline - 60 * 60 * 1000);
+  const lastHourSamples = ttsWorkingSetSamples.filter(sample => sample.at >= lastHourStart && sample.at <= deadline);
   const ttsLastHourGrowthRate = lastHourSamples.length >= 2 && lastHourSamples[0].rssBytes > 0
     ? Number(((lastHourSamples.at(-1).rssBytes - lastHourSamples[0].rssBytes) / lastHourSamples[0].rssBytes).toFixed(4))
     : null;
@@ -537,6 +561,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
     ttsProbeAudioBytes,
     ttsProbeError: ttsProbeError || null,
     ttsWorkingSetSamples: ttsWorkingSetSamples.length,
+    ttsWorkingSetPeakBytes: ttsWorkingSetSamples.reduce((max, sample) => Math.max(max, sample.rssBytes), 0),
     ttsLastHourGrowthRate,
     voiceprintCoverage: !ttsFixtureReady
       ? 'missing_fixture'
@@ -547,6 +572,7 @@ async function runSoak(args, runRoot, runtimeMeta) {
     voiceprintEmbeddingDim,
     voiceprintProbeError: voiceprintProbeError || null,
     voiceprintWorkingSetSamples: voiceprintWorkingSetSamples.length,
+    voiceprintWorkingSetPeakBytes: voiceprintWorkingSetSamples.reduce((max, sample) => Math.max(max, sample.rssBytes), 0),
     sidecarBudgetExceeded: { gptSovits: maxGptSovitsBudgetExceeded, voiceprint: maxVoiceprintBudgetExceeded },
     gptSovitsIdleReclamationVerified,
     voiceprintIdleReclamationVerified,
