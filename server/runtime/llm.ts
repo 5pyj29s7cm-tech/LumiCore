@@ -146,12 +146,9 @@ function getArk() {
 function getOllama() {
   const config = getLocalModelConfig('ollama');
   const available = config.detected && config.models.some(isTextGenerationModel);
-  const signature = available ? config.baseUrl : '';
+  const signature = config.baseUrl;
   ollamaDetected = available;
-  if (!signature) {
-    ollama = null;
-    ollamaSignature = '';
-  } else if (!ollama || ollamaSignature !== signature) {
+  if (!ollama || ollamaSignature !== signature) {
     ollama = new OpenAI({
       apiKey: 'ollama',
       baseURL: `${config.baseUrl}/v1`,
@@ -169,12 +166,9 @@ function isOllamaAvailable() {
 function getLmStudio() {
   const config = getLocalModelConfig('lmstudio');
   const available = config.detected && config.models.some(isTextGenerationModel);
-  const signature = available ? config.baseUrl : '';
+  const signature = config.baseUrl;
   lmstudioDetected = available;
-  if (!signature) {
-    lmstudio = null;
-    lmstudioSignature = '';
-  } else if (!lmstudio || lmstudioSignature !== signature) {
+  if (!lmstudio || lmstudioSignature !== signature) {
     lmstudio = new OpenAI({
       apiKey: 'lm-studio',
       baseURL: `${config.baseUrl}/v1`,

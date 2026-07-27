@@ -10,6 +10,7 @@ import { ToolExecutionRecord, ToolContext } from '../tools/types';
 import { executeToolCall } from '../tools/execution_engine';
 import { routeToolsForTurn } from '../cognition/tool_router';
 import type { ToolPolicy } from '../personality/types';
+import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 
 export interface ChainerPlan {
   goal: string;
@@ -254,17 +255,25 @@ function extractWeChatMessage(userTask: string): string {
 
 export function buildForegroundWeChatSendArgs(userTask: string): Record<string, any> | null {
   const text = String(userTask || '');
+  const normalizedIntent = normalizeActionIntent(text);
+  if (['messaging_read', 'correction_explanation', 'status_query', 'client_navigation', 'client_state'].includes(normalizedIntent.kind)) return null;
   if (isNonCommandWeChatStatement(text)) return null;
   const inquiry = extractWeChatInquiry(text);
+  if (normalizedIntent.kind !== 'messaging_send' && !inquiry) return null;
   const isWeChatTask = /wechat|weixin|\u5fae\u4fe1/i.test(text);
   const directedSend = isDirectedWeChatSend(text);
   const looksLikeWeChatFollowup = /\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\u53d1\u665a\u5b89/u.test(text);
   const wantsSend = Boolean(inquiry) || /send|message|reply|\u53d1\u9001|\u53d1\u7ed9|\u53d1\u665a\u5b89|\u7ed9[^\s,锛屻€?!?锛侊紵]{1,24}\u53d1|\u4f60\u6765\u53d1|\u76f4\u63a5\u53d1|\u56de\u590d/u.test(text);
   if (!(isWeChatTask || looksLikeWeChatFollowup || directedSend) || !(wantsSend || directedSend)) return null;
 
+  const contact = extractWeChatContact(text) || normalizedIntent.target;
+  const message = extractWeChatMessage(text) || normalizedIntent.payload;
+  // An external commit is never inferred against whichever chat happens to
+  // be focused. Both the immutable recipient and payload must be resolved.
+  if (!contact || !message) return null;
   return {
-    contact: extractWeChatContact(text),
-    message: extractWeChatMessage(text),
+    contact,
+    message,
     applicationTarget: 'wechat',
     useVirtualCursor: true,
   };
@@ -272,11 +281,15 @@ export function buildForegroundWeChatSendArgs(userTask: string): Record<string, 
 
 export function buildForegroundWeChatReadArgs(userTask: string): Record<string, any> | null {
   const text = String(userTask || '');
-  if (!isWeChatReadTask(text)) return null;
+  const normalizedIntent = normalizeActionIntent(text);
+  if (normalizedIntent.kind !== 'messaging_read' && !isWeChatReadTask(text)) return null;
+  const contact = normalizedIntent.kind === 'messaging_read' && normalizedIntent.target
+    ? normalizedIntent.target
+    : extractWeChatReadContact(text);
   return {
-    contact: extractWeChatReadContact(text),
+    contact,
     applicationTarget: 'wechat',
-    useSearch: Boolean(extractWeChatReadContact(text)),
+    useSearch: Boolean(contact),
     maxMessages: 8,
   };
 }

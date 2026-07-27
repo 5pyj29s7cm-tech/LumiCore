@@ -38,6 +38,7 @@ import {
   trackTopic,
   getTopicContext,
   getConversationSummary,
+  getConversationActionStatus,
   prepareConversationActionExecution,
   cancelConversationActionExecution,
   settleConversationActionExecutionRequest,
@@ -59,7 +60,7 @@ import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { searchKnowledgeBase } from "../org/kb";
 import { buildQuickCommandToolPolicy, matchQuickCommand } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
-import { DEFAULT_MODELS, getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
+import { getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import {
   detectRequestedOperationMode,
   isPureOperationModeSwitchRequest,
@@ -70,6 +71,7 @@ import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messag
 import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
+import { executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
@@ -97,7 +99,7 @@ import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 import { hasClientActionOnlyIntent, hasExplicitToolIntent, isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { setRealtimeVoiceSessionActive } from "../autonomy/foreground_activity";
-import { buildForegroundWeChatSendArgs } from "../agents/nl_chainer";
+import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs } from "../agents/nl_chainer";
 import {
   isSpeechClearlyDirectedAwayFromLumi,
   isVoiceCorrectionContinuation,
@@ -1588,10 +1590,7 @@ async function processVoiceInput(
 
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
-  const voiceModel = (userLLMPrefs.models || {})[provider]
-    || (provider === 'deepseek' ? 'deepseek-v4-pro' : DEFAULT_MODELS[provider])
-    || userLLMPrefs.model
-    || 'deepseek-v4-flash';
+  const voiceModel = userLLMPrefs.model;
   const scheduleVoiceSummary = (conversationId: string) => {
     scheduleConversationSummary({
       conversationId,
@@ -1813,6 +1812,9 @@ async function processVoiceInput(
 
   const toolContext = {
     userId: session.userId,
+    taskId: actionTaskExecution.state?.taskId,
+    turnId: requestId,
+    requestId,
     domain: voiceScope.domain,
     orgId: voiceScope.orgId,
     desktopRelay,
@@ -2060,7 +2062,12 @@ async function processVoiceInput(
       voiceScope.domain,
       voiceScope.orgId,
     );
-    responseText = formatConversationActionTaskStatus(updatedConversation.actionContinuationState);
+    responseText = getConversationActionStatus(
+      updatedConversation.id,
+      session.userId,
+      actionIntentText,
+      updatedConversation.actionContinuationState,
+    );
     emitAgent('agent:response', {
       text: responseText,
       agentName: 'Lumi',
@@ -2084,8 +2091,13 @@ async function processVoiceInput(
     return;
   }
 
-  if (actionFollowupIntent === 'status' && conversationTurn.conversation.actionContinuationState) {
-    responseText = formatConversationActionTaskStatus(conversationTurn.conversation.actionContinuationState);
+  if (actionFollowupIntent === 'status') {
+    responseText = getConversationActionStatus(
+      conversationTurn.conversation.id,
+      session.userId,
+      actionIntentText,
+      conversationTurn.conversation.actionContinuationState,
+    );
     emitAgent('agent:response', {
       text: responseText,
       agentName: 'Lumi',
@@ -2550,6 +2562,7 @@ async function processVoiceInput(
     }
   }
 
+  const foregroundWeChatReadArgs = buildForegroundWeChatReadArgs(actionIntentText);
   let foregroundWeChatSendArgs = buildForegroundWeChatSendArgs(actionIntentText);
   if (foregroundWeChatSendArgs) {
     try {
@@ -2563,7 +2576,7 @@ async function processVoiceInput(
 
   try {
     const quickResult = preMatchedQuickResult;
-    if (!foregroundWeChatSendArgs && quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
+    if (!foregroundWeChatReadArgs && !foregroundWeChatSendArgs && quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
       logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
       let quickResponseText = quickResult.responseText;
       let quickToolResult = '';
@@ -2660,6 +2673,108 @@ async function processVoiceInput(
     logger.warn(`[Audio] Quick command check failed, falling through to LLM: ${qcErr.message}`);
   }
 
+  // Voice and chat share the same deterministic read route. Inbound language
+  // such as “张勇给我发了什么” can never fall through to the send capability.
+  if (foregroundWeChatReadArgs && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn) {
+    const toolName = 'wechat_read_recent_chat';
+    const correlationId = `voice-wechat-read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let toolRecord: ToolExecutionRecord = {
+      id: correlationId,
+      name: toolName,
+      arguments: foregroundWeChatReadArgs,
+      result: '',
+    };
+    try {
+      const foregroundExecution = await executeForegroundMessagingAction({
+        action: 'read',
+        normalizedIntent: executionPipeline.normalizedIntent,
+        registry: toolRegistry,
+        correlationId,
+        arguments: foregroundWeChatReadArgs,
+        context: toolContext,
+        onLifecycle: event => emitToolLifecycle({
+          correlationId: event.correlationId,
+          name: event.name,
+          arguments: event.arguments,
+          ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
+          ...(event.error ? { error: event.error } : {}),
+        }),
+      });
+      toolRecord = foregroundExecution.record;
+      if (toolRecord.error) throw new Error(toolRecord.error);
+      const parsed = foregroundExecution.parsed;
+      const contact = String(foregroundWeChatReadArgs.contact || '').trim();
+      const summary = String(parsed.contentSummary || '').trim();
+      const evidence = String(parsed.uiSnapshotPreview || '').slice(0, 1200);
+      responseText = parsed.read && summary
+        ? contact
+          ? `我已经定位到你和${contact}的微信聊天。可见最近内容如下：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
+          : `我已经读到当前微信聊天的可见最近内容：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
+        : parsed.read
+          ? contact
+            ? `我已经定位到你和${contact}的微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
+            : `我已经定位到当前微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
+          : `这次还没完成。卡住的位置：微信前台聊天读取。${String(parsed.visionError || parsed.note || '没有拿到可读的聊天内容证据。')}`; // i18n-allow: reviewed Chinese messaging-read blocker.
+    } catch (readErr: any) {
+      toolRecord.error = readErr?.message || String(readErr);
+      responseText = `这次还没完成。卡住的位置：微信前台聊天读取：${toolRecord.error}。我不会把只打开或聚焦微信说成已读到聊天内容。`; // i18n-allow: reviewed Chinese messaging-read failure receipt.
+    }
+
+    const directFinal = finalizeLumiResponse({
+      taskText: actionIntentText,
+      responseText,
+      toolRecords: [toolRecord],
+      source: 'voice',
+      flow: turnFlow,
+    });
+    responseText = directFinal.text;
+    if (directFinal.notification) emitAgent('agent:notification', directFinal.notification);
+    persistVoiceTakeoverExecution(responseText, {
+      toolRecords: [toolRecord],
+      source: 'voice_foreground_messaging_read',
+      sourceInteractionId: `voice_wechat_read_${Date.now()}`,
+      finalizationBlocked: directFinal.blocked,
+      assistantTextTrusted: !directFinal.blocked,
+      finalizationReason: directFinal.reason,
+    });
+    emitAgent('agent:response', {
+      text: responseText,
+      agentName: 'Lumi',
+      source: 'voice_foreground_messaging_read',
+      finalized: true,
+      blocked: directFinal.blocked,
+      reason: directFinal.reason || '',
+    });
+    persistVoiceAssistantMessage(conversationTurn.conversation.id, responseText, {
+      toolCalls: [toolRecord],
+      cognitiveIntent: directFinal.blocked ? 'work_product_guard' : 'messaging_read',
+      llmWasCalled: false,
+      source: 'voice_foreground_messaging_read',
+    });
+    queueFinalizedSpeech(responseText);
+    await Promise.allSettled(ttsPromises);
+    if (!isCurrentTurn()) return;
+    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    persistVoiceUserMessage(turnDispatch.boundary);
+    persistSidecarConversation(conv.id);
+    session.isProcessing = false;
+    session.isSpeaking = false;
+    if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
+    session.activeTurnText = '';
+    session.activeRoutingText = '';
+    socket.emit('chat:conversation_updated', { conversationId: conv.id, agentId: session.agentId, source: 'voice' });
+    socket.emit('audio:status', { status: 'listening', requestId });
+    emitAgent('agent:status', { status: 'idle' });
+    if (!directFinal.blocked) {
+      persistVoiceLearning(responseText, {
+        toolRecords: [toolRecord],
+        sourceInteractionId: `voice_wechat_read_${Date.now()}`,
+        logLabel: 'voice foreground messaging read',
+      });
+    }
+    return;
+  }
+
   // Explicit ordinary foreground WeChat sends use the same deterministic path
   // as text chat. Do not ask the model to rediscover a registered capability.
   if (foregroundWeChatSendArgs && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn) {
@@ -2671,26 +2786,27 @@ async function processVoiceInput(
       arguments: foregroundWeChatSendArgs,
       result: '',
     };
-    emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs });
     let directSendVerified = false;
     try {
-      Object.assign(toolRecord, await executeToolCall({
+      const foregroundExecution = await executeForegroundMessagingAction({
+        action: 'send',
+        normalizedIntent: executionPipeline.normalizedIntent,
         registry: toolRegistry,
-        id: correlationId,
-        name: toolName,
+        correlationId,
         arguments: foregroundWeChatSendArgs,
         context: toolContext,
-      }));
+        onLifecycle: event => emitToolLifecycle({
+          correlationId: event.correlationId,
+          name: event.name,
+          arguments: event.arguments,
+          ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
+          ...(event.error ? { error: event.error } : {}),
+        }),
+      });
+      Object.assign(toolRecord, foregroundExecution.record);
       if (toolRecord.error) throw new Error(toolRecord.error);
       if (!isCurrentTurn()) return;
-      emitToolLifecycle({
-        correlationId,
-        name: toolName,
-        arguments: foregroundWeChatSendArgs,
-        result: formatToolResultForUi(toolRecord.result),
-      });
-      let parsed: any = {};
-      try { parsed = JSON.parse(toolRecord.result || '{}'); } catch {}
+      const parsed = foregroundExecution.parsed;
       const contact = String(foregroundWeChatSendArgs.contact || '').trim();
       const message = String(foregroundWeChatSendArgs.message || '').trim();
       directSendVerified = parsed.sent === true && parsed.verificationStatus === 'verified';
@@ -2702,7 +2818,6 @@ async function processVoiceInput(
     } catch (sendErr: any) {
       toolRecord.error = sendErr?.message || String(sendErr);
       if (!isCurrentTurn()) return;
-      emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, error: toolRecord.error });
       responseText = formatCnVoiceWeChatSendError(toolRecord.error);
     }
 
@@ -2776,7 +2891,7 @@ async function processVoiceInput(
       isLLMAvailable: true,
     };
     const llmClassifier = async (prompt: string, userText: string): Promise<string> => {
-      const classifierModel = provider === 'deepseek' ? 'deepseek-v4-flash' : voiceModel;
+      const classifierModel = voiceModel;
       const result = await makeLLMCall(
         [{ role: 'system', content: prompt }, { role: 'user', content: userText }],
         [],
@@ -2848,15 +2963,7 @@ async function processVoiceInput(
     }
 
     // Auto-select model based on cognitive intent
-    const isComplex = ['command', 'code', 'analysis'].includes(cognition.intent.category)
-      || (
-        cognition.intent.category === 'question'
-        && (userText.length > 60 || isUserCorrectionOrExplanationQuestion(userText))
-      );
-    let effectiveModel = voiceModel;
-    if (provider === 'deepseek') {
-      effectiveModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-    }
+    const effectiveModel = voiceModel;
     logger.info(`[Audio] Cognition: ${cognition.intent.category} (confidence: ${cognition.intent.confidence}), model: ${effectiveModel}`);
 
     // ── Orchestrator: complex/moderate tasks → multi-agent decomposition ──

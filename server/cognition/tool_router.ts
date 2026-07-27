@@ -731,6 +731,18 @@ export function routeToolsForTurn(
     ));
   }
 
+  if (actionContract.kind === 'messaging_read') {
+    for (const entry of routingManifest) {
+      const externalCommit = entry.operation === 'communicate'
+        || /(?:send|reply|post|publish|upload|submit|message_file)/i.test(entry.toolName);
+      if (entry.lane === 'messaging' && externalCommit) {
+        selected.delete(entry.toolName);
+        forbiddenToolNames.add(entry.toolName);
+      }
+    }
+    reasons.push('message reading hard-forbids every messaging capability with external side effects');
+  }
+
   if (currentAppEdit) {
     categories.push('external_control');
     reasons.push(recoveredCurrentAppEdit

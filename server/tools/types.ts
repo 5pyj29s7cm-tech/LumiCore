@@ -187,6 +187,11 @@ export interface CapabilityManifestEntry {
 
 export interface ToolContext {
   userId?: string;
+  /** Durable execution correlation shared by task, confirmation and receipt ledgers. */
+  taskId?: string;
+  turnId?: string;
+  requestId?: string;
+  idempotencyKey?: string;
   /** Canonical registry injected by ToolRegistry for nested workflow/tool execution. */
   toolRegistry?: import('./registry').ToolRegistry;
   /** Active data domain for scoped writes. */
@@ -259,6 +264,17 @@ export interface ToolDefinition {
   description: string;
   parameters: Record<string, any>;
   handler: (args: Record<string, any>, context?: ToolContext) => Promise<string>;
+  /**
+   * Read-only reconciliation for a timed-out external commit. It must query
+   * the original provider/target with the same idempotency key and must never
+   * repeat the mutation. Return a verified normal tool result or null when the
+   * outcome remains unknown.
+   */
+  reconcileExternalCommit?: (
+    args: Record<string, any>,
+    context: ToolContext | undefined,
+    idempotencyKey: string,
+  ) => Promise<string | null>;
   permission: ToolPermission;
   /** Security level: safe = auto-execute, confirm = ask user, forbidden = never execute */
   securityLevel: SecurityLevel;
@@ -306,6 +322,10 @@ export interface NormalizedLLMResponse {
 
 export interface ToolExecutionRecord {
   id?: string;
+  taskId?: string;
+  turnId?: string;
+  requestId?: string;
+  idempotencyKey?: string;
   name: string;
   arguments: Record<string, any>;
   result: string;
@@ -333,6 +353,38 @@ export interface ToolExecutionRecord {
   terminalVerification?: {
     status: 'verified' | 'unverified' | 'failed';
     strategy: CapabilityVerification['strategy'];
+    reason: string;
+  };
+  /** Uniform terminal projection attached by the canonical executor. */
+  envelope?: ToolExecutionEnvelope;
+}
+
+export type ToolExecutionEnvelopeStatus =
+  | 'verified_success'
+  | 'failed'
+  | 'timeout'
+  | 'forbidden'
+  | 'waiting_confirmation'
+  | 'unknown_outcome'
+  | 'target_mismatch';
+
+/** Canonical result projected from every legacy/new tool record. */
+export interface ToolExecutionEnvelope<T = unknown> {
+  version: 1;
+  status: ToolExecutionEnvelopeStatus;
+  toolName: string;
+  taskId: string;
+  turnId: string;
+  requestId: string;
+  idempotencyKey: string;
+  targetIdentity: string;
+  startedAt?: string;
+  completedAt: string;
+  durationMs?: number;
+  result?: T;
+  error?: string;
+  verification: {
+    status: 'verified' | 'unverified' | 'failed';
     reason: string;
   };
 }

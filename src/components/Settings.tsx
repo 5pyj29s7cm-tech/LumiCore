@@ -2613,6 +2613,7 @@ const REASONING_MODEL_OPTIONS: Record<string, string[]> = {
   relay: [],
   ollama: [],
   lmstudio: [],
+  auto: [],
 };
 
 function ReasoningRoleSettings({ t }: { t: any }) {
@@ -2669,6 +2670,7 @@ function ReasoningRoleSettings({ t }: { t: any }) {
             <option value="kimi">Kimi / Moonshot</option>
             <option value="glm">GLM / Zhipu AI</option>
             <option value="relay">{t.apiRelayLabel || 'OpenAI-Compatible'}</option>
+            <option value="auto">Automatic (Local First)</option>
             <option value="ollama">Ollama Local</option>
             <option value="lmstudio">LM Studio Local</option>
           </select>

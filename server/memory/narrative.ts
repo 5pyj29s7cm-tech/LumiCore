@@ -1,6 +1,7 @@
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { queryMemories, addMemory, getAssociatedMemories } from './store';
 import { Memory } from './types';
+import { getScopedPreferredLLM } from '../llm/user_preferences';
 
 export interface NarrativeChainResult {
   narrative: string;
@@ -38,7 +39,16 @@ export async function buildNarrativeChain(params: {
   orgId?: string;
   getDeepSeek: () => any;
   getGemini: () => any;
+  getOpenAI?: () => any;
+  getAnthropic?: () => any;
   getQwen?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
 }): Promise<NarrativeChainResult> {
   const { userId, topic, limit = 10 } = params;
   const domain = params.domain === 'work' ? 'work' : 'personal';
@@ -93,15 +103,23 @@ export async function buildNarrativeChain(params: {
 
   // 5. Call LLM
   try {
+    const preferred = getScopedPreferredLLM(userId, { domain, orgId });
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: 512, userId },
+      { provider: preferred.provider, model: preferred.model, maxTokens: 512, userId, domain, orgId },
       params.getDeepSeek,
       params.getGemini,
-      undefined,
-      undefined,
+      params.getOpenAI,
+      params.getAnthropic,
       params.getQwen,
+      params.getOllama,
+      params.getLmStudio,
+      params.getArk,
+      params.getXiaomi,
+      params.getKimi,
+      params.getGlm,
+      params.getRelay,
     );
 
     const text = response.text || '';

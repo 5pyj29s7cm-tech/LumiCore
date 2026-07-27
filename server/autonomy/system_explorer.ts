@@ -559,10 +559,8 @@ function scanSoftwareProfile(): SoftwareProfile {
   };
 }
 
-export function runFirstBootExploration(): SystemSnapshot {
-  console.log("[Explorer] First-boot exploration starting...");
-
-  const snapshot: SystemSnapshot = {
+export function collectFirstBootSnapshot(): SystemSnapshot {
+  return {
     id: `explore_${Date.now()}`,
     timestamp: new Date().toISOString(),
     type: "first_boot",
@@ -575,6 +573,9 @@ export function runFirstBootExploration(): SystemSnapshot {
   };
 
   // Profession detection — what does this user do?
+}
+
+export function persistFirstBootExploration(snapshot: SystemSnapshot): SystemSnapshot {
   let professionSummary = '';
   try {
     const profiles = detectProfession(snapshot.software.installedApps);
@@ -599,6 +600,11 @@ export function runFirstBootExploration(): SystemSnapshot {
 
   console.log(`[Explorer] First-boot complete. Host: ${snapshot.hardware.hostname}, Apps: ${snapshot.software.installedApps.length}, Disks: ${snapshot.hardware.disks.length}${professionSummary}`);
   return snapshot;
+}
+
+export function runFirstBootExploration(): SystemSnapshot {
+  console.log("[Explorer] First-boot exploration starting...");
+  return persistFirstBootExploration(collectFirstBootSnapshot());
 }
 
 export function runDailyScan(): SystemSnapshot | null {

@@ -43,6 +43,26 @@ await build({
   },
 });
 
+await build({
+  entryPoints: ['server/autonomy/system_explorer_worker.ts'],
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  outfile: 'dist-server/system-explorer-worker.mjs',
+  external: [
+    'sqlite3',
+    'sharp',
+    '@img/sharp-win32-x64',
+    '@img/sharp-libvips-win32-x64',
+    'lightningcss',
+    'playwright-core',
+    '@larksuiteoapi/node-sdk',
+  ],
+  banner: {
+    js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);",
+  },
+});
+
 // Generate entry.cjs for CommonJS environments (Tauri node.exe, production serve)
 mkdirSync('dist-server', { recursive: true });
 writeFileSync('dist-server/runtime-meta.json', `${JSON.stringify(runtimeMeta, null, 2)}\n`);
@@ -100,4 +120,4 @@ console.log('[build-server] Skipped hide-console.cjs (not Windows)');
 }
 
 console.log(`[build-server] Generated runtime metadata ${runtimeMeta.version} ${runtimeMeta.buildId.slice(0, 7)} (${runtimeMeta.channel})`);
-console.log('[build-server] Generated dist-server/server.mjs + dist-server/entry.cjs + dist-server/runtime-meta.json + dist-server/hide-console.cjs');
+console.log('[build-server] Generated dist-server/server.mjs + dist-server/system-explorer-worker.mjs + dist-server/entry.cjs + dist-server/runtime-meta.json + dist-server/hide-console.cjs');

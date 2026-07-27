@@ -190,6 +190,7 @@ describe('desktop AI collaboration tools', () => {
       targets: ['workbuddy', 'codex'],
       send: true,
     }, {
+      requestConfirmation: async () => true,
       desktopRelay: async (name, args) => {
         calls.push({ name, args });
         if (name === 'desktop_active_window') {

@@ -11,6 +11,7 @@ import type {
   LumiExecutionGovernance,
   LumiTurnChannel,
 } from './turn_flow';
+import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
 
 export interface LumiIntentTraceRule {
   layer: string;
@@ -49,6 +50,7 @@ export interface LumiIntentTrace {
     text: string;
     routeText: string;
   };
+  normalizedActionIntent: NormalizedActionIntent;
   matched: {
     informationOnlyQuestion: boolean;
     diagnosticOrRepair: boolean;
@@ -158,6 +160,7 @@ export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput): LumiInte
   const flow = dispatch.flow;
   const source = input.source || dispatch.source || dispatch.channel;
   const text = input.text || '';
+  const normalizedActionIntent = normalizeActionIntent(text);
   const toolIntent = traceToolIntentDecision(text, source, flow.effectiveOperationMode);
   const toolRoute = compactRoute(execution.toolRoute);
   const routeSummary = toolRoute
@@ -195,6 +198,7 @@ export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput): LumiInte
       text,
       routeText: flow.routeText || text,
     },
+    normalizedActionIntent,
     matched: {
       informationOnlyQuestion: toolIntent.signals.informationOnlyQuestion,
       diagnosticOrRepair: toolIntent.signals.diagnosticOrRepair,

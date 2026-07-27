@@ -142,8 +142,14 @@ export function recordFailure(
  */
 export function resetCircuit(provider?: string, model?: string): void {
   if (provider) {
-    const key = circuitKey(provider, model);
-    circuits.delete(key);
+    if (model) {
+      circuits.delete(circuitKey(provider, model));
+    } else {
+      circuits.delete(provider);
+      for (const key of [...circuits.keys()]) {
+        if (key.startsWith(`${provider}:`)) circuits.delete(key);
+      }
+    }
   } else {
     circuits.clear();
   }

@@ -21,6 +21,7 @@ import {
   trackTopic,
   getTopicContext,
   getConversationSummary,
+  getConversationActionStatus,
   prepareConversationActionExecution,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
@@ -78,7 +79,7 @@ import {
   toolRecordSucceeded,
 } from "../cognition/task_execution_ledger";
 import { createDesktopRelay } from "./desktop_relay";
-import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
+import { getScopedPreferredLLM } from "../llm/user_preferences";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 import { CN_TASK_EXECUTION_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import {
@@ -250,9 +251,12 @@ export function registerTaskHandler(
       : null;
     if (runningTask && activeMessageRelation === 'status') {
       const activeConversation = activeConversationForStatus!;
-      const statusText = activeConversation.actionContinuationState
-        ? formatConversationActionTaskStatus(activeConversation.actionContinuationState)
-        : CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
+      const statusText = getConversationActionStatus(
+        activeConversation.id,
+        uid,
+        data.text,
+        activeConversation.actionContinuationState,
+      ) || CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
       socket.emit('agent:response', {
         text: statusText,
@@ -385,7 +389,7 @@ export function registerTaskHandler(
 
     const userLLMPrefs = getScopedPreferredLLM(uid, taskScope);
     let activeProvider = userLLMPrefs.provider || 'deepseek';
-    let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-v4-flash';
+    let activeModel = userLLMPrefs.model;
 
     // ── Load persisted conversation history (survives page reload) ──
     const executionPipeline = buildLumiExecutionPipeline({
@@ -615,8 +619,13 @@ export function registerTaskHandler(
       return false;
     };
 
-    if (actionFollowupIntent === 'status' && convForHistory.actionContinuationState) {
-      const statusText = formatConversationActionTaskStatus(convForHistory.actionContinuationState);
+    if (actionFollowupIntent === 'status') {
+      const statusText = getConversationActionStatus(
+        convForHistory.id,
+        uid,
+        data.text,
+        convForHistory.actionContinuationState,
+      );
       emitAgent('agent:response', {
         text: statusText,
         agentName: personality.name,
@@ -793,20 +802,9 @@ export function registerTaskHandler(
         throw cancellationError;
       }
 
-      // If cognitive engine handled directly (simple command), skip LLM entirely
-      // ── Auto-select model: flash for simple chat, pro for complex tasks ──
-      const complexCategories = ['command', 'code', 'question', 'analysis'];
-      const isComplex = complexCategories.includes(cognition.intent.category);
-      if (activeProvider === 'deepseek') {
-        activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-      } else if (activeProvider === 'qwen') {
-        activeModel = isComplex ? 'qwen-max' : 'qwen-plus';
-      } else if (activeProvider === 'gemini') {
-        activeModel = isComplex ? 'gemini-2.5-pro' : 'gemini-2.0-flash';
-      } else if (activeProvider === 'openai') {
-        activeModel = isComplex ? 'gpt-4o' : 'gpt-4o-mini';
-      }
-      console.log(`[Task] Model auto-selected: ${activeProvider}/${activeModel} for category: ${cognition.intent.category}`);
+      // Cognitive complexity may influence prompting and token budgets, but the
+      // exact model selected by the user must not be silently replaced.
+      console.log(`[Task] Using configured model: ${activeProvider}/${activeModel} for category: ${cognition.intent.category}`);
 
       if (cognition.directToolExecuted && cognition.responseText) {
         console.log(`[Cognition] Task handled directly: ${cognition.intent.category}/${cognition.intent.subIntent}`);

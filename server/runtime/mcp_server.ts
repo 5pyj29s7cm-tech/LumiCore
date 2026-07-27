@@ -14,7 +14,11 @@ export function setupMcpServer(
   app: express.Express,
   server: http.Server,
   io: Server,
-  llm: { getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any },
+  llm: {
+    getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
+    getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any;
+    getKimi?: any; getGlm?: any; getRelay?: any;
+  },
   __dirname: string,
 ) {
   const lumiMcp = createLumiMcpServer(llm, toolRegistry, (event, data) => io.emit(event, data));

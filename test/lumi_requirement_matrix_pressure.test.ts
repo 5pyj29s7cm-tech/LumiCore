@@ -142,9 +142,9 @@ describe('Lumi requirement matrix pressure', () => {
       label: 'confirm real buy order with trading password',
     }, 'safe', { source: 'chat' } as any);
 
-    expect(message.requiresUserConfirmation).toBe(false);
-    expect(comment.requiresUserConfirmation).toBe(false);
-    expect(canAutoApproveAction('wechat_send_message', { message: '晚安' })).toBe(true);
+    expect(message.requiresUserConfirmation).toBe(true);
+    expect(comment.requiresUserConfirmation).toBe(true);
+    expect(canAutoApproveAction('wechat_send_message', { message: '晚安' })).toBe(false);
 
     expect(courtSubmit.requiresUserConfirmation).toBe(true);
     expect(courtSubmit.reason).toContain('High-consequence');

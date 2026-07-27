@@ -4,6 +4,7 @@ import { isStrictPrivacy, requireLocalProvider } from '../config/privacy';
 import { getScopedPreferredLLM } from './user_preferences';
 import { getUserPreferredVision } from './vision_preferences';
 import { getUserPreferredWorldModel } from './world_preferences';
+import { ensureLocalModelReady, markLocalModelUnhealthy, type LocalModelProvider } from './local_models';
 
 export type MessageContent =
   | string
@@ -158,6 +159,60 @@ function assertQwenAllowedByUserPrefs(config: { provider: string; model: string;
   if (preferred.provider !== 'qwen') {
     throw new Error(`Qwen LLM call blocked: current primary reasoning brain is ${preferred.provider}/${preferred.model}. Change Primary Reasoning Brain to Qwen to use Alibaba LLM.`);
   }
+}
+
+function autoDispatchPreference(config: {
+  model: string;
+  userId?: string;
+  domain?: string;
+  orgId?: string;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}) {
+  const preferred = config.userId
+    ? getScopedPreferredLLM(config.userId, { domain: config.domain, orgId: config.orgId })
+    : null;
+  return {
+    provider: preferred?.autoFallbackProvider || 'deepseek',
+    model: preferred?.autoFallbackModel || preferred?.models?.deepseek || 'deepseek-v4-flash',
+    localModel: config.model || preferred?.model,
+    maxTokens: config.maxTokens,
+    userId: config.userId,
+    domain: config.domain,
+    orgId: config.orgId,
+    signal: config.signal,
+    allowCloudFallback: !isStrictPrivacy(),
+  };
+}
+
+function autoDispatchGetters(
+  getDeepSeek: () => any,
+  getGemini: () => any,
+  getOpenAI?: () => any,
+  getAnthropic?: () => any,
+  getQwen?: () => any,
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
+) {
+  return {
+    getDeepSeek,
+    getGemini,
+    getOpenAI: getOpenAI || (() => null),
+    getAnthropic: getAnthropic || (() => null),
+    getQwen: getQwen || (() => null),
+    getOllama: getOllama || (() => null),
+    getLmStudio: getLmStudio || (() => null),
+    getArk: getArk || (() => null),
+    getXiaomi: getXiaomi || (() => null),
+    getKimi: getKimi || (() => null),
+    getGlm: getGlm || (() => null),
+    getRelay: getRelay || (() => null),
+  };
 }
 
 function toolResultAsUserMessage(m: NormalizedMessage): OpenAICompatibleMessage | null {
@@ -654,53 +709,28 @@ export async function makeLLMCall(
     ? Math.max(config.maxTokens || 8000, 4000)
     : config.maxTokens;
 
-  if (isStrictPrivacy()) {
-    if (config.provider === 'auto') {
-      // In strict mode, auto routes to local-only dispatch
-      const { dispatchLLMCall } = await import('./dispatch');
-      const localGetters = { getDeepSeek, getGemini, getOpenAI: getOpenAI || (() => null), getAnthropic: getAnthropic || (() => null), getQwen: getQwen || (() => null), getArk: getArk || (() => null), getOllama, isOllamaAvailable: () => !!getOllama?.(), getLmStudio, isLmStudioAvailable: () => !!getLmStudio?.() };
-      if (getOllama?.()) {
-        try {
-          const req = formatOpenAIRequest({ model: 'llama3.2', messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
-          const client = getOllama();
-          const res = await withCloudResilience(
-            () => client.chat.completions.create(req),
-            { provider: 'ollama', maxRetries: 1 }
-          );
-          return parseOpenAIResponse(res);
-        } catch {
-          if (getLmStudio?.()) {
-            try {
-              const req = formatOpenAIRequest({ model: config.model, messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
-              const client = getLmStudio();
-              const res = await client.chat.completions.create(req);
-              return parseOpenAIResponse(res);
-            } catch {}
-          }
-          throw new Error('[Privacy] Strict mode: no local LLM available. Start Ollama or LM Studio.');
-        }
-      }
-      if (getLmStudio?.()) {
-        const req = formatOpenAIRequest({ model: config.model, messages, toolDeclarations, maxTokens: maxTokens, userId: config.userId });
-        const client = getLmStudio();
-        const res = await client.chat.completions.create(req);
-        return parseOpenAIResponse(res);
-      }
-      throw new Error('[Privacy] Strict mode: no local LLM provider available. Set up Ollama or LM Studio.');
-    }
-    requireLocalProvider(config.provider);
+  // Automatic routing is resolved once from the user's persisted local model
+  // and cloud fallback selections. This must run before the legacy privacy
+  // branch so no provider/model literal can override the selected brain.
+  if (config.provider === 'auto') {
+    const { dispatchLLMCall } = await import('./dispatch');
+    const result = await dispatchLLMCall(
+      messages,
+      toolDeclarations,
+      autoDispatchPreference({ ...config, maxTokens }),
+      autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
+    );
+    return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
   }
 
-  // ── Auto/hybrid dispatch: local Ollama → cloud DeepSeek fallback ──
-  if (config.provider === 'auto' && getOllama) {
-    const { dispatchLLMCall } = await import('./dispatch');
-    const getters = { getDeepSeek, getGemini, getOpenAI: getOpenAI || (() => null), getAnthropic: getAnthropic || (() => null), getQwen: getQwen || (() => null), getArk: getArk || (() => null), getOllama, isOllamaAvailable: () => !!getOllama?.(), getLmStudio, isLmStudioAvailable: () => !!getLmStudio?.() };
-    const result = await dispatchLLMCall(messages, toolDeclarations, { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: maxTokens, userId: config.userId }, getters);
-    return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
+  if (isStrictPrivacy()) {
+    requireLocalProvider(config.provider);
   }
 
   // OpenAI-compatible path: DeepSeek, Qwen, Ark, Ollama, LM Studio
   if (config.provider === 'deepseek' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
+    const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
+    if (isLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
     const client = config.provider === 'deepseek' ? getDeepSeek()
       : config.provider === 'qwen' ? getQwen?.()
       : config.provider === 'ark' ? getArk?.()
@@ -717,7 +747,6 @@ export async function makeLLMCall(
       : config.provider === 'deepseek'
         ? formatDeepSeekRequest
         : formatOpenAIRequest;
-    const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
     const params: any = fmt({
       model: config.model,
       messages,
@@ -731,11 +760,19 @@ export async function makeLLMCall(
       delete params.max_tokens;
     }
 
-    const response = await withCloudResilience(
-      () => client.chat.completions.create(params),
-      { provider: config.provider, model: config.model },
-    );
-    return parseDeepSeekResponse(response);
+    try {
+      const response = await withCloudResilience(
+        () => client.chat.completions.create(
+          params,
+          isLocal ? { signal: AbortSignal.timeout(60_000) } : undefined,
+        ),
+        { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
+      );
+      return parseDeepSeekResponse(response);
+    } catch (error) {
+      if (isLocal) markLocalModelUnhealthy(config.provider as LocalModelProvider, error);
+      throw error;
+    }
   }
 
   if (config.provider === 'gemini') {
@@ -842,15 +879,22 @@ export async function makeLLMCallStreaming(
     : config.maxTokens;
 
   // ── Auto/hybrid dispatch: local Ollama → cloud DeepSeek fallback ──
-  if (config.provider === 'auto' && getOllama) {
+  if (config.provider === 'auto') {
     const { dispatchLLMCallStreaming } = await import('./dispatch');
-    const getters = { getDeepSeek, getGemini, getOpenAI: getOpenAI || (() => null), getAnthropic: getAnthropic || (() => null), getQwen: getQwen || (() => null), getArk: getArk || (() => null), getOllama, isOllamaAvailable: () => !!getOllama?.(), getLmStudio, isLmStudioAvailable: () => !!getLmStudio?.() };
-    const result = await dispatchLLMCallStreaming(messages, toolDeclarations, { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: maxTokens, userId: config.userId, signal: config.signal }, onChunk, getters);
+    const result = await dispatchLLMCallStreaming(
+      messages,
+      toolDeclarations,
+      autoDispatchPreference({ ...config, maxTokens }),
+      onChunk,
+      autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
+    );
     return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
   }
 
   // ── DeepSeek / OpenAI / Qwen / Ark / Ollama / LM Studio (OpenAI-compatible streaming) ──
   if (config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
+    const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
+    if (isLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
     const client = config.provider === 'deepseek' ? getDeepSeek()
       : config.provider === 'openai' ? getOpenAI?.()
       : config.provider === 'qwen' ? getQwen?.()
@@ -868,7 +912,6 @@ export async function makeLLMCallStreaming(
       : config.provider === 'deepseek'
         ? formatDeepSeekRequest
         : formatOpenAIRequest;
-    const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
     const params: any = fmt({
       model: config.model,
       messages,
@@ -882,10 +925,21 @@ export async function makeLLMCallStreaming(
     }
     params.stream = true;
 
-    const stream: any = await withCloudResilience(
-      () => client.chat.completions.create(params, { signal: config.signal }),
-      { provider: config.provider, model: config.model },
-    );
+    let stream: any;
+    try {
+      const localSignal = isLocal
+        ? config.signal
+          ? AbortSignal.any([config.signal, AbortSignal.timeout(60_000)])
+          : AbortSignal.timeout(60_000)
+        : config.signal;
+      stream = await withCloudResilience(
+        () => client.chat.completions.create(params, { signal: localSignal }),
+        { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
+      );
+    } catch (error) {
+      if (isLocal) markLocalModelUnhealthy(config.provider as LocalModelProvider, error);
+      throw error;
+    }
     const accumulatedText: string[] = [];
     const accumulatedReasoning: string[] = [];
     const toolCallAccumulators: Map<number, { id: string; name: string; args: string }> = new Map();

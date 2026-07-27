@@ -3,11 +3,32 @@ import fs from 'fs';
 import path from 'path';
 import { getDataPath } from '../../config/data_path';
 import { withCloudResilience } from '../../cloud/resilience';
+import { ensureGptSovitsRuntime, markGptSovitsActivity } from '../gptsovits_runtime';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9880';
 
 const SEGMENTS_DIR = getDataPath('voice_training/segments');
 const TRAINING_FILE_LIST = getDataPath('voice_training/filelist.txt');
+const MAX_CONCURRENT_SYNTHESIS = Math.max(1, Number(process.env.GPTSOVITS_CONCURRENCY) || 1);
+let activeSynthesis = 0;
+const synthesisQueue: Array<() => void> = [];
+
+async function withSynthesisSlot<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (activeSynthesis >= MAX_CONCURRENT_SYNTHESIS) {
+    await new Promise<void>((resolve, reject) => {
+      const enter = () => signal?.aborted ? reject(new Error('GPT-SoVITS request was cancelled while queued.')) : resolve();
+      synthesisQueue.push(enter);
+    });
+  }
+  if (signal?.aborted) throw new Error('GPT-SoVITS request was cancelled.');
+  activeSynthesis += 1;
+  try {
+    return await work();
+  } finally {
+    activeSynthesis = Math.max(0, activeSynthesis - 1);
+    synthesisQueue.shift()?.();
+  }
+}
 
 function getBaseUrl(): string {
   return (process.env.GPTSOVITS_API_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -73,11 +94,13 @@ export function listVoices(): VoiceListItem[] {
   }));
 }
 
-export async function synthesizeSpeech(
+async function synthesizeSpeechInternal(
   text: string,
   voiceId?: string,
   signal?: AbortSignal,
 ): Promise<TTSResult> {
+  await ensureGptSovitsRuntime(signal);
+  markGptSovitsActivity();
   // Resolve reference audio based on voiceId
   let refAudioPath: string;
   let promptText: string;
@@ -130,8 +153,25 @@ export async function synthesizeSpeech(
     },
     { provider: 'gptsovits', maxRetries: 2, baseDelayMs: 500 },
   );
+  markGptSovitsActivity();
   return {
     audioBuffer,
     format: 'audio/wav',
+  };
+}
+
+export function synthesizeSpeech(
+  text: string,
+  voiceId?: string,
+  signal?: AbortSignal,
+): Promise<TTSResult> {
+  return withSynthesisSlot(() => synthesizeSpeechInternal(text, voiceId, signal), signal);
+}
+
+export function getRuntimeQueueStatus() {
+  return {
+    inFlight: activeSynthesis,
+    queueLength: synthesisQueue.length,
+    concurrency: MAX_CONCURRENT_SYNTHESIS,
   };
 }

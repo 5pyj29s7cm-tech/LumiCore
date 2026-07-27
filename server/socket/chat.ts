@@ -22,6 +22,7 @@ import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
+import { executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
 import { buildClientDiagnosticPlan, formatClientDiagnosticResult } from "../cognition/client_diagnostic_result";
@@ -63,6 +64,7 @@ import {
   trackTopic,
   getTopicContext,
   getActiveConversation,
+  getConversationActionStatus,
   prepareConversationActionExecution,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
@@ -125,7 +127,7 @@ import { CN_CLIENT_DIAGNOSTIC_MESSAGES } from "../regions/packs/cn/client_diagno
 import { CN_BACKGROUND_DELEGATION_MESSAGES } from "../regions/packs/cn/background_delegation_messages";
 import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
 import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
-import { DEFAULT_MODELS, getScopedPreferredLLM } from "../llm/user_preferences";
+import { getScopedPreferredLLM } from "../llm/user_preferences";
 import { createDesktopRelay } from "./desktop_relay";
 import { resolveSocketScope, scopedEmotionalStateKey } from "./scope";
 import {
@@ -1083,8 +1085,8 @@ export function registerChatHandler(
         resolvedDomain,
         resolvedOrgId,
       );
-      const statusText = activeConversation?.actionContinuationState
-        ? formatConversationActionTaskStatus(activeConversation.actionContinuationState)
+      const statusText = activeConversation
+        ? getConversationActionStatus(activeConversation.id, uid, visibleUserText, activeConversation.actionContinuationState)
         : CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt;
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
       socket.emit('agent:response', {
@@ -1569,8 +1571,8 @@ export function registerChatHandler(
         visibleUserText,
         conversation?.actionContinuationState,
       );
-      if (conversationId && actionFollowupIntent === 'status' && conversation?.actionContinuationState) {
-        const statusText = formatConversationActionTaskStatus(conversation.actionContinuationState);
+      if (conversationId && actionFollowupIntent === 'status') {
+        const statusText = getConversationActionStatus(conversationId, uid, visibleUserText, conversation?.actionContinuationState);
         emitAgent("agent:status", { status: "responding", agentName: personality.name });
         emitAgent("agent:response", { text: statusText, agentName: personality.name, finalized: true, blocked: false, reason: '' });
         addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'user', content: storedUserContent, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId });
@@ -1981,21 +1983,14 @@ export function registerChatHandler(
       // Work-domain chats use organization LLM prefs when configured. If the org
       // has no explicit policy, they visibly inherit the user's personal prefs.
       const userLLMPrefs = getScopedPreferredLLM(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
-      const resolveProvider = (model: string) =>
-        model.startsWith('deepseek') ? 'deepseek' as const
-        : model.startsWith('qwen') ? 'qwen' as const
-        : model.startsWith('gpt') || model.startsWith('o1') ? 'openai' as const
-        : model.startsWith('claude') ? 'anthropic' as const
-        : 'gemini' as const;
-
       let activeProvider = userLLMPrefs.provider || 'deepseek';
-      let activeModel = (userLLMPrefs.models || {})[activeProvider] || DEFAULT_MODELS[activeProvider] || 'deepseek-v4-flash';
+      let activeModel = userLLMPrefs.model;
 
       // Hybrid dispatch is opt-in only; do not change providers unless the user chose auto.
       if (llmGetters.isOllamaAvailable() && userLLMPrefs.provider === 'auto') {
-        activeProvider = 'auto';
-        activeModel = 'qwen2.5:7b';
-        console.log('[Chat] Hybrid mode enabled — local Ollama → cloud DeepSeek');
+        // Availability is observational only; automatic routing resolves the
+        // user's exact local model and cloud fallback in the shared dispatcher.
+        console.log('[Chat] Automatic model routing enabled with persisted local and fallback selections');
       }
 
       const scheduleChatSummary = (targetConversationId: string) => {
@@ -2481,7 +2476,7 @@ export function registerChatHandler(
         const result = await makeLLMCall(
           messages,
           [],
-          { provider: activeProvider, model: activeProvider === 'deepseek' ? 'deepseek-v4-flash' : activeModel, userId: uid, maxTokens: 60, domain: resolvedDomain, orgId: resolvedOrgId },
+          { provider: activeProvider, model: activeModel, userId: uid, maxTokens: 60, domain: resolvedDomain, orgId: resolvedOrgId },
           llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
           llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
         );
@@ -2513,21 +2508,7 @@ export function registerChatHandler(
       }
 
       // Auto-select model: flash for simple chat, pro for complex tasks
-      const isComplex = ['command', 'code', 'analysis'].includes(cognition.intent.category)
-        || (
-          cognition.intent.category === 'question'
-          && (visibleUserText.length > 80 || isUserCorrectionOrExplanationQuestion(visibleUserText))
-        );
-      if (activeProvider === 'deepseek') {
-        activeModel = isComplex ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-      } else if (activeProvider === 'qwen') {
-        activeModel = isComplex ? 'qwen-max' : 'qwen-plus';
-      } else if (activeProvider === 'gemini') {
-        activeModel = isComplex ? 'gemini-2.5-pro' : 'gemini-2.0-flash';
-      } else if (activeProvider === 'openai') {
-        activeModel = isComplex ? 'gpt-4o' : 'gpt-4o-mini';
-      }
-      console.log('[ChatHandler] Model auto-selected:', activeProvider, '/', activeModel, 'for category:', cognition.intent.category);
+      console.log('[ChatHandler] Using exact configured reasoning model:', activeProvider, '/', activeModel);
 
       let responseText = '';
       let llmWasCalled = false;
@@ -2787,13 +2768,12 @@ export function registerChatHandler(
           phase: 'foreground_messaging_read',
           detail: '\u6b63\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u8bfb\u53d6\u804a\u5929\u5185\u5bb9',
         });
-        emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatReadArgs });
-
         try {
-          Object.assign(toolRecord, await executeToolCall({
+          const foregroundExecution = await executeForegroundMessagingAction({
+            action: 'read',
+            normalizedIntent: executionPipeline.normalizedIntent,
             registry: toolRegistry,
-            id: correlationId,
-            name: toolName,
+            correlationId,
             arguments: foregroundWeChatReadArgs,
             context: {
               userId: uid,
@@ -2815,11 +2795,17 @@ export function registerChatHandler(
                 }
               },
             },
-          }));
+            onLifecycle: event => emitToolLifecycle({
+              correlationId: event.correlationId,
+              name: event.name,
+              arguments: event.arguments,
+              ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
+              ...(event.error ? { error: event.error } : {}),
+            }),
+          });
+          Object.assign(toolRecord, foregroundExecution.record);
           if (toolRecord.error) throw new Error(toolRecord.error);
-          emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatReadArgs, result: formatToolResultForUi(toolRecord.result) });
-          let parsed: any = {};
-          try { parsed = JSON.parse(toolRecord.result || '{}'); } catch {}
+          const parsed = foregroundExecution.parsed;
           const contact = String(foregroundWeChatReadArgs.contact || '').trim();
           const summary = String(parsed.contentSummary || '').trim();
           if (parsed.read && summary) {
@@ -2841,7 +2827,6 @@ export function registerChatHandler(
           llmWasCalled = false;
         } catch (readErr: any) {
           toolRecord.error = readErr?.message || String(readErr);
-          emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatReadArgs, error: toolRecord.error });
           responseText = [
             '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
             `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a\u5fae\u4fe1\u524d\u53f0\u804a\u5929\u8bfb\u53d6: ${toolRecord.error}\u3002`,
@@ -2869,13 +2854,12 @@ export function registerChatHandler(
           phase: 'foreground_messaging',
           detail: '\u6b63\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u6d88\u606f',
         });
-        emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs });
-
         try {
-          Object.assign(toolRecord, await executeToolCall({
+          const foregroundExecution = await executeForegroundMessagingAction({
+            action: 'send',
+            normalizedIntent: executionPipeline.normalizedIntent,
             registry: toolRegistry,
-            id: correlationId,
-            name: toolName,
+            correlationId,
             arguments: foregroundWeChatSendArgs,
             context: {
               userId: uid,
@@ -2897,13 +2881,19 @@ export function registerChatHandler(
                 }
               },
             },
-          }));
+            onLifecycle: event => emitToolLifecycle({
+              correlationId: event.correlationId,
+              name: event.name,
+              arguments: event.arguments,
+              ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
+              ...(event.error ? { error: event.error } : {}),
+            }),
+          });
+          Object.assign(toolRecord, foregroundExecution.record);
           if (toolRecord.error) throw new Error(toolRecord.error);
-          emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, result: formatToolResultForUi(toolRecord.result) });
           const contact = String(foregroundWeChatSendArgs.contact || '').trim();
           const message = String(foregroundWeChatSendArgs.message || foregroundWeChatSendArgs.draft || '').trim();
-          let sendResult: any = {};
-          try { sendResult = JSON.parse(toolRecord.result || '{}'); } catch {}
+          const sendResult = foregroundExecution.parsed;
           if (sendResult.sent === true && sendResult.verificationStatus === 'verified') {
             responseText = contact
               ? `\u5df2\u5728\u524d\u53f0\u5fae\u4fe1\u91cc\u53d1\u9001\u7ed9${contact}\uff1a${message}`
@@ -2916,7 +2906,6 @@ export function registerChatHandler(
           llmWasCalled = false;
         } catch (sendErr: any) {
           toolRecord.error = sendErr?.message || String(sendErr);
-          emitToolLifecycle({ correlationId, name: toolName, arguments: foregroundWeChatSendArgs, error: toolRecord.error });
           responseText = [
             '\u8fd9\u6b21\u8fd8\u6ca1\u5b8c\u6210\u3002',
             `\u5361\u4f4f\u7684\u4f4d\u7f6e\uff1a\u5fae\u4fe1\u524d\u53f0\u53d1\u9001: ${toolRecord.error}\u3002`,
@@ -3609,105 +3598,10 @@ export function registerChatHandler(
           }
         } catch (llmErr: any) {
           console.error(`[Cognition] LLM '${activeProvider}/${activeModel}' failed: ${llmErr.message}`);
-          // Do not silently switch to another paid provider. The selected model should run or fail visibly.
-          if (false && llmErr.message?.includes('not configured') && activeProvider !== 'gemini') {
-            try {
-              const fallbackMessage = `主推理服务 ${activeProvider}/${activeModel} 不可用，Lumi 将临时降级到 Gemini。`;
-              socket.emit('agent:notification', { type: 'llm_fallback', level: 'warning', message: fallbackMessage });
-              pushNotification(uid, { type: 'llm_fallback', title: 'LLM 降级提醒', message: fallbackMessage });
-              if (!executionDecision.allowToolUse) {
-                const fallbackChunks: string[] = [];
-                const fallback = await makeLLMCallStreaming(
-                  messages,
-                  [],
-                  { provider: 'gemini', model: DEFAULT_MODELS.gemini, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal },
-                  (chunk) => {
-                    fallbackChunks.push(chunk);
-                    if (!deferCompletionStream) {
-                      const safeText = chatTextGate.push(chunk);
-                      if (safeText) {
-                        emitAgent("agent:chunk", { text: safeText, agentName: personality.name });
-                      }
-                    }
-                  },
-                  llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-                  llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-                );
-                responseText = fallback.text || fallbackChunks.join('') || '';
-                llmWasCalled = true;
-                if (fallback.usage) {
-                  recordTokenUsage(uid, 'gemini', DEFAULT_MODELS.gemini, {
-                    promptTokens: fallback.usage.promptTokens,
-                    completionTokens: fallback.usage.completionTokens,
-                    totalTokens: fallback.usage.totalTokens,
-                  }, interactionId);
-                }
-              } else {
-              const fallback = await runWithTools(
-                messages, toolRegistry,
-                { provider: 'gemini', model: DEFAULT_MODELS.gemini, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId },
-                (record) => {
-                  allToolRecords.push(record);
-                  if (isDirectDesktopTool(record.name)) return;
-                  emitToolLifecycle({
-                    correlationId: record.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    name: record.name,
-                    arguments: record.arguments,
-                    result: formatToolResultForUi(record.result),
-                    error: record.error,
-                  });
-                },
-                1,
-                llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-                undefined,
-                {
-                  userId: uid,
-                  domain: resolvedDomain,
-                  orgId: resolvedOrgId,
-                  desktopRelay,
-                  llmGetters,
-                  source: 'chat',
-                  supervisedExternalCommits: true,
-                  allowLocalFileWrites,
-                  localWriteIntentReason,
-                  isCancelled: () => abortController.signal.aborted,
-                  onToolStart: (call) => {
-                    if (isDirectDesktopTool(call.name)) return;
-                    emitToolLifecycle({
-                      correlationId: call.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                      name: call.name,
-                      arguments: call.arguments,
-                    });
-                  },
-                  ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
-                  actionIntent: visibleUserText,
-                  routedTaskText: turnFlow.routeText,
-                  ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
-                },
-                llmGetters.getOllama,
-                llmGetters.getLmStudio,
-                llmGetters.getArk,
-                llmGetters.getXiaomi,
-                llmGetters.getKimi,
-                llmGetters.getGlm,
-                llmGetters.getRelay,
-              );
-              responseText = fallback.text || '';
-              llmWasCalled = true;
-              for (const u of fallback.usageRecords) {
-                recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId);
-              }
-              }
-            } catch (fallbackErr: any) {
-              // Both primary and fallback LLMs failed — use cognitive fallback
-              const cf = handleLLMFailure(cognition.intent, fallbackErr);
-              responseText = cf.responseText;
-            }
-          } else {
-            // LLM failed for other reasons — use cognitive fallback
-            const cf = handleLLMFailure(cognition.intent, llmErr);
-            responseText = cf.responseText;
-          }
+          // Automatic fallback exists only behind the explicit `auto` provider,
+          // where the fallback provider and model are persisted user choices.
+          const cf = handleLLMFailure(cognition.intent, llmErr);
+          responseText = cf.responseText;
         }
       }
 
@@ -3824,7 +3718,7 @@ export function registerChatHandler(
                 },
               ],
               [],
-              { provider: 'deepseek', model: 'deepseek-v4-flash', userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, maxTokens: 300 },
+              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, maxTokens: 300 },
               llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
               llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
             );

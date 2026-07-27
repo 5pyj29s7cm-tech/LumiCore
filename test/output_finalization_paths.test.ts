@@ -239,8 +239,8 @@ describe('finalized output paths', () => {
       expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
       expect(voice).toContain(`if (!${finalized}.blocked) {`);
     }
-    expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(2);
-    expect(voice.match(/if \(!directFinal\.blocked\) \{/g)).toHaveLength(2);
+    expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(3);
+    expect(voice.match(/if \(!directFinal\.blocked\) \{/g)).toHaveLength(3);
   });
 
   it('persists finalized stored-workflow turns with tool evidence before conversation sync', () => {

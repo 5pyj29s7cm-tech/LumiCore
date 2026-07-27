@@ -12,7 +12,7 @@ import {
   isVideoGenerationProvider,
   upsertUserPreferredGenerationModels,
 } from './generation_preferences';
-import { getLocalModelConfig } from './local_models';
+import { ensureLocalModelReady, getLocalModelConfig } from './local_models';
 import { rerankConfiguredDocuments } from './rerank_provider';
 import {
   DEFAULT_EMBEDDING_MODELS,
@@ -313,10 +313,14 @@ export async function testLLMProviderConnection(
   const localConfig = provider === 'ollama' || provider === 'lmstudio'
     ? getLocalModelConfig(provider)
     : null;
-  const model = String(requestedModel || localConfig?.models.find(modelName => !/(?:embed|whisper|rerank)/i.test(modelName)) || (DEFAULT_MODELS as Record<string, string>)[provider] || '').trim();
+  let model = String(requestedModel || localConfig?.models.find(modelName => !/(?:embed|whisper|rerank)/i.test(modelName)) || (DEFAULT_MODELS as Record<string, string>)[provider] || '').trim();
   if (!model || model.length > 200) throw new Error('A valid model name is required');
 
   const startedAt = Date.now();
+  if (provider === 'ollama' || provider === 'lmstudio') {
+    const selection = await ensureLocalModelReady(provider, requestedModel, { force: true, timeoutMs: 8_000 });
+    model = selection.model;
+  }
   if (provider === 'gemini') {
     const client = llm.getGemini?.();
     if (!client) throw new Error('Gemini is not configured');

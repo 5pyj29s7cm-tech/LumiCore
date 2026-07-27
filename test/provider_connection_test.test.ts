@@ -4,14 +4,14 @@ import { testLLMProviderConnection, testVisionProviderConnection } from '../serv
 describe('provider live connection test', () => {
   it('performs a real minimal chat-completions call through the configured client', async () => {
     const create = vi.fn().mockResolvedValue({ choices: [{ message: { content: 'OK' } }] });
-    const result = await testLLMProviderConnection('lmstudio', 'local-chat-model', {
-      getLmStudio: () => ({ chat: { completions: { create } } }),
+    const result = await testLLMProviderConnection('openai', 'gpt-test-model', {
+      getOpenAI: () => ({ chat: { completions: { create } } }),
     });
 
     expect(result.ok).toBe(true);
-    expect(result.provider).toBe('lmstudio');
+    expect(result.provider).toBe('openai');
     expect(create).toHaveBeenCalledOnce();
-    expect(create.mock.calls[0][0]).toMatchObject({ model: 'local-chat-model', max_tokens: 8 });
+    expect(create.mock.calls[0][0]).toMatchObject({ model: 'gpt-test-model', max_tokens: 8 });
   });
 
   it('rejects configured-looking providers that have no runtime client', async () => {

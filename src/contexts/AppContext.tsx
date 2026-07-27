@@ -193,6 +193,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: '' };
     }
   });
+  const modelPreferenceRequestRef = React.useRef(0);
+  const aiConfigRef = React.useRef(aiConfig);
+  useEffect(() => {
+    aiConfigRef.current = aiConfig;
+  }, [aiConfig]);
   const [visionConfig, setVisionConfig] = useState<VisionConfig>(() => {
     const saved = localStorage.getItem('lumi_vision_config');
     return saved ? JSON.parse(saved) : { provider: 'openai', model: 'gpt-4o', apiKey: '' };
@@ -451,64 +456,77 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [resolvedAppearanceMode]);
 
   const updateAIConfig = (newConfig: Partial<AIConfig>) => {
-    setAiConfig(prev => {
-      // Auto-resolve model from per-provider preferences when provider changes
-      let resolved = { ...newConfig };
-      if (newConfig.provider && !newConfig.model) {
-        const savedModels = (() => {
-          try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
-        })();
-        const defaults: Record<string, string> = {
-          qwen: 'qwen-plus', deepseek: 'deepseek-v4-flash', openai: 'gpt-4o',
-          gemini: 'gemini-2.0-flash', anthropic: 'claude-sonnet-4-6',
-          ark: 'doubao-seed-2-0-lite-260215', xiaomi: 'mimo-v2.5-pro',
-          kimi: 'moonshot-v1-8k', glm: 'glm-5.1', relay: 'gpt-4o',
-          ollama: 'qwen2.5:7b', lmstudio: 'local-model', auto: 'qwen2.5:7b',
-        };
-        resolved.model = savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
-      }
-      const updated = { ...prev, ...resolved };
-      localStorage.setItem('lumi_ai_config', JSON.stringify(updated));
+    const requestRevision = ++modelPreferenceRequestRef.current;
+    const previous = aiConfigRef.current;
+    const resolved = { ...newConfig };
+    if (newConfig.provider && !newConfig.model) {
+      const savedModels = (() => {
+        try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
+      })();
+      const defaults: Record<string, string> = {
+        qwen: 'qwen-plus', deepseek: 'deepseek-v4-flash', openai: 'gpt-4o',
+        gemini: 'gemini-2.0-flash', anthropic: 'claude-sonnet-4-6',
+        ark: 'doubao-seed-2-0-lite-260215', xiaomi: 'mimo-v2.5-pro',
+        kimi: 'moonshot-v1-8k', glm: 'glm-5.1', relay: 'gpt-4o',
+        ollama: 'qwen2.5:7b', lmstudio: 'local-model', auto: 'qwen2.5:7b',
+      };
+      resolved.model = savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
+    }
+    const updated = { ...previous, ...resolved };
+    aiConfigRef.current = updated;
+    setAiConfig(updated);
+    localStorage.setItem('lumi_ai_config', JSON.stringify(updated));
 
-      // Also sync apiKey to server so LLM/STT/TTS providers can read it
-      if (updated.apiKey && updated.provider) {
-        const KEY_MAP: Record<string, string> = {
-          qwen: 'DASHSCOPE_API_KEY',
-          deepseek: 'DEEPSEEK_API_KEY',
-          openai: 'OPENAI_API_KEY',
-          gemini: 'GEMINI_API_KEY',
-          anthropic: 'ANTHROPIC_API_KEY',
-          ark: 'ARK_API_KEY',
-          xiaomi: 'XIAOMI_API_KEY',
-          kimi: 'KIMI_API_KEY',
-          glm: 'GLM_API_KEY',
-          relay: 'RELAY_API_KEY',
-        };
-        const serverKey = KEY_MAP[updated.provider];
-        if (serverKey) {
-          saveServerKeys({ [serverKey]: updated.apiKey })
-            .catch(err => toast.error(err.message || 'API key save failed'));
-        }
+    if (updated.apiKey && updated.provider) {
+      const KEY_MAP: Record<string, string> = {
+        qwen: 'DASHSCOPE_API_KEY', deepseek: 'DEEPSEEK_API_KEY', openai: 'OPENAI_API_KEY',
+        gemini: 'GEMINI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', ark: 'ARK_API_KEY',
+        xiaomi: 'XIAOMI_API_KEY', kimi: 'KIMI_API_KEY', glm: 'GLM_API_KEY', relay: 'RELAY_API_KEY',
+      };
+      const serverKey = KEY_MAP[updated.provider];
+      if (serverKey) {
+        saveServerKeys({ [serverKey]: updated.apiKey })
+          .catch(err => toast.error(err.message || 'API key save failed'));
       }
+    }
 
-      // Sync LLM prefs (provider + per-provider models) to server for personality evolution
-      if (updated.provider || updated.model) {
-        const allModels = (() => {
-          try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
-        })();
-        if (updated.model && updated.provider) {
-          allModels[updated.provider] = updated.model;
-        }
-        apiFetch('/api/preferences/llm', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: updated.provider || prev.provider, models: allModels }),
-          credentials: 'include',
-        }).catch(() => {});
-      }
-      return updated;
+    if (!updated.provider && !updated.model) return;
+    const allModels = (() => {
+      try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
+    })();
+    if (updated.model && updated.provider) allModels[updated.provider] = updated.model;
+    void apiFetch('/api/preferences/llm', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: updated.provider || previous.provider,
+        model: updated.model,
+        models: allModels,
+      }),
+      credentials: 'include',
+    }).then(async response => {
+      const confirmed = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(confirmed.error || 'Model preference update failed');
+      if (modelPreferenceRequestRef.current !== requestRevision) return;
+      const synchronized = {
+        ...updated,
+        provider: confirmed.provider || updated.provider,
+        model: confirmed.model || updated.model,
+        apiKey: '',
+      };
+      aiConfigRef.current = synchronized;
+      setAiConfig(synchronized);
+      localStorage.setItem('lumi_ai_config', JSON.stringify(synchronized));
+      if (confirmed.models) localStorage.setItem('lumi_llm_models', JSON.stringify(confirmed.models));
+      window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed'));
+      toast.success('Neural core configuration synchronized');
+    }).catch(error => {
+      if (modelPreferenceRequestRef.current !== requestRevision) return;
+      aiConfigRef.current = previous;
+      setAiConfig(previous);
+      localStorage.setItem('lumi_ai_config', JSON.stringify(previous));
+      toast.error(error?.message || 'Model preference update failed');
     });
-    toast.success('Neural core configuration synchronized');
   };
 
   const updateVisionConfig = (newConfig: Partial<VisionConfig>) => {

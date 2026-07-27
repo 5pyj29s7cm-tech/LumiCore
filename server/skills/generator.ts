@@ -10,6 +10,7 @@ import os from 'os';
 import { createHash } from 'crypto';
 import { exec } from 'child_process';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
+import { getScopedPreferredLLM } from '../llm/user_preferences';
 import { WorkflowRecord, WorkflowStep } from './worklog';
 import { mcpManager, SKILLS_DIR } from '../mcp/client';
 import { getDataPath } from '../config/data_path';
@@ -186,6 +187,13 @@ export async function generateSkill(
   getOpenAI?: () => any,
   getAnthropic?: () => any,
   getQwen?: () => any,
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
 ): Promise<SkillGenerateResult> {
   // Build input description for LLM
   let inputDescription = '';
@@ -221,8 +229,9 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
     { role: 'user', content: prompt },
   ];
 
-  const provider = request.provider || 'deepseek';
-  const model = request.model || 'deepseek-v4-flash';
+  const preferred = getScopedPreferredLLM(request.userId || 'skill_gen');
+  const provider = request.provider || preferred.provider;
+  const model = request.model || preferred.model;
   let generatedSkillStagingDir = '';
 
   try {
@@ -235,6 +244,13 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
       getOpenAI,
       getAnthropic,
       getQwen,
+      getOllama,
+      getLmStudio,
+      getArk,
+      getXiaomi,
+      getKimi,
+      getGlm,
+      getRelay,
     );
 
     const text = response.text || '';

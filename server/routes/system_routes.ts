@@ -37,6 +37,10 @@ import { getUserPreferredLLM, upsertUserPreferredLLM } from "../llm/user_prefere
 import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
+import { getGptSovitsRuntimeStatus } from "../tts/gptsovits_runtime";
+import { getRuntimeQueueStatus as getGptSovitsQueueStatus } from "../tts/providers/gptsovits";
+import { getVoiceprintRuntimeStatus } from "../biometrics/voiceprint_provider";
+import { getToolRuntimeMetrics } from "../runtime/tool_metrics";
 import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
 import { generateConfiguredEmbedding } from "../llm/embedding_provider";
 import { rerankConfiguredDocuments } from "../llm/rerank_provider";
@@ -267,6 +271,10 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   router.get("/health", (req, res) => {
     try {
       const db = readDB();
+      const memory = process.memoryUsage();
+      const toolMetrics = getToolRuntimeMetrics();
+      const ollama = getLocalModelConfig('ollama');
+      const lmstudio = getLocalModelConfig('lmstudio');
       res.json({
         status: isDbDirty() ? "degraded" : "ok",
         timestamp: new Date().toISOString(),
@@ -276,7 +284,47 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           agents: db.agents.length,
           interactions: db.interactions.length,
           dirty: isDbDirty(),
-        }
+          actionTasks: (db.conversationActionTasks || []).length,
+          actionReceipts: (db.conversationActionReceipts || []).length,
+          functionalProbe: 'read_ok',
+        },
+        process: {
+          uptimeSec: Math.round(process.uptime()),
+          rssBytes: memory.rss,
+          heapUsedBytes: memory.heapUsed,
+          externalBytes: memory.external,
+        },
+        tools: toolMetrics,
+        queues: {
+          toolCallsInFlight: toolMetrics.totals.inFlight,
+          voiceprint: getVoiceprintRuntimeStatus(),
+          gptSovits: getGptSovitsQueueStatus(),
+        },
+        supervisedRuntimes: {
+          gptSovits: getGptSovitsRuntimeStatus(),
+          voiceprint: getVoiceprintRuntimeStatus(),
+        },
+        functionalProbes: {
+          databaseRead: true,
+          registeredTools: toolRegistry.list().length,
+          mcp: mcpManager.getServerHealth(),
+          localModels: {
+            ollama: {
+              reachable: ollama.detected,
+              baseUrl: ollama.baseUrl,
+              modelCount: ollama.models.length,
+              lastChecked: ollama.updatedAt,
+              error: ollama.lastError || '',
+            },
+            lmstudio: {
+              reachable: lmstudio.detected,
+              baseUrl: lmstudio.baseUrl,
+              modelCount: lmstudio.models.length,
+              lastChecked: lmstudio.updatedAt,
+              error: lmstudio.lastError || '',
+            },
+          },
+        },
       });
     } catch (error: any) {
       logger.error("Health check failed", error);
@@ -287,6 +335,26 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // Cloud provider health — circuit breaker + fallback status
   router.get("/cloud/health", (_req, res) => {
     try { res.json(getCloudHealth()); } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Explicit functional probe for local OpenAI-compatible runtimes. This is
+  // separate from the cheap cached /health response so monitoring can choose
+  // when to incur a network probe.
+  router.get("/llm/local/health", requireLocalRequest, async (_req, res) => {
+    const current = {
+      ollama: getLocalModelConfig('ollama'),
+      lmstudio: getLocalModelConfig('lmstudio'),
+    };
+    const [ollama, lmstudio] = await Promise.all([
+      refreshLocalModelConfig('ollama', current.ollama.baseUrl, { timeoutMs: 2500 }),
+      refreshLocalModelConfig('lmstudio', current.lmstudio.baseUrl, { timeoutMs: 2500 }),
+    ]);
+    const status = ollama.detected || lmstudio.detected ? 'ok' : 'degraded';
+    res.status(status === 'ok' ? 200 : 503).json({
+      status,
+      checkedAt: new Date().toISOString(),
+      providers: { ollama, lmstudio },
+    });
   });
 
   router.get("/voice/active-provider", requireAuth, (_req, res) => {

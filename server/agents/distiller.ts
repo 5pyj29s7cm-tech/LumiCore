@@ -6,6 +6,7 @@
  */
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { PersonalityConfig, PersonalityVector } from '../personality/types';
+import { getScopedPreferredLLM } from '../llm/user_preferences';
 
 // ── Types ──
 
@@ -208,6 +209,14 @@ type LLMGetters = {
   getOpenAI?: () => any;
   getAnthropic?: () => any;
   getQwen?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
+  preferredConfig?: { provider: string; model: string; userId: string };
 };
 
 async function callDistillLLM(
@@ -217,10 +226,21 @@ async function callDistillLLM(
   model?: string,
 ): Promise<string> {
   const messages: NormalizedMessage[] = [{ role: 'user', content: prompt }];
+  const selectedProvider = llmGetters.preferredConfig?.provider || provider;
+  const selectedModel = llmGetters.preferredConfig?.model
+    || model
+    || (selectedProvider === 'qwen' ? 'qwen-plus' : 'deepseek-v4-flash');
   const result = await makeLLMCall(
     messages, [],
-    { provider, model: model || (provider === 'qwen' ? 'qwen-plus' : 'deepseek-v4-flash'), maxTokens: 3000 },
+    {
+      provider: selectedProvider as any,
+      model: selectedModel,
+      userId: llmGetters.preferredConfig?.userId,
+      maxTokens: 3000,
+    },
     llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+    llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
+    llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
   );
   return result.text || '';
 }
@@ -557,6 +577,11 @@ Output ONLY the narrative text, no labels.`;
 
 export async function distillPersona(options: DistillOptions, llmGetters: LLMGetters): Promise<DistillResult> {
   const { chatLog, format, targetName: providedName, relationshipType: providedRel, userId, audioTranscript } = options;
+  const preferred = getScopedPreferredLLM(userId);
+  const configuredGetters: LLMGetters = {
+    ...llmGetters,
+    preferredConfig: { provider: preferred.provider, model: preferred.model, userId },
+  };
 
   // Merge audio transcript into chat log for richer distillation
   let enrichedLog = chatLog;
@@ -577,23 +602,23 @@ export async function distillPersona(options: DistillOptions, llmGetters: LLMGet
 
   // 3. Four-dimension distillation (parallel)
   const [cognitive, expression, behavioral, emotional] = await Promise.all([
-    distillCognitivePattern(transcript, inferredName, llmGetters),
-    distillExpressionStyle(transcript, inferredName, llmGetters),
-    distillBehavioralPattern(transcript, inferredName, providedRel || 'close_friend', llmGetters),
-    distillEmotionalTraits(transcript, inferredName, llmGetters),
+    distillCognitivePattern(transcript, inferredName, configuredGetters),
+    distillExpressionStyle(transcript, inferredName, configuredGetters),
+    distillBehavioralPattern(transcript, inferredName, providedRel || 'close_friend', configuredGetters),
+    distillEmotionalTraits(transcript, inferredName, configuredGetters),
   ]);
 
   // 4. Infer relationship type if not provided
   const relationshipType = providedRel || inferRelationship(transcript, emotional);
 
   // 5. Extract seed memories with evidence grading
-  const { memories: seedMemories, evidenceMap } = await extractSeedMemories(transcript, inferredName, llmGetters);
+  const { memories: seedMemories, evidenceMap } = await extractSeedMemories(transcript, inferredName, configuredGetters);
 
   // 6. Synthesize personality config
   const personalityConfig = profileToPersonalityConfig(cognitive, expression, behavioral, emotional, inferredName, relationshipType);
 
   // 7. Generate narrative
-  const narrative = await generateNarrative(cognitive, expression, behavioral, emotional, inferredName, relationshipType, seedMemories.length, llmGetters);
+  const narrative = await generateNarrative(cognitive, expression, behavioral, emotional, inferredName, relationshipType, seedMemories.length, configuredGetters);
 
   return {
     personalityConfig,

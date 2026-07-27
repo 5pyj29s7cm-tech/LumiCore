@@ -13,6 +13,7 @@ import {
   CN_VOICE_QUICK_WORK_MESSAGES,
 } from '../regions/packs/cn/voice_fast_path_messages';
 import type { ToolPolicy } from '../personality/types';
+import { normalizeActionIntent } from './normalized_action_intent';
 import { listWebLoginSitePresets } from '../web_login/legal_presets';
 import { formatKnownLoginOpening, formatKnownLoginResult } from '../i18n/naturalness_messages';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
@@ -643,6 +644,25 @@ export async function matchQuickCommand(
   options?: QuickCommandOptions,
 ): Promise<QuickCommandResult | null> {
   const clean = text.trim();
+  const normalizedIntent = normalizeActionIntent(clean);
+
+  // Safety-critical intent classes are resolved before the generic "open X"
+  // shortcut. This prevents client-native surfaces and complaints containing
+  // an action verb from being converted into desktop_open side effects.
+  if (
+    normalizedIntent.kind === 'correction_explanation'
+    || normalizedIntent.kind === 'status_query'
+  ) return null;
+  if (normalizedIntent.kind === 'client_navigation' && normalizedIntent.clientAction) {
+    return {
+      responseText: '正在切换 Lumi 界面。', // i18n-allow: reviewed deterministic client-navigation acknowledgement.
+      matched: true,
+      toolCall: {
+        name: 'client_action',
+        arguments: { action: normalizedIntent.clientAction },
+      },
+    };
+  }
 
   for (const pattern of patterns) {
     for (const regex of pattern.patterns) {

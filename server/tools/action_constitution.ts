@@ -45,7 +45,7 @@ export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
     rules: [
       'Observation, reading, search, and analysis tools may run automatically when tool policy allows them.',
       'Low- and medium-risk desktop control, browser/external app preparation, and clipboard handoff may run under the active chat/assistant/autonomy tool policy without a per-step prompt.',
-      'User-present foreground social/content commits such as ordinary messages, comments, replies, and non-commercial posts may run without a separate confirmation popup when the user asked for that action.',
+      'Every external commit, including ordinary messages, comments, replies, and non-commercial posts, requires one exact one-time confirmation bound to its destination and payload.',
       'Market watch actions such as stock quotes, watchlists, alerts, K-line/news/sector checks, risk plans, and paper trading are observational or simulated and may run when tools are allowed.',
       'Local writes and file generation may run automatically only when the current turn explicitly requests a local deliverable or a narrower trusted policy exists.',
       'Payments, purchases, transfers, real brokerage orders, buy/sell/cancel-order clicks, order/price/inventory/ad-spend changes, first-time login/security verification/credential storage/account switching, legal filings/signatures, system commands, installs, package changes, git mutations, and destructive actions require confirmation or are forbidden.',
@@ -104,11 +104,12 @@ export function evaluateActionConstitution(
     return allow('desktop_control', 'Validated AutoCAD drawing playback is allowed by Assistant and Autonomy desktop execution policy');
   }
 
+  if (toolName === 'desktop_ai_ask' && args?.send === false) {
+    return allow('external_app', 'Preparing a desktop AI prompt without submitting it does not create an external side effect');
+  }
+
   if (isExplicitMessagingFileTransfer(toolName, context)) {
-    if (canRunSupervisedExternalCommit(context)) {
-      return allow('messaging', 'User explicitly requested this bound WeChat/Feishu file transfer');
-    }
-    return confirm('messaging', 'Messaging file transfer requires a supervised request or relaxed messaging policy');
+    return confirm('messaging', 'Messaging file transfer requires exact one-time confirmation');
   }
 
   if (isHighConsequenceExternalCommit(actionText, toolName) && isExternalStateChangingDomain(domain)) {
@@ -116,10 +117,7 @@ export function evaluateActionConstitution(
   }
 
   if (isSocialContentCommit(actionText, toolName) && isExternalStateChangingDomain(domain)) {
-    if (canRunSupervisedExternalCommit(context)) {
-      return allow(domain, 'User-present foreground social/content commit allowed by active execution policy');
-    }
-    return confirm(domain, 'Social/content external commits require supervised foreground execution or an explicit relaxed messaging policy');
+    return confirm(domain, 'Social/content external commit requires exact one-time confirmation');
   }
 
   if (
@@ -212,6 +210,11 @@ export function canAutoApproveAction(toolName: string, args: Record<string, any>
   const domain = classifyAction(toolName, args);
   const risk = classifyActionRisk(toolName, args, context);
   if (risk === 'high') return false;
+  const actionText = buildActionText(toolName, args, context);
+  if (
+    isExternalStateChangingDomain(domain)
+    && (isSocialContentCommit(actionText, toolName) || GENERIC_EXTERNAL_COMMIT_PATTERN.test(actionText))
+  ) return false;
   return !['system', 'destructive'].includes(domain);
 }
 

@@ -3,6 +3,7 @@ import { estimateTokenCount } from '../llm/providers';
 import {
   buildConversationActionContinuationState,
   classifyRecentActionFollowupIntent,
+  formatConversationActionTaskStatus,
   isUserObservedTaskCompletion,
   needsRecentActionContinuationContext,
   normalizeConversationActionState,
@@ -11,6 +12,7 @@ import {
 } from '../cognition/action_continuation';
 import { taskCompletionFromReceipts } from '../cognition/task_execution_ledger';
 import { buildActionContract } from '../cognition/action_contract';
+import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 import type { ToolPolicy } from '../personality/types';
 import {
   isolateLegacyGuardSummaryState,
@@ -23,6 +25,22 @@ import {
   isUnverifiedExecutionAssistantText,
   sanitizeSummaryForPrompt,
 } from './summary_grounding';
+import {
+  formatConversationActionLedgerStatus,
+  migrateLegacyConversationActionLedger,
+  syncConversationActionTaskLedger,
+} from './action_ledger';
+
+export function getConversationActionStatus(
+  conversationId: string,
+  userId: string,
+  query = '',
+  fallbackState?: ConversationActionContinuationState | null,
+): string {
+  const db = readDB();
+  return formatConversationActionLedgerStatus(db, { conversationId, userId, query })
+    || formatConversationActionTaskStatus(fallbackState);
+}
 
 export interface Conversation {
   id: string;
@@ -415,6 +433,14 @@ export function prepareConversationActionExecution(input: {
     if (prepared.state) conversation.actionContinuationState = prepared.state;
     else delete conversation.actionContinuationState;
     conversation.lastActiveAt = new Date().toISOString();
+    if (prepared.state) {
+      syncConversationActionTaskLedger(db, {
+        conversation,
+        state: prepared.state,
+        userText: input.userText,
+        now: conversation.lastActiveAt,
+      });
+    }
     writeDB(db);
   }
   return prepared;
@@ -445,6 +471,10 @@ export function cancelConversationActionExecution(
     updatedAt: new Date().toISOString(),
   };
   delete conversation.pendingActionContinuation;
+  syncConversationActionTaskLedger(db, {
+    conversation,
+    state: conversation.actionContinuationState,
+  });
   writeDB(db);
   return conversation.actionContinuationState;
 }
@@ -472,6 +502,11 @@ export function completeConversationActionFromUserObservation(
     revision: (previous.revision || 0) + 1,
     updatedAt: new Date().toISOString(),
   };
+  syncConversationActionTaskLedger(db, {
+    conversation,
+    state: conversation.actionContinuationState,
+    userText,
+  });
   writeDB(db);
   return conversation.actionContinuationState;
 }
@@ -512,6 +547,10 @@ export function settleConversationActionExecutionRequest(
     revision: (previous.revision || 0) + 1,
     updatedAt: new Date().toISOString(),
   };
+  syncConversationActionTaskLedger(db, {
+    conversation,
+    state: conversation.actionContinuationState,
+  });
   writeDB(db);
   return conversation.actionContinuationState;
 }
@@ -527,6 +566,7 @@ export function recoverOrphanedConversationActionExecutions(
   now = new Date().toISOString(),
 ): number {
   const db = readDB();
+  const migrated = migrateLegacyConversationActionLedger(db);
   let recovered = 0;
   for (const conversation of db.conversations || []) {
     const previous = normalizeConversationActionState(conversation.actionContinuationState);
@@ -548,9 +588,14 @@ export function recoverOrphanedConversationActionExecutions(
       updatedAt: now,
     };
     delete conversation.pendingActionContinuation;
+    syncConversationActionTaskLedger(db, {
+      conversation,
+      state: conversation.actionContinuationState,
+      now,
+    });
     recovered += 1;
   }
-  if (recovered > 0) writeDB(db);
+  if (migrated > 0 || recovered > 0) writeDB(db);
   return recovered;
 }
 
@@ -581,6 +626,10 @@ export function setConversationActionExecutionStatus(
     revision: (previous.revision || 0) + 1,
     updatedAt: new Date().toISOString(),
   };
+  syncConversationActionTaskLedger(db, {
+    conversation,
+    state: conversation.actionContinuationState,
+  });
   writeDB(db);
   return conversation.actionContinuationState;
 }
@@ -736,8 +785,10 @@ export function addMessage(msg: {
         const pending = conv.pendingActionContinuation;
         const pendingFollowupIntent = classifyRecentActionFollowupIntent(pending.userText);
         const pendingContract = buildActionContract(pending.userText);
+        const pendingNormalizedIntent = normalizeActionIntent(pending.userText);
         const pendingExpectsExecution = pendingFollowupIntent === 'execute'
-          || (pendingContract.applies && pendingContract.kind !== 'none');
+          || (pendingContract.applies && pendingContract.kind !== 'none')
+          || ['client_navigation', 'client_state', 'messaging_read'].includes(pendingNormalizedIntent.kind);
         const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
         if (
           pendingExpectsExecution
@@ -772,6 +823,20 @@ export function addMessage(msg: {
           };
         }
         delete conv.pendingActionContinuation;
+      }
+
+      if (conv.actionContinuationState) {
+        syncConversationActionTaskLedger(db, {
+          conversation: conv,
+          state: conv.actionContinuationState,
+          userText: msg.role === 'user'
+            ? String(msg.content || '')
+            : conv.actionContinuationState.latestInstruction,
+          rootUserMessageId: msg.role === 'user'
+            ? id
+            : conv.actionContinuationState.evidenceMessageId,
+          now,
+        });
       }
     }
   }

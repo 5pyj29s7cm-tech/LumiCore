@@ -1,18 +1,19 @@
-import path from "path";
-import fs from "fs";
-import { spawn, ChildProcess } from "child_process";
 import { readDB, writeDB, flushDB, ensureDatabaseInitialized, isDbDirty, pruneOldData } from "../../db_layer";
+import fs from "fs";
+import path from "path";
+import { spawn, type ChildProcess } from "child_process";
 import { toolRegistry } from "../tools/registry";
 import { registerAllTools } from "../tools/definitions/index";
 import { mcpManager, registerMCPTools } from "../mcp";
 import { scheduler, registerScheduledTasks } from "../scheduler";
-import { runFirstBootExploration, isFirstBootComplete } from "../autonomy/system_explorer";
+import { runFirstBootExploration, isFirstBootComplete, persistFirstBootExploration, type SystemSnapshot } from "../autonomy/system_explorer";
 import { installProfessionAgents } from "../autonomy/profession_templates";
 import bcrypt from "bcryptjs";
 import { getLocalAdminPassword } from "../config/local_identity";
 import { repairCorruptedOrganizationNames } from "../org/db";
 import { startMessagingConnections, stopMessagingConnections } from "./messaging";
 import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
+import { stopGptSovitsRuntime } from "../tts/gptsovits_runtime";
 
 interface BootstrapContext {
   server: any;
@@ -28,19 +29,87 @@ interface BootstrapContext {
   __dirname: string;
 }
 
-function scheduleFirstBootExploration(delayMs = 30000) {
+let firstBootExplorationWorker: ChildProcess | null = null;
+
+function isValidSystemSnapshot(value: unknown): value is SystemSnapshot {
+  const snapshot = value as Partial<SystemSnapshot> | null;
+  return Boolean(
+    snapshot
+    && snapshot.type === 'first_boot'
+    && snapshot.hardware?.hostname
+    && Array.isArray(snapshot.software?.installedApps)
+    && snapshot.filesystem
+    && snapshot.network,
+  );
+}
+
+async function collectFirstBootSnapshotInWorker(runtimeDir: string): Promise<SystemSnapshot> {
+  const workerPath = path.join(runtimeDir, 'system-explorer-worker.mjs');
+  if (!fs.existsSync(workerPath)) {
+    console.warn('[Bootstrap] Packaged system exploration worker unavailable; using the development fallback');
+    return runFirstBootExploration();
+  }
+
+  const outputDir = path.join(process.env.LUMI_DATA_DIR || runtimeDir, 'runtime');
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  const outputPath = path.join(outputDir, `first-boot-exploration-${process.pid}-${Date.now()}.json`);
+  let stderr = '';
+
+  try {
+    const child = spawn(process.execPath, [workerPath, outputPath], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, LUMI_SYSTEM_EXPLORATION_WORKER: '1' },
+    });
+    firstBootExplorationWorker = child;
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', chunk => {
+      if (stderr.length < 16_384) stderr += String(chunk).slice(0, 16_384 - stderr.length);
+    });
+
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('system exploration worker timed out after 120 seconds'));
+      }, 120_000);
+      if (typeof (timeout as any).unref === 'function') (timeout as any).unref();
+      child.once('error', error => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once('exit', (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    });
+    if (exit.code !== 0) {
+      throw new Error(`system exploration worker exited with ${exit.code ?? exit.signal}: ${stderr.trim() || 'no diagnostics'}`);
+    }
+
+    const parsed = JSON.parse(await fs.promises.readFile(outputPath, 'utf8')) as unknown;
+    if (!isValidSystemSnapshot(parsed)) throw new Error('system exploration worker returned an invalid snapshot');
+    return parsed;
+  } finally {
+    firstBootExplorationWorker = null;
+    await fs.promises.rm(outputPath, { force: true }).catch(() => undefined);
+  }
+}
+
+function scheduleFirstBootExploration(runtimeDir: string, delayMs = 30000) {
   const timer = setTimeout(() => {
-    try {
-      if (!isFirstBootComplete()) {
-        console.log('[Bootstrap] First boot detected - running system exploration after server startup...');
-        const snapshot = runFirstBootExploration();
+    if (isFirstBootComplete()) return;
+    console.log('[Bootstrap] First boot detected - running system exploration in an isolated worker...');
+    void collectFirstBootSnapshotInWorker(runtimeDir)
+      .then(snapshot => {
+        if (isFirstBootComplete()) return;
+        persistFirstBootExploration(snapshot);
         console.log(`[Bootstrap] Exploration complete: ${snapshot.hardware.cpus.model}, ${snapshot.hardware.totalMemoryGB}GB RAM, ${snapshot.software.installedApps.length} apps, ${snapshot.filesystem.totalUserFiles} user files`);
         const installed = installProfessionAgents();
         if (installed > 0) console.log(`[Bootstrap] Installed ${installed} profession agents`);
-      }
-    } catch (err) {
-      console.warn('[Bootstrap] System exploration failed:', (err as Error).message);
-    }
+      })
+      .catch((err: Error) => {
+        console.warn('[Bootstrap] System exploration failed:', err.message);
+      });
   }, delayMs);
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
 }
@@ -122,41 +191,9 @@ export async function bootstrap(ctx: BootstrapContext) {
     console.warn('[MCP] Tool registration warning:', err.message);
   });
 
-  // Start GPT-SoVITS API server (optional)
-  let gptSovitsProcess: ChildProcess | null = null;
-  const gptSovitsDir = path.join(__dirname, 'gpt-sovits-src');
-  const pythonExe = path.join(gptSovitsDir, 'venv/Scripts/python.exe');
-  const apiPy = path.join(gptSovitsDir, 'api_v2.py');
-  if (fs.existsSync(pythonExe) && fs.existsSync(apiPy)) {
-    console.log('[GPT-SoVITS] Starting API server...');
-    gptSovitsProcess = spawn(pythonExe, [
-      apiPy,
-      '-a', '127.0.0.1',
-      '-p', '9880',
-      '-c', 'GPT_SoVITS/configs/tts_infer.yaml',
-    ], {
-      cwd: gptSovitsDir,
-      stdio: 'pipe',
-    });
-    gptSovitsProcess.stdout?.on('data', (d: Buffer) => {
-      const line = d.toString().trim();
-      if (line) console.log(`[GPT-SoVITS] ${line}`);
-    });
-    gptSovitsProcess.stderr?.on('data', (d: Buffer) => {
-      const line = d.toString().trim();
-      if (line) console.warn(`[GPT-SoVITS] ${line}`);
-    });
-    gptSovitsProcess.on('error', (err) => {
-      console.warn('[GPT-SoVITS] Process error:', err.message);
-      gptSovitsProcess = null;
-    });
-    gptSovitsProcess.on('exit', (code) => {
-      if (code && code !== 0) console.warn(`[GPT-SoVITS] Exited with code ${code}`);
-      gptSovitsProcess = null;
-    });
-  } else {
-    console.log('[GPT-SoVITS] Not found — TTS will use cloud providers only.');
-  }
+  // GPT-SoVITS is supervised and started on first synthesis request. Keeping
+  // the multi-gigabyte model resident while voice is idle is no longer the
+  // backend bootstrap default.
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
@@ -213,7 +250,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       console.warn('[Org] Failed to install design templates:', err.message);
     });
 
-    scheduleFirstBootExploration();
+    scheduleFirstBootExploration(__dirname);
     schedulePostStartupFlush(5_000);
     schedulePostStartupFlush(30_000);
   });
@@ -224,6 +261,10 @@ export async function bootstrap(ctx: BootstrapContext) {
     if (cleaningUp) return;
     cleaningUp = true;
     console.log('[Shutdown] Cleaning up...');
+    if (firstBootExplorationWorker && firstBootExplorationWorker.exitCode === null) {
+      firstBootExplorationWorker.kill('SIGTERM');
+      firstBootExplorationWorker = null;
+    }
     scheduler.stop();
     try {
       await stopMessagingConnections();
@@ -241,10 +282,7 @@ export async function bootstrap(ctx: BootstrapContext) {
     } catch (err: any) {
       console.warn('[MCP] Disconnect error:', err.message);
     }
-    if (gptSovitsProcess && !gptSovitsProcess.killed) {
-      console.log('[GPT-SoVITS] Stopping API server...');
-      gptSovitsProcess.kill();
-    }
+    stopGptSovitsRuntime();
   };
   process.on('SIGINT', () => { cleanup().then(() => process.exit(0)); });
   process.on('SIGTERM', () => { cleanup().then(() => process.exit(0)); });

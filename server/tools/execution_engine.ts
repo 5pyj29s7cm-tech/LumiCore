@@ -2,6 +2,7 @@ import type { ToolContext, ToolExecutionRecord } from './types';
 import type { ToolRegistry } from './registry';
 import { verifyCapabilityReceipt } from './capability_verification';
 import { decodeToolResult } from './result_envelope';
+import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from './execution_envelope';
 
 const SECRET_ARGUMENT_RE =
   /password|passphrase|passkey|secret|token|api.?key|credential|otp|captcha|verification.?code/i;
@@ -57,6 +58,8 @@ export interface ExecuteToolCallInput {
 export async function executeToolCall(
   input: ExecuteToolCallInput,
 ): Promise<ToolExecutionRecord> {
+  const startedAt = new Date().toISOString();
+  const startedMs = Date.now();
   const requestedArguments = input.arguments || {};
   const preflight = input.preflight?.(input.name, requestedArguments)
     || { allowed: true, arguments: requestedArguments };
@@ -69,6 +72,9 @@ export async function executeToolCall(
   const evidenceBuilder = (input.registry as any)?.buildEvidenceRecord;
   const record: ToolExecutionRecord = {
     id: input.id,
+    taskId: input.context?.taskId,
+    turnId: input.context?.turnId,
+    requestId: input.context?.requestId,
     name: input.name,
     arguments: receiptArguments,
     result: '',
@@ -86,16 +92,28 @@ export async function executeToolCall(
         }
       : undefined,
   };
+  record.idempotencyKey = input.context?.idempotencyKey || toolRecordIdempotencyKey(record);
+  const finalizeRecord = (): ToolExecutionRecord => {
+    record.envelope = buildToolExecutionEnvelope(record, {
+      taskId: input.context?.taskId,
+      turnId: input.context?.turnId,
+      requestId: input.context?.requestId,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs: Math.max(0, Date.now() - startedMs),
+    });
+    return record;
+  };
 
   if (!preflight.allowed) {
     record.error = preflight.reason || 'Tool execution was blocked by preflight validation.';
     record.terminalVerification = verifyCapabilityReceipt(capability, record);
-    return record;
+    return finalizeRecord();
   }
   if (input.context?.isCancelled?.()) {
     record.error = 'Task was cancelled before the tool started.';
     record.terminalVerification = verifyCapabilityReceipt(capability, record);
-    return record;
+    return finalizeRecord();
   }
 
   try {
@@ -121,7 +139,7 @@ export async function executeToolCall(
     record.error = String(error?.message || error || 'Tool execution failed.');
   }
   record.terminalVerification = verifyCapabilityReceipt(capability, record);
-  return record;
+  return finalizeRecord();
 }
 
 /**

@@ -4,6 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { logger } from '../../logger';
+import { SupervisedProcessResourceMonitor } from '../runtime/process_resource_monitor';
 
 export interface VoiceprintEmbeddingInput {
   pcm16Base64?: string;
@@ -28,12 +29,22 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type QueuedRequest = {
+  payload: Record<string, unknown>;
+  timeoutMs: number;
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+};
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SIDECAR_SCRIPT = path.join(__dirname, 'voiceprint_sidecar.py');
 const DEFAULT_TIMEOUT_MS = 45000;
 const UNAVAILABLE_RETRY_MS = 60000;
 const MAX_PCM_BASE64_CHARS = 800000;
+const MAX_CONCURRENT_REQUESTS = Math.max(1, Number(process.env.LUMI_VOICEPRINT_CONCURRENCY) || 2);
+const SIDECAR_IDLE_MS = Math.max(30_000, Number(process.env.LUMI_VOICEPRINT_IDLE_MS) || 5 * 60_000);
+const SIDECAR_MEMORY_BUDGET_BYTES = Math.max(256, Number(process.env.LUMI_VOICEPRINT_MEMORY_BUDGET_MB) || 1_024) * 1024 * 1024;
 let providerCooldownUntil = 0;
 let providerCooldownReason = '';
 
@@ -70,12 +81,35 @@ class SpeechBrainSidecarClient {
   private seq = 0;
   private unavailableUntil = 0;
   private lastError = '';
+  private queue: QueuedRequest[] = [];
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartCount = 0;
+  private resourceMonitor = new SupervisedProcessResourceMonitor({
+    budgetBytes: SIDECAR_MEMORY_BUDGET_BYTES,
+    onBudgetExceeded: snapshot => {
+      const proc = this.proc;
+      if (!proc || proc.killed) return;
+      this.markUnavailable(new Error(`SpeechBrain working set ${snapshot.rssBytes} exceeded budget ${snapshot.budgetBytes}`));
+      this.resourceMonitor.stop();
+      proc.kill();
+    },
+  });
 
   request(payload: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<any> {
     if (Date.now() < this.unavailableUntil) {
       return Promise.reject(new Error(this.lastError || 'SpeechBrain sidecar is temporarily unavailable'));
     }
 
+    this.clearIdleTimer();
+    if (this.pending.size >= MAX_CONCURRENT_REQUESTS) {
+      return new Promise((resolve, reject) => {
+        this.queue.push({ payload, timeoutMs, resolve, reject });
+      });
+    }
+    return this.dispatch(payload, timeoutMs);
+  }
+
+  private dispatch(payload: Record<string, unknown>, timeoutMs: number): Promise<any> {
     this.ensureProcess();
     if (!this.proc || !this.proc.stdin.writable) {
       return Promise.reject(new Error('SpeechBrain sidecar is not writable'));
@@ -88,6 +122,8 @@ class SpeechBrainSidecarClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('SpeechBrain sidecar request timed out'));
+        this.drainQueue();
+        this.scheduleIdleStop();
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.proc?.stdin.write(message, 'utf8', (err) => {
@@ -97,10 +133,37 @@ class SpeechBrainSidecarClient {
             clearTimeout(pending.timer);
             this.pending.delete(id);
             pending.reject(err);
+            this.drainQueue();
+            this.scheduleIdleStop();
           }
         }
       });
     });
+  }
+
+  private drainQueue(): void {
+    while (this.queue.length > 0 && this.pending.size < MAX_CONCURRENT_REQUESTS) {
+      const queued = this.queue.shift()!;
+      this.dispatch(queued.payload, queued.timeoutMs).then(queued.resolve, queued.reject);
+    }
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
+  private scheduleIdleStop(): void {
+    this.clearIdleTimer();
+    if (this.pending.size > 0 || this.queue.length > 0 || !this.proc) return;
+    this.idleTimer = setTimeout(() => {
+      if (this.pending.size === 0 && this.queue.length === 0 && this.proc && !this.proc.killed) {
+        logger.info(`[Voiceprint] Sidecar idle for ${SIDECAR_IDLE_MS}ms; releasing model process.`);
+        this.proc.kill();
+        this.proc = null;
+      }
+    }, SIDECAR_IDLE_MS);
+    this.idleTimer.unref?.();
   }
 
   private ensureProcess(): void {
@@ -113,6 +176,7 @@ class SpeechBrainSidecarClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
+    if (this.proc.pid) this.resourceMonitor.start(this.proc.pid);
 
     const rl = readline.createInterface({ input: this.proc.stdout });
     rl.on('line', (line) => this.handleLine(line));
@@ -125,6 +189,7 @@ class SpeechBrainSidecarClient {
 
     this.proc.on('error', (err) => this.markUnavailable(err));
     this.proc.on('exit', (code, signal) => {
+      this.resourceMonitor.stop();
       this.proc = null;
       const err = new Error(`SpeechBrain sidecar exited (${code ?? signal ?? 'unknown'})`);
       for (const [id, pending] of this.pending.entries()) {
@@ -133,6 +198,7 @@ class SpeechBrainSidecarClient {
         this.pending.delete(id);
       }
       if (code !== 0 && code !== null) this.markUnavailable(err);
+      else this.scheduleIdleStop();
     });
   }
 
@@ -151,17 +217,40 @@ class SpeechBrainSidecarClient {
     clearTimeout(pending.timer);
     this.pending.delete(id);
     pending.resolve(data);
+    this.restartCount = 0;
+    this.drainQueue();
+    this.scheduleIdleStop();
   }
 
   private markUnavailable(err: Error): void {
     this.lastError = err.message;
-    this.unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
+    this.restartCount += 1;
+    this.unavailableUntil = Date.now() + Math.max(
+      UNAVAILABLE_RETRY_MS,
+      Math.min(5 * 60_000, 2 ** Math.min(this.restartCount, 8) * 1_000),
+    );
     for (const [id, pending] of this.pending.entries()) {
       clearTimeout(pending.timer);
       pending.reject(err);
       this.pending.delete(id);
     }
+    for (const queued of this.queue.splice(0)) queued.reject(err);
     logger.warn(`[Voiceprint] SpeechBrain sidecar unavailable: ${err.message}`);
+  }
+
+  status() {
+    return {
+      running: Boolean(this.proc && !this.proc.killed),
+      pid: this.proc?.pid || null,
+      inFlight: this.pending.size,
+      queueLength: this.queue.length,
+      concurrency: MAX_CONCURRENT_REQUESTS,
+      idleTimeoutMs: SIDECAR_IDLE_MS,
+      restartCount: this.restartCount,
+      unavailableUntil: this.unavailableUntil ? new Date(this.unavailableUntil).toISOString() : '',
+      lastError: this.lastError,
+      resources: this.resourceMonitor.status(),
+    };
   }
 }
 
@@ -170,6 +259,30 @@ let client: SpeechBrainSidecarClient | null = null;
 function getClient(): SpeechBrainSidecarClient {
   if (!client) client = new SpeechBrainSidecarClient();
   return client;
+}
+
+export function getVoiceprintRuntimeStatus() {
+  return client?.status() || {
+    running: false,
+    pid: null,
+    inFlight: 0,
+    queueLength: 0,
+    concurrency: MAX_CONCURRENT_REQUESTS,
+    idleTimeoutMs: SIDECAR_IDLE_MS,
+    restartCount: 0,
+    unavailableUntil: '',
+    lastError: '',
+    resources: {
+      pid: null,
+      rssBytes: 0,
+      privateBytes: 0,
+      peakRssBytes: 0,
+      budgetBytes: SIDECAR_MEMORY_BUDGET_BYTES,
+      budgetExceededCount: 0,
+      sampledAt: '',
+      lastError: '',
+    },
+  };
 }
 
 function sanitizeEmbedding(value: unknown): number[] {

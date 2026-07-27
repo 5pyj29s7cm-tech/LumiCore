@@ -26,6 +26,7 @@ import { logger } from '../../logger';
 import type { Request, Response } from 'express';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../tools/types';
+import { getScopedPreferredLLM } from '../llm/user_preferences';
 
 // Track active transports per session
 const transports: Map<string, SSEServerTransport> = new Map();
@@ -57,10 +58,25 @@ export function createLumiMcpServer(llmGetters?: {
   getOpenAI?: () => any;
   getAnthropic?: () => any;
   getQwen?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
 }, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void): McpServer {
   const g = llmGetters || {};
   const tr = toolReg || toolRegistry;
   const bc = broadcast || (() => {});
+  const resolveMcpLLM = () => {
+    const preferred = getScopedPreferredLLM('mcp_remote');
+    return {
+      provider: (process.env.LUMI_MCP_LLM_PROVIDER || preferred.provider) as any,
+      model: process.env.LUMI_MCP_LLM_MODEL || preferred.model,
+      userId: 'mcp_remote',
+    };
+  };
   setOfficeBroadcast(bc);
   const mcp = new McpServer({
     name: 'lumi-mcp',
@@ -81,6 +97,7 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ message, personalityId }) => {
       try {
+        const chatLLM = resolveMcpLLM();
         bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'received', message: message.slice(0, 200) });
         bc('agent:status', { status: 'thinking', agentName: 'Lumi' });
         const pid = personalityId || 'lumi';
@@ -118,10 +135,8 @@ export function createLumiMcpServer(llmGetters?: {
           messages,
           tr,
           {
-            provider: 'deepseek',
-            model: 'deepseek-v4-pro',
+            ...chatLLM,
             maxTokens: 2048,
-            userId: 'mcp_remote',
           },
           (record) => {
             upsertCompletedToolRecord(mcpToolRecords, record);
@@ -141,6 +156,13 @@ export function createLumiMcpServer(llmGetters?: {
           g.getQwen || (() => null),
           (chunk) => bufferedChunks.push(chunk),
           { toolPolicy: personality.toolPolicy, source: 'mcp_chat' },
+          g.getOllama,
+          g.getLmStudio,
+          g.getArk,
+          g.getXiaomi,
+          g.getKimi,
+          g.getGlm,
+          g.getRelay,
         );
 
         const queueMemoryExtraction = (assistantResponse: string) => {
@@ -155,7 +177,7 @@ export function createLumiMcpServer(llmGetters?: {
             try {
               const { extractMemories } = await import('../memory/extractor');
               const result = await extractMemories(
-                { userMessage: message, assistantResponse, existingMemories: existingContents, provider: 'deepseek', model: 'deepseek-v4-pro', userId: 'mcp_remote' },
+                { userMessage: message, assistantResponse, existingMemories: existingContents, ...chatLLM },
                 gDeep, gGem, gOAI, gAnt, gQw,
               );
               for (const mem of result.memories) {
@@ -499,7 +521,16 @@ export function createLumiMcpServer(llmGetters?: {
           limit,
           getDeepSeek: g.getDeepSeek || (() => null),
           getGemini: g.getGemini || (() => null),
+          getOpenAI: g.getOpenAI,
+          getAnthropic: g.getAnthropic,
           getQwen: g.getQwen || (() => null),
+          getOllama: g.getOllama,
+          getLmStudio: g.getLmStudio,
+          getArk: g.getArk,
+          getXiaomi: g.getXiaomi,
+          getKimi: g.getKimi,
+          getGlm: g.getGlm,
+          getRelay: g.getRelay,
         });
         return {
           content: [{
@@ -691,6 +722,7 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ task, targetAgentId }) => {
       try {
+        const routeLLM = resolveMcpLLM();
         bc('mcp:activity', { device: 'xiaozhi', action: 'route_task', status: 'received', task: task.slice(0, 200) });
 
         const complexity = classifyComplexity(task, { userId: 'mcp_remote', personalityId: 'lumi' });
@@ -707,10 +739,19 @@ export function createLumiMcpServer(llmGetters?: {
 
           const result = await runWithTools(
             messages, tr,
-            { provider: 'deepseek', model: 'deepseek-v4-pro', maxTokens: 2048, userId: 'mcp_remote' },
+            { ...routeLLM, maxTokens: 2048 },
             undefined, 2,
             g.getDeepSeek || (() => null), g.getGemini || (() => null), g.getOpenAI || (() => null),
             g.getAnthropic || (() => null), g.getQwen || (() => null),
+            undefined,
+            undefined,
+            g.getOllama,
+            g.getLmStudio,
+            g.getArk,
+            g.getXiaomi,
+            g.getKimi,
+            g.getGlm,
+            g.getRelay,
           );
           const finalized = finalizeLumiResponse({
             taskText: task,
@@ -762,7 +803,7 @@ export function createLumiMcpServer(llmGetters?: {
 
         const subTasks = await decomposeTask(
           task,
-          { provider: 'deepseek', model: 'deepseek-v4-pro' },
+          routeLLM,
           { userId: 'mcp_remote', personalityId: 'lumi' },
           { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
         );
@@ -772,7 +813,7 @@ export function createLumiMcpServer(llmGetters?: {
         const workflowResult = await executeWorkflow(
           assignments,
           { userId: 'mcp_remote', personalityId: 'lumi', rootTaskText: task },
-          { provider: 'deepseek', model: 'deepseek-v4-pro' },
+          routeLLM,
           { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
           [],
           (record) => {
@@ -782,7 +823,7 @@ export function createLumiMcpServer(llmGetters?: {
 
         const aggregated = await aggregateWithLLM(
           workflowResult, task,
-          { provider: 'deepseek', model: 'deepseek-v4-pro' },
+          routeLLM,
           { getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
         );
         const finalized = finalizeLumiResponse({

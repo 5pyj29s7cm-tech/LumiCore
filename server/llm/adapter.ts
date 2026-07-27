@@ -833,13 +833,12 @@ export async function analyzeScreen(
   let provider = config.provider;
   let model = config.model;
 
-  // Qwen and Ark have specific vision models — auto-switch when using chat models
+  // World-model calls respect the exact configured model. Silent substitution
+  // can route data to an endpoint the user did not select.
   if (provider === 'qwen' && !model.includes('vl')) {
-    // qwen-plus/qwen-max/qwen-turbo → qwen-vl-max for vision
-    model = 'qwen-vl-max';
+    throw new Error(`Configured Qwen model '${model}' is not a vision model. Choose a Qwen-VL model in Settings > World Model.`);
   } else if (provider === 'ark' && !model.includes('vision')) {
-    // doubao-1-5-pro/lite → doubao-1-5-vision-pro for vision
-    model = 'doubao-1-5-vision-pro-32k';
+    throw new Error(`Configured Ark model '${model}' is not a vision model. Choose an Ark vision model in Settings > World Model.`);
   } else if (provider === 'deepseek') {
     throw new Error('DeepSeek does not support visual perception. Choose a visual-perception model in Settings > World Model.');
   }

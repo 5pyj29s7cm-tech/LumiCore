@@ -11,6 +11,7 @@ import { getRecentWorkflows } from "../skills/worklog";
 import { loadKeys } from "../config/keys";
 import { requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { createAgentForSkill } from "../agents/skill_agent";
+import { getScopedPreferredLLM } from "../llm/user_preferences";
 
 const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => Promise<any>) =>
   (req: Request, res: Response, next: NextFunction) =>
@@ -34,6 +35,13 @@ export function mountSkillRoutes(
     getOpenAI?: () => any;
     getAnthropic?: () => any;
     getQwen?: () => any;
+    getOllama?: () => any;
+    getLmStudio?: () => any;
+    getArk?: () => any;
+    getXiaomi?: () => any;
+    getKimi?: () => any;
+    getGlm?: () => any;
+    getRelay?: () => any;
   },
   io: { emit: (event: string, data: any) => void },
 ) {
@@ -114,6 +122,7 @@ export function mountSkillRoutes(
     try {
       const { description, provider, model } = req.body;
       const dc = resolveDomain(req.user!);
+      const preferred = getScopedPreferredLLM(req.user!.uid, { domain: dc.domain, orgId: dc.orgId });
 
       let workflows;
       if (req.body.workflowIds) {
@@ -127,11 +136,13 @@ export function mountSkillRoutes(
         {
           description,
           workflows,
-          provider: provider || 'deepseek',
-          model: model || 'deepseek-v4-flash',
+          provider: provider || preferred.provider,
+          model: model || preferred.model,
           userId: req.user!.uid,
         },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
+        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
 
       if (result.success) {

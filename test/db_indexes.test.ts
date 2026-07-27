@@ -47,6 +47,37 @@ function readConversationColumns(): Promise<string[]> {
   });
 }
 
+function readActionTaskColumns(): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const database = new sqlite3.Database(getDataPath('lumi.db'));
+    database.all(
+      'PRAGMA table_info(conversation_action_tasks)',
+      (error, rows: Array<{ name: string }>) => {
+        database.close();
+        if (error) reject(error);
+        else resolve(rows.map(row => row.name));
+      },
+    );
+  });
+}
+
+function readActionLedgerRows(conversationId: string): Promise<{ taskCount: number; receiptCount: number }> {
+  return new Promise((resolve, reject) => {
+    const database = new sqlite3.Database(getDataPath('lumi.db'));
+    database.get(
+      `SELECT
+        (SELECT COUNT(*) FROM conversation_action_tasks WHERE conversationId = ?) AS taskCount,
+        (SELECT COUNT(*) FROM conversation_action_receipts WHERE conversationId = ?) AS receiptCount`,
+      [conversationId, conversationId],
+      (error, row: { taskCount: number; receiptCount: number }) => {
+        database.close();
+        if (error) reject(error);
+        else resolve(row);
+      },
+    );
+  });
+}
+
 function readConversationSummaryState(conversationId: string): Promise<{
   summaryChain: string;
   lastSummaryMessageCount: number;
@@ -88,6 +119,8 @@ describe('SQLite persistence indexes', () => {
       'idx_memories_user_type_tier',
       'idx_org_memberships_user_status',
       'idx_org_kb_articles_org_category',
+      'idx_action_tasks_conversation_updated',
+      'idx_action_receipts_idempotency',
     ]));
   });
 
@@ -124,6 +157,12 @@ describe('SQLite persistence indexes', () => {
   });
 
   it('persists the durable task identity and terminal receipts across an atomic snapshot write', async () => {
+    expect(await readActionTaskColumns()).toEqual(expect.arrayContaining([
+      'parentTaskId',
+      'activeRequestId',
+      'completionSource',
+      'context',
+    ]));
     const userId = `action-continuation-persistence-${Date.now()}-${Math.random()}`;
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
     addMessage({
@@ -160,5 +199,9 @@ describe('SQLite persistence indexes', () => {
       receipts: [{ name: 'desktop_open', outcome: 'success' }],
     });
     expect(JSON.parse(persisted.actionContinuationState).taskId).toMatch(/^task_/);
+    expect(await readActionLedgerRows(conversation.id)).toMatchObject({
+      taskCount: 1,
+      receiptCount: 1,
+    });
   });
 });

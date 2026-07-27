@@ -3,6 +3,7 @@ import type { ToolContext } from '../types';
 import { readDB, writeDB } from '../../../db_layer';
 import { validateExternalCommand } from '../../agents/external_runtime';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { getScopedPreferredLLM } from '../../llm/user_preferences';
 
 function normalizeStringList(value: unknown, max = 20): string[] {
   const raw = Array.isArray(value)
@@ -37,7 +38,10 @@ async function agentCreate(args: Record<string, any>, context?: ToolContext): Pr
   const skillTags = normalizeStringList(args.skillTags);
   const description = (args.description || '').trim();
   const executionMode = args.executionMode || 'lumi';
-  const modelPreference = args.model || 'deepseek-v4-flash';
+  const modelPreference = args.model || getScopedPreferredLLM(context?.userId || 'agent_create', {
+    domain: context?.domain,
+    orgId: context?.orgId,
+  }).model;
   const knowledgeDomains = normalizeStringList(args.knowledgeDomains);
   const autonomyLevel = args.autonomyLevel || 'reactive';
   const runtime = args.runtime === 'external' ? 'external' : 'internal';
@@ -202,7 +206,7 @@ export function registerAgentTools(registry: ToolRegistry): void {
         skillTags: { type: 'array', items: { type: 'string' }, description: 'Specific skill tags for task matching (e.g. ["python", "data-analysis"])' },
         description: { type: 'string', description: 'What this agent specializes in — used as its internal config' },
         executionMode: { type: 'string', description: 'Thinking mode: lumi (default), scholar, founder, or zen' },
-        model: { type: 'string', description: 'Preferred LLM model (default: deepseek-v4-flash)' },
+        model: { type: 'string', description: 'Preferred LLM model (default: inherit the current user selection)' },
         knowledgeDomains: { type: 'array', items: { type: 'string' }, description: 'Knowledge domains for RAG routing' },
         autonomyLevel: { type: 'string', description: 'reactive (on-demand only), scheduled (periodic checks), or autonomous (self-triggering)' },
         runtime: { type: 'string', description: '"internal" (LLM-powered, default) or "external" (CLI process like OpenClaw/Hermes)' },

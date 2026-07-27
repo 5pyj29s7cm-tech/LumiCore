@@ -5,6 +5,7 @@ import {
   type OperationMode,
 } from './operation_modes';
 import { hasVisionIntent } from './vision_routing';
+import { normalizeActionIntent } from './normalized_action_intent';
 
 interface IntentGrammarRule {
   name: string;
@@ -247,6 +248,7 @@ function hasExplicitActionRequest(text: string): boolean {
 export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
+  if (normalizeActionIntent(normalized).kind === 'correction_explanation') return true;
   if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return true;
   // A negated authorization is feedback about the preceding action, never a
   // fresh command. Keep this semantic and verb-based so corrections do not
@@ -353,6 +355,9 @@ function hasExternalDesktopOrTeamExecutionIntent(text: string): boolean {
 export function hasExplicitToolIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  const canonical = normalizeActionIntent(normalized);
+  if (canonical.kind === 'messaging_read' || canonical.kind === 'messaging_send') return true;
+  if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_TOOL_INTENT_RULES)) return true;
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
@@ -361,6 +366,8 @@ export function hasExplicitToolIntent(text: string): boolean {
 export function hasClientActionIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  const canonical = normalizeActionIntent(normalized);
+  if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
@@ -373,6 +380,8 @@ export function hasClientActionIntent(text: string): boolean {
 export function hasClientActionOnlyIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  const canonical = normalizeActionIntent(normalized);
+  if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (hasExternalDesktopOrTeamExecutionIntent(normalized)) return false;
@@ -409,6 +418,7 @@ export function shouldAllowToolUseForTurn(text: string, source?: string, operati
 
 export function traceToolIntentDecision(text: string, source?: string, operationMode?: string): ToolIntentDecisionTrace {
   const normalized = text.trim();
+  const canonical = normalizeActionIntent(normalized);
   const mode = normalizeOperationMode(operationMode);
   const requestedMode = normalized ? detectRequestedOperationMode(normalized) : null;
   const matchedRules: ToolIntentMatchedRule[] = [];
@@ -417,10 +427,12 @@ export function traceToolIntentDecision(text: string, source?: string, operation
 
   const clientStateInspectionRequest = normalized ? CLIENT_STATE_INSPECTION_REQUEST.test(normalized) : false;
   const correctionOrExplanation = normalized
-    ? isUserCorrectionOrExplanationQuestion(normalized)
+    ? canonical.kind === 'correction_explanation' || isUserCorrectionOrExplanationQuestion(normalized)
     : false;
   const informationOnlyQuestion = normalized
-    ? correctionOrExplanation || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest)
+    ? correctionOrExplanation
+      || canonical.kind === 'status_query'
+      || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest)
     : false;
   const externalDesktopOrTeamExecution = normalized
     ? hasExternalDesktopOrTeamExecutionIntent(normalized)
@@ -432,9 +444,14 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const diagnosticRules = diagnosticOrRepair
     ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern')
     : [];
-  const structuredToolRules = !informationOnlyQuestion && normalized
+  const matchedStructuredToolRules = !informationOnlyQuestion && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_TOOL_INTENT_RULES)
     : [];
+  const structuredToolRules = canonical.kind === 'messaging_read'
+    ? ['messaging-read']
+    : canonical.kind === 'messaging_send'
+      ? ['messaging-send']
+      : matchedStructuredToolRules;
   const legacyToolRules = !informationOnlyQuestion && normalized
     ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
     : [];
@@ -463,12 +480,22 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   if (visionIntent) pushRule(matchedRules, 'vision', 'vision-intent');
 
   const explicitToolIntent = structuredToolRules.length > 0 || legacyToolRules.length > 0;
-  const clientActionIntent = Boolean(requestedMode) || structuredClientRules.length > 0 || clientActionRules.length > 0;
+  const clientActionIntent = canonical.kind === 'client_navigation'
+    || canonical.kind === 'client_state'
+    || Boolean(requestedMode)
+    || structuredClientRules.length > 0
+    || clientActionRules.length > 0;
   const pureOperationModeSwitch = Boolean(
     requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode),
   );
   const clientActionOnlyIntent = !externalDesktopOrTeamExecution
-    && (pureOperationModeSwitch || structuredClientRules.length > 0 || clientActionOnlyRules.length > 0);
+    && (
+      canonical.kind === 'client_navigation'
+      || canonical.kind === 'client_state'
+      || pureOperationModeSwitch
+      || structuredClientRules.length > 0
+      || clientActionOnlyRules.length > 0
+    );
   const autonomousTask = autonomousTaskRules.length > 0;
 
   let allowToolUse = false;

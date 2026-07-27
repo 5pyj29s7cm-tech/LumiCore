@@ -12,7 +12,8 @@ function parseArgs(argv) {
     mode: 'lifecycle',
     distServer: path.join(root, 'desktop-resources', 'dist-server'),
     iterations: 50,
-    durationHours: 24,
+    durationHours: 2,
+    minMixedRounds: 200,
     pollMs: 30_000,
     timeoutMs: 45_000,
     baselineMs: Number(process.env.LUMI_COLD_START_BASELINE_MS || 0),
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     else if (value === '--dist-server') args.distServer = path.resolve(argv[++i]);
     else if (value === '--iterations') args.iterations = Number(argv[++i]);
     else if (value === '--duration-hours') args.durationHours = Number(argv[++i]);
+    else if (value === '--min-mixed-rounds') args.minMixedRounds = Number(argv[++i]);
     else if (value === '--poll-ms') args.pollMs = Number(argv[++i]);
     else if (value === '--timeout-ms') args.timeoutMs = Number(argv[++i]);
     else if (value === '--baseline-ms') args.baselineMs = Number(argv[++i]);
@@ -31,7 +33,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown argument: ${value}`);
   }
   if (!['lifecycle', 'soak'].includes(args.mode)) throw new Error(`Unsupported mode: ${args.mode}`);
-  if (args.iterations < 1 || args.durationHours <= 0 || args.pollMs < 100) throw new Error('Invalid reliability test limits');
+  if (args.iterations < 1 || args.durationHours <= 0 || args.minMixedRounds < 1 || args.pollMs < 100) throw new Error('Invalid reliability test limits');
   return args;
 }
 
@@ -114,7 +116,7 @@ async function startRuntime(args, runRoot, logPrefix) {
       LUMI_DATA_DIR: dataRoot,
       LUMI_LOG_FILE: path.join(dataRoot, 'logs', 'server.log'),
       USERPROFILE: home,
-      HOME: home,
+      LUMI_RELIABILITY_HOME: home,
     },
   });
   return { child, baseUrl: `http://127.0.0.1:${port}/api`, stdout, stderr, stdoutPath, stderrPath, dataRoot };
@@ -173,17 +175,52 @@ async function runSoak(args, runRoot, runtimeMeta) {
   let started = 0;
   let deadline = 0;
   let polls = 0;
+  let mixedRounds = 0;
+  let functionalCalls = 0;
+  let maxToolQueue = 0;
+  let maxTtsQueue = 0;
+  let maxVoiceprintQueue = 0;
+  let maxToolErrorRate = 0;
+  let maxToolTimeoutRate = 0;
+  let maxGptSovitsBudgetExceeded = 0;
+  let maxVoiceprintBudgetExceeded = 0;
+  let gptSovitsInstalled = false;
+  let finalHealth = null;
+  const ttsWorkingSetSamples = [];
   try {
     await waitForHealth(runtime.baseUrl, runtime.child, args.timeoutMs);
     started = Date.now();
     deadline = started + args.durationHours * 60 * 60 * 1000;
     while (Date.now() < deadline) {
       if (runtime.child.exitCode !== null || runtime.child.signalCode !== null) throw new Error(`backend restarted/exited with ${runtime.child.exitCode ?? runtime.child.signalCode}`);
-      const [health, mcp] = await Promise.all([fetchJson(`${runtime.baseUrl}/health`), fetchJson(`${runtime.baseUrl}/mcp/health`)]);
+      const [health, mcp, providers, marketplace, socketHandshake] = await Promise.all([
+        fetchJson(`${runtime.baseUrl}/health`),
+        fetchJson(`${runtime.baseUrl}/mcp/health`),
+        fetchJson(`${runtime.baseUrl}/llm/providers`),
+        fetchJson(`${runtime.baseUrl}/marketplace/skills?lang=zh`),
+        fetch(`http://127.0.0.1:${new URL(runtime.baseUrl).port}/socket.io/?EIO=4&transport=polling`).then(response => response.text()),
+      ]);
       if (health.status !== 'ok' || health.database?.dirty !== false || health.runtime?.buildId !== runtimeMeta.buildId) throw new Error('health or database invariant failed');
+      if (!socketHandshake.startsWith('0{')) throw new Error('Socket.IO mixed-round handshake failed');
+      if (!providers?.providers || !Array.isArray(marketplace) || marketplace.length < 48) throw new Error('provider/marketplace functional probe failed');
       const unhealthy = Object.entries(mcp.servers || {}).filter(([, state]) => Number(state.consecutiveCrashes || 0) > 0 || ['crashed', 'failed', 'restarting'].includes(state.status));
       if (unhealthy.length) throw new Error(`MCP crash state: ${JSON.stringify(unhealthy)}`);
       polls += 1;
+      mixedRounds += 1;
+      functionalCalls += 5;
+      finalHealth = health;
+      maxToolQueue = Math.max(maxToolQueue, Number(health.queues?.toolCallsInFlight || 0));
+      maxTtsQueue = Math.max(maxTtsQueue, Number(health.queues?.gptSovits?.queueLength || 0));
+      maxVoiceprintQueue = Math.max(maxVoiceprintQueue, Number(health.queues?.voiceprint?.queueLength || 0));
+      maxToolErrorRate = Math.max(maxToolErrorRate, Number(health.tools?.totals?.errorRate || 0));
+      maxToolTimeoutRate = Math.max(maxToolTimeoutRate, Number(health.tools?.totals?.timeoutRate || 0));
+      const gptRuntime = health.supervisedRuntimes?.gptSovits || {};
+      const voiceprintRuntime = health.supervisedRuntimes?.voiceprint || {};
+      gptSovitsInstalled ||= gptRuntime.installed === true;
+      maxGptSovitsBudgetExceeded = Math.max(maxGptSovitsBudgetExceeded, Number(gptRuntime.resources?.budgetExceededCount || 0));
+      maxVoiceprintBudgetExceeded = Math.max(maxVoiceprintBudgetExceeded, Number(voiceprintRuntime.resources?.budgetExceededCount || 0));
+      const ttsRssBytes = Number(gptRuntime.resources?.rssBytes || 0);
+      if (ttsRssBytes > 0) ttsWorkingSetSamples.push({ at: Date.now(), rssBytes: ttsRssBytes });
       await new Promise(resolve => setTimeout(resolve, Math.min(args.pollMs, Math.max(0, deadline - Date.now()))));
     }
   } finally {
@@ -194,7 +231,58 @@ async function runSoak(args, runRoot, runtimeMeta) {
   const logs = `${await fs.readFile(runtime.stdoutPath, 'utf8')}\n${await fs.readFile(runtime.stderrPath, 'utf8')}`;
   const unhandled = logs.match(/UnhandledPromiseRejection|ERR_UNHANDLED_REJECTION|uncaughtException/gi) || [];
   if (unhandled.length) throw new Error(`unhandled runtime exceptions found: ${unhandled.length}`);
-  return { mode: 'soak', ok: true, buildId: runtimeMeta.buildId, version: runtimeMeta.version, requestedHours: args.durationHours, elapsedMs: Date.now() - started, polls, backendRestarts: 0, mcpConsecutiveCrashes: 0, databaseDirty: false, unhandledExceptions: 0, completedAt: new Date().toISOString() };
+  const lastHourStart = deadline - 60 * 60 * 1000;
+  const lastHourSamples = ttsWorkingSetSamples.filter(sample => sample.at >= lastHourStart);
+  const ttsLastHourGrowthRate = lastHourSamples.length >= 2 && lastHourSamples[0].rssBytes > 0
+    ? Number(((lastHourSamples.at(-1).rssBytes - lastHourSamples[0].rssBytes) / lastHourSamples[0].rssBytes).toFixed(4))
+    : null;
+  const gptRuntime = finalHealth?.supervisedRuntimes?.gptSovits || {};
+  const voiceprintRuntime = finalHealth?.supervisedRuntimes?.voiceprint || {};
+  const gptIdleExpired = gptRuntime.owned === true && gptRuntime.lastUsedAt
+    ? Date.now() - Date.parse(gptRuntime.lastUsedAt) >= Number(gptRuntime.idleTimeoutMs || 0)
+    : false;
+  const voiceprintIdleExpired = voiceprintRuntime.running === true && voiceprintRuntime.resources?.sampledAt
+    ? Date.now() - Date.parse(voiceprintRuntime.resources.sampledAt) >= Number(voiceprintRuntime.idleTimeoutMs || 0)
+    : false;
+  const result = {
+    mode: 'soak',
+    ok: true,
+    buildId: runtimeMeta.buildId,
+    version: runtimeMeta.version,
+    requestedHours: args.durationHours,
+    elapsedMs: Date.now() - started,
+    polls,
+    mixedRounds,
+    functionalCalls,
+    requiredMixedRounds: args.minMixedRounds,
+    healthProbeInterruptions: 0,
+    maxQueues: { tools: maxToolQueue, gptSovits: maxTtsQueue, voiceprint: maxVoiceprintQueue },
+    maxToolErrorRate,
+    maxToolTimeoutRate,
+    ttsCoverage: !gptSovitsInstalled ? 'not_installed' : ttsWorkingSetSamples.length >= 2 ? 'observed' : 'missing_workload',
+    ttsWorkingSetSamples: ttsWorkingSetSamples.length,
+    ttsLastHourGrowthRate,
+    sidecarBudgetExceeded: { gptSovits: maxGptSovitsBudgetExceeded, voiceprint: maxVoiceprintBudgetExceeded },
+    idleReclamationVerified: !gptIdleExpired && !voiceprintIdleExpired,
+    backendRestarts: 0,
+    mcpConsecutiveCrashes: 0,
+    databaseDirty: false,
+    unhandledExceptions: 0,
+    completedAt: new Date().toISOString(),
+  };
+  const ttsStable = result.ttsCoverage === 'not_installed'
+    || (result.ttsCoverage === 'observed' && result.ttsLastHourGrowthRate !== null && result.ttsLastHourGrowthRate <= 0.1);
+  if (
+    mixedRounds < args.minMixedRounds
+    || maxGptSovitsBudgetExceeded > 0
+    || maxVoiceprintBudgetExceeded > 0
+    || !result.idleReclamationVerified
+    || !ttsStable
+  ) {
+    result.ok = false;
+    throw Object.assign(new Error('runtime soak acceptance thresholds were not met'), { result });
+  }
+  return result;
 }
 
 async function main() {

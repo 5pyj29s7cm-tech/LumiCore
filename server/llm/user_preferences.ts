@@ -15,10 +15,14 @@ export type UserLLMProvider =
   | 'lmstudio'
   | 'auto';
 
+export type CloudUserLLMProvider = Exclude<UserLLMProvider, 'ollama' | 'lmstudio' | 'auto'>;
+
 export interface UserLLMPrefs {
   provider: UserLLMProvider;
   model: string;
   models: Record<string, string>;
+  autoFallbackProvider: CloudUserLLMProvider;
+  autoFallbackModel: string;
   source: 'personal';
 }
 
@@ -53,6 +57,9 @@ const VALID_PROVIDERS = new Set<UserLLMProvider>([
   'lmstudio',
   'auto',
 ]);
+const CLOUD_PROVIDERS = new Set<CloudUserLLMProvider>([
+  'deepseek', 'qwen', 'openai', 'gemini', 'anthropic', 'ark', 'xiaomi', 'kimi', 'glm', 'relay',
+]);
 
 function normalizeProvider(value: unknown): UserLLMProvider {
   return typeof value === 'string' && VALID_PROVIDERS.has(value as UserLLMProvider)
@@ -69,6 +76,12 @@ function normalizeModels(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .filter(([, model]) => typeof model === 'string' && model.trim())
     .map(([provider, model]) => [provider, String(model).trim().slice(0, 200)]));
+}
+
+function normalizeCloudFallback(value: unknown): CloudUserLLMProvider {
+  return typeof value === 'string' && CLOUD_PROVIDERS.has(value as CloudUserLLMProvider)
+    ? value as CloudUserLLMProvider
+    : 'deepseek';
 }
 
 function parsePrefsRow(key: string): any {
@@ -92,10 +105,20 @@ function resolvePrefs(raw: any): UserLLMPrefs {
   const rawModels = normalizeModels(raw?.models);
   const model = normalizeLegacyModel(provider, rawModels[provider] || DEFAULT_MODELS[provider]);
   const models = { ...rawModels, [provider]: model };
+  const autoFallbackProvider = CLOUD_PROVIDERS.has(provider as CloudUserLLMProvider)
+    ? provider as CloudUserLLMProvider
+    : normalizeCloudFallback(raw?.autoFallbackProvider);
+  const autoFallbackModel = normalizeLegacyModel(
+    autoFallbackProvider,
+    String(raw?.autoFallbackModel || models[autoFallbackProvider] || DEFAULT_MODELS[autoFallbackProvider]),
+  );
+  models[autoFallbackProvider] = autoFallbackModel;
   return {
     provider,
     model,
     models,
+    autoFallbackProvider,
+    autoFallbackModel,
     source: 'personal',
   };
 }
@@ -106,7 +129,13 @@ export function getUserPreferredLLM(userId: string): UserLLMPrefs {
 
 export function upsertUserPreferredLLM(
   userId: string,
-  input: { provider?: string; model?: string; models?: Record<string, string> },
+  input: {
+    provider?: string;
+    model?: string;
+    models?: Record<string, string>;
+    autoFallbackProvider?: string;
+    autoFallbackModel?: string;
+  },
 ): UserLLMPrefs {
   if (!isUserLLMProvider(input.provider)) throw new Error(`Unsupported reasoning provider: ${input.provider || ''}`);
   const current = getUserPreferredLLM(userId || 'anonymous');
@@ -118,7 +147,30 @@ export function upsertUserPreferredLLM(
   const requestedModel = String(input.model || models[provider] || DEFAULT_MODELS[provider]).trim().slice(0, 200);
   if (!requestedModel) throw new Error('A reasoning model name is required');
   models[provider] = requestedModel;
-  const payload = { provider, models, updatedAt: new Date().toISOString() };
+  const requestedFallback = input.autoFallbackProvider
+    ? normalizeCloudFallback(input.autoFallbackProvider)
+    : null;
+  const autoFallbackProvider = requestedFallback
+    || (CLOUD_PROVIDERS.has(provider as CloudUserLLMProvider)
+      ? provider as CloudUserLLMProvider
+      : provider === 'auto' && CLOUD_PROVIDERS.has(current.provider as CloudUserLLMProvider)
+        ? current.provider as CloudUserLLMProvider
+        : current.autoFallbackProvider);
+  const autoFallbackModel = String(
+    input.autoFallbackModel
+    || models[autoFallbackProvider]
+    || current.autoFallbackModel
+    || DEFAULT_MODELS[autoFallbackProvider],
+  ).trim().slice(0, 200);
+  if (!autoFallbackModel) throw new Error('An automatic-mode fallback model is required');
+  models[autoFallbackProvider] = autoFallbackModel;
+  const payload = {
+    provider,
+    models,
+    autoFallbackProvider,
+    autoFallbackModel,
+    updatedAt: new Date().toISOString(),
+  };
   const db = readDB();
   const key = `llm_prefs_${userId || 'anonymous'}`;
   if (!db.settings) (db as any).settings = [];

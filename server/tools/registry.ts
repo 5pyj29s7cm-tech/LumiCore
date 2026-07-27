@@ -23,6 +23,8 @@ import {
   projectToolDeclarationForRouting,
   type CapabilityRoutingProjection,
 } from './capability_projection';
+import crypto from 'node:crypto';
+import { beginToolMetric } from '../runtime/tool_metrics';
 
 export {
   inferCapabilityFamily,
@@ -33,6 +35,45 @@ export {
 export type { CapabilityRoutingProjection };
 
 export type EffectiveSecurity = { level: SecurityLevel; reason: string };
+
+type ExternalCommitAttempt = {
+  state: 'running' | 'verified' | 'unknown';
+  promise?: Promise<string>;
+  result?: string;
+  expiresAt: number;
+};
+
+const externalCommitAttempts = new Map<string, ExternalCommitAttempt>();
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map(key => [
+    key,
+    stableValue((value as Record<string, unknown>)[key]),
+  ]));
+}
+
+function executionIdempotencyKey(name: string, args: Record<string, any>, context?: ToolContext): string {
+  if (context?.idempotencyKey) return context.idempotencyKey;
+  return crypto.createHash('sha256').update(JSON.stringify(stableValue({
+    userId: context?.userId || '',
+    taskId: context?.taskId || '',
+    actionIntent: context?.actionIntent || '',
+    name,
+    args,
+  }))).digest('hex');
+}
+
+function externalResultIsVerified(result: string): boolean {
+  try {
+    const payload = JSON.parse(result || '{}');
+    if (payload.sent === false || payload.submitted === false || payload.published === false) return false;
+    if (payload.verificationStatus) return payload.verificationStatus === 'verified';
+    if (payload.verified !== undefined) return payload.verified === true;
+  } catch {}
+  return true;
+}
 
 /**
  * Canonical tool-name visibility rule shared by model declarations, routed
@@ -573,14 +614,19 @@ export class ToolRegistry {
   }
 
   async execute(name: string, args: Record<string, any>, context?: ToolContext): Promise<string> {
+    const finishMetric = beginToolMetric(name);
     const tool = this.get(name);
-    if (!tool) throw new Error(`Tool "${name}" not found in registry`);
+    if (!tool) {
+      finishMetric('failed');
+      throw new Error(`Tool "${name}" not found in registry`);
+    }
 
     // Resolve effective security level
     const policy = (context as any)?.toolPolicy as ToolPolicy | undefined;
     const effective = this.resolveSecurity(name, policy);
 
     if (effective.level === 'forbidden') {
+      finishMetric('forbidden');
       throw new Error(`Tool "${name}" is forbidden: ${effective.reason}.`);
     }
 
@@ -593,6 +639,7 @@ export class ToolRegistry {
       capability,
     );
     if (constitutional.level === 'forbidden') {
+      finishMetric('forbidden');
       throw new Error(`Tool "${name}" is forbidden: ${constitutional.reason}.`);
     }
 
@@ -604,10 +651,12 @@ export class ToolRegistry {
       } else if (context?.requestConfirmation) {
         const allowed = await context.requestConfirmation(name, args);
         if (!allowed) {
+          finishMetric('waiting_confirmation');
           return `Tool "${name}" requires user confirmation and was not approved.`;
         }
         userConfirmed = true;
       } else {
+        finishMetric('waiting_confirmation');
         throw new Error(`Tool "${name}" requires user confirmation: ${constitutional.reason}.`);
       }
       console.log(`[Tool] Executing confirmation-level tool: ${name} (${constitutional.reason})`);
@@ -615,6 +664,30 @@ export class ToolRegistry {
 
     // Wrap with timeouts to prevent hanging. Vision/CAD extraction needs more room than simple tools.
     const timeoutMs = getToolExecutionTimeoutMs(name);
+    const externalCommit = capability.sideEffects.some(effect => (
+      effect.type === 'external_communication' || effect.type === 'external_state_change'
+    ));
+    const idempotencyKey = externalCommit ? executionIdempotencyKey(name, args, context) : '';
+    if (externalCommit) {
+      const existing = externalCommitAttempts.get(idempotencyKey);
+      if (existing?.expiresAt && existing.expiresAt <= Date.now()) externalCommitAttempts.delete(idempotencyKey);
+      else if (existing?.state === 'verified') {
+        finishMetric('verified_success');
+        return existing.result || '';
+      } else if (existing?.state === 'unknown') {
+        finishMetric('unknown_outcome');
+        throw new Error(`Tool "${name}" has an unknown prior outcome for this idempotency key; automatic resend was stopped.`);
+      } else if (existing?.state === 'running' && existing.promise) {
+        try {
+          const result = await existing.promise;
+          finishMetric(externalResultIsVerified(result) ? 'verified_success' : 'failed');
+          return result;
+        } catch (error) {
+          finishMetric('failed');
+          throw error;
+        }
+      }
+    }
     let timedOut = false;
     const executionContext: ToolContext = {
       ...(context || {}),
@@ -623,8 +696,7 @@ export class ToolRegistry {
       isCancelled: () => timedOut || context?.isCancelled?.() === true,
     };
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-    try {
-      const result = await Promise.race([
+    const execution = Promise.race([
         tool.handler(args, executionContext),
         new Promise<string>((_, reject) => {
           timeoutHandle = setTimeout(() => {
@@ -633,8 +705,64 @@ export class ToolRegistry {
           }, timeoutMs);
         }),
       ]);
-
+    if (externalCommit) {
+      externalCommitAttempts.set(idempotencyKey, {
+        state: 'running',
+        promise: execution,
+        expiresAt: Date.now() + 24 * 60 * 60_000,
+      });
+    }
+    try {
+      const result = await execution;
+      if (externalCommit) {
+        if (externalResultIsVerified(result)) {
+          externalCommitAttempts.set(idempotencyKey, {
+            state: 'verified',
+            result,
+            expiresAt: Date.now() + 24 * 60 * 60_000,
+          });
+        } else {
+          externalCommitAttempts.delete(idempotencyKey);
+        }
+      }
+      finishMetric(externalCommit && !externalResultIsVerified(result) ? 'failed' : 'verified_success');
       return result;
+    } catch (error) {
+      if (externalCommit && timedOut) {
+        if (tool.reconcileExternalCommit) {
+          let reconciliationTimeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const reconciled = await Promise.race([
+              tool.reconcileExternalCommit(args, context, idempotencyKey),
+              new Promise<null>(resolve => {
+                reconciliationTimeout = setTimeout(() => resolve(null), 8_000);
+              }),
+            ]);
+            if (reconciled && externalResultIsVerified(reconciled)) {
+              externalCommitAttempts.set(idempotencyKey, {
+                state: 'verified',
+                result: reconciled,
+                expiresAt: Date.now() + 24 * 60 * 60_000,
+              });
+              finishMetric('verified_success');
+              return reconciled;
+            }
+          } catch {
+            // A failed read-only reconciliation leaves the outcome unknown.
+          } finally {
+            if (reconciliationTimeout) clearTimeout(reconciliationTimeout);
+          }
+        }
+        externalCommitAttempts.set(idempotencyKey, {
+          state: 'unknown',
+          expiresAt: Date.now() + 24 * 60 * 60_000,
+        });
+        finishMetric('unknown_outcome');
+      } else {
+        if (externalCommit) externalCommitAttempts.delete(idempotencyKey);
+        finishMetric(timedOut ? 'timeout' : 'failed');
+      }
+      throw error;
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }

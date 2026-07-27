@@ -177,6 +177,9 @@ describe('Lumi continuous real-action pressure', () => {
       contact: '\u963f\u9646',
       useSearch: true,
     });
+    const inboundRead = evaluate(cases[0].text, { userId: 'continuous_inbound_read_guard' });
+    expect(inboundRead.route?.toolNames).not.toContain('wechat_send_message');
+    expect(inboundRead.execution.toolPolicy.forbiddenTools).toContain('wechat_send_message');
     expect(buildForegroundWeChatSendArgs(cases[1].text)).toMatchObject({
       contact: '\u5f20\u4e09',
       message: '\u4e0b\u5348\u4e09\u70b9\u5f00\u4f1a',
@@ -186,10 +189,7 @@ describe('Lumi continuous real-action pressure', () => {
       contact: '\u674e\u56db',
       message: '\u6211\u5230\u4e86',
     });
-    expect(buildForegroundWeChatSendArgs('\u76f4\u63a5\u53d1\u660e\u5929\u89c1')).toMatchObject({
-      contact: '',
-      message: '\u660e\u5929\u89c1',
-    });
+    expect(buildForegroundWeChatSendArgs('\u76f4\u63a5\u53d1\u660e\u5929\u89c1')).toBeNull();
   });
 
   it('keeps chat and voice on the same foreground send path', () => {

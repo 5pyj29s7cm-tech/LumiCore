@@ -15,6 +15,7 @@ import {
 import { mcpManager } from '../../mcp/client';
 import type { ToolContext } from '../types';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { getScopedPreferredLLM } from '../../llm/user_preferences';
 
 // Module-level LLM getters, set during registration
 let _llmGetters: {
@@ -23,6 +24,13 @@ let _llmGetters: {
   getOpenAI?: () => any;
   getAnthropic?: () => any;
   getQwen?: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
 } | null = null;
 
 export function setSkillLLMGetters(getters: typeof _llmGetters): void {
@@ -48,8 +56,12 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
     throw new Error('A specific skill description is required.');
   }
 
-  const provider = (args.provider as string) || 'deepseek';
-  const model = (args.model as string) || 'deepseek-v4-flash';
+  const preferred = getScopedPreferredLLM(context?.userId || 'skill_gen', {
+    domain: context?.domain,
+    orgId: context?.orgId,
+  });
+  const provider = (args.provider as string) || preferred.provider;
+  const model = (args.model as string) || preferred.model;
 
   const result = await generateSkill(
     {
@@ -63,6 +75,13 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
     _llmGetters.getOpenAI,
     _llmGetters.getAnthropic,
     _llmGetters.getQwen,
+    _llmGetters.getOllama,
+    _llmGetters.getLmStudio,
+    _llmGetters.getArk,
+    _llmGetters.getXiaomi,
+    _llmGetters.getKimi,
+    _llmGetters.getGlm,
+    _llmGetters.getRelay,
   );
 
   if (!result.success) {
@@ -189,7 +208,7 @@ export function registerSkillTools(registry: ToolRegistry): void {
         },
         model: {
           type: 'string',
-          description: 'Specific model name. Default: deepseek-v4-flash.',
+          description: 'Specific model name. Default: inherit the current user selection.',
         },
       },
       required: ['description'],

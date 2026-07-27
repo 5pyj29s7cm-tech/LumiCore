@@ -1854,6 +1854,54 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           : 'The send shortcut was pressed, but completion was not verified. Do not report the message as sent.',
       }, null, 2);
     },
+    reconcileExternalCommit: async (args, context, idempotencyKey) => {
+      const message = String(args.message || args.draft || '').trim();
+      const contact = String(args.contact || '').trim();
+      const visionConfig = hasVisionProvider(context);
+      if (!message || !visionConfig) return null;
+      const desktopRelay = requireDesktopRelay(context);
+      const activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+      if (!isWeChatActiveWindow(activeWindow)) return null;
+      const getters = context?.llmGetters;
+      const screenCapture = await desktopRelay('desktop_capture_screen', { quality: 70 });
+      const verificationText = await analyzeScreen(
+        screenCapture,
+        [
+          'Read-only reconciliation after a timed-out WeChat send. Do not perform any UI action.',
+          `Idempotency key: ${JSON.stringify(idempotencyKey)}.`,
+          `Expected exact recipient/group: ${JSON.stringify(contact || '(current conversation)')}.`,
+          `Expected exact message: ${JSON.stringify(message)}.`,
+          'Set sent=true only if the exact message is visibly the newest outgoing bubble in the intended conversation and is not in the composer.',
+          'Return only JSON: {"sent":boolean,"confidence":number,"reason":"short visible evidence"}.',
+        ].join('\n'),
+        visionConfig,
+        getters?.getDeepSeek,
+        getters?.getGemini,
+        getters?.getOpenAI,
+        getters?.getAnthropic,
+        getters?.getQwen,
+        getters?.getOllama,
+        getters?.getLmStudio,
+        getters?.getArk,
+        getters?.getXiaomi,
+        getters?.getKimi,
+        getters?.getGlm,
+        getters?.getRelay,
+      );
+      const verification = parseWeChatSendVisionVerification(verificationText);
+      if (!verification.sent) return null;
+      return JSON.stringify({
+        sent: true,
+        sendAttempted: true,
+        verificationStatus: 'verified',
+        verificationMethod: 'timeout_reconciliation_vision',
+        verificationConfidence: verification.confidence,
+        verificationReason: verification.reason,
+        contact: contact || null,
+        messagePreview: message.slice(0, 80),
+        idempotencyKey,
+      });
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: {

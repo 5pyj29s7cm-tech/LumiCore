@@ -5,6 +5,10 @@ export interface PendingToolConfirmation {
   userId: string;
   toolName: string;
   argsHash: string;
+  /** Exact destination identity shown to and approved by the user. */
+  target: string;
+  /** Hash of the external payload; changes invalidate the grant. */
+  payloadDigest: string;
   /** Exact in-memory arguments used only after the one-time grant is consumed. */
   exactArgs: Record<string, any>;
   safeArgs: Record<string, any>;
@@ -41,6 +45,27 @@ function stableValue(value: any): any {
 
 function argsHash(args: Record<string, any>): string {
   return crypto.createHash('sha256').update(JSON.stringify(stableValue(args || {}))).digest('hex');
+}
+
+function confirmationTarget(args: Record<string, any>): string {
+  return String(
+    args.contact
+    || args.recipient
+    || args.target
+    || args.channelId
+    || args.chatId
+    || args.url
+    || '',
+  ).trim().slice(0, 300);
+}
+
+function confirmationPayloadDigest(args: Record<string, any>): string {
+  const payload = {
+    message: args.message ?? args.text ?? args.content ?? args.draft ?? '',
+    filePath: args.filePath ?? args.path ?? args.attachment ?? '',
+    submission: args.payload ?? args.body ?? args.data ?? '',
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(stableValue(payload))).digest('hex');
 }
 
 function sanitizeValue(value: any, depth = 0): any {
@@ -102,6 +127,8 @@ export function recordPendingConfirmation(
     userId,
     toolName,
     argsHash: argsHash(args),
+    target: confirmationTarget(args),
+    payloadDigest: confirmationPayloadDigest(args),
     exactArgs: stableValue(args || {}),
     safeArgs: sanitizeValue(args || {}),
     actionIntent: String(scope.actionIntent || '').trim(),
@@ -179,7 +206,10 @@ export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation
     'You may call only the exact same tool with exactly the same arguments. The grant is one-time and cannot authorize any other action.',
     'Execute the exact pending tool now, then report only its real result.',
     `Pending id: ${pending.id}`,
+    `Task id: ${pending.taskId || '(conversation turn)'}`,
     `Tool: ${pending.toolName}`,
+    `Target: ${pending.target || '(current verified target)'}`,
+    `Payload digest: ${pending.payloadDigest}`,
     `Arguments (secrets redacted): ${JSON.stringify(pending.safeArgs)}`,
   ].join('\n');
 }

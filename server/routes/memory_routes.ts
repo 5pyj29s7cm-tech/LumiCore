@@ -39,6 +39,13 @@ export function mountMemoryRoutes(
     getOpenAI?: () => any;
     getAnthropic?: () => any;
     getQwen?: () => any;
+    getOllama?: () => any;
+    getLmStudio?: () => any;
+    getArk?: () => any;
+    getXiaomi?: () => any;
+    getKimi?: () => any;
+    getGlm?: () => any;
+    getRelay?: () => any;
   },
 ) {
   router.get("/memory/firewall/policy", (_req, res) => {
@@ -284,10 +291,11 @@ export function mountMemoryRoutes(
       try { decoded = jwt.verify(token, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
       const userId = decoded.uid || 'anonymous';
       const scope = getMemoryScope(req, decoded);
+      const preferred = getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId });
       const ctx: ConsolidationContext = {
         userId,
-        provider: (req.body.provider as any) || 'deepseek',
-        model: (req.body.model as any) || 'deepseek-v4-flash',
+        provider: (req.body.provider as any) || preferred.provider,
+        model: (req.body.model as any) || preferred.model,
         domain: scope.domain,
         orgId: scope.orgId,
       };
@@ -295,6 +303,8 @@ export function mountMemoryRoutes(
       const result = await consolidateEpisodic(
         ctx, minCount,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
+        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
       if (result) {
         broadcastMemoryChange(userId, 'updated', result.id);
@@ -317,16 +327,19 @@ export function mountMemoryRoutes(
       try { decoded = jwt.verify(token, jwtSecret); } catch { return res.status(401).json({ error: 'Invalid token' }); }
       const userId = decoded.uid || 'anonymous';
       const scope = getMemoryScope(req, decoded);
+      const preferred = getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId });
       const ctx: ConsolidationContext = {
         userId,
-        provider: (req.body.provider as any) || 'deepseek',
-        model: (req.body.model as any) || 'deepseek-v4-flash',
+        provider: (req.body.provider as any) || preferred.provider,
+        model: (req.body.model as any) || preferred.model,
         domain: scope.domain,
         orgId: scope.orgId,
       };
       const result = await selfReflect(
         ctx,
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
+        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
       if (result) {
         broadcastMemoryChange(userId, 'updated', result.id);
@@ -586,7 +599,16 @@ Rules:
         orgId: scope.orgId,
         getDeepSeek: llmGetters.getDeepSeek,
         getGemini: llmGetters.getGemini,
+        getOpenAI: llmGetters.getOpenAI,
+        getAnthropic: llmGetters.getAnthropic,
         getQwen: llmGetters.getQwen,
+        getOllama: llmGetters.getOllama,
+        getLmStudio: llmGetters.getLmStudio,
+        getArk: llmGetters.getArk,
+        getXiaomi: llmGetters.getXiaomi,
+        getKimi: llmGetters.getKimi,
+        getGlm: llmGetters.getGlm,
+        getRelay: llmGetters.getRelay,
       });
       res.json(result);
     } catch (err: any) {

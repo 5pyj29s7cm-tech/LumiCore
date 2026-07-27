@@ -85,7 +85,12 @@ function externalRuntimeConfig(agent: any): { cwd?: string } {
 export function mountAgentRoutes(
   router: Router,
   _jwtSecret: string,
-  llmGetters: { getDeepSeek: () => any; getGemini: () => any; getOpenAI?: () => any; getAnthropic?: () => any; getQwen?: () => any; },
+  llmGetters: {
+    getDeepSeek: () => any; getGemini: () => any; getOpenAI?: () => any;
+    getAnthropic?: () => any; getQwen?: () => any; getOllama?: () => any;
+    getLmStudio?: () => any; getArk?: () => any; getXiaomi?: () => any;
+    getKimi?: () => any; getGlm?: () => any; getRelay?: () => any;
+  },
 ) {
   router.post("/agents/distill", requireAuth, asyncHandler(async (req, res) => {
     const uid = req.user!.uid;
@@ -96,7 +101,14 @@ export function mountAgentRoutes(
       const { distillPersona } = await import('../agents/distiller');
       const result = await distillPersona(
         { chatLog, format, targetName, relationshipType, userId: uid },
-        { getDeepSeek: llmGetters.getDeepSeek, getGemini: llmGetters.getGemini, getOpenAI: llmGetters.getOpenAI, getAnthropic: llmGetters.getAnthropic, getQwen: llmGetters.getQwen },
+        {
+          getDeepSeek: llmGetters.getDeepSeek, getGemini: llmGetters.getGemini,
+          getOpenAI: llmGetters.getOpenAI, getAnthropic: llmGetters.getAnthropic,
+          getQwen: llmGetters.getQwen, getOllama: llmGetters.getOllama,
+          getLmStudio: llmGetters.getLmStudio, getArk: llmGetters.getArk,
+          getXiaomi: llmGetters.getXiaomi, getKimi: llmGetters.getKimi,
+          getGlm: llmGetters.getGlm, getRelay: llmGetters.getRelay,
+        },
       );
       res.json({ personalityConfig: result.personalityConfig, seedMemories: result.seedMemories, evidenceMap: result.evidenceMap, relationshipType: result.relationshipType, narrative: result.narrative, inferredName: result.inferredName, summary: { messageCount: chatLog.split('\n').filter((l: string) => l.trim()).length, memoryCount: result.seedMemories.length, cognitiveStyle: result.personalityConfig.personalityVector?.cognitiveStyle, socialStyle: result.personalityConfig.personalityVector?.socialStyle, tone: result.personalityConfig.expressionStyle.tone, topPhrases: result.personalityConfig.expressionStyle.vocabularyHints?.slice(0, 5) } });
     } catch (err: any) { console.error('[Distill] Failed:', err.message); res.status(500).json({ error: err.message || 'Distillation failed' }); }

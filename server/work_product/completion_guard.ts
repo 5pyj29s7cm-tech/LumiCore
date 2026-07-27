@@ -110,7 +110,7 @@ const SELF_COMPLETION_CLAIM_RE =
   /(?:^|[\n。！？!?；;])\s*(?:(?:好|好的|可以|行)[，,\s]*)?(?:(?:(?:我|我们|这边)\s*(?:(?:已经|已)[^。！？!?\n]{0,28}(?:完成|做完|做好|搞定|生成|新建|创建|保存|输出|写入|写好|写完|打开|加载|导出|发送|处理完|执行完)|[^。！？!?\n]{0,28}(?:完成了|做完了|做好了|搞定了|生成好了|新建好了|创建好了|保存好了|输出好了|写好了|写完了|打开了|加载好了|导出了|发送了|处理完了|执行完了)))|(?:(?:任务|工作|操作|处理|这件事)(?:已经|已)?|已经|已)[^。！？!?\n]{0,28}(?:完成|做完|做好|搞定|生成|新建|创建|保存|输出|写入|写好|写完|打开|加载|导出|发送|处理完|执行完)|(?:生成|新建|创建|保存|输出|写|打开|加载|发送|处理|执行|搞定|完成)(?:好|完)?了)[^。！？!?\n]{0,16}(?=$|[，,。！？!?；;：:\n])/iu;
 
 const SELF_COMPLETION_CLAIM_EN_RE =
-  /(?:^|[\n.!?;])\s*(?:(?:I|we)(?:'ve| have| already)?[^.!?\n]{0,36}(?:completed|finished|created|saved|opened|generated|sent|written)|(?:done|completed|finished|created|saved|opened|generated|sent)(?:\s+successfully)?)(?=$|[,.:;!?\n])/iu;
+  /(?:^|[\n.!?;])\s*(?:(?:I|we)(?:'ve| have)?(?:\s+already)?[^.!?\n]{0,36}(?:completed|finished|created|saved|opened|generated|sent|written)\b[^.!?\n]{0,48}|(?:done|completed|finished|created|saved|opened|generated|sent)(?:\s+successfully)?)(?=$|[,.:;!?\n])/iu;
 
 const SELF_EXECUTION_STATUS_RE =
   // i18n-allow: Chinese immediate-execution recognition pattern; not user-visible copy.

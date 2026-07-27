@@ -224,7 +224,6 @@ $OldEnv = @{
   LUMI_DATA_DIR = $env:LUMI_DATA_DIR
   LUMI_LOG_FILE = $env:LUMI_LOG_FILE
   USERPROFILE = $env:USERPROFILE
-  HOME = $env:HOME
 }
 
 $App = $null
@@ -272,7 +271,6 @@ try {
   $RuntimeLog = Join-Path $DataRoot "logs\server.log"
   $env:LUMI_LOG_FILE = $RuntimeLog
   $env:USERPROFILE = $HomeDir
-  $env:HOME = $HomeDir
 
   $App = Start-Process `
     -FilePath $InstalledExe `
@@ -515,7 +513,10 @@ try {
 
   if ($Succeeded -and -not $Keep) {
     $ResolvedRunRoot = [System.IO.Path]::GetFullPath($RunRoot)
-    if ($ResolvedRunRoot.StartsWith($CodexRun, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (
+      (Test-IsPathInside -Path $ResolvedRunRoot -Parent $CodexRun) -and
+      $ResolvedRunRoot -match '[\\/]installer-first-run-[^\\/]+$'
+    ) {
       Remove-Item -Recurse -Force -Path $ResolvedRunRoot -ErrorAction SilentlyContinue
     }
   }

@@ -183,8 +183,8 @@ describe('Action Constitution', () => {
       source: 'chat',
       supervisedExternalCommits: true,
     });
-    expect(supervisedPublishClick.level).toBe('safe');
-    expect(supervisedPublishClick.requiresUserConfirmation).toBe(false);
+    expect(supervisedPublishClick.level).toBe('confirm');
+    expect(supervisedPublishClick.requiresUserConfirmation).toBe(true);
   });
 
   it('does not prompt for messaging drafts or clipboard handoff before sending', () => {
@@ -214,8 +214,8 @@ describe('Action Constitution', () => {
       source: 'voice',
       supervisedExternalCommits: true,
     });
-    expect(supervisedSend.level).toBe('safe');
-    expect(supervisedSend.requiresUserConfirmation).toBe(false);
+    expect(supervisedSend.level).toBe('confirm');
+    expect(supervisedSend.requiresUserConfirmation).toBe(true);
     expect(classifyActionRisk('wechat_send_message', { text: 'Thanks' })).toBe('medium');
   });
 
@@ -228,9 +228,9 @@ describe('Action Constitution', () => {
       supervisedExternalCommits: true,
     });
     expect(transfer).toMatchObject({
-      level: 'safe',
+      level: 'confirm',
       domain: 'messaging',
-      requiresUserConfirmation: false,
+      requiresUserConfirmation: true,
     });
 
     const filing = evaluateActionConstitution('mcp_playwright_browser_click', {
@@ -250,8 +250,8 @@ describe('Action Constitution', () => {
       source: 'chat',
       supervisedExternalCommits: true,
     });
-    expect(comment.level).toBe('safe');
-    expect(comment.requiresUserConfirmation).toBe(false);
+    expect(comment.level).toBe('confirm');
+    expect(comment.requiresUserConfirmation).toBe(true);
     expect(classifyActionRisk('mcp_playwright_browser_click', { name: 'Submit comment' })).toBe('medium');
 
     const payment = evaluateActionConstitution('mcp_playwright_browser_click', {

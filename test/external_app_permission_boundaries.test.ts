@@ -218,7 +218,7 @@ describe('external app permission boundaries', () => {
     expect(relayCalls.find(call => call.name === 'desktop_cursor_glow_update')?.args).toEqual({ x: 758, y: 764 });
   });
 
-  it('uses the member personal desktop relay for a verified organization-to-WeChat file transfer', async () => {
+  it('requires confirmation then uses the member personal desktop relay for a verified organization-to-WeChat file transfer', async () => {
     const { ToolRegistry } = await import('../server/tools/registry');
     const { registerExternalAppTools } = await import('../server/tools/definitions/external_app_tools');
     const registry = new ToolRegistry();
@@ -231,6 +231,7 @@ describe('external app permission boundaries', () => {
     fs.writeFileSync(filePath, 'file transfer evidence', 'utf8');
     const relayCalls: Array<{ name: string; args: Record<string, any> }> = [];
     let snapshotCount = 0;
+    let confirmationCount = 0;
 
     try {
       const raw = await registry.execute('wechat_send_file', {
@@ -243,7 +244,10 @@ describe('external app permission boundaries', () => {
         source: 'feishu_bot',
         actionIntent: '把这个文件附件发给我的微信',
         supervisedExternalCommits: true,
-        requestConfirmation: async () => { throw new Error('explicit file transfer must not open confirmation'); },
+        requestConfirmation: async () => {
+          confirmationCount += 1;
+          return true;
+        },
         desktopRelay: async () => { throw new Error('work desktop relay must not be used'); },
         personalDesktopRelay: async (name, args) => {
           relayCalls.push({ name, args });
@@ -265,6 +269,7 @@ describe('external app permission boundaries', () => {
 
       const result = JSON.parse(raw);
       expect(result.sent).toBe(true);
+      expect(confirmationCount).toBe(1);
       expect(result.verificationMethod).toBe('uia_filename');
       expect(relayCalls.find(call => call.name === 'desktop_clipboard_write_files')?.args)
         .toEqual({ paths: [filePath] });

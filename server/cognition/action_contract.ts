@@ -7,6 +7,7 @@ import {
 } from './desktop_observation';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { CN_ACTION_CONTRACT_BLOCKERS } from '../regions/packs/cn/voice_fast_path_messages';
+import { normalizeActionIntent } from './normalized_action_intent';
 
 export type LumiActionContractKind =
   | 'none'
@@ -649,6 +650,7 @@ function buildDesignDeliveryContract(): LumiActionContract {
 
 export function buildActionContract(input: string): LumiActionContract {
   const rawInput = String(input || '');
+  const normalizedIntent = normalizeActionIntent(rawInput);
   const primaryTaskText = extractPrimaryTaskText(rawInput);
   if (primaryTaskText && primaryTaskText.trim() !== rawInput.trim()) {
     const primaryContract = buildActionContract(primaryTaskText);
@@ -661,6 +663,11 @@ export function buildActionContract(input: string): LumiActionContract {
 
   const text = compact(rawInput);
   if (!text) return NONE_CONTRACT;
+  if (
+    normalizedIntent.kind === 'correction_explanation'
+    || normalizedIntent.kind === 'client_navigation'
+    || normalizedIntent.kind === 'client_state'
+  ) return NONE_CONTRACT;
   const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
   if (runtimeWorkIntent !== 'none') {
     const cancelling = runtimeWorkIntent === 'cancel';
@@ -686,6 +693,7 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
     });
   }
+  if (normalizedIntent.kind === 'status_query') return NONE_CONTRACT;
   if (isInformationOnlyQuestion(text)) return NONE_CONTRACT;
   // Blank AutoCAD creation has a dedicated verified COM path. It remains a
   // CAD document action even when continuation context also supplies the
@@ -715,8 +723,13 @@ export function buildActionContract(input: string): LumiActionContract {
   const activeWindowObservation = requiresActiveWindowObservation(text);
   const desktopFileObservation = requiresDesktopFileListingObservation(text);
   const desktopObservationInspection = activeWindowObservation || desktopFileObservation;
-  const directedMessageSend = matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
-    || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu);
+  const directedMessageSend = normalizedIntent.kind === 'messaging_send' || (
+    normalizedIntent.kind !== 'messaging_read'
+    && (
+      matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
+      || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu)
+    )
+  );
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const directedMessagingInquiry = /(?:问(?:一下|问)?|询问)\s*[^\s，。！？,.!?:：;；、]{1,24}?(?:在干嘛|在做什么|干嘛|做什么|忙什么|现在怎么样|有没有空)/u.test(text);
 

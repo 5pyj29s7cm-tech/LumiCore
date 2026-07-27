@@ -1196,7 +1196,7 @@ function createEphemeralAgent(category: string, skillTag: string): AgentRecord {
     data: '{}',
     createdAt: new Date().toISOString(),
     status: 'idle',
-    modelPreference: 'deepseek-v4-flash',
+    modelPreference: '',
     memoryScope: 'private',
     autonomyLevel: 'reactive',
     runtimeConfig: '{}',

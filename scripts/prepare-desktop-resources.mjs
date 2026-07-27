@@ -179,6 +179,7 @@ async function prepareServer() {
   await copyIfExists(path.join(src, nodeBinaryName), path.join(dest, nodeBinaryName));
   await copyIfExists(path.join(src, 'entry.cjs'), path.join(dest, 'entry.cjs'));
   await copyIfExists(path.join(src, 'server.mjs'), path.join(dest, 'server.mjs'));
+  await copyIfExists(path.join(src, 'system-explorer-worker.mjs'), path.join(dest, 'system-explorer-worker.mjs'));
   await copyIfExists(path.join(src, 'runtime-meta.json'), path.join(dest, 'runtime-meta.json'));
   await copyIfExists(path.join(src, 'server.cjs'), path.join(dest, 'server.cjs'));
   await copyIfExists(path.join(src, 'package.json'), path.join(dest, 'package.json'));

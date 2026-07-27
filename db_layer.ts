@@ -53,6 +53,10 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_agents_org ON agents(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_conversations_user_domain ON conversations(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(orgId, userId)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_tasks_conversation_updated ON conversation_action_tasks(conversationId, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_tasks_user_status ON conversation_action_tasks(userId, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_task_created ON conversation_action_receipts(taskId, createdAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_idempotency ON conversation_action_receipts(taskId, idempotencyKey, toolName, outcome)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
@@ -393,6 +397,7 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE conversations ADD COLUMN summaryChain TEXT DEFAULT '[]'", onAlter);
     db!.run("ALTER TABLE conversations ADD COLUMN lastSummaryMessageCount INTEGER DEFAULT -1", onAlter);
     db!.run("ALTER TABLE conversations ADD COLUMN actionContinuationState TEXT DEFAULT '{}'", onAlter);
+    db!.run("ALTER TABLE conversation_action_tasks ADD COLUMN context TEXT NOT NULL DEFAULT '{}'", onAlter);
     // Canvas sessions: persisted workbench state with personal/work isolation
     db!.run(`CREATE TABLE IF NOT EXISTS canvas_sessions (
       id TEXT PRIMARY KEY,
@@ -567,6 +572,44 @@ function createTables(): Promise<void> {
         createdAt TEXT NOT NULL,
         domain TEXT DEFAULT 'personal',
         orgId TEXT DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_action_tasks (
+        id TEXT PRIMARY KEY,
+        conversationId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        domain TEXT DEFAULT 'personal',
+        orgId TEXT DEFAULT '',
+        parentTaskId TEXT DEFAULT '',
+        rootUserMessageId TEXT DEFAULT '',
+        intentKind TEXT NOT NULL DEFAULT 'none',
+        operation TEXT NOT NULL DEFAULT 'read',
+        goal TEXT NOT NULL,
+        target TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'planning',
+        blocker TEXT DEFAULT '',
+        activeRequestId TEXT DEFAULT '',
+        completionSource TEXT DEFAULT '',
+        context TEXT NOT NULL DEFAULT '{}',
+        revision INTEGER NOT NULL DEFAULT 1,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        completedAt TEXT DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS conversation_action_receipts (
+        id TEXT PRIMARY KEY,
+        taskId TEXT NOT NULL,
+        conversationId TEXT NOT NULL,
+        turnId TEXT DEFAULT '',
+        requestId TEXT DEFAULT '',
+        idempotencyKey TEXT NOT NULL,
+        toolName TEXT NOT NULL,
+        targetIdentity TEXT DEFAULT '',
+        inputDigest TEXT DEFAULT '',
+        envelope TEXT NOT NULL DEFAULT '{}',
+        outcome TEXT NOT NULL,
+        createdAt TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS voice_profiles (
@@ -793,6 +836,8 @@ async function loadMemoryDB(): Promise<void> {
 
   // Load conversations
   const conversationsRaw = await query<any>('SELECT * FROM conversations');
+  const conversationActionTasks = await query<any>('SELECT * FROM conversation_action_tasks');
+  const conversationActionReceipts = await query<any>('SELECT * FROM conversation_action_receipts');
   const canvasSessionsRaw = await query<any>('SELECT * FROM canvas_sessions');
 
   // Load token usage
@@ -912,6 +957,8 @@ async function loadMemoryDB(): Promise<void> {
     memories: (memories || []).map((m: any) => ({ ...m, domain: m.domain || 'personal', orgId: m.orgId || '' })),
     reminders: remindersRaw || [],
     conversations,
+    conversationActionTasks: conversationActionTasks || [],
+    conversationActionReceipts: conversationActionReceipts || [],
     canvas_sessions: (canvasSessionsRaw || []).map((s: any) => ({ ...s, edges: s.edges || '[]', domain: s.domain || 'personal', orgId: s.orgId || '' })),
     settings: settings || [],
     systemFlags: systemFlags || {},
@@ -1149,6 +1196,18 @@ async function persistMemoryDB(): Promise<void> {
       createSQL: `CREATE TABLE _temp_conversations (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, title TEXT DEFAULT '', status TEXT DEFAULT 'active', summary TEXT DEFAULT '', summaryChain TEXT DEFAULT '[]', lastSummaryMessageCount INTEGER DEFAULT -1, actionContinuationState TEXT DEFAULT '{}', messageCount INTEGER DEFAULT 0, lastActiveAt TEXT NOT NULL, createdAt TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
       insertSQL: `INSERT INTO _temp_conversations (id, userId, agentId, title, status, summary, summaryChain, lastSummaryMessageCount, actionContinuationState, messageCount, lastActiveAt, createdAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.conversations || []).map((c: any) => [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', JSON.stringify(Array.isArray(c.summaryChain) ? c.summaryChain : []), Number.isFinite(Number(c.lastSummaryMessageCount)) ? Math.floor(Number(c.lastSummaryMessageCount)) : -1, serializeStoredActionContinuationState(c.actionContinuationState), c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']),
+    },
+    {
+      name: 'conversation_action_tasks',
+      createSQL: `CREATE TABLE _temp_conversation_action_tasks (id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', parentTaskId TEXT DEFAULT '', rootUserMessageId TEXT DEFAULT '', intentKind TEXT NOT NULL DEFAULT 'none', operation TEXT NOT NULL DEFAULT 'read', goal TEXT NOT NULL, target TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'planning', blocker TEXT DEFAULT '', activeRequestId TEXT DEFAULT '', completionSource TEXT DEFAULT '', context TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 1, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, completedAt TEXT DEFAULT '')`,
+      insertSQL: `INSERT INTO _temp_conversation_action_tasks (id, conversationId, userId, domain, orgId, parentTaskId, rootUserMessageId, intentKind, operation, goal, target, status, blocker, activeRequestId, completionSource, context, revision, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.conversationActionTasks || []).map((t: any) => [t.id, t.conversationId, t.userId, t.domain || 'personal', t.orgId || '', t.parentTaskId || '', t.rootUserMessageId || '', t.intentKind || 'none', t.operation || 'read', t.goal || '', t.target || '', t.status || 'planning', t.blocker || '', t.activeRequestId || '', t.completionSource || '', typeof t.context === 'string' ? t.context : JSON.stringify(t.context || {}), Number(t.revision) || 1, t.createdAt, t.updatedAt, t.completedAt || '']),
+    },
+    {
+      name: 'conversation_action_receipts',
+      createSQL: `CREATE TABLE _temp_conversation_action_receipts (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, conversationId TEXT NOT NULL, turnId TEXT DEFAULT '', requestId TEXT DEFAULT '', idempotencyKey TEXT NOT NULL, toolName TEXT NOT NULL, targetIdentity TEXT DEFAULT '', inputDigest TEXT DEFAULT '', envelope TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL, createdAt TEXT NOT NULL)`,
+      insertSQL: `INSERT INTO _temp_conversation_action_receipts (id, taskId, conversationId, turnId, requestId, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.conversationActionReceipts || []).map((r: any) => [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]),
     },
     {
       name: 'canvas_sessions',

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { normalizeActionIntent } from './normalized_action_intent';
 import { matchesCnActionContinuation } from '../regions/packs/cn/action_continuation';
 import {
   CN_TASK_EXECUTION_MESSAGES,
@@ -583,6 +584,9 @@ export function classifyConversationActionFollowupIntent(
   text: string,
   state?: ConversationActionContinuationState | null,
 ): RecentActionFollowupIntent {
+  const normalizedIntent = normalizeActionIntent(text);
+  if (normalizedIntent.kind === 'status_query') return 'status';
+  if (normalizedIntent.kind === 'correction_explanation') return 'none';
   const direct = classifyRecentActionFollowupIntent(text);
   if (direct !== 'none') return direct;
   const durableState = normalizeConversationActionState(state);
@@ -798,6 +802,12 @@ export function isUserObservedTaskCompletion(
 export function needsRecentActionContinuationContext(userText: string): boolean {
   const clean = compact(userText, 500);
   if (!clean || (clean.length > 180 && !isCurrentAppEditingRequest(clean))) return false;
+  const normalizedIntent = normalizeActionIntent(clean);
+  if (
+    normalizedIntent.kind === 'correction_explanation'
+    || normalizedIntent.kind === 'status_query'
+    || normalizedIntent.relation === 'child'
+  ) return true;
   // A complete instruction can contain a pronoun ("把它画到 CAD 里") while
   // still naming its source and destination in the same sentence. Do not let
   // an older task overwrite that self-contained command.

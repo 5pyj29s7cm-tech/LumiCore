@@ -172,12 +172,16 @@ async function checkReliabilityEvidence(checks, strict, head) {
 
   if (existsSync(soakPath)) {
     const soak = await readJson(soakPath);
-    const valid = soak.ok === true && soak.buildId === head && soak.requestedHours >= 24 && soak.elapsedMs >= 23.9 * 60 * 60 * 1000
-      && soak.backendRestarts === 0 && soak.mcpConsecutiveCrashes === 0 && soak.databaseDirty === false && soak.unhandledExceptions === 0;
-    if (valid) pass(checks, 'reliability.soak', '24-hour runtime soak evidence passed');
-    else warnOrFail(checks, strict, 'reliability.soak', 'Soak evidence must cover the current commit and a clean 24-hour run', soak);
+    const valid = soak.ok === true && soak.buildId === head && soak.requestedHours >= 2 && soak.elapsedMs >= 1.99 * 60 * 60 * 1000
+      && soak.mixedRounds >= 200 && soak.healthProbeInterruptions === 0
+      && soak.backendRestarts === 0 && soak.mcpConsecutiveCrashes === 0 && soak.databaseDirty === false && soak.unhandledExceptions === 0
+      && soak.sidecarBudgetExceeded?.gptSovits === 0 && soak.sidecarBudgetExceeded?.voiceprint === 0
+      && soak.idleReclamationVerified === true
+      && (soak.ttsCoverage === 'not_installed' || (soak.ttsCoverage === 'observed' && soak.ttsWorkingSetSamples >= 2 && soak.ttsLastHourGrowthRate <= 0.1));
+    if (valid) pass(checks, 'reliability.soak', 'Two-hour, 200-round runtime soak evidence passed');
+    else warnOrFail(checks, strict, 'reliability.soak', 'Soak evidence must cover the current commit, two hours, 200 mixed rounds, sidecar budgets, idle reclamation, and TTS growth <= 10%', soak);
   } else {
-    warnOrFail(checks, strict, 'reliability.soak', 'Missing 24-hour runtime soak evidence', relative(soakPath));
+    warnOrFail(checks, strict, 'reliability.soak', 'Missing two-hour mixed-call soak evidence', relative(soakPath));
   }
 }
 

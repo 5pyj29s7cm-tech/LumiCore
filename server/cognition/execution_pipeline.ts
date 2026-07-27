@@ -1,6 +1,7 @@
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import type { ConversationActionContinuationState } from './action_continuation';
+import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
 import {
   buildLumiCapabilitySelection,
   type LumiCapabilitySelection,
@@ -18,6 +19,11 @@ import {
   type LumiTurnDispatch,
   type LumiTurnDispatchInput,
 } from './turn_dispatch';
+import {
+  applyLumiRoutingShadowGuard,
+  compareLumiRoutingShadow,
+  type LumiRoutingShadowComparison,
+} from './routing_shadow_guard';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -26,10 +32,12 @@ export interface LumiCapabilityPlan extends LumiCapabilitySelection {
 }
 
 export interface LumiExecutionPipeline {
+  normalizedIntent: NormalizedActionIntent;
   turnIntent: LumiTurnDispatch;
   capabilityPlan: LumiCapabilityPlan;
   execution: LumiExecutionDecision;
   intentTrace: LumiIntentTrace;
+  shadowComparison: LumiRoutingShadowComparison;
 }
 
 export interface BuildLumiExecutionPipelineInput {
@@ -56,7 +64,8 @@ export function buildLumiExecutionPipeline(
 ): LumiExecutionPipeline {
   const turnIntent = buildLumiTurnDispatch(input.dispatch);
   const decisionText = input.decisionText || turnIntent.flow.routeText;
-  const execution = buildLumiExecutionDecision({
+  const normalizedIntent = normalizeActionIntent(decisionText);
+  const legacyExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
     text: decisionText,
     toolDeclarations: input.registry.getToolDeclarations(),
@@ -65,6 +74,13 @@ export function buildLumiExecutionPipeline(
     actionTaskState: input.actionTaskState,
     isSanctuary: input.isSanctuary,
   });
+  const unrestrictedManifest = input.registry.getCapabilityManifest(legacyExecution.toolPolicy);
+  const shadowComparison = compareLumiRoutingShadow({
+    normalizedIntent,
+    execution: legacyExecution,
+    manifest: unrestrictedManifest,
+  });
+  const execution = applyLumiRoutingShadowGuard(legacyExecution, shadowComparison);
   const selection = buildLumiCapabilitySelection({
     dispatch: turnIntent,
     execution,
@@ -93,10 +109,19 @@ export function buildLumiExecutionPipeline(
     text: input.traceText || decisionText,
     source: input.source || input.dispatch.source || input.dispatch.channel,
   });
+  if (!shadowComparison.aligned) {
+    intentTrace.matchedRules.push({ layer: 'shadow_route', name: 'normalized-legacy-divergence' });
+    intentTrace.reasons.push(`shadow route:${shadowComparison.reason}`);
+    if (shadowComparison.externalCommitBlocked) {
+      intentTrace.blockedBy.push('external_commit_route_divergence');
+    }
+  }
   return {
+    normalizedIntent,
     turnIntent,
     capabilityPlan,
     execution,
     intentTrace,
+    shadowComparison,
   };
 }

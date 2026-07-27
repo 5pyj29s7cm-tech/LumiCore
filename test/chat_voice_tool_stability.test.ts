@@ -160,7 +160,7 @@ describe('chat and voice tool-call stability', () => {
     expect(shouldChainTask('\u5fae\u4fe1\u5e2e\u6211\u7f16\u8f91\u4e00\u6761\u665a\u5b89\u53d1\u7ed9\u963f\u9646')).toBe(true);
   });
 
-  it('keeps foreground WeChat sends on the dedicated chat fast path', () => {
+  it('keeps foreground WeChat sends on the shared deterministic execution path', () => {
     const args = buildForegroundWeChatSendArgs('\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89');
     expect(args).toMatchObject({
       contact: '\u963f\u9646',
@@ -171,7 +171,8 @@ describe('chat and voice tool-call stability', () => {
 
     const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     expect(chat).toContain('buildForegroundWeChatSendArgs');
-    expect(chat).toContain("const toolName = 'wechat_send_message'");
+    expect(chat).toContain('executeForegroundMessagingAction');
+    expect(chat).toContain("action: 'send'");
     expect(chat).toContain('buildRecentFailureExplanation');
     expect(chat).toContain('recent_failure_explanation');
   });
@@ -189,10 +190,7 @@ describe('chat and voice tool-call stability', () => {
       message: '\u6211\u5230\u4e86',
     });
 
-    expect(buildForegroundWeChatSendArgs('\u76f4\u63a5\u53d1\u660e\u5929\u89c1')).toMatchObject({
-      contact: '',
-      message: '\u660e\u5929\u89c1',
-    });
+    expect(buildForegroundWeChatSendArgs('\u76f4\u63a5\u53d1\u660e\u5929\u89c1')).toBeNull();
   });
 
   it('turns a WeChat inquiry and its barge-in correction into one exact send', () => {
@@ -211,7 +209,8 @@ describe('chat and voice tool-call stability', () => {
     });
 
     const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
-    expect(voice).toContain("const toolName = 'wechat_send_message'");
+    expect(voice).toContain('executeForegroundMessagingAction');
+    expect(voice).toContain("action: 'send'");
     expect(voice).toContain('if (!isCurrentTurn()) return');
     expect(voice).toContain('session.pipelineAbortController === pipelineAbort');
   });
