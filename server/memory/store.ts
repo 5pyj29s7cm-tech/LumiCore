@@ -714,6 +714,10 @@ export function addMemory(
     privacyClass?: Memory['privacyClass'];
     retention?: Memory['retention'];
     userApproved?: boolean;
+    /** Disable semantic deduplication when every source chunk needs an exact receipt. */
+    deduplicate?: boolean;
+    /** Disable background embedding when the caller already attempted a verified embedding. */
+    generateEmbedding?: boolean;
   },
 ): Memory {
   const all = getMemoryStore();
@@ -755,9 +759,11 @@ export function addMemory(
   // Deduplicate using index — only scan same userId + type
   const idx = getDedupIndex();
   const dedupCandidates = idx.get(memory.userId)?.get(memory.type) || [];
-  const existing = dedupCandidates.find(m =>
-    matchesMemoryScope(m, domain, orgId) && contentSimilarity(m.content, memory.content) > 0.7,
-  );
+  const existing = overrides?.deduplicate === false
+    ? undefined
+    : dedupCandidates.find(m =>
+        matchesMemoryScope(m, domain, orgId) && contentSimilarity(m.content, memory.content) > 0.7,
+      );
 
   const now = new Date().toISOString();
 
@@ -797,7 +803,7 @@ export function addMemory(
   saveMemoryStore(all);
 
   // Background: generate embedding for semantic search
-  attachEmbedding(newMemory).catch(() => {});
+  if (overrides?.generateEmbedding !== false) attachEmbedding(newMemory).catch(() => {});
 
   return newMemory;
 }

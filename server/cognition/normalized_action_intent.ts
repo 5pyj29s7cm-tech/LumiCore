@@ -279,6 +279,32 @@ function genericExternalCommit(text: string): NormalizedActionIntent | null {
   return null;
 }
 
+function localDesktopOperation(text: string): NormalizedActionIntent | null {
+  // Client surfaces and external commits have already won the priority race.
+  // This rule requires an explicit local action plus a concrete target; a lone
+  // action-shaped word is never enough to create executable work.
+  const match = text.match(
+    /(?:^|[，。！？!?\s])(?:请|请你|帮我|麻烦你|给我)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?\n]{1,120})/iu,
+  );
+  if (!match) return null;
+  const verb = trimSlot(match[1]);
+  const target = trimSlot(match[2]);
+  if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null;
+  return {
+    kind: 'desktop_operation',
+    operation: /^(?:打开|启动|运行|切换到|聚焦|open|launch|start|focus)$/iu.test(verb)
+      ? 'navigate'
+      : 'mutate',
+    subject: 'user',
+    target,
+    payload: '',
+    sideEffectClass: 'none',
+    relation: 'new',
+    confidence: 0.88,
+    rule: 'explicit-local-desktop-operation',
+  };
+}
+
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = currentTurnText(value);
   if (!text) return { ...EMPTY_INTENT };
@@ -292,6 +318,7 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
     inboundMessageRead(text),
     outgoingMessageSend(text),
     genericExternalCommit(text),
+    localDesktopOperation(text),
   ].find(Boolean);
   if (priority) return priority;
 

@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDataPath } from '../../config/data_path';
 import { withCloudResilience } from '../../cloud/resilience';
-import { ensureGptSovitsRuntime, markGptSovitsActivity } from '../gptsovits_runtime';
+import { ensureGptSovitsRuntime, isGptSovitsRuntimeReady, markGptSovitsActivity } from '../gptsovits_runtime';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9880';
 
@@ -40,6 +40,10 @@ export function isConfigured(): boolean {
   const localDir = path.join(process.cwd(), 'gpt-sovits-src');
   return fs.existsSync(path.join(localDir, 'venv', 'Scripts', 'python.exe'))
     && fs.existsSync(path.join(localDir, 'api_v2.py'));
+}
+
+export function isReadyForAutomaticFallback(): boolean {
+  return isGptSovitsRuntimeReady();
 }
 
 export function parseVoiceTrainingFileList(content: string): Record<string, string> {

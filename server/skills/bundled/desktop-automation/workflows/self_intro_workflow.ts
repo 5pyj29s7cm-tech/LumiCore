@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import { readDB } from "../../../../../db_layer";
 import { ToolExecutionRecord } from "../../../../tools/types";
+import { buildSelfIntroductionPlan } from '../../../../client/self_model';
 
 type VoiceScope = {
   domain: 'personal' | 'work';
@@ -111,7 +112,10 @@ function normalizeIntentText(text: string): string {
 export function isSelfIntroDemoRequest(text: string): boolean {
   const normalized = normalizeIntentText(text || '');
   if (!normalized) return false;
-  return SELF_INTRO_PATTERNS.some(pattern => pattern.test(normalized));
+  const selfIntroduction = SELF_INTRO_PATTERNS.some(pattern => pattern.test(normalized))
+    || /(?:自我介绍|介绍(?:一下)?你自己|你是谁|(?:introduce|demo|show).{0,40}(?:yourself|lumi))/iu.test(normalized);
+  const visibleDemo = /(?:演示|展示|桌面操作|实际操作|边介绍边操作|(?:demo|show).{0,40}(?:yourself|lumi))/iu.test(normalized);
+  return selfIntroduction && visibleDemo;
 }
 
 function getUserAddress(userId: string): string {
@@ -175,6 +179,7 @@ export function verifyOfficePasteEvidence(input: {
   clipboardReadResult: string;
   selectAllResult: string;
   pasteResult: string;
+  expectedText?: string;
 }): { ok: boolean; reason: string } {
   const active = parseActiveWindow(input.activeWindowRaw);
   if (!activeWindowMatches(active, OFFICE_EDITOR_PATTERNS)) {
@@ -185,7 +190,7 @@ export function verifyOfficePasteEvidence(input: {
   }
   if (
     input.clipboardReadResult.replace(/\r\n/g, '\n')
-    !== OFFICE_DEMO_TEXT.replace(/\r\n/g, '\n')
+    !== (input.expectedText || OFFICE_DEMO_TEXT).replace(/\r\n/g, '\n')
   ) {
     return { ok: false, reason: 'clipboard_readback_mismatch' };
   }
@@ -265,18 +270,19 @@ function buildOfficeDemoRtf(text: string): string {
   ].join('\n');
 }
 
-function createOfficeDemoFile(): string {
+function createOfficeDemoFile(text = OFFICE_DEMO_TEXT): string {
   const desktopDir = path.join(os.homedir(), 'Desktop');
   const fallbackDir = path.join(os.tmpdir(), 'LumiOS-Demo');
   const dir = fs.existsSync(desktopDir) ? desktopDir : fallbackDir;
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, 'Lumi-自我介绍-演示.rtf');
-  fs.writeFileSync(filePath, buildOfficeDemoRtf(OFFICE_DEMO_TEXT), 'utf8');
+  fs.writeFileSync(filePath, buildOfficeDemoRtf(text), 'utf8');
   return filePath;
 }
 
 export async function runSelfIntroDemo({
   socket,
+  userText,
   userId,
   desktopRelay,
   speak,
@@ -289,7 +295,13 @@ export async function runSelfIntroDemo({
 }> {
   const address = getUserAddress(userId);
   const greeting = address ? `好的，${address}。` : '好的。';
-  const opening = `${greeting}我是 Lumi，一个私有化的个人 AI 助理和伙伴。我会边介绍边操作，让你直接看到我能做什么。`;
+  const introPlan = buildSelfIntroductionPlan(
+    userId,
+    voiceScope,
+    { visibleDemo: true, requestText: userText },
+  );
+  const opening = `${greeting}${introPlan.statements.slice(0, 2).map(statement => statement.text).join('')}`;
+  const officeDemoText = introPlan.documentText;
   const spokenLines: string[] = [];
   const toolCalls: ToolExecutionRecord[] = [];
   let officeOutcomeLine = '';
@@ -812,7 +824,7 @@ exit 2
 
     const officePatterns = OFFICE_EDITOR_PATTERNS;
     const wpsShortcut = await findDesktopShortcut([/wps/i, /金山/i, /文字/i, /writer/i]);
-    const officeDemoFile = createOfficeDemoFile();
+    const officeDemoFile = createOfficeDemoFile(officeDemoText);
     let active: ActiveWindowInfo | null = null;
     await runTool('desktop_run_command', { command: buildOpenWpsWriterCommand(wpsShortcut, officeDemoFile) }, true);
     await wait(7200);
@@ -839,7 +851,7 @@ exit 2
     try {
       const clipboardWriteResult = await runTool(
         'desktop_clipboard_write',
-        { text: OFFICE_DEMO_TEXT },
+        { text: officeDemoText },
         false,
       );
       const clipboardReadResult = await runTool('desktop_clipboard_read', {}, false);
@@ -876,6 +888,7 @@ exit 2
         clipboardReadResult,
         selectAllResult,
         pasteResult,
+        expectedText: officeDemoText,
       });
       if (!verification.ok) {
         officeOutcomeLine = `办公文档这一步没有完成：粘贴后的编辑器状态未通过验证（${verification.reason}），所以我不会说已经写好了。`; // i18n-allow: reviewed CN workflow result copy.
@@ -1009,17 +1022,20 @@ exit 2
     await enterWallpaperMode();
     await runTool('desktop_capture_screen', { quality: 45 }, true);
   }
-  if (!isCancelled?.()) await runOfficeDemo();
-  if (!isCancelled?.()) await runBrowserDemo();
-  if (!isCancelled?.()) await runCodexDemo();
+  const enabledDemoIds = new Set(
+    introPlan.demoCandidates.filter(candidate => candidate.enabled).map(candidate => candidate.applicationId),
+  );
+  if (!isCancelled?.() && enabledDemoIds.has('office-suite')) await runOfficeDemo();
+  if (!isCancelled?.() && enabledDemoIds.has('desktop-browser')) await runBrowserDemo();
+  if (!isCancelled?.() && enabledDemoIds.has('desktop-ai-client')) await runCodexDemo();
 
   if (!isCancelled?.()) {
     await exitWallpaperMode();
     await runTool('desktop_show_lumi_window', {}, true);
     await wait(600);
     await runClientAction({ action: 'focus_home' });
-    await say('这就是我想呈现的自己：本地优先、私有化、能说话、能记住、能打开工具，也能在桌面上把任务真正推进下去。', 6800);
-    await say('我叫 Lumi。你可以把我当作个人 AI 助理，也可以把我当作会陪你一起工作的伙伴。', 5600);
+    await say(introPlan.statements[3]?.text || introPlan.statements[0].text, 6800);
+    await say(introPlan.statements[4]?.text || introPlan.statements[0].text, 5600);
   }
 
   } finally {

@@ -167,7 +167,10 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       category: req.query.category as string | undefined,
       status: req.query.status as string | undefined,
     });
-    res.json(articles);
+    res.json(articles.map(article => ({
+      ...article,
+      ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, article.id),
+    })));
   });
 
   router.get('/org/kb/articles/:articleId', requireAuth, requireOrgMember, (req: Request, res: Response) => {
@@ -176,7 +179,10 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       res.status(404).json({ error: 'Article not found' });
       return;
     }
-    res.json(article);
+    res.json({
+      ...article,
+      ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, article.id),
+    });
   });
 
   router.post('/org/kb/articles', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
@@ -186,7 +192,10 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       return;
     }
     const article = KB.createArticle(req.user!.orgId!, req.user!.uid, { title, content, category, tags, status });
-    res.status(201).json(article);
+    res.status(201).json({
+      ...article,
+      ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, article.id),
+    });
   });
 
   router.put('/org/kb/articles/:articleId', requireAuth, requireOrgRole('owner', 'admin', 'member'), (req: Request, res: Response) => {
@@ -195,7 +204,10 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
       res.status(404).json({ error: 'Article not found' });
       return;
     }
-    res.json(article);
+    res.json({
+      ...article,
+      ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, article.id),
+    });
   });
 
   router.delete('/org/kb/articles/:articleId', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
@@ -209,7 +221,11 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
 
   router.post('/org/kb/articles/:articleId/index', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
     KB.indexArticle(req.user!.orgId!, req.params.articleId).then(count => {
-      res.json({ success: true, indexedChunks: count });
+      res.json({
+        success: true,
+        indexedChunks: count,
+        ingestionManifest: KB.getArticleIngestionManifest(req.user!.orgId!, req.params.articleId),
+      });
     }).catch(err => {
       res.status(500).json({ error: err.message });
     });

@@ -8,6 +8,23 @@ import {
 import { executeForegroundMessagingAction } from '../server/cognition/foreground_messaging_execution';
 import { ToolRegistry } from '../server/tools/registry';
 
+function messagingPlanFor(toolName: string): any {
+  return {
+    schemaVersion: 1,
+    planId: 'plan-test',
+    taskId: 'task-test',
+    intent: {},
+    nodes: [{ toolName }],
+    edges: [],
+    risk: { sideEffectClass: 'external_commit', requiresConfirmation: true, failClosed: true },
+    expectedEvidence: [],
+    fallbackPolicy: { allowLegacyRoute: false },
+    contextRefs: [],
+    decisionAuthority: 'semantic_planner',
+    scriptAuthority: 'adapter_only',
+  };
+}
+
 function execution(toolNames: string[]): LumiExecutionDecision {
   return {
     allowToolUse: true,
@@ -107,6 +124,7 @@ describe('shared foreground messaging execution', () => {
     } as any);
     const result = await executeForegroundMessagingAction({
       action: 'send',
+      executionPlan: messagingPlanFor('wechat_send_message'),
       normalizedIntent: normalizeActionIntent('看一下张勇最近给我发什么消息了'),
       arguments: { contact: '张勇', message: '最近给我发什么消息了' },
       registry,
@@ -133,6 +151,7 @@ describe('shared foreground messaging execution', () => {
     } as any);
     const result = await executeForegroundMessagingAction({
       action: 'send',
+      executionPlan: messagingPlanFor('wechat_send_message'),
       normalizedIntent: normalizeActionIntent('给张勇发「明天见」'),
       arguments: { contact: '张勇', message: '明天见' },
       registry,

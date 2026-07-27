@@ -187,7 +187,7 @@ describe('Lumi capability selection', () => {
     expect(selection.promptOverlay).toContain('Do not hard-code an industry demo into Lumi core');
   });
 
-  it('keeps learned self-introduction as a skill workflow instead of a fixed script', async () => {
+  it('keeps ordinary self-introduction conversational and reserves workflow execution for explicit demos', async () => {
     const { dispatch, selection } = await selectCapability({
       userId: 'capability_selection_skill_user',
       text: 'Lumi, introduce yourself',
@@ -195,10 +195,19 @@ describe('Lumi capability selection', () => {
       targetIsLumi: true,
     });
 
-    expect(dispatch.boundary).toBe('skill_workflow');
-    expect(selection.lane).toBe('skill_workflow');
-    expect(selection.primary).toContain('self_intro_demo');
-    expect(selection.promptOverlay).toContain('not a fixed script');
+    expect(dispatch.boundary).toBe('conversation');
+    expect(selection.lane).toBe('conversation');
+
+    const demo = await selectCapability({
+      userId: 'capability_selection_skill_user',
+      text: 'Lumi, show me a visible demo of yourself',
+      operationMode: 'assistant',
+      targetIsLumi: true,
+    });
+    expect(demo.dispatch.boundary).toBe('skill_workflow');
+    expect(demo.selection.lane).toBe('skill_workflow');
+    expect(demo.selection.primary).toContain('self_intro_demo');
+    expect(demo.selection.promptOverlay).toContain('not a fixed script');
   });
 
   it('treats task center turns as persistent task work', async () => {

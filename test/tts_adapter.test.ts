@@ -20,6 +20,7 @@ describe('TTS adapter fallback', () => {
     }));
     vi.doMock('../server/tts/providers/gptsovits', () => ({
       isConfigured: () => true,
+      isReadyForAutomaticFallback: () => true,
       synthesizeSpeech: localSynthesize,
       listVoices: () => [],
     }));

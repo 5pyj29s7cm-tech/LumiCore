@@ -69,6 +69,7 @@ export interface KbArticle {
   viewCount: number;
   createdAt: string;
   updatedAt: string;
+  ingestionManifest: string;
 }
 
 export interface KbEmbedding {
@@ -425,6 +426,7 @@ export function createKbArticle(
     viewCount: 0,
     createdAt: now(),
     updatedAt: now(),
+    ingestionManifest: '{}',
   };
   if (!db.orgKbArticles) db.orgKbArticles = [];
   db.orgKbArticles.push(article);
@@ -439,6 +441,21 @@ export function updateKbArticle(orgId: string, articleId: string, updates: Parti
   );
   if (!article) return null;
   Object.assign(article, updates, { updatedAt: now() });
+  entWrite();
+  return article;
+}
+
+/** Persist index evidence without changing the source article revision timestamp. */
+export function setKbArticleIngestionManifest(
+  orgId: string,
+  articleId: string,
+  manifest: string,
+): KbArticle | null {
+  const article = entDB().orgKbArticles?.find(
+    (candidate: KbArticle) => candidate.orgId === orgId && candidate.id === articleId,
+  );
+  if (!article) return null;
+  article.ingestionManifest = manifest || '{}';
   entWrite();
   return article;
 }

@@ -35,6 +35,7 @@ const DECLARATIONS = [
   'url_fetch',
   'browser_open_task',
   'knowledge_file_stats',
+  'knowledge_coverage_report',
   'url_fetch_logged_in',
   'web_login_site_presets',
   'web_login_profile_save_from_preset',
@@ -173,6 +174,7 @@ describe('tool router', () => {
     const knowledge = routeToolsForTurn('看一下现在知识库里有多少的文件内容。', DECLARATIONS);
     expect(knowledge.categories).toContain('knowledge');
     expect(knowledge.toolNames).toContain('knowledge_file_stats');
+    expect(knowledge.toolNames).toContain('knowledge_coverage_report');
     expect(knowledge.toolNames).not.toContain('client_get_state');
   });
 

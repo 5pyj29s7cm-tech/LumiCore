@@ -105,7 +105,7 @@ describe('systematic naturalness regressions', () => {
     expect(answer).toContain('当前采样');
   });
 
-  it('executes the desktop observation directly without an LLM classifier or worker', async () => {
+  it('keeps deterministic desktop observation scripts as non-executing planner hints', async () => {
     const execute = vi.spyOn(toolRegistry, 'execute').mockResolvedValue(JSON.stringify([
       { pid: 1, name: 'wps.exe' },
       { pid: 2, name: 'Weixin.exe' },
@@ -125,9 +125,10 @@ describe('systematic naturalness regressions', () => {
         classifier,
         { userId: 'naturalness-observation' },
       );
-      expect(result.directToolExecuted).toBe(true);
-      expect(result.toolRecords).toHaveLength(1);
-      expect(result.responseText).toContain('2 个活跃进程条目');
+      expect(result.directToolExecuted).toBe(false);
+      expect(result.toolRecords).toBeUndefined();
+      expect(result.responseText).toBe('');
+      expect(execute).not.toHaveBeenCalled();
       expect(classifier).not.toHaveBeenCalled();
     } finally {
       execute.mockRestore();

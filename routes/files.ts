@@ -17,6 +17,8 @@ import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { readDB, writeDB } from '../db_layer';
 import { chunkText, ingestDocument } from '../server/agents/rag';
+import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
+import { hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
 import { getDataPath, getDataRoot } from '../server/config/data_path';
 import { getJwtSecret } from '../server/config/local_identity';
 import * as OrgKB from '../server/org/kb';
@@ -138,6 +140,9 @@ interface KnowledgeEntry {
   extractionProvider?: string;
   extractionModel?: string;
   contentChars?: number;
+  ingestionStatus?: KnowledgeIngestionManifest['status'];
+  ingestionManifestId?: string;
+  ingestionCoverage?: KnowledgeIngestionManifest['coverage'];
   sourceTitle?: string;
   sourceAliases?: string[];
   sourceTags?: string[];
@@ -837,6 +842,27 @@ function applyExtractionMeta(meta: any, extraction: KnowledgeExtractionResult, c
   meta.updatedAt = new Date().toISOString();
 }
 
+function applyIngestionManifest(meta: any, manifest: KnowledgeIngestionManifest): void {
+  if (!meta) return;
+  meta.ingestionManifest = manifest;
+  meta.ingestionManifestId = manifest.manifestId;
+  meta.ingestionStatus = manifest.status;
+  meta.ingestionCoverage = manifest.coverage;
+  meta.chunkCount = manifest.chunks.length;
+  meta.sourceRevision = manifest.sourceRevision;
+  meta.updatedAt = new Date().toISOString();
+}
+
+function hasCurrentVerifiedManifest(meta: any, content: string, existingMemoryIds: string[]): boolean {
+  const manifest = meta?.ingestionManifest as KnowledgeIngestionManifest | undefined;
+  if (!manifest || manifest.schemaVersion !== 1) return false;
+  if (manifest.sourceRevision !== hashKnowledgeContent(content)) return false;
+  const existing = new Set(existingMemoryIds);
+  return manifest.chunks.length > 0
+    && manifest.chunks.every(chunk => Boolean(chunk.memoryId) && existing.has(String(chunk.memoryId)))
+    && manifest.coverage?.chunkStorageCoverage === 1;
+}
+
 function buildOrgArticleTags(filename: string, metadata?: MarkdownKnowledgeMetadata): string[] {
   const ext = path.extname(filename).replace(/^\./, '');
   return [
@@ -847,35 +873,40 @@ function buildOrgArticleTags(filename: string, metadata?: MarkdownKnowledgeMetad
   ].map(tag => String(tag || '').trim()).filter(Boolean).slice(0, 20);
 }
 
-function ensureOrgArticleFromFile(
+async function ensureOrgArticleFromFile(
   scope: FileScope,
   userId: string,
   filename: string,
   content: string | null,
   articleId?: string,
   metadata?: MarkdownKnowledgeMetadata,
-): any | null {
+): Promise<any | null> {
   if (scope.domain !== 'work' || !scope.orgId) return null;
   const articleContent = (content && content.trim())
     ? content
     : `文件已上传到组织知识库。\n\n文件名：${repairFilename(filename)}`;
   const articleTags = buildOrgArticleTags(filename, metadata);
   if (articleId && OrgKB.getArticle(scope.orgId, articleId)) {
-    return OrgKB.updateArticle(scope.orgId, userId, articleId, {
+    const article = OrgKB.updateArticle(scope.orgId, userId, articleId, {
       title: repairFilename(filename),
       content: articleContent,
       category: 'files',
       tags: articleTags,
       status: 'published',
-    });
+    }, { index: false });
+    if (!article) return null;
+    await OrgKB.indexArticle(scope.orgId, article.id);
+    return OrgKB.getArticle(scope.orgId, article.id) || article;
   }
-  return OrgKB.createArticle(scope.orgId, userId, {
+  const article = OrgKB.createArticle(scope.orgId, userId, {
     title: repairFilename(filename),
     content: articleContent,
     category: 'files',
     tags: articleTags,
     status: 'published',
-  });
+  }, { index: false });
+  await OrgKB.indexArticle(scope.orgId, article.id);
+  return OrgKB.getArticle(scope.orgId, article.id) || article;
 }
 
 function uniqueKnowledgeDestination(scope: FileScope, originalName: string): string {
@@ -987,16 +1018,25 @@ async function saveKnowledgeFile(
       const meta = findFileMeta(db, finalName, scope);
       if (meta) applyExtractionMeta(meta, extraction, extractedContent);
       if (extractedContent?.trim()) {
-        const article = ensureOrgArticleFromFile(scope, userId, finalName, extractedContent, meta?.orgArticleId, extraction.sourceMetadata);
+        const article = await ensureOrgArticleFromFile(scope, userId, finalName, extractedContent, meta?.orgArticleId, extraction.sourceMetadata);
+        const manifest = article?.id && scope.orgId
+          ? OrgKB.getArticleIngestionManifest(scope.orgId, article.id)
+          : null;
         if (meta) {
           if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
           meta.orgArticleId = article?.id;
           meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
           if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
+          if (manifest) applyIngestionManifest(meta, manifest);
         }
         entry.orgArticleId = article?.id;
         entry.ingested = true;
         entry.partial = extraction.status === 'partial';
+        if (manifest) {
+          entry.ingestionStatus = manifest.status;
+          entry.ingestionManifestId = manifest.manifestId;
+          entry.ingestionCoverage = manifest.coverage;
+        }
       } else if (meta) {
         meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
         entry.syncError = extraction.error || extraction.warning || 'No extractable content found';
@@ -1012,6 +1052,7 @@ async function saveKnowledgeFile(
         domain: scope.domain,
         orgId: scope.orgId || '',
         sourceMetadata: extraction.sourceMetadata,
+        extraction,
       });
       const meta = findFileMeta(db, finalName, scope);
       if (meta) {
@@ -1019,6 +1060,7 @@ async function saveKnowledgeFile(
         if (!meta.agentIds.includes('lumi')) meta.agentIds.push('lumi');
         meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
         applyExtractionMeta(meta, extraction, extractedContent);
+        applyIngestionManifest(meta, result.manifest);
       }
       entry.ingested = true;
       entry.partial = extraction.status === 'partial';
@@ -1286,10 +1328,14 @@ async function syncObsidianNote(
   applyExtractionMeta(meta, extraction, content);
 
   if (scope.domain === 'work') {
-    const article = ensureOrgArticleFromFile(scope, userId, finalName, content, meta.orgArticleId, extraction.sourceMetadata);
+    const article = await ensureOrgArticleFromFile(scope, userId, finalName, content, meta.orgArticleId, extraction.sourceMetadata);
     meta.orgArticleId = article?.id;
     if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
     meta.status = 'indexed';
+    const manifest = article?.id && scope.orgId
+      ? OrgKB.getArticleIngestionManifest(scope.orgId, article.id)
+      : null;
+    if (manifest) applyIngestionManifest(meta, manifest);
   } else {
     removeExistingFileMemories(db, finalName, scope, { userId, agentId: 'lumi' });
     const result = await ingestDocument(userId, 'lumi', finalName, content, {
@@ -1297,10 +1343,12 @@ async function syncObsidianNote(
       domain: scope.domain,
       orgId: scope.orgId || '',
       sourceMetadata: extraction.sourceMetadata,
+      extraction,
     });
     if (!meta.agentIds.includes('lumi')) meta.agentIds.push('lumi');
     meta.status = 'indexed';
     meta.chunkCount = result.chunkCount;
+    applyIngestionManifest(meta, result.manifest);
   }
 
   return { status: 'synced', file: buildEntry(finalName, 'obsidian', meta.agentIds, scope, meta.status, meta) };
@@ -1390,6 +1438,9 @@ function buildEntry(filename: string, source: KnowledgeFileSource, agentIds: str
     extractionProvider: meta?.extractionProvider || undefined,
     extractionModel: meta?.extractionModel || undefined,
     contentChars: meta?.contentChars || undefined,
+    ingestionStatus: meta?.ingestionStatus || (meta?.status === 'indexed' ? 'indexed_unverified' : undefined),
+    ingestionManifestId: meta?.ingestionManifestId || undefined,
+    ingestionCoverage: meta?.ingestionCoverage || undefined,
     sourceTitle: meta?.sourceTitle || undefined,
     sourceAliases: Array.isArray(meta?.sourceAliases) ? meta.sourceAliases : undefined,
     sourceTags: Array.isArray(meta?.sourceTags) ? meta.sourceTags : undefined,
@@ -1815,13 +1866,17 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
     if (meta) applyExtractionMeta(meta, generatedExtraction, generatedKnowledgeContent);
     let orgArticleId: string | undefined;
     if (scope.domain === 'work') {
-      const article = ensureOrgArticleFromFile(scope, userId, safeName, generatedKnowledgeContent, meta?.orgArticleId, generatedExtraction.sourceMetadata);
+      const article = await ensureOrgArticleFromFile(scope, userId, safeName, generatedKnowledgeContent, meta?.orgArticleId, generatedExtraction.sourceMetadata);
       orgArticleId = article?.id;
       if (meta) {
         if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
         meta.orgArticleId = orgArticleId;
         meta.status = 'indexed';
         if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
+        const manifest = article?.id && scope.orgId
+          ? OrgKB.getArticleIngestionManifest(scope.orgId, article.id)
+          : null;
+        if (manifest) applyIngestionManifest(meta, manifest);
       }
     } else if (meta) {
       try {
@@ -1830,11 +1885,13 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
           domain: scope.domain,
           orgId: scope.orgId || '',
           sourceMetadata: generatedExtraction.sourceMetadata,
+          extraction: generatedExtraction,
         });
         if (!Array.isArray(meta.agentIds)) meta.agentIds = [];
         if (!meta.agentIds.includes('lumi')) meta.agentIds.push('lumi');
         meta.status = 'indexed';
         applyExtractionMeta(meta, generatedExtraction, generatedKnowledgeContent);
+        applyIngestionManifest(meta, result.manifest);
         console.log(`[AutoIngest] "${safeName}" -> ${result.chunkCount} chunks`);
       } catch (ingestErr: any) {
         console.warn(`[AutoIngest] Failed for generated "${safeName}": ${ingestErr.message}`);
@@ -2037,6 +2094,9 @@ router.get('/files/info/:id', (req: Request, res: Response) => {
       extractionProvider: meta?.extractionProvider || undefined,
       extractionModel: meta?.extractionModel || undefined,
       contentChars: meta?.contentChars || undefined,
+      ingestionStatus: meta?.ingestionStatus || (meta?.status === 'indexed' ? 'indexed_unverified' : undefined),
+      ingestionManifestId: meta?.ingestionManifestId || undefined,
+      ingestionCoverage: meta?.ingestionCoverage || undefined,
       sourceTitle: meta?.sourceTitle || undefined,
       sourceAliases: Array.isArray(meta?.sourceAliases) ? meta.sourceAliases : undefined,
       sourceTags: Array.isArray(meta?.sourceTags) ? meta.sourceTags : undefined,
@@ -2098,7 +2158,10 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
     const canReuseExisting = existingMemories.length > 0
       && !['partial', 'failed'].includes(String(meta.status || meta.extractionStatus || ''));
     const expectedChunks = content?.trim() ? chunkText(content).length : 0;
-    const hasCompleteExisting = canReuseExisting && (expectedChunks === 0 || existingMemories.length >= expectedChunks);
+    const hasCompleteExisting = canReuseExisting
+      && (expectedChunks === 0 || existingMemories.length >= expectedChunks)
+      && Boolean(content?.trim())
+      && hasCurrentVerifiedManifest(meta, content!, existingMemories.map((memory: any) => String(memory.id || '')));
     if (hasCompleteExisting) {
       if (!meta.agentIds.includes(agentId)) meta.agentIds.push(agentId);
       meta.status = 'indexed';
@@ -2111,6 +2174,8 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
         chunkCount: existingMemories.length,
         memoryIds: existingMemories.map((m: any) => m.id).filter(Boolean),
         extractionStatus: content?.trim() ? extraction.status : (meta.extractionStatus || 'indexed'),
+        ingestionStatus: meta.ingestionStatus || 'indexed_unverified',
+        ingestionManifestId: meta.ingestionManifestId,
       });
     }
     applyExtractionMeta(meta, extraction, content);
@@ -2127,14 +2192,26 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
     writeDB(db);
 
     if (scope.domain === 'work') {
-      const article = ensureOrgArticleFromFile(scope, userId, safeName, content, meta?.orgArticleId, extraction.sourceMetadata);
+      const article = await ensureOrgArticleFromFile(scope, userId, safeName, content, meta?.orgArticleId, extraction.sourceMetadata);
       if (!meta.agentIds.includes('org-kb')) meta.agentIds.push('org-kb');
       meta.orgArticleId = article?.id;
       meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
       applyExtractionMeta(meta, extraction, content);
+      const manifest = article?.id && scope.orgId
+        ? OrgKB.getArticleIngestionManifest(scope.orgId, article.id)
+        : null;
+      if (manifest) applyIngestionManifest(meta, manifest);
       delete meta.indexingAt;
       writeDB(db);
-      res.json({ success: true, orgArticleId: article?.id, memoryIds: [], extractionStatus: extraction.status });
+      res.json({
+        success: true,
+        orgArticleId: article?.id,
+        memoryIds: [],
+        extractionStatus: extraction.status,
+        ingestionStatus: manifest?.status || 'indexed_unverified',
+        ingestionManifestId: manifest?.manifestId,
+        ingestionCoverage: manifest?.coverage,
+      });
       return;
     }
 
@@ -2143,16 +2220,26 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
       domain: scope.domain,
       orgId: scope.orgId || '',
       sourceMetadata: extraction.sourceMetadata,
+      extraction,
     });
 
     // Mark as indexed
     if (!meta.agentIds.includes(agentId)) meta.agentIds.push(agentId);
     meta.status = extraction.status === 'partial' ? 'partial' : 'indexed';
     applyExtractionMeta(meta, extraction, content);
+    applyIngestionManifest(meta, result.manifest);
     delete meta.indexingAt;
     writeDB(db);
 
-    res.json({ success: true, chunkCount: result.chunkCount, memoryIds: result.memoryIds, extractionStatus: extraction.status });
+    res.json({
+      success: true,
+      chunkCount: result.chunkCount,
+      memoryIds: result.memoryIds,
+      extractionStatus: extraction.status,
+      ingestionStatus: result.manifest.status,
+      ingestionManifestId: result.manifest.manifestId,
+      coverage: result.manifest.coverage,
+    });
   } catch (err: any) {
     sendRouteError(res, err, 500);
   }

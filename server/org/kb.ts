@@ -5,7 +5,19 @@
 import * as EDB from './db';
 import { logAudit } from './db';
 import { generateEmbedding, cosineSimilarity } from '../memory/store';
+import { generateConfiguredEmbedding } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
+import {
+  buildKnowledgeIngestionManifest,
+  chunkKnowledgeText,
+  evaluateKnowledgeManifest,
+  evaluateKnowledgeRetrievalCases,
+  hashKnowledgeContent,
+  markKnowledgeManifestStale,
+  type KnowledgeChunkManifest,
+  type KnowledgeIngestionManifest,
+  type KnowledgeRetrievalCaseEvidence,
+} from '../knowledge/ingestion_manifest';
 
 export interface KnowledgeSearchResult {
   articleId: string;
@@ -29,6 +41,10 @@ export interface KnowledgeStats {
   indexedArticles: number;
   missingIndexArticles: number;
   staleArticles: number;
+  verifiedArticles: number;
+  unverifiedArticles: number;
+  failedArticles: number;
+  fullyAbsorbed: boolean;
   categoryBreakdown: Array<{ category: string; count: number }>;
   statusBreakdown: Array<{ status: string; count: number }>;
   articleHealth: Array<{
@@ -38,6 +54,9 @@ export interface KnowledgeStats {
     stale: boolean;
     updatedAt: string;
     lastIndexedAt: string | null;
+    ingestionStatus: KnowledgeIngestionManifest['status'] | 'missing';
+    verified: boolean;
+    coverage?: KnowledgeIngestionManifest['coverage'];
   }>;
 }
 
@@ -46,6 +65,37 @@ interface SearchOptions {
   category?: string;
   status?: string;
   userId?: string;
+}
+
+interface ArticleMutationOptions {
+  index?: boolean;
+}
+
+function parseIngestionManifest(value: unknown): KnowledgeIngestionManifest | null {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return parsed && typeof parsed === 'object' && (parsed as any).schemaVersion === 1
+      ? parsed as KnowledgeIngestionManifest
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getArticleIngestionManifest(
+  orgId: string,
+  articleId: string,
+): KnowledgeIngestionManifest | null {
+  const article = EDB.getKbArticle(orgId, articleId);
+  if (!article) return null;
+  const manifest = parseIngestionManifest(article.ingestionManifest);
+  if (!manifest) return null;
+  const current = evaluateKnowledgeManifest(manifest, hashArticleRevision(article.content));
+  return { ...manifest, ...current };
+}
+
+function hashArticleRevision(content: string): string {
+  return hashKnowledgeContent(content);
 }
 
 // Article CRUD
@@ -63,7 +113,8 @@ export function getArticle(orgId: string, articleId: string) {
 export function createArticle(
   orgId: string,
   authorId: string,
-  data: { title: string; content: string; category?: string; tags?: string[]; status?: 'draft' | 'published' }
+  data: { title: string; content: string; category?: string; tags?: string[]; status?: 'draft' | 'published' },
+  options: ArticleMutationOptions = {},
 ) {
   const article = EDB.createKbArticle(orgId, authorId, normalizeArticleInput(data));
   logAudit({
@@ -74,9 +125,11 @@ export function createArticle(
     resourceId: article.id,
     details: { title: article.title, category: article.category, status: article.status },
   });
-  indexArticle(orgId, article.id).catch(err => {
-    console.error(`[KB] Failed to index article ${article.id}:`, err.message);
-  });
+  if (options.index !== false) {
+    indexArticle(orgId, article.id).catch(err => {
+      console.error(`[KB] Failed to index article ${article.id}:`, err.message);
+    });
+  }
   return article;
 }
 
@@ -84,7 +137,8 @@ export function updateArticle(
   orgId: string,
   userId: string,
   articleId: string,
-  updates: { title?: string; content?: string; category?: string; tags?: string[]; status?: 'draft' | 'published' | 'archived' }
+  updates: { title?: string; content?: string; category?: string; tags?: string[]; status?: 'draft' | 'published' | 'archived' },
+  options: ArticleMutationOptions = {},
 ) {
   const dbUpdates: any = normalizeArticleInput(updates);
   if (updates.tags) dbUpdates.tags = JSON.stringify(normalizeTags(updates.tags));
@@ -99,10 +153,19 @@ export function updateArticle(
       details: updates,
     });
     if (updates.content || updates.title || updates.category || updates.tags) {
-      EDB.deleteKbEmbeddings(articleId);
-      indexArticle(orgId, articleId).catch(err => {
-        console.error(`[KB] Failed to re-index article ${articleId}:`, err.message);
-      });
+      const priorManifest = parseIngestionManifest(article.ingestionManifest);
+      if (priorManifest && updates.content) {
+        EDB.setKbArticleIngestionManifest(
+          orgId,
+          articleId,
+          JSON.stringify(markKnowledgeManifestStale(priorManifest, article.content)),
+        );
+      }
+      if (options.index !== false) {
+        indexArticle(orgId, articleId).catch(err => {
+          console.error(`[KB] Failed to re-index article ${articleId}:`, err.message);
+        });
+      }
     }
   }
   return article;
@@ -144,9 +207,13 @@ export function getStats(orgId: string): KnowledgeStats {
       .sort()
       .at(-1) || null;
     const indexed = chunks.length > 0;
-    const stale = indexed && lastIndexedAt !== null
+    const rawManifest = parseIngestionManifest(article.ingestionManifest);
+    const manifest = rawManifest
+      ? { ...rawManifest, ...evaluateKnowledgeManifest(rawManifest, hashArticleRevision(article.content)) }
+      : null;
+    const stale = manifest?.status === 'stale' || (indexed && lastIndexedAt !== null
       ? new Date(lastIndexedAt).getTime() < new Date(article.updatedAt).getTime()
-      : false;
+      : false);
 
     categoryCounts.set(article.category || 'general', (categoryCounts.get(article.category || 'general') || 0) + 1);
     statusCounts.set(article.status || 'published', (statusCounts.get(article.status || 'published') || 0) + 1);
@@ -158,6 +225,9 @@ export function getStats(orgId: string): KnowledgeStats {
       stale,
       updatedAt: article.updatedAt,
       lastIndexedAt,
+      ingestionStatus: manifest?.status || 'missing',
+      verified: manifest?.coverage.verified === true,
+      coverage: manifest?.coverage,
     };
   });
 
@@ -170,6 +240,10 @@ export function getStats(orgId: string): KnowledgeStats {
     indexedArticles: articleHealth.filter(item => item.indexed).length,
     missingIndexArticles: articleHealth.filter(item => !item.indexed).length,
     staleArticles: articleHealth.filter(item => item.stale).length,
+    verifiedArticles: articleHealth.filter(item => item.verified).length,
+    unverifiedArticles: articleHealth.filter(item => !item.verified && item.ingestionStatus !== 'failed').length,
+    failedArticles: articleHealth.filter(item => item.ingestionStatus === 'failed').length,
+    fullyAbsorbed: articleHealth.length > 0 && articleHealth.every(item => item.verified),
     categoryBreakdown: [...categoryCounts.entries()]
       .map(([category, count]) => ({ category, count }))
       .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
@@ -185,47 +259,52 @@ export function getStats(orgId: string): KnowledgeStats {
 const CHUNK_SIZE = 800;
 const CHUNK_OVERLAP = 120;
 
-function chunkText(text: string): string[] {
-  const cleaned = String(text || '').replace(/\r\n/g, '\n').trim();
-  if (!cleaned) return [];
-  if (cleaned.length <= CHUNK_SIZE) return [cleaned];
-
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < cleaned.length) {
-    const hardEnd = Math.min(start + CHUNK_SIZE, cleaned.length);
-    let breakPoint = hardEnd;
-
-    if (hardEnd < cleaned.length) {
-      const windowStart = Math.max(start + Math.floor(CHUNK_SIZE * 0.55), hardEnd - 160);
-      const slice = cleaned.slice(windowStart, Math.min(hardEnd + 120, cleaned.length));
-      const matches = [...slice.matchAll(/[。！？!?；;\n]/g)];
-      const last = matches.at(-1);
-      if (last?.index !== undefined) {
-        breakPoint = windowStart + last.index + 1;
-      }
-    }
-
-    const chunk = cleaned.slice(start, breakPoint).trim();
-    if (chunk.length > 10) chunks.push(chunk);
-    if (breakPoint >= cleaned.length) break;
-
-    const nextStart = Math.max(0, breakPoint - CHUNK_OVERLAP);
-    start = nextStart <= start ? breakPoint : nextStart;
-  }
-  return chunks;
-}
-
 // Indexing
+
+const articleIndexGenerations = new Map<string, number>();
 
 export async function indexArticle(orgId: string, articleId: string): Promise<number> {
   const article = EDB.getKbArticle(orgId, articleId);
   if (!article) return 0;
+  const generation = (articleIndexGenerations.get(articleId) || 0) + 1;
+  articleIndexGenerations.set(articleId, generation);
+  const sourceContent = String(article.content || '');
+  const sourceRevision = hashArticleRevision(sourceContent);
+  const chunks = chunkKnowledgeText(sourceContent, {
+    maxChunkSize: CHUNK_SIZE,
+    overlapSize: CHUNK_OVERLAP,
+  });
 
-  EDB.deleteKbEmbeddings(articleId);
-
-  const chunks = chunkText(article.content);
-  if (chunks.length === 0) return 0;
+  const pendingChunks: KnowledgeChunkManifest[] = chunks.map(chunk => ({
+    index: chunk.index,
+    start: chunk.start,
+    end: chunk.end,
+    charCount: chunk.charCount,
+    contentHash: chunk.contentHash,
+    stored: false,
+    embeddingStatus: 'pending',
+    citationKey: `org:${orgId}:article:${articleId}#chunk:${chunk.index + 1}/${chunks.length}#sha256:${chunk.contentHash}`,
+  }));
+  const pendingBase = buildKnowledgeIngestionManifest({
+    sourceId: `org:${orgId}:article:${articleId}`,
+    content: sourceContent,
+    chunks: pendingChunks,
+    extraction: { status: sourceContent.trim() ? 'verified' : 'failed', method: 'org-article' },
+  });
+  const pendingManifest: KnowledgeIngestionManifest = {
+    ...pendingBase,
+    status: chunks.length > 0 ? 'pending' : 'failed',
+    coverage: {
+      ...pendingBase.coverage,
+      verified: false,
+      blockers: chunks.length > 0 ? ['indexing_in_progress'] : pendingBase.coverage.blockers,
+    },
+  };
+  EDB.setKbArticleIngestionManifest(orgId, articleId, JSON.stringify(pendingManifest));
+  if (chunks.length === 0) {
+    EDB.deleteKbEmbeddings(articleId);
+    return 0;
+  }
 
   const tags = parseTags(article.tags).join(', ');
   const contextPrefix = [
@@ -234,21 +313,107 @@ export async function indexArticle(orgId: string, articleId: string): Promise<nu
     tags ? `Tags: ${tags}` : '',
   ].filter(Boolean).join('\n');
 
-  let indexed = 0;
+  const embeddingResults: Array<
+    | Awaited<ReturnType<typeof generateConfiguredEmbedding>>
+    | { error: string }
+  > = [];
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const embedding = await generateEmbedding(`${contextPrefix}\n\n${chunks[i]}`, article.authorId);
-      if (embedding) {
-        EDB.saveKbEmbedding(articleId, i, embedding, chunks[i]);
-        indexed++;
-      }
+      embeddingResults[i] = await generateConfiguredEmbedding(
+        `${contextPrefix}\n\n${chunks[i].text}`,
+        article.authorId,
+      );
       if (i > 0 && i % 5 === 0) {
         await new Promise(r => setTimeout(r, 200));
       }
-    } catch (err) {
+    } catch (err: any) {
+      embeddingResults[i] = { error: String(err?.message || err || 'embedding_failed').slice(0, 300) };
       console.error(`[KB] Failed to embed chunk ${i} of article ${articleId}:`, err);
     }
   }
+
+  const latest = EDB.getKbArticle(orgId, articleId);
+  if (!latest
+    || articleIndexGenerations.get(articleId) !== generation
+    || hashArticleRevision(latest.content) !== sourceRevision) {
+    return 0;
+  }
+
+  EDB.deleteKbEmbeddings(articleId);
+  const chunkManifests: KnowledgeChunkManifest[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const embedding = embeddingResults[i] && !('error' in embeddingResults[i])
+      ? embeddingResults[i] as Awaited<ReturnType<typeof generateConfiguredEmbedding>>
+      : null;
+    const error = embeddingResults[i] && 'error' in embeddingResults[i]
+      ? embeddingResults[i].error
+      : undefined;
+    const row = embedding
+      ? EDB.saveKbEmbedding(
+        articleId,
+        i,
+        embedding.vector,
+        chunk.text,
+        `${embedding.provider}/${embedding.model}`,
+      )
+      : null;
+    chunkManifests.push({
+      index: chunk.index,
+      start: chunk.start,
+      end: chunk.end,
+      charCount: chunk.charCount,
+      contentHash: chunk.contentHash,
+      memoryId: row?.id,
+      stored: Boolean(row),
+      embeddingStatus: embedding ? 'verified' : 'failed',
+      embeddingProvider: embedding?.provider,
+      embeddingModel: embedding?.model,
+      embeddingDimensions: embedding?.vector.length,
+      citationKey: `org:${orgId}:article:${articleId}#chunk:${i + 1}/${chunks.length}#sha256:${chunk.contentHash}`,
+      error,
+    });
+  }
+
+  let manifest = buildKnowledgeIngestionManifest({
+    sourceId: `org:${orgId}:article:${articleId}`,
+    content: sourceContent,
+    chunks: chunkManifests,
+    extraction: { status: 'verified', method: 'org-article' },
+  });
+  const sampleIndexes = chunks.length <= 12
+    ? chunks.map(chunk => chunk.index)
+    : Array.from(new Set(Array.from({ length: 12 }, (_, index) => Math.round(index * (chunks.length - 1) / 11))));
+  const cases: KnowledgeRetrievalCaseEvidence[] = [];
+  const articleById = new Map([[article.id, latest]]);
+  for (const index of sampleIndexes) {
+    const probe = chunks[index].text.replace(/\s+/g, ' ').trim().slice(0, 180);
+    const retrieved = await semanticSearch(orgId, probe, 5, articleById, article.authorId);
+    cases.push({
+      caseId: `chunk_${index + 1}`,
+      expectedChunkIndexes: [index],
+      retrievedMemoryIds: retrieved.flatMap(result => {
+        const matched = chunkManifests[result.chunkIndex ?? -1];
+        return matched?.memoryId ? [matched.memoryId] : [];
+      }),
+      citedChunkHashes: retrieved.flatMap(result => {
+        const matched = chunkManifests[result.chunkIndex ?? -1];
+        return matched?.contentHash ? [matched.contentHash] : [];
+      }),
+    });
+  }
+  const retrieval = evaluateKnowledgeRetrievalCases({ cases, chunks: chunkManifests, topK: 5 });
+  const manifestWithRetrieval = { ...manifest, retrieval, updatedAt: new Date().toISOString() };
+  manifest = { ...manifestWithRetrieval, ...evaluateKnowledgeManifest(manifestWithRetrieval) };
+
+  const current = EDB.getKbArticle(orgId, articleId);
+  if (!current
+    || articleIndexGenerations.get(articleId) !== generation
+    || hashArticleRevision(current.content) !== sourceRevision) {
+    return 0;
+  }
+  EDB.setKbArticleIngestionManifest(orgId, articleId, JSON.stringify(manifest));
+  const indexed = chunkManifests.filter(chunk => chunk.embeddingStatus === 'verified').length;
 
   if (indexed > 0) {
     logAudit({
@@ -257,7 +422,13 @@ export async function indexArticle(orgId: string, articleId: string): Promise<nu
       action: 'kb.article.index',
       resourceType: 'kb_article',
       resourceId: articleId,
-      details: { chunks: chunks.length, indexed },
+      details: {
+        chunks: chunks.length,
+        indexed,
+        ingestionStatus: manifest.status,
+        manifestId: manifest.manifestId,
+        recallAt5: manifest.coverage.retrievalRecallAt5,
+      },
     });
   }
 

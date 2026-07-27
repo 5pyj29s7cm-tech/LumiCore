@@ -40,7 +40,7 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
   } catch (error: any) {
     recordFailure(circuit, undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
     if (config.allowFallback !== false) {
-      const fallbackProvider = getActiveProvider();
+      const fallbackProvider = getActiveProvider({ requireWarmLocal: true });
       if (fallbackProvider && fallbackProvider !== config.provider) {
         return synthesizeSpeech(text, {
           ...config,
@@ -105,16 +105,18 @@ export function isTTSProviderConfigured(provider: TTSProvider): boolean {
   }
 }
 
-export function getActiveProvider(options: { requireHealthy?: boolean } = {}): TTSProvider | null {
+export function getActiveProvider(options: { requireHealthy?: boolean; requireWarmLocal?: boolean } = {}): TTSProvider | null {
   const pref = getVoicePreference();
   const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
   if (pref.tts === 'local-cosyvoice' && localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
-  if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')) return 'gptsovits';
+  if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')
+    && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
   if (pref.tts === 'cosyvoice' && hasDashScopeKey() && available('cosyvoice')) return 'cosyvoice';
   if (pref.tts === 'ark' && hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
   // Auto mode and unavailable explicit selections — prefer local, then healthy cloud.
   if (localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
-  if (gptsovits.isConfigured() && available('gptsovits')) return 'gptsovits';
+  if (gptsovits.isConfigured() && available('gptsovits')
+    && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
   if (hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
   const dashscopeKey = hasDashScopeKey();
   if (dashscopeKey && available('cosyvoice')) return 'cosyvoice';

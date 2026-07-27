@@ -1,6 +1,8 @@
 import { ToolRegistry } from '../registry';
 import { computerUseLoop } from '../../agents/computer_use';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { normalizeActionIntent } from '../../cognition/normalized_action_intent';
+import { resolveDesktopApplicationIdentity } from '../../desktop/execution_plan';
 
 const DEFAULT_COMPUTER_USE_STEPS = 12;
 const MAX_COMPUTER_USE_STEPS = 50;
@@ -40,6 +42,14 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
   if (!task.trim()) {
     throw new Error('The "task" parameter is required. Describe what you want Lumi to do on the desktop.');
   }
+  const normalizedIntent = normalizeActionIntent(task);
+  if (normalizedIntent.sideEffectClass === 'external_commit') {
+    throw new Error('Vision computer control cannot perform the final external commit. Use the dedicated provider/application capability with immutable confirmation and receipt verification.');
+  }
+  const expectedApplication = resolveDesktopApplicationIdentity(
+    String(args.target_application || task),
+    'desktop_control',
+  );
 
   const maxIterations = resolveComputerUseSteps(args, context);
   const leaseKey = computerUseLeaseKey(context);
@@ -58,6 +68,7 @@ async function computerUse(args: Record<string, any>, context?: any): Promise<st
         console.log(`[ComputerUse] ${step}`);
       }),
       isCancelled: context.isCancelled,
+      expectedApplication: expectedApplication.family === 'unknown' ? undefined : expectedApplication,
     });
   } finally {
     activeDesktopControlLeases.delete(leaseKey);
@@ -80,6 +91,10 @@ export function registerComputerUseTool(registry: ToolRegistry): void {
         max_steps: {
           type: 'number',
           description: 'Maximum number of screenshot/action iterations. Default 12; capped by the active tool policy up to 50.',
+        },
+        target_application: {
+          type: 'string',
+          description: 'Exact target application name when known. Completion is rejected unless its process/window identity matches.',
         },
       },
       required: ['task'],

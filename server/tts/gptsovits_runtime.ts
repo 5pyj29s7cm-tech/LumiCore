@@ -12,6 +12,7 @@ const MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.GPTSOVITS_MEMORY_BU
 
 let ownedProcess: ChildProcess | null = null;
 let startPromise: Promise<void> | null = null;
+let ready = false;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let restartCount = 0;
 let backoffUntil = 0;
@@ -77,10 +78,13 @@ export function markGptSovitsActivity(): void {
   idleTimer.unref?.();
 }
 
-async function waitUntilReady(signal?: AbortSignal): Promise<void> {
+async function waitUntilReady(child: ChildProcess, signal?: AbortSignal): Promise<void> {
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error('GPT-SoVITS startup was cancelled.');
+    if (child.exitCode !== null || child.signalCode !== null || ownedProcess !== child) {
+      throw new Error(`GPT-SoVITS exited before becoming ready${lastError ? `: ${lastError}` : '.'}`);
+    }
     if (await probeTcp()) return;
     await new Promise<void>(resolve => {
       const timer = setTimeout(resolve, 500);
@@ -92,7 +96,10 @@ async function waitUntilReady(signal?: AbortSignal): Promise<void> {
 
 export async function ensureGptSovitsRuntime(signal?: AbortSignal): Promise<void> {
   markGptSovitsActivity();
-  if (await probeTcp()) return;
+  if (await probeTcp()) {
+    ready = true;
+    return;
+  }
   if (process.env.GPTSOVITS_API_URL && !process.env.GPTSOVITS_API_URL.includes('127.0.0.1:9880')) {
     return;
   }
@@ -130,6 +137,7 @@ export async function ensureGptSovitsRuntime(signal?: AbortSignal): Promise<void
     });
     child.once('exit', code => {
       resourceMonitor.stop();
+      ready = false;
       if (ownedProcess === child) ownedProcess = null;
       if (code && code !== 0) {
         restartCount += 1;
@@ -138,7 +146,8 @@ export async function ensureGptSovitsRuntime(signal?: AbortSignal): Promise<void
       }
     });
     try {
-      await waitUntilReady(signal);
+      await waitUntilReady(child, signal);
+      ready = true;
       restartCount = 0;
       backoffUntil = 0;
       lastError = '';
@@ -146,6 +155,7 @@ export async function ensureGptSovitsRuntime(signal?: AbortSignal): Promise<void
     } catch (error: any) {
       if (ownedProcess === child && !child.killed) child.kill();
       ownedProcess = null;
+      ready = false;
       restartCount += 1;
       lastError = error?.message || String(error);
       backoffUntil = Date.now() + Math.min(5 * 60_000, 2 ** Math.min(restartCount, 8) * 1_000);
@@ -162,6 +172,14 @@ export function stopGptSovitsRuntime(): void {
   resourceMonitor.stop();
   if (ownedProcess && !ownedProcess.killed) ownedProcess.kill();
   ownedProcess = null;
+  ready = false;
+}
+
+/** Heavy local models are fallback-eligible only after an explicit use warmed them. */
+export function isGptSovitsRuntimeReady(): boolean {
+  const externalUrl = String(process.env.GPTSOVITS_API_URL || '');
+  if (externalUrl && !externalUrl.includes('127.0.0.1:9880')) return true;
+  return ready && Boolean(ownedProcess) && !startPromise;
 }
 
 export function getGptSovitsRuntimeStatus() {
@@ -170,6 +188,7 @@ export function getGptSovitsRuntimeStatus() {
     owned: Boolean(ownedProcess),
     pid: ownedProcess?.pid || null,
     starting: Boolean(startPromise),
+    ready,
     idleTimeoutMs: IDLE_MS,
     lastUsedAt,
     restartCount,

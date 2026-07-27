@@ -131,7 +131,7 @@ describe('external work versus Lumi client actions', () => {
     }
   });
 
-  it('does not let a direct desktop sub-step consume an explicit team request', async () => {
+  it('keeps legacy direct-tool hints read-only for both team and single-agent turns', async () => {
     const { processInput } = await import('../server/cognition');
     const { toolRegistry } = await import('../server/tools/registry');
     const execute = vi.spyOn(toolRegistry, 'execute').mockResolvedValue(
@@ -153,9 +153,10 @@ describe('external work versus Lumi client actions', () => {
       expect(execute).not.toHaveBeenCalled();
 
       const singleResult = await processInput(SINGLE_DESKTOP_TASK, context);
-      expect(singleResult.directToolExecuted).toBe(true);
-      expect(singleResult.toolRecord?.name).toBe('desktop_list_files');
-      expect(execute).toHaveBeenCalledTimes(1);
+      expect(singleResult.intent.directToolCall?.name).toBe('desktop_list_files');
+      expect(singleResult.directToolExecuted).toBe(false);
+      expect(singleResult.toolRecord).toBeUndefined();
+      expect(execute).not.toHaveBeenCalled();
     } finally {
       execute.mockRestore();
     }

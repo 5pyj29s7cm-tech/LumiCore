@@ -21,6 +21,10 @@ import { parseScreenshotBase64 } from '../llm/adapter';
 import type { VisionProvider } from '../llm/vision_preferences';
 import { getUserPreferredWorldModel } from '../llm/world_preferences';
 import { recordTokenUsage } from '../llm/token_tracker';
+import {
+  desktopFingerprintMatchesApplication,
+  type ApplicationIdentity,
+} from '../desktop/execution_plan';
 
 interface ComputerUseAction {
   action: 'click' | 'double_click' | 'right_click' | 'type' | 'key_press' | 'wait' | 'done' | 'error';
@@ -39,6 +43,8 @@ export interface ComputerUseOptions {
   maxIterations?: number;
   onProgress?: (step: string) => void;
   isCancelled?: () => boolean;
+  /** Exact certified target whose identity must match before completion. */
+  expectedApplication?: ApplicationIdentity;
 }
 
 export type DesktopWindowFingerprint = {
@@ -425,6 +431,7 @@ export async function computerUseLoop(
   let consecutiveErrors = 0;
   let wallpaperModeEnabled = false;
   let doneCandidate: { iteration: number; message: string } | null = null;
+  let targetApplicationObserved = false;
 
   // ── Enter desktop control: show cursor glow so user sees where Lumi is clicking ──
   try {
@@ -471,6 +478,12 @@ export async function computerUseLoop(
         continue;
       }
       observedWindow ||= windowBeforeCapture;
+      if (
+        options.expectedApplication
+        && desktopFingerprintMatchesApplication(observedWindow, options.expectedApplication)
+      ) {
+        targetApplicationObserved = true;
+      }
     } catch (err: any) {
       options.onProgress?.(`[${i + 1}/${maxIter}] Screenshot failed: ${err.message}`);
       consecutiveErrors++;
@@ -519,6 +532,15 @@ export async function computerUseLoop(
 
     // ── 5. Execute ──
     if (action.action === 'done') {
+      if (options.expectedApplication && !desktopFingerprintMatchesApplication(observedWindow, options.expectedApplication)) {
+        options.onProgress?.(
+          `[${i + 1}/${maxIter}] Completion rejected because the active window does not match ${options.expectedApplication.displayName}.`,
+        );
+        actionHistory.push(`[${i + 1}/${maxIter}] REJECTED_TARGET_MISMATCH:${options.expectedApplication.id}`);
+        doneCandidate = null;
+        await sleep(300);
+        continue;
+      }
       if (doneCandidate && doneCandidate.iteration < i) {
         options.onProgress?.(
           `[${i + 1}/${maxIter}] \u65b0\u622a\u56fe\u590d\u6838\u5b8c\u6210\uff0c\u6b63\u5728\u751f\u6210\u53ef\u9a8c\u8bc1\u7ed3\u679c`, // i18n-allow: reviewed Chinese computer-control progress copy.
@@ -530,6 +552,8 @@ export async function computerUseLoop(
           status: blocked ? 'blocked' : 'verified',
           completionVerified: !blocked,
           observations: 2,
+          applicationIdentity: options.expectedApplication?.id || '',
+          applicationMatched: options.expectedApplication ? targetApplicationObserved : true,
           message,
         });
       }

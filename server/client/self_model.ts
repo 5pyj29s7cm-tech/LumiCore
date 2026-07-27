@@ -29,6 +29,8 @@ import {
 import { toolRegistry } from '../tools/registry';
 import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
 import { selectManifestCapabilities } from '../tools/capability_projection';
+import { getLumiModelConfiguration, LUMI_MODEL_ROLES } from '../llm/model_configuration';
+import { DESKTOP_APPLICATION_REGISTRY } from '../desktop/execution_plan';
 
 export type ClientMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 export type ClientCapabilityKind =
@@ -87,8 +89,11 @@ export interface ClientStateSnapshot {
     orgId?: string;
     totalFiles?: number;
     indexedFiles?: number;
+    verifiedFiles?: number;
+    indexedUnverifiedFiles?: number;
     partialFiles?: number;
     pendingFiles?: number;
+    staleFiles?: number;
     failedFiles?: number;
     unsupportedFiles?: number;
     orgArticles?: {
@@ -242,6 +247,87 @@ export interface ClientSelfAwarenessReport {
   gaps: string[];
   habits: string[];
   nextBestActions: string[];
+}
+
+export interface SelfModelSnapshot {
+  schemaVersion: 1;
+  identity: {
+    name: 'Lumi';
+    product: 'LumiOS';
+    deployment: 'private_user_directed_agent';
+    continuity: 'single_identity_across_surfaces';
+  };
+  scope: { domain: 'personal' | 'work'; orgId: string };
+  modes: Array<{ id: string; available: boolean; active: boolean }>;
+  configuredModels: Array<{
+    role: string;
+    provider: string;
+    model: string;
+    configured: boolean;
+    effectiveProvider?: string;
+    effectiveModel?: string;
+  }>;
+  connectedCapabilities: {
+    tools: number;
+    skills: number;
+    mcp: number;
+    adaptersReady: number;
+    adaptersAttention: number;
+  };
+  desktopCapabilities: Array<{
+    id: string;
+    displayName: string;
+    certification: string;
+    controlLayers: string[];
+  }>;
+  knowledgeCoverage: {
+    totalFiles: number;
+    indexedFiles: number;
+    verifiedFiles: number;
+    indexedUnverifiedFiles: number;
+    partialFiles: number;
+    pendingFiles: number;
+    staleFiles: number;
+    failedFiles: number;
+    unsupportedFiles: number;
+    verification: 'empty' | 'verified' | 'indexed_unverified' | 'partial' | 'stale' | 'failed';
+    verifiedAbsorption: boolean;
+  };
+  memoryState: {
+    available: boolean;
+    scope: 'personal' | 'organization';
+    absorptionClaim: 'retrieval_and_evidence_required';
+  };
+  runtime: {
+    awareness: 'live' | 'stale' | 'missing';
+    health: ClientHealthLevel;
+    stateAgeSeconds: number | null;
+  };
+  permissions: {
+    externalCommitConfirmation: 'required';
+    localActions: 'policy_controlled';
+    dataBoundary: 'source_and_scope_isolated';
+  };
+  limitations: string[];
+  generatedAt: string;
+}
+
+export interface SelfIntroductionPlan {
+  schemaVersion: 1;
+  snapshotGeneratedAt: string;
+  mode: 'verbal' | 'visible_demo';
+  statements: Array<{
+    text: string;
+    evidence: string;
+    qualified: boolean;
+  }>;
+  demoCandidates: Array<{
+    applicationId: string;
+    enabled: boolean;
+    reason: string;
+    requiresPreflight: boolean;
+  }>;
+  documentText: string;
 }
 
 const CLIENT_CAPABILITIES: ClientCapability[] = [
@@ -1465,6 +1551,192 @@ export function getClientSelfAwarenessReport(
   };
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export function getSelfModelSnapshot(
+  userId: string,
+  scope: { domain?: 'personal' | 'work'; orgId?: string } = {},
+): SelfModelSnapshot {
+  const domain = scope.domain === 'work' && scope.orgId ? 'work' : 'personal';
+  const state = getClientStateForScope(userId, { domain, orgId: domain === 'work' ? scope.orgId : '' });
+  const awareness = getClientSelfAwarenessReport(userId, { domain, orgId: scope.orgId });
+  const health = getClientHealthReport(userId, { domain, orgId: scope.orgId });
+  const modelConfiguration = getLumiModelConfiguration(userId) as {
+    roles?: Record<string, Record<string, unknown>>;
+  };
+  const models = LUMI_MODEL_ROLES.map(role => {
+    const configuration = modelConfiguration.roles?.[role] || {};
+    return {
+      role,
+      provider: stringValue(configuration.provider),
+      model: stringValue(configuration.model),
+      configured: configuration.configured === true,
+      ...(stringValue(configuration.effectiveProvider)
+        ? { effectiveProvider: stringValue(configuration.effectiveProvider) }
+        : {}),
+      ...(stringValue(configuration.effectiveModel)
+        ? { effectiveModel: stringValue(configuration.effectiveModel) }
+        : {}),
+    };
+  });
+  const manifest = toolRegistry.getCapabilityManifest();
+  const adapters = getAdapterRegistry({ userId, clientState: state as Record<string, any> | null });
+  const knowledge = state?.knowledge || {};
+  const totalFiles = Number(knowledge.totalFiles || 0);
+  const indexedFiles = Number(knowledge.indexedFiles || 0);
+  const verifiedFiles = Number(knowledge.verifiedFiles || 0);
+  const indexedUnverifiedFiles = Number(knowledge.indexedUnverifiedFiles || Math.max(0, indexedFiles - verifiedFiles));
+  const partialFiles = Number(knowledge.partialFiles || 0);
+  const pendingFiles = Number(knowledge.pendingFiles || 0);
+  const staleFiles = Number(knowledge.staleFiles || 0);
+  const failedFiles = Number(knowledge.failedFiles || 0);
+  const unsupportedFiles = Number(knowledge.unsupportedFiles || 0);
+  const verification = failedFiles > 0 || unsupportedFiles > 0
+    ? 'failed'
+    : staleFiles > 0
+      ? 'stale'
+      : partialFiles > 0 || pendingFiles > 0 || indexedFiles < totalFiles
+      ? 'partial'
+      : totalFiles > 0 && verifiedFiles === totalFiles
+        ? 'verified'
+        : totalFiles > 0
+        ? 'indexed_unverified'
+        : 'empty';
+  return {
+    schemaVersion: 1,
+    identity: {
+      name: 'Lumi',
+      product: 'LumiOS',
+      deployment: 'private_user_directed_agent',
+      continuity: 'single_identity_across_surfaces',
+    },
+    scope: { domain, orgId: domain === 'work' ? String(scope.orgId || '') : '' },
+    modes: ['chat', 'assistant', 'autonomous', 'meeting'].map(id => ({
+      id,
+      available: true,
+      active: state?.mode === id,
+    })),
+    configuredModels: models,
+    connectedCapabilities: {
+      tools: manifest.length,
+      skills: manifest.filter(entry => entry.source === 'skill' && entry.executable).length,
+      mcp: manifest.filter(entry => entry.source === 'mcp' && entry.executable).length,
+      adaptersReady: adapters.adapters.filter(adapter => adapter.status === 'ready' || adapter.status === 'available').length,
+      adaptersAttention: adapters.adapters.filter(adapter => ['attention', 'degraded', 'blocked', 'requires_setup'].includes(adapter.status)).length,
+    },
+    desktopCapabilities: DESKTOP_APPLICATION_REGISTRY.map(application => ({
+      id: application.id,
+      displayName: application.displayName,
+      certification: application.certification,
+      controlLayers: [...application.controlLayers],
+    })),
+    knowledgeCoverage: {
+      totalFiles,
+      indexedFiles,
+      verifiedFiles,
+      indexedUnverifiedFiles,
+      partialFiles,
+      pendingFiles,
+      staleFiles,
+      failedFiles,
+      unsupportedFiles,
+      verification,
+      verifiedAbsorption: totalFiles > 0 && verifiedFiles === totalFiles,
+    },
+    memoryState: {
+      available: manifest.some(entry => entry.lane === 'memory'),
+      scope: domain === 'work' ? 'organization' : 'personal',
+      absorptionClaim: 'retrieval_and_evidence_required',
+    },
+    runtime: {
+      awareness: awareness.level,
+      health: health.level,
+      stateAgeSeconds: health.stateAgeSeconds,
+    },
+    permissions: {
+      externalCommitConfirmation: 'required',
+      localActions: 'policy_controlled',
+      dataBoundary: 'source_and_scope_isolated',
+    },
+    limitations: [
+      'Desktop certification applies only to registered application identities and tested versions; unknown applications use safe fallback control.',
+      'Indexed knowledge is not called absorbed until extraction, embedding, retrieval, citation, and evaluation evidence pass.',
+      'Models and agents are dynamically orchestrated only inside privacy, permission, confirmation, budget, and receipt policies.',
+      ...(awareness.level === 'live' ? [] : ['Live client state is unavailable or stale, so present-moment desktop claims require refresh.']),
+    ],
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+export function buildSelfIntroductionPlan(
+  userId: string,
+  scope: { domain?: 'personal' | 'work'; orgId?: string } = {},
+  options: { visibleDemo?: boolean; requestText?: string } = {},
+): SelfIntroductionPlan {
+  const snapshot = getSelfModelSnapshot(userId, scope);
+  const configuredModels = snapshot.configuredModels.filter(model => model.configured);
+  const statements: SelfIntroductionPlan['statements'] = [
+    {
+      text: '我是 Lumi，运行在 LumiOS 中、由用户目标驱动的私有化智能体；语音、聊天、任务和组织工作区使用同一个身份。',
+      evidence: 'identity and scope contract',
+      qualified: false,
+    },
+    {
+      text: `当前有 ${configuredModels.length}/${snapshot.configuredModels.length} 个模型角色已配置；推理、视觉、桌面动作、生成、检索和语音按角色路由，并可组成受策略约束的任务图。`,
+      evidence: 'live model role configuration',
+      qualified: configuredModels.length !== snapshot.configuredModels.length,
+    },
+    {
+      text: `当前运行能力清单包含 ${snapshot.connectedCapabilities.tools} 个工具能力、${snapshot.connectedCapabilities.skills} 个可执行 Skill 能力和 ${snapshot.connectedCapabilities.mcp} 个 MCP 能力。`,
+      evidence: 'runtime capability manifest',
+      qualified: snapshot.connectedCapabilities.adaptersAttention > 0,
+    },
+    {
+      text: `知识范围当前有 ${snapshot.knowledgeCoverage.totalFiles} 个文件，其中 ${snapshot.knowledgeCoverage.indexedFiles} 个已索引、${snapshot.knowledgeCoverage.verifiedFiles} 个通过吸收验证；状态为 ${snapshot.knowledgeCoverage.verification}。索引不等于完全吸收，只有抽取、分块、嵌入、召回和引用证据均通过时才称为已验证吸收。`,
+      evidence: 'current scoped knowledge inventory',
+      qualified: snapshot.knowledgeCoverage.verification !== 'indexed_unverified',
+    },
+    {
+      text: `当前客户端自我感知为 ${snapshot.runtime.awareness}，健康状态为 ${snapshot.runtime.health}。外部发送、发布和提交必须确认并由真实回执验收。`,
+      evidence: 'client health and execution constitution',
+      qualified: snapshot.runtime.awareness !== 'live' || snapshot.runtime.health !== 'ok',
+    },
+  ];
+  const explicitlyRequestedApplication = DESKTOP_APPLICATION_REGISTRY.find(application => (
+    application.aliases.some(alias => String(options.requestText || '').toLowerCase().includes(alias.toLowerCase()))
+  ))?.id;
+  const demoCandidates = snapshot.desktopCapabilities.map(application => ({
+    applicationId: application.id,
+    enabled: options.visibleDemo === true && (
+      application.id === 'lumi-client'
+      || application.certification === 'certified'
+      || application.id === explicitlyRequestedApplication
+    ),
+    reason: application.id === 'lumi-client'
+      ? `client awareness is ${snapshot.runtime.awareness}`
+      : `${application.certification}; installed-process preflight is still required`,
+    requiresPreflight: application.id !== 'lumi-client',
+  }));
+  return {
+    schemaVersion: 1,
+    snapshotGeneratedAt: snapshot.generatedAt,
+    mode: options.visibleDemo ? 'visible_demo' : 'verbal',
+    statements,
+    demoCandidates,
+    documentText: [
+      'Lumi 实时自我介绍',
+      '',
+      ...statements.map(statement => statement.text),
+      '',
+      '能力边界：',
+      ...snapshot.limitations.map(limitation => `- ${limitation}`),
+      `快照时间：${snapshot.generatedAt}`,
+    ].join('\n'),
+  };
+}
+
 function isConfirmationSensitiveClientAction(action: string, mode?: string): boolean {
   if (action === 'start_meeting_mode' || action === 'end_meeting_mode' || action === 'set_wallpaper_mode') return true;
   return action === 'set_client_mode' && mode === 'meeting';
@@ -1723,6 +1995,8 @@ export function formatClientSelfPrompt(
 
   return [
     '## Lumi Client Self Model',
+    `Live self snapshot: ${JSON.stringify(getSelfModelSnapshot(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }))}`,
+    'When introducing yourself, derive every capability and limitation from this live snapshot. Do not use a fixed capability script, and do not describe indexed knowledge as fully absorbed.',
     isWork
       ? `You are the same Lumi operating in organization workspace ${scope.orgId} for the currently authenticated member. Apply the organization overlay and role permissions without changing the member's core Lumi identity or exposing any other member's personal data.`
       : 'You are the user\'s continuous Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',

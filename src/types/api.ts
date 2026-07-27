@@ -58,6 +58,11 @@ export interface AgentCreateRequest {
   isFrozen?: boolean;
   seedMemoryIds?: string[];
   executionMode?: string;
+  runtime?: 'internal' | 'external';
+  externalCommand?: string;
+  skillTags?: string[];
+  knowledgeDomains?: string[];
+  runtimeConfig?: string;
 }
 
 export interface AgentUpdateRequest {

@@ -40,6 +40,8 @@ import {
   getConversationSummary,
   getConversationActionStatus,
   prepareConversationActionExecution,
+  persistConversationExecutionPlan,
+  persistConversationModelExecutionResult,
   cancelConversationActionExecution,
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
@@ -71,7 +73,9 @@ import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messag
 import { buildInternalOpenCommand } from "../i18n/naturalness_messages";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
-import { executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
+import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy";
+import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
+import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
@@ -1279,7 +1283,7 @@ async function processVoiceInput(
   session.activeRoutingText = actionIntentText;
   let preMatchedQuickResult: Awaited<ReturnType<typeof matchQuickCommand>> = null;
   try {
-    preMatchedQuickResult = await matchQuickCommand(
+    preMatchedQuickResult = shouldRunLegacyDirectExecution() ? await matchQuickCommand(
       continuationOpenTarget ? buildInternalOpenCommand(userText, continuationOpenTarget) : userText,
       session.userId,
       {
@@ -1288,7 +1292,7 @@ async function processVoiceInput(
       surface: 'voice',
       currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
       },
-    );
+    ) : null;
   } catch {}
   const requestedModeHint = detectRequestedOperationMode(userText);
   const skipKnowledgeRetrieval = Boolean(preMatchedQuickResult)
@@ -1479,6 +1483,7 @@ async function processVoiceInput(
     text: turnFlow.routeText,
     flow: turnFlow,
     capabilitySelection,
+    capabilityExecutionPlan: executionPipeline.executionPlan,
   });
   const routedToolPolicy = executionDecision.toolPolicy;
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
@@ -1498,6 +1503,17 @@ async function processVoiceInput(
         toolPolicy: routedToolPolicy,
         forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
       });
+  if (actionTaskExecution.state?.taskId) {
+    executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
+      executionPipeline.executionPlan,
+      actionTaskExecution.state.taskId,
+    );
+    persistConversationExecutionPlan({
+      conversationId: conversationTurn.conversation.id,
+      userId: session.userId,
+      plan: executionPipeline.executionPlan,
+    });
+  }
   if (actionTaskExecution.kind === 'new') {
     // A concrete replacement task invalidates an older confirmation boundary
     // on this exact voice channel.
@@ -2562,17 +2578,8 @@ async function processVoiceInput(
     }
   }
 
-  const foregroundWeChatReadArgs = buildForegroundWeChatReadArgs(actionIntentText);
-  let foregroundWeChatSendArgs = buildForegroundWeChatSendArgs(actionIntentText);
-  if (foregroundWeChatSendArgs) {
-    try {
-      const currentConversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      foregroundWeChatSendArgs = resolveWeChatRecipientFromHistory(
-        foregroundWeChatSendArgs,
-        getMessagesByTokenBudget(currentConversation.id).slice(-24),
-      );
-    } catch {}
-  }
+  const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
+  const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
 
   try {
     const quickResult = preMatchedQuickResult;
@@ -2688,6 +2695,7 @@ async function processVoiceInput(
       const foregroundExecution = await executeForegroundMessagingAction({
         action: 'read',
         normalizedIntent: executionPipeline.normalizedIntent,
+        executionPlan: executionPipeline.executionPlan,
         registry: toolRegistry,
         correlationId,
         arguments: foregroundWeChatReadArgs,
@@ -2791,6 +2799,7 @@ async function processVoiceInput(
       const foregroundExecution = await executeForegroundMessagingAction({
         action: 'send',
         normalizedIntent: executionPipeline.normalizedIntent,
+        executionPlan: executionPipeline.executionPlan,
         registry: toolRegistry,
         correlationId,
         arguments: foregroundWeChatSendArgs,
@@ -3001,6 +3010,7 @@ async function processVoiceInput(
             orgId: voiceScope.orgId,
             desktopRelay,
             toolPolicy: routedToolPolicy,
+            taskId: actionTaskExecution.state?.taskId,
             isCancelled: () => pipelineAbort?.signal.aborted ?? false,
           },
           { provider, model: effectiveModel },
@@ -3048,6 +3058,14 @@ async function processVoiceInput(
         );
         if (!isCurrentTurn()) return;
         if (orchResult) {
+          if (actionTaskExecution.state?.taskId) {
+            persistConversationModelExecutionResult({
+              conversationId: conversationTurn.conversation.id,
+              userId: session.userId,
+              taskId: actionTaskExecution.state.taskId,
+              workflowResult: orchResult.workflowResult,
+            });
+          }
           usedOrchestrator = true;
           responseText = orchResult.responseText;
           const rawSentences = responseText.split(/(?<=[。！？.!?\n])/);

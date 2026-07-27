@@ -23,6 +23,8 @@ import {
   getConversationSummary,
   getConversationActionStatus,
   prepareConversationActionExecution,
+  persistConversationExecutionPlan,
+  persistConversationModelExecutionResult,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
 } from "../conversation/manager";
@@ -45,6 +47,7 @@ import { shouldExposeAgentWork } from "../cognition/tool_intent";
 import { formatClientSelfPrompt } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
+import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
@@ -426,6 +429,17 @@ export function registerTaskHandler(
       toolPolicy: executionDecision.toolPolicy,
       forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
     });
+    if (actionTaskExecution.state?.taskId) {
+      executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
+        executionPipeline.executionPlan,
+        actionTaskExecution.state.taskId,
+      );
+      persistConversationExecutionPlan({
+        conversationId: convForHistory.id,
+        userId: uid,
+        plan: executionPipeline.executionPlan,
+      });
+    }
     const priorTaskRecords = actionTaskExecution.kind === 'resume'
       ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
       : [];
@@ -452,6 +466,7 @@ export function registerTaskHandler(
       text: routedTaskText,
       flow: turnFlow,
       capabilitySelection,
+      capabilityExecutionPlan: executionPipeline.executionPlan,
     });
     if (executionDecision.toolRoute) {
       emitAgent('agent:tool_route', {
@@ -869,6 +884,7 @@ export function registerTaskHandler(
           orgId: taskScope.orgId,
           toolPolicy: executionDecision.toolPolicy,
           rootTaskText: routedTaskText,
+          taskId: actionTaskExecution.state?.taskId,
         };
         const complexity = classifyComplexity(routedTaskText, orchestrationContext);
         const shouldOrchestrate = shouldAttemptOrchestration({
@@ -923,6 +939,14 @@ export function registerTaskHandler(
                   }
                 },
               );
+              if (actionTaskExecution.state?.taskId) {
+                persistConversationModelExecutionResult({
+                  conversationId: convForHistory.id,
+                  userId: uid,
+                  taskId: actionTaskExecution.state.taskId,
+                  workflowResult,
+                });
+              }
               const aggregated = await aggregateWithLLM(workflowResult, data.text, scopedLlmConfig, llmGetters, uid, taskScope);
               orchestratedText = aggregated;
 

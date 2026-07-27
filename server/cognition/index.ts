@@ -3,8 +3,8 @@
  *
  * This engine sits BETWEEN the socket handlers and the LLM. It:
  * 1. Classifies every user input before it reaches any LLM
- * 2. Executes simple commands directly (no LLM call needed)
- * 3. Passes complex requests to the LLM with enriched context
+ * 2. Preserves legacy deterministic classifications as read-only hints
+ * 3. Passes execution through the shared semantic capability plan
  * 4. Falls back to local responses when the LLM is unavailable
  *
  * Architecture:
@@ -24,6 +24,7 @@ import { hasExplicitTeamExecutionRequest } from './tool_intent';
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from './desktop_observation';
 import { formatDesktopObservationUnavailable } from '../i18n/naturalness_messages';
 import { executeToolCall } from '../tools/execution_engine';
+import { shouldRunLegacyDirectExecution } from './legacy_route_policy';
 
 export { classifyIntent, classifyIntentLLM, extractSentiment, generateFallback, isLLMDown, getModeConfig };
 export type { IntentResult, SentimentResult } from './intent';
@@ -89,11 +90,15 @@ export async function processInput(
   }
 
   // ── Path A: Direct tool call (skip LLM entirely) ──
-  // An explicit team request may contain a simple sub-step such as "list the
+  // Read-only compatibility branch. The policy is fail-closed; this code is
+  // retained for one release solely to compare old/new routing. An explicit
+  // team request may contain a simple sub-step such as "list the
   // desktop files". That sub-step must not consume the whole turn before the
   // orchestrator sees the user's requested decomposition/delegation contract.
   const explicitTeamExecution = hasExplicitTeamExecutionRequest(input);
-  const desktopObservationPlan = explicitTeamExecution ? [] : buildDesktopObservationPlan(input);
+  const desktopObservationPlan = shouldRunLegacyDirectExecution() && !explicitTeamExecution
+    ? buildDesktopObservationPlan(input)
+    : [];
   if (desktopObservationPlan.length > 0 && toolContext) {
     const records: ToolExecutionRecord[] = [];
     for (const call of desktopObservationPlan) {
@@ -125,7 +130,8 @@ export async function processInput(
     };
   }
   if (
-    !explicitTeamExecution
+    shouldRunLegacyDirectExecution()
+    && !explicitTeamExecution
     && intent.directToolCall
     && intent.confidence >= 0.75
     && !intent.needsLLM

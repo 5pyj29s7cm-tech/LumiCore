@@ -17,6 +17,22 @@ function normalizeStringList(value: unknown, max = 20): string[] {
     .slice(0, max)));
 }
 
+function normalizeModelCandidates(value: unknown): Array<{ provider: string; model: string; priority: number }> {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 6).flatMap((candidate, index) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+    const provider = String((candidate as any).provider || '').trim().toLowerCase();
+    const model = String((candidate as any).model || '').trim().slice(0, 200);
+    if (!provider || !model) return [];
+    const priority = Number((candidate as any).priority);
+    return [{
+      provider,
+      model,
+      priority: Number.isFinite(priority) ? Math.max(0, Math.min(1000, Math.trunc(priority))) : index,
+    }];
+  });
+}
+
 const BUILTIN_AGENT_IDS = ['lumi', 'lumi_default', 'scholar_default', 'founder_default', 'incubated'];
 
 function agentInToolScope(agent: any, context?: ToolContext): boolean {
@@ -42,6 +58,7 @@ async function agentCreate(args: Record<string, any>, context?: ToolContext): Pr
     domain: context?.domain,
     orgId: context?.orgId,
   }).model;
+  const modelCandidates = normalizeModelCandidates(args.modelCandidates);
   const knowledgeDomains = normalizeStringList(args.knowledgeDomains);
   const autonomyLevel = args.autonomyLevel || 'reactive';
   const runtime = args.runtime === 'external' ? 'external' : 'internal';
@@ -71,7 +88,7 @@ async function agentCreate(args: Record<string, any>, context?: ToolContext): Pr
     modelPreference,
     memoryScope: 'shared',
     autonomyLevel,
-    runtimeConfig: '{}',
+    runtimeConfig: JSON.stringify({ ...(modelCandidates.length ? { modelCandidates } : {}) }),
     skillTags,
     executionMode,
     allowCrossPollination: true,
@@ -91,7 +108,7 @@ async function agentCreate(args: Record<string, any>, context?: ToolContext): Pr
     return JSON.stringify({
       ok: true,
       status: 'created',
-      agent: { id, name, category, skillTags, status: 'active' },
+      agent: { id, name, category, skillTags, status: 'active', modelPreference, modelCandidates },
       message: `Worker agent "${name}" created and ready. ID: ${id}`,
     });
   } catch (err: any) {
@@ -207,6 +224,19 @@ export function registerAgentTools(registry: ToolRegistry): void {
         description: { type: 'string', description: 'What this agent specializes in — used as its internal config' },
         executionMode: { type: 'string', description: 'Thinking mode: lumi (default), scholar, founder, or zen' },
         model: { type: 'string', description: 'Preferred LLM model (default: inherit the current user selection)' },
+        modelCandidates: {
+          type: 'array',
+          description: 'Ordered model fallback graph for this worker. Each item has provider, model, and optional priority. A fallback is attempted only before any tool execution starts.',
+          items: {
+            type: 'object',
+            properties: {
+              provider: { type: 'string' },
+              model: { type: 'string' },
+              priority: { type: 'number' },
+            },
+            required: ['provider', 'model'],
+          },
+        },
         knowledgeDomains: { type: 'array', items: { type: 'string' }, description: 'Knowledge domains for RAG routing' },
         autonomyLevel: { type: 'string', description: 'reactive (on-demand only), scheduled (periodic checks), or autonomous (self-triggering)' },
         runtime: { type: 'string', description: '"internal" (LLM-powered, default) or "external" (CLI process like OpenClaw/Hermes)' },

@@ -8,6 +8,11 @@ import { normalizeActionIntent, type NormalizedActionIntent } from '../cognition
 import { taskReceiptsToRecords, type ConversationTaskStatus } from '../cognition/task_execution_ledger';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from '../tools/execution_envelope';
 import type { ToolExecutionRecord } from '../tools/types';
+import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
+import type {
+  ModelExecutionGraph,
+  ModelGraphNodeReceipt,
+} from '../agents/model_execution_graph';
 
 export interface ConversationActionTaskRow {
   id: string;
@@ -45,6 +50,33 @@ export interface ConversationActionReceiptRow {
   envelope: string;
   outcome: string;
   createdAt: string;
+}
+
+export interface PersistedCapabilityExecutionPlan {
+  schemaVersion: 1;
+  planId: string;
+  taskId: string;
+  intent: Omit<NormalizedActionIntent, 'payload'> & {
+    payload: '';
+    payloadDigest: string;
+  };
+  nodes: Array<{
+    nodeId: string;
+    type: string;
+    capabilityId: string;
+    toolName?: string;
+    lane: string;
+    operation: string;
+    risk: string;
+    requiresConfirmation: boolean;
+    verificationStrategy: string;
+  }>;
+  risk: CapabilityExecutionPlan['risk'];
+  fallbackPolicy: CapabilityExecutionPlan['fallbackPolicy'];
+  contextRefs: CapabilityExecutionPlan['contextRefs'];
+  decisionAuthority: 'semantic_planner';
+  scriptAuthority: 'adapter_only';
+  persistedAt: string;
 }
 
 function stableValue(value: unknown, depth = 0): unknown {
@@ -93,6 +125,45 @@ function sanitizeState(state: ConversationActionContinuationState): Conversation
       ...receipt,
       arguments: redactArguments(receipt.arguments || {}),
     })),
+  };
+}
+
+function sanitizeExecutionPlan(
+  plan: CapabilityExecutionPlan,
+  persistedAt: string,
+): PersistedCapabilityExecutionPlan {
+  return {
+    schemaVersion: 1,
+    planId: plan.planId,
+    taskId: plan.taskId,
+    intent: {
+      ...plan.intent,
+      payload: '',
+      payloadDigest: digest(plan.intent.payload),
+    },
+    nodes: plan.nodes.map(node => ({
+      nodeId: node.nodeId,
+      type: node.type,
+      capabilityId: node.capabilityId,
+      ...(node.toolName ? { toolName: node.toolName } : {}),
+      lane: node.lane,
+      operation: node.operation,
+      risk: node.risk,
+      requiresConfirmation: node.requiresConfirmation,
+      verificationStrategy: node.verification.strategy,
+    })),
+    risk: {
+      ...plan.risk,
+      reasons: [...plan.risk.reasons],
+      ...(plan.risk.confirmationBinding
+        ? { confirmationBinding: { ...plan.risk.confirmationBinding } }
+        : {}),
+    },
+    fallbackPolicy: { ...plan.fallbackPolicy },
+    contextRefs: plan.contextRefs.map(ref => ({ ...ref })),
+    decisionAuthority: plan.decisionAuthority,
+    scriptAuthority: plan.scriptAuthority,
+    persistedAt,
   };
 }
 
@@ -237,6 +308,97 @@ export function appendConversationActionReceipts(
     appended.push(row);
   });
   return appended;
+}
+
+/**
+ * Persists the semantic plan in the existing append-compatible task context.
+ * Raw message payloads are never stored; confirmation uses the digest already
+ * bound to the durable task identity.
+ */
+export function attachConversationExecutionPlan(
+  db: any,
+  input: {
+    conversationId: string;
+    userId: string;
+    plan: CapabilityExecutionPlan;
+    now?: string;
+  },
+): ConversationActionTaskRow | null {
+  ensureTables(db);
+  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
+    candidate.id === input.plan.taskId
+    && candidate.conversationId === input.conversationId
+    && candidate.userId === input.userId
+  ));
+  if (!task) return null;
+  const now = input.now || new Date().toISOString();
+  const context = parseObject(task.context);
+  const persisted = sanitizeExecutionPlan(input.plan, now);
+  const history = (Array.isArray(context.executionPlans) ? context.executionPlans : [])
+    .filter((candidate: any) => candidate?.planId !== persisted.planId)
+    .slice(-11);
+  history.push(persisted);
+  task.context = JSON.stringify({
+    ...context,
+    executionPlan: persisted,
+    executionPlans: history,
+  });
+  task.updatedAt = now;
+  return task;
+}
+
+/** Stores the compiled graph and digest-only node receipts for restart recovery. */
+export function attachConversationModelExecutionGraph(
+  db: any,
+  input: {
+    conversationId: string;
+    userId: string;
+    taskId: string;
+    graph: ModelExecutionGraph;
+    receipts: ModelGraphNodeReceipt[];
+    now?: string;
+  },
+): ConversationActionTaskRow | null {
+  ensureTables(db);
+  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
+    candidate.id === input.taskId
+    && candidate.conversationId === input.conversationId
+    && candidate.userId === input.userId
+  ));
+  if (!task || input.graph.taskId !== task.id) return null;
+  const now = input.now || new Date().toISOString();
+  const context = parseObject(task.context);
+  const persistedGraph = {
+    ...input.graph,
+    nodes: input.graph.nodes.map(node => ({
+      ...node,
+      candidates: node.candidates.map(candidate => ({ ...candidate })),
+      dependsOn: [...node.dependsOn],
+      inputRefs: [...node.inputRefs],
+      outputSchema: { ...node.outputSchema },
+    })),
+    edges: input.graph.edges.map(edge => ({ ...edge })),
+    budgets: { ...input.graph.budgets },
+    persistedAt: now,
+  };
+  const graphHistory = (Array.isArray(context.modelExecutionGraphs) ? context.modelExecutionGraphs : [])
+    .filter((candidate: any) => candidate?.graphId !== persistedGraph.graphId)
+    .slice(-7);
+  graphHistory.push(persistedGraph);
+  const priorReceipts = Array.isArray(context.modelNodeReceipts) ? context.modelNodeReceipts : [];
+  const receiptKeys = new Set(input.receipts.map(receipt => `${receipt.graphId}:${receipt.nodeId}`));
+  const modelNodeReceipts = [
+    ...priorReceipts.filter((receipt: any) => !receiptKeys.has(`${receipt?.graphId}:${receipt?.nodeId}`)),
+    ...input.receipts.map(receipt => ({ ...receipt })),
+  ].slice(-120);
+  task.context = JSON.stringify({
+    ...context,
+    modelExecutionGraph: persistedGraph,
+    modelExecutionGraphs: graphHistory,
+    modelNodeReceipts,
+  });
+  task.updatedAt = now;
+  return task;
 }
 
 export function findConversationActionTask(

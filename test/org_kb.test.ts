@@ -40,7 +40,7 @@ describe('Org Knowledge Base', () => {
     });
   });
 
-  it('reports category, status, and index health stats', () => {
+  it('reports category, status, index health, and verifiable ingestion evidence', async () => {
     const orgId = 'org-kb-stats';
     const article = KB.createArticle(orgId, 'user-1', {
       title: 'Draft Billing SOP',
@@ -50,17 +50,28 @@ describe('Org Knowledge Base', () => {
       status: 'draft',
     });
 
+    await KB.indexArticle(orgId, article.id);
+    const manifest = KB.getArticleIngestionManifest(orgId, article.id);
     const stats = KB.getStats(orgId);
 
     expect(stats.totalArticles).toBe(1);
     expect(stats.draftArticles).toBe(1);
     expect(stats.missingIndexArticles).toBe(1);
     expect(stats.categoryBreakdown).toContainEqual({ category: 'sop', count: 1 });
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      sourceId: `org:${orgId}:article:${article.id}`,
+    });
+    expect(manifest?.sourceContentHash).toHaveLength(64);
+    expect(manifest?.coverage.blockers.length).toBeGreaterThan(0);
     expect(stats.articleHealth[0]).toMatchObject({
       articleId: article.id,
       indexed: false,
       stale: false,
+      verified: false,
     });
+    expect(stats.articleHealth[0].ingestionStatus).not.toBe('missing');
+    expect(stats.fullyAbsorbed).toBe(false);
   });
 
   it('respects category and status filters during search', async () => {

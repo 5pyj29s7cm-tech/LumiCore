@@ -280,9 +280,20 @@ async function ingestDocumentToRag(args: Record<string, any>, context?: any): Pr
   const userId = context?.userId || 'system';
   const title = args.title || path.basename(filePath);
   const text = await extractDocumentText({ filePath, password: args.password });
-  const count = await ingestDocument(userId, agentId, title, text, { filePath });
+  const result = await ingestDocument(userId, agentId, title, text, {
+    filePath,
+    extraction: { status: 'indexed', method: path.extname(filePath).replace(/^\./, '') || 'text' },
+  });
 
-  return JSON.stringify({ ok: true, status: 'ingested', agentId, title, chunkCount: count }, null, 2);
+  return JSON.stringify({
+    ok: true,
+    status: result.manifest.status,
+    agentId,
+    title,
+    chunkCount: result.chunkCount,
+    ingestionManifestId: result.manifest.manifestId,
+    coverage: result.manifest.coverage,
+  }, null, 2);
 }
 
 // ── XLSX Creation & Modification ──
@@ -718,11 +729,11 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       verification: {
         strategy: 'terminal_receipt',
         required: true,
-        requiredFields: ['ok', 'status', 'agentId', 'title', 'chunkCount'],
-        requiredValues: { ok: true, status: 'ingested' },
-        successStatuses: ['ingested'],
-        successSignals: ['the target agent knowledge store returned a concrete stored chunk count'],
-        limitations: ['Ingestion does not prove the agent will rank every chunk for every future query.'],
+        requiredFields: ['ok', 'status', 'agentId', 'title', 'chunkCount', 'ingestionManifestId', 'coverage'],
+        requiredValues: { ok: true },
+        successStatuses: ['verified', 'indexed_unverified', 'partial'],
+        successSignals: ['the target agent knowledge store returned a manifest with chunk, embedding, retrieval, and citation coverage'],
+        limitations: ['Only status=verified proves the configured retrieval probes and citation checks passed; indexed_unverified must not be described as fully absorbed.'],
       },
     }),
     evidence: capabilityEvidence({

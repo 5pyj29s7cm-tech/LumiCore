@@ -27,9 +27,13 @@ import {
 } from './summary_grounding';
 import {
   formatConversationActionLedgerStatus,
+  attachConversationExecutionPlan,
+  attachConversationModelExecutionGraph,
   migrateLegacyConversationActionLedger,
   syncConversationActionTaskLedger,
 } from './action_ledger';
+import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
+import type { WorkflowResult } from '../agents/orchestrator';
 
 export function getConversationActionStatus(
   conversationId: string,
@@ -444,6 +448,38 @@ export function prepareConversationActionExecution(input: {
     writeDB(db);
   }
   return prepared;
+}
+
+export function persistConversationExecutionPlan(input: {
+  conversationId: string;
+  userId: string;
+  plan: CapabilityExecutionPlan;
+}): boolean {
+  const db = readDB();
+  const task = attachConversationExecutionPlan(db, input);
+  if (!task) return false;
+  writeDB(db);
+  return true;
+}
+
+export function persistConversationModelExecutionResult(input: {
+  conversationId: string;
+  userId: string;
+  taskId: string;
+  workflowResult: WorkflowResult;
+}): boolean {
+  if (!input.workflowResult.executionGraph) return false;
+  const db = readDB();
+  const task = attachConversationModelExecutionGraph(db, {
+    conversationId: input.conversationId,
+    userId: input.userId,
+    taskId: input.taskId,
+    graph: input.workflowResult.executionGraph,
+    receipts: input.workflowResult.nodeReceipts || [],
+  });
+  if (!task) return false;
+  writeDB(db);
+  return true;
 }
 
 export function cancelConversationActionExecution(

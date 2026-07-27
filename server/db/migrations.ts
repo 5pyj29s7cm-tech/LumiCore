@@ -70,6 +70,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 33, description: 'Add edges to canvas_sessions', sql: `ALTER TABLE canvas_sessions ADD COLUMN edges TEXT NOT NULL DEFAULT '[]'` },
   { version: 34, description: 'Add domain to canvas_sessions', sql: `ALTER TABLE canvas_sessions ADD COLUMN domain TEXT DEFAULT 'personal'` },
   { version: 35, description: 'Add orgId to canvas_sessions', sql: `ALTER TABLE canvas_sessions ADD COLUMN orgId TEXT DEFAULT ''` },
+  { version: 36, description: 'Add verifiable ingestion manifest to organization knowledge articles', sql: `ALTER TABLE org_kb_articles ADD COLUMN ingestionManifest TEXT NOT NULL DEFAULT '{}'` },
 ];
 
 // Indexes are safe to create repeatedly

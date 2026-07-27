@@ -173,20 +173,20 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
-  if (flow.executionGovernance.capabilityLearningIntent !== 'none') {
-    return {
-      lane: 'capability_learning',
-      primary: flow.executionGovernance.capabilityLearningIntent,
-      reasons: [...reasons, flow.executionGovernance.capabilityLearningReason],
-    };
-  }
-
   if (input.dispatch.boundary === 'skill_workflow' || flow.specialWorkflow) {
     const workflow = flow.specialWorkflow;
     return {
       lane: 'skill_workflow',
       primary: workflow ? `${workflow.skillId}/${workflow.id}` : 'matched skill workflow',
       reasons: [...reasons, 'a learned repeatable workflow matched this turn'],
+    };
+  }
+
+  if (flow.executionGovernance.capabilityLearningIntent !== 'none') {
+    return {
+      lane: 'capability_learning',
+      primary: flow.executionGovernance.capabilityLearningIntent,
+      reasons: [...reasons, flow.executionGovernance.capabilityLearningReason],
     };
   }
 

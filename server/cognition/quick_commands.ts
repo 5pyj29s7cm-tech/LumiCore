@@ -1,8 +1,9 @@
 /**
  * Quick Command Fast-Path — deterministic pattern-match tree.
  *
- * Catches common commands before they reach the LLM, returning millisecond responses.
- * Used by both chat.ts and voice.ts to bypass full LLM orchestration.
+ * Legacy deterministic matcher retained for one release of routing comparison.
+ * Runtime execution is disabled by legacy_route_policy; results are diagnostic
+ * hints only and cannot bypass the semantic capability plan.
  */
 
 import { readDB } from '../../db_layer';

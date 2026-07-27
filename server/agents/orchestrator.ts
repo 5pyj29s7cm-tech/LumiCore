@@ -29,6 +29,8 @@ import { buildResponseLanguageInstruction } from "../utils/language";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import type { ToolPolicy } from "../personality/types";
 import type { ToolContext } from "../tools/types";
+import { isStrictPrivacy } from '../config/privacy';
+import { getScopedPreferredLLM } from '../llm/user_preferences';
 import { executeToolCall } from "../tools/execution_engine";
 import { routeToolsForTurn } from "../cognition/tool_router";
 import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
@@ -36,6 +38,18 @@ import {
   buildDesktopObservationPlan,
   formatDesktopObservationResult,
 } from "../cognition/desktop_observation";
+import {
+  buildModelGraphNodeReceipt,
+  compileModelExecutionGraph,
+  modelCandidateLocality,
+  resolveAgentModelCandidates,
+  type ModelExecutionBudget,
+  type ModelExecutionGraph,
+  type ModelCandidate,
+  type ModelGraphNode,
+  type ModelGraphNodeReceipt,
+  type ModelGraphPrivacy,
+} from './model_execution_graph';
 
 type LLMProvider = 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
 type ScopedLLMConfig = {
@@ -136,6 +150,8 @@ export interface WorkflowResult {
   }>;
   aggregatedOutput: string;
   totalAgentsUsed: number;
+  executionGraph?: ModelExecutionGraph;
+  nodeReceipts?: ModelGraphNodeReceipt[];
 }
 
 export type OrchestrationSubTaskStatus = 'succeeded' | 'failed' | 'blocked';
@@ -145,6 +161,7 @@ type WorkerTaskResult = {
   output: string;
   agentId: string;
   status: OrchestrationSubTaskStatus;
+  selectedCandidate?: ModelCandidate;
 };
 
 export interface OrchestrationContext {
@@ -161,6 +178,14 @@ export interface OrchestrationContext {
   rootTaskText?: string;
   /** Explicit user-requested delegation may use the moderate pipeline even when the short command itself classifies as simple. */
   forceOrchestration?: boolean;
+  /** Stable parent task identity shared with the conversation action ledger. */
+  taskId?: string;
+  /** Prevents any graph node from sending task data to remote/external runtimes. */
+  dataRoutingPolicy?: ModelGraphPrivacy;
+  /** Hard graph limits enforced before any worker starts. */
+  executionBudget?: Partial<ModelExecutionBudget>;
+  /** Optional task-scoped model sequence. Each candidate is still privacy-gated. */
+  modelCandidates?: Array<{ provider: string; model: string; priority?: number }>;
 }
 
 export interface OrchestrationToolMeta {
@@ -1251,11 +1276,58 @@ function topologicalGroups(assignments: WorkerAssignment[]): WorkerAssignment[][
   return groups;
 }
 
+/** Build the exact agent/model sequence that the graph executor is allowed to use. */
+export function compileWorkerModelCandidates(
+  assignment: WorkerAssignment,
+  context: OrchestrationContext,
+  llmConfig: ScopedLLMConfig,
+  fallbackAgents: AgentRecord[] = [],
+): ModelCandidate[] {
+  const privacyPolicy = context.dataRoutingPolicy || (isStrictPrivacy() ? 'local_only' : 'policy_scoped');
+  const agents = [
+    assignment.agent,
+    ...fallbackAgents.filter(agent => agent.id !== assignment.agent.id),
+  ]
+    .filter(agent => agent.runtime !== 'external' || canUseExternalWorkerForContext(context))
+    .slice(0, 3);
+  const preferences = getScopedPreferredLLM(context.userId, {
+    domain: context.domain,
+    orgId: context.orgId,
+  });
+
+  const candidates = agents.flatMap((agent, agentIndex) => resolveAgentModelCandidates({
+    agentId: agent.id,
+    agentName: agent.name,
+    runtime: agent.runtime,
+    modelPreference: agent.modelPreference,
+    runtimeConfig: agent.runtimeConfig,
+    defaultProvider: llmConfig.provider,
+    defaultModel: llmConfig.model,
+    configuredModels: preferences.models,
+    taskCandidates: agentIndex === 0 ? context.modelCandidates : undefined,
+  }).map(candidate => ({
+    ...candidate,
+    // Preserve worker priority before comparing that worker's model priority.
+    priority: agentIndex * 2_000 + candidate.priority,
+  })));
+
+  const privacyScoped = privacyPolicy === 'local_only'
+    ? candidates.filter(candidate => candidate.locality === 'local')
+    : candidates;
+  const unique = new Map<string, ModelCandidate>();
+  for (const candidate of privacyScoped) {
+    const key = `${candidate.agentId || ''}\u0000${candidate.provider}\u0000${candidate.model}`;
+    if (!unique.has(key)) unique.set(key, candidate);
+  }
+  return [...unique.values()].sort((a, b) => a.priority - b.priority).slice(0, 12);
+}
+
 /**
  * Execute a task on an external agent via CLI (OpenClaw, Hermes, etc.).
  */
 async function executeExternalWorkerTask(
   assignment: WorkerAssignment,
+  selectedCandidate: ModelCandidate,
   dependencyContext = '',
 ): Promise<WorkerTaskResult> {
   const { subTask, agent } = assignment;
@@ -1267,6 +1339,7 @@ async function executeExternalWorkerTask(
       output: `[External agent config error: ${validationError}]`,
       agentId: agent.id,
       status: 'failed',
+      selectedCandidate,
     };
   }
 
@@ -1283,6 +1356,7 @@ async function executeExternalWorkerTask(
       : `[External agent '${agent.name}' failed (exit ${result.exitCode}): ${result.output.slice(0, 500)}]`,
     agentId: agent.id,
     status: result.success ? 'succeeded' : 'failed',
+    selectedCandidate,
   };
 }
 
@@ -1296,6 +1370,7 @@ async function executeExternalWorkerTask(
 async function executeWorkerTask(
   assignment: WorkerAssignment,
   context: OrchestrationContext,
+  node: ModelGraphNode,
   llmConfig: ScopedLLMConfig,
   llmGetters: LlmGetters,
   fallbackAgents: AgentRecord[],
@@ -1306,34 +1381,40 @@ async function executeWorkerTask(
   throwIfCancelled(context);
   const dependencyContext = buildOrchestrationDependencyContext(dependencyResults);
 
-  const agentsToTry = [
+  const agentById = new Map([
     agent,
     ...fallbackAgents.filter(a => a.id !== agent.id),
-  ]
-    .filter(currentAgent => (
-      currentAgent.runtime !== 'external' || canUseExternalWorkerForContext(context)
-    ))
-    .slice(0, 3);
+  ].map(candidate => [candidate.id, candidate]));
+  const candidatesToTry = node.candidates.slice(0, node.maxRetries + 1);
 
-  if (agentsToTry.length === 0) {
+  if (candidatesToTry.length === 0) {
     return {
       subTaskId: subTask.id,
-      output: '[Worker failed: the available external runtime cannot enforce the routed ToolPolicy, and no policy-capable worker was available]',
+      output: '[Worker failed: no policy- and privacy-compatible model/agent candidate was compiled]',
       agentId: agent.id,
       status: 'failed',
     };
   }
 
-  for (let attempt = 0; attempt < agentsToTry.length; attempt++) {
+  const attemptErrors: string[] = [];
+  let lastCandidate: ModelCandidate | undefined;
+  for (let attempt = 0; attempt < candidatesToTry.length; attempt++) {
     throwIfCancelled(context);
-    const currentAgent = agentsToTry[attempt];
+    const selectedCandidate = candidatesToTry[attempt];
+    lastCandidate = selectedCandidate;
+    const currentAgent = agentById.get(selectedCandidate.agentId || agent.id);
     const isRetry = attempt > 0;
+    if (!currentAgent) {
+      attemptErrors.push(`candidate ${selectedCandidate.provider}/${selectedCandidate.model} references an unavailable agent`);
+      continue;
+    }
 
     // Legacy/unscoped orchestration may still dispatch to an explicitly
     // configured external runtime. Policy-bound turns were filtered above.
     if (currentAgent.runtime === 'external' && currentAgent.externalCommand) {
       const result = await executeExternalWorkerTask(
         { subTask, agent: currentAgent },
+        selectedCandidate,
         dependencyContext,
       );
       throwIfCancelled(context);
@@ -1365,7 +1446,7 @@ async function executeWorkerTask(
     }
 
     const retryHint = isRetry
-      ? `\n(Retry attempt ${attempt + 1}/${agentsToTry.length} — previous attempt failed. Try a different approach or be more concise.)`
+      ? `\n(Model fallback ${attempt + 1}/${candidatesToTry.length}. The previous model failed before any tool execution.)`
       : '';
 
     const workerTaskText = buildOrchestrationWorkerTaskText(
@@ -1386,6 +1467,7 @@ async function executeWorkerTask(
       'Complete this sub-task using available tools. Output the final result.',
     ].filter(Boolean).join('\n\n');
 
+    let toolExecutionStarted = false;
     try {
       const messages: NormalizedMessage[] = [{ role: 'user', content: workerPrompt }];
       // Workers inherit the task intent: ordinary tool use stays low-friction, while
@@ -1411,6 +1493,7 @@ async function executeWorkerTask(
         llmGetters,
         toolPolicy: workerToolPolicy,
         onToolStart: (record: { id: string; name: string; arguments: Record<string, any> }) => {
+          toolExecutionStarted = true;
           onTool?.({
             id: record.id,
             name: record.name,
@@ -1422,27 +1505,32 @@ async function executeWorkerTask(
           });
         },
       };
-      const WORKER_TIMEOUT_MS = 240_000;
-      const timeoutPromise = new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error('Worker timed out after 4 minutes')), WORKER_TIMEOUT_MS),
-      );
-      const result = await Promise.race([
-        runWithTools(
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Worker timed out after ${node.timeoutMs}ms`)),
+          node.timeoutMs,
+        );
+      });
+      const modelExecution = runWithTools(
           messages,
           toolRegistry,
           {
-            provider: llmConfig.provider,
-            model: llmConfig.model,
+            provider: selectedCandidate.provider as LLMProvider,
+            model: selectedCandidate.model,
             maxTokens: 4000,
             userId: llmConfig.userId || context.userId,
             domain: llmConfig.domain || context.domain,
             orgId: llmConfig.orgId || context.orgId,
           },
-          (record) => onTool?.(record, {
-            subTaskId: subTask.id,
-            agentId: currentAgent.id,
-            agentName: currentAgent.name,
-          }),
+          (record) => {
+            toolExecutionStarted = true;
+            onTool?.(record, {
+              subTaskId: subTask.id,
+              agentId: currentAgent.id,
+              agentName: currentAgent.name,
+            });
+          },
           Math.min(isRetry ? 12 : 8, workerToolPolicy.maxIterations),
           llmGetters.getDeepSeek,
           llmGetters.getGemini,
@@ -1458,9 +1546,13 @@ async function executeWorkerTask(
           llmGetters.getKimi,
           llmGetters.getGlm,
           llmGetters.getRelay,
-        ),
-        timeoutPromise,
-      ]);
+        );
+      let result: Awaited<typeof modelExecution>;
+      try {
+        result = await Promise.race([modelExecution, timeoutPromise]);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
       throwIfCancelled(context);
 
       // Record token usage for each LLM call within this worker
@@ -1468,8 +1560,20 @@ async function executeWorkerTask(
         recordTokenUsage(context.userId, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, `orch_worker_${Date.now()}`, 'orchestrator');
       }
 
+      const usageRecords = result.usageRecords || [];
+      const actualUsage = usageRecords[usageRecords.length - 1];
+      const actualCandidate: ModelCandidate = actualUsage?.provider && actualUsage?.model
+        ? {
+          provider: actualUsage.provider,
+          model: actualUsage.model,
+          locality: modelCandidateLocality(actualUsage.provider),
+          priority: selectedCandidate.priority,
+          agentId: currentAgent.id,
+        }
+        : selectedCandidate;
+
       if (isRetry) {
-        console.log(`[Orchestrator] Worker '${agent.name}' failed on attempt ${attempt}, succeeded with '${currentAgent.name}'`);
+        console.log(`[Orchestrator] Worker '${agent.name}' succeeded with '${currentAgent.name}' via ${actualCandidate.provider}/${actualCandidate.model}`);
       }
 
       const workerOutput = buildWorkerOutput(result.text.trim(), result.toolCalls);
@@ -1481,18 +1585,31 @@ async function executeWorkerTask(
           : workerOutput,
         agentId: currentAgent.id,
         status: failureReason ? 'failed' : 'succeeded',
+        selectedCandidate: actualCandidate,
       };
     } catch (err) {
       throwIfCancelled(context);
-      if (attempt < agentsToTry.length - 1) {
-        console.warn(`[Orchestrator] Worker '${currentAgent.name}' failed (attempt ${attempt + 1}/${agentsToTry.length}), trying next...`, String(err).slice(0, 80));
+      const reason = String(err).slice(0, 240);
+      attemptErrors.push(`${selectedCandidate.provider}/${selectedCandidate.model}: ${reason}`);
+      if (toolExecutionStarted) {
+        return {
+          subTaskId: subTask.id,
+          output: `[Worker result unknown after tool execution started; automatic model fallback stopped to prevent duplicate side effects: ${reason}]`,
+          agentId: currentAgent.id,
+          status: 'failed',
+          selectedCandidate,
+        };
+      }
+      if (attempt < candidatesToTry.length - 1) {
+        console.warn(`[Orchestrator] Model candidate '${selectedCandidate.provider}/${selectedCandidate.model}' failed before tool execution; trying the next compiled candidate.`, reason.slice(0, 80));
         continue;
       }
       return {
         subTaskId: subTask.id,
-        output: `[Worker failed after ${agentsToTry.length} attempt(s): ${String(err).slice(0, 200)}]`,
-        agentId: agent.id,
+        output: `[Worker failed after ${candidatesToTry.length} model candidate(s): ${attemptErrors.join('; ').slice(0, 700)}]`,
+        agentId: currentAgent.id,
         status: 'failed',
+        selectedCandidate,
       };
     }
   }
@@ -1500,9 +1617,10 @@ async function executeWorkerTask(
   // Unreachable but TypeScript needs it
   return {
     subTaskId: subTask.id,
-    output: '[Worker failed: all agents exhausted]',
+    output: `[Worker failed: all compiled candidates were exhausted${attemptErrors.length ? ` (${attemptErrors.join('; ').slice(0, 500)})` : ''}]`,
     agentId: agent.id,
     status: 'failed',
+    selectedCandidate: lastCandidate,
   };
 }
 
@@ -1518,9 +1636,82 @@ export async function executeWorkflow(
   fallbackAgents: AgentRecord[] = [],
   onTool?: OrchestrationToolCallback,
 ): Promise<WorkflowResult> {
-  const groups = topologicalGroups(assignments);
+  const graphNodes: ModelGraphNode[] = assignments.map(assignment => {
+    const candidates = compileWorkerModelCandidates(
+      assignment,
+      context,
+      llmConfig,
+      fallbackAgents,
+    );
+    const maxRetries = Math.min(
+      context.executionBudget?.maxRetriesPerNode ?? 2,
+      Math.max(0, candidates.length - 1),
+    );
+    return {
+      nodeId: assignment.subTask.id,
+      type: candidates[0]?.provider.startsWith('external:')
+        ? 'external_agent'
+        : 'internal_agent',
+      role: assignment.subTask.requiredSkill,
+      candidates,
+      dependsOn: Array.from(new Set(assignment.subTask.dependsOn || [])),
+      inputRefs: assignment.subTask.dependsOn?.map(id => `receipt:${id}`) || [],
+      outputSchema: { type: 'string', minLength: 1 },
+      timeoutMs: Math.max(1_000, Math.min(
+        240_000,
+        context.executionBudget?.maxWallTimeMs || 10 * 60_000,
+      )),
+      maxRetries,
+      assignedAgentId: assignment.agent.id,
+    };
+  });
+  const compilation = compileModelExecutionGraph({
+    taskId: context.taskId,
+    nodes: graphNodes,
+    privacyPolicy: context.dataRoutingPolicy || (isStrictPrivacy() ? 'local_only' : undefined),
+    budgets: context.executionBudget,
+  });
+  const graph = compilation.graph;
+  const assignmentById = new Map(assignments.map(assignment => [assignment.subTask.id, assignment]));
+  const groups = compilation.waves.map(wave => wave
+    .map(nodeId => assignmentById.get(nodeId))
+    .filter(Boolean) as WorkerAssignment[]);
+
+  if (!compilation.ok) {
+    const lacksPolicyCapableWorker = compilation.errors.some(error => error.includes('has no model/agent candidate'))
+      && assignments.some(assignment => assignment.agent.runtime === 'external')
+      && !canUseExternalWorkerForContext(context);
+    const reason = [
+      ...compilation.errors,
+      ...(lacksPolicyCapableWorker
+        ? ['the available external runtime cannot enforce the routed ToolPolicy, and no policy-capable worker was available']
+        : []),
+    ].join('; ');
+    const timestamp = new Date().toISOString();
+    const blockedResults: WorkerTaskResult[] = assignments.map(assignment => ({
+      subTaskId: assignment.subTask.id,
+      output: `[Worker blocked: invalid execution graph: ${reason}]`,
+      agentId: assignment.agent.id,
+      status: 'blocked',
+    }));
+    return {
+      subTaskResults: blockedResults,
+      aggregatedOutput: aggregateResults(blockedResults, assignments),
+      totalAgentsUsed: 0,
+      executionGraph: graph,
+      nodeReceipts: graph.nodes.map(node => buildModelGraphNodeReceipt({
+        graph,
+        node,
+        status: 'blocked',
+        startedAt: timestamp,
+        completedAt: timestamp,
+        error: reason,
+      })),
+    };
+  }
 
   const allResults: WorkerTaskResult[] = [];
+  const nodeReceipts: ModelGraphNodeReceipt[] = [];
   const usedAgentIds = new Set<string>();
   const assignmentIds = new Set(assignments.map(assignment => assignment.subTask.id));
 
@@ -1529,54 +1720,76 @@ export async function executeWorkflow(
     const completedResults = new Map(allResults.map(result => [result.subTaskId, result]));
     // Execute group in parallel
     const groupResults = await Promise.all(
-      group.map(a => {
+      group.map(async a => {
+        const startedAt = new Date().toISOString();
         const dependencyResults: WorkerTaskResult[] = [];
         const dependencyIds = Array.from(new Set(a.subTask.dependsOn || []));
         if (dependencyIds.length > ORCHESTRATION_DEPENDENCY_MAX_RECEIPTS) {
-          return Promise.resolve<WorkerTaskResult>({
+          const result: WorkerTaskResult = {
             subTaskId: a.subTask.id,
             output: `[Worker blocked: ${dependencyIds.length} prerequisites exceed the safe handoff limit of ${ORCHESTRATION_DEPENDENCY_MAX_RECEIPTS}; sub-task was not executed.]`,
             agentId: a.agent.id,
             status: 'blocked',
-          });
+          };
+          nodeReceipts.push(buildModelGraphNodeReceipt({ graph, node: graph.nodes.find(node => node.nodeId === a.subTask.id)!, status: result.status, startedAt, agentId: result.agentId, output: result.output, error: result.output }));
+          return result;
         }
         for (const dependencyId of dependencyIds) {
           if (!assignmentIds.has(dependencyId)) {
-            return Promise.resolve<WorkerTaskResult>({
+            const result: WorkerTaskResult = {
               subTaskId: a.subTask.id,
               output: `[Worker blocked: prerequisite "${dependencyId}" is not part of this workflow; sub-task was not executed.]`,
               agentId: a.agent.id,
               status: 'blocked',
-            });
+            };
+            nodeReceipts.push(buildModelGraphNodeReceipt({ graph, node: graph.nodes.find(node => node.nodeId === a.subTask.id)!, status: result.status, startedAt, agentId: result.agentId, output: result.output, error: result.output }));
+            return result;
           }
           const dependencyResult = completedResults.get(dependencyId);
           if (!dependencyResult) {
-            return Promise.resolve<WorkerTaskResult>({
+            const result: WorkerTaskResult = {
               subTaskId: a.subTask.id,
               output: `[Worker blocked: prerequisite "${dependencyId}" has no completed execution receipt (unresolved or circular dependency); sub-task was not executed.]`,
               agentId: a.agent.id,
               status: 'blocked',
-            });
+            };
+            nodeReceipts.push(buildModelGraphNodeReceipt({ graph, node: graph.nodes.find(node => node.nodeId === a.subTask.id)!, status: result.status, startedAt, agentId: result.agentId, output: result.output, error: result.output }));
+            return result;
           }
           if (dependencyResult.status !== 'succeeded') {
-            return Promise.resolve<WorkerTaskResult>({
+            const result: WorkerTaskResult = {
               subTaskId: a.subTask.id,
               output: `[Worker blocked: prerequisite "${dependencyId}" ended with status "${dependencyResult.status}"; sub-task was not executed.]`,
               agentId: a.agent.id,
               status: 'blocked',
-            });
+            };
+            nodeReceipts.push(buildModelGraphNodeReceipt({ graph, node: graph.nodes.find(node => node.nodeId === a.subTask.id)!, status: result.status, startedAt, agentId: result.agentId, output: result.output, error: result.output }));
+            return result;
           }
           dependencyResults.push(dependencyResult);
         }
-        return executeWorkerTask(
+        const graphNode = graph.nodes.find(node => node.nodeId === a.subTask.id)!;
+        const result = await executeWorkerTask(
           a,
           context,
+          graphNode,
           llmConfig,
           llmGetters,
           fallbackAgents,
           onTool,
           dependencyResults,
         );
+        nodeReceipts.push(buildModelGraphNodeReceipt({
+          graph,
+          node: graphNode,
+          status: result.status,
+          startedAt,
+          agentId: result.agentId,
+          output: result.output,
+          selectedCandidate: result.selectedCandidate,
+          ...(result.status === 'succeeded' ? {} : { error: result.output }),
+        }));
+        return result;
       }),
     );
     // Only record routing success for a verified successful worker result.
@@ -1627,6 +1840,8 @@ export async function executeWorkflow(
     subTaskResults: allResults,
     aggregatedOutput,
     totalAgentsUsed: usedAgentIds.size,
+    executionGraph: graph,
+    nodeReceipts,
   };
 }
 

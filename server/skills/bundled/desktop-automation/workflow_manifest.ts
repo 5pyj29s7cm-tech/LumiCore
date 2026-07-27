@@ -9,7 +9,7 @@ export const desktopAutomationWorkflow: SkillWorkflowDescriptor = {
   logLabel: 'Self-intro demo',
   statusDetail: 'Running self-introduction desktop demo',
   chatSpeech: { minMs: 2200, maxMs: 6400, msPerChar: 115 },
-  fallbackText: '我已经学会自我介绍演示这条流程了，不过刚才桌面演示没有完整跑完。你再说“Lumi，介绍一下你自己”，我会重新进入演示。',
+  fallbackText: '刚才的可视化自我介绍没有完整跑完。你可以再明确说“Lumi，演示一下你自己”，我会根据当前实时能力重新规划演示。',
   match: (text, context) => context?.targetIsLumi !== false && isSelfIntroDemoRequest(text),
   run: runSelfIntroDemo,
 };

@@ -1,12 +1,18 @@
 import type { LumiCapabilityLane, LumiCapabilitySelection } from './capability_selection';
 import type { LumiTurnChannel, LumiTurnFlow } from './turn_flow';
 import { isRecoveredCurrentAppEditingContinuation } from './action_continuation';
+import type { CapabilityExecutionPlan } from './capability_execution_plan';
+import {
+  buildDesktopExecutionPlan,
+  type DesktopExecutionPlan,
+} from '../desktop/execution_plan';
 
 export interface DesktopExecutionStabilityPolicyInput {
   channel: LumiTurnChannel;
   text: string;
   flow?: LumiTurnFlow;
   capabilitySelection: Pick<LumiCapabilitySelection, 'lane' | 'primary' | 'preferredTools'>;
+  capabilityExecutionPlan?: CapabilityExecutionPlan;
 }
 
 export interface DesktopExecutionStabilityPolicy {
@@ -16,6 +22,7 @@ export interface DesktopExecutionStabilityPolicy {
   actuationTools: string[];
   verificationTools: string[];
   promptOverlay: string;
+  executionPlan: DesktopExecutionPlan | null;
 }
 
 const VISIBLE_DESKTOP_LANES = new Set<LumiCapabilityLane>([
@@ -60,6 +67,7 @@ export function buildDesktopExecutionStabilityPolicy(
       actuationTools: [],
       verificationTools: [],
       promptOverlay: '',
+      executionPlan: null,
     };
   }
 
@@ -108,6 +116,13 @@ export function buildDesktopExecutionStabilityPolicy(
   ]);
   const lane = input.capabilitySelection.lane;
   const taskId = input.flow?.workTakeover.latestTask?.id || '';
+  const executionPlan = buildDesktopExecutionPlan({
+    text: input.text || input.flow?.routeText || '',
+    lane,
+    capabilityExecutionPlan: input.capabilityExecutionPlan,
+    taskId: input.capabilityExecutionPlan?.taskId || taskId,
+    recoveredCurrentAppEdit,
+  });
 
   return {
     applies: true,
@@ -115,9 +130,11 @@ export function buildDesktopExecutionStabilityPolicy(
     evidenceTools,
     actuationTools,
     verificationTools,
+    executionPlan,
     promptOverlay: [
       '## Desktop Execution Stability',
       `Applies because ${inferReason(input)}. Lane=${lane}; primary=${input.capabilitySelection.primary}.`,
+      `Certified target: ${executionPlan.application.displayName} (${executionPlan.application.id}); certification=${executionPlan.application.certification}; control layers=${executionPlan.application.controlLayers.join(' > ')}.`,
       taskId ? `Persistent task id: ${taskId}. Write blockers and verification evidence back to this task.` : '',
       'Ground rule: the screen is the source of truth. A command returning success, a cursor glow, or a planned step is not enough evidence.',
       'Before acting:',
@@ -125,6 +142,8 @@ export function buildDesktopExecutionStabilityPolicy(
       '- If the target app is already running in the taskbar/background, restore or focus it before opening a duplicate.',
       '- If the target local app path is unknown, use desktop_list_apps and then desktop_open; do not guess Program Files paths or generate a one-off launcher skill.',
       '- Prefer UIA/browser/control-tree actions when available; use raw mouse clicks only after locating the target from screen/UI evidence.',
+      '- Every actuation step is invalidated when the foreground-window fingerprint changes. Re-observe and re-plan instead of reusing stale coordinates or selectors.',
+      '- Vision may help locate controls, but it may never perform the final external commit.',
       'While acting:',
       recoveredCurrentAppEdit
         ? '- Current-app editing is UIA-only: do not use computer_use, raw coordinate mouse actions, or untargeted keyboard typing.'
@@ -144,6 +163,7 @@ export function buildDesktopExecutionStabilityPolicy(
       evidenceTools.length ? `Evidence tools to prefer: ${evidenceTools.join(', ')}.` : '',
       actuationTools.length ? `Actuation tools to prefer: ${actuationTools.join(', ')}.` : '',
       verificationTools.length ? `Verification tools to prefer: ${verificationTools.join(', ')}.` : '',
+      `Desktop execution plan id: ${executionPlan.planId}. Completion requires every required step receipt plus an application match.`,
       compact(input.text) ? `Newest user request: ${compact(input.text).slice(0, 220)}` : '',
     ].filter(Boolean).join('\n'),
   };

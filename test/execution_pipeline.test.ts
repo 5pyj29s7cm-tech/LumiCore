@@ -36,6 +36,12 @@ describe('unified execution pipeline', () => {
     expect(pipeline.capabilityPlan.schemaVersion).toBe(1);
     expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(true);
     expect(pipeline.capabilityPlan.capabilityIds.length).toBeGreaterThan(0);
+    expect(pipeline.executionPlan.decisionAuthority).toBe('semantic_planner');
+    expect(pipeline.executionPlan.scriptAuthority).toBe('adapter_only');
+    expect(pipeline.executionPlan.nodes.length).toBeGreaterThan(0);
+    expect(pipeline.executionPlan.expectedEvidence.length)
+      .toBe(pipeline.executionPlan.nodes.length);
+    expect(pipeline.capabilityPlan.promptOverlay).toContain('Capability Execution Plan');
     expect(pipeline.intentTrace.toolPolicy.allowedTools)
       .toEqual(pipeline.execution.toolPolicy.allowedTools);
   });
@@ -67,5 +73,62 @@ describe('unified execution pipeline', () => {
     expect(chat.turnIntent.channel).toBe('chat');
     expect(voice.turnIntent.channel).toBe('voice');
     expect(task.turnIntent.channel).toBe('task');
+    expect(chat.executionPlan.planId).toBe(voice.executionPlan.planId);
+    expect(voice.executionPlan.planId).toBe(task.executionPlan.planId);
+  });
+
+  it('fails external commits closed and binds confirmation to immutable payload evidence', () => {
+    const registry = createRegistry();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-user',
+        text: 'send to Alice: deployment is complete',
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+    });
+
+    expect(pipeline.normalizedIntent.sideEffectClass).toBe('external_commit');
+    expect(pipeline.executionPlan.risk.requiresConfirmation).toBe(true);
+    expect(pipeline.executionPlan.risk.failClosed).toBe(true);
+    expect(pipeline.executionPlan.risk.confirmationBinding).toMatchObject({
+      taskId: pipeline.executionPlan.taskId,
+      target: 'Alice',
+      tool: '',
+    });
+    expect(pipeline.executionPlan.risk.confirmationBinding?.payloadDigest).toHaveLength(64);
+    expect(pipeline.executionPlan.fallbackPolicy).toMatchObject({
+      maxRetries: 0,
+      reconcileUnknownOutcome: true,
+      allowLegacyRoute: false,
+      onUnknownOutcome: 'reconcile_then_stop',
+    });
+  });
+
+  it('permits bounded jittered retry only for read/status plans', () => {
+    const registry = createRegistry();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-user',
+        text: 'read messages from Alice',
+        channel: 'voice',
+        source: 'voice',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+    });
+
+    expect(pipeline.normalizedIntent.operation).toBe('read');
+    expect(pipeline.executionPlan.risk.sideEffectClass).toBe('none');
+    expect(pipeline.executionPlan.fallbackPolicy).toMatchObject({
+      retryClass: 'idempotent_only',
+      maxRetries: 2,
+      jitter: true,
+      allowLegacyRoute: false,
+    });
   });
 });

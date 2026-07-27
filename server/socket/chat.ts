@@ -22,7 +22,9 @@ import { buildLumiExecutionDecision } from "../cognition/execution_decision";
 import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
-import { executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
+import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy";
+import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
+import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
 import { buildClientDiagnosticPlan, formatClientDiagnosticResult } from "../cognition/client_diagnostic_result";
@@ -66,6 +68,8 @@ import {
   getActiveConversation,
   getConversationActionStatus,
   prepareConversationActionExecution,
+  persistConversationExecutionPlan,
+  persistConversationModelExecutionResult,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
 } from "../conversation/manager";
@@ -1903,6 +1907,7 @@ export function registerChatHandler(
         text: turnFlow.routeText,
         flow: turnFlow,
         capabilitySelection,
+        capabilityExecutionPlan: executionPipeline.executionPlan,
       });
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
@@ -1916,6 +1921,17 @@ export function registerChatHandler(
             forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
           })
         : { state: null, kind: 'conversation' as const };
+      if (conversationId && actionTaskExecution.state?.taskId) {
+        executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
+          executionPipeline.executionPlan,
+          actionTaskExecution.state.taskId,
+        );
+        persistConversationExecutionPlan({
+          conversationId,
+          userId: uid,
+          plan: executionPipeline.executionPlan,
+        });
+      }
       const priorTaskRecords = actionTaskExecution.kind === 'resume'
         ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
         : [];
@@ -2188,7 +2204,7 @@ export function registerChatHandler(
       const runWorkflowMatch = text.match(/(?:run|执行|跑|运行)\s+(?:my\s+)?(.+?)(?:\s*(?:routine|workflow|流程|工作流))?\s*$/i);
       let workflowQuickResult: string | null = null;
       const workflowQuickToolRecords: ToolExecutionRecord[] = [];
-      if (runWorkflowMatch && executionDecision.allowToolUse) {
+      if (shouldRunLegacyDirectExecution() && runWorkflowMatch && executionDecision.allowToolUse) {
         const wfName = runWorkflowMatch[1].trim().toLowerCase();
         const workflowScope = { domain: resolvedDomain, orgId: resolvedOrgId };
         const allWfs = listWorkflows(uid, undefined, workflowScope);
@@ -2327,7 +2343,7 @@ export function registerChatHandler(
 
       // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
       try {
-        const quickResult = await matchQuickCommand(
+        const quickResult = shouldRunLegacyDirectExecution() ? await matchQuickCommand(
           continuationOpenTarget ? buildInternalOpenCommand(visibleUserText, continuationOpenTarget) : text,
           uid,
           {
@@ -2336,7 +2352,7 @@ export function registerChatHandler(
           surface: turnSurface,
           currentAppTarget: getRecoveredApplicationContinuationTarget(actionContinuationBridge),
           },
-        );
+        ) : null;
         if (quickResult?.matched && (!quickResult.toolCall || executionDecision.allowToolUse)) {
           console.log('[ChatHandler] Quick command:', text.slice(0, 60));
           let quickResponseText = quickResult.responseText;
@@ -2751,7 +2767,7 @@ export function registerChatHandler(
         console.log(`[Cognition] Direct tool '${cognition.intent.directToolCall?.name}' handled without LLM`);
       }
 
-      const foregroundWeChatReadArgs = buildForegroundWeChatReadArgs(text);
+      const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
       if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && foregroundWeChatReadArgs) {
         const toolName = 'wechat_read_recent_chat';
         const correlationId = `wechat-read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2772,6 +2788,7 @@ export function registerChatHandler(
           const foregroundExecution = await executeForegroundMessagingAction({
             action: 'read',
             normalizedIntent: executionPipeline.normalizedIntent,
+            executionPlan: executionPipeline.executionPlan,
             registry: toolRegistry,
             correlationId,
             arguments: foregroundWeChatReadArgs,
@@ -2837,7 +2854,7 @@ export function registerChatHandler(
         allToolRecords.push(toolRecord);
       }
 
-      const foregroundWeChatSendArgs = buildForegroundWeChatSendArgs(text);
+      const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
       if (!responseText && !actionPreflightContext && executionDecision.allowToolUse && !clientActionOnlyTurn && !selfRepairTurn && foregroundWeChatSendArgs) {
         const toolName = 'wechat_send_message';
         const correlationId = `wechat-send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2858,6 +2875,7 @@ export function registerChatHandler(
           const foregroundExecution = await executeForegroundMessagingAction({
             action: 'send',
             normalizedIntent: executionPipeline.normalizedIntent,
+            executionPlan: executionPipeline.executionPlan,
             registry: toolRegistry,
             correlationId,
             arguments: foregroundWeChatSendArgs,
@@ -3064,6 +3082,7 @@ export function registerChatHandler(
                     orgId: resolvedOrgId,
                     desktopRelay,
                     toolPolicy: routedToolPolicy,
+                    taskId: actionTaskExecution.state?.taskId,
                     availableAgentIds: backgroundTask.workers.map(worker => worker.id),
                     forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
                     isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId),
@@ -3106,6 +3125,14 @@ export function registerChatHandler(
 
                 if (!orchResult) {
                   throw new Error('No worker agent accepted the delegated task.');
+                }
+                if (conversationId && actionTaskExecution.state?.taskId) {
+                  persistConversationModelExecutionResult({
+                    conversationId,
+                    userId: uid,
+                    taskId: actionTaskExecution.state.taskId,
+                    workflowResult: orchResult.workflowResult,
+                  });
                 }
                 if (isBackgroundTaskCancellationRequested(backgroundTaskId)) {
                   throw new Error('Workflow cancelled');
@@ -3310,6 +3337,7 @@ export function registerChatHandler(
               orgId: resolvedOrgId,
               desktopRelay,
               toolPolicy: routedToolPolicy,
+              taskId: actionTaskExecution.state?.taskId,
             },
             { provider: activeProvider, model: activeModel },
             llmGetters,
@@ -3345,6 +3373,14 @@ export function registerChatHandler(
             },
           );
           if (orchResult) {
+            if (conversationId && actionTaskExecution.state?.taskId) {
+              persistConversationModelExecutionResult({
+                conversationId,
+                userId: uid,
+                taskId: actionTaskExecution.state.taskId,
+                workflowResult: orchResult.workflowResult,
+              });
+            }
             responseText = orchResult.responseText;
             llmWasCalled = orchResult.llmWasCalled;
 

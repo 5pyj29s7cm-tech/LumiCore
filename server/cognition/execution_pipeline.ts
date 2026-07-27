@@ -24,6 +24,11 @@ import {
   compareLumiRoutingShadow,
   type LumiRoutingShadowComparison,
 } from './routing_shadow_guard';
+import {
+  buildCapabilityExecutionPlan,
+  formatCapabilityExecutionPlanPrompt,
+  type CapabilityExecutionPlan,
+} from './capability_execution_plan';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -35,6 +40,7 @@ export interface LumiExecutionPipeline {
   normalizedIntent: NormalizedActionIntent;
   turnIntent: LumiTurnDispatch;
   capabilityPlan: LumiCapabilityPlan;
+  executionPlan: CapabilityExecutionPlan;
   execution: LumiExecutionDecision;
   intentTrace: LumiIntentTrace;
   shadowComparison: LumiRoutingShadowComparison;
@@ -103,6 +109,18 @@ export function buildLumiExecutionPipeline(
       || turnIntent.boundary === 'work_takeover',
     ),
   };
+  const executionPlan = buildCapabilityExecutionPlan({
+    intent: normalizedIntent,
+    capabilityPlan,
+    execution,
+    manifest,
+    taskId: input.actionTaskState?.taskId,
+    sourcePaths: input.actionTaskState?.sourcePaths,
+  });
+  capabilityPlan.promptOverlay = [
+    capabilityPlan.promptOverlay,
+    formatCapabilityExecutionPlanPrompt(executionPlan),
+  ].filter(Boolean).join('\n\n');
   const intentTrace = buildLumiIntentTrace({
     dispatch: turnIntent,
     execution,
@@ -120,6 +138,7 @@ export function buildLumiExecutionPipeline(
     normalizedIntent,
     turnIntent,
     capabilityPlan,
+    executionPlan,
     execution,
     intentTrace,
     shadowComparison,
