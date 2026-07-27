@@ -28,10 +28,18 @@ describe('runtime reliability evidence modes', () => {
     expect(reliabilityScript).toContain("provider: 'gptsovits'");
     expect(reliabilityScript).toContain("ttsCoverage: !gptSovitsInstalled");
     expect(reliabilityScript).toContain("'missing_fixture'");
-    expect(reliabilityScript).toContain('idleReclamationVerified = true');
+    expect(reliabilityScript).toContain('gptSovitsIdleReclamationVerified = true');
     expect(reliabilityScript).toContain('ttsProbeAudioBytes');
     expect(reliabilityScript).toContain('scrubStagedTtsFixture(runRoot)');
     expect(reliabilityScript).toContain('A fixed');
+  });
+
+  it('requires a real SpeechBrain embedding and voiceprint idle reclamation', () => {
+    expect(reliabilityScript).toContain("/auth/biometric/voiceprint/enroll");
+    expect(reliabilityScript).toContain('requireEmbedding: true');
+    expect(reliabilityScript).toContain("voiceprintCoverage: !ttsFixtureReady");
+    expect(reliabilityScript).toContain('voiceprintIdleReclamationVerified');
+    expect(releaseCheck).toContain("soak.voiceprintCoverage === 'observed'");
   });
 
   it('never lets source-only results satisfy packaged release gates', () => {

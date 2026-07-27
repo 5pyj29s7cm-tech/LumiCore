@@ -14,6 +14,7 @@ import { repairCorruptedOrganizationNames } from "../org/db";
 import { startMessagingConnections, stopMessagingConnections } from "./messaging";
 import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
 import { stopGptSovitsRuntime } from "../tts/gptsovits_runtime";
+import { stopVoiceprintRuntime } from "../biometrics/voiceprint_provider";
 
 interface BootstrapContext {
   server: any;
@@ -283,6 +284,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       console.warn('[MCP] Disconnect error:', err.message);
     }
     stopGptSovitsRuntime();
+    await stopVoiceprintRuntime();
   };
   process.on('SIGINT', () => { cleanup().then(() => process.exit(0)); });
   process.on('SIGTERM', () => { cleanup().then(() => process.exit(0)); });

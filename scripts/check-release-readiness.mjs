@@ -177,6 +177,8 @@ async function checkReliabilityEvidence(checks, strict, head) {
       && soak.backendRestarts === 0 && soak.mcpConsecutiveCrashes === 0 && soak.databaseDirty === false && soak.unhandledExceptions === 0
       && soak.sidecarBudgetExceeded?.gptSovits === 0 && soak.sidecarBudgetExceeded?.voiceprint === 0
       && soak.idleReclamationVerified === true
+      && soak.gptSovitsIdleReclamationVerified === true && soak.voiceprintIdleReclamationVerified === true
+      && soak.voiceprintCoverage === 'observed' && soak.voiceprintProbeCount >= 1 && soak.voiceprintWorkingSetSamples >= 2
       && (soak.ttsCoverage === 'not_installed' || (soak.ttsCoverage === 'observed' && soak.ttsWorkingSetSamples >= 2 && soak.ttsLastHourGrowthRate <= 0.1));
     if (valid) pass(checks, 'reliability.soak', 'Two-hour, 200-round runtime soak evidence passed');
     else warnOrFail(checks, strict, 'reliability.soak', 'Soak evidence must cover the current commit, two hours, 200 mixed rounds, sidecar budgets, idle reclamation, and TTS growth <= 10%', soak);

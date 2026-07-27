@@ -23,6 +23,7 @@ function parseArgs(argv) {
       : '',
     ttsProbeIntervalMs: 10 * 60_000,
     ttsProbeTimeoutMs: 3 * 60_000,
+    voiceprintProbeTimeoutMs: 3 * 60_000,
     baselineMs: Number(process.env.LUMI_COLD_START_BASELINE_MS || 0),
     keep: false,
   };
@@ -40,6 +41,7 @@ function parseArgs(argv) {
     else if (value === '--tts-fixture-dir') args.ttsFixtureDir = path.resolve(argv[++i]);
     else if (value === '--tts-probe-interval-ms') args.ttsProbeIntervalMs = Number(argv[++i]);
     else if (value === '--tts-probe-timeout-ms') args.ttsProbeTimeoutMs = Number(argv[++i]);
+    else if (value === '--voiceprint-probe-timeout-ms') args.voiceprintProbeTimeoutMs = Number(argv[++i]);
     else if (value === '--baseline-ms') args.baselineMs = Number(argv[++i]);
     else if (value === '--keep') args.keep = true;
     else throw new Error(`Unknown argument: ${value}`);
@@ -53,6 +55,7 @@ function parseArgs(argv) {
     || args.pollMs < 100
     || args.ttsProbeIntervalMs < 1000
     || args.ttsProbeTimeoutMs < 1000
+    || args.voiceprintProbeTimeoutMs < 1000
   ) throw new Error('Invalid reliability test limits');
   return args;
 }
@@ -97,6 +100,90 @@ async function synthesizeTtsProbe(baseUrl, token, timeoutMs) {
     if (!response.ok) throw new Error(`GPT-SoVITS probe failed with ${response.status}`);
     if (body.length <= 44) throw new Error(`GPT-SoVITS probe returned an invalid audio payload (${body.length} bytes)`);
     return body.length;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadVoiceprintPcmFixture(fixtureRoot) {
+  const sourceSegments = path.join(fixtureRoot, 'segments');
+  const entries = await fs.readdir(sourceSegments, { withFileTypes: true }).catch(() => []);
+  const sourceName = entries
+    .filter(entry => entry.isFile() && /\.wav$/i.test(entry.name))
+    .map(entry => entry.name)
+    .sort((a, b) => a.localeCompare(b))[0];
+  if (!sourceName) throw new Error(`No WAV voiceprint fixture found under ${sourceSegments}`);
+
+  const wav = await fs.readFile(path.join(sourceSegments, sourceName));
+  if (wav.length < 44 || wav.toString('ascii', 0, 4) !== 'RIFF' || wav.toString('ascii', 8, 12) !== 'WAVE') {
+    throw new Error(`Voiceprint fixture is not a valid RIFF/WAVE file: ${sourceName}`);
+  }
+
+  let format = 0;
+  let channels = 0;
+  let sampleRate = 0;
+  let bitsPerSample = 0;
+  let pcm = null;
+  for (let offset = 12; offset + 8 <= wav.length;) {
+    const chunkId = wav.toString('ascii', offset, offset + 4);
+    const chunkSize = wav.readUInt32LE(offset + 4);
+    const chunkStart = offset + 8;
+    const chunkEnd = Math.min(wav.length, chunkStart + chunkSize);
+    if (chunkId === 'fmt ' && chunkEnd - chunkStart >= 16) {
+      format = wav.readUInt16LE(chunkStart);
+      channels = wav.readUInt16LE(chunkStart + 2);
+      sampleRate = wav.readUInt32LE(chunkStart + 4);
+      bitsPerSample = wav.readUInt16LE(chunkStart + 14);
+    } else if (chunkId === 'data') {
+      pcm = wav.subarray(chunkStart, chunkEnd);
+    }
+    offset = chunkStart + chunkSize + (chunkSize % 2);
+  }
+  if (format !== 1 || !pcm || channels < 1 || bitsPerSample !== 16 || sampleRate < 8_000) {
+    throw new Error(`Voiceprint fixture must be PCM16 WAV: ${sourceName}`);
+  }
+
+  if (channels > 1) {
+    const frames = Math.floor(pcm.length / (channels * 2));
+    const mono = Buffer.allocUnsafe(frames * 2);
+    for (let frame = 0; frame < frames; frame += 1) {
+      let sum = 0;
+      for (let channel = 0; channel < channels; channel += 1) {
+        sum += pcm.readInt16LE((frame * channels + channel) * 2);
+      }
+      mono.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sum / channels))), frame * 2);
+    }
+    pcm = mono;
+  }
+  return { pcm16Base64: pcm.toString('base64'), sampleRate };
+}
+
+async function runVoiceprintProbe(baseUrl, token, fixtureRoot, timeoutMs) {
+  const fixture = await loadVoiceprintPcmFixture(fixtureRoot);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${baseUrl}/auth/biometric/voiceprint/enroll`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        label: 'reliability-probe',
+        audioPcm16Base64: fixture.pcm16Base64,
+        sampleRate: fixture.sampleRate,
+        sampleCount: 1,
+        replaceExisting: true,
+        requireEmbedding: true,
+      }),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body?.voiceprint?.embeddingReady !== true) {
+      throw new Error(`Voiceprint probe failed with ${response.status}: ${body?.reason || body?.error || 'embedding unavailable'}`);
+    }
+    return Number(body.voiceprint.embeddingDim || 0);
   } finally {
     clearTimeout(timer);
   }
@@ -290,20 +377,27 @@ async function runSoak(args, runRoot, runtimeMeta) {
   let ttsProbeCount = 0;
   let ttsProbeAudioBytes = 0;
   let ttsProbeError = '';
+  let voiceprintProbeCount = 0;
+  let voiceprintEmbeddingDim = 0;
+  let voiceprintProbeError = '';
   let nextTtsProbeAt = 0;
   let authToken = '';
-  let idleReclamationVerified = false;
+  let gptSovitsIdleReclamationVerified = false;
+  let voiceprintIdleReclamationVerified = false;
   let finalHealth = null;
   const ttsWorkingSetSamples = [];
+  const voiceprintWorkingSetSamples = [];
   try {
     const initialHealth = await waitForHealth(runtime.baseUrl, runtime.child, args.timeoutMs);
     finalHealth = initialHealth;
     gptSovitsInstalled = initialHealth.supervisedRuntimes?.gptSovits?.installed === true;
     ttsFixtureReady = Boolean(args.ttsFixtureDir);
-    if (gptSovitsInstalled && ttsFixtureReady) {
+    if (ttsFixtureReady) {
       const auth = await fetchJson(`${runtime.baseUrl}/auth/bootstrap`, 10_000);
       authToken = String(auth.token || '');
       if (!authToken) throw new Error('Local reliability identity bootstrap did not return a token');
+    }
+    if (gptSovitsInstalled && authToken) {
       try {
         ttsProbeAudioBytes += await synthesizeTtsProbe(runtime.baseUrl, authToken, args.ttsProbeTimeoutMs);
         ttsProbeCount += 1;
@@ -312,6 +406,20 @@ async function runSoak(args, runRoot, runtimeMeta) {
         ttsProbeError = error?.message || String(error);
       }
       nextTtsProbeAt = Date.now() + args.ttsProbeIntervalMs;
+    }
+    if (authToken) {
+      try {
+        voiceprintEmbeddingDim = await runVoiceprintProbe(
+          runtime.baseUrl,
+          authToken,
+          args.ttsFixtureDir,
+          args.voiceprintProbeTimeoutMs,
+        );
+        voiceprintProbeCount += 1;
+        functionalCalls += 1;
+      } catch (error) {
+        voiceprintProbeError = error?.message || String(error);
+      }
     }
     started = Date.now();
     deadline = started + args.durationHours * 60 * 60 * 1000;
@@ -359,23 +467,32 @@ async function runSoak(args, runRoot, runtimeMeta) {
       maxVoiceprintBudgetExceeded = Math.max(maxVoiceprintBudgetExceeded, Number(voiceprintRuntime.resources?.budgetExceededCount || 0));
       const ttsRssBytes = Number(gptRuntime.resources?.rssBytes || 0);
       if (ttsRssBytes > 0) ttsWorkingSetSamples.push({ at: Date.now(), rssBytes: ttsRssBytes });
+      const voiceprintRssBytes = Number(voiceprintRuntime.resources?.rssBytes || 0);
+      if (voiceprintRssBytes > 0) voiceprintWorkingSetSamples.push({ at: Date.now(), rssBytes: voiceprintRssBytes });
       await new Promise(resolve => setTimeout(resolve, Math.min(args.pollMs, Math.max(0, deadline - Date.now()))));
     }
 
     if (!gptSovitsInstalled) {
-      idleReclamationVerified = true;
-    } else if (ttsProbeCount > 0) {
-      const lastStatus = finalHealth?.supervisedRuntimes?.gptSovits || {};
-      const idleTimeoutMs = Number(lastStatus.idleTimeoutMs || 0);
-      const idleDeadline = Date.now() + idleTimeoutMs + 30_000;
-      while (Date.now() < idleDeadline) {
-        const health = await fetchJson(`${runtime.baseUrl}/health`);
-        finalHealth = health;
-        const status = health.supervisedRuntimes?.gptSovits || {};
-        if (status.owned !== true && status.ready !== true && status.starting !== true) {
-          idleReclamationVerified = true;
-          break;
-        }
+      gptSovitsIdleReclamationVerified = true;
+    }
+    const gptIdleTimeoutMs = Number(finalHealth?.supervisedRuntimes?.gptSovits?.idleTimeoutMs || 0);
+    const voiceprintIdleTimeoutMs = Number(finalHealth?.supervisedRuntimes?.voiceprint?.idleTimeoutMs || 0);
+    const idleDeadline = Date.now() + Math.max(gptIdleTimeoutMs, voiceprintIdleTimeoutMs) + 30_000;
+    while (Date.now() < idleDeadline && (!gptSovitsIdleReclamationVerified || !voiceprintIdleReclamationVerified)) {
+      const health = await fetchJson(`${runtime.baseUrl}/health`);
+      finalHealth = health;
+      const gptStatus = health.supervisedRuntimes?.gptSovits || {};
+      const voiceprintStatus = health.supervisedRuntimes?.voiceprint || {};
+      if (
+        (!gptSovitsInstalled || ttsProbeCount > 0)
+        && gptStatus.owned !== true
+        && gptStatus.ready !== true
+        && gptStatus.starting !== true
+      ) gptSovitsIdleReclamationVerified = true;
+      if (voiceprintProbeCount > 0 && voiceprintStatus.running !== true) {
+        voiceprintIdleReclamationVerified = true;
+      }
+      if (!gptSovitsIdleReclamationVerified || !voiceprintIdleReclamationVerified) {
         await new Promise(resolve => setTimeout(resolve, Math.min(2_000, Math.max(0, idleDeadline - Date.now()))));
       }
     }
@@ -393,11 +510,6 @@ async function runSoak(args, runRoot, runtimeMeta) {
   const ttsLastHourGrowthRate = lastHourSamples.length >= 2 && lastHourSamples[0].rssBytes > 0
     ? Number(((lastHourSamples.at(-1).rssBytes - lastHourSamples[0].rssBytes) / lastHourSamples[0].rssBytes).toFixed(4))
     : null;
-  const gptRuntime = finalHealth?.supervisedRuntimes?.gptSovits || {};
-  const voiceprintRuntime = finalHealth?.supervisedRuntimes?.voiceprint || {};
-  const voiceprintIdleExpired = voiceprintRuntime.running === true && voiceprintRuntime.resources?.sampledAt
-    ? Date.now() - Date.parse(voiceprintRuntime.resources.sampledAt) >= Number(voiceprintRuntime.idleTimeoutMs || 0)
-    : false;
   const result = {
     mode: 'soak',
     runtimeKind: args.runtime,
@@ -426,8 +538,19 @@ async function runSoak(args, runRoot, runtimeMeta) {
     ttsProbeError: ttsProbeError || null,
     ttsWorkingSetSamples: ttsWorkingSetSamples.length,
     ttsLastHourGrowthRate,
+    voiceprintCoverage: !ttsFixtureReady
+      ? 'missing_fixture'
+      : voiceprintProbeCount > 0 && voiceprintWorkingSetSamples.length >= 2
+        ? 'observed'
+        : 'missing_workload',
+    voiceprintProbeCount,
+    voiceprintEmbeddingDim,
+    voiceprintProbeError: voiceprintProbeError || null,
+    voiceprintWorkingSetSamples: voiceprintWorkingSetSamples.length,
     sidecarBudgetExceeded: { gptSovits: maxGptSovitsBudgetExceeded, voiceprint: maxVoiceprintBudgetExceeded },
-    idleReclamationVerified: idleReclamationVerified && !voiceprintIdleExpired,
+    gptSovitsIdleReclamationVerified,
+    voiceprintIdleReclamationVerified,
+    idleReclamationVerified: gptSovitsIdleReclamationVerified && voiceprintIdleReclamationVerified,
     databaseDirtyObservations,
     backendRestarts: 0,
     mcpConsecutiveCrashes: 0,
@@ -437,12 +560,16 @@ async function runSoak(args, runRoot, runtimeMeta) {
   };
   const ttsStable = result.ttsCoverage === 'not_installed'
     || (result.ttsCoverage === 'observed' && result.ttsLastHourGrowthRate !== null && result.ttsLastHourGrowthRate <= 0.1);
+  const voiceprintStable = result.voiceprintCoverage === 'observed'
+    && result.voiceprintProbeCount > 0
+    && result.voiceprintWorkingSetSamples >= 2;
   if (
     mixedRounds < args.minMixedRounds
     || maxGptSovitsBudgetExceeded > 0
     || maxVoiceprintBudgetExceeded > 0
     || !result.idleReclamationVerified
     || !ttsStable
+    || !voiceprintStable
   ) {
     result.ok = false;
     throw Object.assign(new Error('runtime soak acceptance thresholds were not met'), { result });

@@ -4,6 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { logger } from '../../logger';
+import { getDataDirectory } from '../config/data_path';
 import { SupervisedProcessResourceMonitor } from '../runtime/process_resource_monitor';
 
 export interface VoiceprintEmbeddingInput {
@@ -84,6 +85,7 @@ class SpeechBrainSidecarClient {
   private queue: QueuedRequest[] = [];
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private restartCount = 0;
+  private lastUsedAt = '';
   private resourceMonitor = new SupervisedProcessResourceMonitor({
     budgetBytes: SIDECAR_MEMORY_BUDGET_BYTES,
     onBudgetExceeded: snapshot => {
@@ -101,6 +103,7 @@ class SpeechBrainSidecarClient {
     }
 
     this.clearIdleTimer();
+    this.lastUsedAt = new Date().toISOString();
     if (this.pending.size >= MAX_CONCURRENT_REQUESTS) {
       return new Promise((resolve, reject) => {
         this.queue.push({ payload, timeoutMs, resolve, reject });
@@ -172,7 +175,12 @@ class SpeechBrainSidecarClient {
     const python = resolveVoiceprintPython();
     this.proc = spawn(python, [SIDECAR_SCRIPT], {
       cwd: path.resolve(__dirname, '..', '..'),
-      env: { ...process.env, PYTHONUTF8: '1' },
+      env: {
+        ...process.env,
+        PYTHONUTF8: '1',
+        LUMI_VOICEPRINT_MODEL_DIR: process.env.LUMI_VOICEPRINT_MODEL_DIR?.trim()
+          || getDataDirectory('voiceprint_models'),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -217,6 +225,7 @@ class SpeechBrainSidecarClient {
     clearTimeout(pending.timer);
     this.pending.delete(id);
     pending.resolve(data);
+    this.lastUsedAt = new Date().toISOString();
     this.restartCount = 0;
     this.drainQueue();
     this.scheduleIdleStop();
@@ -246,11 +255,41 @@ class SpeechBrainSidecarClient {
       queueLength: this.queue.length,
       concurrency: MAX_CONCURRENT_REQUESTS,
       idleTimeoutMs: SIDECAR_IDLE_MS,
+      lastUsedAt: this.lastUsedAt,
       restartCount: this.restartCount,
       unavailableUntil: this.unavailableUntil ? new Date(this.unavailableUntil).toISOString() : '',
       lastError: this.lastError,
       resources: this.resourceMonitor.status(),
     };
+  }
+
+  async stop(): Promise<void> {
+    this.clearIdleTimer();
+    const proc = this.proc;
+    this.proc = null;
+    this.resourceMonitor.stop();
+    const error = new Error('SpeechBrain sidecar stopped during runtime shutdown');
+    for (const [id, pending] of this.pending.entries()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+      this.pending.delete(id);
+    }
+    for (const queued of this.queue.splice(0)) queued.reject(error);
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+
+    const exited = new Promise<void>(resolve => proc.once('exit', () => resolve()));
+    proc.kill('SIGTERM');
+    const graceful = await Promise.race([
+      exited.then(() => true),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2_000)),
+    ]);
+    if (!graceful && proc.exitCode === null && proc.signalCode === null) {
+      proc.kill('SIGKILL');
+      await Promise.race([
+        exited,
+        new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+      ]);
+    }
   }
 }
 
@@ -269,6 +308,7 @@ export function getVoiceprintRuntimeStatus() {
     queueLength: 0,
     concurrency: MAX_CONCURRENT_REQUESTS,
     idleTimeoutMs: SIDECAR_IDLE_MS,
+    lastUsedAt: '',
     restartCount: 0,
     unavailableUntil: '',
     lastError: '',
@@ -283,6 +323,12 @@ export function getVoiceprintRuntimeStatus() {
       lastError: '',
     },
   };
+}
+
+export async function stopVoiceprintRuntime(): Promise<void> {
+  const activeClient = client;
+  client = null;
+  if (activeClient) await activeClient.stop();
 }
 
 function sanitizeEmbedding(value: unknown): number[] {
