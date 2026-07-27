@@ -1,0 +1,41 @@
+import fs from 'fs';
+import path from 'path';
+import { describe, expect, it } from 'vitest';
+
+describe('runtime reliability evidence modes', () => {
+  const reliabilityScript = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/runtime-reliability.mjs'),
+    'utf8',
+  );
+  const releaseCheck = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/check-release-readiness.mjs'),
+    'utf8',
+  );
+
+  it('runs current TypeScript source without overwriting packaged evidence', () => {
+    expect(reliabilityScript).toContain("runtime: 'packaged'");
+    expect(reliabilityScript).toContain("args.runtime === 'source'");
+    expect(reliabilityScript).toContain("node_modules', 'tsx', 'dist', 'cli.mjs'");
+    expect(reliabilityScript).toContain('`${args.mode}-source.json`');
+  });
+
+  it('isolates source probes from legacy developer data', () => {
+    expect(reliabilityScript).toContain("path.join(dataDirectory, '.migration_skip')");
+    expect(reliabilityScript).toContain("LUMI_DATA_DIR: dataRoot");
+  });
+
+  it('requires real TTS output, memory samples, and idle reclamation', () => {
+    expect(reliabilityScript).toContain("provider: 'gptsovits'");
+    expect(reliabilityScript).toContain("ttsCoverage: !gptSovitsInstalled");
+    expect(reliabilityScript).toContain("'missing_fixture'");
+    expect(reliabilityScript).toContain('idleReclamationVerified = true');
+    expect(reliabilityScript).toContain('ttsProbeAudioBytes');
+    expect(reliabilityScript).toContain('scrubStagedTtsFixture(runRoot)');
+    expect(reliabilityScript).toContain('A fixed');
+  });
+
+  it('never lets source-only results satisfy packaged release gates', () => {
+    expect(releaseCheck).toContain("lifecycle.runtimeKind === 'packaged'");
+    expect(releaseCheck).toContain("soak.runtimeKind === 'packaged'");
+  });
+});

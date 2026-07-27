@@ -162,7 +162,7 @@ async function checkReliabilityEvidence(checks, strict, head) {
 
   if (existsSync(lifecyclePath)) {
     const lifecycle = await readJson(lifecyclePath);
-    const valid = lifecycle.ok === true && lifecycle.buildId === head && lifecycle.iterations >= 50 && lifecycle.orphanProcesses === 0
+    const valid = lifecycle.ok === true && lifecycle.runtimeKind === 'packaged' && lifecycle.buildId === head && lifecycle.iterations >= 50 && lifecycle.orphanProcesses === 0
       && lifecycle.baselineMs > 0 && lifecycle.p95Ms <= lifecycle.baselineMs * 0.75;
     if (valid) pass(checks, 'reliability.lifecycle', `50-run lifecycle P95 passed at ${lifecycle.p95Ms} ms`);
     else warnOrFail(checks, strict, 'reliability.lifecycle', 'Lifecycle evidence must cover the current commit, 50 runs, zero orphans, and a 25% P95 improvement', lifecycle);
@@ -172,7 +172,7 @@ async function checkReliabilityEvidence(checks, strict, head) {
 
   if (existsSync(soakPath)) {
     const soak = await readJson(soakPath);
-    const valid = soak.ok === true && soak.buildId === head && soak.requestedHours >= 2 && soak.elapsedMs >= 1.99 * 60 * 60 * 1000
+    const valid = soak.ok === true && soak.runtimeKind === 'packaged' && soak.buildId === head && soak.requestedHours >= 2 && soak.elapsedMs >= 1.99 * 60 * 60 * 1000
       && soak.mixedRounds >= 200 && soak.healthProbeInterruptions === 0
       && soak.backendRestarts === 0 && soak.mcpConsecutiveCrashes === 0 && soak.databaseDirty === false && soak.unhandledExceptions === 0
       && soak.sidecarBudgetExceeded?.gptSovits === 0 && soak.sidecarBudgetExceeded?.voiceprint === 0
