@@ -1,8 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execFileSync } from 'child_process';
 import { getLatestExploration } from '../autonomy/system_explorer';
+import { runWindowsPowerShellJson } from '../adapters/host_probe';
 
 interface DesktopEntry {
   name: string;
@@ -125,27 +125,6 @@ function listDesktopEntries(dirs: string[]): { entries: DesktopEntry[]; count: n
   return { entries: entries.slice(0, DESKTOP_ENTRY_LIMIT), count };
 }
 
-function runPowerShellJson(script: string, timeout = 2500): unknown {
-  if (process.platform !== 'win32') return null;
-  try {
-    const utf8Script = [
-      '[Console]::InputEncoding = [System.Text.Encoding]::UTF8',
-      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-      '$OutputEncoding = [System.Text.Encoding]::UTF8',
-      script,
-    ].join('\n');
-    const output = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', utf8Script],
-      { encoding: 'utf8', timeout, windowsHide: true },
-    ).trim();
-    if (!output) return null;
-    return JSON.parse(output);
-  } catch {
-    return null;
-  }
-}
-
 function asArray<T>(value: T | T[] | null | undefined): T[] {
   if (!value) return [];
   return Array.isArray(value) ? value : [value];
@@ -175,7 +154,7 @@ $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
   pid = [int]$processId
 } | ConvertTo-Json -Compress
 `;
-  const value = runPowerShellJson(script, 2200) as ForegroundWindow | null;
+  const value = runWindowsPowerShellJson(script, 2200) as ForegroundWindow | null;
   if (!value || (!value.title && !value.processName)) return null;
   return {
     title: String(value.title || '').trim(),
@@ -191,7 +170,7 @@ Get-Process |
   Select-Object -First ${PROCESS_LIMIT} @{Name='name'; Expression={$_.ProcessName}}, @{Name='pid'; Expression={$_.Id}}, @{Name='cpuTimeSeconds'; Expression={ if ($_.CPU -ne $null) { [math]::Round($_.CPU, 1) } else { $null } }}, @{Name='memoryMB'; Expression={ [math]::Round($_.WorkingSet64 / 1MB, 1) }} |
   ConvertTo-Json -Compress
 `;
-  const raw = asArray(runPowerShellJson(script, 2800) as any);
+  const raw = asArray(runWindowsPowerShellJson(script, 2800) as any);
   return raw
     .map((item: any) => ({
       name: String(item?.name || '').trim(),

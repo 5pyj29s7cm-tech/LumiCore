@@ -3,7 +3,6 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ToolContext } from '../types';
 import { ToolRegistry } from '../registry';
-import { floorplanExtractGeometry, ocrImageFile } from './ocr_tools';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff']);
 
@@ -189,9 +188,10 @@ async function runInternalTool(
   const definition = registry.get(name);
   if (!definition) throw new Error(`Required CAD workflow capability is unavailable: ${name}`);
   // The composite tool is the authorization boundary. Its fixed, audited
-  // stages call handlers directly so a model cannot widen or narrow the
-  // capability envelope halfway through the task.
-  return definition.handler(args, context ? { ...context, toolPolicy: undefined } : context);
+  // stages are not model-selectable, but still pass through the registry so
+  // constitutional checks, confirmation state, timeouts, and metrics cannot
+  // be bypassed by a composite workflow.
+  return registry.execute(name, args, context ? { ...context, toolPolicy: undefined } : context);
 }
 
 export function registerCadWorkflowTools(registry: ToolRegistry): void {
@@ -228,7 +228,7 @@ export function registerCadWorkflowTools(registry: ToolRegistry): void {
         let calibrationEvidence: Record<string, any> | null = null;
         if (!physicalWidth || !physicalHeight) {
           context?.onProgress?.('Reading source dimensions');
-          const ocrResult = await ocrImageFile({
+          const ocrResult = await runInternalTool(registry, 'ocr_image_file', {
             imagePath: sourcePath,
             query: 'Read only confirmed outermost physical dimensions from this floor plan. Return JSON only: {"physicalWidth":number|null,"physicalHeight":number|null,"unit":"mm","evidence":"visible dimension labels used"}. Width is the full horizontal extent and height is the full vertical extent. Never estimate or use pixel dimensions.',
           }, context);
@@ -242,7 +242,7 @@ export function registerCadWorkflowTools(registry: ToolRegistry): void {
         }
 
         context?.onProgress?.('Tracing and verifying source geometry');
-        const geometryText = await floorplanExtractGeometry({
+        const geometryText = await runInternalTool(registry, 'floorplan_extract_geometry', {
           imagePath: sourcePath,
           projectName: args.projectName || path.parse(sourcePath).name,
           physicalWidth: physicalWidth || undefined,

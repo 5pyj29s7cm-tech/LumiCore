@@ -44,6 +44,7 @@ import { getToolRuntimeMetrics } from "../runtime/tool_metrics";
 import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
 import { generateConfiguredEmbedding } from "../llm/embedding_provider";
 import { rerankConfiguredDocuments } from "../llm/rerank_provider";
+import { queryWindowsGpuName } from "../adapters/host_probe";
 import { loadRuntimeBuildMetadata } from "../../shared/runtime_build_metadata";
 import {
   testLLMProviderConnection,
@@ -198,16 +199,8 @@ async function collectSystemStatsSnapshot() {
   if (_cachedGPU === undefined) {
     _cachedGPU = null;
     if (process.platform === 'win32') {
-      try {
-        const { execFileSync } = await import('child_process');
-        const script = "Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Idd|Indirect|Mirror|Virtual' } | Select-Object -First 1 -ExpandProperty Name";
-        const output = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
-          timeout: 5000,
-          encoding: 'utf-8',
-          windowsHide: true,
-        }).trim();
-        if (output) _cachedGPU = { name: output };
-      } catch {}
+      const output = queryWindowsGpuName();
+      if (output) _cachedGPU = { name: output };
     }
   }
 

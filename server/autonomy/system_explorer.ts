@@ -1,10 +1,10 @@
 import os from "os";
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
 import { readDB, writeDB } from "../../db_layer";
 import { isAppDiscoveryNoise } from "../../shared/system_apps";
 import { detectProfession, saveProfessionProfile } from "./professions";
+import { runHostProbeCommand } from "../adapters/host_probe";
 
 export interface SystemSnapshot {
   id: string;
@@ -67,8 +67,7 @@ export interface NetworkProfile {
 }
 
 function exec(cmd: string): string {
-  try { return execSync(cmd, { encoding: "utf8", timeout: 15000, windowsHide: true }).trim(); }
-  catch { return ""; }
+  return runHostProbeCommand(cmd);
 }
 
 const APP_SCAN_LIMIT = 1500;
