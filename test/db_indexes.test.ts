@@ -1,9 +1,10 @@
 import './helpers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sqlite3 from 'sqlite3';
-import { flushDB, initDatabase, readDB, writeDB } from '../db_layer';
+import { closeDatabase, flushDB, initDatabase, readDB, writeDB } from '../db_layer';
 import { getDataPath } from '../server/config/data_path';
 import { addMessage, getOrCreateActiveConversation, setConversationSummary } from '../server/conversation/manager';
+import { ToolRegistry, resetExternalCommitRuntimeCacheForTests } from '../server/tools/registry';
 
 function readIndexNames(): Promise<string[]> {
   return new Promise((resolve, reject) => {
@@ -52,6 +53,20 @@ function readActionTaskColumns(): Promise<string[]> {
     const database = new sqlite3.Database(getDataPath('lumi.db'));
     database.all(
       'PRAGMA table_info(conversation_action_tasks)',
+      (error, rows: Array<{ name: string }>) => {
+        database.close();
+        if (error) reject(error);
+        else resolve(rows.map(row => row.name));
+      },
+    );
+  });
+}
+
+function readExternalCommitJournalColumns(): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const database = new sqlite3.Database(getDataPath('lumi.db'));
+    database.all(
+      'PRAGMA table_info(external_commit_journal)',
       (error, rows: Array<{ name: string }>) => {
         database.close();
         if (error) reject(error);
@@ -121,6 +136,22 @@ describe('SQLite persistence indexes', () => {
       'idx_org_kb_articles_org_category',
       'idx_action_tasks_conversation_updated',
       'idx_action_receipts_idempotency',
+      'idx_external_commit_journal_task',
+    ]));
+  });
+
+  it('creates the write-ahead journal required for external-commit restart safety', async () => {
+    expect(await readExternalCommitJournalColumns()).toEqual(expect.arrayContaining([
+      'idempotencyKey',
+      'taskId',
+      'userId',
+      'toolName',
+      'inputDigest',
+      'state',
+      'replayResult',
+      'claimToken',
+      'createdAt',
+      'updatedAt',
     ]));
   });
 
@@ -209,5 +240,65 @@ describe('SQLite persistence indexes', () => {
       taskCount: 1,
       receiptCount: 1,
     });
+  });
+
+  it('deduplicates an external commit after closing and reopening SQLite', async () => {
+    const toolName = `restart_safe_commit_${Date.now()}`;
+    const idempotencyKey = `restart-safe-key-${Date.now()}-${Math.random()}`;
+    const calls: string[] = [];
+    const register = (registry: ToolRegistry) => registry.register({
+      name: toolName,
+      description: 'Restart-safe external commit test tool.',
+      parameters: { type: 'object', properties: {} },
+      permission: 'user',
+      securityLevel: 'confirm',
+      capability: {
+        lane: 'messaging',
+        operation: 'mutate',
+        risk: 'high',
+        sideEffects: [{ type: 'external_communication', scope: 'recipient', reversible: false }],
+        verification: {
+          strategy: 'provider_receipt',
+          required: true,
+          requiredFields: ['sent', 'verificationStatus'],
+          successSignals: ['provider receipt'],
+          limitations: [],
+        },
+      },
+      handler: async () => {
+        calls.push('sent');
+        return JSON.stringify({
+          sent: true,
+          verificationStatus: 'verified',
+          providerReceipt: 'sqlite-restart-receipt',
+          message: 'must not be persisted in replay evidence',
+        });
+      },
+    });
+    const args = { target: 'SQLite Restart Recipient', payload: 'Send exactly once' };
+    const context = {
+      userId: 'sqlite-restart-user',
+      taskId: 'sqlite-restart-task',
+      userConfirmed: true,
+      idempotencyKey,
+    };
+
+    const firstRegistry = new ToolRegistry();
+    register(firstRegistry);
+    await expect(firstRegistry.execute(toolName, args, context)).resolves.toContain('sqlite-restart-receipt');
+    await closeDatabase();
+    resetExternalCommitRuntimeCacheForTests();
+    await initDatabase();
+
+    const restartedRegistry = new ToolRegistry();
+    register(restartedRegistry);
+    const replay = await restartedRegistry.execute(toolName, args, context);
+    expect(calls).toEqual(['sent']);
+    expect(JSON.parse(replay)).toMatchObject({
+      providerReceipt: 'sqlite-restart-receipt',
+      verificationStatus: 'verified',
+      deduplicated: true,
+    });
+    expect(replay).not.toContain('must not be persisted in replay evidence');
   });
 });

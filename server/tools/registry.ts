@@ -25,6 +25,10 @@ import {
 } from './capability_projection';
 import crypto from 'node:crypto';
 import { beginToolMetric } from '../runtime/tool_metrics';
+import {
+  claimExternalCommitAttempt,
+  settleExternalCommitAttempt,
+} from './external_commit_journal';
 
 export {
   inferCapabilityFamily,
@@ -37,13 +41,19 @@ export type { CapabilityRoutingProjection };
 export type EffectiveSecurity = { level: SecurityLevel; reason: string };
 
 type ExternalCommitAttempt = {
-  state: 'running' | 'verified' | 'unknown';
+  state: 'preparing' | 'running' | 'verified' | 'unknown';
+  ready?: Promise<void>;
   promise?: Promise<string>;
   result?: string;
   expiresAt: number;
 };
 
 const externalCommitAttempts = new Map<string, ExternalCommitAttempt>();
+
+/** Test-only process restart simulation; durable journal rows are preserved. */
+export function resetExternalCommitRuntimeCacheForTests(): void {
+  externalCommitAttempts.clear();
+}
 
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -63,6 +73,47 @@ function executionIdempotencyKey(name: string, args: Record<string, any>, contex
     name,
     args,
   }))).digest('hex');
+}
+
+function externalCommitInputDigest(name: string, args: Record<string, any>): string {
+  return crypto.createHash('sha256').update(JSON.stringify(stableValue({ name, args }))).digest('hex');
+}
+
+function persistedExternalCommitReplay(result: string, idempotencyKey: string): string {
+  const safeKeys = /^(?:sent|submitted|published|verified|verificationStatus|verificationMethod|verificationConfidence|verificationReason|providerReceipt|messageId|submissionId|publicationId|paymentId|signatureId|status|targetMatched|conversationVerified|contactVerified|sendAttempted|completedAt|timestamp)$/i;
+  try {
+    const parsed = JSON.parse(result || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const safe = Object.fromEntries(
+        Object.entries(parsed)
+          .filter(([key]) => safeKeys.test(key))
+          .slice(0, 40)
+          .map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 500) : value]),
+      );
+      return JSON.stringify({
+        ...safe,
+        verified: true,
+        verificationStatus: 'verified',
+        deduplicated: true,
+        idempotencyKey,
+      });
+    }
+  } catch {}
+  return JSON.stringify({
+    verified: true,
+    verificationStatus: 'verified',
+    deduplicated: true,
+    idempotencyKey,
+    resultDigest: crypto.createHash('sha256').update(String(result || '')).digest('hex'),
+  });
+}
+
+function externalCommitUnknownError(name: string, detail: string): Error {
+  const error = new Error(
+    `Tool "${name}" external commit outcome is unknown and automatic resend was stopped. ${detail}`.trim(),
+  ) as Error & { externalCommitUnknown?: boolean };
+  error.externalCommitUnknown = true;
+  return error;
 }
 
 function externalResultIsVerified(result: string): boolean {
@@ -668,10 +719,20 @@ export class ToolRegistry {
       effect.type === 'external_communication' || effect.type === 'external_state_change'
     ));
     const idempotencyKey = externalCommit ? executionIdempotencyKey(name, args, context) : '';
+    const inputDigest = externalCommit ? externalCommitInputDigest(name, args) : '';
+    const claimToken = externalCommit ? crypto.randomUUID() : '';
+    let releasePreparation: (() => void) | null = null;
     if (externalCommit) {
-      const existing = externalCommitAttempts.get(idempotencyKey);
-      if (existing?.expiresAt && existing.expiresAt <= Date.now()) externalCommitAttempts.delete(idempotencyKey);
-      else if (existing?.state === 'verified') {
+      let existing = externalCommitAttempts.get(idempotencyKey);
+      if (existing?.expiresAt && existing.expiresAt <= Date.now()) {
+        externalCommitAttempts.delete(idempotencyKey);
+        existing = undefined;
+      }
+      else if (existing?.state === 'preparing' && existing.ready) {
+        await existing.ready;
+        existing = externalCommitAttempts.get(idempotencyKey);
+      }
+      if (existing?.state === 'verified') {
         finishMetric('verified_success');
         return existing.result || '';
       } else if (existing?.state === 'unknown') {
@@ -683,9 +744,126 @@ export class ToolRegistry {
           finishMetric(externalResultIsVerified(result) ? 'verified_success' : 'failed');
           return result;
         } catch (error) {
-          finishMetric('failed');
+          finishMetric(/unknown|timed?\s*out|timeout/i.test(String((error as any)?.message || error))
+            ? 'unknown_outcome'
+            : 'failed');
           throw error;
         }
+      }
+
+      let release!: () => void;
+      const ready = new Promise<void>(resolve => { release = resolve; });
+      releasePreparation = release;
+      externalCommitAttempts.set(idempotencyKey, {
+        state: 'preparing',
+        ready,
+        expiresAt: Date.now() + 24 * 60 * 60_000,
+      });
+
+      let claim;
+      try {
+        const now = new Date().toISOString();
+        claim = await claimExternalCommitAttempt({
+          idempotencyKey,
+          taskId: String(context?.taskId || ''),
+          userId: String(context?.userId || ''),
+          toolName: name,
+          inputDigest,
+          state: 'running',
+          replayResult: '',
+          claimToken,
+          createdAt: now,
+          updatedAt: now,
+        });
+      } catch (error: any) {
+        externalCommitAttempts.delete(idempotencyKey);
+        releasePreparation?.();
+        releasePreparation = null;
+        finishMetric('forbidden');
+        throw new Error(
+          `Tool "${name}" external commit was stopped before execution because the durable idempotency journal is unavailable: ${String(error?.message || error)}`,
+        );
+      }
+
+      if (!claim.claimed) {
+        const prior = claim.entry;
+        if (prior.toolName !== name || prior.inputDigest !== inputDigest) {
+          externalCommitAttempts.set(idempotencyKey, {
+            state: 'unknown',
+            expiresAt: Date.now() + 24 * 60 * 60_000,
+          });
+          releasePreparation?.();
+          releasePreparation = null;
+          finishMetric('target_mismatch');
+          throw new Error(
+            `Tool "${name}" target mismatch: this idempotency key is already bound to different external commit input.`,
+          );
+        }
+        if (prior.state === 'verified') {
+          const replay = prior.replayResult || persistedExternalCommitReplay('', idempotencyKey);
+          externalCommitAttempts.set(idempotencyKey, {
+            state: 'verified',
+            result: replay,
+            expiresAt: Date.now() + 24 * 60 * 60_000,
+          });
+          releasePreparation?.();
+          releasePreparation = null;
+          finishMetric('verified_success');
+          return replay;
+        }
+
+        let reconciled: string | null = null;
+        if (tool.reconcileExternalCommit) {
+          let reconciliationTimeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            reconciled = await Promise.race([
+              tool.reconcileExternalCommit(args, context, idempotencyKey),
+              new Promise<null>(resolve => {
+                reconciliationTimeout = setTimeout(() => resolve(null), 8_000);
+              }),
+            ]);
+          } catch {
+            reconciled = null;
+          } finally {
+            if (reconciliationTimeout) clearTimeout(reconciliationTimeout);
+          }
+        }
+        if (reconciled && externalResultIsVerified(reconciled)) {
+          const replay = persistedExternalCommitReplay(reconciled, idempotencyKey);
+          await settleExternalCommitAttempt({
+            idempotencyKey,
+            claimToken: prior.claimToken,
+            state: 'verified',
+            replayResult: replay,
+            updatedAt: new Date().toISOString(),
+            recoverExisting: true,
+          }).catch(() => false);
+          externalCommitAttempts.set(idempotencyKey, {
+            state: 'verified',
+            result: reconciled,
+            expiresAt: Date.now() + 24 * 60 * 60_000,
+          });
+          releasePreparation?.();
+          releasePreparation = null;
+          finishMetric('verified_success');
+          return reconciled;
+        }
+        await settleExternalCommitAttempt({
+          idempotencyKey,
+          claimToken: prior.claimToken,
+          state: 'unknown',
+          replayResult: '',
+          updatedAt: new Date().toISOString(),
+          recoverExisting: true,
+        }).catch(() => false);
+        externalCommitAttempts.set(idempotencyKey, {
+          state: 'unknown',
+          expiresAt: Date.now() + 24 * 60 * 60_000,
+        });
+        releasePreparation?.();
+        releasePreparation = null;
+        finishMetric('unknown_outcome');
+        throw externalCommitUnknownError(name, 'A prior running or unknown attempt could not be verified by read-only reconciliation.');
       }
     }
     let timedOut = false;
@@ -711,60 +889,104 @@ export class ToolRegistry {
         promise: execution,
         expiresAt: Date.now() + 24 * 60 * 60_000,
       });
+      releasePreparation?.();
+      releasePreparation = null;
     }
     try {
       const result = await execution;
       if (externalCommit) {
         if (externalResultIsVerified(result)) {
+          const replayResult = persistedExternalCommitReplay(result, idempotencyKey);
+          await settleExternalCommitAttempt({
+            idempotencyKey,
+            claimToken,
+            state: 'verified',
+            replayResult,
+            updatedAt: new Date().toISOString(),
+          }).catch(() => false);
           externalCommitAttempts.set(idempotencyKey, {
             state: 'verified',
             result,
             expiresAt: Date.now() + 24 * 60 * 60_000,
           });
         } else {
-          externalCommitAttempts.delete(idempotencyKey);
+          await settleExternalCommitAttempt({
+            idempotencyKey,
+            claimToken,
+            state: 'unknown',
+            replayResult: '',
+            updatedAt: new Date().toISOString(),
+          }).catch(() => false);
+          externalCommitAttempts.set(idempotencyKey, {
+            state: 'unknown',
+            expiresAt: Date.now() + 24 * 60 * 60_000,
+          });
+          finishMetric('unknown_outcome');
+          return result;
         }
       }
-      finishMetric(externalCommit && !externalResultIsVerified(result) ? 'failed' : 'verified_success');
+      finishMetric('verified_success');
       return result;
-    } catch (error) {
-      if (externalCommit && timedOut) {
+    } catch (error: any) {
+      if (error?.externalCommitUnknown === true) throw error;
+      if (externalCommit) {
+        let reconciled: string | null = null;
         if (tool.reconcileExternalCommit) {
           let reconciliationTimeout: ReturnType<typeof setTimeout> | undefined;
           try {
-            const reconciled = await Promise.race([
+            reconciled = await Promise.race([
               tool.reconcileExternalCommit(args, context, idempotencyKey),
               new Promise<null>(resolve => {
                 reconciliationTimeout = setTimeout(() => resolve(null), 8_000);
               }),
             ]);
-            if (reconciled && externalResultIsVerified(reconciled)) {
-              externalCommitAttempts.set(idempotencyKey, {
-                state: 'verified',
-                result: reconciled,
-                expiresAt: Date.now() + 24 * 60 * 60_000,
-              });
-              finishMetric('verified_success');
-              return reconciled;
-            }
           } catch {
             // A failed read-only reconciliation leaves the outcome unknown.
+            reconciled = null;
           } finally {
             if (reconciliationTimeout) clearTimeout(reconciliationTimeout);
           }
         }
+        if (reconciled && externalResultIsVerified(reconciled)) {
+          const replayResult = persistedExternalCommitReplay(reconciled, idempotencyKey);
+          await settleExternalCommitAttempt({
+            idempotencyKey,
+            claimToken,
+            state: 'verified',
+            replayResult,
+            updatedAt: new Date().toISOString(),
+          }).catch(() => false);
+          externalCommitAttempts.set(idempotencyKey, {
+            state: 'verified',
+            result: reconciled,
+            expiresAt: Date.now() + 24 * 60 * 60_000,
+          });
+          finishMetric('verified_success');
+          return reconciled;
+        }
+        await settleExternalCommitAttempt({
+          idempotencyKey,
+          claimToken,
+          state: 'unknown',
+          replayResult: '',
+          updatedAt: new Date().toISOString(),
+        }).catch(() => false);
         externalCommitAttempts.set(idempotencyKey, {
           state: 'unknown',
           expiresAt: Date.now() + 24 * 60 * 60_000,
         });
         finishMetric('unknown_outcome');
+        throw externalCommitUnknownError(
+          name,
+          `${timedOut ? 'The call timed out.' : 'The handler failed after the durable claim.'} ${String(error?.message || error || '')}`,
+        );
       } else {
-        if (externalCommit) externalCommitAttempts.delete(idempotencyKey);
         finishMetric(timedOut ? 'timeout' : 'failed');
       }
       throw error;
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      releasePreparation?.();
     }
   }
 }

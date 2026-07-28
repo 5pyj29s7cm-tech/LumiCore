@@ -4,6 +4,11 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { getDataPath, getDataRoot } from './server/config/data_path';
 import { isolateLegacyGuardSummaryState } from './server/conversation/guard_history';
+import {
+  configureExternalCommitJournal,
+  type ExternalCommitJournalAdapter,
+  type ExternalCommitJournalEntry,
+} from './server/tools/external_commit_journal';
 
 // Auto-migrate data from old location (project directory) to user directory on first run
 function migrateDataFromOldLocation() {
@@ -57,6 +62,7 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_action_tasks_user_status ON conversation_action_tasks(userId, status)`,
   `CREATE INDEX IF NOT EXISTS idx_action_receipts_task_created ON conversation_action_receipts(taskId, createdAt)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_idempotency ON conversation_action_receipts(taskId, idempotencyKey, toolName, outcome)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_commit_journal_task ON external_commit_journal(taskId, updatedAt)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
@@ -613,6 +619,19 @@ function createTables(): Promise<void> {
         createdAt TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS external_commit_journal (
+        idempotencyKey TEXT PRIMARY KEY,
+        taskId TEXT DEFAULT '',
+        userId TEXT DEFAULT '',
+        toolName TEXT NOT NULL,
+        inputDigest TEXT NOT NULL,
+        state TEXT NOT NULL,
+        replayResult TEXT NOT NULL DEFAULT '',
+        claimToken TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS voice_profiles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         userId TEXT NOT NULL,
@@ -978,6 +997,8 @@ async function loadMemoryDB(): Promise<void> {
     auditLog: auditLogEntries || [],
   };
 
+  configureSqliteExternalCommitJournal();
+
   // Prompt safety is already guaranteed by the sanitized in-memory rows.
   // Persist the cleanup opportunistically without making a writable database
   // a startup dependency (tests, shutdown races, and recovery mounts may be
@@ -1035,6 +1056,14 @@ export function pruneOldData(): void {
 // Write lock to prevent concurrent SQLite transactions
 let writeLock: Promise<void> = Promise.resolve();
 
+function withDatabaseWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const scheduled = writeLock.catch((error) => {
+    console.error('[DB] Previous write failed before durable journal operation:', error);
+  }).then(operation);
+  writeLock = scheduled.then(() => undefined, () => undefined);
+  return scheduled;
+}
+
 let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let writeRevision = 0;
 let persistedRevision = 0;
@@ -1070,6 +1099,67 @@ function scheduleDatabaseFlush(delayMs = 100): void {
         if (persistedRevision < writeRevision) scheduleDatabaseFlush(250);
       });
   }, delayMs);
+}
+
+function configureSqliteExternalCommitJournal(): void {
+  const adapter: ExternalCommitJournalAdapter = {
+    async claim(entry) {
+      return withDatabaseWriteLock(async () => {
+        await run(
+          `INSERT OR IGNORE INTO external_commit_journal
+            (idempotencyKey, taskId, userId, toolName, inputDigest, state, replayResult, claimToken, createdAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            entry.idempotencyKey,
+            entry.taskId,
+            entry.userId,
+            entry.toolName,
+            entry.inputDigest,
+            entry.state,
+            entry.replayResult,
+            entry.claimToken,
+            entry.createdAt,
+            entry.updatedAt,
+          ],
+        );
+        const rows = await query<ExternalCommitJournalEntry>(
+          'SELECT * FROM external_commit_journal WHERE idempotencyKey = ? LIMIT 1',
+          [entry.idempotencyKey],
+        );
+        const persisted = rows[0];
+        if (!persisted) throw new Error('External commit journal claim was not persisted.');
+        return {
+          claimed: persisted.claimToken === entry.claimToken,
+          entry: persisted,
+        };
+      });
+    },
+    async settle(input) {
+      return withDatabaseWriteLock(async () => {
+        const claimClause = input.recoverExisting ? '' : ' AND claimToken = ?';
+        const params: any[] = [
+          input.state,
+          input.replayResult,
+          input.updatedAt,
+          input.idempotencyKey,
+        ];
+        if (!input.recoverExisting) params.push(input.claimToken);
+        await run(
+          `UPDATE external_commit_journal
+           SET state = ?, replayResult = ?, updatedAt = ?
+           WHERE idempotencyKey = ?${claimClause}`,
+          params,
+        );
+        const rows = await query<ExternalCommitJournalEntry>(
+          'SELECT * FROM external_commit_journal WHERE idempotencyKey = ? LIMIT 1',
+          [input.idempotencyKey],
+        );
+        return rows[0]?.state === input.state
+          && rows[0]?.replayResult === input.replayResult;
+      });
+    },
+  };
+  configureExternalCommitJournal(adapter);
 }
 
 export function writeDB(data: any): void {
@@ -1138,6 +1228,7 @@ export async function closeDatabase(): Promise<void> {
   persistedRevision = 0;
   writeInFlight = false;
   dbDirty = false;
+  configureExternalCommitJournal(null);
 
   if (!closingDb) return;
   await new Promise<void>((resolve, reject) => {

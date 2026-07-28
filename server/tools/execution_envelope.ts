@@ -57,6 +57,7 @@ export function buildToolExecutionEnvelope(
     : {};
   const rawError = String(record.error || '').trim();
   const timeout = /timed?\s*out|timeout/i.test(rawError);
+  const unknownOutcome = /unknown (?:prior )?(?:external commit )?outcome|external commit outcome is unknown|automatic resend was stopped/i.test(rawError);
   const forbidden = /forbidden|not exposed|outside .*policy|permission denied/i.test(rawError);
   const targetMismatch = payload.targetMatched === false
     || payload.conversationVerified === false
@@ -65,6 +66,10 @@ export function buildToolExecutionEnvelope(
   const externalCommit = record.capability?.sideEffects?.some(effect =>
     effect.type === 'external_communication' || effect.type === 'external_state_change',
   ) || /(?:send|submit|publish|post|comment|reply|payment|purchase|sign)/i.test(record.name);
+  const unverifiedExternalResult = externalCommit && (
+    /^(?:uncertain|unknown|submitted_unverified|unverified)$/i.test(String(payload.verificationStatus || payload.status || ''))
+    || payload.outcomeUnknown === true
+  );
   const succeeded = toolRecordSucceeded(record);
   const verificationStatus = record.terminalVerification?.status
     || (succeeded ? 'verified' : 'failed');
@@ -73,7 +78,7 @@ export function buildToolExecutionEnvelope(
   if (waitingConfirmation) status = 'waiting_confirmation';
   else if (targetMismatch) status = 'target_mismatch';
   else if (forbidden) status = 'forbidden';
-  else if (timeout && externalCommit) status = 'unknown_outcome';
+  else if (((timeout || unknownOutcome) && externalCommit) || unverifiedExternalResult) status = 'unknown_outcome';
   else if (timeout) status = 'timeout';
   else status = succeeded ? 'verified_success' : 'failed';
 
