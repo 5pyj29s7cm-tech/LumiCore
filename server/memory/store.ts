@@ -759,7 +759,7 @@ export function addMemory(
   // Deduplicate using index — only scan same userId + type
   const idx = getDedupIndex();
   const dedupCandidates = idx.get(memory.userId)?.get(memory.type) || [];
-  const existing = overrides?.deduplicate === false
+  const existing = overrides?.deduplicate === false || contradictions.length > 0
     ? undefined
     : dedupCandidates.find(m =>
         matchesMemoryScope(m, domain, orgId) && contentSimilarity(m.content, memory.content) > 0.7,
@@ -799,6 +799,26 @@ export function addMemory(
     orgId,
   }, firewall);
 
+  if (contradictions.length > 0) {
+    const detectedAt = now;
+    newMemory.conflict = {
+      status: 'unresolved',
+      relatedMemoryIds: contradictions.map(item => item.id),
+      detectedAt,
+    };
+    for (const conflicted of contradictions) {
+      const related = new Set([
+        ...(conflicted.conflict?.relatedMemoryIds || []),
+        newMemory.id,
+      ]);
+      conflicted.conflict = {
+        status: 'unresolved',
+        relatedMemoryIds: [...related],
+        detectedAt: conflicted.conflict?.detectedAt || detectedAt,
+      };
+    }
+  }
+
   all.push(newMemory);
   saveMemoryStore(all);
 
@@ -813,8 +833,102 @@ export function removeMemory(id: string): boolean {
   const idx = all.findIndex(m => m.id === id);
   if (idx === -1) return false;
   all.splice(idx, 1);
+  const now = new Date().toISOString();
+  for (const memory of all) {
+    if (!memory.conflict?.relatedMemoryIds.includes(id)) continue;
+    memory.conflict.relatedMemoryIds = memory.conflict.relatedMemoryIds.filter(relatedId => relatedId !== id);
+    if (memory.conflict.relatedMemoryIds.length === 0) {
+      memory.conflict.status = 'resolved';
+      memory.conflict.resolution = 'related_removed';
+      memory.conflict.resolvedAt = now;
+      delete memory.conflict.chosenMemoryId;
+    }
+    memory.updatedAt = now;
+  }
   saveMemoryStore(all);
   return true;
+}
+
+/**
+ * Update lifecycle metadata without replacing the memory record. Stable IDs are
+ * required because citations, tree links, and contradiction evidence refer to
+ * the original memory identity.
+ */
+export function updateMemoryLifecycle(input: {
+  userId: string;
+  memoryId: string;
+  domain?: string;
+  orgId?: string;
+  tier: MemoryTier;
+  confidence?: number;
+  importance?: number;
+  retention?: Memory['retention'];
+  userApproved?: boolean;
+}): Memory | undefined {
+  const all = getMemoryStore();
+  const memory = all.find(item => (
+    item.id === input.memoryId
+    && item.userId === input.userId
+    && matchesMemoryScope(item, input.domain || 'personal', input.orgId || '')
+  ));
+  if (!memory) return undefined;
+  memory.tier = input.tier;
+  if (input.confidence !== undefined) memory.confidence = input.confidence;
+  if (input.importance !== undefined) memory.importance = input.importance;
+  if (input.retention !== undefined) memory.retention = input.retention;
+  if (input.userApproved !== undefined) memory.userApproved = input.userApproved;
+  memory.updatedAt = new Date().toISOString();
+  saveMemoryStore(all);
+  return memory;
+}
+
+export function resolveMemoryConflict(input: {
+  userId: string;
+  memoryId: string;
+  resolution: 'keep_both' | 'prefer_one';
+  chosenMemoryId?: string;
+  domain?: string;
+  orgId?: string;
+}): Memory[] {
+  const all = getMemoryStore();
+  const target = all.find(memory => (
+    memory.id === input.memoryId
+    && memory.userId === input.userId
+    && matchesMemoryScope(memory, input.domain || 'personal', input.orgId || '')
+  ));
+  if (!target?.conflict) throw new Error('Memory conflict not found');
+  const groupIds = new Set([target.id, ...target.conflict.relatedMemoryIds]);
+  const group = all.filter(memory => (
+    groupIds.has(memory.id)
+    && memory.userId === input.userId
+    && matchesMemoryScope(memory, input.domain || 'personal', input.orgId || '')
+  ));
+  if (group.length < 2) throw new Error('Memory conflict has no related evidence');
+  if (input.resolution === 'prefer_one' && !input.chosenMemoryId) {
+    throw new Error('chosenMemoryId is required for prefer_one');
+  }
+  if (input.chosenMemoryId && !groupIds.has(input.chosenMemoryId)) {
+    throw new Error('chosenMemoryId is outside this conflict group');
+  }
+  const resolvedAt = new Date().toISOString();
+  for (const memory of group) {
+    memory.conflict = {
+      status: 'resolved',
+      relatedMemoryIds: group.filter(item => item.id !== memory.id).map(item => item.id),
+      detectedAt: memory.conflict?.detectedAt || resolvedAt,
+      resolvedAt,
+      resolution: input.resolution,
+      ...(input.chosenMemoryId ? { chosenMemoryId: input.chosenMemoryId } : {}),
+    };
+    if (input.resolution === 'prefer_one') {
+      memory.confidence = memory.id === input.chosenMemoryId
+        ? Math.min(1, memory.confidence + 0.1)
+        : Math.max(0.1, memory.confidence - 0.2);
+    }
+    memory.updatedAt = resolvedAt;
+  }
+  saveMemoryStore(all);
+  return group;
 }
 
 /** Tier-based decay: core_identity never decays, episodic decays fast */
@@ -1094,6 +1208,7 @@ const NEGATION_PATTERNS = [
 
 // Common polarity-flip pairs: positive → negative
 const POLARITY_PAIRS: [RegExp, string][] = [
+  [/\b(?:like|likes|liked|love|loves|loved)\b/gi, 'dislike|dislikes|disliked|hate|hates|hated|does not like|do not like'],
   [/喜欢|爱|享受|热爱/g, '讨厌|恨|厌恶|反感'],
   [/好|棒|优秀|出色|赞/g, '差|烂|糟糕|坏|垃圾'],
   [/快|迅速|高效/g, '慢|缓慢|拖沓'],
@@ -1138,12 +1253,14 @@ function hasPolarityConflict(a: string, b: string): boolean {
   const lowerB = b.toLowerCase();
 
   for (const [posPat, negList] of POLARITY_PAIRS) {
+    posPat.lastIndex = 0;
     const negPats = negList.split('|');
     const aHasPos = posPat.test(lowerA);
+    posPat.lastIndex = 0;
     const bHasPos = posPat.test(lowerB);
 
     for (const negStr of negPats) {
-      const negRe = new RegExp(negStr, 'g');
+      const negRe = new RegExp(negStr, 'i');
       const aHasNeg = negRe.test(lowerA);
       const bHasNeg = negRe.test(lowerB);
 

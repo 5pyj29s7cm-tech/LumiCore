@@ -1,3 +1,5 @@
+import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
 import { addMemory, queryMemoriesVector } from '../memory/store';
 import { generateConfiguredEmbedding } from '../llm/embedding_provider';
@@ -8,6 +10,7 @@ import {
   chunkKnowledgeText,
   evaluateKnowledgeManifest,
   evaluateKnowledgeRetrievalCases,
+  hashKnowledgeContent,
   type KnowledgeChunkManifest,
   type KnowledgeIngestionManifest,
   type KnowledgeRetrievalCaseEvidence,
@@ -90,6 +93,21 @@ export async function ingestDocument(
 
   const memoryIds: string[] = [];
   const sourceFile = options?.filePath || documentTitle;
+  const sourceLabel = path.basename(sourceFile);
+  const sourceRevision = hashKnowledgeContent(content);
+  let sourcePath: string | undefined;
+  let sourceFileHash: string | undefined;
+  let sourceModifiedAtMs: number | undefined;
+  let sourceSizeBytes: number | undefined;
+  try {
+    if (fs.existsSync(sourceFile) && fs.statSync(sourceFile).isFile()) {
+      const stat = fs.statSync(sourceFile);
+      sourcePath = path.resolve(sourceFile);
+      sourceFileHash = crypto.createHash('sha256').update(fs.readFileSync(sourceFile)).digest('hex');
+      sourceModifiedAtMs = stat.mtimeMs;
+      sourceSizeBytes = stat.size;
+    }
+  } catch {}
   const metadataKeywords = buildSourceMetadataKeywords(options?.sourceMetadata);
 
   const verifyEmbeddings = options?.verifyEmbeddings !== false;
@@ -115,6 +133,7 @@ export async function ingestDocument(
     const embeddingError = embeddingResults[i] && 'error' in (embeddingResults[i] as any)
       ? String((embeddingResults[i] as any).error)
       : undefined;
+    const citationKey = `source:${sourceLabel}#chunk:${i + 1}/${chunks.length}#sha256:${chunk.contentHash}`;
     const mem = addMemory(
       {
         userId,
@@ -131,6 +150,20 @@ export async function ingestDocument(
         confidence: 0.7,
         sourceInteractionId: sourceFile,
         embedding: embedding?.vector,
+        knowledgeProvenance: {
+          sourceId: sourceFile,
+          sourceLabel,
+          ...(sourcePath ? { sourcePath } : {}),
+          sourceRevision,
+          ...(sourceFileHash ? { sourceFileHash } : {}),
+          ...(sourceModifiedAtMs !== undefined ? { sourceModifiedAtMs } : {}),
+          ...(sourceSizeBytes !== undefined ? { sourceSizeBytes } : {}),
+          chunkIndex: i,
+          chunkCount: chunks.length,
+          chunkContentHash: chunk.contentHash,
+          citationKey,
+          ingestedAt: new Date().toISOString(),
+        },
       },
       {
         tier: options?.tier || 'internalized',
@@ -157,7 +190,7 @@ export async function ingestDocument(
       embeddingProvider: embedding?.provider,
       embeddingModel: embedding?.model,
       embeddingDimensions: embedding?.vector.length,
-      citationKey: `source:${path.basename(sourceFile)}#chunk:${i + 1}/${chunks.length}#sha256:${chunk.contentHash}`,
+      citationKey,
       error: embeddingError,
     });
   }
@@ -232,26 +265,60 @@ export async function retrieveChunks(
   limit = 5,
   scope: { domain?: string; orgId?: string } = {},
 ): Promise<Array<Memory & { citation: string }>> {
+  const requestedLimit = Math.max(1, Math.min(50, Number(limit) || 5));
   const memories = await queryMemoriesVector({
     userId,
     agentId,
     type: 'knowledge',
     query,
-    limit,
+    // Over-fetch so stale source revisions can be removed without starving
+    // the requested result count when current chunks are also available.
+    limit: Math.min(50, requestedLimit * 3),
     minConfidence: 0.3,
     domain: scope.domain,
     orgId: scope.orgId,
     useVector: true,
   });
 
-  return memories.map(m => {
-    const source = m.sourceInteractionId
-      ? path.basename(m.sourceInteractionId)
-      : 'unknown';
-    const chunkInfo = (m.keywords || []).find((k: string) => k.startsWith('chunk:')) || 'unknown';
-    return {
+  return memories
+    .filter(isKnowledgeMemorySourceCurrent)
+    .slice(0, requestedLimit)
+    .map(m => ({
       ...m,
-      citation: `[Source: ${source}, ${chunkInfo}]`,
-    };
-  });
+      citation: formatKnowledgeCitation(m),
+    }));
+}
+
+/**
+ * A file-backed knowledge chunk is current only while the exact source file
+ * identity observed at ingestion is still present and byte-for-byte unchanged. Legacy and
+ * virtual sources without a local file timestamp remain readable but cannot
+ * gain verified-absorption status without a modern ingestion manifest.
+ */
+export function isKnowledgeMemorySourceCurrent(memory: Pick<Memory, 'knowledgeProvenance'>): boolean {
+  const provenance = memory.knowledgeProvenance;
+  if (!provenance?.sourcePath || provenance.sourceModifiedAtMs === undefined) return true;
+  try {
+    const stat = fs.statSync(provenance.sourcePath);
+    if (!stat.isFile()) return false;
+    if (provenance.sourceSizeBytes !== undefined && stat.size !== provenance.sourceSizeBytes) return false;
+    if (provenance.sourceFileHash) {
+      const currentHash = crypto.createHash('sha256').update(fs.readFileSync(provenance.sourcePath)).digest('hex');
+      return currentHash === provenance.sourceFileHash;
+    }
+    return stat.mtimeMs <= provenance.sourceModifiedAtMs + 1_000;
+  } catch {
+    return false;
+  }
+}
+
+/** Format citation evidence without exposing the user's absolute local path. */
+export function formatKnowledgeCitation(memory: Pick<Memory, 'sourceInteractionId' | 'keywords' | 'knowledgeProvenance'>): string {
+  const provenance = memory.knowledgeProvenance;
+  if (provenance) return `[Source: ${provenance.citationKey}]`;
+  const source = memory.sourceInteractionId
+    ? path.basename(memory.sourceInteractionId)
+    : 'unknown';
+  const chunkInfo = (memory.keywords || []).find((keyword: string) => keyword.startsWith('chunk:')) || 'unknown';
+  return `[Source: ${source}, ${chunkInfo}]`;
 }

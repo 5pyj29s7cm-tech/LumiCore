@@ -30,6 +30,15 @@ export const CONVERSATIONAL_MEMORY_EVIDENCE: readonly MemoryEvidenceClass[] = [
   'shared_context',
 ];
 
+export interface MemoryConflictEvidence {
+  status: 'unresolved' | 'resolved';
+  relatedMemoryIds: string[];
+  detectedAt: string;
+  resolvedAt?: string;
+  resolution?: 'keep_both' | 'prefer_one' | 'related_removed';
+  chosenMemoryId?: string;
+}
+
 /** Tree node type — branch nodes are topic containers, leaves are actual memories */
 export type MemoryNodeType = 'branch' | 'leaf';
 
@@ -45,6 +54,24 @@ export interface Memory {
   confidence: number;
   /** Interaction ID that produced this memory */
   sourceInteractionId: string;
+  /** Immutable source/chunk evidence for imported knowledge memories. */
+  knowledgeProvenance?: {
+    sourceId: string;
+    sourceLabel: string;
+    sourcePath?: string;
+    sourceRevision: string;
+    /** SHA-256 of the original file bytes, when the source is file-backed. */
+    sourceFileHash?: string;
+    sourceModifiedAtMs?: number;
+    sourceSizeBytes?: number;
+    chunkIndex: number;
+    chunkCount: number;
+    chunkContentHash: string;
+    citationKey: string;
+    ingestedAt: string;
+  };
+  /** Explicit, reviewable contradiction links; both memories remain stored. */
+  conflict?: MemoryConflictEvidence;
   createdAt: string;
   updatedAt: string;
   lastRetrievedAt: string | null;

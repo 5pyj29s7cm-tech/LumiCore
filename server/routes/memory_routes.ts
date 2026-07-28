@@ -2,7 +2,8 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { readDB, writeDB } from "../../db_layer";
 import {
-  queryMemories, addMemory, removeMemory,
+  queryMemories, addMemory, removeMemory, updateMemoryLifecycle,
+  resolveMemoryConflict,
   addReminder, fireReminder,
   runBehavioralAnalysis, broadcastMemoryChange,
   getDueReminders, getUnconsolidatedEpisodic,
@@ -117,9 +118,15 @@ export function mountMemoryRoutes(
       const decoded: any = jwt.verify(token, jwtSecret);
       const { id } = req.params;
       const { content, keywords, confidence, type, parentId, nodeType } = req.body;
+      const scope = getMemoryScope(req, decoded);
 
       const all = readDB().memories || [];
-      const idx = all.findIndex((m: any) => m.id === id && m.userId === decoded.uid);
+      const idx = all.findIndex((m: any) => (
+        m.id === id
+        && m.userId === decoded.uid
+        && String(m.domain || 'personal') === scope.domain
+        && String(m.orgId || '') === scope.orgId
+      ));
       if (idx === -1) return res.status(404).json({ error: "Memory not found" });
 
       const existing = all[idx];
@@ -148,16 +155,19 @@ export function mountMemoryRoutes(
     try {
       const decoded: any = jwt.verify(token, jwtSecret);
       const { id } = req.params;
+      const scope = getMemoryScope(req, decoded);
 
       const all = readDB().memories || [];
-      const idx = all.findIndex((m: any) => m.id === id && m.userId === decoded.uid);
+      const idx = all.findIndex((m: any) => (
+        m.id === id
+        && m.userId === decoded.uid
+        && String(m.domain || 'personal') === scope.domain
+        && String(m.orgId || '') === scope.orgId
+      ));
       if (idx === -1) return res.status(404).json({ error: "Memory not found" });
 
       const memoryId = all[idx].id;
-      all.splice(idx, 1);
-      const db = readDB();
-      db.memories = all;
-      writeDB(db);
+      removeMemory(memoryId);
       broadcastMemoryChange(decoded.uid, 'deleted', memoryId);
       res.json({ success: true });
     } catch (e: any) {
@@ -365,6 +375,32 @@ export function mountMemoryRoutes(
     res.json({ growth, coreIdentity: core });
   });
 
+  router.post("/memory/:id/conflict/resolve", (req, res) => {
+    const token = getAuthToken(req);
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    try {
+      const decoded: any = jwt.verify(token, jwtSecret);
+      const scope = getMemoryScope(req, decoded);
+      const resolution = String(req.body?.resolution || '');
+      if (resolution !== 'keep_both' && resolution !== 'prefer_one') {
+        return res.status(400).json({ error: 'resolution must be keep_both or prefer_one' });
+      }
+      const memories = resolveMemoryConflict({
+        userId: decoded.uid,
+        memoryId: req.params.id,
+        resolution,
+        chosenMemoryId: req.body?.chosenMemoryId,
+        domain: scope.domain,
+        orgId: scope.orgId,
+      });
+      for (const memory of memories) broadcastMemoryChange(decoded.uid, 'updated', memory.id);
+      res.json({ success: true, memories });
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      res.status(/not found|no related/i.test(message) ? 404 : 400).json({ error: message });
+    }
+  });
+
   // Memory tiers
   router.get("/memory/tiers", (req, res) => {
     const token = getAuthToken(req);
@@ -400,18 +436,18 @@ export function mountMemoryRoutes(
       return res.status(400).json({ error: 'Promoting to core_identity requires confirmed:true', currentTier: mem.tier, currentImportance: mem.importance });
     }
 
-    removeMemory(mem.id);
-    const updated = addMemory(
-      {
-        userId: mem.userId,
-        type: mem.type,
-        content: mem.content,
-        keywords: mem.keywords,
-        confidence: tier === 'core_identity' ? 1.0 : mem.confidence,
-        sourceInteractionId: mem.sourceInteractionId,
-      },
-      { tier, perspective: mem.perspective, importance: tier === 'core_identity' ? Math.max(0.9, mem.importance) : mem.importance, parentId: mem.parentId, agentId: mem.agentId, nodeType: mem.nodeType, domain: mem.domain || scope.domain, orgId: mem.orgId || scope.orgId, source: mem.source || 'manual', privacyClass: mem.privacyClass, retention: tier === 'core_identity' ? 'permanent' : mem.retention, userApproved: tier === 'core_identity' ? true : mem.userApproved },
-    );
+    const updated = updateMemoryLifecycle({
+      userId: mem.userId,
+      memoryId: mem.id,
+      domain: mem.domain || scope.domain,
+      orgId: mem.orgId || scope.orgId,
+      tier,
+      confidence: tier === 'core_identity' ? 1.0 : mem.confidence,
+      importance: tier === 'core_identity' ? Math.max(0.9, mem.importance) : mem.importance,
+      retention: tier === 'core_identity' ? 'permanent' : mem.retention,
+      userApproved: tier === 'core_identity' ? true : mem.userApproved,
+    });
+    if (!updated) return res.status(404).json({ error: 'Memory not found' });
     broadcastMemoryChange(mem.userId, 'updated', updated.id);
     res.json({ success: true, memory: updated });
   });
@@ -561,19 +597,33 @@ Rules:
     if (!mem) return res.status(404).json({ error: 'Memory not found' });
 
     if (mem.tier === 'core_identity') {
-      removeMemory(mem.id);
-      const updated = addMemory(
-        { userId: mem.userId, type: mem.type, content: mem.content, keywords: mem.keywords, confidence: mem.confidence, sourceInteractionId: mem.sourceInteractionId },
-        { tier: 'growth', perspective: mem.perspective, importance: Math.min(0.8, mem.importance), parentId: mem.parentId, agentId: mem.agentId, nodeType: mem.nodeType, domain: mem.domain || scope.domain, orgId: mem.orgId || scope.orgId, source: mem.source || 'manual', privacyClass: mem.privacyClass, retention: mem.retention, userApproved: mem.userApproved },
-      );
+      const updated = updateMemoryLifecycle({
+        userId: mem.userId,
+        memoryId: mem.id,
+        domain: mem.domain || scope.domain,
+        orgId: mem.orgId || scope.orgId,
+        tier: 'growth',
+        confidence: mem.confidence,
+        importance: Math.min(0.8, mem.importance),
+        retention: mem.retention,
+        userApproved: mem.userApproved,
+      });
+      if (!updated) return res.status(404).json({ error: 'Memory not found' });
       broadcastMemoryChange(mem.userId, 'updated', updated.id);
       res.json({ success: true, protected: false, memory: updated });
     } else {
-      removeMemory(mem.id);
-      const updated = addMemory(
-        { userId: mem.userId, type: mem.type, content: mem.content, keywords: mem.keywords, confidence: 1.0, sourceInteractionId: mem.sourceInteractionId },
-        { tier: 'core_identity', perspective: mem.perspective, importance: Math.max(0.9, mem.importance), parentId: mem.parentId, agentId: mem.agentId, nodeType: mem.nodeType, domain: mem.domain || scope.domain, orgId: mem.orgId || scope.orgId, source: mem.source || 'manual', privacyClass: mem.privacyClass, retention: 'permanent', userApproved: true },
-      );
+      const updated = updateMemoryLifecycle({
+        userId: mem.userId,
+        memoryId: mem.id,
+        domain: mem.domain || scope.domain,
+        orgId: mem.orgId || scope.orgId,
+        tier: 'core_identity',
+        confidence: 1.0,
+        importance: Math.max(0.9, mem.importance),
+        retention: 'permanent',
+        userApproved: true,
+      });
+      if (!updated) return res.status(404).json({ error: 'Memory not found' });
       broadcastMemoryChange(mem.userId, 'updated', updated.id);
       res.json({ success: true, protected: true, memory: updated });
     }
