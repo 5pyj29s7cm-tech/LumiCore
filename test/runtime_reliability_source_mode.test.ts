@@ -24,6 +24,10 @@ describe('runtime reliability evidence modes', () => {
     expect(reliabilityScript).toContain("LUMI_DATA_DIR: dataRoot");
   });
 
+  it('reports the endpoint and deadline when a functional probe times out', () => {
+    expect(reliabilityScript).toContain('GET ${url} timed out after ${timeoutMs}ms');
+  });
+
   it('requires real TTS output, memory samples, and idle reclamation', () => {
     expect(reliabilityScript).toContain("provider: 'gptsovits'");
     expect(reliabilityScript).toContain("ttsCoverage: !gptSovitsInstalled");

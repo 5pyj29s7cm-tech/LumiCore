@@ -6,7 +6,7 @@ import { toolRegistry } from "../tools/registry";
 import { registerAllTools } from "../tools/definitions/index";
 import { mcpManager, registerMCPTools } from "../mcp";
 import { scheduler, registerScheduledTasks } from "../scheduler";
-import { runFirstBootExploration, isFirstBootComplete, persistFirstBootExploration, type SystemSnapshot } from "../autonomy/system_explorer";
+import { isFirstBootComplete, persistFirstBootExploration, type SystemSnapshot } from "../autonomy/system_explorer";
 import { installProfessionAgents } from "../autonomy/profession_templates";
 import bcrypt from "bcryptjs";
 import { getLocalAdminPassword } from "../config/local_identity";
@@ -15,6 +15,7 @@ import { startMessagingConnections, stopMessagingConnections } from "./messaging
 import { recoverOrphanedConversationActionExecutions } from "../conversation/manager";
 import { stopGptSovitsRuntime } from "../tts/gptsovits_runtime";
 import { stopVoiceprintRuntime } from "../biometrics/voiceprint_provider";
+import { resolveSystemExplorationWorker } from "./system_exploration_worker";
 
 interface BootstrapContext {
   server: any;
@@ -45,11 +46,7 @@ function isValidSystemSnapshot(value: unknown): value is SystemSnapshot {
 }
 
 async function collectFirstBootSnapshotInWorker(runtimeDir: string): Promise<SystemSnapshot> {
-  const workerPath = path.join(runtimeDir, 'system-explorer-worker.mjs');
-  if (!fs.existsSync(workerPath)) {
-    console.warn('[Bootstrap] Packaged system exploration worker unavailable; using the development fallback');
-    return runFirstBootExploration();
-  }
+  const worker = resolveSystemExplorationWorker(runtimeDir);
 
   const outputDir = path.join(process.env.LUMI_DATA_DIR || runtimeDir, 'runtime');
   await fs.promises.mkdir(outputDir, { recursive: true });
@@ -57,7 +54,9 @@ async function collectFirstBootSnapshotInWorker(runtimeDir: string): Promise<Sys
   let stderr = '';
 
   try {
-    const child = spawn(process.execPath, [workerPath, outputPath], {
+    console.log(`[Bootstrap] Starting ${worker.kind} system exploration worker`);
+    const child = spawn(worker.executable, [...worker.args, outputPath], {
+      cwd: worker.cwd,
       windowsHide: true,
       stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, LUMI_SYSTEM_EXPLORATION_WORKER: '1' },
