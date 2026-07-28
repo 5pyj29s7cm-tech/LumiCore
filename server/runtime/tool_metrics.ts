@@ -3,6 +3,7 @@ import type { ToolExecutionEnvelopeStatus } from '../tools/types';
 interface ToolCounter {
   calls: number;
   inFlight: number;
+  retries: number;
   durationMs: number;
   outcomes: Record<ToolExecutionEnvelopeStatus, number>;
 }
@@ -21,16 +22,21 @@ function emptyOutcomes(): Record<ToolExecutionEnvelopeStatus, number> {
   return Object.fromEntries(STATUSES.map(status => [status, 0])) as Record<ToolExecutionEnvelopeStatus, number>;
 }
 
-const totals: ToolCounter = { calls: 0, inFlight: 0, durationMs: 0, outcomes: emptyOutcomes() };
+const totals: ToolCounter = { calls: 0, inFlight: 0, retries: 0, durationMs: 0, outcomes: emptyOutcomes() };
 const byTool = new Map<string, ToolCounter>();
 
 function counterFor(name: string): ToolCounter {
   let counter = byTool.get(name);
   if (!counter) {
-    counter = { calls: 0, inFlight: 0, durationMs: 0, outcomes: emptyOutcomes() };
+    counter = { calls: 0, inFlight: 0, retries: 0, durationMs: 0, outcomes: emptyOutcomes() };
     byTool.set(name, counter);
   }
   return counter;
+}
+
+export function recordToolRetry(name: string): void {
+  totals.retries += 1;
+  counterFor(name).retries += 1;
 }
 
 export function beginToolMetric(name: string): (status: ToolExecutionEnvelopeStatus) => void {
@@ -63,6 +69,7 @@ function snapshotCounter(counter: ToolCounter) {
   return {
     calls: counter.calls,
     inFlight: counter.inFlight,
+    retries: counter.retries,
     averageDurationMs: counter.calls ? Math.round(counter.durationMs / counter.calls) : 0,
     errorRate: counter.calls ? Number((failures / counter.calls).toFixed(4)) : 0,
     timeoutRate: counter.calls ? Number(((counter.outcomes.timeout + counter.outcomes.unknown_outcome) / counter.calls).toFixed(4)) : 0,
@@ -86,6 +93,7 @@ export function getToolRuntimeMetrics() {
 export function resetToolRuntimeMetricsForTests(): void {
   totals.calls = 0;
   totals.inFlight = 0;
+  totals.retries = 0;
   totals.durationMs = 0;
   totals.outcomes = emptyOutcomes();
   byTool.clear();

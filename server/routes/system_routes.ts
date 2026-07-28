@@ -41,6 +41,7 @@ import { getGptSovitsRuntimeStatus } from "../tts/gptsovits_runtime";
 import { getRuntimeQueueStatus as getGptSovitsQueueStatus } from "../tts/providers/gptsovits";
 import { getVoiceprintRuntimeStatus } from "../biometrics/voiceprint_provider";
 import { getToolRuntimeMetrics } from "../runtime/tool_metrics";
+import { getAdapterResilienceSnapshot } from "../tools/adapter_resilience";
 import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
 import { generateConfiguredEmbedding } from "../llm/embedding_provider";
 import { rerankConfiguredDocuments } from "../llm/rerank_provider";
@@ -288,6 +289,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           externalBytes: memory.external,
         },
         tools: toolMetrics,
+        adapterResilience: getAdapterResilienceSnapshot(),
         queues: {
           toolCallsInFlight: toolMetrics.totals.inFlight,
           voiceprint: getVoiceprintRuntimeStatus(),

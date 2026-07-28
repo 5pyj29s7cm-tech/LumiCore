@@ -58,7 +58,7 @@ export function buildToolExecutionEnvelope(
   const rawError = String(record.error || '').trim();
   const timeout = /timed?\s*out|timeout/i.test(rawError);
   const unknownOutcome = /unknown (?:prior )?(?:external commit )?outcome|external commit outcome is unknown|automatic resend was stopped/i.test(rawError);
-  const forbidden = /forbidden|not exposed|outside .*policy|permission denied/i.test(rawError);
+  const forbidden = /forbidden|not exposed|outside .*policy|permission denied|adapter circuit is open/i.test(rawError);
   const targetMismatch = payload.targetMatched === false
     || payload.conversationVerified === false
     || /target mismatch|conversation was not verified/i.test(rawError);
