@@ -477,6 +477,21 @@ async function runSoak(args, runRoot, runtimeMeta) {
       ]);
     }
     await prewarm;
+    if (
+      ttsProbeFailureCount > 0
+      || voiceprintProbeFailureCount > 0
+      || maxGptSovitsBudgetExceeded > 0
+      || maxVoiceprintBudgetExceeded > 0
+    ) {
+      throw new Error(`runtime soak prewarm failed its functional or resource-budget gate: ${JSON.stringify({
+        ttsProbeFailureCount,
+        ttsProbeError: ttsProbeError || null,
+        voiceprintProbeFailureCount,
+        voiceprintProbeError: voiceprintProbeError || null,
+        gptSovitsBudgetExceeded: maxGptSovitsBudgetExceeded,
+        voiceprintBudgetExceeded: maxVoiceprintBudgetExceeded,
+      })}`);
+    }
     started = Date.now();
     deadline = started + args.durationHours * 60 * 60 * 1000;
     while (Date.now() < deadline) {

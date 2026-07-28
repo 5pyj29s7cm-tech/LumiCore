@@ -8,10 +8,11 @@ const HOST = '127.0.0.1';
 const PORT = 9880;
 const IDLE_MS = Math.max(30_000, Number(process.env.GPTSOVITS_IDLE_MS) || 5 * 60_000);
 const START_TIMEOUT_MS = Math.max(10_000, Number(process.env.GPTSOVITS_START_TIMEOUT_MS) || 90_000);
-// The supervised Windows process tree peaks around 6.2 GiB with the bundled
-// v1 checkpoints. Keep headroom for allocator variance while still enforcing
-// a hard ceiling and relying on idle reclamation to prevent long residency.
-const MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.GPTSOVITS_MEMORY_BUDGET_MB) || 7_168) * 1024 * 1024;
+// The supervised Windows process tree can briefly peak around 7.3 GiB while
+// loading and serving the first request with the bundled v1 checkpoints.
+// Keep bounded startup headroom while retaining the independent 12 GiB
+// private-memory ceiling and idle reclamation for long-residency control.
+const MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.GPTSOVITS_MEMORY_BUDGET_MB) || 8_192) * 1024 * 1024;
 const PRIVATE_MEMORY_BUDGET_BYTES = Math.max(1_024, Number(process.env.GPTSOVITS_PRIVATE_MEMORY_BUDGET_MB) || 12_288) * 1024 * 1024;
 
 let ownedProcess: ChildProcess | null = null;

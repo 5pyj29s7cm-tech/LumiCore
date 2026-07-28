@@ -32,6 +32,7 @@ describe('runtime reliability evidence modes', () => {
     expect(reliabilityScript).toContain('ttsProbeAudioBytes');
     expect(reliabilityScript).toContain('scrubStagedTtsFixture(runRoot)');
     expect(reliabilityScript).toContain('A fixed');
+    expect(reliabilityScript).toContain('runtime soak prewarm failed its functional or resource-budget gate');
   });
 
   it('requires a real SpeechBrain embedding and voiceprint idle reclamation', () => {

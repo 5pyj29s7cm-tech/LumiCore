@@ -35,5 +35,17 @@ describe('voiceprint sidecar supervision', () => {
     expect(monitor).toContain('peakPrivateBytes');
     expect(monitor).toContain('privateBudgetBytes');
     expect(provider).toContain('intervalMs: 5_000');
+    expect(provider).toContain('LUMI_VOICEPRINT_COLD_START_TIMEOUT_MS');
+    expect(provider).toContain('this.warmed');
+    expect(provider).toContain('Math.max(timeoutMs, COLD_START_TIMEOUT_MS)');
+  });
+
+  it('keeps bounded headroom for the observed GPT-SoVITS startup peak', () => {
+    const runtime = fs.readFileSync(
+      path.join(process.cwd(), 'server/tts/gptsovits_runtime.ts'),
+      'utf8',
+    );
+    expect(runtime).toContain("GPTSOVITS_MEMORY_BUDGET_MB) || 8_192");
+    expect(runtime).toContain("GPTSOVITS_PRIVATE_MEMORY_BUDGET_MB) || 12_288");
   });
 });

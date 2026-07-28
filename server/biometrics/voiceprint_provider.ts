@@ -41,6 +41,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SIDECAR_SCRIPT = path.join(__dirname, 'voiceprint_sidecar.py');
 const DEFAULT_TIMEOUT_MS = 45000;
+const COLD_START_TIMEOUT_MS = Math.max(
+  DEFAULT_TIMEOUT_MS,
+  Number(process.env.LUMI_VOICEPRINT_COLD_START_TIMEOUT_MS) || 120_000,
+);
 const UNAVAILABLE_RETRY_MS = 60000;
 const MAX_PCM_BASE64_CHARS = 800000;
 const MAX_CONCURRENT_REQUESTS = Math.max(1, Number(process.env.LUMI_VOICEPRINT_CONCURRENCY) || 2);
@@ -79,6 +83,7 @@ export function resolveVoiceprintPython(): string {
 
 class SpeechBrainSidecarClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
+  private warmed = false;
   private pending = new Map<string, PendingRequest>();
   private seq = 0;
   private unavailableUntil = 0;
@@ -111,12 +116,15 @@ class SpeechBrainSidecarClient {
 
     this.clearIdleTimer();
     this.lastUsedAt = new Date().toISOString();
+    const effectiveTimeoutMs = this.warmed
+      ? timeoutMs
+      : Math.max(timeoutMs, COLD_START_TIMEOUT_MS);
     if (this.pending.size >= MAX_CONCURRENT_REQUESTS) {
       return new Promise((resolve, reject) => {
-        this.queue.push({ payload, timeoutMs, resolve, reject });
+        this.queue.push({ payload, timeoutMs: effectiveTimeoutMs, resolve, reject });
       });
     }
-    return this.dispatch(payload, timeoutMs);
+    return this.dispatch(payload, effectiveTimeoutMs);
   }
 
   private dispatch(payload: Record<string, unknown>, timeoutMs: number): Promise<any> {
@@ -180,6 +188,7 @@ class SpeechBrainSidecarClient {
     if (this.proc && !this.proc.killed) return;
 
     const python = resolveVoiceprintPython();
+    this.warmed = false;
     this.proc = spawn(python, [SIDECAR_SCRIPT], {
       cwd: path.resolve(__dirname, '..', '..'),
       env: {
@@ -206,6 +215,7 @@ class SpeechBrainSidecarClient {
     this.proc.on('exit', (code, signal) => {
       this.resourceMonitor.stop();
       this.proc = null;
+      this.warmed = false;
       const err = new Error(`SpeechBrain sidecar exited (${code ?? signal ?? 'unknown'})`);
       for (const [id, pending] of this.pending.entries()) {
         clearTimeout(pending.timer);
@@ -232,6 +242,7 @@ class SpeechBrainSidecarClient {
     clearTimeout(pending.timer);
     this.pending.delete(id);
     pending.resolve(data);
+    this.warmed = true;
     this.lastUsedAt = new Date().toISOString();
     this.restartCount = 0;
     this.drainQueue();
@@ -257,6 +268,7 @@ class SpeechBrainSidecarClient {
   status() {
     return {
       running: Boolean(this.proc && !this.proc.killed),
+      warmed: this.warmed,
       pid: this.proc?.pid || null,
       inFlight: this.pending.size,
       queueLength: this.queue.length,
@@ -274,6 +286,7 @@ class SpeechBrainSidecarClient {
     this.clearIdleTimer();
     const proc = this.proc;
     this.proc = null;
+    this.warmed = false;
     this.resourceMonitor.stop();
     const error = new Error('SpeechBrain sidecar stopped during runtime shutdown');
     for (const [id, pending] of this.pending.entries()) {
@@ -310,6 +323,7 @@ function getClient(): SpeechBrainSidecarClient {
 export function getVoiceprintRuntimeStatus() {
   return client?.status() || {
     running: false,
+    warmed: false,
     pid: null,
     inFlight: 0,
     queueLength: 0,
