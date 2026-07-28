@@ -31,6 +31,7 @@ import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
 import { selectManifestCapabilities } from '../tools/capability_projection';
 import { getLumiModelConfiguration, LUMI_MODEL_ROLES } from '../llm/model_configuration';
 import { DESKTOP_APPLICATION_REGISTRY } from '../desktop/execution_plan';
+import { CN_SELF_INTRODUCTION_COPY } from '../regions/packs/cn/self_introduction';
 
 export type ClientMode = 'chat' | 'assistant' | 'autonomous' | 'meeting';
 export type ClientCapabilityKind =
@@ -1679,27 +1680,31 @@ export function buildSelfIntroductionPlan(
   const configuredModels = snapshot.configuredModels.filter(model => model.configured);
   const statements: SelfIntroductionPlan['statements'] = [
     {
-      text: '我是 Lumi，运行在 LumiOS 中、由用户目标驱动的私有化智能体；语音、聊天、任务和组织工作区使用同一个身份。',
+      text: CN_SELF_INTRODUCTION_COPY.identity,
       evidence: 'identity and scope contract',
       qualified: false,
     },
     {
-      text: `当前有 ${configuredModels.length}/${snapshot.configuredModels.length} 个模型角色已配置；推理、视觉、桌面动作、生成、检索和语音按角色路由，并可组成受策略约束的任务图。`,
+      text: CN_SELF_INTRODUCTION_COPY.modelRoles(configuredModels.length, snapshot.configuredModels.length),
       evidence: 'live model role configuration',
       qualified: configuredModels.length !== snapshot.configuredModels.length,
     },
     {
-      text: `当前运行能力清单包含 ${snapshot.connectedCapabilities.tools} 个工具能力、${snapshot.connectedCapabilities.skills} 个可执行 Skill 能力和 ${snapshot.connectedCapabilities.mcp} 个 MCP 能力。`,
+      text: CN_SELF_INTRODUCTION_COPY.capabilities(
+        snapshot.connectedCapabilities.tools,
+        snapshot.connectedCapabilities.skills,
+        snapshot.connectedCapabilities.mcp,
+      ),
       evidence: 'runtime capability manifest',
       qualified: snapshot.connectedCapabilities.adaptersAttention > 0,
     },
     {
-      text: `知识范围当前有 ${snapshot.knowledgeCoverage.totalFiles} 个文件，其中 ${snapshot.knowledgeCoverage.indexedFiles} 个已索引、${snapshot.knowledgeCoverage.verifiedFiles} 个通过吸收验证；状态为 ${snapshot.knowledgeCoverage.verification}。索引不等于完全吸收，只有抽取、分块、嵌入、召回和引用证据均通过时才称为已验证吸收。`,
+      text: CN_SELF_INTRODUCTION_COPY.knowledgeCoverage(snapshot.knowledgeCoverage),
       evidence: 'current scoped knowledge inventory',
       qualified: snapshot.knowledgeCoverage.verification !== 'indexed_unverified',
     },
     {
-      text: `当前客户端自我感知为 ${snapshot.runtime.awareness}，健康状态为 ${snapshot.runtime.health}。外部发送、发布和提交必须确认并由真实回执验收。`,
+      text: CN_SELF_INTRODUCTION_COPY.runtime(snapshot.runtime.awareness, snapshot.runtime.health),
       evidence: 'client health and execution constitution',
       qualified: snapshot.runtime.awareness !== 'live' || snapshot.runtime.health !== 'ok',
     },
@@ -1726,13 +1731,13 @@ export function buildSelfIntroductionPlan(
     statements,
     demoCandidates,
     documentText: [
-      'Lumi 实时自我介绍',
+      CN_SELF_INTRODUCTION_COPY.title,
       '',
       ...statements.map(statement => statement.text),
       '',
-      '能力边界：',
+      CN_SELF_INTRODUCTION_COPY.capabilityBoundary,
       ...snapshot.limitations.map(limitation => `- ${limitation}`),
-      `快照时间：${snapshot.generatedAt}`,
+      CN_SELF_INTRODUCTION_COPY.snapshotTime(snapshot.generatedAt),
     ].join('\n'),
   };
 }

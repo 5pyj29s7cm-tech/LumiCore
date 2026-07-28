@@ -113,8 +113,8 @@ export function isSelfIntroDemoRequest(text: string): boolean {
   const normalized = normalizeIntentText(text || '');
   if (!normalized) return false;
   const selfIntroduction = SELF_INTRO_PATTERNS.some(pattern => pattern.test(normalized))
-    || /(?:自我介绍|介绍(?:一下)?你自己|你是谁|(?:introduce|demo|show).{0,40}(?:yourself|lumi))/iu.test(normalized);
-  const visibleDemo = /(?:演示|展示|桌面操作|实际操作|边介绍边操作|(?:demo|show).{0,40}(?:yourself|lumi))/iu.test(normalized);
+    || /(?:自我介绍|介绍(?:一下)?你自己|你是谁|(?:introduce|demo|show).{0,40}(?:yourself|lumi))/iu.test(normalized); // i18n-allow: Chinese self-introduction input recognition.
+  const visibleDemo = /(?:演示|展示|桌面操作|实际操作|边介绍边操作|(?:demo|show).{0,40}(?:yourself|lumi))/iu.test(normalized); // i18n-allow: Chinese visible-demo input recognition.
   return selfIntroduction && visibleDemo;
 }
 

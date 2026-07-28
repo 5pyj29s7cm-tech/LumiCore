@@ -99,6 +99,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'lumi-client',
     family: 'lumi',
     displayName: 'Lumi desktop client',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['lumi', 'lumios', '聊天界面', '知识库', '设置'],
     processPatterns: ['lumi', 'lumi-os'],
     windowTitlePatterns: ['lumi', 'lumios'],
@@ -110,6 +111,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'chrome-browser',
     family: 'browser',
     displayName: 'Google Chrome',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['google chrome', 'chrome', '谷歌浏览器'],
     processPatterns: ['chrome'],
     windowTitlePatterns: ['google chrome'],
@@ -121,6 +123,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'edge-browser',
     family: 'browser',
     displayName: 'Microsoft Edge',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['microsoft edge', 'edge', '微软浏览器'],
     processPatterns: ['msedge'],
     windowTitlePatterns: ['microsoft edge'],
@@ -132,6 +135,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'firefox-browser',
     family: 'browser',
     displayName: 'Mozilla Firefox',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['mozilla firefox', 'firefox', '火狐浏览器'],
     processPatterns: ['firefox'],
     windowTitlePatterns: ['mozilla firefox', 'firefox'],
@@ -143,6 +147,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'desktop-browser',
     family: 'browser',
     displayName: 'Certified desktop browser',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['browser', '浏览器', '网页', '网站'],
     processPatterns: ['msedge', 'chrome', 'firefox'],
     windowTitlePatterns: ['microsoft edge', 'google chrome', 'mozilla firefox'],
@@ -154,8 +159,10 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'wps-spreadsheet',
     family: 'office',
     displayName: 'WPS Spreadsheets',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['wps spreadsheets', 'wps spreadsheet', 'wps 表格', 'wps表格'],
     processPatterns: ['et'],
+    // i18n-allow: Reviewed multilingual window-title fingerprint.
     windowTitlePatterns: ['wps spreadsheets', 'wps 表格'],
     executablePatterns: ['et.exe'],
     certification: 'certified',
@@ -165,8 +172,10 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'wps-presentation',
     family: 'office',
     displayName: 'WPS Presentation',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['wps presentation', 'wps 演示', 'wps演示'],
     processPatterns: ['wpp'],
+    // i18n-allow: Reviewed multilingual window-title fingerprint.
     windowTitlePatterns: ['wps presentation', 'wps 演示'],
     executablePatterns: ['wpp.exe'],
     certification: 'certified',
@@ -176,8 +185,10 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'wps-writer',
     family: 'office',
     displayName: 'WPS Writer',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['wps writer', 'wps 文字', 'wps文字', 'wps'],
     processPatterns: ['wps'],
+    // i18n-allow: Reviewed multilingual window-title fingerprint.
     windowTitlePatterns: ['wps writer', 'wps 文字', 'wps'],
     executablePatterns: ['wps.exe'],
     certification: 'certified',
@@ -220,6 +231,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'office-suite',
     family: 'office',
     displayName: 'Office suite (generic target)',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['office suite', 'office', '办公软件', '文档', '表格', '演示文稿'],
     processPatterns: ['wps', 'et', 'wpp', 'winword', 'excel', 'powerpnt'],
     windowTitlePatterns: ['wps', 'word', 'excel', 'powerpoint'],
@@ -231,8 +243,10 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'wechat-desktop',
     family: 'messaging',
     displayName: 'WeChat desktop',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['wechat', 'weixin', '微信'],
     processPatterns: ['wechat', 'weixin'],
+    // i18n-allow: Reviewed multilingual window-title fingerprint.
     windowTitlePatterns: ['微信', 'wechat'],
     executablePatterns: ['wechat.exe', 'weixin.exe'],
     certification: 'conditional',
@@ -242,6 +256,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'autocad-desktop',
     family: 'cad',
     displayName: 'AutoCAD',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['autocad', 'cad', 'dwg', '图纸', '平面图'],
     processPatterns: ['acad'],
     windowTitlePatterns: ['autocad'],
@@ -297,6 +312,7 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'desktop-ai-client',
     family: 'desktop_ai',
     displayName: 'Desktop AI client (generic target)',
+    // i18n-allow: Reviewed multilingual application aliases for exact target matching.
     aliases: ['desktop ai', '桌面 ai', '桌面ai'],
     processPatterns: ['chatgpt', 'claude', 'codex', 'gemini'],
     windowTitlePatterns: ['chatgpt', 'claude', 'codex', 'gemini'],

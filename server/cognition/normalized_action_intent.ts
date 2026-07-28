@@ -284,15 +284,16 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   // This rule requires an explicit local action plus a concrete target; a lone
   // action-shaped word is never enough to create executable work.
   const match = text.match(
+    // i18n-allow: Chinese local desktop semantic-role input recognition.
     /(?:^|[，。！？!?\s])(?:请|请你|帮我|麻烦你|给我)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?\n]{1,120})/iu,
   );
   if (!match) return null;
   const verb = trimSlot(match[1]);
   const target = trimSlot(match[2]);
-  if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null;
+  if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null; // i18n-allow: Chinese interrogative input recognition.
   return {
     kind: 'desktop_operation',
-    operation: /^(?:打开|启动|运行|切换到|聚焦|open|launch|start|focus)$/iu.test(verb)
+    operation: /^(?:打开|启动|运行|切换到|聚焦|open|launch|start|focus)$/iu.test(verb) // i18n-allow: Chinese desktop navigation verb recognition.
       ? 'navigate'
       : 'mutate',
     subject: 'user',
