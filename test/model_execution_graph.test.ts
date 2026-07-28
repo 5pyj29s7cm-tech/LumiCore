@@ -65,6 +65,17 @@ describe('model execution graph', () => {
     expect(overBudget.errors.join(' ')).toContain('budget allows 1');
   });
 
+  it('preserves an explicit zero-retry budget instead of replacing it with the default', () => {
+    const compiled = compileModelExecutionGraph({
+      nodes: [{ ...node('no-retry'), maxRetries: 0 }],
+      budgets: { maxRetriesPerNode: 0 },
+    });
+
+    expect(compiled.ok).toBe(true);
+    expect(compiled.graph.budgets.maxRetriesPerNode).toBe(0);
+    expect(compiled.graph.nodes[0].maxRetries).toBe(0);
+  });
+
   it('enforces local-only privacy before any node can run', () => {
     const compiled = compileModelExecutionGraph({
       nodes: [node('local', [], 'ollama'), node('remote', ['local'], 'openai')],

@@ -1329,6 +1329,7 @@ async function executeExternalWorkerTask(
   assignment: WorkerAssignment,
   selectedCandidate: ModelCandidate,
   dependencyContext = '',
+  timeoutMs = 180_000,
 ): Promise<WorkerTaskResult> {
   const { subTask, agent } = assignment;
 
@@ -1344,7 +1345,7 @@ async function executeExternalWorkerTask(
   }
 
   const result = await executeExternalAgent(
-    { command: agent.externalCommand!, timeout: 180_000 },
+    { command: agent.externalCommand!, timeout: timeoutMs },
     [subTask.description, dependencyContext].filter(Boolean).join('\n\n'),
   );
   recordExternalAgentRun(agent.id, result);
@@ -1416,6 +1417,7 @@ async function executeWorkerTask(
         { subTask, agent: currentAgent },
         selectedCandidate,
         dependencyContext,
+        node.timeoutMs,
       );
       throwIfCancelled(context);
       return result;
@@ -1479,6 +1481,8 @@ async function executeWorkerTask(
         ),
         context.rootTaskText || '',
       );
+      let attemptTimedOut = false;
+      const attemptAbort = new AbortController();
       const workerContext: ToolContext = {
         userId: context.userId,
         domain: context.domain,
@@ -1489,7 +1493,7 @@ async function executeWorkerTask(
         routedTaskText: context.rootTaskText || subTask.description,
         source: 'orchestrator',
         desktopRelay: context.desktopRelay,
-        isCancelled: context.isCancelled,
+        isCancelled: () => attemptTimedOut || context.isCancelled?.() === true,
         llmGetters,
         toolPolicy: workerToolPolicy,
         onToolStart: (record: { id: string; name: string; arguments: Record<string, any> }) => {
@@ -1508,7 +1512,15 @@ async function executeWorkerTask(
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
-          () => reject(new Error(`Worker timed out after ${node.timeoutMs}ms`)),
+          () => {
+            attemptTimedOut = true;
+            const timeoutError = new Error(`Worker timed out after ${node.timeoutMs}ms`);
+            // Reject the graph attempt first, then abort the underlying model.
+            // Providers that ignore AbortSignal are still stopped by the
+            // cancellation checks inside runWithTools before any late tool call.
+            reject(timeoutError);
+            attemptAbort.abort(timeoutError);
+          },
           node.timeoutMs,
         );
       });
@@ -1522,6 +1534,7 @@ async function executeWorkerTask(
             userId: llmConfig.userId || context.userId,
             domain: llmConfig.domain || context.domain,
             orgId: llmConfig.orgId || context.orgId,
+            signal: attemptAbort.signal,
           },
           (record) => {
             toolExecutionStarted = true;
@@ -1672,6 +1685,7 @@ export async function executeWorkflow(
     budgets: context.executionBudget,
   });
   const graph = compilation.graph;
+  const workflowDeadline = Date.now() + graph.budgets.maxWallTimeMs;
   const assignmentById = new Map(assignments.map(assignment => [assignment.subTask.id, assignment]));
   const groups = compilation.waves.map(wave => wave
     .map(nodeId => assignmentById.get(nodeId))
@@ -1769,10 +1783,32 @@ export async function executeWorkflow(
           dependencyResults.push(dependencyResult);
         }
         const graphNode = graph.nodes.find(node => node.nodeId === a.subTask.id)!;
+        const remainingWallTimeMs = workflowDeadline - Date.now();
+        if (remainingWallTimeMs <= 0) {
+          const result: WorkerTaskResult = {
+            subTaskId: a.subTask.id,
+            output: `[Worker blocked: model execution graph exhausted its ${graph.budgets.maxWallTimeMs}ms wall-time budget before this node could start.]`,
+            agentId: a.agent.id,
+            status: 'blocked',
+          };
+          nodeReceipts.push(buildModelGraphNodeReceipt({
+            graph,
+            node: graphNode,
+            status: result.status,
+            startedAt,
+            agentId: result.agentId,
+            output: result.output,
+            error: result.output,
+          }));
+          return result;
+        }
+        const runtimeNode = remainingWallTimeMs < graphNode.timeoutMs
+          ? { ...graphNode, timeoutMs: Math.max(1, remainingWallTimeMs) }
+          : graphNode;
         const result = await executeWorkerTask(
           a,
           context,
-          graphNode,
+          runtimeNode,
           llmConfig,
           llmGetters,
           fallbackAgents,

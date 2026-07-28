@@ -599,6 +599,17 @@ export async function runWithTools(
         );
     recordLatency('llm', Date.now() - llmStart);
 
+    // A provider may ignore AbortSignal and resolve after the caller has
+    // cancelled or timed out. Re-check before interpreting a late response so
+    // it can never dispatch tool calls after a replacement model/turn starts.
+    if (context?.isCancelled?.()) {
+      return {
+        text: 'Task was cancelled before the model response could be applied.',
+        toolCalls: executionLog,
+        usageRecords,
+      };
+    }
+
     // Collect usage from this LLM call
     if (response.usage) {
       usageRecords.push({
@@ -680,6 +691,15 @@ export async function runWithTools(
     });
 
     for (const tc of normalizedToolCalls) {
+      // Cancellation can also arrive between multiple tool calls in one model
+      // response. Never continue the remaining batch after that boundary.
+      if (context?.isCancelled?.()) {
+        return {
+          text: 'Task was cancelled before the remaining tool calls could run.',
+          toolCalls: executionLog,
+          usageRecords,
+        };
+      }
       if (!exposedToolNames.has(tc.name)) {
         conversationHistory.push({
           role: 'tool',

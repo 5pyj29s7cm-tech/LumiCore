@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const declarations = [
@@ -190,6 +190,10 @@ beforeEach(() => {
     exitCode: 0,
     durationMs: 1,
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('orchestrator worker ToolPolicy propagation', () => {
@@ -821,6 +825,148 @@ describe('orchestrator worker ToolPolicy propagation', () => {
     expect(result.nodeReceipts?.[0].selectedCandidate).toMatchObject({
       provider: 'qwen', model: 'qwen-plus', agentId: agent.id,
     });
+  });
+
+  it('aborts the timed-out model before starting its compiled fallback', async () => {
+    vi.useFakeTimers();
+    const agent = internalAgent();
+    let firstSignal: AbortSignal | undefined;
+    mocks.runWithTools
+      .mockImplementationOnce(async (...args: any[]) => {
+        firstSignal = args[2].signal;
+        return new Promise(() => {});
+      })
+      .mockResolvedValueOnce({
+        text: 'fallback completed after the timed-out model was aborted',
+        toolCalls: [],
+        usageRecords: [],
+      });
+
+    const execution = executeWorkflow(
+      [{
+        subTask: { id: 'timeout-fallback', description: 'Analyze safely', requiredSkill: 'analysis', executionMode: 'lumi' },
+        agent,
+      }],
+      {
+        userId: 'timeout-fallback-user',
+        rootTaskText: 'Analyze safely',
+        modelCandidates: [
+          { provider: 'openai', model: 'slow-primary', priority: 0 },
+          { provider: 'qwen', model: 'healthy-fallback', priority: 1 },
+        ],
+        executionBudget: {
+          maxNodes: 1,
+          maxParallel: 1,
+          maxRetriesPerNode: 1,
+          maxWallTimeMs: 1_000,
+        },
+      },
+      llmConfig,
+      llmGetters,
+      [agent],
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await execution;
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
+    expect((mocks.runWithTools.mock.calls[1][2] as any).signal.aborted).toBe(false);
+    expect(result.subTaskResults[0]).toMatchObject({ status: 'succeeded' });
+    expect(result.nodeReceipts?.[0].selectedCandidate).toMatchObject({
+      provider: 'qwen',
+      model: 'healthy-fallback',
+    });
+  });
+
+  it('shares one wall-time budget across sequential model graph nodes', async () => {
+    vi.useFakeTimers();
+    const agent = internalAgent();
+    let secondSignal: AbortSignal | undefined;
+    mocks.runWithTools
+      .mockImplementationOnce(async () => new Promise(resolve => {
+        setTimeout(() => resolve({
+          text: 'first node completed',
+          toolCalls: [],
+          usageRecords: [],
+        }), 800);
+      }))
+      .mockImplementationOnce(async (...args: any[]) => {
+        secondSignal = args[2].signal;
+        return new Promise(() => {});
+      });
+
+    const execution = executeWorkflow(
+      [
+        {
+          subTask: { id: 'budget-first', description: 'First analysis', requiredSkill: 'analysis', executionMode: 'lumi' },
+          agent,
+        },
+        {
+          subTask: {
+            id: 'budget-second',
+            description: 'Second analysis',
+            requiredSkill: 'analysis',
+            executionMode: 'lumi',
+            dependsOn: ['budget-first'],
+          },
+          agent,
+        },
+      ],
+      {
+        userId: 'shared-wall-budget-user',
+        rootTaskText: 'Run two analyses inside one second',
+        modelCandidates: [{ provider: 'openai', model: 'one-candidate', priority: 0 }],
+        executionBudget: {
+          maxNodes: 2,
+          maxParallel: 1,
+          maxRetriesPerNode: 0,
+          maxWallTimeMs: 1_000,
+        },
+      },
+      llmConfig,
+      llmGetters,
+      [],
+    );
+
+    await vi.advanceTimersByTimeAsync(800);
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(200);
+    const result = await execution;
+
+    expect(secondSignal?.aborted).toBe(true);
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
+    expect(result.subTaskResults.map(item => item.status)).toEqual(['succeeded', 'failed']);
+    expect(result.subTaskResults[1].output).toContain('timed out after 200ms');
+  });
+
+  it('uses the compiled node timeout for an allowed external agent runtime', async () => {
+    const external = externalAgent();
+    const result = await executeWorkflow(
+      [{
+        subTask: { id: 'external-timeout', description: 'Read external analysis', requiredSkill: 'analysis', executionMode: 'lumi' },
+        agent: external,
+      }],
+      {
+        userId: 'external-timeout-user',
+        rootTaskText: 'Read external analysis',
+        executionBudget: {
+          maxNodes: 1,
+          maxParallel: 1,
+          maxRetriesPerNode: 0,
+          maxWallTimeMs: 42_000,
+        },
+      },
+      llmConfig,
+      llmGetters,
+      [external],
+    );
+
+    expect(mocks.executeExternalAgent).toHaveBeenCalledWith(
+      { command: external.externalCommand, timeout: 42_000 },
+      expect.stringContaining('Read external analysis'),
+    );
+    expect(result.subTaskResults[0].status).toBe('succeeded');
   });
 
   it('does not replay a worker through another model after tool execution has started', async () => {

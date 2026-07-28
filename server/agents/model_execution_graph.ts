@@ -245,11 +245,15 @@ export function modelGraphDigest(value: unknown): string {
 }
 
 function normalizeBudgets(input?: Partial<ModelExecutionBudget>): ModelExecutionBudget {
+  const finiteOr = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
   return {
-    maxNodes: Math.max(1, Math.min(64, Math.trunc(Number(input?.maxNodes) || 12))),
-    maxParallel: Math.max(1, Math.min(16, Math.trunc(Number(input?.maxParallel) || 4))),
-    maxRetriesPerNode: Math.max(0, Math.min(3, Math.trunc(Number(input?.maxRetriesPerNode) || 2))),
-    maxWallTimeMs: Math.max(1_000, Math.min(60 * 60_000, Math.trunc(Number(input?.maxWallTimeMs) || 10 * 60_000))),
+    maxNodes: Math.max(1, Math.min(64, Math.trunc(finiteOr(input?.maxNodes, 12)))),
+    maxParallel: Math.max(1, Math.min(16, Math.trunc(finiteOr(input?.maxParallel, 4)))),
+    maxRetriesPerNode: Math.max(0, Math.min(3, Math.trunc(finiteOr(input?.maxRetriesPerNode, 2)))),
+    maxWallTimeMs: Math.max(1_000, Math.min(60 * 60_000, Math.trunc(finiteOr(input?.maxWallTimeMs, 10 * 60_000)))),
   };
 }
 
