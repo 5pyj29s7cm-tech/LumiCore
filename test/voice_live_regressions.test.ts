@@ -232,7 +232,13 @@ describe('live voice regression cases', () => {
       toolRecords: [{
         name: 'desktop_open',
         arguments: { target: 'AutoCAD' },
-        result: 'Opened app AutoCAD via desktop shortcut',
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'AutoCAD',
+          targetMatched: true,
+          actualTarget: { processName: 'acad.exe', title: 'Autodesk AutoCAD' },
+        }),
       }],
       source: 'voice',
     });

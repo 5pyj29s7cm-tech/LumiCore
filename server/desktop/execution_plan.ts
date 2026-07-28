@@ -107,10 +107,43 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     controlLayers: ['client_native'],
   },
   {
+    id: 'chrome-browser',
+    family: 'browser',
+    displayName: 'Google Chrome',
+    aliases: ['google chrome', 'chrome', '谷歌浏览器'],
+    processPatterns: ['chrome'],
+    windowTitlePatterns: ['google chrome'],
+    executablePatterns: ['chrome.exe'],
+    certification: 'certified',
+    controlLayers: ['browser_dom', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'edge-browser',
+    family: 'browser',
+    displayName: 'Microsoft Edge',
+    aliases: ['microsoft edge', 'edge', '微软浏览器'],
+    processPatterns: ['msedge'],
+    windowTitlePatterns: ['microsoft edge'],
+    executablePatterns: ['msedge.exe'],
+    certification: 'certified',
+    controlLayers: ['browser_dom', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'firefox-browser',
+    family: 'browser',
+    displayName: 'Mozilla Firefox',
+    aliases: ['mozilla firefox', 'firefox', '火狐浏览器'],
+    processPatterns: ['firefox'],
+    windowTitlePatterns: ['mozilla firefox', 'firefox'],
+    executablePatterns: ['firefox.exe'],
+    certification: 'certified',
+    controlLayers: ['browser_dom', 'windows_uia', 'vision'],
+  },
+  {
     id: 'desktop-browser',
     family: 'browser',
     displayName: 'Certified desktop browser',
-    aliases: ['browser', '浏览器', 'edge', 'chrome', '网页', '网站'],
+    aliases: ['browser', '浏览器', '网页', '网站'],
     processPatterns: ['msedge', 'chrome', 'firefox'],
     windowTitlePatterns: ['microsoft edge', 'google chrome', 'mozilla firefox'],
     executablePatterns: ['msedge.exe', 'chrome.exe', 'firefox.exe'],
@@ -118,10 +151,76 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     controlLayers: ['browser_dom', 'windows_uia', 'vision'],
   },
   {
+    id: 'wps-spreadsheet',
+    family: 'office',
+    displayName: 'WPS Spreadsheets',
+    aliases: ['wps spreadsheets', 'wps spreadsheet', 'wps 表格', 'wps表格'],
+    processPatterns: ['et'],
+    windowTitlePatterns: ['wps spreadsheets', 'wps 表格'],
+    executablePatterns: ['et.exe'],
+    certification: 'certified',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'wps-presentation',
+    family: 'office',
+    displayName: 'WPS Presentation',
+    aliases: ['wps presentation', 'wps 演示', 'wps演示'],
+    processPatterns: ['wpp'],
+    windowTitlePatterns: ['wps presentation', 'wps 演示'],
+    executablePatterns: ['wpp.exe'],
+    certification: 'certified',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'wps-writer',
+    family: 'office',
+    displayName: 'WPS Writer',
+    aliases: ['wps writer', 'wps 文字', 'wps文字', 'wps'],
+    processPatterns: ['wps'],
+    windowTitlePatterns: ['wps writer', 'wps 文字', 'wps'],
+    executablePatterns: ['wps.exe'],
+    certification: 'certified',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'microsoft-word',
+    family: 'office',
+    displayName: 'Microsoft Word',
+    aliases: ['microsoft word', 'word'],
+    processPatterns: ['winword'],
+    windowTitlePatterns: ['microsoft word', 'word'],
+    executablePatterns: ['winword.exe'],
+    certification: 'certified',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'microsoft-excel',
+    family: 'office',
+    displayName: 'Microsoft Excel',
+    aliases: ['microsoft excel', 'excel'],
+    processPatterns: ['excel'],
+    windowTitlePatterns: ['microsoft excel', 'excel'],
+    executablePatterns: ['excel.exe'],
+    certification: 'certified',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'microsoft-powerpoint',
+    family: 'office',
+    displayName: 'Microsoft PowerPoint',
+    aliases: ['microsoft powerpoint', 'powerpoint'],
+    processPatterns: ['powerpnt'],
+    windowTitlePatterns: ['microsoft powerpoint', 'powerpoint'],
+    executablePatterns: ['powerpnt.exe'],
+    certification: 'certified',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
     id: 'office-suite',
     family: 'office',
-    displayName: 'WPS / Microsoft Office',
-    aliases: ['wps', 'word', 'excel', 'powerpoint', 'office', '文档', '表格', '演示文稿'],
+    displayName: 'Office suite (generic target)',
+    aliases: ['office suite', 'office', '办公软件', '文档', '表格', '演示文稿'],
     processPatterns: ['wps', 'et', 'wpp', 'winword', 'excel', 'powerpnt'],
     windowTitlePatterns: ['wps', 'word', 'excel', 'powerpoint'],
     executablePatterns: ['wps.exe', 'et.exe', 'wpp.exe', 'winword.exe', 'excel.exe', 'powerpnt.exe'],
@@ -151,13 +250,57 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
   },
   {
+    id: 'chatgpt-desktop',
+    family: 'desktop_ai',
+    displayName: 'ChatGPT desktop',
+    aliases: ['chatgpt desktop', 'chatgpt'],
+    processPatterns: ['chatgpt'],
+    windowTitlePatterns: ['chatgpt'],
+    executablePatterns: ['chatgpt*.exe'],
+    certification: 'conditional',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'claude-desktop',
+    family: 'desktop_ai',
+    displayName: 'Claude desktop',
+    aliases: ['claude desktop', 'claude'],
+    processPatterns: ['claude'],
+    windowTitlePatterns: ['claude'],
+    executablePatterns: ['claude*.exe'],
+    certification: 'conditional',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'codex-desktop',
+    family: 'desktop_ai',
+    displayName: 'Codex desktop',
+    aliases: ['codex desktop', 'codex'],
+    processPatterns: ['codex'],
+    windowTitlePatterns: ['codex'],
+    executablePatterns: ['codex*.exe'],
+    certification: 'conditional',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
+    id: 'gemini-desktop',
+    family: 'desktop_ai',
+    displayName: 'Gemini desktop',
+    aliases: ['gemini desktop', 'gemini'],
+    processPatterns: ['gemini'],
+    windowTitlePatterns: ['gemini'],
+    executablePatterns: ['gemini*.exe'],
+    certification: 'conditional',
+    controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
+  },
+  {
     id: 'desktop-ai-client',
     family: 'desktop_ai',
-    displayName: 'Desktop AI client',
-    aliases: ['desktop ai', '桌面ai', 'codex', 'claude', 'chatgpt', 'gemini'],
+    displayName: 'Desktop AI client (generic target)',
+    aliases: ['desktop ai', '桌面 ai', '桌面ai'],
     processPatterns: ['chatgpt', 'claude', 'codex', 'gemini'],
     windowTitlePatterns: ['chatgpt', 'claude', 'codex', 'gemini'],
-    executablePatterns: ['chatgpt*.exe', 'claude*.exe', 'codex*.exe'],
+    executablePatterns: ['chatgpt*.exe', 'claude*.exe', 'codex*.exe', 'gemini*.exe'],
     certification: 'conditional',
     controlLayers: ['dedicated_adapter', 'windows_uia', 'vision'],
   },
@@ -184,23 +327,48 @@ export function resolveDesktopApplicationIdentity(
   lane?: LumiCapabilityLane,
 ): ApplicationIdentity {
   const normalized = String(text || '').toLowerCase();
-  const explicit = DESKTOP_APPLICATION_REGISTRY.find(application => (
-    application.aliases.some(alias => normalized.includes(alias.toLowerCase()))
-  ));
+  const explicit = DESKTOP_APPLICATION_REGISTRY
+    .flatMap(application => application.aliases
+      .filter(alias => desktopTextMatchesAlias(normalized, alias))
+      .map(alias => ({ application, aliasLength: alias.length })))
+    .sort((left, right) => right.aliasLength - left.aliasLength)[0]?.application;
   if (explicit) return { ...explicit, aliases: [...explicit.aliases], processPatterns: [...explicit.processPatterns], windowTitlePatterns: [...explicit.windowTitlePatterns], executablePatterns: [...explicit.executablePatterns], controlLayers: [...explicit.controlLayers] };
-  const family = lane === 'design_cad'
-    ? 'cad'
+  const inferredId = lane === 'design_cad'
+    ? 'autocad-desktop'
     : lane === 'web_or_account'
-      ? 'browser'
+      ? 'desktop-browser'
       : undefined;
-  const inferred = family
-    ? DESKTOP_APPLICATION_REGISTRY.find(application => application.family === family)
+  const inferred = inferredId
+    ? DESKTOP_APPLICATION_REGISTRY.find(application => application.id === inferredId)
     : undefined;
   const chosen = inferred || UNKNOWN_APPLICATION;
   return { ...chosen, aliases: [...chosen.aliases], processPatterns: [...chosen.processPatterns], windowTitlePatterns: [...chosen.windowTitlePatterns], executablePatterns: [...chosen.executablePatterns], controlLayers: [...chosen.controlLayers] };
 }
 
-function matchesPattern(value: string, pattern: string): boolean {
+function desktopTextMatchesAlias(normalizedText: string, alias: string): boolean {
+  const normalizedAlias = alias.trim().toLowerCase();
+  if (!normalizedAlias) return false;
+  if (/^[a-z0-9][a-z0-9 ._+-]*$/i.test(normalizedAlias)) {
+    const escaped = normalizedAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i').test(normalizedText);
+  }
+  return normalizedText.includes(normalizedAlias);
+}
+
+function normalizeProcessName(value: string): string {
+  const raw = String(value || '').trim().toLowerCase().replace(/\\/g, '/').split('/').pop() || '';
+  return raw.replace(/\.exe$/i, '');
+}
+
+function processMatchesPattern(value: string, pattern: string): boolean {
+  const normalizedValue = normalizeProcessName(value);
+  const normalizedPattern = normalizeProcessName(pattern);
+  if (!normalizedValue || !normalizedPattern) return false;
+  const escaped = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`, 'i').test(normalizedValue);
+}
+
+function titleMatchesPattern(value: string, pattern: string): boolean {
   const normalizedValue = String(value || '').trim().toLowerCase();
   const normalizedPattern = String(pattern || '').trim().toLowerCase().replace(/\*/g, '');
   return Boolean(normalizedValue && normalizedPattern && normalizedValue.includes(normalizedPattern));
@@ -211,10 +379,39 @@ export function desktopFingerprintMatchesApplication(
   application: ApplicationIdentity,
 ): boolean {
   if (!fingerprint || application.family === 'unknown') return false;
-  const processMatched = application.processPatterns.some(pattern => matchesPattern(fingerprint.processName || '', pattern))
-    || application.executablePatterns.some(pattern => matchesPattern(fingerprint.processName || '', pattern));
-  const titleMatched = application.windowTitlePatterns.some(pattern => matchesPattern(fingerprint.title || '', pattern));
-  return processMatched || titleMatched;
+  const processName = String(fingerprint.processName || '').trim();
+  const processMatched = application.processPatterns.some(pattern => processMatchesPattern(processName, pattern))
+    || application.executablePatterns.some(pattern => processMatchesPattern(processName, pattern));
+  // A process identity is stronger than a title. For example, a Chrome tab
+  // titled "AutoCAD" is not the AutoCAD desktop program.
+  if (processName) return processMatched;
+  return application.windowTitlePatterns.some(pattern => titleMatchesPattern(fingerprint.title || '', pattern));
+}
+
+export function desktopFingerprintMatchesRequestedTarget(
+  fingerprint: { title?: string; processName?: string } | null | undefined,
+  target: string,
+  explicitApplication = '',
+): boolean {
+  if (!fingerprint) return false;
+  const identityText = explicitApplication || (/^https?:\/\//i.test(target) ? 'browser' : target);
+  const lane = /^https?:\/\//i.test(target) ? 'web_or_account' : undefined;
+  const identity = resolveDesktopApplicationIdentity(identityText, lane);
+  if (identity.family !== 'unknown') return desktopFingerprintMatchesApplication(fingerprint, identity);
+
+  const processName = normalizeProcessName(fingerprint.processName || '');
+  const requested = explicitApplication || target;
+  const requestedProcess = normalizeProcessName(requested);
+  if (processName && requestedProcess && !/[\\/]/.test(requested)) {
+    return processName === requestedProcess;
+  }
+  const leaf = String(target || '').replace(/\\/g, '/').split('/').pop() || '';
+  const titleNeedle = leaf.replace(/\.[a-z0-9]{1,12}$/i, '').trim().toLowerCase();
+  return Boolean(
+    processName
+    && titleNeedle.length >= 2
+    && String(fingerprint.title || '').toLowerCase().includes(titleNeedle)
+  );
 }
 
 function toolsForLayer(layer: DesktopControlLayer, family: DesktopApplicationFamily): string[] {

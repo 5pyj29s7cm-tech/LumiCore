@@ -59,6 +59,16 @@ export async function captureNativeUiSnapshot(
 export async function runNativeUiAction(
   options: DesktopUiActionOptions,
 ): Promise<unknown> {
+  const processId = Number(options.processId || 0);
+  const nativeWindowHandle = Number(options.nativeWindowHandle || 0);
+  if (!(Number.isFinite(processId) && processId > 0) && !(Number.isFinite(nativeWindowHandle) && nativeWindowHandle > 0)) {
+    return {
+      status: 'target_mismatch',
+      targetMatched: false,
+      action: options.action,
+      note: 'A fresh desktop_ui_snapshot processId or nativeWindowHandle is required before native UI actuation.',
+    };
+  }
   const adapter = getNativeUiAdapter();
   if (!adapter) {
     return {
@@ -67,5 +77,37 @@ export async function runNativeUiAction(
       note: 'Native semantic UI control is supported by the Windows UIA and macOS Accessibility adapters.',
     };
   }
-  return adapter.runAction(options);
+  const result = await adapter.runAction(options);
+  return finalizeNativeUiActionResult(options, result);
+}
+
+export function finalizeNativeUiActionResult(
+  options: DesktopUiActionOptions,
+  result: unknown,
+): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const payload = result as Record<string, any>;
+  if (payload.status !== 'ok') return payload;
+  const processId = Number(options.processId || 0);
+  const nativeWindowHandle = Number(options.nativeWindowHandle || 0);
+  const selected = payload.selectedBefore && typeof payload.selectedBefore === 'object'
+    ? payload.selectedBefore as Record<string, any>
+    : {};
+  const processMatched = processId > 0 ? Number(selected.processId || 0) === processId : true;
+  const handleMatched = nativeWindowHandle > 0
+    ? Number(selected.nativeWindowHandle || 0) === nativeWindowHandle
+    : true;
+  const targetMatched = processMatched && handleMatched;
+  return {
+    ...payload,
+    status: targetMatched ? payload.status : 'target_mismatch',
+    targetMatched,
+    expectedTarget: {
+      ...(processId > 0 ? { processId } : {}),
+      ...(nativeWindowHandle > 0 ? { nativeWindowHandle } : {}),
+    },
+    ...(!targetMatched
+      ? { note: 'The native UI target identity changed before actuation completed.' }
+      : {}),
+  };
 }

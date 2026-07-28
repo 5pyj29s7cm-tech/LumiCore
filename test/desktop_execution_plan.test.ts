@@ -8,16 +8,22 @@ import {
 
 describe('desktop execution plan', () => {
   it('resolves certified core applications by semantic identity', () => {
-    expect(resolveDesktopApplicationIdentity('在 WPS 里新建文档').id).toBe('office-suite');
+    expect(resolveDesktopApplicationIdentity('在 WPS 里新建文档').id).toBe('wps-writer');
     expect(resolveDesktopApplicationIdentity('打开 AutoCAD 图纸').id).toBe('autocad-desktop');
-    expect(resolveDesktopApplicationIdentity('check the page in Chrome').id).toBe('desktop-browser');
+    expect(resolveDesktopApplicationIdentity('check the page in Chrome').id).toBe('chrome-browser');
     expect(resolveDesktopApplicationIdentity('查看微信消息').id).toBe('wechat-desktop');
   });
 
-  it('matches application identity using process or window evidence', () => {
+  it('uses exact process identity and never accepts an alternative app or spoofed title', () => {
     const browser = resolveDesktopApplicationIdentity('Chrome');
     expect(desktopFingerprintMatchesApplication({ processName: 'chrome.exe', title: 'Lumi - Google Chrome' }, browser)).toBe(true);
+    expect(desktopFingerprintMatchesApplication({ processName: 'msedge.exe', title: 'Google Chrome download' }, browser)).toBe(false);
     expect(desktopFingerprintMatchesApplication({ processName: 'notepad.exe', title: 'Notes' }, browser)).toBe(false);
+    const cad = resolveDesktopApplicationIdentity('AutoCAD');
+    expect(desktopFingerprintMatchesApplication({ processName: 'chrome.exe', title: 'AutoCAD web page' }, cad)).toBe(false);
+    expect(desktopFingerprintMatchesApplication({ processName: 'acad.exe', title: 'Drawing1.dwg' }, cad)).toBe(true);
+    const wps = resolveDesktopApplicationIdentity('WPS');
+    expect(desktopFingerprintMatchesApplication({ processName: 'WINWORD.EXE', title: 'WPS migration.docx' }, wps)).toBe(false);
   });
 
   it('uses adapter then UIA then vision for certified CAD work', () => {

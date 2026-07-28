@@ -16,8 +16,8 @@ const UI_TARGET_PROPERTIES = {
   automationId: { type: 'string', description: 'Exact AutomationId to match.' },
   controlType: { type: 'string', description: 'Control type to match, e.g. Button, Edit, Document, MenuItem, Window.' },
   className: { type: 'string', description: 'Exact UI class name to match.' },
-  processId: { type: 'number', description: 'Optional process id to restrict matches.' },
-  nativeWindowHandle: { type: 'number', description: 'Optional native window handle to restrict matches.' },
+  processId: { type: 'number', description: 'Process id from a fresh desktop_ui_snapshot. Either this or nativeWindowHandle is required for every action.' },
+  nativeWindowHandle: { type: 'number', description: 'Native window handle from a fresh desktop_ui_snapshot. Either this or processId is required for every action.' },
   index: { type: 'number', description: 'Zero-based index when multiple controls match. Defaults 0.' },
   maxDepth: { type: 'number', description: 'Maximum UI tree depth to search, default 5, max 8.' },
   maxNodes: { type: 'number', description: 'Maximum controls to inspect, default 160, max 500.' },
@@ -277,7 +277,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ui_focus',
-    description: 'Focus a platform-native accessible control selected by name, identifier, control type, class/role, process id, or handle where supported. Windows uses UI Automation and macOS uses Accessibility. Use desktop_ui_snapshot first.',
+    description: 'Focus a platform-native accessible control selected by name, identifier, control type, class/role, and a process id or handle from a fresh desktop_ui_snapshot. Windows uses UI Automation and macOS uses Accessibility. The action fails closed without a stable target binding.',
     parameters: {
       type: 'object',
       properties: UI_TARGET_PROPERTIES,
@@ -312,7 +312,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ui_click',
-    description: 'Activate a platform-native accessible control selected by semantic properties. Prefer this over raw coordinates for office, messaging, CAD/BIM dialogs, installers, and normal desktop apps. Use desktop_ui_snapshot first.',
+    description: 'Activate a platform-native accessible control selected by semantic properties and a process id or handle from a fresh desktop_ui_snapshot. Prefer this over raw coordinates for office, messaging, CAD/BIM dialogs, installers, and normal desktop apps. The action fails closed if the target binding is missing or changed.',
     parameters: {
       type: 'object',
       properties: UI_TARGET_PROPERTIES,
@@ -347,7 +347,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ui_invoke',
-    description: 'Invoke a platform-native accessible button or menu item through UIA Invoke/Press on Windows or AXPress on macOS.',
+    description: 'Invoke a platform-native accessible button or menu item through UIA Invoke/Press on Windows or AXPress on macOS, bound to a process id or handle from a fresh desktop_ui_snapshot.',
     parameters: {
       type: 'object',
       properties: {

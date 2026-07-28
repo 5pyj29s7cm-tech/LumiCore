@@ -156,7 +156,13 @@ describe('durable conversation task execution ledger', () => {
       toolCalls: [{
         name: 'desktop_open',
         arguments: { target: 'WPS' },
-        result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'WPS',
+          targetMatched: true,
+          actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+        }),
       }],
       requestId: 'request-2',
     });
@@ -173,9 +179,11 @@ describe('durable conversation task execution ledger', () => {
       arguments: { target: 'WPS' },
       result: JSON.stringify({
         ok: true,
-        status: 'opened',
+        status: 'verified',
         opened: true,
-        actualTarget: 'WPS',
+        target: 'WPS',
+        targetMatched: true,
+        actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
       }),
     };
 

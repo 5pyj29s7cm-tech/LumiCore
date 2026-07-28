@@ -158,7 +158,13 @@ describe('recent action continuation', () => {
         toolCalls: JSON.stringify([{
           name: 'desktop_open',
           arguments: { target: 'WPS' },
-          result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+          result: JSON.stringify({
+            ok: true,
+            status: 'verified',
+            target: 'WPS',
+            targetMatched: true,
+            actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+          }),
         }]),
       },
     ];
@@ -202,9 +208,13 @@ describe('recent action continuation', () => {
           arguments: { target: 'WPS' },
           result: JSON.stringify({
             ok: true,
-            status: 'opened',
-            processName: 'wps.exe',
+            status: 'verified',
             target: 'WPS',
+            targetMatched: true,
+            actualTarget: {
+              processName: 'wps.exe',
+              title: 'WPS Writer',
+            },
           }),
         }]),
       },
@@ -344,7 +354,13 @@ describe('recent action continuation', () => {
       toolCalls: [{
         name: 'desktop_open',
         arguments: { target: 'WPS' },
-        result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'WPS',
+          targetMatched: true,
+          actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+        }),
       }],
       updatedAt: '2026-07-17T10:00:00.000Z',
       evidenceMessageId: 'msg-open-wps',
@@ -378,7 +394,13 @@ describe('recent action continuation', () => {
       toolCalls: [{
         name: 'desktop_open',
         arguments: { target: 'WPS' },
-        result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'WPS',
+          targetMatched: true,
+          actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+        }),
       }],
     });
     const written = buildConversationActionContinuationState({

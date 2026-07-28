@@ -491,10 +491,13 @@ describe('Lumi result finalizer', () => {
         arguments: { target: 'AutoCAD' },
         result: JSON.stringify({
           ok: true,
-          status: 'opened',
+          status: 'verified',
           target: 'AutoCAD',
-          processName: 'acad.exe',
-          windowTitle: 'Autodesk AutoCAD',
+          targetMatched: true,
+          actualTarget: {
+            processName: 'acad.exe',
+            title: 'Autodesk AutoCAD',
+          },
         }),
       }],
       source: 'chat',
@@ -521,7 +524,13 @@ describe('Lumi result finalizer', () => {
       toolRecords: [{
         name: 'desktop_open',
         arguments: { target: 'WPS' },
-        result: 'Opened app WPS Office',
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'WPS',
+          targetMatched: true,
+          actualTarget: { processName: 'wps.exe', title: 'WPS Office' },
+        }),
       }, {
         name: 'desktop_ui_focus',
         arguments: { nameContains: 'WPS Office' },

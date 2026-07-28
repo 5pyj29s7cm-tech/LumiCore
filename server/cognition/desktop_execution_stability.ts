@@ -143,6 +143,8 @@ export function buildDesktopExecutionStabilityPolicy(
       '- If the target local app path is unknown, use desktop_list_apps and then desktop_open; do not guess Program Files paths or generate a one-off launcher skill.',
       '- Prefer UIA/browser/control-tree actions when available; use raw mouse clicks only after locating the target from screen/UI evidence.',
       '- Every actuation step is invalidated when the foreground-window fingerprint changes. Re-observe and re-plan instead of reusing stale coordinates or selectors.',
+      '- Bind every desktop_ui_focus/click/invoke/type call to processId or nativeWindowHandle from the fresh desktop_ui_snapshot. The adapter fails closed without this identity binding.',
+      '- Bind raw desktop click/drag/keyboard fallback calls to expectedProcessId from the fresh foreground observation. Input dispatch stops if focus moved to another process.',
       '- Vision may help locate controls, but it may never perform the final external commit.',
       'While acting:',
       recoveredCurrentAppEdit

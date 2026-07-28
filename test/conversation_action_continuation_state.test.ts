@@ -35,7 +35,13 @@ describe('conversation action continuation state', () => {
       toolCalls: [{
         name: 'desktop_open',
         arguments: { target: 'WPS' },
-        result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'WPS',
+          targetMatched: true,
+          actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+        }),
       }],
       domain: 'personal',
     });
@@ -135,7 +141,13 @@ describe('conversation action continuation state', () => {
       toolCalls: [{
         name: 'desktop_open',
         arguments: { target: 'WPS' },
-        result: JSON.stringify({ ok: true, status: 'opened', target: 'WPS' }),
+        result: JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target: 'WPS',
+          targetMatched: true,
+          actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+        }),
       }],
       domain: 'personal',
     });

@@ -1136,15 +1136,23 @@ function hasMatchingDesktopOpenEvidence(record: ToolExecutionRecord, requestedTa
   }
 
   const structuredTargets: string[] = [];
-  collectStructuredDesktopTargets(payload, structuredTargets);
-  if (
-    structuredTargets.length > 0
-    && !structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases))
-  ) return false;
-
-  if (argumentTargets.some(value => matchesRequestedDesktopTarget(value, aliases))) return true;
-  if (structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases))) return true;
-  return matchesRequestedDesktopTarget(record.result, aliases);
+  collectStructuredDesktopTargets(
+    payload?.actualTarget
+      || payload?.verification?.actualTarget
+      || payload?.postState
+      || payload?.observedTarget,
+    structuredTargets,
+  );
+  const verifiedPostState = payload?.targetMatched === true && (
+    payload?.verified === true
+    || status === 'verified'
+    || compact(payload?.verification?.status).toLowerCase() === 'verified'
+    || record.terminalVerification?.status === 'verified'
+  );
+  // Invocation arguments prove intent, not outcome. Completion requires a
+  // matching structured post-open target from the desktop client.
+  if (!verifiedPostState || structuredTargets.length === 0) return false;
+  return structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases));
 }
 
 function requestedBrowserTargetAliases(target: string): string[] {

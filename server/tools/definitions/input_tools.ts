@@ -1,6 +1,60 @@
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
+function parseActiveWindow(raw: unknown): Record<string, any> {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function relayBoundDesktopInput(
+  toolName: string,
+  relayArgs: Record<string, any>,
+  expectedProcessId: unknown,
+  context?: any,
+): Promise<string> {
+  if (!context?.desktopRelay) throw new Error('Desktop input requires the Tauri desktop app');
+  const expectedPid = Number(expectedProcessId || 0);
+  if (!Number.isFinite(expectedPid) || expectedPid <= 0) {
+    return JSON.stringify({
+      ok: false,
+      status: 'target_mismatch',
+      targetMatched: false,
+      error: 'expectedProcessId from a fresh desktop_active_window or desktop_ui_snapshot is required.',
+    });
+  }
+  const activeWindow = parseActiveWindow(await context.desktopRelay('desktop_active_window', {}));
+  const actualPid = Number(activeWindow.pid || activeWindow.processId || 0);
+  if (actualPid !== expectedPid) {
+    return JSON.stringify({
+      ok: false,
+      status: 'target_mismatch',
+      targetMatched: false,
+      expectedProcessId: expectedPid,
+      actualTarget: activeWindow,
+      error: 'The foreground process changed before desktop input dispatch.',
+    });
+  }
+  const dispatchResult = await context.desktopRelay(toolName, relayArgs);
+  return JSON.stringify({
+    ok: true,
+    status: 'verified',
+    targetMatched: true,
+    expectedProcessId: expectedPid,
+    actualTarget: activeWindow,
+    dispatchResult,
+    verification: {
+      status: 'verified',
+      note: 'Input was dispatched only after the foreground PID matched the fresh observation.',
+    },
+  });
+}
+
 function inputCapability(id: string, scope: string) {
   return capabilityContract({
     id,
@@ -35,29 +89,40 @@ async function mouseMove(args: Record<string, any>, context?: any): Promise<stri
 }
 
 async function mouseClick(args: Record<string, any>, context?: any): Promise<string> {
-  if (!context?.desktopRelay) throw new Error('Mouse control requires the Tauri desktop app');
-  return context.desktopRelay('desktop_mouse_click', { button: args.button || 'left' });
+  return relayBoundDesktopInput(
+    'desktop_mouse_click',
+    { button: args.button || 'left' },
+    args.expectedProcessId,
+    context,
+  );
 }
 
 async function mouseDrag(args: Record<string, any>, context?: any): Promise<string> {
-  if (!context?.desktopRelay) throw new Error('Mouse control requires the Tauri desktop app');
-  return context.desktopRelay('desktop_mouse_drag', {
+  return relayBoundDesktopInput('desktop_mouse_drag', {
     from_x: args.from_x,
     from_y: args.from_y,
     to_x: args.to_x,
     to_y: args.to_y,
     button: args.button || 'left',
-  });
+  }, args.expectedProcessId, context);
 }
 
 async function keyType(args: Record<string, any>, context?: any): Promise<string> {
-  if (!context?.desktopRelay) throw new Error('Keyboard control requires the Tauri desktop app');
-  return context.desktopRelay('desktop_keyboard_type', { text: args.text });
+  return relayBoundDesktopInput(
+    'desktop_keyboard_type',
+    { text: args.text },
+    args.expectedProcessId,
+    context,
+  );
 }
 
 async function keyPress(args: Record<string, any>, context?: any): Promise<string> {
-  if (!context?.desktopRelay) throw new Error('Keyboard control requires the Tauri desktop app');
-  return context.desktopRelay('desktop_keyboard_press', { key: args.key });
+  return relayBoundDesktopInput(
+    'desktop_keyboard_press',
+    { key: args.key },
+    args.expectedProcessId,
+    context,
+  );
 }
 
 async function relayDesktopInput(
@@ -76,21 +141,20 @@ export function registerInputTools(registry: ToolRegistry): void {
   // derived from the same source of truth.
   registry.register({
     name: 'desktop_mouse_click_at',
-    description: 'Click a specific absolute screen coordinate in the visible desktop app. Inspect the target first and use this only when an accessible UI control is unavailable.',
+    description: 'Click a specific absolute screen coordinate in the visible desktop app. Inspect the target first, pass its fresh PID as expectedProcessId, and use this only when an accessible UI control is unavailable.',
     parameters: {
       type: 'object',
       properties: {
         x: { type: 'number', description: 'Absolute horizontal screen coordinate.' },
         y: { type: 'number', description: 'Absolute vertical screen coordinate.' },
         button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button. Defaults to left.' },
+        expectedProcessId: { type: 'number', description: 'Foreground PID from a fresh desktop_active_window observation.' },
       },
-      required: ['x', 'y'],
+      required: ['x', 'y', 'expectedProcessId'],
     },
-    handler: (args, context) => relayDesktopInput('desktop_mouse_click_at', {
-      x: args.x,
-      y: args.y,
-      button: args.button || 'left',
-    }, context),
+    handler: (args, context) => relayBoundDesktopInput('desktop_mouse_click_at', {
+      x: args.x, y: args.y, button: args.button || 'left',
+    }, args.expectedProcessId, context),
     permission: 'user',
     securityLevel: 'safe',
     capability: {
@@ -118,15 +182,21 @@ export function registerInputTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_keyboard_press',
-    description: 'Press a key or keyboard shortcut in the visible foreground desktop app.',
+    description: 'Press a key or keyboard shortcut only if the foreground PID still matches a fresh desktop observation.',
     parameters: {
       type: 'object',
       properties: {
         key: { type: 'string', description: 'Key name or combination such as enter, escape, ctrl+v, or meta+n.' },
+        expectedProcessId: { type: 'number', description: 'Foreground PID from a fresh desktop_active_window observation.' },
       },
-      required: ['key'],
+      required: ['key', 'expectedProcessId'],
     },
-    handler: (args, context) => relayDesktopInput('desktop_keyboard_press', { key: args.key }, context),
+    handler: (args, context) => relayBoundDesktopInput(
+      'desktop_keyboard_press',
+      { key: args.key },
+      args.expectedProcessId,
+      context,
+    ),
     permission: 'user',
     securityLevel: 'safe',
     capability: {
@@ -249,8 +319,9 @@ export function registerInputTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         button: { type: 'string', description: 'Mouse button: "left", "right", or "middle". Defaults to "left".' },
+        expectedProcessId: { type: 'number', description: 'Foreground PID from a fresh desktop observation.' },
       },
-      required: [],
+      required: ['expectedProcessId'],
     },
     handler: mouseClick,
     permission: 'user',
@@ -271,8 +342,9 @@ export function registerInputTools(registry: ToolRegistry): void {
         to_x: { type: 'number', description: 'Ending x coordinate.' },
         to_y: { type: 'number', description: 'Ending y coordinate.' },
         button: { type: 'string', description: 'Mouse button: "left", "right", or "middle". Defaults to "left".' },
+        expectedProcessId: { type: 'number', description: 'Foreground PID from a fresh desktop observation.' },
       },
-      required: ['from_x', 'from_y', 'to_x', 'to_y'],
+      required: ['from_x', 'from_y', 'to_x', 'to_y', 'expectedProcessId'],
     },
     handler: mouseDrag,
     permission: 'user',
@@ -289,8 +361,9 @@ export function registerInputTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'The text to type.' },
+        expectedProcessId: { type: 'number', description: 'Foreground PID from a fresh desktop observation.' },
       },
-      required: ['text'],
+      required: ['text', 'expectedProcessId'],
     },
     handler: keyType,
     permission: 'user',
@@ -307,8 +380,9 @@ export function registerInputTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         key: { type: 'string', description: 'Key name or combination. E.g., "enter", "ctrl+c", "alt+tab", "ctrl+shift+t".' },
+        expectedProcessId: { type: 'number', description: 'Foreground PID from a fresh desktop observation.' },
       },
-      required: ['key'],
+      required: ['key', 'expectedProcessId'],
     },
     handler: keyPress,
     permission: 'user',

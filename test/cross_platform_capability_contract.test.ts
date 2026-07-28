@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getNativeUiAdapter } from '../server/external_control/native_ui';
+import {
+  finalizeNativeUiActionResult,
+  getNativeUiAdapter,
+  runNativeUiAction,
+} from '../server/external_control/native_ui';
 import { getProductivityAdapter } from '../server/adapters/productivity';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
@@ -38,6 +42,27 @@ describe('cross-platform capability contract', () => {
     expect(macos).toMatchObject({ id: 'macos-accessibility', platform: 'darwin' });
     expect(Object.keys(windows || {}).sort()).toEqual(Object.keys(macos || {}).sort());
     expect(getNativeUiAdapter('linux')).toBeNull();
+  });
+
+  it('fails native UI actuation closed without a fresh process or window binding', async () => {
+    await expect(runNativeUiAction({
+      action: 'click',
+      name: 'Save',
+    })).resolves.toMatchObject({
+      status: 'target_mismatch',
+      targetMatched: false,
+    });
+  });
+
+  it('turns a stale native UI selection into a target mismatch receipt', () => {
+    expect(finalizeNativeUiActionResult(
+      { action: 'click', name: 'Save', processId: 42 },
+      { status: 'ok', selectedBefore: { processId: 99, name: 'Save' } },
+    )).toMatchObject({
+      status: 'target_mismatch',
+      targetMatched: false,
+      expectedTarget: { processId: 42 },
+    });
   });
 
   it('keeps calendar and mail semantics identical across Windows and macOS adapters', () => {

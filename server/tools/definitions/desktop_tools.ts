@@ -1,5 +1,34 @@
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
+import { desktopFingerprintMatchesRequestedTarget } from '../../desktop/execution_plan';
+
+function parseRelayPayload(value: unknown): Record<string, any> | null {
+  let current = value;
+  for (let depth = 0; depth < 3 && typeof current === 'string'; depth += 1) {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return null;
+    }
+  }
+  return current && typeof current === 'object' && !Array.isArray(current)
+    ? current as Record<string, any>
+    : null;
+}
+
+function activeWindowFingerprint(value: unknown): { title: string; processName: string } | null {
+  const payload = parseRelayPayload(value);
+  if (!payload) return null;
+  const title = String(payload.title || payload.windowTitle || payload.window_title || '').trim();
+  const processName = String(
+    payload.processName || payload.process_name || payload.process || payload.executable || '',
+  ).trim();
+  return title || processName ? { title, processName } : null;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function desktopSystemInfo(_args: Record<string, any>, context?: any): Promise<string> {
   if (!context?.desktopRelay) {
@@ -49,9 +78,64 @@ async function desktopOpen(args: Record<string, any>, context?: any): Promise<st
   if (!context?.desktopRelay) {
     throw new Error('Desktop tools require a Tauri frontend relay (not available in web mode)');
   }
-  return context.desktopRelay('desktop_open', {
-    target: args.target || '',
-    application: args.application || args.browser || '',
+  const target = String(args.target || '').trim();
+  const application = String(args.application || args.browser || '').trim();
+  const openResult = await context.desktopRelay('desktop_open', { target, application });
+  let lastFingerprint: { title: string; processName: string } | null = null;
+  let observationError = '';
+  const retryDelays = [0, 250, 750, 1_500];
+
+  for (const delay of retryDelays) {
+    if (context?.isCancelled?.()) {
+      return JSON.stringify({
+        ok: false,
+        status: 'cancelled',
+        target,
+        application,
+        targetMatched: false,
+      });
+    }
+    if (delay > 0) await wait(delay);
+    try {
+      const observed = await context.desktopRelay('desktop_active_window', {});
+      const fingerprint = activeWindowFingerprint(observed);
+      if (!fingerprint) continue;
+      lastFingerprint = fingerprint;
+      if (desktopFingerprintMatchesRequestedTarget(fingerprint, target, application)) {
+        return JSON.stringify({
+          ok: true,
+          status: 'verified',
+          target,
+          application,
+          targetMatched: true,
+          actualTarget: fingerprint,
+          openResult,
+        });
+      }
+    } catch (error: any) {
+      observationError = String(error?.message || error || 'Desktop state observation failed.');
+    }
+  }
+
+  if (!lastFingerprint) {
+    return JSON.stringify({
+      ok: false,
+      status: 'unverified',
+      target,
+      application,
+      openResult,
+      error: observationError || 'The desktop client returned no active-window fingerprint after opening the target.',
+    });
+  }
+  return JSON.stringify({
+    ok: false,
+    status: 'target_mismatch',
+    target,
+    application,
+    targetMatched: false,
+    actualTarget: lastFingerprint,
+    openResult,
+    error: 'The foreground application does not match the exact requested target.',
   });
 }
 
@@ -167,9 +251,12 @@ export function registerDesktopTools(registry: ToolRegistry): void {
       verification: {
         strategy: 'state_diff',
         required: true,
-        requiredFields: ['target'],
+        requiredFields: ['target', 'targetMatched', 'actualTarget.processName'],
+        requiredValues: { targetMatched: true },
+        successStatuses: ['verified'],
+        failureStatuses: ['target_mismatch', 'unverified', 'failed'],
         successSignals: ['requested application, file, folder, or URL is visibly active'],
-        limitations: ['A launch request alone is not proof that the requested target became active.'],
+        limitations: ['A launch request alone is never proof that the requested target became active.'],
       },
       intents: ['open or focus a named local target'],
     },

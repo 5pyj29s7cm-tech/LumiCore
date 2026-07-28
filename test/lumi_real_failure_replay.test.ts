@@ -137,9 +137,13 @@ describe('Lumi real failure-chain replay', () => {
       arguments: { target: 'AutoCAD' },
       result: JSON.stringify({
         ok: true,
-        status: 'opened',
-        processName: 'acad.exe',
-        windowTitle: 'Autodesk AutoCAD',
+        status: 'verified',
+        target: 'AutoCAD',
+        targetMatched: true,
+        actualTarget: {
+          processName: 'acad.exe',
+          title: 'Autodesk AutoCAD',
+        },
       }),
     }];
     const wrongReceipt = [{
@@ -254,9 +258,13 @@ describe('Lumi real failure-chain replay', () => {
           arguments: { target: 'WPS' },
           result: JSON.stringify({
             ok: true,
-            status: 'opened',
-            processName: 'wps.exe',
+            status: 'verified',
             target: 'WPS',
+            targetMatched: true,
+            actualTarget: {
+              processName: 'wps.exe',
+              title: 'WPS Writer',
+            },
           }),
         }]),
       },

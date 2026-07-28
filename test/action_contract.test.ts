@@ -197,11 +197,22 @@ describe('Lumi action contract', () => {
     expect(contract.coreAction).toContain('exactly');
     expect(contract.preferredTools).toContain('desktop_open');
     expect(contract.preferredTools).not.toContain('cad_generate_dxf');
-    expect(hasCoreActionEvidence(contract, [{
+    const launchOnly = {
       id: 'open-autocad',
       name: 'desktop_open',
       arguments: { target: 'AutoCAD' },
       result: 'Opened app AutoCAD via public desktop shortcut',
+    };
+    expect(hasCoreActionEvidence(contract, [launchOnly], task)).toBe(false);
+    expect(hasCoreActionEvidence(contract, [{
+      ...launchOnly,
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        target: 'AutoCAD',
+        targetMatched: true,
+        actualTarget: { processName: 'acad.exe', title: 'Drawing1.dwg - AutoCAD' },
+      }),
     }], task)).toBe(true);
   });
 
@@ -219,7 +230,13 @@ describe('Lumi action contract', () => {
       id: 'correct-autocad-open',
       name: 'desktop_open',
       arguments: { target: 'acad.exe' },
-      result: 'Opened app Autodesk AutoCAD via Start Menu shortcut',
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        target: 'acad.exe',
+        targetMatched: true,
+        actualTarget: { processName: 'acad.exe', title: 'Drawing1.dwg - AutoCAD' },
+      }),
     }], autoCadTask)).toBe(true);
 
     const wpsTask = '\u6253\u5f00 WPS\u3002';
@@ -227,8 +244,14 @@ describe('Lumi action contract', () => {
     expect(hasCoreActionEvidence(wpsContract, [{
       id: 'correct-wps-open',
       name: 'desktop_open',
-      arguments: { target: 'Kingsoft Office' },
-      result: 'Opened app WPS Office',
+      arguments: { target: 'WPS' },
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        target: 'WPS',
+        targetMatched: true,
+        actualTarget: { processName: 'wps.exe', title: 'WPS Writer' },
+      }),
     }], wpsTask)).toBe(true);
     expect(hasCoreActionEvidence(wpsContract, [{
       id: 'wrong-wps-open',
@@ -243,7 +266,13 @@ describe('Lumi action contract', () => {
       id: 'correct-wechat-open',
       name: 'desktop_open',
       arguments: { target: 'Weixin.exe' },
-      result: 'Focused running app WeChat',
+      result: JSON.stringify({
+        ok: true,
+        status: 'verified',
+        target: 'Weixin.exe',
+        targetMatched: true,
+        actualTarget: { processName: 'Weixin.exe', title: '微信' },
+      }),
     }], weChatTask)).toBe(true);
   });
 
