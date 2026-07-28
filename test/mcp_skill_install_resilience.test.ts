@@ -49,6 +49,7 @@ async function importClientWithExec(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   if (ORIGINAL_LUMI_DATA_DIR === undefined) delete process.env.LUMI_DATA_DIR;
   else process.env.LUMI_DATA_DIR = ORIGINAL_LUMI_DATA_DIR;
   vi.restoreAllMocks();
@@ -60,6 +61,44 @@ afterEach(() => {
 });
 
 describe('MCP skill install resilience', () => {
+  it('retries a crashed server with exponential backoff and opens the circuit after five failures', async () => {
+    vi.useFakeTimers();
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    manager.saveConfig({
+      unstable: {
+        command: 'unstable-mcp',
+        args: [],
+        enabled: true,
+        source: 'external',
+      },
+    });
+    const connectServer = vi.fn().mockRejectedValue(new Error('injected MCP crash'));
+    (manager as any).connectServer = connectServer;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    (manager as any).recordStartupFailure('unstable', new Error('initial MCP crash'));
+    expect(manager.getServerHealth().unstable).toMatchObject({
+      status: 'restarting',
+      consecutiveCrashes: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000 + 8_000 + 16_000);
+
+    expect(connectServer).toHaveBeenCalledTimes(5);
+    expect(manager.getServerHealth().unstable).toMatchObject({
+      status: 'failed',
+      consecutiveCrashes: 5,
+      lastError: 'injected MCP crash',
+    });
+    expect((manager as any).crashTrackers.get('unstable').restartTimer).toBeNull();
+    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/giving up/i));
+    consoleError.mockRestore();
+    consoleLog.mockRestore();
+  });
+
   it('backfills factory MCP capability declarations without changing user enablement', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearAllPendingConfirmationsForTests,
   consumePendingConfirmation,
@@ -10,6 +10,37 @@ import {
 
 describe('One-time pending tool confirmations', () => {
   beforeEach(() => clearAllPendingConfirmationsForTests());
+  afterEach(() => {
+    vi.useRealTimers();
+    clearAllPendingConfirmationsForTests();
+  });
+
+  it('expires an approval boundary before it can authorize a stale external commit', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const pending = recordPendingConfirmation(
+      'u-expired',
+      'wechat_send_message',
+      { recipient: 'Alice', text: 'Original immutable payload' },
+      'voice',
+      { channelId: 'voice-expired', taskId: 'task-expired' },
+    );
+
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+
+    expect(getPendingConfirmation('u-expired', {
+      source: 'voice',
+      channelId: 'voice-expired',
+      taskId: 'task-expired',
+    })).toBeNull();
+    expect(consumePendingConfirmation(
+      'u-expired',
+      pending.id,
+      pending.toolName,
+      pending.exactArgs,
+      { source: 'voice', channelId: 'voice-expired', taskId: 'task-expired' },
+    )).toBe(false);
+  });
 
   it('consumes only an exact tool and argument match once', () => {
     const pending = recordPendingConfirmation('u1', 'legal_submit_filing', { caseId: 'case-1', court: 'A' });

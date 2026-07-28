@@ -200,4 +200,53 @@ describe('desktop relay routing', () => {
     expect(sent.some(item => item.event === 'tool:desktop_cancel')).toBe(true);
     expect(getPendingDesktopRelayCount()).toBe(0);
   });
+
+  it('rejects and forgets a pending action when the requesting socket disconnects', async () => {
+    const userId = `relay_disconnect_${Date.now()}`;
+    const sent: any[] = [];
+    const disconnectHandlers = new Set<() => void>();
+    const desktopSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    const requestSocket = {
+      id: 'request_disconnect_socket',
+      connected: true,
+      data: {},
+      once: (event: string, handler: () => void) => {
+        if (event === 'disconnect') disconnectHandlers.add(handler);
+      },
+      off: (event: string, handler: () => void) => {
+        if (event === 'disconnect') disconnectHandlers.delete(handler);
+      },
+    };
+    deviceRegistry.register(userId, 'scope_disconnect_desktop', {
+      name: 'Disconnect Desktop',
+      type: 'desktop',
+      domain: 'personal',
+      orgId: '',
+      deviceFingerprint: userId,
+    });
+    const { io } = mockIo({ scope_disconnect_desktop: desktopSocket });
+    const relay = createDesktopRelay({
+      io,
+      userId,
+      source: 'chat',
+      requestSocket: requestSocket as any,
+      cancelOnRequestSocketDisconnect: true,
+      timeoutMs: 1000,
+    });
+
+    const promise = relay('desktop_keyboard_type', { text: 'must stop on disconnect' });
+    expect(sent[0].event).toBe('tool:desktop_exec');
+    const correlationId = sent[0].payload.correlationId;
+    expect(disconnectHandlers.size).toBe(1);
+
+    for (const handler of [...disconnectHandlers]) handler();
+
+    await expect(promise).rejects.toThrow(/requesting client disconnected/i);
+    expect(disconnectHandlers.size).toBe(0);
+    expect(getPendingDesktopRelayCount()).toBe(0);
+    expect(handleDesktopRelayResult(correlationId, { output: 'late success' }, 'scope_disconnect_desktop')).toBe(false);
+  });
 });

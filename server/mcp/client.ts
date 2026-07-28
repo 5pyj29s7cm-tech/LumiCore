@@ -1601,6 +1601,11 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       } catch (err: any) {
         tracker.lastError = String(err?.message || err);
         console.error(`[MCP] Restart attempt for "${name}" failed: ${err.message}`);
+        // A failed recovery attempt is still part of the same crash sequence.
+        // Keep retrying with the tracker-controlled exponential backoff until
+        // the five-crash circuit breaker opens. Without this reschedule, one
+        // failed restart left an enabled MCP server permanently disconnected.
+        this.scheduleRestart(name);
       }
       this.broadcastHealth();
     }, delay);
