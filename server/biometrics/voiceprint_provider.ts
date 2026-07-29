@@ -54,14 +54,28 @@ const SIDECAR_PRIVATE_MEMORY_BUDGET_BYTES = Math.max(512, Number(process.env.LUM
 let providerCooldownUntil = 0;
 let providerCooldownReason = '';
 
+export function getVoiceprintRuntimeRoots(
+  projectRoot = path.resolve(__dirname, '..', '..'),
+  cwd = process.cwd(),
+  resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+): string[] {
+  return [...new Set([
+    projectRoot,
+    cwd,
+    path.dirname(cwd),
+    resourcesPath,
+    resourcesPath ? path.join(resourcesPath, 'resources') : '',
+    resourcesPath ? path.join(resourcesPath, 'desktop-resources') : '',
+    resourcesPath ? path.join(resourcesPath, '_up_', 'desktop-resources') : '',
+  ].filter((value): value is string => Boolean(value)).map(root => path.resolve(root)))];
+}
+
 export function resolveVoiceprintPython(): string {
   if (process.env.LUMI_VOICEPRINT_PYTHON?.trim()) {
     return process.env.LUMI_VOICEPRINT_PYTHON.trim();
   }
 
-  const projectRoot = path.resolve(__dirname, '..', '..');
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const roots = [projectRoot, process.cwd(), resourcesPath].filter((value): value is string => Boolean(value));
+  const roots = getVoiceprintRuntimeRoots();
   const relativeCandidates = process.platform === 'win32'
     ? [
         path.join('gpt-sovits-src', 'venv', 'Scripts', 'python.exe'),

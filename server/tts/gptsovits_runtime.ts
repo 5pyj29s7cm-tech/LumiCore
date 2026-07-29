@@ -56,10 +56,25 @@ function probeTcp(timeoutMs = 600): Promise<boolean> {
   });
 }
 
-function runtimeFiles(): { root: string; python: string; api: string } | null {
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const roots = [process.cwd(), resourcesPath, resourcesPath ? path.join(resourcesPath, 'resources') : '']
-    .filter(Boolean) as string[];
+export type GptSovitsRuntimeFiles = { root: string; python: string; api: string };
+
+export function getGptSovitsRuntimeRoots(
+  cwd = process.cwd(),
+  resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+): string[] {
+  return [...new Set([
+    cwd,
+    path.dirname(cwd),
+    resourcesPath,
+    resourcesPath ? path.join(resourcesPath, 'resources') : '',
+    resourcesPath ? path.join(resourcesPath, 'desktop-resources') : '',
+    resourcesPath ? path.join(resourcesPath, '_up_', 'desktop-resources') : '',
+  ].filter(Boolean).map(root => path.resolve(root as string)))];
+}
+
+export function resolveGptSovitsRuntimeFiles(
+  roots = getGptSovitsRuntimeRoots(),
+): GptSovitsRuntimeFiles | null {
   for (const base of roots) {
     const root = path.resolve(base, 'gpt-sovits-src');
     const python = path.join(root, process.platform === 'win32' ? 'venv/Scripts/python.exe' : 'venv/bin/python3');
@@ -67,6 +82,10 @@ function runtimeFiles(): { root: string; python: string; api: string } | null {
     if (fs.existsSync(python) && fs.existsSync(api)) return { root, python, api };
   }
   return null;
+}
+
+export function isGptSovitsRuntimeInstalled(): boolean {
+  return Boolean(resolveGptSovitsRuntimeFiles());
 }
 
 function clearIdleTimer(): void {
@@ -118,7 +137,7 @@ export async function ensureGptSovitsRuntime(signal?: AbortSignal): Promise<void
   }
   if (startPromise) return startPromise;
   startPromise = (async () => {
-    const files = runtimeFiles();
+    const files = resolveGptSovitsRuntimeFiles();
     if (!files) throw new Error('Local GPT-SoVITS runtime is not installed.');
     console.log('[GPT-SoVITS] Starting on demand...');
     const child = spawn(files.python, [
@@ -194,7 +213,7 @@ export function isGptSovitsRuntimeReady(): boolean {
 
 export function getGptSovitsRuntimeStatus() {
   return {
-    installed: Boolean(runtimeFiles()),
+    installed: isGptSovitsRuntimeInstalled(),
     owned: Boolean(ownedProcess),
     pid: ownedProcess?.pid || null,
     starting: Boolean(startPromise),

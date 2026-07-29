@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { getVoiceprintRuntimeRoots } from '../server/biometrics/voiceprint_provider';
+import { getGptSovitsRuntimeRoots } from '../server/tts/gptsovits_runtime';
 
 describe('voiceprint sidecar supervision', () => {
   const provider = fs.readFileSync(
@@ -47,5 +49,23 @@ describe('voiceprint sidecar supervision', () => {
     );
     expect(runtime).toContain("GPTSOVITS_MEMORY_BUDGET_MB) || 8_192");
     expect(runtime).toContain("GPTSOVITS_PRIVATE_MEMORY_BUDGET_MB) || 12_288");
+  });
+
+  it('finds offline voice resources beside the packaged dist-server directory', () => {
+    const packagedCwd = path.join(process.cwd(), 'desktop-resources', 'dist-server');
+    const resourceRoot = path.dirname(packagedCwd);
+
+    expect(getGptSovitsRuntimeRoots(packagedCwd)).toContain(resourceRoot);
+    expect(getVoiceprintRuntimeRoots(packagedCwd, packagedCwd)).toContain(resourceRoot);
+  });
+
+  it('leaves GPT-SoVITS lifecycle ownership with the supervised Node runtime', () => {
+    const nativeRuntime = fs.readFileSync(
+      path.join(process.cwd(), 'src-tauri/src/lib.rs'),
+      'utf8',
+    );
+    expect(nativeRuntime).toContain("GPT-SoVITS is owned by the Node backend's supervised, on-demand");
+    expect(nativeRuntime).not.toContain('fn spawn_python(');
+    expect(nativeRuntime).not.toContain('Restarting Python API');
   });
 });

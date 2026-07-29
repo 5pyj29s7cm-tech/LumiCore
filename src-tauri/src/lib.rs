@@ -28,7 +28,6 @@ struct BackendProcesses {
     node_restarts: u32,
     python_restarts: u32,
     node_config: Option<SpawnConfig>,
-    python_config: Option<SpawnConfig>,
 }
 
 /// Track whether wallpaper (click-through) mode is active and where to restore
@@ -891,37 +890,6 @@ fn run_command(
                 success: false,
                 output: e.to_string(),
             }
-        }
-    }
-}
-
-fn spawn_python(python_exe: &std::path::Path, api_py: &std::path::Path, work_dir: &std::path::Path) -> Option<Child> {
-    let normalized_python = normalize_unc(python_exe);
-    let normalized_api = normalize_unc(api_py);
-    let normalized_cwd = normalize_unc(work_dir);
-    println!(
-        "[LumiOS] Starting GPT-SoVITS API: {} {} (cwd: {})",
-        normalized_python.display(),
-        normalized_api.display(),
-        normalized_cwd.display(),
-    );
-    let mut cmd = Command::new(normalized_python);
-    cmd.arg(normalized_api)
-        .arg("-a")
-        .arg("127.0.0.1")
-        .arg("-p")
-        .arg("9880")
-        .arg("-c")
-        .arg("GPT_SoVITS/configs/tts_infer.yaml")
-        .current_dir(normalized_cwd);
-    match spawn_hidden(&mut cmd) {
-        Ok(child) => {
-            println!("[LumiOS] GPT-SoVITS API PID: {}", child.id());
-            Some(child)
-        }
-        Err(e) => {
-            eprintln!("[LumiOS] Failed to start GPT-SoVITS API: {}", e);
-            None
         }
     }
 }
@@ -4134,7 +4102,7 @@ pub fn run() {
     };
 
     builder
-        .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None, python_config: None }))
+        .manage(Mutex::new(BackendProcesses { node: None, python: None, node_restarts: 0, python_restarts: 0, node_config: None }))
         .manage(Mutex::new(ActiveDesktopCommands::default()))
         .manage(Mutex::new(WallpaperState::default()))
         .manage(Mutex::new(ResidentState { close_to_background: started_in_background, started_in_background, force_quit: false }))
@@ -4305,43 +4273,9 @@ pub fn run() {
                 );
             }
 
-            // Spawn GPT-SoVITS Python API server
-            let gpt_sovits_dir = resolve_resource_dir(&resource_dir, "gpt-sovits-src");
-            let python_exe = gpt_sovits_dir.join("venv/Scripts/python.exe");
-            let api_py = gpt_sovits_dir.join("api_v2.py");
-            let dev_python = std::path::PathBuf::from("../gpt-sovits-src/venv/Scripts/python.exe");
-            let dev_api = std::path::PathBuf::from("../gpt-sovits-src/api_v2.py");
-
-            let python_child = if python_exe.exists() && api_py.exists() {
-                spawn_python(&python_exe, &api_py, normalize_unc(&gpt_sovits_dir))
-            } else if dev_python.exists() && dev_api.exists() {
-                spawn_python(&dev_python, &dev_api, Path::new("../gpt-sovits-src"))
-            } else {
-                eprintln!(
-                    "[LumiOS] GPT-SoVITS API not found at {} or {}",
-                    python_exe.display(),
-                    dev_python.display()
-                );
-                None
-            };
-            if let Some(child) = python_child {
-                let app_state = app.state::<Mutex<BackendProcesses>>();
-                let mut state = app_state.lock().unwrap();
-                if python_exe.exists() && api_py.exists() {
-                    state.python_config = Some(SpawnConfig {
-                        exe: python_exe,
-                        entry: api_py,
-                        work_dir: gpt_sovits_dir,
-                    });
-                } else {
-                    state.python_config = Some(SpawnConfig {
-                        exe: dev_python,
-                        entry: dev_api,
-                        work_dir: PathBuf::from("../gpt-sovits-src"),
-                    });
-                }
-                state.python = Some(child);
-            }
+            // GPT-SoVITS is owned by the Node backend's supervised, on-demand
+            // runtime. Starting it here would bypass its queue, memory budget,
+            // restart backoff, and idle reclamation policy.
             } // end else (release mode spawns backend)
 
             // ── Child process health check (release mode, checks every 5s) ──
@@ -4398,46 +4332,6 @@ pub fn run() {
                             state.node = None;
                         }
 
-                        // Check GPT-SoVITS Python API
-                        let mut restart_python = false;
-                        if let Some(ref mut child) = state.python {
-                            match child.try_wait() {
-                                Ok(Some(status)) => {
-                                    eprintln!("[LumiOS] Python API exited with status {:?}", status.code());
-                                    restart_python = true;
-                                }
-                                Ok(None) => { /* still running */ }
-                                Err(e) => {
-                                    eprintln!("[LumiOS] Python API health check failed: {}", e);
-                                    restart_python = true;
-                                }
-                            }
-                        }
-                        if restart_python && state.python_restarts < max_restarts {
-                            if let Some(ref cfg) = state.python_config {
-                                eprintln!("[LumiOS] Restarting Python API (attempt {}/{})", state.python_restarts + 1, max_restarts);
-                                let mut restart_py_cmd = Command::new(&cfg.exe);
-                                restart_py_cmd.arg(&cfg.entry)
-                                    .arg("-a").arg("127.0.0.1")
-                                    .arg("-p").arg("9880")
-                                    .arg("-c").arg("GPT_SoVITS/configs/tts_infer.yaml")
-                                    .current_dir(&cfg.work_dir);
-                                match spawn_hidden(&mut restart_py_cmd)
-                                {
-                                    Ok(child) => {
-                                        println!("[LumiOS] Python API restarted, PID: {}", child.id());
-                                        state.python = Some(child);
-                                        state.python_restarts += 1;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[LumiOS] Failed to restart Python API: {}", e);
-                                    }
-                                }
-                            }
-                        } else if restart_python {
-                            eprintln!("[LumiOS] Python API max restarts ({}) reached, giving up", max_restarts);
-                            state.python = None;
-                        }
                     }
                 });
             }

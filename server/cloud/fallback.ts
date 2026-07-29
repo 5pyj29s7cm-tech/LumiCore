@@ -9,8 +9,7 @@
 import { isCircuitClosed, recordFailure, recordSuccess } from './circuit_breaker';
 import { isCloudRetryable } from './retry';
 import { getKey } from '../config/keys';
-import fs from 'fs';
-import path from 'path';
+import { isGptSovitsRuntimeInstalled } from '../tts/gptsovits_runtime';
 
 // ── Provider Priority Lists ──
 
@@ -188,7 +187,6 @@ export function getAvailableSTTProviders(): Record<string, boolean> {
  * Check which TTS providers have API keys configured.
  */
 export function getAvailableTTSProviders(): Record<string, boolean> {
-  const gptSovitsDir = path.join(process.cwd(), 'gpt-sovits-src');
   const doubaoSpeech = process.env.DOUBAO_SPEECH_KEY || getKey('DOUBAO_SPEECH_KEY') || '';
   return {
     'local-cosyvoice': !!(
@@ -202,10 +200,7 @@ export function getAvailableTTSProviders(): Record<string, boolean> {
       process.env.GPTSOVITS_API_URL
       || process.env.GPTSOVITS_ENABLED === 'true'
       || getKey('GPTSOVITS_API_URL')
-      || (
-        fs.existsSync(path.join(gptSovitsDir, 'venv', 'Scripts', 'python.exe'))
-        && fs.existsSync(path.join(gptSovitsDir, 'api_v2.py'))
-      )
+      || isGptSovitsRuntimeInstalled()
     ),
   };
 }

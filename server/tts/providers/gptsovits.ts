@@ -3,7 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { getDataPath } from '../../config/data_path';
 import { withCloudResilience } from '../../cloud/resilience';
-import { ensureGptSovitsRuntime, isGptSovitsRuntimeReady, markGptSovitsActivity } from '../gptsovits_runtime';
+import {
+  ensureGptSovitsRuntime,
+  isGptSovitsRuntimeInstalled,
+  isGptSovitsRuntimeReady,
+  markGptSovitsActivity,
+} from '../gptsovits_runtime';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9880';
 
@@ -37,9 +42,7 @@ function getBaseUrl(): string {
 export function isConfigured(): boolean {
   if (process.env.GPTSOVITS_API_URL || process.env.GPTSOVITS_ENABLED === 'true') return true;
 
-  const localDir = path.join(process.cwd(), 'gpt-sovits-src');
-  return fs.existsSync(path.join(localDir, 'venv', 'Scripts', 'python.exe'))
-    && fs.existsSync(path.join(localDir, 'api_v2.py'));
+  return isGptSovitsRuntimeInstalled();
 }
 
 export function isReadyForAutomaticFallback(): boolean {
