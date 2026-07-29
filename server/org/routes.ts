@@ -231,6 +231,27 @@ export function mountOrgRoutes(router: Router, io?: SocketIOServer) {
     });
   });
 
+  router.post('/org/kb/articles/:articleId/verify', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
+    if (!Array.isArray(req.body?.cases) || req.body.cases.length === 0) {
+      res.status(400).json({ error: 'cases must contain at least one golden question with a reference answer and expected chunk indexes' });
+      return;
+    }
+    KB.verifyArticleKnowledge(
+      req.user!.orgId!,
+      req.params.articleId,
+      req.user!.uid,
+      req.body.cases,
+    ).then(ingestionManifest => {
+      res.json({
+        success: true,
+        ingestionStatus: ingestionManifest.status,
+        ingestionManifest,
+      });
+    }).catch(err => {
+      res.status(/not found/i.test(String(err?.message || '')) ? 404 : 400).json({ error: err.message });
+    });
+  });
+
   router.post('/org/kb/search', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const { query, limit, category, status } = req.body;
     if (!query) {

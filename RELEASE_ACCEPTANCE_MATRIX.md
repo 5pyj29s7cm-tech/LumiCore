@@ -2,6 +2,8 @@
 
 Record the commit, machine image, operator, start/end time, and evidence path for every run. A row passes only when the observable result and the CapabilityManifest/TaskLedger receipt agree; do not add a second success rule in the test harness.
 
+The mandatory 240-run physical desktop handoff is defined in `LUMI_PHYSICAL_DESKTOP_ACCEPTANCE.md`; this release matrix does not replace those visible application tasks with API health probes.
+
 ## Intent routing consistency
 
 Run each intent through chat, voice, and Task Center. The selected capability family, risk/confirmation decision, terminal receipt, and final user-facing status must match.

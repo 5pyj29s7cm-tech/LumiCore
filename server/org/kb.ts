@@ -11,12 +11,12 @@ import {
   buildKnowledgeIngestionManifest,
   chunkKnowledgeText,
   evaluateKnowledgeManifest,
-  evaluateKnowledgeRetrievalCases,
   hashKnowledgeContent,
   markKnowledgeManifestStale,
+  runKnowledgeGoldenEvaluation,
+  type KnowledgeGoldenCaseDefinition,
   type KnowledgeChunkManifest,
   type KnowledgeIngestionManifest,
-  type KnowledgeRetrievalCaseEvidence,
 } from '../knowledge/ingestion_manifest';
 
 export interface KnowledgeSearchResult {
@@ -382,31 +382,6 @@ export async function indexArticle(orgId: string, articleId: string): Promise<nu
     chunks: chunkManifests,
     extraction: { status: 'verified', method: 'org-article' },
   });
-  const sampleIndexes = chunks.length <= 12
-    ? chunks.map(chunk => chunk.index)
-    : Array.from(new Set(Array.from({ length: 12 }, (_, index) => Math.round(index * (chunks.length - 1) / 11))));
-  const cases: KnowledgeRetrievalCaseEvidence[] = [];
-  const articleById = new Map([[article.id, latest]]);
-  for (const index of sampleIndexes) {
-    const probe = chunks[index].text.replace(/\s+/g, ' ').trim().slice(0, 180);
-    const retrieved = await semanticSearch(orgId, probe, 5, articleById, article.authorId);
-    cases.push({
-      caseId: `chunk_${index + 1}`,
-      expectedChunkIndexes: [index],
-      retrievedMemoryIds: retrieved.flatMap(result => {
-        const matched = chunkManifests[result.chunkIndex ?? -1];
-        return matched?.memoryId ? [matched.memoryId] : [];
-      }),
-      citedChunkHashes: retrieved.flatMap(result => {
-        const matched = chunkManifests[result.chunkIndex ?? -1];
-        return matched?.contentHash ? [matched.contentHash] : [];
-      }),
-    });
-  }
-  const retrieval = evaluateKnowledgeRetrievalCases({ cases, chunks: chunkManifests, topK: 5 });
-  const manifestWithRetrieval = { ...manifest, retrieval, updatedAt: new Date().toISOString() };
-  manifest = { ...manifestWithRetrieval, ...evaluateKnowledgeManifest(manifestWithRetrieval) };
-
   const current = EDB.getKbArticle(orgId, articleId);
   if (!current
     || articleIndexGenerations.get(articleId) !== generation
@@ -434,6 +409,61 @@ export async function indexArticle(orgId: string, articleId: string): Promise<nu
   }
 
   return indexed;
+}
+
+/** Verify an indexed organization article with owner-supplied golden questions and citations. */
+export async function verifyArticleKnowledge(
+  orgId: string,
+  articleId: string,
+  userId: string,
+  cases: KnowledgeGoldenCaseDefinition[],
+): Promise<KnowledgeIngestionManifest> {
+  const article = EDB.getKbArticle(orgId, articleId);
+  if (!article) throw new Error('Knowledge article not found.');
+  const manifest = getArticleIngestionManifest(orgId, articleId);
+  if (!manifest) throw new Error('Knowledge article has no ingestion manifest.');
+  if (manifest.sourceRevision !== hashArticleRevision(article.content)) {
+    throw new Error('Knowledge article changed after indexing; re-index it before golden verification.');
+  }
+  const retrieval = await runKnowledgeGoldenEvaluation({
+    cases,
+    chunks: manifest.chunks,
+    retrieve: async (question, topK) => {
+      const articleById = new Map(listArticles(orgId).map(candidate => [candidate.id, candidate]));
+      const results = await semanticSearch(orgId, question, topK, articleById, userId);
+      return results.map(result => {
+        if (result.articleId !== articleId) {
+          return {
+            memoryId: `foreign:${result.articleId}:${result.chunkIndex ?? 'keyword'}`,
+            chunkContentHash: `foreign:${result.articleId}:${result.chunkIndex ?? 'keyword'}`,
+          };
+        }
+        const chunk = manifest.chunks.find(candidate => candidate.index === result.chunkIndex);
+        return {
+          memoryId: chunk?.memoryId || `missing:${articleId}:${result.chunkIndex ?? 'keyword'}`,
+          chunkContentHash: chunk?.contentHash || `missing:${articleId}:${result.chunkIndex ?? 'keyword'}`,
+        };
+      });
+    },
+  });
+  const base = { ...manifest, retrieval, updatedAt: new Date().toISOString() };
+  const verified = { ...base, ...evaluateKnowledgeManifest(base) };
+  EDB.setKbArticleIngestionManifest(orgId, articleId, JSON.stringify(verified));
+  logAudit({
+    orgId,
+    userId,
+    action: 'kb.article.verify',
+    resourceType: 'kb_article',
+    resourceId: articleId,
+    details: {
+      manifestId: verified.manifestId,
+      cases: cases.length,
+      recallAt5: verified.coverage.retrievalRecallAt5,
+      citationAccuracy: verified.coverage.citationAccuracy,
+      verified: verified.coverage.verified,
+    },
+  });
+  return verified;
 }
 
 // Search

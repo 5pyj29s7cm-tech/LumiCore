@@ -9,11 +9,11 @@ import {
   buildKnowledgeIngestionManifest,
   chunkKnowledgeText,
   evaluateKnowledgeManifest,
-  evaluateKnowledgeRetrievalCases,
   hashKnowledgeContent,
+  runKnowledgeGoldenEvaluation,
+  type KnowledgeGoldenCaseDefinition,
   type KnowledgeChunkManifest,
   type KnowledgeIngestionManifest,
-  type KnowledgeRetrievalCaseEvidence,
 } from '../knowledge/ingestion_manifest';
 
 export interface ChunkOptions {
@@ -36,7 +36,9 @@ export interface IngestDocumentOptions {
     error?: string;
   };
   verifyEmbeddings?: boolean;
+  /** @deprecated Synthetic source excerpts are not golden QA and can no longer verify absorption. */
   verifyRetrieval?: boolean;
+  goldenCases?: KnowledgeGoldenCaseDefinition[];
 }
 
 export interface IngestDocumentResult {
@@ -202,34 +204,41 @@ export async function ingestDocument(
     extraction: options?.extraction,
   });
 
-  if (options?.verifyRetrieval !== false && chunks.length > 0) {
-    const sampleIndexes = chunks.length <= 12
-      ? chunks.map(chunk => chunk.index)
-      : Array.from(new Set(Array.from({ length: 12 }, (_, index) => Math.round(index * (chunks.length - 1) / 11))));
-    const cases: KnowledgeRetrievalCaseEvidence[] = [];
-    for (const index of sampleIndexes) {
-      const chunk = chunks[index];
-      const probe = chunk.text.replace(/\s+/g, ' ').trim().slice(0, 180);
-      const retrieved = await retrieveChunks(userId, agentId, probe, 5, {
-        domain: options?.domain,
-        orgId: options?.orgId,
-      });
-      cases.push({
-        caseId: `chunk_${index + 1}`,
-        expectedChunkIndexes: [index],
-        retrievedMemoryIds: retrieved.map(memory => memory.id),
-        citedChunkHashes: retrieved
-          .map(memory => chunkManifests.find(candidate => candidate.memoryId === memory.id)?.contentHash || '')
-          .filter(Boolean),
-      });
-    }
-    const retrieval = evaluateKnowledgeRetrievalCases({ cases, chunks: chunkManifests, topK: 5 });
-    const base = { ...manifest, retrieval, updatedAt: new Date().toISOString() };
-    manifest = { ...base, ...evaluateKnowledgeManifest(base) };
+  if (options?.goldenCases?.length && chunks.length > 0) {
+    manifest = await verifyIngestedDocument(
+      userId,
+      agentId,
+      manifest,
+      options.goldenCases,
+      { domain: options.domain, orgId: options.orgId },
+    );
   }
 
   console.log(`[RAG] Ingested "${documentTitle}" -> ${chunks.length} chunks for agent ${agentId}`);
   return { chunkCount: chunks.length, memoryIds, manifest };
+}
+
+/** Run real Top-5 retrieval and exact citation localization for a persisted source manifest. */
+export async function verifyIngestedDocument(
+  userId: string,
+  agentId: string,
+  manifest: KnowledgeIngestionManifest,
+  cases: KnowledgeGoldenCaseDefinition[],
+  scope: { domain?: string; orgId?: string } = {},
+): Promise<KnowledgeIngestionManifest> {
+  const retrieval = await runKnowledgeGoldenEvaluation({
+    cases,
+    chunks: manifest.chunks,
+    retrieve: async (question, topK) => {
+      const retrieved = await retrieveChunks(userId, agentId, question, topK, scope);
+      return retrieved.map(memory => ({
+        memoryId: memory.id,
+        chunkContentHash: memory.knowledgeProvenance?.chunkContentHash || '',
+      }));
+    },
+  });
+  const base = { ...manifest, retrieval, updatedAt: new Date().toISOString() };
+  return { ...base, ...evaluateKnowledgeManifest(base) };
 }
 
 function buildSourceMetadataKeywords(metadata?: MarkdownKnowledgeMetadata): string[] {

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import jwt from 'jsonwebtoken';
@@ -140,6 +141,94 @@ describe('knowledge source format acceptance matrix', () => {
       chunks: [],
       coverage: { verified: false },
     });
+  });
+
+  it('persists real golden QA evidence through the personal knowledge verification API', async () => {
+    const userId = `knowledge-golden-${Date.now()}`;
+    const filename = 'golden-source.txt';
+    const content = 'The verified July release meeting takes place in the north conference room.';
+    const directoryId = crypto.createHash('sha256').update(userId).digest('hex').slice(0, 24);
+    const { getDataPath } = await import('../server/config/data_path');
+    const directory = getDataPath(path.join('knowledge', '_users', directoryId));
+    const filePath = path.join(directory, filename);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+    const { ingestDocument } = await import('../server/agents/rag');
+    const result = await ingestDocument(userId, 'lumi', filename, content, {
+      filePath,
+      domain: 'personal',
+      verifyEmbeddings: false,
+      verifyRetrieval: false,
+      extraction: { status: 'indexed', method: 'text' },
+    });
+    const { readDB, writeDB } = await import('../db_layer');
+    const db = readDB();
+    db.knowledgeFiles = (db.knowledgeFiles || []).filter((item: any) => !(
+      item.userId === userId && item.filename === filename
+    ));
+    db.knowledgeFiles.push({
+      filename,
+      displayName: filename,
+      userId,
+      domain: 'personal',
+      orgId: '',
+      status: 'indexed',
+      extractionStatus: 'indexed',
+      agentIds: ['lumi'],
+      ingestionManifest: result.manifest,
+      ingestionManifestId: result.manifest.manifestId,
+      ingestionStatus: result.manifest.status,
+      ingestionCoverage: result.manifest.coverage,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    writeDB(db);
+
+    try {
+      const cookie = `token=${jwt.sign({ uid: userId, username: userId }, JWT_SECRET)}`;
+      const response = await fetch(`${testUrl}/api/files/ingestion/${filename}/verify?domain=personal`, {
+        method: 'POST',
+        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 'lumi',
+          cases: [{
+            caseId: 'release-meeting-location',
+            question: 'Where does the verified July release meeting take place?',
+            referenceAnswer: 'The meeting takes place in the north conference room.',
+            expectedChunkIndexes: [0],
+            expectedCitationChunkIndexes: [0],
+          }],
+        }),
+      });
+      expect(response.ok).toBe(true);
+      const body = await response.json();
+      expect(body).toMatchObject({
+        success: true,
+        ingestionStatus: 'indexed_unverified',
+        retrieval: {
+          method: 'golden_qa_v1',
+          recallAtK: 1,
+          citationAccuracy: 1,
+          passed: true,
+        },
+        coverage: {
+          embeddingCoverage: 0,
+          verified: false,
+        },
+      });
+      const stored = readDB().knowledgeFiles.find((item: any) => (
+        item.userId === userId && item.filename === filename
+      ));
+      expect(stored?.ingestionManifest?.retrieval).toMatchObject({ method: 'golden_qa_v1', passed: true });
+    } finally {
+      const cleanupDb = readDB();
+      cleanupDb.knowledgeFiles = (cleanupDb.knowledgeFiles || []).filter((item: any) => !(
+        item.userId === userId && item.filename === filename
+      ));
+      cleanupDb.memories = (cleanupDb.memories || []).filter((item: any) => !result.memoryIds.includes(item.id));
+      writeDB(cleanupDb);
+      fs.rmSync(filePath, { force: true });
+    }
   });
 
   it('gradually migrates a missing legacy index to an explicit failed manifest without deleting history', async () => {

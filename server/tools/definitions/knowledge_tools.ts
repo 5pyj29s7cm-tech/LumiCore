@@ -4,7 +4,11 @@ import path from 'path';
 import { readDB } from '../../../db_layer';
 import { getDataPath } from '../../config/data_path';
 import { ToolRegistry } from '../registry';
-import type { KnowledgeIngestionManifest, KnowledgeIngestionStatus } from '../../knowledge/ingestion_manifest';
+import {
+  evaluateKnowledgeManifest,
+  type KnowledgeIngestionManifest,
+  type KnowledgeIngestionStatus,
+} from '../../knowledge/ingestion_manifest';
 
 function scopeDirectory(userId: string, domain: string, orgId: string): string {
   if (domain === 'work' && orgId) return getDataPath(path.join('org', orgId, 'knowledge'));
@@ -69,8 +73,11 @@ function buildKnowledgeCoverageSnapshot(context: any, filename = ''): Record<str
     const meta: any = metaByName.get(name) || {};
     const inferredMemories = (db.memories || []).filter((memory: any) => memoryMatchesFile(memory, name, userId, domain, orgId));
     const legacyStatus = String(meta.extractionStatus || meta.status || 'ready');
-    const manifest = meta.ingestionManifest && meta.ingestionManifest.schemaVersion === 1
+    const storedManifest = meta.ingestionManifest && meta.ingestionManifest.schemaVersion === 1
       ? meta.ingestionManifest as KnowledgeIngestionManifest
+      : undefined;
+    const manifest = storedManifest
+      ? { ...storedManifest, ...evaluateKnowledgeManifest(storedManifest) }
       : undefined;
     let status: KnowledgeIngestionStatus;
     const blockers = Array.isArray(manifest?.coverage?.blockers) ? [...manifest!.coverage.blockers] : [];

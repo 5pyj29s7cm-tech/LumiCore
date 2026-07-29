@@ -38,19 +38,39 @@ export interface KnowledgeChunkManifest extends Omit<KnowledgeChunkDescriptor, '
 
 export interface KnowledgeRetrievalCaseEvidence {
   caseId: string;
+  /** Sensitive golden prompts and answers are represented by immutable digests only. */
+  questionDigest: string;
+  referenceAnswerDigest: string;
   expectedChunkIndexes: number[];
+  expectedCitationChunkIndexes: number[];
   retrievedMemoryIds: string[];
   citedChunkHashes: string[];
 }
 
 export interface KnowledgeRetrievalEvaluation {
   evaluatedAt: string;
+  method: 'golden_qa_v1';
+  caseDefinitionDigest: string;
   topK: number;
   caseCount: number;
   recallAtK: number;
   citationAccuracy: number;
   passed: boolean;
   cases: KnowledgeRetrievalCaseEvidence[];
+}
+
+export interface KnowledgeGoldenCaseDefinition {
+  caseId: string;
+  question: string;
+  referenceAnswer: string;
+  expectedChunkIndexes: number[];
+  /** Defaults to expectedChunkIndexes when the reference answer uses the same evidence. */
+  expectedCitationChunkIndexes?: number[];
+}
+
+export interface KnowledgeGoldenRetrievalResult {
+  memoryId: string;
+  chunkContentHash: string;
 }
 
 export interface KnowledgeCoverageReport {
@@ -181,6 +201,8 @@ export function evaluateKnowledgeManifest(
   if (embeddingCoverage < 1) blockers.push('embedding_incomplete');
   if (!manifest.retrieval) blockers.push('retrieval_not_evaluated');
   else {
+    if (manifest.retrieval.method !== 'golden_qa_v1') blockers.push('retrieval_not_golden_qa');
+    if (!/^[a-f0-9]{64}$/i.test(manifest.retrieval.caseDefinitionDigest || '')) blockers.push('golden_case_digest_missing');
     if (manifest.retrieval.topK !== KNOWLEDGE_GOLDEN_TOP_K) blockers.push('retrieval_top_k_not_5');
     if (manifest.retrieval.caseCount <= 0) blockers.push('retrieval_cases_missing');
     if (manifest.retrieval.recallAtK < KNOWLEDGE_RECALL_AT_5_MIN) blockers.push('recall_below_threshold');
@@ -265,22 +287,46 @@ export function evaluateKnowledgeRetrievalCases(input: {
       recallTotal += 1;
       if (retrievedIndexes.has(expected)) recallHits += 1;
     }
-    const validHashes = new Set(input.chunks.map(chunk => chunk.contentHash));
-    for (const citationHash of evidence.citedChunkHashes) {
-      citationTotal += 1;
-      if (validHashes.has(citationHash)) correctCitations += 1;
+    const chunkHashByIndex = new Map(input.chunks.map(chunk => [chunk.index, chunk.contentHash]));
+    const expectedCitationIndexes = evidence.expectedCitationChunkIndexes?.length
+      ? evidence.expectedCitationChunkIndexes
+      : evidence.expectedChunkIndexes;
+    const expectedCitationHashes = new Set(
+      expectedCitationIndexes
+        .map(index => chunkHashByIndex.get(index) || `missing_chunk_${index}`),
+    );
+    const actualCitationHashes = new Set(evidence.citedChunkHashes.filter(Boolean));
+    citationTotal += Math.max(expectedCitationHashes.size, actualCitationHashes.size);
+    for (const citationHash of actualCitationHashes) {
+      if (expectedCitationHashes.has(citationHash)) correctCitations += 1;
     }
   }
 
   const recallAtK = ratio(recallHits, recallTotal);
   const citationAccuracy = ratio(correctCitations, citationTotal);
+  const evidenceComplete = input.cases.every(evidence => (
+    /^[a-f0-9]{64}$/i.test(evidence.questionDigest || '')
+    && /^[a-f0-9]{64}$/i.test(evidence.referenceAnswerDigest || '')
+    && evidence.expectedChunkIndexes.length > 0
+    && (evidence.expectedCitationChunkIndexes?.length || 0) > 0
+  ));
+  const caseDefinitionDigest = digest(JSON.stringify(input.cases.map(evidence => ({
+    caseId: evidence.caseId,
+    questionDigest: evidence.questionDigest,
+    referenceAnswerDigest: evidence.referenceAnswerDigest,
+    expectedChunkIndexes: evidence.expectedChunkIndexes,
+    expectedCitationChunkIndexes: evidence.expectedCitationChunkIndexes,
+  }))));
   const evaluation = {
     evaluatedAt: input.now || new Date().toISOString(),
+    method: 'golden_qa_v1' as const,
+    caseDefinitionDigest,
     topK,
     caseCount: input.cases.length,
     recallAtK,
     citationAccuracy,
     passed: input.cases.length > 0
+      && evidenceComplete
       && recallTotal > 0
       && citationTotal > 0
       && topK === KNOWLEDGE_GOLDEN_TOP_K
@@ -296,6 +342,77 @@ export function evaluateKnowledgeRetrievalCases(input: {
     citationHits: correctCitations,
   });
   return evaluation;
+}
+
+function normalizeGoldenIndexes(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value
+    .map(index => Number(index))
+    .filter(index => Number.isInteger(index) && index >= 0)))
+    .sort((a, b) => a - b);
+}
+
+/**
+ * Execute user/owner supplied golden questions against the real retrieval path.
+ * The first N retrieved chunks are treated as the deterministic citation selection,
+ * where N is the number of citations in the reference answer. Plaintext questions
+ * and reference answers are never persisted in the manifest.
+ */
+export async function runKnowledgeGoldenEvaluation(input: {
+  cases: KnowledgeGoldenCaseDefinition[];
+  chunks: KnowledgeChunkManifest[];
+  retrieve: (question: string, topK: number) => Promise<KnowledgeGoldenRetrievalResult[]>;
+  now?: string;
+}): Promise<KnowledgeRetrievalEvaluation> {
+  if (!Array.isArray(input.cases) || input.cases.length === 0) {
+    throw new Error('At least one golden knowledge question is required.');
+  }
+  if (input.cases.length > 500) throw new Error('Golden knowledge evaluation is limited to 500 cases per run.');
+  const availableIndexes = new Set(input.chunks.map(chunk => chunk.index));
+  const caseIds = new Set<string>();
+  const evidence: KnowledgeRetrievalCaseEvidence[] = [];
+
+  for (const raw of input.cases) {
+    const caseId = String(raw?.caseId || '').trim().slice(0, 160);
+    const question = String(raw?.question || '').trim();
+    const referenceAnswer = String(raw?.referenceAnswer || '').trim();
+    const expectedChunkIndexes = normalizeGoldenIndexes(raw?.expectedChunkIndexes);
+    const expectedCitationChunkIndexes = normalizeGoldenIndexes(
+      raw?.expectedCitationChunkIndexes?.length
+        ? raw.expectedCitationChunkIndexes
+        : raw?.expectedChunkIndexes,
+    );
+    if (!caseId || caseIds.has(caseId)) throw new Error('Golden knowledge case IDs must be non-empty and unique.');
+    if (!question || question.length > 10_000) throw new Error(`Golden case ${caseId} has an invalid question.`);
+    if (!referenceAnswer || referenceAnswer.length > 50_000) throw new Error(`Golden case ${caseId} has an invalid reference answer.`);
+    if (expectedChunkIndexes.length === 0 || expectedChunkIndexes.some(index => !availableIndexes.has(index))) {
+      throw new Error(`Golden case ${caseId} references an unavailable retrieval chunk.`);
+    }
+    if (expectedCitationChunkIndexes.length === 0 || expectedCitationChunkIndexes.some(index => !availableIndexes.has(index))) {
+      throw new Error(`Golden case ${caseId} references an unavailable citation chunk.`);
+    }
+    caseIds.add(caseId);
+    const retrieved = (await input.retrieve(question, KNOWLEDGE_GOLDEN_TOP_K)).slice(0, KNOWLEDGE_GOLDEN_TOP_K);
+    evidence.push({
+      caseId,
+      questionDigest: hashKnowledgeContent(question),
+      referenceAnswerDigest: hashKnowledgeContent(referenceAnswer),
+      expectedChunkIndexes,
+      expectedCitationChunkIndexes,
+      retrievedMemoryIds: retrieved.map(result => String(result.memoryId || '')).filter(Boolean),
+      citedChunkHashes: retrieved
+        .slice(0, expectedCitationChunkIndexes.length)
+        .map(result => String(result.chunkContentHash || ''))
+        .filter(Boolean),
+    });
+  }
+
+  return evaluateKnowledgeRetrievalCases({
+    cases: evidence,
+    chunks: input.chunks,
+    topK: KNOWLEDGE_GOLDEN_TOP_K,
+    now: input.now,
+  });
 }
 
 export function markKnowledgeManifestStale(

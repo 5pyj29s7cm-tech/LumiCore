@@ -732,8 +732,8 @@ export function registerDocumentTools(registry: ToolRegistry): void {
         requiredFields: ['ok', 'status', 'agentId', 'title', 'chunkCount', 'ingestionManifestId', 'coverage'],
         requiredValues: { ok: true },
         successStatuses: ['verified', 'indexed_unverified', 'partial'],
-        successSignals: ['the target agent knowledge store returned a manifest with chunk, embedding, retrieval, and citation coverage'],
-        limitations: ['Only status=verified proves the configured retrieval probes and citation checks passed; indexed_unverified must not be described as fully absorbed.'],
+        successSignals: ['the target agent knowledge store returned a manifest with extraction, chunk, embedding, and explicit verification-blocker evidence'],
+        limitations: ['Ingestion alone remains indexed_unverified. Only status=verified after owner-supplied golden questions and reference citations pass Recall@5 and citation thresholds may be described as fully absorbed.'],
       },
     }),
     evidence: capabilityEvidence({

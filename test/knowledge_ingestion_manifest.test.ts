@@ -4,10 +4,12 @@ import {
   chunkKnowledgeText,
   evaluateKnowledgeManifest,
   evaluateKnowledgeRetrievalCases,
+  hashKnowledgeContent,
   KNOWLEDGE_CITATION_ACCURACY_MIN,
   KNOWLEDGE_GOLDEN_TOP_K,
   KNOWLEDGE_RECALL_AT_5_MIN,
   markKnowledgeManifestStale,
+  runKnowledgeGoldenEvaluation,
   type KnowledgeChunkManifest,
 } from '../server/knowledge/ingestion_manifest';
 
@@ -65,7 +67,10 @@ describe('knowledge ingestion manifests', () => {
       chunks,
       cases: chunks.map(chunk => ({
         caseId: `case-${chunk.index}`,
+        questionDigest: hashKnowledgeContent(`question-${chunk.index}`),
+        referenceAnswerDigest: hashKnowledgeContent(`answer-${chunk.index}`),
         expectedChunkIndexes: [chunk.index],
+        expectedCitationChunkIndexes: [chunk.index],
         retrievedMemoryIds: [chunk.memoryId!],
         citedChunkHashes: [chunk.contentHash],
       })),
@@ -90,7 +95,10 @@ describe('knowledge ingestion manifests', () => {
     const chunks = Array.from({ length: 100 }, (_, index) => storedChunk(index, `chunk-${index}`));
     const passingCases = chunks.map((chunk, index) => ({
       caseId: `case-${index}`,
+      questionDigest: hashKnowledgeContent(`question-${index}`),
+      referenceAnswerDigest: hashKnowledgeContent(`answer-${index}`),
       expectedChunkIndexes: [chunk.index],
+      expectedCitationChunkIndexes: [chunk.index],
       retrievedMemoryIds: index < 95 ? [chunk.memoryId!] : [],
       citedChunkHashes: index < 98 ? [chunk.contentHash] : ['not-a-source-chunk'],
     }));
@@ -122,13 +130,99 @@ describe('knowledge ingestion manifests', () => {
     expect(failingCitation).toMatchObject({ citationAccuracy: 0.97, passed: false });
   });
 
+  it('rejects a citation to the wrong chunk even when it belongs to the same source', () => {
+    const chunks = [storedChunk(0, 'correct evidence'), storedChunk(1, 'wrong evidence')];
+    const retrieval = evaluateKnowledgeRetrievalCases({
+      chunks,
+      cases: [{
+        caseId: 'same-source-wrong-citation',
+        questionDigest: hashKnowledgeContent('Which evidence is correct?'),
+        referenceAnswerDigest: hashKnowledgeContent('The first evidence is correct.'),
+        expectedChunkIndexes: [0],
+        expectedCitationChunkIndexes: [0],
+        retrievedMemoryIds: [chunks[0].memoryId!],
+        citedChunkHashes: [chunks[1].contentHash],
+      }],
+      topK: 5,
+    });
+
+    expect(retrieval).toMatchObject({ recallAtK: 1, citationAccuracy: 0, passed: false });
+  });
+
+  it('runs plaintext golden questions through retrieval but persists only their digests', async () => {
+    const chunks = [storedChunk(0, 'expected launch evidence'), storedChunk(1, 'unrelated evidence')];
+    const question = 'What is the verified launch evidence?';
+    const referenceAnswer = 'The expected launch evidence is authoritative.';
+    const retrieval = await runKnowledgeGoldenEvaluation({
+      chunks,
+      cases: [{
+        caseId: 'launch-evidence',
+        question,
+        referenceAnswer,
+        expectedChunkIndexes: [0],
+        expectedCitationChunkIndexes: [0],
+      }],
+      retrieve: async receivedQuestion => {
+        expect(receivedQuestion).toBe(question);
+        return [{ memoryId: chunks[0].memoryId!, chunkContentHash: chunks[0].contentHash }];
+      },
+      now: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(retrieval).toMatchObject({
+      method: 'golden_qa_v1',
+      recallAtK: 1,
+      citationAccuracy: 1,
+      passed: true,
+    });
+    expect(retrieval.caseDefinitionDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(retrieval)).not.toContain(question);
+    expect(JSON.stringify(retrieval)).not.toContain(referenceAnswer);
+  });
+
+  it('invalidates legacy synthetic retrieval evidence that was previously marked verified', () => {
+    const chunk = storedChunk(0, 'legacy synthetic probe');
+    const golden = evaluateKnowledgeRetrievalCases({
+      chunks: [chunk],
+      cases: [{
+        caseId: 'legacy-probe',
+        questionDigest: hashKnowledgeContent('legacy question'),
+        referenceAnswerDigest: hashKnowledgeContent('legacy answer'),
+        expectedChunkIndexes: [0],
+        expectedCitationChunkIndexes: [0],
+        retrievedMemoryIds: [chunk.memoryId!],
+        citedChunkHashes: [chunk.contentHash],
+      }],
+    });
+    const legacyRetrieval = { ...golden } as any;
+    delete legacyRetrieval.method;
+    delete legacyRetrieval.caseDefinitionDigest;
+    const manifest = buildKnowledgeIngestionManifest({
+      sourceId: 'legacy.txt',
+      content: 'legacy synthetic probe',
+      chunks: [chunk],
+      extraction: { status: 'indexed', method: 'text' },
+      retrieval: legacyRetrieval,
+    });
+
+    expect(manifest.status).toBe('indexed_unverified');
+    expect(manifest.coverage.verified).toBe(false);
+    expect(manifest.coverage.blockers).toEqual(expect.arrayContaining([
+      'retrieval_not_golden_qa',
+      'golden_case_digest_missing',
+    ]));
+  });
+
   it('does not accept a non-Top-5 evaluation or an empty citation set as verified absorption', () => {
     const chunk = storedChunk(0, 'alpha');
     const nonTopFive = evaluateKnowledgeRetrievalCases({
       chunks: [chunk],
       cases: [{
         caseId: 'case-0',
+        questionDigest: hashKnowledgeContent('question-0'),
+        referenceAnswerDigest: hashKnowledgeContent('answer-0'),
         expectedChunkIndexes: [0],
+        expectedCitationChunkIndexes: [0],
         retrievedMemoryIds: [chunk.memoryId!],
         citedChunkHashes: [chunk.contentHash],
       }],
@@ -138,7 +232,10 @@ describe('knowledge ingestion manifests', () => {
       chunks: [chunk],
       cases: [{
         caseId: 'case-0',
+        questionDigest: hashKnowledgeContent('question-0'),
+        referenceAnswerDigest: hashKnowledgeContent('answer-0'),
         expectedChunkIndexes: [0],
+        expectedCitationChunkIndexes: [0],
         retrievedMemoryIds: [chunk.memoryId!],
         citedChunkHashes: [],
       }],
@@ -168,7 +265,10 @@ describe('knowledge ingestion manifests', () => {
       chunks: [chunk],
       cases: [{
         caseId: 'case-0',
+        questionDigest: hashKnowledgeContent('question-0'),
+        referenceAnswerDigest: hashKnowledgeContent('answer-0'),
         expectedChunkIndexes: [0],
+        expectedCitationChunkIndexes: [0],
         retrievedMemoryIds: [chunk.memoryId!],
         citedChunkHashes: [chunk.contentHash],
       }],

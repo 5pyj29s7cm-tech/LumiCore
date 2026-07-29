@@ -16,9 +16,9 @@ import crypto from 'crypto';
 import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { readDB, writeDB } from '../db_layer';
-import { chunkText, ingestDocument } from '../server/agents/rag';
+import { chunkText, ingestDocument, verifyIngestedDocument } from '../server/agents/rag';
 import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
-import { buildKnowledgeIngestionManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
+import { buildKnowledgeIngestionManifest, evaluateKnowledgeManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
 import { getDataPath, getDataRoot } from '../server/config/data_path';
 import { getJwtSecret } from '../server/config/local_identity';
 import * as OrgKB from '../server/org/kb';
@@ -921,7 +921,12 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
     const now = Date.now();
     const meta = (db.knowledgeFiles || []).find((item: any) => {
       const domain = normalizeFileDomain(item?.domain || (item?.orgId ? 'work' : 'personal'));
-      if (domain !== 'personal' || item?.ingestionManifest?.schemaVersion === 1) return false;
+      if (domain !== 'personal') return false;
+      const storedManifest = item?.ingestionManifest as KnowledgeIngestionManifest | undefined;
+      if (storedManifest?.schemaVersion === 1) {
+        return storedManifest.coverage?.verified === true
+          && storedManifest.retrieval?.method !== 'golden_qa_v1';
+      }
       const legacyStatus = String(item?.extractionStatus || item?.status || '').toLowerCase();
       const attempts = Number(item?.legacyRevalidationAttempts || 0);
       const retryAt = Number(item?.legacyRevalidationRetryAt || 0);
@@ -934,6 +939,18 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
     const userId = String(meta.userId || '');
     const filename = String(meta.filename || '');
     activeIdentity = { userId, filename };
+    const storedManifest = meta.ingestionManifest as KnowledgeIngestionManifest | undefined;
+    if (storedManifest?.schemaVersion === 1
+      && storedManifest.coverage?.verified === true
+      && storedManifest.retrieval?.method !== 'golden_qa_v1') {
+      const invalidated = { ...storedManifest, ...evaluateKnowledgeManifest(storedManifest) };
+      applyIngestionManifest(meta, invalidated);
+      meta.status = 'indexed';
+      meta.legacyRevalidationLastAt = new Date().toISOString();
+      meta.legacyRevalidationError = 'Prior synthetic retrieval probes are not golden QA; owner-supplied cases are required.';
+      writeDB(db);
+      return 'unverified';
+    }
     const filePath = path.join(personalKnowledgeDirectoryForMeta(meta, db), filename);
     meta.legacyRevalidationAttempts = Number(meta.legacyRevalidationAttempts || 0) + 1;
     meta.legacyRevalidationLastAt = new Date().toISOString();
@@ -1046,6 +1063,12 @@ function applyIngestionManifest(meta: any, manifest: KnowledgeIngestionManifest)
   meta.chunkCount = manifest.chunks.length;
   meta.sourceRevision = manifest.sourceRevision;
   meta.updatedAt = new Date().toISOString();
+}
+
+function readCurrentIngestionManifest(meta: any): KnowledgeIngestionManifest | null {
+  const manifest = meta?.ingestionManifest as KnowledgeIngestionManifest | undefined;
+  if (!manifest || manifest.schemaVersion !== 1) return null;
+  return { ...manifest, ...evaluateKnowledgeManifest(manifest) };
 }
 
 function hasCurrentVerifiedManifest(meta: any, content: string, existingMemoryIds: string[]): boolean {
@@ -1627,6 +1650,7 @@ function buildEntry(filename: string, source: KnowledgeFileSource, agentIds: str
   let st: fs.Stats;
   try { st = fs.statSync(filePath); }
   catch { st = { size: 0, mtime: new Date(), birthtime: new Date() } as fs.Stats; }
+  const currentManifest = readCurrentIngestionManifest(meta);
   return {
     id: filename,
     name: displayName,
@@ -1648,9 +1672,9 @@ function buildEntry(filename: string, source: KnowledgeFileSource, agentIds: str
     extractionProvider: meta?.extractionProvider || undefined,
     extractionModel: meta?.extractionModel || undefined,
     contentChars: meta?.contentChars || undefined,
-    ingestionStatus: meta?.ingestionStatus || (meta?.status === 'indexed' ? 'indexed_unverified' : undefined),
+    ingestionStatus: currentManifest?.status || meta?.ingestionStatus || (meta?.status === 'indexed' ? 'indexed_unverified' : undefined),
     ingestionManifestId: meta?.ingestionManifestId || undefined,
-    ingestionCoverage: meta?.ingestionCoverage || undefined,
+    ingestionCoverage: currentManifest?.coverage || meta?.ingestionCoverage || undefined,
     sourceTitle: meta?.sourceTitle || undefined,
     sourceAliases: Array.isArray(meta?.sourceAliases) ? meta.sourceAliases : undefined,
     sourceTags: Array.isArray(meta?.sourceTags) ? meta.sourceTags : undefined,
@@ -2285,6 +2309,7 @@ router.get('/files/info/:id', (req: Request, res: Response) => {
     const st = fs.statSync(filePath);
     const db = readDB();
     const meta = findFileMeta(db, safeName, scope);
+    const currentManifest = readCurrentIngestionManifest(meta);
     res.json({
       id: safeName,
       name: repairFilename(safeName),
@@ -2305,9 +2330,9 @@ router.get('/files/info/:id', (req: Request, res: Response) => {
       extractionProvider: meta?.extractionProvider || undefined,
       extractionModel: meta?.extractionModel || undefined,
       contentChars: meta?.contentChars || undefined,
-      ingestionStatus: meta?.ingestionStatus || (meta?.status === 'indexed' ? 'indexed_unverified' : undefined),
+      ingestionStatus: currentManifest?.status || meta?.ingestionStatus || (meta?.status === 'indexed' ? 'indexed_unverified' : undefined),
       ingestionManifestId: meta?.ingestionManifestId || undefined,
-      ingestionCoverage: meta?.ingestionCoverage || undefined,
+      ingestionCoverage: currentManifest?.coverage || meta?.ingestionCoverage || undefined,
       sourceTitle: meta?.sourceTitle || undefined,
       sourceAliases: Array.isArray(meta?.sourceAliases) ? meta.sourceAliases : undefined,
       sourceTags: Array.isArray(meta?.sourceTags) ? meta.sourceTags : undefined,
@@ -2324,6 +2349,94 @@ router.get('/files/info/:id', (req: Request, res: Response) => {
     });
   } catch (err: any) {
     sendRouteError(res, err);
+  }
+});
+
+// ── Verifiable knowledge absorption: manifest + owner-supplied golden QA ──
+router.get('/files/ingestion/:id', requireAuth, (req: Request, res: Response) => {
+  try {
+    const scope = getFileScope(req);
+    const safeName = path.basename(req.params.id);
+    const db = readDB();
+    const meta = findFileMeta(db, safeName, scope);
+    if (!meta) return res.status(404).json({ error: 'Knowledge file metadata not found' });
+    const manifest = scope.domain === 'work' && scope.orgId && meta.orgArticleId
+      ? OrgKB.getArticleIngestionManifest(scope.orgId, meta.orgArticleId)
+      : readCurrentIngestionManifest(meta);
+    if (!manifest) return res.status(404).json({ error: 'Knowledge ingestion manifest not found' });
+    res.json({
+      filename: safeName,
+      domain: scope.domain,
+      orgId: scope.orgId,
+      agentIds: meta.agentIds || [],
+      ingestionManifest: manifest,
+    });
+  } catch (err: any) {
+    sendRouteError(res, err);
+  }
+});
+
+router.post('/files/ingestion/:id/verify', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const scope = getFileScope(req);
+    assertKnowledgeWriteAccess(scope, scope.domain === 'work');
+    const cases = req.body?.cases;
+    if (!Array.isArray(cases) || cases.length === 0) {
+      return res.status(400).json({ error: 'cases must contain at least one golden question with a reference answer and expected chunk indexes' });
+    }
+    const safeName = path.basename(req.params.id);
+    const db = readDB();
+    const meta = findFileMeta(db, safeName, scope);
+    if (!meta) return res.status(404).json({ error: 'Knowledge file metadata not found' });
+
+    let verified: KnowledgeIngestionManifest;
+    if (scope.domain === 'work') {
+      if (!scope.orgId || !meta.orgArticleId) {
+        return res.status(409).json({ error: 'The work knowledge file is not linked to an indexed organization article' });
+      }
+      verified = await OrgKB.verifyArticleKnowledge(scope.orgId, meta.orgArticleId, scope.userId, cases);
+    } else {
+      const manifest = readCurrentIngestionManifest(meta);
+      if (!manifest) return res.status(409).json({ error: 'Index the knowledge file before golden verification' });
+      const filePath = path.join(scope.dir, safeName);
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return res.status(409).json({ error: 'The source file is missing; the existing index cannot be verified' });
+      }
+      const extraction = await extractKnowledgeFileContent(filePath, scope.userId);
+      if (!extraction.content?.trim() || hashKnowledgeContent(extraction.content) !== manifest.sourceRevision) {
+        return res.status(409).json({ error: 'The source content changed after indexing; re-index it before golden verification' });
+      }
+      const agentIds = Array.isArray(meta.agentIds)
+        ? meta.agentIds.map((value: unknown) => String(value || '').trim()).filter(Boolean)
+        : [];
+      const requestedAgentId = String(req.body?.agentId || '').trim();
+      const agentId = requestedAgentId || (agentIds.includes('lumi') ? 'lumi' : agentIds[0]);
+      if (!agentId || !agentIds.includes(agentId)) {
+        return res.status(400).json({ error: 'agentId must identify an agent that indexed this exact file' });
+      }
+      verified = await verifyIngestedDocument(
+        scope.userId,
+        agentId,
+        manifest,
+        cases,
+        { domain: 'personal', orgId: '' },
+      );
+    }
+
+    const latestDb = readDB();
+    const latestMeta = findFileMeta(latestDb, safeName, scope);
+    if (!latestMeta) return res.status(409).json({ error: 'Knowledge file metadata changed during verification' });
+    applyIngestionManifest(latestMeta, verified);
+    writeDB(latestDb);
+    res.json({
+      success: true,
+      ingestionStatus: verified.status,
+      coverage: verified.coverage,
+      retrieval: verified.retrieval,
+      ingestionManifestId: verified.manifestId,
+    });
+  } catch (err: any) {
+    sendRouteError(res, err, 400);
   }
 });
 
@@ -2374,6 +2487,8 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
       && Boolean(content?.trim())
       && hasCurrentVerifiedManifest(meta, content!, existingMemories.map((memory: any) => String(memory.id || '')));
     if (hasCompleteExisting) {
+      const currentManifest = readCurrentIngestionManifest(meta);
+      if (currentManifest) applyIngestionManifest(meta, currentManifest);
       if (!meta.agentIds.includes(agentId)) meta.agentIds.push(agentId);
       meta.status = 'indexed';
       if (content?.trim()) applyExtractionMeta(meta, extraction, content);
@@ -2385,7 +2500,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
         chunkCount: existingMemories.length,
         memoryIds: existingMemories.map((m: any) => m.id).filter(Boolean),
         extractionStatus: content?.trim() ? extraction.status : (meta.extractionStatus || 'indexed'),
-        ingestionStatus: meta.ingestionStatus || 'indexed_unverified',
+        ingestionStatus: currentManifest?.status || 'indexed_unverified',
         ingestionManifestId: meta.ingestionManifestId,
       });
     }
