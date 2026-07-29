@@ -199,7 +199,7 @@ export function getStats(orgId: string): KnowledgeStats {
 
   const categoryCounts = new Map<string, number>();
   const statusCounts = new Map<string, number>();
-  const articleHealth = articles.map(article => {
+  const articleHealth: KnowledgeStats['articleHealth'] = articles.map(article => {
     const chunks = embeddingsByArticle.get(article.id) || [];
     const lastIndexedAt = chunks
       .map(chunk => chunk.createdAt)
@@ -343,11 +343,12 @@ export async function indexArticle(orgId: string, articleId: string): Promise<nu
   const chunkManifests: KnowledgeChunkManifest[] = [];
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    const embedding = embeddingResults[i] && !('error' in embeddingResults[i])
-      ? embeddingResults[i] as Awaited<ReturnType<typeof generateConfiguredEmbedding>>
+    const embeddingResult = embeddingResults[i];
+    const embedding = embeddingResult && !('error' in embeddingResult)
+      ? embeddingResult
       : null;
-    const error = embeddingResults[i] && 'error' in embeddingResults[i]
-      ? embeddingResults[i].error
+    const error = embeddingResult && 'error' in embeddingResult
+      ? embeddingResult.error
       : undefined;
     const row = embedding
       ? EDB.saveKbEmbedding(

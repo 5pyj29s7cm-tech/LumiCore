@@ -111,7 +111,7 @@ describe('adapter resilience circuits', () => {
         lane: 'messaging', operation: 'observe', risk: 'low',
         sideEffects: [{ type: 'network_read', scope: 'chat', reversible: true }],
         verification: {
-          strategy: 'provider_receipt', required: true, requiredFields: ['read'],
+          strategy: 'provider_ack', required: true, requiredFields: ['read'],
           successSignals: ['read receipt'], limitations: [],
         },
       },
@@ -151,7 +151,7 @@ describe('adapter resilience circuits', () => {
         risk: 'low',
         sideEffects: [{ type: 'network_read', scope: 'chat', reversible: true }],
         verification: {
-          strategy: 'provider_receipt', required: true, requiredFields: ['read'],
+          strategy: 'provider_ack', required: true, requiredFields: ['read'],
           successSignals: ['read receipt'], limitations: [],
         },
       },

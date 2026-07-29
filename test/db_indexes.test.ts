@@ -258,7 +258,7 @@ describe('SQLite persistence indexes', () => {
         risk: 'high',
         sideEffects: [{ type: 'external_communication', scope: 'recipient', reversible: false }],
         verification: {
-          strategy: 'provider_receipt',
+          strategy: 'provider_ack',
           required: true,
           requiredFields: ['sent', 'verificationStatus'],
           successSignals: ['provider receipt'],
