@@ -39,7 +39,6 @@ type QueuedRequest = {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SIDECAR_SCRIPT = path.join(__dirname, 'voiceprint_sidecar.py');
 const DEFAULT_TIMEOUT_MS = 45000;
 const COLD_START_TIMEOUT_MS = Math.max(
   DEFAULT_TIMEOUT_MS,
@@ -68,6 +67,22 @@ export function getVoiceprintRuntimeRoots(
     resourcesPath ? path.join(resourcesPath, 'desktop-resources') : '',
     resourcesPath ? path.join(resourcesPath, '_up_', 'desktop-resources') : '',
   ].filter((value): value is string => Boolean(value)).map(root => path.resolve(root)))];
+}
+
+export function getVoiceprintSidecarCandidates(
+  moduleDir = __dirname,
+  cwd = process.cwd(),
+): string[] {
+  return [...new Set([
+    path.join(moduleDir, 'voiceprint_sidecar.py'),
+    path.join(moduleDir, 'server', 'biometrics', 'voiceprint_sidecar.py'),
+    path.join(cwd, 'server', 'biometrics', 'voiceprint_sidecar.py'),
+  ].map(candidate => path.resolve(candidate)))];
+}
+
+export function resolveVoiceprintSidecarScript(): string {
+  return getVoiceprintSidecarCandidates().find(candidate => fs.existsSync(candidate))
+    || getVoiceprintSidecarCandidates()[0];
 }
 
 export function resolveVoiceprintPython(): string {
@@ -202,9 +217,10 @@ class SpeechBrainSidecarClient {
     if (this.proc && !this.proc.killed) return;
 
     const python = resolveVoiceprintPython();
+    const sidecarScript = resolveVoiceprintSidecarScript();
     this.warmed = false;
-    this.proc = spawn(python, [SIDECAR_SCRIPT], {
-      cwd: path.resolve(__dirname, '..', '..'),
+    this.proc = spawn(python, [sidecarScript], {
+      cwd: path.dirname(sidecarScript),
       env: {
         ...process.env,
         PYTHONUTF8: '1',
@@ -223,6 +239,13 @@ class SpeechBrainSidecarClient {
     this.proc.stderr.on('data', (chunk) => {
       const text = String(chunk).trim();
       if (text) logger.warn(`[Voiceprint] SpeechBrain sidecar: ${text.slice(0, 600)}`);
+    });
+    // A fast child exit can race an in-flight stdin write. Keep the stream
+    // error observed so Node does not promote the expected EPIPE/EOF to an
+    // uncaught process exception; the write callback and exit handler reject
+    // the affected requests below.
+    this.proc.stdin.on('error', (err) => {
+      logger.warn(`[Voiceprint] SpeechBrain stdin closed: ${err.message}`);
     });
 
     this.proc.on('error', (err) => this.markUnavailable(err));

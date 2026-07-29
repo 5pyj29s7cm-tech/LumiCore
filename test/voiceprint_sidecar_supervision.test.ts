@@ -1,7 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { getVoiceprintRuntimeRoots } from '../server/biometrics/voiceprint_provider';
+import {
+  getVoiceprintRuntimeRoots,
+  getVoiceprintSidecarCandidates,
+} from '../server/biometrics/voiceprint_provider';
 import { getGptSovitsRuntimeRoots } from '../server/tts/gptsovits_runtime';
 
 describe('voiceprint sidecar supervision', () => {
@@ -57,6 +60,14 @@ describe('voiceprint sidecar supervision', () => {
 
     expect(getGptSovitsRuntimeRoots(packagedCwd)).toContain(resourceRoot);
     expect(getVoiceprintRuntimeRoots(packagedCwd, packagedCwd)).toContain(resourceRoot);
+  });
+
+  it('finds the copied voiceprint sidecar from the bundled server entry directory', () => {
+    const packagedCwd = path.join(process.cwd(), 'desktop-resources', 'dist-server');
+    expect(getVoiceprintSidecarCandidates(packagedCwd, packagedCwd)).toContain(
+      path.join(packagedCwd, 'server', 'biometrics', 'voiceprint_sidecar.py'),
+    );
+    expect(provider).toContain("this.proc.stdin.on('error'");
   });
 
   it('leaves GPT-SoVITS lifecycle ownership with the supervised Node runtime', () => {
