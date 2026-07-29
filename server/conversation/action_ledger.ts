@@ -333,6 +333,84 @@ export function appendConversationActionReceipts(
 }
 
 /**
+ * Stores a scheduler execution in the shared action ledger. The scheduler has
+ * no chat conversation, so it uses a namespaced conversation identity while
+ * retaining the same append-only task/receipt schema and sanitization rules.
+ */
+export function persistScheduledCapabilityExecution(
+  db: any,
+  input: {
+    scheduledTaskId: string;
+    plan: CapabilityExecutionPlan;
+    status: Extract<ConversationTaskStatus, 'executing' | 'blocked' | 'completed'>;
+    records?: ToolExecutionRecord[];
+    blocker?: string;
+    now?: string;
+  },
+): ConversationActionTaskRow {
+  ensureTables(db);
+  const now = input.now || new Date().toISOString();
+  const conversationId = `scheduler:${input.scheduledTaskId}`;
+  const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
+  let task = tasks.find(candidate => (
+    candidate.id === input.plan.taskId
+    && candidate.conversationId === conversationId
+    && candidate.userId === 'system'
+  ));
+  const existingCompleted = task?.status === 'completed';
+  const persistedPlan = sanitizeCapabilityExecutionPlan(input.plan, now);
+  const existingContext = parseObject(task?.context);
+  const context = {
+    ...existingContext,
+    source: 'scheduler',
+    scheduledTaskId: input.scheduledTaskId,
+    executionPlan: persistedPlan,
+    executionPlans: [
+      ...(Array.isArray(existingContext.executionPlans)
+        ? existingContext.executionPlans.filter((candidate: any) => candidate?.planId !== persistedPlan.planId)
+        : []),
+      persistedPlan,
+    ].slice(-12),
+  };
+  const status = existingCompleted ? 'completed' : input.status;
+  const values: ConversationActionTaskRow = {
+    id: input.plan.taskId,
+    conversationId,
+    userId: 'system',
+    domain: 'personal',
+    orgId: '',
+    parentTaskId: '',
+    rootUserMessageId: '',
+    intentKind: input.plan.intent.kind,
+    operation: input.plan.intent.operation,
+    goal: `Execute declared scheduled task ${input.scheduledTaskId}`,
+    target: input.scheduledTaskId,
+    status,
+    blocker: existingCompleted ? '' : String(input.blocker || '').slice(0, 500),
+    activeRequestId: input.plan.taskId,
+    completionSource: status === 'completed' ? 'tool_receipt' : '',
+    context: JSON.stringify(context),
+    revision: Math.max(1, Number(task?.revision || 0) + (task ? 1 : 0)),
+    createdAt: task?.createdAt || now,
+    updatedAt: existingCompleted ? task?.updatedAt || now : now,
+    completedAt: status === 'completed' ? task?.completedAt || now : '',
+  };
+  if (task) Object.assign(task, values);
+  else {
+    task = values;
+    tasks.push(task);
+  }
+  appendConversationActionReceipts(db, {
+    task,
+    records: input.records || [],
+    turnId: input.plan.taskId,
+    requestId: input.plan.taskId,
+    now,
+  });
+  return task;
+}
+
+/**
  * Persists the semantic plan in the existing append-compatible task context.
  * Raw message payloads are never stored; confirmation uses the digest already
  * bound to the durable task identity.

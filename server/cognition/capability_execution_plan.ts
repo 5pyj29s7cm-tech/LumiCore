@@ -124,6 +124,15 @@ export interface BuildCapabilityExecutionPlanInput {
   sourcePaths?: string[];
 }
 
+export interface BuildScheduledCapabilityExecutionPlanInput {
+  taskId: string;
+  scheduledTaskId: string;
+  lane: CapabilityLane;
+  operation: CapabilityOperation;
+  sideEffectClass: Exclude<NormalizedSideEffectClass, 'external_commit'>;
+  sideEffects: CapabilitySideEffect[];
+}
+
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
   if (!value || typeof value !== 'object') return value;
@@ -416,6 +425,116 @@ export function buildCapabilityExecutionPlan(
     contextRefs: Array.from(new Set(input.sourcePaths || []))
       .filter(Boolean)
       .map(value => ({ kind: 'source' as const, value })),
+    decisionAuthority: 'semantic_planner',
+    scriptAuthority: 'adapter_only',
+  };
+}
+
+/**
+ * Compiles an already-declared scheduler policy into the same semantic graph
+ * used by interactive entrances. Scheduler handlers remain adapters: they do
+ * not get to infer intent, widen their target, or introduce external commits.
+ */
+export function buildScheduledCapabilityExecutionPlan(
+  input: BuildScheduledCapabilityExecutionPlanInput,
+): CapabilityExecutionPlan {
+  const intent: NormalizedActionIntent = {
+    kind: 'scheduled_task',
+    operation: input.operation === 'observe' ? 'read' : 'mutate',
+    subject: 'lumi_scheduler',
+    target: input.scheduledTaskId,
+    payload: '',
+    sideEffectClass: input.sideEffectClass,
+    relation: 'new',
+    confidence: 1,
+    rule: 'declared-scheduler-policy',
+  };
+  const groupId = `group_${digest({
+    task: input.scheduledTaskId,
+    lane: input.lane,
+    operation: input.operation,
+  }).slice(0, 12)}`;
+  const selectorId = `select_${groupId}`;
+  const adapterId = `scheduled_${digest(input.scheduledTaskId).slice(0, 16)}`;
+  const verifierId = `verify_${groupId}`;
+  const joinId = `join_${digest([groupId]).slice(0, 12)}`;
+  const capabilityId = `lumi.scheduler.${input.scheduledTaskId}`;
+  const adapter: CapabilityNode = {
+    nodeId: adapterId,
+    type: 'internal_agent',
+    state: 'candidate',
+    capabilityId,
+    toolName: 'scheduler_task_handler',
+    lane: input.lane,
+    operation: input.operation,
+    risk: input.sideEffectClass === 'none' ? 'none' : 'low',
+    sideEffects: input.sideEffects.map(effect => ({ ...effect })),
+    requiresConfirmation: false,
+    verification: {
+      strategy: 'terminal_receipt',
+      required: true,
+      requiredFields: ['status', 'verified', 'scheduledTaskId'],
+      requiredValues: {
+        status: 'verified',
+        verified: true,
+        scheduledTaskId: input.scheduledTaskId,
+      },
+      requiredArtifacts: [],
+      requiredArtifactCollections: [],
+      successStatuses: ['verified'],
+      failureStatuses: ['failed', 'blocked', 'unknown'],
+      successSignals: ['declared scheduler handler completed and its local delivery persistence was recorded'],
+      limitations: ['The scheduler adapter cannot execute an external commit or change its declared task target.'],
+    },
+    provenance: { source: 'adapter', provider: 'lumi-scheduler', trust: 'core' },
+    executionRole: 'adapter',
+    selectionGroup: groupId,
+    selectionRank: 0,
+  };
+  const nodes: CapabilityNode[] = [
+    syntheticNode({
+      nodeId: selectorId,
+      type: 'model',
+      role: 'planner',
+      capabilityId: `lumi.semantic_selector.${groupId}`,
+      lane: input.lane,
+      operation: input.operation,
+      selectionGroup: groupId,
+    }),
+    adapter,
+    syntheticNode({
+      nodeId: verifierId,
+      type: 'judge',
+      role: 'verifier',
+      capabilityId: `lumi.receipt_verifier.${groupId}`,
+      lane: input.lane,
+      operation: input.operation,
+      selectionGroup: groupId,
+    }),
+    syntheticNode({
+      nodeId: joinId,
+      type: 'join',
+      role: 'join',
+      capabilityId: 'lumi.verified_receipt_join',
+      lane: input.lane,
+      operation: input.operation,
+    }),
+  ];
+  return {
+    schemaVersion: 1,
+    planId: `plan_${digest({ taskId: input.taskId, intent, capabilityId }).slice(0, 24)}`,
+    taskId: input.taskId,
+    intent,
+    nodes,
+    edges: [
+      { from: selectorId, to: adapterId, condition: 'selected' },
+      { from: adapterId, to: verifierId, condition: 'success' },
+      { from: verifierId, to: joinId, condition: 'verified' },
+    ],
+    risk: buildRiskDecision(intent, nodes, input.taskId),
+    expectedEvidence: [buildEvidence(adapter)],
+    fallbackPolicy: buildFallbackPolicy(intent),
+    contextRefs: [{ kind: 'task', value: input.scheduledTaskId }],
     decisionAuthority: 'semantic_planner',
     scriptAuthority: 'adapter_only',
   };

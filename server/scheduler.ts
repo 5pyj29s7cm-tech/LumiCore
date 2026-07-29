@@ -1,6 +1,7 @@
 ﻿// Proactive agent scheduler - cron-like check-ins
 // Each check-in fires a socket event to the UI so the user sees "Lumi checked in"
 
+import crypto from 'node:crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { queryMemories, getDueReminders, fireReminder, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, autoMarkCrossAgentShare } from './memory';
 import { consolidateEpisodic, consolidateNarrative, ConsolidationContext } from './memory/consolidator';
@@ -25,6 +26,18 @@ import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
 import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
 import { finalizeLumiResponse } from './cognition/result_finalizer';
+import {
+  authorizeCapabilityPlanTool,
+  buildScheduledCapabilityExecutionPlan,
+  type CapabilityExecutionPlan,
+} from './cognition/capability_execution_plan';
+import { persistScheduledCapabilityExecution } from './conversation/action_ledger';
+import type {
+  CapabilityLane,
+  CapabilityOperation,
+  CapabilitySideEffect,
+  ToolExecutionRecord,
+} from './tools/types';
 
 export interface ScheduledDelivery {
   userId: string;
@@ -82,10 +95,18 @@ export function finalizeScheduledDelivery(
   };
 }
 
+export type ScheduledExecutionClass =
+  | 'maintenance'
+  | 'proactive_delivery'
+  | 'client_probe'
+  | 'autonomous_orchestration';
+
 interface ScheduledTask {
   id: string;
   cron: string;
   lastRun: string | null;
+  /** Explicit semantic boundary compiled before the handler may run. */
+  executionClass: ScheduledExecutionClass;
   handler: () => Promise<ScheduledTaskResult>;
   /** If true, result is stored internally but NOT broadcast as a proactive notification */
   quiet?: boolean;
@@ -110,6 +131,41 @@ const SCHEDULE_ALIASES: Record<string, ParsedSchedule> = {
   every_7d: { type: 'interval', intervalMs: 7 * 24 * 60 * 60 * 1000 },
   daily_9am: { type: 'cron', fields: [0, 9, -1, -1, -1] },
   evening_8pm: { type: 'cron', fields: [0, 20, -1, -1, -1] },
+};
+
+const SCHEDULED_EXECUTION_POLICIES: Record<ScheduledExecutionClass, {
+  lane: CapabilityLane;
+  operation: CapabilityOperation;
+  sideEffectClass: 'local_write';
+  sideEffects: CapabilitySideEffect[];
+}> = {
+  maintenance: {
+    lane: 'system',
+    operation: 'mutate',
+    sideEffectClass: 'local_write',
+    sideEffects: [{ type: 'local_write', scope: 'declared scheduler maintenance state', reversible: true }],
+  },
+  proactive_delivery: {
+    lane: 'system',
+    operation: 'communicate',
+    sideEffectClass: 'local_write',
+    sideEffects: [
+      { type: 'local_write', scope: 'scoped proactive interaction ledger', reversible: true },
+      { type: 'local_state_change', scope: 'local Lumi notification queue', reversible: true },
+    ],
+  },
+  client_probe: {
+    lane: 'client',
+    operation: 'communicate',
+    sideEffectClass: 'local_write',
+    sideEffects: [{ type: 'local_state_change', scope: 'connected Lumi client session', reversible: true }],
+  },
+  autonomous_orchestration: {
+    lane: 'agents',
+    operation: 'mutate',
+    sideEffectClass: 'local_write',
+    sideEffects: [{ type: 'local_write', scope: 'autonomous local task queue and receipts', reversible: true }],
+  },
 };
 
 /** Parse supported fixed aliases or simple five-field cron expressions. */
@@ -141,6 +197,56 @@ export function parseSchedule(cron: string): ParsedSchedule {
     return value;
   });
   return { type: 'cron', fields };
+}
+
+/** Stable within one cron/interval slot, so restarts cannot replay that slot. */
+export function buildScheduledExecutionId(
+  taskId: string,
+  cron: string,
+  at: Date = new Date(),
+): string {
+  const parsed = parseSchedule(cron);
+  const slot = parsed.type === 'interval'
+    ? Math.floor(at.getTime() / parsed.intervalMs)
+    : at.toISOString().slice(0, 16);
+  const digest = crypto.createHash('sha256')
+    .update(JSON.stringify({ taskId, cron, slot }))
+    .digest('hex')
+    .slice(0, 24);
+  return `scheduler_${digest}`;
+}
+
+export function buildScheduledTaskExecutionPlan(
+  task: Pick<ScheduledTask, 'id' | 'cron' | 'executionClass'>,
+  at: Date = new Date(),
+): CapabilityExecutionPlan {
+  const policy = SCHEDULED_EXECUTION_POLICIES[task.executionClass];
+  if (!policy) throw new Error(`Scheduler task '${task.id}' has no declared execution policy.`);
+  return buildScheduledCapabilityExecutionPlan({
+    taskId: buildScheduledExecutionId(task.id, task.cron, at),
+    scheduledTaskId: task.id,
+    lane: policy.lane,
+    operation: policy.operation,
+    sideEffectClass: policy.sideEffectClass,
+    sideEffects: policy.sideEffects,
+  });
+}
+
+export function buildScheduledProactiveInteractionId(
+  executionId: string,
+  deliveryIndex: number,
+  delivery: Pick<ScheduledDelivery, 'userId' | 'domain' | 'orgId'>,
+): string {
+  return `proactive_${crypto.createHash('sha256')
+    .update(JSON.stringify({
+      executionId,
+      deliveryIndex,
+      userId: delivery.userId,
+      domain: delivery.domain,
+      orgId: delivery.orgId,
+    }))
+    .digest('hex')
+    .slice(0, 24)}`;
 }
 
 type LLMGetters = {
@@ -272,51 +378,64 @@ export class Scheduler {
     }));
   }
 
-  /** Persist a proactive message under its explicit owner and data boundary. */
-  private saveProactiveMessage(taskId: string, delivery: ScheduledDelivery, timestamp: string) {
-    try {
-      const db = readDB();
-      if (!db.interactions) db.interactions = [];
-      db.interactions.push({
-        id: `proactive_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        userId: delivery.userId,
-        agentId: 'lumi',
-        conversationId: '',
-        module: 'lumi',
-        message: `[${taskId}] ${delivery.message}`,
-        response: '',
-        role: 'assistant',
-        personality: 'lumi',
-        mode: 'proactive',
-        toolCalls: '',
-        domain: delivery.domain || 'personal',
-        orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
-        timestamp,
-      });
-      writeDB(db);
-    } catch (err: any) {
-      console.warn(`[Scheduler] Failed to persist proactive message:`, err.message);
-    }
+  /** Persist once before enqueueing; retries never emit the same delivery twice. */
+  private saveProactiveMessage(
+    taskId: string,
+    executionId: string,
+    deliveryIndex: number,
+    delivery: ScheduledDelivery,
+    timestamp: string,
+  ): { id: string; created: boolean } {
+    const db = readDB();
+    if (!db.interactions) db.interactions = [];
+    const id = buildScheduledProactiveInteractionId(executionId, deliveryIndex, delivery);
+    if (db.interactions.some((candidate: any) => candidate.id === id)) return { id, created: false };
+    db.interactions.push({
+      id,
+      userId: delivery.userId,
+      agentId: 'lumi',
+      conversationId: '',
+      module: 'lumi',
+      message: `[${taskId}] ${delivery.message}`,
+      response: '',
+      role: 'assistant',
+      personality: 'lumi',
+      mode: 'proactive',
+      toolCalls: JSON.stringify({ executionId }),
+      domain: delivery.domain || 'personal',
+      orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
+      timestamp,
+    });
+    writeDB(db);
+    return { id, created: true };
   }
 
-  private deliverTaskResult(task: ScheduledTask, result: ScheduledTaskResult, timestamp: string): void {
-    if (!result) return;
+  private deliverTaskResult(
+    task: ScheduledTask,
+    plan: CapabilityExecutionPlan,
+    result: ScheduledTaskResult,
+    timestamp: string,
+  ): { deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number } {
+    const summary = { deliveryCount: 0, persistedCount: 0, emittedCount: 0, withheldCount: 0 };
+    if (!result) return summary;
     if (!Array.isArray(result)) {
       if (!task.quiet) {
         console.warn(`[Scheduler] Dropped unscoped proactive result from "${task.id}". Return ScheduledDelivery[] instead.`);
       }
-      return;
+      return summary;
     }
 
-    for (const delivery of result) {
-      if (!delivery?.userId || !delivery.message?.trim()) continue;
+    result.forEach((delivery, deliveryIndex) => {
+      if (!delivery?.userId || !delivery.message?.trim()) return;
+      summary.deliveryCount += 1;
       const deliveryFinalization = finalizeScheduledDelivery(task.id, delivery);
       if (!deliveryFinalization.delivery) {
+        summary.withheldCount += 1;
         console.warn(
           `[Scheduler] Withheld unverified model-authored proactive message from "${task.id}": `
           + deliveryFinalization.reason,
         );
-        continue;
+        return;
       }
       const safeDelivery = deliveryFinalization.delivery;
       const normalized: ScheduledDelivery = {
@@ -325,8 +444,15 @@ export class Scheduler {
         domain: safeDelivery.domain === 'work' && safeDelivery.orgId ? 'work' : 'personal',
         orgId: safeDelivery.domain === 'work' ? safeDelivery.orgId || '' : '',
       };
-      this.saveProactiveMessage(task.id, normalized, timestamp);
-      if (!task.quiet && this.io) {
+      const persistence = this.saveProactiveMessage(
+        task.id,
+        plan.taskId,
+        deliveryIndex,
+        normalized,
+        timestamp,
+      );
+      summary.persistedCount += 1;
+      if (persistence.created && !task.quiet && this.io) {
         const room = normalized.domain === 'work' && normalized.orgId
           ? `org:${normalized.orgId}`
           : `user:${normalized.userId}:personal`;
@@ -340,8 +466,10 @@ export class Scheduler {
           blocked: false,
           reason: deliveryFinalization.reason,
         });
+        summary.emittedCount += 1;
       }
-    }
+    });
+    return summary;
   }
 
   private scheduleTask(task: ScheduledTask) {
@@ -376,15 +504,147 @@ export class Scheduler {
   private async runTask(task: ScheduledTask): Promise<void> {
     if (task.enabled === false || this.runningTasks.has(task.id)) return;
     this.runningTasks.add(task.id);
+    const startedAt = new Date();
+    let plan: CapabilityExecutionPlan | null = null;
+    let handlerStarted = false;
     try {
+      plan = buildScheduledTaskExecutionPlan(task, startedAt);
+      const authorization = authorizeCapabilityPlanTool(plan, 'scheduler_task_handler');
+      const db = readDB();
+      const previous = (db.conversationActionTasks || []).find((candidate: any) => candidate.id === plan.taskId);
+      if (previous) {
+        if (previous.status === 'executing') {
+          const record = this.buildScheduledTaskRecord(plan, {
+            verified: false,
+            status: 'unknown',
+            error: 'scheduler_previous_outcome_unknown',
+          });
+          persistScheduledCapabilityExecution(db, {
+            scheduledTaskId: task.id,
+            plan,
+            status: 'blocked',
+            blocker: 'A previous execution in this exact schedule slot has an unknown outcome; replay was stopped.',
+            records: [record],
+            now: startedAt.toISOString(),
+          });
+          writeDB(db);
+        }
+        return;
+      }
+      persistScheduledCapabilityExecution(db, {
+        scheduledTaskId: task.id,
+        plan,
+        status: authorization.allowed ? 'executing' : 'blocked',
+        blocker: authorization.allowed ? '' : authorization.reason,
+        records: authorization.allowed ? [] : [this.buildScheduledTaskRecord(plan, {
+          verified: false,
+          status: 'blocked',
+          error: authorization.reason,
+        })],
+        now: startedAt.toISOString(),
+      });
+      writeDB(db);
+      if (!authorization.allowed) {
+        console.warn(`[Scheduler] Task "${task.id}" blocked by capability policy: ${authorization.reason}`);
+        return;
+      }
+      handlerStarted = true;
       const result = await task.handler();
       task.lastRun = new Date().toISOString();
-      this.deliverTaskResult(task, result, task.lastRun);
+      const delivery = this.deliverTaskResult(task, plan, result, task.lastRun);
+      const completedDb = readDB();
+      persistScheduledCapabilityExecution(completedDb, {
+        scheduledTaskId: task.id,
+        plan,
+        status: 'completed',
+        records: [this.buildScheduledTaskRecord(plan, {
+          verified: true,
+          status: 'verified',
+          delivery,
+        })],
+        now: task.lastRun,
+      });
+      writeDB(completedDb);
     } catch (err: any) {
+      if (handlerStarted && plan) {
+        try {
+          const failedAt = new Date().toISOString();
+          const db = readDB();
+          persistScheduledCapabilityExecution(db, {
+            scheduledTaskId: task.id,
+            plan,
+            status: 'blocked',
+            blocker: 'Scheduled handler failed; automatic replay for this slot is disabled.',
+            records: [this.buildScheduledTaskRecord(plan, {
+              verified: false,
+              status: 'failed',
+              error: 'scheduler_handler_failed',
+            })],
+            now: failedAt,
+          });
+          writeDB(db);
+        } catch (ledgerError: any) {
+          console.warn(`[Scheduler] Failed to persist task failure for "${task.id}":`, ledgerError.message);
+        }
+      }
       console.warn(`[Scheduler] Task "${task.id}" failed:`, err.message);
     } finally {
       this.runningTasks.delete(task.id);
     }
+  }
+
+  private buildScheduledTaskRecord(
+    plan: CapabilityExecutionPlan,
+    input: {
+      verified: boolean;
+      status: 'verified' | 'blocked' | 'failed' | 'unknown';
+      error?: string;
+      delivery?: { deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number };
+    },
+  ): ToolExecutionRecord {
+    const node = plan.nodes.find(candidate => candidate.toolName === 'scheduler_task_handler');
+    if (!node) throw new Error('Scheduled capability plan is missing its handler adapter.');
+    const receipt = {
+      status: input.status,
+      verified: input.verified,
+      scheduledTaskId: plan.intent.target,
+      ...(input.delivery || {}),
+    };
+    return {
+      id: `receipt_${plan.taskId}_${input.status}`,
+      taskId: plan.taskId,
+      turnId: plan.taskId,
+      requestId: plan.taskId,
+      idempotencyKey: `${plan.taskId}:scheduler_task_handler:${input.status}`,
+      name: 'scheduler_task_handler',
+      arguments: { scheduledTaskId: plan.intent.target, executionId: plan.taskId },
+      result: JSON.stringify(receipt),
+      receipt,
+      ...(input.error ? { error: input.error } : {}),
+      capability: {
+        capabilityId: node.capabilityId,
+        lane: node.lane,
+        operation: node.operation,
+        risk: node.risk,
+        sideEffects: node.sideEffects.map(effect => ({ ...effect })),
+        verification: {
+          ...node.verification,
+          requiredFields: [...node.verification.requiredFields],
+          requiredValues: node.verification.requiredValues ? { ...node.verification.requiredValues } : undefined,
+          requiredArtifacts: [...(node.verification.requiredArtifacts || [])],
+          requiredArtifactCollections: [...(node.verification.requiredArtifactCollections || [])],
+          successStatuses: [...(node.verification.successStatuses || [])],
+          failureStatuses: [...(node.verification.failureStatuses || [])],
+          successSignals: [...node.verification.successSignals],
+          limitations: [...node.verification.limitations],
+        },
+      },
+      terminalVerification: {
+        status: input.verified ? 'verified' : input.status === 'failed' ? 'failed' : 'unverified',
+        strategy: 'terminal_receipt',
+        reason: input.verified ? 'Declared scheduler handler completed with a persisted terminal receipt.' : input.error || input.status,
+      },
+    };
   }
 
   private setTaskTimeout(id: string, callback: () => void | Promise<void>, delayMs: number): NodeJS.Timeout {
@@ -495,6 +755,7 @@ export function registerScheduledTasks(
     id: 'legal_authority_source_refresh',
     cron: '23 4 * * *',
     lastRun: null,
+    executionClass: 'proactive_delivery',
     handler: async () => {
       const result = await refreshAuthoritativeStatuteSources();
       if (result.newPendingReview === 0) return null;
@@ -518,6 +779,7 @@ export function registerScheduledTasks(
     id: 'reminder_check',
     cron: 'every_5m',
     lastRun: null,
+    executionClass: 'proactive_delivery',
     handler: async () => {
       const due = getDueReminders();
       if (due.length > 0) {
@@ -547,6 +809,7 @@ export function registerScheduledTasks(
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       for (const userId of userIds) {
@@ -563,6 +826,7 @@ export function registerScheduledTasks(
     cron: 'every_1h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       let totalPromoted = 0;
@@ -585,6 +849,7 @@ export function registerScheduledTasks(
     cron: 'every_30m',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -615,6 +880,7 @@ export function registerScheduledTasks(
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -652,6 +918,7 @@ export function registerScheduledTasks(
     cron: '17 3 * * *',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -699,6 +966,7 @@ export function registerScheduledTasks(
     id: 'daily_summary',
     cron: 'daily_9am',
     lastRun: null,
+    executionClass: 'proactive_delivery',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: ScheduledDelivery[] = [];
@@ -761,6 +1029,7 @@ Output ONLY the greeting — no preamble, no labels.`;
     id: 'evening_wrapup',
     cron: 'evening_8pm',
     lastRun: null,
+    executionClass: 'proactive_delivery',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: ScheduledDelivery[] = [];
@@ -816,6 +1085,7 @@ Output ONLY the reflection — no preamble, no labels.`;
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       let totalCount = 0;
@@ -835,6 +1105,7 @@ Output ONLY the reflection — no preamble, no labels.`;
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       let totalBranches = 0;
@@ -938,6 +1209,7 @@ Rules:
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1000,6 +1272,7 @@ Rules:
     cron: 'every_7d',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1068,6 +1341,7 @@ Rules:
     cron: '1 0 1 * *',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1135,6 +1409,7 @@ Rules:
     cron: '0 0 1 1 *',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1202,6 +1477,7 @@ Rules:
     cron: 'every_hour',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       try {
         for (const userId of getAllUserIds()) {
@@ -1233,6 +1509,7 @@ Rules:
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       try {
         const userIds = getAllUserIds();
@@ -1262,6 +1539,7 @@ Rules:
     id: 'growth_journal',
     cron: 'daily_9am',
     lastRun: null,
+    executionClass: 'proactive_delivery',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: ScheduledDelivery[] = [];
@@ -1412,6 +1690,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
     cron: 'every_30m',
     quiet: true,
     lastRun: null,
+    executionClass: 'autonomous_orchestration',
     handler: async () => {
       const db = readDB();
       const agents: AgentRecord[] = db.agents || [];
@@ -1496,6 +1775,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
     cron: 'every_1h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1703,6 +1983,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'daily_9am',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1772,6 +2053,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'every_6h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
@@ -1815,6 +2097,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'every_1h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       const removed = cleanupEphemeralAgents(6);
       if (removed > 0) {
@@ -1831,6 +2114,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     id: 'ambient_activity_poll',
     cron: 'every_10s',
     lastRun: null,
+    executionClass: 'client_probe',
     handler: async () => {
       if (scheduler.io) {
         const payload = { timestamp: new Date().toISOString() };
@@ -1847,6 +2131,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     id: 'idle_check',
     cron: 'every_1m',
     lastRun: null,
+    executionClass: 'client_probe',
     handler: async () => {
       if (scheduler.io) {
         const payload = { timestamp: new Date().toISOString() };
@@ -1864,6 +2149,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'every_10m',
     quiet: true,
     lastRun: null,
+    executionClass: 'autonomous_orchestration',
     handler: async () => {
       if (!scheduler.io) return null;
 
@@ -1917,6 +2203,7 @@ Output ONLY the prediction message — no preamble, no labels.`;
     cron: 'every_24h',
     quiet: true,
     lastRun: null,
+    executionClass: 'maintenance',
     handler: async () => {
       if (!isFirstBootComplete()) return null;
       const snapshot = runDailyScan();

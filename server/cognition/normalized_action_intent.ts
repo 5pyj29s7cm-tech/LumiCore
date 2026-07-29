@@ -10,6 +10,7 @@ export type NormalizedActionIntentKind =
   | 'client_state'
   | 'desktop_operation'
   | 'cad_drafting'
+  | 'scheduled_task'
   | 'status_query'
   | 'correction_explanation';
 
