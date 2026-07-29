@@ -77,6 +77,7 @@ function readmeText(manifest, copiedFiles) {
       `  size: ${item.sizeBytes} bytes`,
       `  sha256: ${item.sha256}`,
       copied ? `  bundled file: ${path.basename(copied.dest)}` : '',
+      item.updaterSignatureFile ? `  updater signature: ${path.basename(item.updaterSignatureFile)}` : '',
     ].filter(Boolean).join('\n');
   }).join('\n\n');
 
@@ -163,6 +164,14 @@ async function main() {
       } else {
         await fs.writeFile(path.join(outDir, `${path.basename(artifactPath)}.sha256`), `${digest}  ${path.basename(artifactPath)}\n`);
       }
+    }
+
+    if (artifact.updaterSignatureFile) {
+      const signaturePath = path.join(root, artifact.updaterSignatureFile);
+      if (!existsSync(signaturePath)) {
+        throw new Error(`Updater signature missing: ${signaturePath}`);
+      }
+      await copyFilePreservingName(signaturePath, outDir);
     }
   }
 

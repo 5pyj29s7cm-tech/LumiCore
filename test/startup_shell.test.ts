@@ -101,8 +101,11 @@ describe('desktop startup shell', () => {
 
   it('filters release artifacts by the current version and embeds runtime identity', () => {
     const manifestWriter = fs.readFileSync(path.join(process.cwd(), 'scripts/write-release-manifest.mjs'), 'utf8');
+    const bundleWriter = fs.readFileSync(path.join(process.cwd(), 'scripts/prepare-release-bundle.mjs'), 'utf8');
     expect(manifestWriter).toContain("path.basename(filePath).includes(tauri.version)");
     expect(manifestWriter).toContain('runtime: runtimeMeta');
+    expect(manifestWriter).toContain('updaterSignatureFile');
+    expect(bundleWriter).toContain('artifact.updaterSignatureFile');
   });
 
   it('keeps public updates and commercial distribution behind explicit release gates', () => {
@@ -117,8 +120,15 @@ describe('desktop startup shell', () => {
     expect(releaseCheck).toContain("runtimeMeta.channel !== 'public'");
     expect(releaseCheck).toContain('Get-AuthenticodeSignature');
     expect(releaseCheck).toContain('artifact.updater-signature');
+    expect(releaseCheck).toContain('LUMI_RELEASE_TAURI_CONFIG');
     const windowsWorkflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/build-windows.yml'), 'utf8');
     expect(windowsWorkflow).toContain('createUpdaterArtifacts');
+    expect(windowsWorkflow).toContain('npx tauri build --config $env:LUMI_RELEASE_TAURI_CONFIG');
+    expect(windowsWorkflow).not.toContain("Set-Content -LiteralPath $configPath");
+    const reliabilityWorkflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/reliability-windows.yml'), 'utf8');
+    expect(reliabilityWorkflow).toContain('--duration-hours 24');
+    expect(reliabilityWorkflow).toContain('LUMI_TTS_RELIABILITY_FIXTURE_DIR');
+    expect(reliabilityWorkflow).toContain('New-Item -ItemType Junction');
   });
 
   it('packages Sharp native dependencies for the build host instead of Windows-only binaries', () => {

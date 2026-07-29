@@ -9,10 +9,12 @@ const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
 
 function parseArgs(argv) {
+  const configIndex = argv.indexOf('--tauri-config');
   return {
     strictPublish: argv.includes('--strict-publish'),
     allowDirty: argv.includes('--allow-dirty'),
     json: argv.includes('--json'),
+    tauriConfig: configIndex >= 0 ? argv[configIndex + 1] : '',
   };
 }
 
@@ -73,6 +75,17 @@ function fail(checks, id, message, detail) {
 function parseCargoVersion(cargoToml) {
   const match = cargoToml.match(/^\s*version\s*=\s*"([^"]+)"/m);
   return match?.[1] || '';
+}
+
+function mergeConfig(base, override) {
+  if (Array.isArray(override) || override === null || typeof override !== 'object') return override;
+  const merged = { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}) };
+  for (const [key, value] of Object.entries(override)) {
+    merged[key] = value && typeof value === 'object' && !Array.isArray(value)
+      ? mergeConfig(merged[key], value)
+      : value;
+  }
+  return merged;
 }
 
 function releaseBundleDir(productName, version, shortHead) {
@@ -194,7 +207,11 @@ async function main() {
   const checks = [];
 
   const pkg = await readJson(path.join(root, 'package.json'));
-  const tauri = await readJson(path.join(root, 'src-tauri', 'tauri.conf.json'));
+  const baseTauri = await readJson(path.join(root, 'src-tauri', 'tauri.conf.json'));
+  const tauriConfigOverride = args.tauriConfig || process.env.LUMI_RELEASE_TAURI_CONFIG || '';
+  const tauri = tauriConfigOverride
+    ? mergeConfig(baseTauri, await readJson(path.resolve(root, tauriConfigOverride)))
+    : baseTauri;
   const cargoToml = await readText(path.join(root, 'src-tauri', 'Cargo.toml'));
   const cargoVersion = parseCargoVersion(cargoToml);
   const head = git(['rev-parse', 'HEAD'], 'unknown');
@@ -349,7 +366,9 @@ async function main() {
         else fail(checks, 'release-bundle.file', `Bundle missing ${fileName}`);
       }
       for (const artifact of manifest.artifacts || []) {
-        for (const fileName of [artifact.name, `${artifact.name}.sha256`]) {
+        const artifactFiles = [artifact.name, `${artifact.name}.sha256`];
+        if (artifact.updaterSignatureFile || args.strictPublish) artifactFiles.push(`${artifact.name}.sig`);
+        for (const fileName of artifactFiles) {
           const filePath = path.join(outDir, fileName);
           if (existsSync(filePath)) pass(checks, 'release-bundle.artifact', `Bundle contains ${fileName}`);
           else fail(checks, 'release-bundle.artifact', `Bundle missing ${fileName}`);

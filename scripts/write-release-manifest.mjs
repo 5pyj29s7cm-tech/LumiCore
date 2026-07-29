@@ -85,6 +85,7 @@ async function main() {
     const relativePath = path.relative(root, filePath).split(path.sep).join('/');
     const shaFile = `${filePath}.sha256`;
     await fs.writeFile(shaFile, `${digest}  ${path.basename(filePath)}\n`);
+    const updaterSignaturePath = `${filePath}.sig`;
     entries.push({
       file: relativePath,
       name: path.basename(filePath),
@@ -92,6 +93,9 @@ async function main() {
       sizeBytes: stat.size,
       sha256: digest,
       sha256File: path.relative(root, shaFile).split(path.sep).join('/'),
+      ...(existsSync(updaterSignaturePath) ? {
+        updaterSignatureFile: path.relative(root, updaterSignaturePath).split(path.sep).join('/'),
+      } : {}),
     });
   }
 

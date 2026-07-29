@@ -37,6 +37,10 @@ jobs:
           cache: npm
       - run: npm ci
 
+      - name: Require a soak evidence run for public candidates
+        if: inputs.channel == 'public' && inputs.soak_run_id == ''
+        run: throw 'soak_run_id is required for a public candidate'
+
       - name: Quality and security gates
         run: |
           npm run lint
@@ -48,24 +52,31 @@ jobs:
         shell: pwsh
         env:
           UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+          UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+          COMMERCIAL_LICENSE_APPROVED: ${{ secrets.LUMI_COMMERCIAL_LICENSE_APPROVED }}
+          DEPENDENCY_RISK_APPROVED: ${{ secrets.LUMI_DEPENDENCY_RISK_APPROVED }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:UPDATER_PUBLIC_KEY)) { throw 'TAURI_UPDATER_PUBLIC_KEY is required' }
+          if ([string]::IsNullOrWhiteSpace($env:UPDATER_PRIVATE_KEY)) { throw 'TAURI_SIGNING_PRIVATE_KEY is required' }
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) { throw 'WINDOWS_CODESIGN_CERTIFICATE_BASE64 is required' }
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) { throw 'WINDOWS_CODESIGN_CERTIFICATE_PASSWORD is required' }
-          $configPath = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\tauri.conf.json'
-          $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-          $config.plugins.updater.pubkey = $env:UPDATER_PUBLIC_KEY
+          if ($env:COMMERCIAL_LICENSE_APPROVED -ne '1') { throw 'LUMI_COMMERCIAL_LICENSE_APPROVED must be 1' }
+          if ($env:DEPENDENCY_RISK_APPROVED -ne '1') { throw 'LUMI_DEPENDENCY_RISK_APPROVED must be 1' }
           $pfxPath = Join-Path $env:RUNNER_TEMP 'lumi-windows-signing.pfx'
           [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
           $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
           $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
           if (-not $certificate.Thumbprint) { throw 'Failed to import Windows signing certificate' }
-          $config.bundle.windows.certificateThumbprint = $certificate.Thumbprint
-          $config.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $true -Force
-          $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath -Encoding utf8
+          $publicConfigPath = Join-Path $env:RUNNER_TEMP 'lumi-public-tauri.conf.json'
+          $publicConfig = @{
+            bundle = @{ createUpdaterArtifacts = $true }
+            plugins = @{ updater = @{ pubkey = $env:UPDATER_PUBLIC_KEY } }
+          }
+          $publicConfig | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $publicConfigPath -Encoding utf8
           "TAURI_BUNDLE_WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LUMI_RELEASE_TAURI_CONFIG=$publicConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Download packaged Node.js runtime
         run: node scripts/download-node-binary.mjs
@@ -79,12 +90,19 @@ jobs:
         run: cargo check --release
 
       - name: Build Windows installer
+        shell: pwsh
         env:
           LUMI_RELEASE_CHANNEL: ${{ inputs.channel }}
           LUMI_DESKTOP_WITH_LOCAL_VOICE: ${{ inputs.include_local_voice == 'true' && '1' || '0' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.channel == 'public' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.channel == 'public' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
-        run: npm run tauri:build
+        run: |
+          if ($env:LUMI_RELEASE_CHANNEL -eq 'public') {
+            if ([string]::IsNullOrWhiteSpace($env:LUMI_RELEASE_TAURI_CONFIG)) { throw 'Public Tauri override config is missing' }
+            npx tauri build --config $env:LUMI_RELEASE_TAURI_CONFIG
+          } else {
+            npm run tauri:build
+          }
 
       - name: Desktop preload budget
         run: npm run check:bundle-budget
@@ -106,10 +124,6 @@ jobs:
         run: |
           npm run release:manifest
           npm run release:bundle
-
-      - name: Require a soak evidence run for public candidates
-        if: inputs.channel == 'public' && inputs.soak_run_id == ''
-        run: throw 'soak_run_id is required for a public candidate'
 
       - name: Download current-commit 24-hour soak evidence
         if: inputs.channel == 'public'

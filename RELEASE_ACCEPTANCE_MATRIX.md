@@ -38,3 +38,19 @@ The mandatory workflow is silent isolated install, first launch out of loading s
 ## Owner-provided public prerequisites
 
 Engineering validates but does not invent the updater private key, updater public key, HTTPS update/download endpoint, Windows Authenticode certificate, or AGPL/closed-commercial distribution decision. Missing prerequisites still allow an `internal` candidate, but block public distribution.
+
+The public Windows workflow requires these GitHub Actions secrets:
+
+- `TAURI_UPDATER_PUBLIC_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY` and, when encrypted, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- `WINDOWS_CODESIGN_CERTIFICATE_BASE64` and `WINDOWS_CODESIGN_CERTIFICATE_PASSWORD`
+- `LUMI_COMMERCIAL_LICENSE_APPROVED=1`
+- `LUMI_DEPENDENCY_RISK_APPROVED=1`
+
+The fixed reference runner requires these repository variables:
+
+- `LUMI_COLD_START_BASELINE_MS`
+- `LUMI_GPTSOVITS_ROOT`, pointing to a provisioned GPT-SoVITS runtime outside the checkout
+- `LUMI_TTS_RELIABILITY_FIXTURE_DIR`, pointing to controlled PCM16 WAV fixtures outside the checkout
+
+Run `Windows 24-hour Reliability` first and retain its run ID. Then dispatch `Build Windows Installer` with `channel=public` and that `soak_run_id`. The workflow creates an untracked Tauri override in the runner temp directory, so signing configuration never dirties or rewrites the committed application config.
