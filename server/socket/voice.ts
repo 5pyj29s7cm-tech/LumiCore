@@ -42,6 +42,7 @@ import {
   prepareConversationActionExecution,
   persistConversationExecutionPlan,
   persistConversationModelExecutionResult,
+  getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
@@ -57,6 +58,7 @@ import {
 } from "../agents/orchestrator";
 import { retrieveChunks } from "../agents/rag";
 import { markLatestUserTurn } from "../agents/background_delivery";
+import { executeSkillWorkflowAdapter } from "../skills/workflow_registry";
 import { queryMemories, addMemory } from "../memory/store";
 import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { searchKnowledgeBase } from "../org/kb";
@@ -77,6 +79,7 @@ import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
+import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
@@ -1485,6 +1488,7 @@ async function processVoiceInput(
     capabilitySelection,
     capabilityExecutionPlan: executionPipeline.executionPlan,
   });
+  const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
   const routedToolPolicy = executionDecision.toolPolicy;
   const actionFollowupIntent = classifyConversationActionFollowupIntent(
     actionIntentText,
@@ -1854,6 +1858,7 @@ async function processVoiceInput(
       }
     },
     toolPolicy: routedToolPolicy,
+    desktopExecutionTracker,
   };
   const ttsProvider = getTTSProvider();
   // Emotion-adaptive voice: map mood to speech parameters, preserve user's chosen voiceId
@@ -2285,6 +2290,7 @@ async function processVoiceInput(
         ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
         : continuation.text || confirmationCandidate;
     }
+    confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, desktopExecutionTracker);
     const confirmedFinal = finalizeLumiResponse({
       taskText: confirmedTask,
       responseText: confirmationCandidate,
@@ -2397,16 +2403,22 @@ async function processVoiceInput(
   if (specialWorkflow) {
     let workflowSpeechSummary = '';
     try {
-      const workflowResult = await specialWorkflow.run({
-        socket,
-        userText,
-        userId: session.userId,
-        desktopRelay,
-        // The workflow returns its narration as responseText. TTS is queued
-        // only after the shared finalizer has inspected all tool receipts.
-        speak: async () => 0,
-        voiceScope,
-        isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
+      const workflowResult = await executeSkillWorkflowAdapter({
+        workflow: specialWorkflow,
+        plan: executionPipeline.executionPlan,
+        registry: toolRegistry,
+        context: toolContext,
+        options: {
+          socket,
+          userText,
+          userId: session.userId,
+          desktopRelay,
+          // The workflow returns its narration as responseText. TTS is queued
+          // only after the shared finalizer has inspected all tool receipts.
+          speak: async () => 0,
+          voiceScope,
+          isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
+        },
       });
       responseText = workflowResult.responseText;
       toolResults = workflowResult.toolCalls;
@@ -3001,6 +3013,13 @@ async function processVoiceInput(
         session.activeWorkStatus = 'orchestrating';
         session.activeWorkStep = 'Coordinating worker agents';
 
+        const voiceModelRecovery = actionTaskExecution.state?.taskId
+          ? getConversationModelExecutionRecovery({
+              conversationId: conversationTurn.conversation.id,
+              userId: session.userId,
+              taskId: actionTaskExecution.state.taskId,
+            })
+          : null;
         const orchResult = await runOrchestratedTask(
           routedUserText,
           {
@@ -3011,6 +3030,8 @@ async function processVoiceInput(
             desktopRelay,
             toolPolicy: routedToolPolicy,
             taskId: actionTaskExecution.state?.taskId,
+            desktopExecutionTracker,
+            resumeNodeReceipts: voiceModelRecovery?.receipts,
             isCancelled: () => pipelineAbort?.signal.aborted ?? false,
           },
           { provider, model: effectiveModel },
@@ -3234,6 +3255,10 @@ async function processVoiceInput(
     }
 
     modelTextGate.finish();
+    const finalizedDesktopRecords = withDesktopExecutionReceipt(toolResults, desktopExecutionTracker);
+    if (finalizedDesktopRecords.length > toolResults.length) {
+      toolResults.push(...finalizedDesktopRecords.slice(toolResults.length));
+    }
     const finalResponse = finalizeLumiResponse({
       taskText: actionIntentText,
       responseText,

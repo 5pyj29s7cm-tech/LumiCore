@@ -192,6 +192,8 @@ export interface ToolContext {
   turnId?: string;
   requestId?: string;
   idempotencyKey?: string;
+  /** Runtime consumer for the current DesktopExecutionPlan state machine. */
+  desktopExecutionTracker?: import('../desktop/execution_runtime').DesktopExecutionTracker;
   /** Canonical registry injected by ToolRegistry for nested workflow/tool execution. */
   toolRegistry?: import('./registry').ToolRegistry;
   /** Active data domain for scoped writes. */

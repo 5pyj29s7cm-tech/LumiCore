@@ -18,14 +18,13 @@ import {
 } from "../cognition/operation_modes";
 import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
-import { buildLumiExecutionDecision } from "../cognition/execution_decision";
-import { buildLumiIntentTrace } from "../cognition/intent_trace";
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { shouldRunLegacyDirectExecution } from "../cognition/legacy_route_policy";
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
+import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { buildDesktopObservationPlan, formatDesktopObservationResult } from "../cognition/desktop_observation";
 import { buildClientDiagnosticPlan, formatClientDiagnosticResult } from "../cognition/client_diagnostic_result";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
@@ -40,7 +39,7 @@ import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPrompt } from "../client/self_model";
-import { canAutoApproveAction, classifyActionRisk, evaluateActionConstitution } from "../tools/action_constitution";
+import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   clearPendingConfirmation,
   consumePendingConfirmation,
@@ -70,6 +69,7 @@ import {
   prepareConversationActionExecution,
   persistConversationExecutionPlan,
   persistConversationModelExecutionResult,
+  getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
 } from "../conversation/manager";
@@ -106,6 +106,7 @@ import {
   shouldAttemptOrchestration,
 } from "../agents/orchestrator";
 import { buildDelegationAck, formatBackgroundDelegationFailure, shouldDelegateWorkInBackground } from "../agents/background_delegation";
+import { executeSkillWorkflowAdapter } from "../skills/workflow_registry";
 import { isLatestUserTurn, markLatestUserTurn } from "../agents/background_delivery";
 import {
   cancelBackgroundTask,
@@ -1735,46 +1736,30 @@ export function registerChatHandler(
       const specialWorkflowText = [visibleUserText || text, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
       const specialWorkflow = turnFlow.specialWorkflow;
       if (specialWorkflow) {
-        const workflowHighRiskApprovals = new Set<string>();
-        const workflowDesktopRelay = async (toolName: string, args: Record<string, any> = {}): Promise<string> => {
-          const decision = evaluateActionConstitution(toolName, args, 'safe', {
-            source: specialWorkflow.source,
-            actionIntent: specialWorkflowText,
-          }, toolRegistry.getCapabilityManifest(personality.toolPolicy)
-            .find(entry => entry.toolName === toolName));
-          if (decision.level === 'forbidden') {
-            throw new Error(`Desktop action blocked: ${decision.reason}`);
-          }
-          if (classifyActionRisk(
-            toolName,
-            args,
-            { actionIntent: specialWorkflowText },
-            toolRegistry.getCapabilityManifest(personality.toolPolicy)
-              .find(entry => entry.toolName === toolName),
-          ) === 'high') {
-            const approvalKey = `${toolName}:${JSON.stringify(args || {}).slice(0, 240)}`;
-            if (!workflowHighRiskApprovals.has(approvalKey)) {
-              const allowed = await requestToolConfirmation(toolName, args);
-              if (!allowed) throw new Error(`Desktop action declined by user: ${toolName}`);
-              workflowHighRiskApprovals.add(approvalKey);
-            }
-          }
-          return desktopRelay(toolName, args);
-        };
-        const workflowExecutionDecision = buildLumiExecutionDecision({
-          flow: turnFlow,
-          text: specialWorkflowText,
-        toolDeclarations: toolRegistry.getToolDeclarations(),
-        toolRegistry,
-        personalityToolPolicy: personality.toolPolicy,
-          isSanctuary,
-        });
-        const workflowIntentTrace = buildLumiIntentTrace({
-          dispatch: turnDispatch,
-          execution: workflowExecutionDecision,
-          text: specialWorkflowText,
-          source: eventSource,
-        });
+        const workflowExecutionDecision = executionPipeline.execution;
+        const workflowTaskExecution = conversationId
+          ? prepareConversationActionExecution({
+              conversationId,
+              userId: uid,
+              userText: visibleUserText,
+              requestId,
+              toolPolicy: workflowExecutionDecision.toolPolicy,
+              forceResume: Boolean(pendingConfirmation),
+            })
+          : { state: null, kind: 'conversation' as const };
+        if (conversationId && workflowTaskExecution.state?.taskId) {
+          executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
+            executionPipeline.executionPlan,
+            workflowTaskExecution.state.taskId,
+          );
+          persistConversationExecutionPlan({
+            conversationId,
+            userId: uid,
+            plan: executionPipeline.executionPlan,
+          });
+          setConversationActionExecutionStatus(conversationId, uid, 'executing', { requestId });
+        }
+        const workflowIntentTrace = executionPipeline.intentTrace;
         socket.emit('agent:intent_trace', workflowIntentTrace);
         emitAgent("agent:status", {
           status: "thinking",
@@ -1788,19 +1773,39 @@ export function registerChatHandler(
         let workflowResponseText = '';
         let workflowToolCalls: ToolExecutionRecord[] = [];
         try {
-          const workflowResult = await specialWorkflow.run({
-            socket,
-            userText: specialWorkflowText,
-            userId: uid,
-            desktopRelay: workflowDesktopRelay,
-            // Narration is returned as responseText. Do not expose it before
-            // the shared result finalizer has inspected the tool ledger.
-            speak: async () => 0,
-            voiceScope: {
-              domain: resolvedDomain === 'work' ? 'work' : 'personal',
+          const workflowResult = await executeSkillWorkflowAdapter({
+            workflow: specialWorkflow,
+            plan: executionPipeline.executionPlan,
+            registry: toolRegistry,
+            context: {
+              userId: uid,
+              taskId: workflowTaskExecution.state?.taskId,
+              turnId: requestId,
+              requestId,
+              domain: resolvedDomain,
               orgId: resolvedOrgId,
+              desktopRelay,
+              llmGetters,
+              source: specialWorkflow.source,
+              supervisedExternalCommits: true,
+              actionIntent: specialWorkflowText,
+              routedTaskText: specialWorkflowText,
+              toolPolicy: workflowExecutionDecision.toolPolicy,
+              requestConfirmation: requestToolConfirmation,
+              isCancelled: () => abortController.signal.aborted,
             },
-            isCancelled: () => abortController.signal.aborted,
+            options: {
+              socket,
+              userText: specialWorkflowText,
+              userId: uid,
+              desktopRelay,
+              speak: async () => 0,
+              voiceScope: {
+                domain: resolvedDomain === 'work' ? 'work' : 'personal',
+                orgId: resolvedOrgId,
+              },
+              isCancelled: () => abortController.signal.aborted,
+            },
           });
           workflowResponseText = workflowResult.responseText;
           workflowToolCalls = workflowResult.toolCalls;
@@ -1824,11 +1829,7 @@ export function registerChatHandler(
           toolRecords: workflowToolCalls,
           source: specialWorkflow.source,
           sourceInteractionId: `${interactionId}_workflow`,
-          capabilitySelection: buildLumiCapabilitySelection({
-            dispatch: turnDispatch,
-            execution: workflowExecutionDecision,
-            text: specialWorkflowText,
-          }),
+          capabilitySelection: executionPipeline.capabilityPlan,
           finalizationBlocked: finalizedWorkflow.blocked,
           assistantTextTrusted: !finalizedWorkflow.blocked,
           finalizationReason: finalizedWorkflow.reason,
@@ -1909,6 +1910,7 @@ export function registerChatHandler(
         capabilitySelection,
         capabilityExecutionPlan: executionPipeline.executionPlan,
       });
+      const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
       const toolRoute = executionDecision.toolRoute;
       const routedToolPolicy = executionDecision.toolPolicy;
       const actionTaskExecution = conversationId
@@ -2144,6 +2146,7 @@ export function registerChatHandler(
               actionIntent: confirmedTask,
               routedTaskText: confirmedTask,
               toolPolicy: routedToolPolicy || personality.toolPolicy,
+              desktopExecutionTracker,
             },
             llmGetters.getOllama,
             llmGetters.getLmStudio,
@@ -2158,6 +2161,7 @@ export function registerChatHandler(
             ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
             : continuation.text || candidate;
         }
+        confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, desktopExecutionTracker);
         const finalized = finalizeLumiResponse({
           taskText: confirmedTask,
           responseText: candidate,
@@ -2512,6 +2516,7 @@ export function registerChatHandler(
         requestConfirmation: requestToolConfirmation,
         actionIntent: visibleUserText,
         toolPolicy: routedToolPolicy || personality.toolPolicy,
+        desktopExecutionTracker,
         isCancelled: () => abortController.signal.aborted,
       };
       const cognition = await processInput(text, cognitiveCtx, llmClassifier, cognitionToolContext);
@@ -2555,6 +2560,7 @@ export function registerChatHandler(
             requestConfirmation: requestToolConfirmation,
             actionIntent: visibleUserText,
             ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
+            desktopExecutionTracker,
           },
         });
         if (shouldEmitLifecycle) {
@@ -3073,6 +3079,13 @@ export function registerChatHandler(
                   phase: 'background',
                   detail: `后台子 agent 正在处理 ${backgroundTaskId}`,
                 });
+                const backgroundModelRecovery = conversationId && actionTaskExecution.state?.taskId
+                  ? getConversationModelExecutionRecovery({
+                      conversationId,
+                      userId: uid,
+                      taskId: actionTaskExecution.state.taskId,
+                    })
+                  : null;
                 const orchResult = await runOrchestratedTask(
                   executionTaskText,
                   {
@@ -3083,6 +3096,8 @@ export function registerChatHandler(
                     desktopRelay,
                     toolPolicy: routedToolPolicy,
                     taskId: actionTaskExecution.state?.taskId,
+                    desktopExecutionTracker,
+                    resumeNodeReceipts: backgroundModelRecovery?.receipts,
                     availableAgentIds: backgroundTask.workers.map(worker => worker.id),
                     forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
                     isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId),
@@ -3328,6 +3343,13 @@ export function registerChatHandler(
         // (Skipped for sanctuary agents — they stay in their territory)
         try {
           emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
+          const foregroundModelRecovery = conversationId && actionTaskExecution.state?.taskId
+            ? getConversationModelExecutionRecovery({
+                conversationId,
+                userId: uid,
+                taskId: actionTaskExecution.state.taskId,
+              })
+            : null;
           const orchResult = await runOrchestratedTask(
             executionTaskText,
             {
@@ -3338,6 +3360,8 @@ export function registerChatHandler(
               desktopRelay,
               toolPolicy: routedToolPolicy,
               taskId: actionTaskExecution.state?.taskId,
+              desktopExecutionTracker,
+              resumeNodeReceipts: foregroundModelRecovery?.receipts,
             },
             { provider: activeProvider, model: activeModel },
             llmGetters,
@@ -3605,6 +3629,7 @@ export function registerChatHandler(
               ...(routedToolPolicy ? { toolPolicy: routedToolPolicy } : {}),
               actionIntent: visibleUserText,
               routedTaskText: turnFlow.routeText,
+              desktopExecutionTracker,
               ...(executionDecision.allowToolUse || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation: requestToolConfirmation } : {}),
             },
             llmGetters.getOllama,
@@ -3642,6 +3667,10 @@ export function registerChatHandler(
       }
 
       chatTextGate.finish();
+      const finalizedDesktopRecords = withDesktopExecutionReceipt(allToolRecords, desktopExecutionTracker);
+      if (finalizedDesktopRecords.length > allToolRecords.length) {
+        allToolRecords.push(...finalizedDesktopRecords.slice(allToolRecords.length));
+      }
       const finalResponse = finalizeLumiResponse({
         taskText: executionTaskText,
         responseText,

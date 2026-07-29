@@ -18,7 +18,7 @@ import iconv from 'iconv-lite';
 import { readDB, writeDB } from '../db_layer';
 import { chunkText, ingestDocument } from '../server/agents/rag';
 import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
-import { hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
+import { buildKnowledgeIngestionManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
 import { getDataPath, getDataRoot } from '../server/config/data_path';
 import { getJwtSecret } from '../server/config/local_identity';
 import * as OrgKB from '../server/org/kb';
@@ -82,12 +82,13 @@ const upload = multer({ dest: tmpDir, limits: { fileSize: MAX_UPLOAD_BYTES, file
 type KnowledgeStatus = 'ready' | 'indexing' | 'indexed' | 'partial' | 'unsupported' | 'failed';
 type ExtractionMethod = 'text' | 'markdown' | 'rtf' | 'docx' | 'spreadsheet' | 'presentation' | 'pdf' | 'image-vision' | 'image-metadata' | 'audio-transcript' | 'unsupported';
 
-interface KnowledgeExtractionResult {
+export interface KnowledgeExtractionResult {
   content: string | null;
   method: ExtractionMethod;
   status: Extract<KnowledgeStatus, 'indexed' | 'partial' | 'unsupported' | 'failed'>;
   warning?: string;
   error?: string;
+  failureKind?: KnowledgeIngestionManifest['extraction']['failureKind'];
   provider?: VisionProvider | string;
   model?: string;
   sourceMetadata?: MarkdownKnowledgeMetadata;
@@ -99,9 +100,12 @@ interface KnowledgeExtractionDeps {
 
 let knowledgeExtractionDeps: KnowledgeExtractionDeps = {};
 let sharpLoader: Promise<any> | null = null;
+let legacyRevalidationTimer: ReturnType<typeof setTimeout> | null = null;
+let legacyRevalidationRunning = false;
 
 export function configureKnowledgeFileRoutes(deps: KnowledgeExtractionDeps): void {
   knowledgeExtractionDeps = { ...knowledgeExtractionDeps, ...deps };
+  scheduleLegacyKnowledgeRevalidation();
 }
 
 async function getSharp() {
@@ -137,6 +141,7 @@ interface KnowledgeEntry {
   extractionMethod?: ExtractionMethod;
   extractionWarning?: string;
   extractionError?: string;
+  extractionFailureKind?: KnowledgeExtractionResult['failureKind'];
   extractionProvider?: string;
   extractionModel?: string;
   contentChars?: number;
@@ -528,9 +533,21 @@ async function extractImageKnowledge(filePath: string, userId: string): Promise<
       g.getGlm,
       g.getRelay,
     );
+    const extracted = String(analysis || '').trim();
+    if (!extracted) {
+      return {
+        content: imageInfo,
+        method: 'image-metadata',
+        status: 'partial',
+        provider,
+        model,
+        warning: 'The vision provider returned no extractable text or visual description; only image metadata was indexed.',
+        failureKind: 'empty_extraction',
+      };
+    }
 
     return {
-      content: `${imageInfo}\nVision provider: ${provider}/${model}\n\nExtracted visual knowledge:\n${String(analysis || '').trim()}`,
+      content: `${imageInfo}\nVision provider: ${provider}/${model}\n\nExtracted visual knowledge:\n${extracted}`,
       method: 'image-vision',
       status: 'indexed',
       provider,
@@ -545,8 +562,8 @@ async function extractImageKnowledge(filePath: string, userId: string): Promise<
     return {
       content: fallback || null,
       method: fallback ? 'image-metadata' : 'unsupported',
+      ...classifyKnowledgeExtractionFailure(err),
       status: fallback ? 'partial' : 'failed',
-      error: err?.message || String(err),
       warning: fallback ? 'Image vision extraction failed; only file metadata was indexed.' : undefined,
     };
   }
@@ -594,6 +611,7 @@ async function extractAudioKnowledge(filePath: string): Promise<KnowledgeExtract
         method: 'audio-transcript',
         status: 'failed',
         error: 'No speech was transcribed from this audio file.',
+        failureKind: 'empty_extraction',
       };
     }
     return {
@@ -612,6 +630,7 @@ async function extractAudioKnowledge(filePath: string): Promise<KnowledgeExtract
     };
   } catch (err: any) {
     const message = err?.message || String(err);
+    const classified = classifyKnowledgeExtractionFailure(err);
     return {
       content: null,
       method: 'audio-transcript',
@@ -619,6 +638,7 @@ async function extractAudioKnowledge(filePath: string): Promise<KnowledgeExtract
       error: isAudioTranscriptionUnavailable(err)
         ? 'No audio transcription provider is configured. Configure OpenAI Whisper, DashScope SenseVoice, Doubao Speech, or local Whisper, then retry.'
         : message,
+      failureKind: isAudioTranscriptionUnavailable(err) ? 'provider_unavailable' : classified.failureKind,
     };
   }
 }
@@ -650,30 +670,58 @@ function extractGeneratedTextKnowledge(filename: string, content: string): Knowl
   return { content, method: 'text', status: 'indexed' };
 }
 
-async function extractKnowledgeFileContent(filePath: string, userId = 'anonymous'): Promise<KnowledgeExtractionResult> {
+export async function extractKnowledgeFileContent(filePath: string, userId = 'anonymous'): Promise<KnowledgeExtractionResult> {
   const extName = path.extname(filePath);
   try {
     if (TEXT_KNOWLEDGE_EXTS.test(extName)) {
-      return extractTextKnowledge(filePath);
+      const result = extractTextKnowledge(filePath);
+      return result.content?.trim()
+        ? result
+        : { ...result, content: null, status: 'partial', warning: 'The text source is empty.', failureKind: 'empty_extraction' };
     }
     if (RTF_KNOWLEDGE_EXTS.test(extName)) {
-      return { content: extractRtfText(fs.readFileSync(filePath, 'utf-8')), method: 'rtf', status: 'indexed' };
+      const content = extractRtfText(fs.readFileSync(filePath, 'utf-8'));
+      return content.trim()
+        ? { content, method: 'rtf', status: 'indexed' }
+        : { content: null, method: 'rtf', status: 'partial', warning: 'The RTF source contained no extractable text.', failureKind: 'empty_extraction' };
     }
     if (/\.docx$/i.test(extName)) {
       const mammoth = await import('mammoth');
-      return { content: (await mammoth.extractRawText({ path: filePath })).value, method: 'docx', status: 'indexed' };
+      const content = (await mammoth.extractRawText({ path: filePath })).value;
+      return content.trim()
+        ? { content, method: 'docx', status: 'indexed' }
+        : { content: null, method: 'docx', status: 'partial', warning: 'The document contained no extractable text.', failureKind: 'empty_extraction' };
     }
     if (/\.xlsx$/i.test(extName)) {
-      return { content: await workbookToText(filePath), method: 'spreadsheet', status: 'indexed' };
+      const content = await workbookToText(filePath);
+      return content.trim()
+        ? { content, method: 'spreadsheet', status: 'indexed' }
+        : { content: null, method: 'spreadsheet', status: 'partial', warning: 'The workbook contained no extractable cell content.', failureKind: 'empty_extraction' };
     }
     if (/\.xls$/i.test(extName)) {
       throw new Error('Legacy .xls files are not supported by the safe spreadsheet reader. Convert the file to .xlsx or .csv first.');
     }
     if (/\.pptx$/i.test(extName)) {
-      return { content: await extractPptxText(filePath), method: 'presentation', status: 'indexed' };
+      const content = await extractPptxText(filePath);
+      return content.trim()
+        ? { content, method: 'presentation', status: 'indexed' }
+        : { content: null, method: 'presentation', status: 'partial', warning: 'The presentation contained no extractable text.', failureKind: 'empty_extraction' };
     }
     if (/\.pdf$/i.test(extName)) {
-      return { content: await extractPdfText(filePath), method: 'pdf', status: 'indexed' };
+      const content = await extractPdfText(filePath);
+      const meaningfulContent = content
+        .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
+        .replace(/[\f\u0000]/g, '')
+        .trim();
+      return meaningfulContent
+        ? { content, method: 'pdf', status: 'indexed' }
+        : {
+            content: null,
+            method: 'pdf',
+            status: 'partial',
+            warning: 'The PDF contained no extractable text. It may be scanned or image-only and requires OCR before it can be verified as absorbed.',
+            failureKind: 'empty_extraction',
+          };
     }
     if (AUDIO_KNOWLEDGE_EXTS.test(extName)) {
       return await extractAudioKnowledge(filePath);
@@ -683,13 +731,14 @@ async function extractKnowledgeFileContent(filePath: string, userId = 'anonymous
     }
   } catch (err: any) {
     console.warn(`[Files] Failed to extract "${path.basename(filePath)}": ${err.message}`);
-    return { content: null, method: 'unsupported', status: 'failed', error: err.message };
+    return { content: null, method: 'unsupported', ...classifyKnowledgeExtractionFailure(err) };
   }
   return {
     content: null,
     method: 'unsupported',
     status: 'unsupported',
     warning: 'This file type has no supported text or visual extraction path yet.',
+    failureKind: 'unsupported_format',
   };
 }
 
@@ -823,6 +872,7 @@ function applyExtractionMeta(meta: any, extraction: KnowledgeExtractionResult, c
   meta.extractionMethod = extraction.method;
   meta.extractionWarning = extraction.warning || '';
   meta.extractionError = extraction.error || '';
+  meta.extractionFailureKind = extraction.failureKind || '';
   meta.extractionProvider = extraction.provider || '';
   meta.extractionModel = extraction.model || '';
   meta.contentChars = content?.length || 0;
@@ -840,6 +890,151 @@ function applyExtractionMeta(meta: any, extraction: KnowledgeExtractionResult, c
     delete meta.sourceProperties;
   }
   meta.updatedAt = new Date().toISOString();
+}
+
+function buildNonIndexedManifest(
+  sourceId: string,
+  extraction: KnowledgeExtractionResult,
+): KnowledgeIngestionManifest {
+  return buildKnowledgeIngestionManifest({
+    sourceId,
+    content: '',
+    chunks: [],
+    extraction,
+  });
+}
+
+function personalKnowledgeDirectoryForMeta(meta: any, db: any): string {
+  const userId = String(meta?.userId || '');
+  const primaryAdmin = (db.users || []).find((user: any) => user?.role === 'admin');
+  if (primaryAdmin?.uid && primaryAdmin.uid === userId) return PERSONAL_KNOWLEDGE_DIR;
+  const directoryId = crypto.createHash('sha256').update(userId).digest('hex').slice(0, 24);
+  return getDataPath(path.join('knowledge', '_users', directoryId));
+}
+
+export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | 'unverified' | 'failed' | 'idle'> {
+  if (legacyRevalidationRunning) return 'idle';
+  legacyRevalidationRunning = true;
+  let activeIdentity: { userId: string; filename: string } | null = null;
+  try {
+    const db = readDB();
+    const now = Date.now();
+    const meta = (db.knowledgeFiles || []).find((item: any) => {
+      const domain = normalizeFileDomain(item?.domain || (item?.orgId ? 'work' : 'personal'));
+      if (domain !== 'personal' || item?.ingestionManifest?.schemaVersion === 1) return false;
+      const legacyStatus = String(item?.extractionStatus || item?.status || '').toLowerCase();
+      const attempts = Number(item?.legacyRevalidationAttempts || 0);
+      const retryAt = Number(item?.legacyRevalidationRetryAt || 0);
+      return (legacyStatus === 'indexed' || Boolean(item?.agentIds?.length))
+        && attempts < 3
+        && retryAt <= now;
+    });
+    if (!meta) return 'idle';
+
+    const userId = String(meta.userId || '');
+    const filename = String(meta.filename || '');
+    activeIdentity = { userId, filename };
+    const filePath = path.join(personalKnowledgeDirectoryForMeta(meta, db), filename);
+    meta.legacyRevalidationAttempts = Number(meta.legacyRevalidationAttempts || 0) + 1;
+    meta.legacyRevalidationLastAt = new Date().toISOString();
+    if (!userId || !filename || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      const extraction: KnowledgeExtractionResult = {
+        content: null,
+        method: 'unsupported',
+        status: 'failed',
+        error: 'Legacy knowledge source is missing; existing index remains read-only and unverified.',
+        failureKind: 'extraction_error',
+      };
+      applyExtractionMeta(meta, extraction, null);
+      applyIngestionManifest(meta, buildNonIndexedManifest(filePath || filename, extraction));
+      meta.status = 'failed';
+      writeDB(db);
+      return 'failed';
+    }
+
+    const extraction = await extractKnowledgeFileContent(filePath, userId);
+    if (!extraction.content?.trim()) {
+      applyExtractionMeta(meta, extraction, null);
+      applyIngestionManifest(meta, buildNonIndexedManifest(filePath, extraction));
+      meta.status = extraction.status === 'partial' ? 'partial' : extraction.status;
+      writeDB(db);
+      return 'failed';
+    }
+
+    const legacyMemories = findExistingFileMemories(db, filename, {
+      domain: 'personal',
+      userId,
+      orgId: '',
+      dir: personalKnowledgeDirectoryForMeta(meta, db),
+      legacyPersonalOwner: Boolean((db.users || []).find((user: any) => user?.role === 'admin' && user.uid === userId)),
+    }, { userId });
+    const agentIds = Array.from(new Set<string>(
+      (Array.isArray(meta.agentIds) && meta.agentIds.length ? meta.agentIds : ['lumi'])
+        .map((value: unknown) => String(value || '').trim())
+        .filter((value: string): value is string => Boolean(value)),
+    ));
+    let latestResult: Awaited<ReturnType<typeof ingestDocument>> | null = null;
+    for (const agentId of agentIds) {
+      latestResult = await ingestDocument(userId, agentId, filename, extraction.content, {
+        filePath,
+        domain: 'personal',
+        sourceMetadata: extraction.sourceMetadata,
+        extraction,
+      });
+    }
+    if (!latestResult) throw new Error('No target agent was available for legacy knowledge revalidation.');
+
+    const oldIds = new Set(legacyMemories.map((memory: any) => String(memory.id || '')));
+    if (oldIds.size) db.memories = (db.memories || []).filter((memory: any) => !oldIds.has(String(memory.id || '')));
+    applyExtractionMeta(meta, extraction, extraction.content);
+    applyIngestionManifest(meta, latestResult.manifest);
+    meta.status = latestResult.manifest.status === 'partial' ? 'partial' : 'indexed';
+    delete meta.legacyRevalidationRetryAt;
+    writeDB(db);
+    return latestResult.manifest.coverage.verified ? 'verified' : 'unverified';
+  } catch (error: any) {
+    try {
+      const db = readDB();
+      const candidate = activeIdentity
+        ? (db.knowledgeFiles || []).find((item: any) => (
+            String(item.userId || '') === activeIdentity!.userId
+            && String(item.filename || '') === activeIdentity!.filename
+          ))
+        : null;
+      if (candidate) {
+        const attempts = Number(candidate.legacyRevalidationAttempts || 1);
+        candidate.legacyRevalidationError = String(error?.message || error).slice(0, 500);
+        candidate.legacyRevalidationRetryAt = Date.now() + Math.min(24 * 60 * 60_000, 2 ** attempts * 60_000);
+        writeDB(db);
+      }
+    } catch {}
+    return 'failed';
+  } finally {
+    legacyRevalidationRunning = false;
+  }
+}
+
+export function scheduleLegacyKnowledgeRevalidation(delayMs = 60_000): void {
+  if (legacyRevalidationTimer) return;
+  legacyRevalidationTimer = setTimeout(async () => {
+    legacyRevalidationTimer = null;
+    const result = await revalidateOneLegacyKnowledgeFile();
+    if (result !== 'idle') scheduleLegacyKnowledgeRevalidation(60_000);
+  }, Math.max(1_000, delayMs));
+  if (typeof (legacyRevalidationTimer as any).unref === 'function') (legacyRevalidationTimer as any).unref();
+}
+
+export function classifyKnowledgeExtractionFailure(error: unknown): Pick<KnowledgeExtractionResult, 'status' | 'failureKind' | 'error'> {
+  const message = String((error as any)?.message || error || 'Knowledge extraction failed.').slice(0, 500);
+  const lower = message.toLowerCase();
+  const failureKind: NonNullable<KnowledgeExtractionResult['failureKind']> = /password|encrypted|decrypt|encryption/.test(lower)
+    ? 'encrypted_or_password_required'
+    : /corrupt|invalid|malformed|unexpected end|central directory|zip|xref/.test(lower)
+      ? 'corrupt_source'
+      : /provider|model.*configured|transcri.*unavailable|vision.*unavailable/.test(lower)
+        ? 'provider_unavailable'
+        : 'extraction_error';
+  return { status: 'failed', failureKind, error: message };
 }
 
 function applyIngestionManifest(meta: any, manifest: KnowledgeIngestionManifest): void {
@@ -990,6 +1185,8 @@ async function saveKnowledgeFile(
     content: null,
     method: 'unsupported',
     status: 'unsupported',
+    warning: 'This file type has no supported text or visual extraction path yet.',
+    failureKind: 'unsupported_format',
   };
   let extractedContent: string | null = null;
 
@@ -999,18 +1196,19 @@ async function saveKnowledgeFile(
       ? await extractAudioKnowledge(dest)
       : await extractKnowledgeFileContent(dest, userId);
     extractedContent = extraction.content;
-    entry.extractionStatus = extraction.status;
-    entry.extractionMethod = extraction.method;
-    entry.extractionWarning = extraction.warning;
-    entry.extractionError = extraction.error;
-    entry.extractionProvider = extraction.provider;
-    entry.extractionModel = extraction.model;
     if (extractedContent) {
       entry.content = extractedContent.slice(0, 50000); // cap at 50KB for chat context
       entry.preview = extractedContent.slice(0, 1000);
       entry.extracted = true;
     }
   }
+  entry.extractionStatus = extraction.status;
+  entry.extractionMethod = extraction.method;
+  entry.extractionWarning = extraction.warning;
+  entry.extractionError = extraction.error;
+  entry.extractionFailureKind = extraction.failureKind;
+  entry.extractionProvider = extraction.provider;
+  entry.extractionModel = extraction.model;
 
   // Personal files are ingested into personal memory; work files become org KB articles.
   if (scope.domain === 'work') {
@@ -1038,7 +1236,12 @@ async function saveKnowledgeFile(
           entry.ingestionCoverage = manifest.coverage;
         }
       } else if (meta) {
-        meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
+        const manifest = buildNonIndexedManifest(dest, extraction);
+        meta.status = extraction.status === 'partial' ? 'partial' : extraction.status;
+        applyIngestionManifest(meta, manifest);
+        entry.ingestionStatus = manifest.status;
+        entry.ingestionManifestId = manifest.manifestId;
+        entry.ingestionCoverage = manifest.coverage;
         entry.syncError = extraction.error || extraction.warning || 'No extractable content found';
       }
     } catch (orgErr: any) {
@@ -1078,7 +1281,13 @@ async function saveKnowledgeFile(
     const meta = findFileMeta(db, finalName, scope);
     if (meta) {
       applyExtractionMeta(meta, extraction, extractedContent);
-      meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
+      const manifest = buildNonIndexedManifest(dest, extraction);
+      meta.status = extraction.status === 'partial' ? 'partial' : extraction.status;
+      applyIngestionManifest(meta, manifest);
+      entry.ingestionStatus = manifest.status;
+      entry.ingestionManifestId = manifest.manifestId;
+      entry.ingestionCoverage = manifest.coverage;
+      entry.syncError = extraction.error || extraction.warning || 'No extractable content found';
     }
   }
 
@@ -1435,6 +1644,7 @@ function buildEntry(filename: string, source: KnowledgeFileSource, agentIds: str
     extractionMethod: meta?.extractionMethod,
     extractionWarning: meta?.extractionWarning || undefined,
     extractionError: meta?.extractionError || undefined,
+    extractionFailureKind: meta?.extractionFailureKind || undefined,
     extractionProvider: meta?.extractionProvider || undefined,
     extractionModel: meta?.extractionModel || undefined,
     contentChars: meta?.contentChars || undefined,
@@ -2091,6 +2301,7 @@ router.get('/files/info/:id', (req: Request, res: Response) => {
       extractionMethod: meta?.extractionMethod,
       extractionWarning: meta?.extractionWarning || undefined,
       extractionError: meta?.extractionError || undefined,
+      extractionFailureKind: meta?.extractionFailureKind || undefined,
       extractionProvider: meta?.extractionProvider || undefined,
       extractionModel: meta?.extractionModel || undefined,
       contentChars: meta?.contentChars || undefined,
@@ -2180,12 +2391,18 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
     }
     applyExtractionMeta(meta, extraction, content);
     if (!content || !content.trim()) {
-      meta.status = extraction.status === 'failed' ? 'failed' : extraction.status === 'unsupported' ? 'unsupported' : 'ready';
+      const manifest = buildNonIndexedManifest(filePath, extraction);
+      meta.status = extraction.status === 'partial' ? 'partial' : extraction.status;
+      applyIngestionManifest(meta, manifest);
       writeDB(db);
       return res.status(415).json({
         error: extraction.error || extraction.warning || 'This file type has no extractable text or visual content for Lumi to absorb',
         extractionStatus: extraction.status,
         extractionMethod: extraction.method,
+        extractionFailureKind: extraction.failureKind,
+        ingestionStatus: manifest.status,
+        ingestionManifestId: manifest.manifestId,
+        coverage: manifest.coverage,
       });
     }
     meta.indexingAt = new Date().toISOString();

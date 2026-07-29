@@ -11,6 +11,7 @@ import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import type {
   ModelExecutionGraph,
+  ModelGraphArbitrationReceipt,
   ModelGraphNodeReceipt,
 } from '../agents/model_execution_graph';
 
@@ -70,13 +71,23 @@ export interface PersistedCapabilityExecutionPlan {
     risk: string;
     requiresConfirmation: boolean;
     verificationStrategy: string;
+    executionRole: 'planner' | 'adapter' | 'verifier' | 'join';
+    selectionGroup?: string;
+    selectionRank?: number;
   }>;
+  edges: CapabilityExecutionPlan['edges'];
+  expectedEvidence: CapabilityExecutionPlan['expectedEvidence'];
   risk: CapabilityExecutionPlan['risk'];
   fallbackPolicy: CapabilityExecutionPlan['fallbackPolicy'];
   contextRefs: CapabilityExecutionPlan['contextRefs'];
   decisionAuthority: 'semantic_planner';
   scriptAuthority: 'adapter_only';
   persistedAt: string;
+}
+
+export interface ConversationModelExecutionRecovery {
+  graph: ModelExecutionGraph;
+  receipts: ModelGraphNodeReceipt[];
 }
 
 function stableValue(value: unknown, depth = 0): unknown {
@@ -128,7 +139,7 @@ function sanitizeState(state: ConversationActionContinuationState): Conversation
   };
 }
 
-function sanitizeExecutionPlan(
+export function sanitizeCapabilityExecutionPlan(
   plan: CapabilityExecutionPlan,
   persistedAt: string,
 ): PersistedCapabilityExecutionPlan {
@@ -151,6 +162,17 @@ function sanitizeExecutionPlan(
       risk: node.risk,
       requiresConfirmation: node.requiresConfirmation,
       verificationStrategy: node.verification.strategy,
+      executionRole: node.executionRole,
+      ...(node.selectionGroup ? { selectionGroup: node.selectionGroup } : {}),
+      ...(node.selectionRank !== undefined ? { selectionRank: node.selectionRank } : {}),
+    })),
+    edges: plan.edges.map(edge => ({ ...edge })),
+    expectedEvidence: plan.expectedEvidence.map(requirement => ({
+      ...requirement,
+      requiredFields: [...requirement.requiredFields],
+      ...(requirement.requiredValues ? { requiredValues: { ...requirement.requiredValues } } : {}),
+      requiredArtifacts: [...requirement.requiredArtifacts],
+      successStatuses: [...requirement.successStatuses],
     })),
     risk: {
       ...plan.risk,
@@ -333,7 +355,7 @@ export function attachConversationExecutionPlan(
   if (!task) return null;
   const now = input.now || new Date().toISOString();
   const context = parseObject(task.context);
-  const persisted = sanitizeExecutionPlan(input.plan, now);
+  const persisted = sanitizeCapabilityExecutionPlan(input.plan, now);
   const history = (Array.isArray(context.executionPlans) ? context.executionPlans : [])
     .filter((candidate: any) => candidate?.planId !== persisted.planId)
     .slice(-11);
@@ -356,6 +378,7 @@ export function attachConversationModelExecutionGraph(
     taskId: string;
     graph: ModelExecutionGraph;
     receipts: ModelGraphNodeReceipt[];
+    arbitrationReceipt?: ModelGraphArbitrationReceipt;
     now?: string;
   },
 ): ConversationActionTaskRow | null {
@@ -389,16 +412,105 @@ export function attachConversationModelExecutionGraph(
   const receiptKeys = new Set(input.receipts.map(receipt => `${receipt.graphId}:${receipt.nodeId}`));
   const modelNodeReceipts = [
     ...priorReceipts.filter((receipt: any) => !receiptKeys.has(`${receipt?.graphId}:${receipt?.nodeId}`)),
-    ...input.receipts.map(receipt => ({ ...receipt })),
+    ...input.receipts.map(receipt => ({
+      graphId: receipt.graphId,
+      taskId: receipt.taskId,
+      nodeId: receipt.nodeId,
+      status: receipt.status,
+      ...(receipt.selectedCandidate ? { selectedCandidate: { ...receipt.selectedCandidate } } : {}),
+      ...(receipt.agentId ? { agentId: receipt.agentId } : {}),
+      dependencyReceiptIds: [...receipt.dependencyReceiptIds],
+      startedAt: receipt.startedAt,
+      completedAt: receipt.completedAt,
+      durationMs: receipt.durationMs,
+      nodeFingerprint: receipt.nodeFingerprint,
+      outputDigest: receipt.outputDigest,
+      verified: receipt.verified,
+      ...(receipt.estimatedInputTokens !== undefined
+        ? { estimatedInputTokens: receipt.estimatedInputTokens }
+        : {}),
+      ...(receipt.estimatedCostUsd !== undefined
+        ? { estimatedCostUsd: receipt.estimatedCostUsd }
+        : {}),
+      ...(receipt.reusedFromReceipt ? { reusedFromReceipt: receipt.reusedFromReceipt } : {}),
+      // Model output and free-form errors can contain user data. Durable recovery
+      // intentionally stores only digests and bounded structural metadata.
+      ...(receipt.error ? { error: 'model_node_execution_failed' } : {}),
+    })),
   ].slice(-120);
   task.context = JSON.stringify({
     ...context,
     modelExecutionGraph: persistedGraph,
     modelExecutionGraphs: graphHistory,
     modelNodeReceipts,
+    ...(input.arbitrationReceipt ? {
+      modelArbitrationReceipt: {
+        ...input.arbitrationReceipt,
+        selectedNodeIds: [...input.arbitrationReceipt.selectedNodeIds],
+        consideredNodeIds: [...input.arbitrationReceipt.consideredNodeIds],
+      },
+    } : {}),
   });
   task.updatedAt = now;
   return task;
+}
+
+/**
+ * Loads restart state only from the exact scoped task. Legacy receipts without
+ * a semantic node fingerprint are excluded and therefore cannot be replayed.
+ */
+export function loadConversationModelExecutionRecovery(
+  db: any,
+  input: { conversationId: string; userId: string; taskId: string },
+): ConversationModelExecutionRecovery | null {
+  ensureTables(db);
+  const task = (db.conversationActionTasks as ConversationActionTaskRow[]).find(candidate => (
+    candidate.id === input.taskId
+    && candidate.conversationId === input.conversationId
+    && candidate.userId === input.userId
+  ));
+  if (!task) return null;
+  const context = parseObject(task.context);
+  const graph = context.modelExecutionGraph as ModelExecutionGraph | undefined;
+  if (!graph || graph.taskId !== task.id || !Array.isArray(graph.nodes)) return null;
+  const receipts = (Array.isArray(context.modelNodeReceipts) ? context.modelNodeReceipts : [])
+    .filter((receipt: any) => (
+      receipt
+      && receipt.taskId === task.id
+      && receipt.graphId === graph.graphId
+      && typeof receipt.nodeId === 'string'
+      && typeof receipt.nodeFingerprint === 'string'
+      && receipt.nodeFingerprint.length === 64
+      && typeof receipt.outputDigest === 'string'
+      && receipt.outputDigest.length === 64
+      && receipt.status === 'succeeded'
+      && receipt.verified === true
+    ))
+    .map((receipt: any): ModelGraphNodeReceipt => ({
+      graphId: receipt.graphId,
+      taskId: receipt.taskId,
+      nodeId: receipt.nodeId,
+      status: 'succeeded',
+      ...(receipt.selectedCandidate ? { selectedCandidate: { ...receipt.selectedCandidate } } : {}),
+      ...(receipt.agentId ? { agentId: String(receipt.agentId) } : {}),
+      dependencyReceiptIds: Array.isArray(receipt.dependencyReceiptIds)
+        ? receipt.dependencyReceiptIds.map(String)
+        : [],
+      startedAt: String(receipt.startedAt || ''),
+      completedAt: String(receipt.completedAt || ''),
+      durationMs: Math.max(0, Number(receipt.durationMs) || 0),
+      nodeFingerprint: receipt.nodeFingerprint,
+      outputDigest: receipt.outputDigest,
+      verified: true,
+      ...(receipt.estimatedInputTokens !== undefined
+        ? { estimatedInputTokens: Math.max(0, Number(receipt.estimatedInputTokens) || 0) }
+        : {}),
+      ...(receipt.estimatedCostUsd !== undefined
+        ? { estimatedCostUsd: Math.max(0, Number(receipt.estimatedCostUsd) || 0) }
+        : {}),
+      ...(receipt.reusedFromReceipt ? { reusedFromReceipt: String(receipt.reusedFromReceipt) } : {}),
+    }));
+  return { graph, receipts };
 }
 
 export function findConversationActionTask(

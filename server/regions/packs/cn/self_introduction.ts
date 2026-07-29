@@ -1,6 +1,18 @@
 export const CN_SELF_INTRODUCTION_COPY = {
-  identity:
-    '我是 Lumi，运行在 LumiOS 中、由用户目标驱动的私有化智能体；语音、聊天、任务和组织工作区使用同一个身份。',
+  identity(input: {
+    name: string;
+    product: string;
+    deployment: string;
+    continuity: string;
+  }): string {
+    const deployment = input.deployment === 'private_user_directed_agent'
+      ? '由用户目标驱动的私有化智能体'
+      : input.deployment;
+    const continuity = input.continuity === 'single_identity_across_surfaces'
+      ? '语音、聊天、任务和组织工作区共享同一个身份'
+      : input.continuity;
+    return `我是 ${input.name}，运行在 ${input.product} 中，是${deployment}；${continuity}。`;
+  },
   modelRoles(configured: number, total: number): string {
     return `当前有 ${configured}/${total} 个模型角色已配置；推理、视觉、桌面动作、生成、检索和语音按角色路由，并可组成受策略约束的任务图。`;
   },

@@ -61,8 +61,14 @@ export async function executeToolCall(
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const requestedArguments = input.arguments || {};
-  const preflight = input.preflight?.(input.name, requestedArguments)
+  const callerPreflight = input.preflight?.(input.name, requestedArguments)
     || { allowed: true, arguments: requestedArguments };
+  const desktopAuthorization = callerPreflight.allowed
+    ? input.context?.desktopExecutionTracker?.authorize(input.name)
+    : undefined;
+  const preflight = desktopAuthorization && !desktopAuthorization.allowed
+    ? { allowed: false, arguments: callerPreflight.arguments, reason: desktopAuthorization.reason }
+    : callerPreflight;
   const executionArguments = preflight.arguments || requestedArguments;
   const receiptArguments = sanitizeReceiptValue(executionArguments) as Record<string, any>;
   const capabilityGetter = (input.registry as any)?.getCapabilityManifestEntry;
@@ -102,6 +108,11 @@ export async function executeToolCall(
       completedAt: new Date().toISOString(),
       durationMs: Math.max(0, Date.now() - startedMs),
     });
+    try {
+      input.context?.desktopExecutionTracker?.record(record);
+    } catch {
+      // Desktop observability must not change the canonical tool outcome.
+    }
     return record;
   };
 

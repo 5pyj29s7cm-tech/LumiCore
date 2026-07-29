@@ -29,6 +29,7 @@ import {
   formatConversationActionLedgerStatus,
   attachConversationExecutionPlan,
   attachConversationModelExecutionGraph,
+  loadConversationModelExecutionRecovery,
   migrateLegacyConversationActionLedger,
   syncConversationActionTaskLedger,
 } from './action_ledger';
@@ -476,10 +477,24 @@ export function persistConversationModelExecutionResult(input: {
     taskId: input.taskId,
     graph: input.workflowResult.executionGraph,
     receipts: input.workflowResult.nodeReceipts || [],
+    arbitrationReceipt: input.workflowResult.arbitrationReceipt,
   });
   if (!task) return false;
   writeDB(db);
   return true;
+}
+
+export function getConversationModelExecutionRecovery(input: {
+  conversationId: string;
+  userId: string;
+  taskId?: string;
+}) {
+  if (!input.taskId) return null;
+  return loadConversationModelExecutionRecovery(readDB(), {
+    conversationId: input.conversationId,
+    userId: input.userId,
+    taskId: input.taskId,
+  });
 }
 
 export function cancelConversationActionExecution(

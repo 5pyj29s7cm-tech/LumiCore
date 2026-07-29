@@ -382,6 +382,8 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     : [];
   const preferredTools = unique([
     ...availablePreferredTools(input, selected.lane),
+    ...(input.dispatch.flow.specialWorkflow?.requiredTools || [])
+      .filter(name => effectiveAllowed.size === 0 || effectiveAllowed.has(name)),
     ...contractPreferredTools,
   ]).filter(name => (
     (!visibleAutoCad || ![

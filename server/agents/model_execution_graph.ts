@@ -16,6 +16,7 @@ export interface ModelCandidate {
   priority: number;
   /** The worker identity this candidate is compiled for. */
   agentId?: string;
+  estimatedCostPer1kTokensUsd?: number;
 }
 
 export interface ModelGraphNode {
@@ -29,6 +30,8 @@ export interface ModelGraphNode {
   timeoutMs: number;
   maxRetries: number;
   assignedAgentId?: string;
+  estimatedInputTokens?: number;
+  estimatedOutputTokens?: number;
 }
 
 export interface ModelGraphEdge {
@@ -42,6 +45,8 @@ export interface ModelExecutionBudget {
   maxParallel: number;
   maxRetriesPerNode: number;
   maxWallTimeMs: number;
+  maxInputTokens: number;
+  maxEstimatedCostUsd: number;
 }
 
 export interface ModelExecutionGraph {
@@ -52,7 +57,7 @@ export interface ModelExecutionGraph {
   edges: ModelGraphEdge[];
   budgets: ModelExecutionBudget;
   privacyPolicy: ModelGraphPrivacy;
-  arbitration: 'aggregate_verified' | 'first_verified' | 'judge';
+  arbitration: 'aggregate_verified' | 'first_verified' | 'majority_vote' | 'judge';
   compiledAt: string;
 }
 
@@ -76,9 +81,26 @@ export interface ModelGraphNodeReceipt {
   startedAt: string;
   completedAt: string;
   durationMs: number;
+  nodeFingerprint: string;
   outputDigest: string;
+  outputSummary?: string;
   verified: boolean;
+  reusedFromReceipt?: string;
   error?: string;
+  estimatedInputTokens?: number;
+  estimatedCostUsd?: number;
+}
+
+export interface ModelGraphArbitrationReceipt {
+  graphId: string;
+  taskId: string;
+  policy: ModelExecutionGraph['arbitration'];
+  status: 'succeeded' | 'blocked';
+  selectedNodeIds: string[];
+  consideredNodeIds: string[];
+  outputDigest: string;
+  completedAt: string;
+  reason?: string;
 }
 
 export interface CompileModelExecutionGraphInput {
@@ -244,6 +266,35 @@ export function modelGraphDigest(value: unknown): string {
     .digest('hex');
 }
 
+export function modelGraphNodeFingerprint(node: ModelGraphNode): string {
+  return modelGraphDigest({
+    nodeId: node.nodeId,
+    type: node.type,
+    role: node.role,
+    candidates: node.candidates.map(candidate => ({
+      provider: candidate.provider,
+      model: candidate.model,
+      locality: candidate.locality,
+      agentId: candidate.agentId || '',
+      estimatedCostPer1kTokensUsd: candidate.estimatedCostPer1kTokensUsd || 0,
+    })),
+    dependsOn: [...node.dependsOn].sort(),
+    inputRefs: [...node.inputRefs].sort(),
+    outputSchema: node.outputSchema,
+    assignedAgentId: node.assignedAgentId || '',
+    estimatedInputTokens: node.estimatedInputTokens || 0,
+    estimatedOutputTokens: node.estimatedOutputTokens || 0,
+  });
+}
+
+function summarizeModelNodeOutput(value: string): string {
+  return String(value || '')
+    .replace(/\b(password|passcode|secret|token|api[ _-]?key|authorization)\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1200);
+}
+
 function normalizeBudgets(input?: Partial<ModelExecutionBudget>): ModelExecutionBudget {
   const finiteOr = (value: unknown, fallback: number): number => {
     const parsed = Number(value);
@@ -254,7 +305,23 @@ function normalizeBudgets(input?: Partial<ModelExecutionBudget>): ModelExecution
     maxParallel: Math.max(1, Math.min(16, Math.trunc(finiteOr(input?.maxParallel, 4)))),
     maxRetriesPerNode: Math.max(0, Math.min(3, Math.trunc(finiteOr(input?.maxRetriesPerNode, 2)))),
     maxWallTimeMs: Math.max(1_000, Math.min(60 * 60_000, Math.trunc(finiteOr(input?.maxWallTimeMs, 10 * 60_000)))),
+    maxInputTokens: Math.max(1_000, Math.min(2_000_000, Math.trunc(finiteOr(input?.maxInputTokens, 256_000)))),
+    maxEstimatedCostUsd: Math.max(0, Math.min(10_000, finiteOr(input?.maxEstimatedCostUsd, 20))),
   };
+}
+
+function candidateCostPer1k(candidate: ModelCandidate): number {
+  if (Number.isFinite(candidate.estimatedCostPer1kTokensUsd)) {
+    return Math.max(0, Number(candidate.estimatedCostPer1kTokensUsd));
+  }
+  return candidate.locality === 'local' ? 0 : 0.02;
+}
+
+function estimatedNodeCost(node: ModelGraphNode): number {
+  const tokens = Math.max(0, Number(node.estimatedInputTokens || 0))
+    + Math.max(0, Number(node.estimatedOutputTokens || 0));
+  const highestCandidateRate = Math.max(0, ...node.candidates.map(candidateCostPer1k));
+  return (tokens / 1000) * highestCandidateRate;
 }
 
 function topologicalWaves(nodes: ModelGraphNode[]): { waves: string[][]; errors: string[] } {
@@ -338,9 +405,36 @@ export function compileModelExecutionGraph(
     if (privacyPolicy === 'local_only' && node.type === 'external_agent') {
       errors.push(`node ${node.nodeId} cannot use an external agent in local-only mode`);
     }
+    if (/^(?:reflection|reflect|critique)$/i.test(node.role) && node.dependsOn.length === 0) {
+      errors.push(`reflection node ${node.nodeId} requires at least one dependency to review`);
+    }
   }
   if (input.nodes.length > budgets.maxNodes) {
     errors.push(`graph has ${input.nodes.length} nodes but budget allows ${budgets.maxNodes}`);
+  }
+  const totalInputTokens = input.nodes.reduce((sum, node) => (
+    sum + Math.max(0, Number(node.estimatedInputTokens || 0))
+  ), 0);
+  if (totalInputTokens > budgets.maxInputTokens) {
+    errors.push(`graph input context estimate ${totalInputTokens} exceeds budget ${budgets.maxInputTokens}`);
+  }
+  const estimatedCostUsd = input.nodes.reduce((sum, node) => sum + estimatedNodeCost(node), 0);
+  if (estimatedCostUsd > budgets.maxEstimatedCostUsd) {
+    errors.push(`graph estimated cost ${estimatedCostUsd.toFixed(4)} exceeds budget ${budgets.maxEstimatedCostUsd.toFixed(4)}`);
+  }
+  if (input.arbitration === 'judge') {
+    const judges = input.nodes.filter(node => node.type === 'judge');
+    if (judges.length !== 1) {
+      errors.push('judge arbitration requires exactly one judge node');
+    } else {
+      const requiredInputs = input.nodes
+        .filter(node => node.nodeId !== judges[0].nodeId)
+        .map(node => node.nodeId);
+      const missingJudgeInputs = requiredInputs.filter(nodeId => !judges[0].dependsOn.includes(nodeId));
+      if (missingJudgeInputs.length > 0) {
+        errors.push(`judge node must depend on every candidate node: ${missingJudgeInputs.join(', ')}`);
+      }
+    }
   }
   const sorted = topologicalWaves(input.nodes);
   errors.push(...sorted.errors);
@@ -350,7 +444,14 @@ export function compileModelExecutionGraph(
 
   const taskId = String(input.taskId || '').trim()
     || `task_${modelGraphDigest(input.nodes).slice(0, 24)}`;
-  const graphId = `graph_${modelGraphDigest({ taskId, nodes: input.nodes, budgets, privacyPolicy }).slice(0, 24)}`;
+  const arbitration = input.arbitration || 'aggregate_verified';
+  const graphId = `graph_${modelGraphDigest({
+    taskId,
+    nodes: input.nodes,
+    budgets,
+    privacyPolicy,
+    arbitration,
+  }).slice(0, 24)}`;
   const graph: ModelExecutionGraph = {
     schemaVersion: 1,
     graphId,
@@ -371,7 +472,7 @@ export function compileModelExecutionGraph(
     }))),
     budgets,
     privacyPolicy,
-    arbitration: input.arbitration || 'aggregate_verified',
+    arbitration,
     compiledAt: new Date().toISOString(),
   };
   return { ok: errors.length === 0, graph, errors, waves: sorted.waves };
@@ -406,8 +507,115 @@ export function buildModelGraphNodeReceipt(input: {
     startedAt: input.startedAt,
     completedAt,
     durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(input.startedAt)),
+    nodeFingerprint: modelGraphNodeFingerprint(input.node),
     outputDigest: modelGraphDigest(input.output || ''),
+    ...(input.output ? { outputSummary: summarizeModelNodeOutput(input.output) } : {}),
     verified: input.status === 'succeeded',
+    ...(input.node.estimatedInputTokens !== undefined
+      ? { estimatedInputTokens: input.node.estimatedInputTokens }
+      : {}),
+    ...(estimatedNodeCost(input.node) > 0
+      ? { estimatedCostUsd: Number(estimatedNodeCost(input.node).toFixed(6)) }
+      : {}),
     ...(input.error ? { error: input.error.slice(0, 700) } : {}),
+  };
+}
+
+export function reuseVerifiedModelGraphNodeReceipt(input: {
+  graph: ModelExecutionGraph;
+  node: ModelGraphNode;
+  prior: ModelGraphNodeReceipt;
+  recoveredAt?: string;
+}): ModelGraphNodeReceipt | null {
+  if (
+    input.prior.taskId !== input.graph.taskId
+    || input.prior.nodeId !== input.node.nodeId
+    || input.prior.nodeFingerprint !== modelGraphNodeFingerprint(input.node)
+    || input.prior.status !== 'succeeded'
+    || input.prior.verified !== true
+  ) {
+    return null;
+  }
+  const recoveredAt = input.recoveredAt || new Date().toISOString();
+  return {
+    ...input.prior,
+    graphId: input.graph.graphId,
+    taskId: input.graph.taskId,
+    dependencyReceiptIds: input.node.dependsOn.map(dependency => `${input.graph.graphId}:${dependency}`),
+    startedAt: recoveredAt,
+    completedAt: recoveredAt,
+    durationMs: 0,
+    reusedFromReceipt: `${input.prior.graphId}:${input.prior.nodeId}`,
+  };
+}
+
+export function arbitrateModelGraphResults(input: {
+  graph: ModelExecutionGraph;
+  receipts: ModelGraphNodeReceipt[];
+  outputByNodeId: ReadonlyMap<string, string>;
+  completedAt?: string;
+}): ModelGraphArbitrationReceipt {
+  const verified = new Map(input.receipts
+    .filter(receipt => (
+      receipt.graphId === input.graph.graphId
+      && receipt.taskId === input.graph.taskId
+      && receipt.status === 'succeeded'
+      && receipt.verified === true
+    ))
+    .map(receipt => [receipt.nodeId, receipt]));
+  const consideredNodeIds = input.graph.nodes.map(node => node.nodeId);
+  let selectedNodeIds: string[] = [];
+  let reason = '';
+  if (input.graph.arbitration === 'first_verified') {
+    const selected = consideredNodeIds.find(nodeId => verified.has(nodeId) && input.outputByNodeId.has(nodeId));
+    if (selected) selectedNodeIds = [selected];
+    else reason = 'no verified node result was available';
+  } else if (input.graph.arbitration === 'majority_vote') {
+    const votes = new Map<string, string[]>();
+    for (const nodeId of consideredNodeIds) {
+      if (!verified.has(nodeId) || !input.outputByNodeId.has(nodeId)) continue;
+      const normalizedOutput = String(input.outputByNodeId.get(nodeId) || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+      const key = modelGraphDigest(normalizedOutput);
+      const voters = votes.get(key) || [];
+      voters.push(nodeId);
+      votes.set(key, voters);
+    }
+    const ranked = [...votes.values()].sort((left, right) => (
+      right.length - left.length
+      || consideredNodeIds.indexOf(left[0]) - consideredNodeIds.indexOf(right[0])
+    ));
+    const verifiedCount = consideredNodeIds.filter(nodeId => verified.has(nodeId)).length;
+    if (ranked[0] && ranked[0].length > verifiedCount / 2) {
+      selectedNodeIds = [ranked[0][0]];
+    } else {
+      reason = 'no strict majority of verified node outputs was available';
+    }
+  } else if (input.graph.arbitration === 'judge') {
+    const judge = input.graph.nodes.find(node => node.type === 'judge');
+    if (judge && verified.has(judge.nodeId) && input.outputByNodeId.has(judge.nodeId)) {
+      selectedNodeIds = [judge.nodeId];
+    } else {
+      reason = 'the required judge node did not produce a verified result';
+    }
+  } else {
+    selectedNodeIds = consideredNodeIds.filter(nodeId => (
+      verified.has(nodeId) && input.outputByNodeId.has(nodeId)
+    ));
+    if (selectedNodeIds.length === 0) reason = 'no verified node result was available';
+  }
+  const selectedOutputs = selectedNodeIds.map(nodeId => input.outputByNodeId.get(nodeId) || '');
+  return {
+    graphId: input.graph.graphId,
+    taskId: input.graph.taskId,
+    policy: input.graph.arbitration,
+    status: selectedNodeIds.length > 0 ? 'succeeded' : 'blocked',
+    selectedNodeIds,
+    consideredNodeIds,
+    outputDigest: modelGraphDigest(selectedOutputs),
+    completedAt: input.completedAt || new Date().toISOString(),
+    ...(reason ? { reason } : {}),
   };
 }

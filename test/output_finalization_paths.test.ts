@@ -40,8 +40,10 @@ describe('finalized output paths', () => {
     expect(task).toContain('const safeText = taskTextGate.push(chunk)');
     expect(task).toContain('taskTextGate.finish()');
     expect(task).toContain('const orchestratedToolRecords: ToolExecutionRecord[] = []');
-    expect(task).toContain('toolRecords: orchestratedToolRecords');
-    expect(task).toContain('toolRecords: result.toolCalls');
+    expect(task).toContain('const finalOrchestratedToolRecords = attachDesktopReceipt(orchestratedToolRecords)');
+    expect(task).toContain('toolRecords: taskAwareRecords(finalOrchestratedToolRecords)');
+    expect(task).toContain('const finalTaskToolRecords = attachDesktopReceipt(result.toolCalls)');
+    expect(task).toContain('toolRecords: taskAwareRecords(finalTaskToolRecords)');
     expect(task).toContain('finalized: true');
     expect(task).toContain('blocked: finalTaskResponse.blocked');
   });

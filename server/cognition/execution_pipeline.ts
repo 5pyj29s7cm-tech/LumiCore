@@ -29,6 +29,7 @@ import {
   formatCapabilityExecutionPlanPrompt,
   type CapabilityExecutionPlan,
 } from './capability_execution_plan';
+import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -55,6 +56,74 @@ export interface BuildLumiExecutionPipelineInput {
   decisionText?: string;
   traceText?: string;
   source?: string;
+  /** Durable task identity supplied by non-conversation entrances such as scheduler/agent execution. */
+  taskId?: string;
+}
+
+function applySelectedWorkflowAdapterPolicy(
+  execution: LumiExecutionDecision,
+  turnIntent: LumiTurnDispatch,
+  registry: ToolRegistry,
+  personalityToolPolicy?: ToolPolicy,
+  isSanctuary?: boolean,
+): LumiExecutionDecision {
+  const workflow = turnIntent.flow.specialWorkflow;
+  if (!workflow || isSanctuary) return execution;
+  const configuredAllowed = new Set(personalityToolPolicy?.allowedTools || []);
+  const configuredForbidden = new Set(personalityToolPolicy?.forbiddenTools || []);
+  const configuredWildcard = configuredAllowed.has('*');
+  const hasConfiguredBoundary = Boolean(personalityToolPolicy);
+  const executable = new Map(registry
+    .getCapabilityManifest(undefined, { executableOnly: true })
+    .map(entry => [entry.toolName, entry]));
+  const requiredTools = workflow.requiredTools.filter(toolName => (
+    executable.has(toolName)
+    && (!hasConfiguredBoundary || configuredWildcard || configuredAllowed.has(toolName))
+    && !configuredForbidden.has('*')
+    && !configuredForbidden.has(toolName)
+  ));
+  if (requiredTools.length === 0) return execution;
+  const route = execution.toolRoute || {
+    toolNames: [],
+    categories: [],
+    reasons: [],
+    totalAvailable: registry.getToolDeclarations().length,
+    maxTools: requiredTools.length,
+    truncated: false,
+  };
+  return {
+    ...execution,
+    allowToolUse: true,
+    toolRoute: {
+      ...route,
+      toolNames: Array.from(new Set([...route.toolNames, ...requiredTools])),
+      categories: Array.from(new Set([...route.categories, 'skill_workflow_adapter'])),
+      reasons: Array.from(new Set([
+        ...route.reasons,
+        `semantic plan selected workflow adapter ${workflow.skillId}/${workflow.id}`,
+      ])),
+      maxTools: Math.max(route.maxTools, route.toolNames.length + requiredTools.length),
+    },
+    toolPolicy: {
+      ...execution.toolPolicy,
+      allowedTools: Array.from(new Set([
+        ...(execution.toolPolicy.allowedTools || []).filter(name => name !== '*'),
+        ...requiredTools,
+      ])),
+      requireConfirmation: Array.from(new Set([
+        ...(execution.toolPolicy.requireConfirmation || []),
+        ...requiredTools.filter(name => executable.get(name)?.requiresConfirmation),
+      ])),
+      forbiddenTools: (execution.toolPolicy.forbiddenTools || [])
+        .filter(name => name !== '*' && !requiredTools.includes(name)),
+      maxIterations: Math.max(execution.toolPolicy.maxIterations || 0, requiredTools.length + 2),
+    },
+    maxIterations: Math.max(execution.maxIterations, requiredTools.length + 2),
+    promptOverlay: [
+      execution.promptOverlay,
+      `Selected workflow adapter is restricted to: ${requiredTools.join(', ')}.`,
+    ].filter(Boolean).join('\n'),
+  };
 }
 
 /**
@@ -86,7 +155,13 @@ export function buildLumiExecutionPipeline(
     execution: legacyExecution,
     manifest: unrestrictedManifest,
   });
-  const execution = applyLumiRoutingShadowGuard(legacyExecution, shadowComparison);
+  const execution = applySelectedWorkflowAdapterPolicy(
+    applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
+    turnIntent,
+    input.registry,
+    input.personalityToolPolicy,
+    input.isSanctuary,
+  );
   const selection = buildLumiCapabilitySelection({
     dispatch: turnIntent,
     execution,
@@ -114,7 +189,7 @@ export function buildLumiExecutionPipeline(
     capabilityPlan,
     execution,
     manifest,
-    taskId: input.actionTaskState?.taskId,
+    taskId: input.taskId || input.actionTaskState?.taskId,
     sourcePaths: input.actionTaskState?.sourcePaths,
   });
   capabilityPlan.promptOverlay = [
@@ -127,6 +202,7 @@ export function buildLumiExecutionPipeline(
     text: input.traceText || decisionText,
     source: input.source || input.dispatch.source || input.dispatch.channel,
   });
+  recordRoutingShadowComparison(shadowComparison.aligned, shadowComparison.externalCommitBlocked);
   if (!shadowComparison.aligned) {
     intentTrace.matchedRules.push({ layer: 'shadow_route', name: 'normalized-legacy-divergence' });
     intentTrace.reasons.push(`shadow route:${shadowComparison.reason}`);

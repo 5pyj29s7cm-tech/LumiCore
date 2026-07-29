@@ -2,10 +2,19 @@
  * Autonomous Task Executor — processes the autonomous task queue.
  * Executes tasks via runWithTools with tighter safety policy than user-initiated autonomous mode.
  */
-import { dequeue, markRunning, markCompleted, markFailed, markCancelled, getRunningTask, isTaskCancellationRequested } from './task_queue';
+import {
+  attachAutonomousExecutionPlan,
+  dequeue,
+  markRunning,
+  markCompleted,
+  markFailed,
+  markCancelled,
+  getRunningTask,
+  isTaskCancellationRequested,
+} from './task_queue';
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
-import { toolRegistry } from '../tools/registry';
+import { toolRegistry, type ToolRegistry } from '../tools/registry';
 import { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { canAutoApproveAction } from '../tools/action_constitution';
 import { Server as SocketIOServer } from 'socket.io';
@@ -21,6 +30,11 @@ import {
   buildActionContract,
   hasCoreActionEvidence,
 } from '../cognition/action_contract';
+import {
+  buildLumiExecutionPipeline,
+  type LumiExecutionPipeline,
+} from '../cognition/execution_pipeline';
+import { sanitizeCapabilityExecutionPlan } from '../conversation/action_ledger';
 
 interface LLMGetters {
   getDeepSeek: () => any;
@@ -77,6 +91,31 @@ export function buildAutonomousToolPolicy(task: Pick<AutonomousTask, 'title' | '
     };
   }
   return { ...AUTONOMOUS_POLICY, maxIterations };
+}
+
+export function buildAutonomousCapabilityPipeline(
+  task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>,
+  maxIterations: number,
+  registry: ToolRegistry = toolRegistry,
+): LumiExecutionPipeline {
+  const policy = buildAutonomousToolPolicy(task, maxIterations);
+  return buildLumiExecutionPipeline({
+    dispatch: {
+      userId: task.userId,
+      text: task.description || task.title,
+      channel: task.source === 'scheduler' ? 'scheduler' : 'agent',
+      source: `autonomous:${task.source}`,
+      operationMode: 'autonomous',
+      targetIsLumi: true,
+      surface: 'work',
+    },
+    registry,
+    personalityToolPolicy: policy,
+    decisionText: task.description || task.title,
+    traceText: task.description || task.title,
+    source: `autonomous:${task.source}`,
+    taskId: task.id,
+  });
 }
 
 function clipPlanResult(value: string, max = 1800): string {
@@ -329,13 +368,23 @@ export async function executeNextAutonomousTask(
       source: 'autonomous',
     });
 
-    const toolPolicy = buildAutonomousToolPolicy(running, maxIterations);
+    const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations);
+    attachAutonomousExecutionPlan(
+      running.id,
+      sanitizeCapabilityExecutionPlan(executionPipeline.executionPlan, new Date().toISOString()),
+    );
+    if (executionPipeline.executionPlan.risk.sideEffectClass === 'external_commit') {
+      throw new Error('Autonomous external commit blocked: an action-time immutable user confirmation is required.');
+    }
+    const toolPolicy = executionPipeline.execution.toolPolicy;
 
     const context: ToolContext = {
       userId: task.userId,
+      taskId: running.id,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
       requestConfirmation: async (toolName, args) => canAutoApproveAction(toolName, args, { actionIntent: task.description }),
       actionIntent: task.description,
+      routedTaskText: executionPipeline.turnIntent.flow.routeText,
       toolPolicy,
       isCancelled: () => isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId),
       autonomous: true,
@@ -346,6 +395,7 @@ export async function executeNextAutonomousTask(
       { role: 'system' as const, content: [
         `You are Lumi executing an autonomous background task. You work independently without user interaction. Be efficient and direct. Current task mode: ${task.mode}.`,
         formatLumiConstitutionForPrompt(),
+        executionPipeline.capabilityPlan.promptOverlay,
         'For concrete deliverables, define the work product with work_product_plan, verify it with work_product_verify or domain-specific verification tools, repair failed criteria, and only then mark the task complete. If confirmation or missing input blocks progress, report the blocker.',
         'For autonomous web learning, you may use public web_search, url_fetch, and authority_research. Treat them as observation: cite URLs, retrieval time, confidence, and uncertainty. Choose research topics from the user industry habits in the task context: common platforms, vocabulary, deliverable formats, verification standards, compliance boundaries, and repeated real workflows. Avoid generic trend learning unless it clearly improves that user’s industry workflow. For desktop AI/tool catalog learning, use desktop_ai_list_targets and desktop_ai_discovery_plan, then produce source-grounded candidate JSON for later registration. Do not use login-required, paid, captcha, QR/OTP, private, or account-authorization pages as completed sources. Do not call authority_research_save, desktop_ai_register_target, or other long-term knowledge/configuration writes unless the task itself contains explicit user authorization; otherwise produce source-grounded knowledge or target candidates for later absorption.',
         'For autonomous local machine/body learning, only use observation tools for OS info, top-level file/folder landmarks, launchable apps, active/running processes, idle/activity signals, and adapter inventory. Do not open apps or files, click, type, capture screenshots, run commands, read file contents, move/copy/delete files, or infer private facts from filenames. Produce a local body map with evidence, uncertainty, useful app/file landmarks, industry-relevant tools, and next exploration items that need user confirmation.',

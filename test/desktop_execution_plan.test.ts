@@ -4,6 +4,7 @@ import {
   resolveDesktopApplicationIdentity,
   verifyDesktopExecutionReceipt,
   desktopFingerprintMatchesApplication,
+  assessDesktopApplicationIdentity,
 } from '../server/desktop/execution_plan';
 
 describe('desktop execution plan', () => {
@@ -24,6 +25,38 @@ describe('desktop execution plan', () => {
     expect(desktopFingerprintMatchesApplication({ processName: 'acad.exe', title: 'Drawing1.dwg' }, cad)).toBe(true);
     const wps = resolveDesktopApplicationIdentity('WPS');
     expect(desktopFingerprintMatchesApplication({ processName: 'WINWORD.EXE', title: 'WPS migration.docx' }, wps)).toBe(false);
+  });
+
+  it('certifies an application only from complete runtime binary and window evidence', () => {
+    const chrome = resolveDesktopApplicationIdentity('Chrome');
+    const complete = {
+      processName: 'chrome.exe',
+      executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      publisher: 'CN=Google LLC, O=Google LLC, L=Mountain View',
+      productName: 'Google Chrome',
+      productVersion: '138.0.7204.169',
+      windowClass: 'Chrome_WidgetWin_1',
+      signatureStatus: 'Valid',
+      title: 'Lumi - Google Chrome',
+    };
+    expect(assessDesktopApplicationIdentity(complete, chrome)).toMatchObject({
+      matched: true,
+      certification: 'certified',
+      missingSignals: [],
+      conflictingSignals: [],
+      observedVersion: '138.0.7204.169',
+    });
+    expect(assessDesktopApplicationIdentity({ processName: 'chrome.exe' }, chrome)).toMatchObject({
+      matched: true,
+      certification: 'conditional',
+    });
+    const spoofedPublisher = { ...complete, publisher: 'Unknown Publisher' };
+    expect(assessDesktopApplicationIdentity(spoofedPublisher, chrome)).toMatchObject({
+      matched: false,
+      certification: 'mismatch',
+      conflictingSignals: ['publisher'],
+    });
+    expect(desktopFingerprintMatchesApplication(spoofedPublisher, chrome)).toBe(false);
   });
 
   it('uses adapter then UIA then vision for certified CAD work', () => {
@@ -58,6 +91,35 @@ describe('desktop execution plan', () => {
     expect(actionSteps.every(step => step.layer !== 'vision')).toBe(true);
     expect(actionSteps.every(step => step.requiresConfirmation)).toBe(true);
     expect(plan.recovery.maxObservationRetries).toBe(0);
+    expect(plan.verification).toMatchObject({
+      profile: 'send',
+      requiredSignals: expect.arrayContaining([
+        'certified target application identity',
+        'idempotency-bound delivery or submission receipt',
+      ]),
+    });
+  });
+
+  it('uses independent verification profiles for opening, reading, editing and saving', () => {
+    const planFor = (text: string, operation: 'read' | 'create' | 'mutate' | 'navigate') => buildDesktopExecutionPlan({
+      text,
+      lane: 'desktop_control',
+      taskId: `task-${operation}-${text}`,
+      capabilityExecutionPlan: {
+        schemaVersion: 1,
+        planId: `cap-${operation}-${text}`,
+        taskId: `task-${operation}-${text}`,
+        intent: { kind: 'desktop_operation', operation, subject: 'user', target: 'WPS', payload: '', sideEffectClass: operation === 'read' || operation === 'navigate' ? 'none' : 'local_write', relation: 'new', confidence: 1, rule: 'test' },
+        nodes: [], edges: [], expectedEvidence: [], contextRefs: [],
+        risk: { sideEffectClass: operation === 'read' || operation === 'navigate' ? 'none' : 'local_write', requiresConfirmation: false, failClosed: false, reasons: [] },
+        fallbackPolicy: { retryClass: 'none', maxRetries: 0, jitter: false, reconcileUnknownOutcome: false, allowLegacyRoute: false, onTargetMismatch: 'stop', onUnknownOutcome: 'stop_and_report' },
+        decisionAuthority: 'semantic_planner', scriptAuthority: 'adapter_only',
+      },
+    });
+    expect(planFor('打开 WPS', 'navigate').verification.profile).toBe('open');
+    expect(planFor('读取 WPS 当前文档', 'read').verification.profile).toBe('read');
+    expect(planFor('编辑 WPS 当前文档', 'mutate').verification.profile).toBe('edit');
+    expect(planFor('保存 WPS 当前文档', 'mutate').verification.profile).toBe('save');
   });
 
   it('does not verify completion when any step or application identity is unverified', () => {

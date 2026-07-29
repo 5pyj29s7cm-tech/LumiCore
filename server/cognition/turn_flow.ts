@@ -30,7 +30,7 @@ import {
   needsRecentActionContinuationContext,
 } from './action_continuation';
 
-export type LumiTurnChannel = 'chat' | 'voice' | 'task';
+export type LumiTurnChannel = 'chat' | 'voice' | 'task' | 'scheduler' | 'agent';
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
 export type LumiDelegationIntent = 'none' | 'explicit_team' | 'explicit_background' | 'consider_background' | 'foreground_owned';
 export type LumiCapabilityLearningIntent = 'none' | 'inspect_reuse' | 'learn_missing' | 'stabilize_existing';
@@ -104,7 +104,7 @@ export function resolveTurnSurface(input: {
 }): WorkTakeoverTurnSurface {
   if (input.explicitSurface) return input.explicitSurface;
   if (input.channel === 'voice') return 'voice';
-  if (input.channel === 'task') return 'work';
+  if (input.channel === 'task' || input.channel === 'scheduler' || input.channel === 'agent') return 'work';
   if (input.domain === 'work') return 'work';
   const source = String(input.source || '');
   const category = String(input.category || '');

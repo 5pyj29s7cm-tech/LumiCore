@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { getGateConfig } from '../autonomy/safety_gate';
 import { listAutonomousWorkflows } from '../autonomy/workflows';
 import { formatLAPSelfPrompt } from '../lap/policy';
@@ -252,6 +253,7 @@ export interface ClientSelfAwarenessReport {
 
 export interface SelfModelSnapshot {
   schemaVersion: 1;
+  factDigest: string;
   identity: {
     name: 'Lumi';
     product: 'LumiOS';
@@ -278,7 +280,10 @@ export interface SelfModelSnapshot {
   desktopCapabilities: Array<{
     id: string;
     displayName: string;
-    certification: string;
+    supportTier: string;
+    certification: 'client_state_live' | 'runtime_preflight_required';
+    certifiedVersion: string | null;
+    requiredIdentitySignals: string[];
     controlLayers: string[];
   }>;
   knowledgeCoverage: {
@@ -303,6 +308,9 @@ export interface SelfModelSnapshot {
     awareness: 'live' | 'stale' | 'missing';
     health: ClientHealthLevel;
     stateAgeSeconds: number | null;
+    sourceUpdatedAt: string | null;
+    refreshRequired: boolean;
+    refreshAction: 'client_self_repair(refresh_client_state)' | null;
   };
   permissions: {
     externalCommitConfirmation: 'required';
@@ -316,10 +324,15 @@ export interface SelfModelSnapshot {
 export interface SelfIntroductionPlan {
   schemaVersion: 1;
   snapshotGeneratedAt: string;
+  snapshotFactDigest: string;
+  refreshRequired: boolean;
+  refreshActions: string[];
   mode: 'verbal' | 'visible_demo';
   statements: Array<{
     text: string;
     evidence: string;
+    source: string;
+    observedAt: string;
     qualified: boolean;
   }>;
   demoCandidates: Array<{
@@ -1605,7 +1618,7 @@ export function getSelfModelSnapshot(
         : totalFiles > 0
         ? 'indexed_unverified'
         : 'empty';
-  return {
+  const snapshotCore: Omit<SelfModelSnapshot, 'factDigest' | 'generatedAt'> = {
     schemaVersion: 1,
     identity: {
       name: 'Lumi',
@@ -1630,7 +1643,14 @@ export function getSelfModelSnapshot(
     desktopCapabilities: DESKTOP_APPLICATION_REGISTRY.map(application => ({
       id: application.id,
       displayName: application.displayName,
-      certification: application.certification,
+      supportTier: application.certification,
+      certification: application.id === 'lumi-client' && awareness.level === 'live'
+        ? 'client_state_live'
+        : 'runtime_preflight_required',
+      // A registry entry is a policy, not proof that the installed binary was
+      // observed. The exact version is populated only by an action receipt.
+      certifiedVersion: null,
+      requiredIdentitySignals: [...application.certificationPolicy.requiredSignals],
       controlLayers: [...application.controlLayers],
     })),
     knowledgeCoverage: {
@@ -1655,6 +1675,9 @@ export function getSelfModelSnapshot(
       awareness: awareness.level,
       health: health.level,
       stateAgeSeconds: health.stateAgeSeconds,
+      sourceUpdatedAt: state?.updatedAt ? new Date(state.updatedAt).toISOString() : null,
+      refreshRequired: awareness.level !== 'live',
+      refreshAction: awareness.level === 'live' ? null : 'client_self_repair(refresh_client_state)',
     },
     permissions: {
       externalCommitConfirmation: 'required',
@@ -1667,8 +1690,9 @@ export function getSelfModelSnapshot(
       'Models and agents are dynamically orchestrated only inside privacy, permission, confirmation, budget, and receipt policies.',
       ...(awareness.level === 'live' ? [] : ['Live client state is unavailable or stale, so present-moment desktop claims require refresh.']),
     ],
-    generatedAt: new Date().toISOString(),
   };
+  const factDigest = crypto.createHash('sha256').update(JSON.stringify(snapshotCore)).digest('hex');
+  return { ...snapshotCore, factDigest, generatedAt: new Date().toISOString() };
 }
 
 export function buildSelfIntroductionPlan(
@@ -1680,13 +1704,17 @@ export function buildSelfIntroductionPlan(
   const configuredModels = snapshot.configuredModels.filter(model => model.configured);
   const statements: SelfIntroductionPlan['statements'] = [
     {
-      text: CN_SELF_INTRODUCTION_COPY.identity,
+      text: CN_SELF_INTRODUCTION_COPY.identity(snapshot.identity),
       evidence: 'identity and scope contract',
+      source: 'self_model.identity',
+      observedAt: snapshot.generatedAt,
       qualified: false,
     },
     {
       text: CN_SELF_INTRODUCTION_COPY.modelRoles(configuredModels.length, snapshot.configuredModels.length),
       evidence: 'live model role configuration',
+      source: 'self_model.configuredModels',
+      observedAt: snapshot.generatedAt,
       qualified: configuredModels.length !== snapshot.configuredModels.length,
     },
     {
@@ -1696,27 +1724,34 @@ export function buildSelfIntroductionPlan(
         snapshot.connectedCapabilities.mcp,
       ),
       evidence: 'runtime capability manifest',
+      source: 'self_model.connectedCapabilities',
+      observedAt: snapshot.generatedAt,
       qualified: snapshot.connectedCapabilities.adaptersAttention > 0,
     },
     {
       text: CN_SELF_INTRODUCTION_COPY.knowledgeCoverage(snapshot.knowledgeCoverage),
       evidence: 'current scoped knowledge inventory',
+      source: 'self_model.knowledgeCoverage',
+      observedAt: snapshot.generatedAt,
       qualified: snapshot.knowledgeCoverage.verification !== 'indexed_unverified',
     },
     {
       text: CN_SELF_INTRODUCTION_COPY.runtime(snapshot.runtime.awareness, snapshot.runtime.health),
       evidence: 'client health and execution constitution',
+      source: 'self_model.runtime',
+      observedAt: snapshot.generatedAt,
       qualified: snapshot.runtime.awareness !== 'live' || snapshot.runtime.health !== 'ok',
     },
   ];
-  const explicitlyRequestedApplication = DESKTOP_APPLICATION_REGISTRY.find(application => (
+  const explicitlyRequestedApplication = DESKTOP_APPLICATION_REGISTRY
+    .filter(application => application.id !== 'lumi-client')
+    .find(application => (
     application.aliases.some(alias => String(options.requestText || '').toLowerCase().includes(alias.toLowerCase()))
   ))?.id;
   const demoCandidates = snapshot.desktopCapabilities.map(application => ({
     applicationId: application.id,
     enabled: options.visibleDemo === true && (
       application.id === 'lumi-client'
-      || application.certification === 'certified'
       || application.id === explicitlyRequestedApplication
     ),
     reason: application.id === 'lumi-client'
@@ -1727,6 +1762,9 @@ export function buildSelfIntroductionPlan(
   return {
     schemaVersion: 1,
     snapshotGeneratedAt: snapshot.generatedAt,
+    snapshotFactDigest: snapshot.factDigest,
+    refreshRequired: snapshot.runtime.refreshRequired,
+    refreshActions: snapshot.runtime.refreshAction ? [snapshot.runtime.refreshAction] : [],
     mode: options.visibleDemo ? 'visible_demo' : 'verbal',
     statements,
     demoCandidates,
@@ -1905,6 +1943,10 @@ export function formatClientSelfPrompt(
     habits: [],
     nextBestActions: [],
   };
+  const selfSnapshot = getSelfModelSnapshot(userId, {
+    domain: isWork ? 'work' : 'personal',
+    orgId: scope.orgId,
+  });
   const stateAge = state?.updatedAt ? Math.round((Date.now() - state.updatedAt) / 1000) : null;
   const gate = getGateConfig(userId);
   const workflows = isWork ? [] : listAutonomousWorkflows(userId);
@@ -2000,8 +2042,11 @@ export function formatClientSelfPrompt(
 
   return [
     '## Lumi Client Self Model',
-    `Live self snapshot: ${JSON.stringify(getSelfModelSnapshot(userId, { domain: isWork ? 'work' : 'personal', orgId: scope.orgId }))}`,
+    `Live self snapshot: ${JSON.stringify(selfSnapshot)}`,
     'When introducing yourself, derive every capability and limitation from this live snapshot. Do not use a fixed capability script, and do not describe indexed knowledge as fully absorbed.',
+    selfSnapshot.runtime.refreshRequired
+      ? `The self snapshot is ${selfSnapshot.runtime.awareness}. Before a final present-tense self-introduction or capability claim, run ${selfSnapshot.runtime.refreshAction}; if no fresh state arrives, keep the limitation explicit and do not claim current desktop readiness.`
+      : `The self snapshot is live. Preserve fact digest ${selfSnapshot.factDigest} across chat, voice, task, and authorized remote wording; presentation style may differ but capability facts may not.`,
     isWork
       ? `You are the same Lumi operating in organization workspace ${scope.orgId} for the currently authenticated member. Apply the organization overlay and role permissions without changing the member's core Lumi identity or exposing any other member's personal data.`
       : 'You are the user\'s continuous Lumi running inside the LumiOS desktop client. You are not a pure voice assistant and not a boxed chat bot. Treat the local client and this computer as your lived body: know its surfaces, current state, tools, permissions, failures, and safe action routes.',

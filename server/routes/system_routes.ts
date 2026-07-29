@@ -41,6 +41,8 @@ import { getGptSovitsRuntimeStatus } from "../tts/gptsovits_runtime";
 import { getRuntimeQueueStatus as getGptSovitsQueueStatus } from "../tts/providers/gptsovits";
 import { getVoiceprintRuntimeStatus } from "../biometrics/voiceprint_provider";
 import { getToolRuntimeMetrics } from "../runtime/tool_metrics";
+import { getCapabilityRuntimeMetrics } from "../runtime/capability_metrics";
+import { getCapabilityRolloutStage } from "../cognition/capability_rollout";
 import { getAdapterResilienceSnapshot } from "../tools/adapter_resilience";
 import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
 import { generateConfiguredEmbedding } from "../llm/embedding_provider";
@@ -267,6 +269,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const db = readDB();
       const memory = process.memoryUsage();
       const toolMetrics = getToolRuntimeMetrics();
+      const capabilityMetrics = getCapabilityRuntimeMetrics();
       const ollama = getLocalModelConfig('ollama');
       const lmstudio = getLocalModelConfig('lmstudio');
       res.json({
@@ -289,6 +292,15 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           externalBytes: memory.external,
         },
         tools: toolMetrics,
+        capabilities: {
+          ...capabilityMetrics,
+          rollout: {
+            stage: getCapabilityRolloutStage(),
+            rollbackExternalDisabled: /^(?:1|true|yes|on)$/i.test(
+              String(process.env.LUMI_CAPABILITY_ROLLBACK_DISABLE_EXTERNAL || ''),
+            ),
+          },
+        },
         adapterResilience: getAdapterResilienceSnapshot(),
         queues: {
           toolCallsInFlight: toolMetrics.totals.inFlight,

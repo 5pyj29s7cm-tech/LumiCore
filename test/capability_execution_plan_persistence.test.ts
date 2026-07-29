@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   attachConversationExecutionPlan,
   attachConversationModelExecutionGraph,
+  loadConversationModelExecutionRecovery,
   type ConversationActionTaskRow,
 } from '../server/conversation/action_ledger';
 import {
@@ -153,6 +154,31 @@ describe('capability execution plan persistence', () => {
     expect(context.modelExecutionGraph.graphId).toBe(compilation.graph.graphId);
     expect(context.modelNodeReceipts[0]).toMatchObject({ nodeId: 'research', verified: true });
     expect(context.modelNodeReceipts[0].outputDigest).toHaveLength(64);
+    expect(context.modelNodeReceipts[0].outputSummary).toBeUndefined();
     expect(JSON.stringify(context)).not.toContain('sensitive worker output');
+
+    const recovery = loadConversationModelExecutionRecovery(db, {
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      taskId: 'task-durable',
+    });
+    expect(recovery?.graph.graphId).toBe(compilation.graph.graphId);
+    expect(recovery?.receipts).toHaveLength(1);
+    expect(recovery?.receipts[0]).toMatchObject({
+      taskId: 'task-durable',
+      nodeId: 'research',
+      verified: true,
+      nodeFingerprint: receipt.nodeFingerprint,
+    });
+    expect(loadConversationModelExecutionRecovery(db, {
+      conversationId: 'other-conversation',
+      userId: 'user-1',
+      taskId: 'task-durable',
+    })).toBeNull();
+    expect(loadConversationModelExecutionRecovery(db, {
+      conversationId: 'conversation-1',
+      userId: 'other-user',
+      taskId: 'task-durable',
+    })).toBeNull();
   });
 });

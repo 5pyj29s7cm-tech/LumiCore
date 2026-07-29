@@ -1,4 +1,9 @@
 import crypto from 'crypto';
+import { recordKnowledgeCoverageEvaluation, recordKnowledgeRetrievalEvaluation } from '../runtime/capability_metrics';
+
+export const KNOWLEDGE_GOLDEN_TOP_K = 5 as const;
+export const KNOWLEDGE_RECALL_AT_5_MIN = 0.95;
+export const KNOWLEDGE_CITATION_ACCURACY_MIN = 0.98;
 
 export type KnowledgeIngestionStatus =
   | 'pending'
@@ -75,6 +80,7 @@ export interface KnowledgeIngestionManifest {
     contentChars: number;
     warning?: string;
     error?: string;
+    failureKind?: 'empty_extraction' | 'encrypted_or_password_required' | 'corrupt_source' | 'provider_unavailable' | 'unsupported_format' | 'extraction_error';
   };
   chunks: KnowledgeChunkManifest[];
   retrieval?: KnowledgeRetrievalEvaluation;
@@ -91,6 +97,7 @@ export interface KnowledgeManifestInput {
     method?: string;
     warning?: string;
     error?: string;
+    failureKind?: KnowledgeIngestionManifest['extraction']['failureKind'];
   };
   retrieval?: KnowledgeRetrievalEvaluation;
   previousSourceRevision?: string;
@@ -174,8 +181,11 @@ export function evaluateKnowledgeManifest(
   if (embeddingCoverage < 1) blockers.push('embedding_incomplete');
   if (!manifest.retrieval) blockers.push('retrieval_not_evaluated');
   else {
-    if (manifest.retrieval.recallAtK < 0.8) blockers.push('recall_below_threshold');
-    if (manifest.retrieval.citationAccuracy < 1) blockers.push('citation_inaccurate');
+    if (manifest.retrieval.topK !== KNOWLEDGE_GOLDEN_TOP_K) blockers.push('retrieval_top_k_not_5');
+    if (manifest.retrieval.caseCount <= 0) blockers.push('retrieval_cases_missing');
+    if (manifest.retrieval.recallAtK < KNOWLEDGE_RECALL_AT_5_MIN) blockers.push('recall_below_threshold');
+    if (manifest.retrieval.citationAccuracy < KNOWLEDGE_CITATION_ACCURACY_MIN) blockers.push('citation_below_threshold');
+    if (!manifest.retrieval.passed) blockers.push('retrieval_evaluation_failed');
   }
 
   const verified = blockers.length === 0;
@@ -186,7 +196,7 @@ export function evaluateKnowledgeManifest(
   else if (verified) status = 'verified';
   else if (extractionCoverage < 1 || chunkStorageCoverage < 1) status = 'partial';
 
-  return {
+  const evaluation = {
     status,
     coverage: {
       extractionCoverage,
@@ -199,6 +209,8 @@ export function evaluateKnowledgeManifest(
       blockers,
     },
   };
+  recordKnowledgeCoverageEvaluation(evaluation.status, evaluation.coverage);
+  return evaluation;
 }
 
 export function buildKnowledgeIngestionManifest(input: KnowledgeManifestInput): KnowledgeIngestionManifest {
@@ -222,6 +234,7 @@ export function buildKnowledgeIngestionManifest(input: KnowledgeManifestInput): 
       contentChars: input.content.length,
       warning: input.extraction?.warning || undefined,
       error: input.extraction?.error || undefined,
+      failureKind: input.extraction?.failureKind || undefined,
     },
     chunks: input.chunks,
     retrieval: input.retrieval,
@@ -235,7 +248,7 @@ export function evaluateKnowledgeRetrievalCases(input: {
   chunks: KnowledgeChunkManifest[];
   now?: string;
 }): KnowledgeRetrievalEvaluation {
-  const topK = Math.max(1, Math.min(20, Number(input.topK) || 5));
+  const topK = Math.max(1, Math.min(20, Number(input.topK) || KNOWLEDGE_GOLDEN_TOP_K));
   const memoryToChunk = new Map(input.chunks.map(chunk => [chunk.memoryId || '', chunk.index]));
   let recallHits = 0;
   let recallTotal = 0;
@@ -261,15 +274,28 @@ export function evaluateKnowledgeRetrievalCases(input: {
 
   const recallAtK = ratio(recallHits, recallTotal);
   const citationAccuracy = ratio(correctCitations, citationTotal);
-  return {
+  const evaluation = {
     evaluatedAt: input.now || new Date().toISOString(),
     topK,
     caseCount: input.cases.length,
     recallAtK,
     citationAccuracy,
-    passed: input.cases.length > 0 && recallAtK >= 0.8 && citationAccuracy === 1,
+    passed: input.cases.length > 0
+      && recallTotal > 0
+      && citationTotal > 0
+      && topK === KNOWLEDGE_GOLDEN_TOP_K
+      && recallAtK >= KNOWLEDGE_RECALL_AT_5_MIN
+      && citationAccuracy >= KNOWLEDGE_CITATION_ACCURACY_MIN,
     cases: input.cases,
   };
+  recordKnowledgeRetrievalEvaluation({
+    cases: input.cases.length,
+    expectedItems: recallTotal,
+    retrievalHits: recallHits,
+    citationChecks: citationTotal,
+    citationHits: correctCitations,
+  });
+  return evaluation;
 }
 
 export function markKnowledgeManifestStale(

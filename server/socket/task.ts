@@ -25,6 +25,7 @@ import {
   prepareConversationActionExecution,
   persistConversationExecutionPlan,
   persistConversationModelExecutionResult,
+  getConversationModelExecutionRecovery,
   cancelConversationActionExecution,
   setConversationActionExecutionStatus,
 } from "../conversation/manager";
@@ -49,6 +50,7 @@ import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { bindCapabilityExecutionPlanTask } from "../cognition/capability_execution_plan";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
+import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
 import { finalizeLumiResponse } from "../cognition/result_finalizer";
 import {
   createPreFinalizationTextGate,
@@ -468,6 +470,10 @@ export function registerTaskHandler(
       capabilitySelection,
       capabilityExecutionPlan: executionPipeline.executionPlan,
     });
+    const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
+    const attachDesktopReceipt = (records: ToolExecutionRecord[]) => (
+      withDesktopExecutionReceipt(records, desktopExecutionTracker)
+    );
     if (executionDecision.toolRoute) {
       emitAgent('agent:tool_route', {
         categories: executionDecision.toolRoute.categories,
@@ -687,6 +693,7 @@ export function registerTaskHandler(
           actionIntent: confirmedTask,
           routedTaskText: confirmedTask,
           toolPolicy: executionDecision.toolPolicy,
+          desktopExecutionTracker,
         },
         preflight: () => consumed
           ? { allowed: true, arguments: confirmedArgs }
@@ -754,6 +761,7 @@ export function registerTaskHandler(
             actionIntent: confirmedTask,
             routedTaskText: confirmedTask,
             toolPolicy: executionDecision.toolPolicy,
+            desktopExecutionTracker,
             isCancelled: () => taskAbortController.signal.aborted,
             llmGetters,
             source: 'task_confirmation_resume',
@@ -772,6 +780,7 @@ export function registerTaskHandler(
           ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
           : continuation.text || confirmationResponse;
       }
+      confirmationRecords = attachDesktopReceipt(confirmationRecords);
       const finalConfirmation = finalizeLumiResponse({
         taskText: confirmedTask,
         responseText: confirmationResponse,
@@ -823,8 +832,9 @@ export function registerTaskHandler(
 
       if (cognition.directToolExecuted && cognition.responseText) {
         console.log(`[Cognition] Task handled directly: ${cognition.intent.category}/${cognition.intent.subIntent}`);
-        const directToolRecords = cognition.toolRecords
-          || (cognition.toolRecord ? [cognition.toolRecord] : []);
+        const directToolRecords = attachDesktopReceipt(
+          cognition.toolRecords || (cognition.toolRecord ? [cognition.toolRecord] : []),
+        );
         const finalDirect = finalizeLumiResponse({
           taskText: data.text,
           responseText: cognition.responseText,
@@ -885,6 +895,7 @@ export function registerTaskHandler(
           toolPolicy: executionDecision.toolPolicy,
           rootTaskText: routedTaskText,
           taskId: actionTaskExecution.state?.taskId,
+          desktopExecutionTracker,
         };
         const complexity = classifyComplexity(routedTaskText, orchestrationContext);
         const shouldOrchestrate = shouldAttemptOrchestration({
@@ -918,9 +929,21 @@ export function registerTaskHandler(
               const assignments = matchWorkers(subTasks, availableAgents);
               if (exposeAgentWork && !deferTaskModelOutput) emitTask("task:chunk", { text: `[Orchestrator] Assigned to ${assignments.length} worker(s)\n`, agentName: "Lumi" });
 
+              const taskModelRecovery = actionTaskExecution.state?.taskId
+                ? getConversationModelExecutionRecovery({
+                    conversationId: convForHistory.id,
+                    userId: uid,
+                    taskId: actionTaskExecution.state.taskId,
+                  })
+                : null;
               const workflowResult = await executeWorkflow(
                 assignments,
-                { ...orchestrationContext, desktopRelay },
+                {
+                  ...orchestrationContext,
+                  desktopRelay,
+                  desktopExecutionTracker,
+                  resumeNodeReceipts: taskModelRecovery?.receipts,
+                },
                 scopedLlmConfig,
                 llmGetters,
                 availableAgents,
@@ -973,10 +996,11 @@ export function registerTaskHandler(
       }
 
       if (orchestratedText) {
+        const finalOrchestratedToolRecords = attachDesktopReceipt(orchestratedToolRecords);
         const finalOrchestrated = finalizeLumiResponse({
           taskText: data.text,
           responseText: orchestratedText,
-          toolRecords: taskAwareRecords(orchestratedToolRecords),
+          toolRecords: taskAwareRecords(finalOrchestratedToolRecords),
           source: 'task',
           flow: turnFlow,
         });
@@ -1006,7 +1030,7 @@ export function registerTaskHandler(
         } as any);
         writeDB(db);
         addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
-        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: orchestratedText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: orchestratedToolRecords.length ? orchestratedToolRecords : undefined });
+        addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: orchestratedText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalOrchestratedToolRecords.length ? finalOrchestratedToolRecords : undefined });
 
         // Update emotional state
         let updatedState = updateEmotionalState(emotionalState, { type: 'interaction', userId: uid, timestamp: new Date().toISOString() });
@@ -1014,9 +1038,9 @@ export function registerTaskHandler(
           updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
         }
         saveEmotionalState(taskStateKey, updatedState);
-        persistTaskExecutionWriteback(orchestratedText, orchestratedToolRecords, `${interactionId}_orchestrated`);
+        persistTaskExecutionWriteback(orchestratedText, finalOrchestratedToolRecords, `${interactionId}_orchestrated`);
         persistTaskLearning(orchestratedText, {
-          toolRecords: orchestratedToolRecords,
+          toolRecords: finalOrchestratedToolRecords,
           logLabel: 'task orchestrated',
         });
         return;
@@ -1045,7 +1069,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -1060,12 +1084,13 @@ export function registerTaskHandler(
         recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId, 'task');
       }
       taskTextGate.finish();
+      const finalTaskToolRecords = attachDesktopReceipt(result.toolCalls);
 
       if (taskLease.signal.aborted) {
         const cancelledResponse = finalizeLumiResponse({
           taskText: data.text,
           responseText: '任务已取消。',
-          toolRecords: result.toolCalls,
+          toolRecords: finalTaskToolRecords,
           source: 'task',
           flow: turnFlow,
         });
@@ -1078,9 +1103,9 @@ export function registerTaskHandler(
           reason: 'cancelled',
         });
         emitAgent("agent:status", { status: "idle" });
-        persistTaskExecutionWriteback(cancelledResponse.text, result.toolCalls, `${interactionId}_cancelled`);
+        persistTaskExecutionWriteback(cancelledResponse.text, finalTaskToolRecords, `${interactionId}_cancelled`);
         persistTaskLearning(cancelledResponse.text, {
-          toolRecords: result.toolCalls,
+          toolRecords: finalTaskToolRecords,
           sourceInteractionId: `${interactionId}_cancelled`,
           logLabel: 'task cancelled',
         });
@@ -1091,7 +1116,7 @@ export function registerTaskHandler(
       const finalTaskResponse = finalizeLumiResponse({
         taskText: data.text,
         responseText: finalTaskText,
-        toolRecords: taskAwareRecords(result.toolCalls),
+        toolRecords: taskAwareRecords(finalTaskToolRecords),
         source: 'task',
         flow: turnFlow,
       });
@@ -1128,7 +1153,7 @@ export function registerTaskHandler(
         personality: personality.id,
         timestamp: new Date().toISOString(),
         mode: 'task',
-        toolCalls: result.toolCalls.map((tc: any) => ({ name: tc.name, args: tc.arguments })),
+        toolCalls: finalTaskToolRecords.map((tc: any) => ({ name: tc.name, args: tc.arguments })),
         conversationId: conv.id,
         userId: uid,
         domain: taskScope.domain,
@@ -1136,8 +1161,8 @@ export function registerTaskHandler(
       } as any);
       writeDB(db);
 
-      persistTaskExecutionWriteback(finalTaskText, result.toolCalls);
-      persistTaskLearning(finalTaskText, { toolRecords: result.toolCalls, logLabel: 'task' });
+      persistTaskExecutionWriteback(finalTaskText, finalTaskToolRecords);
+      persistTaskLearning(finalTaskText, { toolRecords: finalTaskToolRecords, logLabel: 'task' });
 
       // Async memory extraction
       const locationTag = sensory.locationTag || undefined;
@@ -1212,7 +1237,7 @@ export function registerTaskHandler(
       if (convForHistory) {
         addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user', content: data.text, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId });
         if (finalTaskText) {
-          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: result.toolCalls.length ? result.toolCalls : undefined });
+          addMessage({ userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant', content: finalTaskText, personality: personality.id, domain: taskScope.domain, orgId: taskScope.orgId, toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined });
         }
         try {
           const topics = extractTopics(data.text + ' ' + finalTaskText);

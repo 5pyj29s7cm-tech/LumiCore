@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildModelGraphNodeReceipt,
+  arbitrateModelGraphResults,
   compileModelExecutionGraph,
   modelCandidateLocality,
   resolveAgentModelCandidates,
+  reuseVerifiedModelGraphNodeReceipt,
   type ModelGraphNode,
 } from '../server/agents/model_execution_graph';
+import { compileWorkerModelCandidates } from '../server/agents/orchestrator';
 
 function node(nodeId: string, dependsOn: string[] = [], provider = 'ollama'): ModelGraphNode {
   return {
@@ -128,6 +131,8 @@ describe('model execution graph', () => {
       durationMs: 1000,
     });
     expect(receipt.outputDigest).toHaveLength(64);
+    expect(receipt.nodeFingerprint).toHaveLength(64);
+    expect(receipt.outputSummary).toBe('verified answer');
   });
 
   it('records the model actually selected by the executor', () => {
@@ -149,5 +154,193 @@ describe('model execution graph', () => {
     });
 
     expect(receipt.selectedCandidate).toEqual(selectedCandidate);
+  });
+
+  it('reuses only a verified receipt for the same task and semantic node fingerprint', () => {
+    const first = compileModelExecutionGraph({ taskId: 'resume-task', nodes: [node('answer')] });
+    const prior = buildModelGraphNodeReceipt({
+      graph: first.graph,
+      node: first.graph.nodes[0],
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      output: 'password=hunter2 verified result',
+    });
+    const resumed = compileModelExecutionGraph({ taskId: 'resume-task', nodes: [node('answer')] });
+    const reused = reuseVerifiedModelGraphNodeReceipt({
+      graph: resumed.graph,
+      node: resumed.graph.nodes[0],
+      prior,
+      recoveredAt: '2026-01-01T00:01:00.000Z',
+    });
+
+    expect(reused).toMatchObject({
+      taskId: 'resume-task',
+      nodeId: 'answer',
+      verified: true,
+      durationMs: 0,
+      reusedFromReceipt: `${prior.graphId}:answer`,
+    });
+    expect(reused?.outputDigest).toBe(prior.outputDigest);
+    expect(reused?.outputSummary).toContain('password=[redacted]');
+    expect(reused?.outputSummary).not.toContain('hunter2');
+
+    const changedNode = { ...resumed.graph.nodes[0], role: 'different-role' };
+    expect(reuseVerifiedModelGraphNodeReceipt({ graph: resumed.graph, node: changedNode, prior })).toBeNull();
+    expect(reuseVerifiedModelGraphNodeReceipt({
+      graph: { ...resumed.graph, taskId: 'other-task' },
+      node: resumed.graph.nodes[0],
+      prior,
+    })).toBeNull();
+  });
+
+  it('arbitrates only verified outputs and honors deterministic first-result policy', () => {
+    const compiled = compileModelExecutionGraph({
+      taskId: 'arbitration-task',
+      nodes: [node('first'), node('second'), node('failed')],
+      arbitration: 'first_verified',
+    });
+    const receipts = compiled.graph.nodes.map(graphNode => buildModelGraphNodeReceipt({
+      graph: compiled.graph,
+      node: graphNode,
+      status: graphNode.nodeId === 'failed' ? 'failed' : 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      output: `${graphNode.nodeId} output`,
+    }));
+    const result = arbitrateModelGraphResults({
+      graph: compiled.graph,
+      receipts,
+      outputByNodeId: new Map([
+        ['first', 'first output'],
+        ['second', 'second output'],
+        ['failed', 'failed output'],
+      ]),
+    });
+
+    expect(result).toMatchObject({
+      policy: 'first_verified',
+      status: 'succeeded',
+      selectedNodeIds: ['first'],
+    });
+    expect(result.outputDigest).toHaveLength(64);
+  });
+
+  it('requires a verified judge that consumes every candidate result', () => {
+    const invalid = compileModelExecutionGraph({
+      taskId: 'judge-task',
+      nodes: [node('candidate-a'), { ...node('judge'), type: 'judge' }],
+      arbitration: 'judge',
+    });
+    expect(invalid.ok).toBe(false);
+    expect(invalid.errors.join(' ')).toContain('judge node must depend on every candidate node');
+
+    const compiled = compileModelExecutionGraph({
+      taskId: 'judge-task',
+      nodes: [
+        node('candidate-a'),
+        node('candidate-b'),
+        { ...node('judge', ['candidate-a', 'candidate-b']), type: 'judge' },
+      ],
+      arbitration: 'judge',
+    });
+    const receipts = compiled.graph.nodes.map(graphNode => buildModelGraphNodeReceipt({
+      graph: compiled.graph,
+      node: graphNode,
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      output: `${graphNode.nodeId} output`,
+    }));
+    const result = arbitrateModelGraphResults({
+      graph: compiled.graph,
+      receipts,
+      outputByNodeId: new Map(compiled.graph.nodes.map(graphNode => [
+        graphNode.nodeId,
+        `${graphNode.nodeId} output`,
+      ])),
+    });
+
+    expect(compiled.ok).toBe(true);
+    expect(result).toMatchObject({
+      policy: 'judge',
+      status: 'succeeded',
+      selectedNodeIds: ['judge'],
+    });
+  });
+
+  it('requires a strict verified majority and blocks ties', () => {
+    const compiled = compileModelExecutionGraph({
+      taskId: 'vote-task',
+      nodes: [node('a'), node('b'), node('c')],
+      arbitration: 'majority_vote',
+    });
+    const receipts = compiled.graph.nodes.map(graphNode => buildModelGraphNodeReceipt({
+      graph: compiled.graph,
+      node: graphNode,
+      status: 'succeeded',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      output: graphNode.nodeId === 'c' ? 'different' : 'Same answer',
+    }));
+    const majority = arbitrateModelGraphResults({
+      graph: compiled.graph,
+      receipts,
+      outputByNodeId: new Map([['a', 'Same answer'], ['b', ' same   answer '], ['c', 'different']]),
+    });
+    expect(majority).toMatchObject({ status: 'succeeded', selectedNodeIds: ['a'] });
+
+    const tie = arbitrateModelGraphResults({
+      graph: { ...compiled.graph, nodes: compiled.graph.nodes.slice(0, 2) },
+      receipts: receipts.slice(0, 2),
+      outputByNodeId: new Map([['a', 'one'], ['b', 'two']]),
+    });
+    expect(tie).toMatchObject({ status: 'blocked', selectedNodeIds: [] });
+  });
+
+  it('enforces reflection dependencies plus context and estimated cost budgets', () => {
+    const reflectionWithoutInput = compileModelExecutionGraph({
+      nodes: [{ ...node('reflect'), role: 'reflection' }],
+    });
+    expect(reflectionWithoutInput.ok).toBe(false);
+    expect(reflectionWithoutInput.errors.join(' ')).toContain('requires at least one dependency');
+
+    const expensive = compileModelExecutionGraph({
+      nodes: [{
+        ...node('remote', [], 'openai'),
+        estimatedInputTokens: 2_000,
+        estimatedOutputTokens: 2_000,
+        candidates: [{
+          ...node('remote', [], 'openai').candidates[0],
+          estimatedCostPer1kTokensUsd: 1,
+        }],
+      }],
+      budgets: { maxInputTokens: 1_000, maxEstimatedCostUsd: 1 },
+    });
+    expect(expensive.ok).toBe(false);
+    expect(expensive.errors.join(' ')).toContain('input context estimate');
+    expect(expensive.errors.join(' ')).toContain('estimated cost');
+  });
+
+  it('does not silently append fallback models when the task pins a model', () => {
+    const candidates = compileWorkerModelCandidates({
+      subTask: {
+        id: 'pinned-node',
+        description: 'Use the exact requested model',
+        requiredSkill: 'analysis',
+        executionMode: 'lumi',
+      },
+      agent: {
+        id: 'worker-pinned',
+        name: 'Pinned Worker',
+        category: 'analysis',
+        status: 'idle',
+        runtime: 'internal',
+        modelPreference: 'ollama/other-model',
+      } as any,
+    }, {
+      userId: 'pinned-user',
+      modelSelectionMode: 'pinned',
+      modelCandidates: [{ provider: 'openai', model: 'exact-model' }],
+    }, { provider: 'deepseek', model: 'fallback-model' });
+
+    expect(candidates.map(candidate => `${candidate.provider}/${candidate.model}`))
+      .toEqual(['openai/exact-model']);
   });
 });

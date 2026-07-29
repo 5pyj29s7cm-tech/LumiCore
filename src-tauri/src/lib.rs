@@ -3062,10 +3062,89 @@ pub struct ActiveWindowInfo {
     pub title: String,
     pub process_name: String,
     pub pid: u32,
+    pub executable_path: String,
+    pub publisher: String,
+    pub product_name: String,
+    pub product_version: String,
+    pub window_class: String,
+    pub signature_status: String,
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct WindowsBinaryIdentity {
+    publisher: String,
+    product_name: String,
+    product_version: String,
+    signature_status: String,
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_binary_identity(executable_path: &str) -> WindowsBinaryIdentity {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Mutex<HashMap<String, WindowsBinaryIdentity>>> = OnceLock::new();
+    let key = executable_path.trim().to_lowercase();
+    if key.is_empty() {
+        return WindowsBinaryIdentity::default();
+    }
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get(&key) {
+            return cached.clone();
+        }
+    }
+
+    let escaped_path = executable_path.replace('\'', "''");
+    let script = format!(
+        r#"$item = Get-Item -LiteralPath '{}'
+$signature = Get-AuthenticodeSignature -LiteralPath '{}'
+$publisher = if ($signature.SignerCertificate) {{ [string]$signature.SignerCertificate.Subject }} else {{ [string]$item.VersionInfo.CompanyName }}
+[PSCustomObject]@{{
+  publisher = $publisher
+  product_name = [string]$item.VersionInfo.ProductName
+  product_version = [string]$item.VersionInfo.ProductVersion
+  signature_status = [string]$signature.Status
+}} | ConvertTo-Json -Compress"#,
+        escaped_path, escaped_path,
+    );
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(0x08000000u32);
+    let mut identity = WindowsBinaryIdentity::default();
+    if let Ok(mut child) = command.spawn() {
+        let started = Instant::now();
+        let completed = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status.success(),
+                Ok(None) if started.elapsed() < Duration::from_millis(2500) => {
+                    std::thread::sleep(Duration::from_millis(15));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break false;
+                }
+            }
+        };
+        if completed {
+            let mut output = String::new();
+            if let Some(mut stdout) = child.stdout.take() {
+                let _ = stdout.read_to_string(&mut output);
+            }
+            identity = serde_json::from_str(output.trim()).unwrap_or_default();
+        }
+    }
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, identity.clone());
+    }
+    identity
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3102,6 +3181,12 @@ fn get_active_window_info() -> ActiveWindowInfo {
     let mut window_id = String::new();
     let mut title = String::new();
     let mut process_name = String::new();
+    let mut executable_path = String::new();
+    let mut publisher = String::new();
+    let mut product_name = String::new();
+    let mut product_version = String::new();
+    let mut window_class = String::new();
+    let mut signature_status = String::new();
     #[allow(unused_mut)]
     let mut pid: u32 = 0;
     #[allow(unused_mut)]
@@ -3127,6 +3212,7 @@ fn get_active_window_info() -> ActiveWindowInfo {
             fn GetWindowTextW(hwnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
             fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
             fn GetWindowRect(hwnd: isize, lpRect: *mut RECT) -> i32;
+            fn GetClassNameW(hwnd: isize, lpClassName: *mut u16, nMaxCount: i32) -> i32;
         }
         unsafe {
             let hwnd = GetForegroundWindow();
@@ -3135,6 +3221,11 @@ fn get_active_window_info() -> ActiveWindowInfo {
                 let mut buf: [u16; 512] = [0; 512];
                 let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 512);
                 title = String::from_utf16_lossy(&buf[..len as usize]);
+                let mut class_buf: [u16; 256] = [0; 256];
+                let class_len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), 256);
+                if class_len > 0 {
+                    window_class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+                }
                 GetWindowThreadProcessId(hwnd, &mut pid);
                 let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
                 if GetWindowRect(hwnd, &mut rect) != 0 {
@@ -3148,10 +3239,18 @@ fn get_active_window_info() -> ActiveWindowInfo {
         if pid != 0 {
             use sysinfo::System;
             let sys = System::new_all();
-            process_name = sys
-                .process(sysinfo::Pid::from(pid as usize))
-                .map(|p| p.name().to_string_lossy().to_string())
-                .unwrap_or_default();
+            if let Some(process) = sys.process(sysinfo::Pid::from(pid as usize)) {
+                process_name = process.name().to_string_lossy().to_string();
+                executable_path = process
+                    .exe()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_default();
+            }
+            let identity = get_windows_binary_identity(&executable_path);
+            publisher = identity.publisher;
+            product_name = identity.product_name;
+            product_version = identity.product_version;
+            signature_status = identity.signature_status;
         }
     }
     #[cfg(target_os = "linux")]
@@ -3216,7 +3315,22 @@ end tell
             }
         }
     }
-    ActiveWindowInfo { window_id, title, process_name, pid, x, y, width, height }
+    ActiveWindowInfo {
+        window_id,
+        title,
+        process_name,
+        pid,
+        executable_path,
+        publisher,
+        product_name,
+        product_version,
+        window_class,
+        signature_status,
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

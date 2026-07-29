@@ -29,6 +29,14 @@ import { buildResponseLanguageInstruction } from "../utils/language";
 import { canAutoApproveAction } from "../tools/action_constitution";
 import type { ToolPolicy } from "../personality/types";
 import type { ToolContext } from "../tools/types";
+import type { DesktopExecutionTracker } from '../desktop/execution_runtime';
+import {
+  recordModelArbitration,
+  recordModelFallback,
+  recordModelFallbackSuppressedAfterSideEffect,
+  recordModelGraphCompilation,
+  recordModelNodeRecovery,
+} from '../runtime/capability_metrics';
 import { isStrictPrivacy } from '../config/privacy';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
 import { executeToolCall } from "../tools/execution_engine";
@@ -40,7 +48,9 @@ import {
 } from "../cognition/desktop_observation";
 import {
   buildModelGraphNodeReceipt,
+  arbitrateModelGraphResults,
   compileModelExecutionGraph,
+  reuseVerifiedModelGraphNodeReceipt,
   modelCandidateLocality,
   resolveAgentModelCandidates,
   type ModelExecutionBudget,
@@ -48,6 +58,7 @@ import {
   type ModelCandidate,
   type ModelGraphNode,
   type ModelGraphNodeReceipt,
+  type ModelGraphArbitrationReceipt,
   type ModelGraphPrivacy,
 } from './model_execution_graph';
 
@@ -134,6 +145,8 @@ export interface SubTask {
   executionMode: 'lumi' | 'scholar' | 'founder';
   dependsOn?: string[];
   assignedAgentId?: string;
+  /** Optional semantic graph role. The planner may set judge/join explicitly. */
+  nodeType?: ModelGraphNode['type'];
 }
 
 export interface WorkerAssignment {
@@ -152,6 +165,7 @@ export interface WorkflowResult {
   totalAgentsUsed: number;
   executionGraph?: ModelExecutionGraph;
   nodeReceipts?: ModelGraphNodeReceipt[];
+  arbitrationReceipt?: ModelGraphArbitrationReceipt;
 }
 
 export type OrchestrationSubTaskStatus = 'succeeded' | 'failed' | 'blocked';
@@ -185,7 +199,19 @@ export interface OrchestrationContext {
   /** Hard graph limits enforced before any worker starts. */
   executionBudget?: Partial<ModelExecutionBudget>;
   /** Optional task-scoped model sequence. Each candidate is still privacy-gated. */
-  modelCandidates?: Array<{ provider: string; model: string; priority?: number }>;
+  modelCandidates?: Array<{
+    provider: string;
+    model: string;
+    priority?: number;
+    estimatedCostPer1kTokensUsd?: number;
+  }>;
+  /** Pinned means the explicit task model list may not be silently replaced. */
+  modelSelectionMode?: 'pinned' | 'prefer_with_fallback';
+  /** Verified node receipts restored from the durable task ledger after a restart. */
+  resumeNodeReceipts?: ModelGraphNodeReceipt[];
+  desktopExecutionTracker?: DesktopExecutionTracker;
+  /** Result selection is enforced by the compiled graph, never by prose aggregation. */
+  arbitrationPolicy?: ModelExecutionGraph['arbitration'];
 }
 
 export interface OrchestrationToolMeta {
@@ -550,6 +576,7 @@ async function runDeterministicDesktopObservation(
         isCancelled: context.isCancelled,
         llmGetters,
         toolPolicy,
+        desktopExecutionTracker: context.desktopExecutionTracker,
       },
     });
     records.push(record);
@@ -1284,6 +1311,22 @@ export function compileWorkerModelCandidates(
   fallbackAgents: AgentRecord[] = [],
 ): ModelCandidate[] {
   const privacyPolicy = context.dataRoutingPolicy || (isStrictPrivacy() ? 'local_only' : 'policy_scoped');
+  if (context.modelSelectionMode === 'pinned' && context.modelCandidates?.length) {
+    if (assignment.agent.runtime === 'external') return [];
+    const pinned = context.modelCandidates.map((candidate, index): ModelCandidate => ({
+      provider: String(candidate.provider || '').trim().toLowerCase(),
+      model: String(candidate.model || '').trim(),
+      locality: modelCandidateLocality(candidate.provider),
+      priority: Number.isFinite(candidate.priority) ? Number(candidate.priority) : index,
+      agentId: assignment.agent.id,
+      ...(Number.isFinite(candidate.estimatedCostPer1kTokensUsd)
+        ? { estimatedCostPer1kTokensUsd: Math.max(0, Number(candidate.estimatedCostPer1kTokensUsd)) }
+        : {}),
+    })).filter(candidate => candidate.provider && candidate.model);
+    return (privacyPolicy === 'local_only'
+      ? pinned.filter(candidate => candidate.locality === 'local')
+      : pinned).sort((left, right) => left.priority - right.priority);
+  }
   const agents = [
     assignment.agent,
     ...fallbackAgents.filter(agent => agent.id !== assignment.agent.id),
@@ -1405,6 +1448,7 @@ async function executeWorkerTask(
     lastCandidate = selectedCandidate;
     const currentAgent = agentById.get(selectedCandidate.agentId || agent.id);
     const isRetry = attempt > 0;
+    if (isRetry) recordModelFallback();
     if (!currentAgent) {
       attemptErrors.push(`candidate ${selectedCandidate.provider}/${selectedCandidate.model} references an unavailable agent`);
       continue;
@@ -1496,6 +1540,7 @@ async function executeWorkerTask(
         isCancelled: () => attemptTimedOut || context.isCancelled?.() === true,
         llmGetters,
         toolPolicy: workerToolPolicy,
+        desktopExecutionTracker: context.desktopExecutionTracker,
         onToolStart: (record: { id: string; name: string; arguments: Record<string, any> }) => {
           toolExecutionStarted = true;
           onTool?.({
@@ -1605,6 +1650,7 @@ async function executeWorkerTask(
       const reason = String(err).slice(0, 240);
       attemptErrors.push(`${selectedCandidate.provider}/${selectedCandidate.model}: ${reason}`);
       if (toolExecutionStarted) {
+        recordModelFallbackSuppressedAfterSideEffect();
         return {
           subTaskId: subTask.id,
           output: `[Worker result unknown after tool execution started; automatic model fallback stopped to prevent duplicate side effects: ${reason}]`,
@@ -1662,9 +1708,9 @@ export async function executeWorkflow(
     );
     return {
       nodeId: assignment.subTask.id,
-      type: candidates[0]?.provider.startsWith('external:')
+      type: assignment.subTask.nodeType || (candidates[0]?.provider.startsWith('external:')
         ? 'external_agent'
-        : 'internal_agent',
+        : 'internal_agent'),
       role: assignment.subTask.requiredSkill,
       candidates,
       dependsOn: Array.from(new Set(assignment.subTask.dependsOn || [])),
@@ -1676,6 +1722,11 @@ export async function executeWorkflow(
       )),
       maxRetries,
       assignedAgentId: assignment.agent.id,
+      estimatedInputTokens: Math.max(1, Math.ceil((
+        (context.rootTaskText || '').length
+        + assignment.subTask.description.length
+      ) / 4) + (assignment.subTask.dependsOn?.length || 0) * 2_500),
+      estimatedOutputTokens: 4_000,
     };
   });
   const compilation = compileModelExecutionGraph({
@@ -1683,8 +1734,10 @@ export async function executeWorkflow(
     nodes: graphNodes,
     privacyPolicy: context.dataRoutingPolicy || (isStrictPrivacy() ? 'local_only' : undefined),
     budgets: context.executionBudget,
+    arbitration: context.arbitrationPolicy,
   });
   const graph = compilation.graph;
+  recordModelGraphCompilation(compilation.ok);
   const workflowDeadline = Date.now() + graph.budgets.maxWallTimeMs;
   const assignmentById = new Map(assignments.map(assignment => [assignment.subTask.id, assignment]));
   const groups = compilation.waves.map(wave => wave
@@ -1708,19 +1761,28 @@ export async function executeWorkflow(
       agentId: assignment.agent.id,
       status: 'blocked',
     }));
+    const blockedReceipts = graph.nodes.map(node => buildModelGraphNodeReceipt({
+      graph,
+      node,
+      status: 'blocked',
+      startedAt: timestamp,
+      completedAt: timestamp,
+      error: reason,
+    }));
+    const arbitrationReceipt = arbitrateModelGraphResults({
+      graph,
+      receipts: blockedReceipts,
+      outputByNodeId: new Map(),
+      completedAt: timestamp,
+    });
+    recordModelArbitration(arbitrationReceipt);
     return {
       subTaskResults: blockedResults,
-      aggregatedOutput: aggregateResults(blockedResults, assignments),
+      aggregatedOutput: `[Workflow blocked: invalid execution graph: ${reason}]`,
       totalAgentsUsed: 0,
       executionGraph: graph,
-      nodeReceipts: graph.nodes.map(node => buildModelGraphNodeReceipt({
-        graph,
-        node,
-        status: 'blocked',
-        startedAt: timestamp,
-        completedAt: timestamp,
-        error: reason,
-      })),
+      nodeReceipts: blockedReceipts,
+      arbitrationReceipt,
     };
   }
 
@@ -1728,6 +1790,7 @@ export async function executeWorkflow(
   const nodeReceipts: ModelGraphNodeReceipt[] = [];
   const usedAgentIds = new Set<string>();
   const assignmentIds = new Set(assignments.map(assignment => assignment.subTask.id));
+  const resumeReceipts = new Map((context.resumeNodeReceipts || []).map(receipt => [receipt.nodeId, receipt]));
 
   for (const group of groups) {
     throwIfCancelled(context);
@@ -1736,6 +1799,22 @@ export async function executeWorkflow(
     const groupResults = await Promise.all(
       group.map(async a => {
         const startedAt = new Date().toISOString();
+        const graphNode = graph.nodes.find(node => node.nodeId === a.subTask.id)!;
+        const priorReceipt = resumeReceipts.get(a.subTask.id);
+        const reusedReceipt = priorReceipt
+          ? reuseVerifiedModelGraphNodeReceipt({ graph, node: graphNode, prior: priorReceipt, recoveredAt: startedAt })
+          : null;
+        if (reusedReceipt) {
+          recordModelNodeRecovery();
+          nodeReceipts.push(reusedReceipt);
+          return {
+            subTaskId: a.subTask.id,
+            output: reusedReceipt.outputSummary || `[Recovered verified result ${reusedReceipt.outputDigest}]`,
+            agentId: reusedReceipt.agentId || a.agent.id,
+            status: 'succeeded' as const,
+            selectedCandidate: reusedReceipt.selectedCandidate,
+          };
+        }
         const dependencyResults: WorkerTaskResult[] = [];
         const dependencyIds = Array.from(new Set(a.subTask.dependsOn || []));
         if (dependencyIds.length > ORCHESTRATION_DEPENDENCY_MAX_RECEIPTS) {
@@ -1782,7 +1861,6 @@ export async function executeWorkflow(
           }
           dependencyResults.push(dependencyResult);
         }
-        const graphNode = graph.nodes.find(node => node.nodeId === a.subTask.id)!;
         const remainingWallTimeMs = workflowDeadline - Date.now();
         if (remainingWallTimeMs <= 0) {
           const result: WorkerTaskResult = {
@@ -1843,7 +1921,19 @@ export async function executeWorkflow(
 
   // Aggregate results
   throwIfCancelled(context);
-  const aggregatedOutput = aggregateResults(allResults, assignments);
+  const resultByNodeId = new Map(allResults.map(result => [result.subTaskId, result.output]));
+  const arbitrationReceipt = arbitrateModelGraphResults({
+    graph,
+    receipts: nodeReceipts,
+    outputByNodeId: resultByNodeId,
+  });
+  recordModelArbitration(arbitrationReceipt);
+  const arbitratedResults = allResults.filter(result => (
+    arbitrationReceipt.selectedNodeIds.includes(result.subTaskId)
+  ));
+  const aggregatedOutput = arbitrationReceipt.status === 'succeeded'
+    ? aggregateResults(arbitratedResults, assignments)
+    : `[Workflow arbitration blocked: ${arbitrationReceipt.reason || 'no verified result'}]`;
 
   // Read-only desktop observations are ephemeral state checks, not reusable
   // knowledge. Never crystallize their raw workflow/result into long-term memory.
@@ -1878,6 +1968,7 @@ export async function executeWorkflow(
     totalAgentsUsed: usedAgentIds.size,
     executionGraph: graph,
     nodeReceipts,
+    arbitrationReceipt,
   };
 }
 

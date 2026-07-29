@@ -10,6 +10,7 @@ import type {
   CapabilitySideEffect,
   CapabilityVerification,
 } from '../tools/types';
+import { evaluateCapabilityRollout } from './capability_rollout';
 
 export type CapabilityNodeType =
   | 'model'
@@ -26,7 +27,7 @@ export type CapabilityNodeState = 'candidate' | 'selected' | 'running' | 'termin
 export interface ExecutionEdge {
   from: string;
   to: string;
-  condition?: 'success' | 'failure' | 'always';
+  condition?: 'selected' | 'success' | 'failure' | 'verified' | 'always';
 }
 
 export interface CapabilityNode {
@@ -46,6 +47,9 @@ export interface CapabilityNode {
     provider: string;
     trust: CapabilityManifestEntry['trust'];
   };
+  executionRole: 'planner' | 'adapter' | 'verifier' | 'join';
+  selectionGroup?: string;
+  selectionRank?: number;
 }
 
 export interface EvidenceRequirement {
@@ -163,6 +167,42 @@ function buildEvidence(node: CapabilityNode): EvidenceRequirement {
   };
 }
 
+function syntheticNode(input: {
+  nodeId: string;
+  type: 'model' | 'judge' | 'join';
+  role: 'planner' | 'verifier' | 'join';
+  capabilityId: string;
+  lane: CapabilityLane;
+  operation: CapabilityOperation;
+  selectionGroup?: string;
+}): CapabilityNode {
+  return {
+    nodeId: input.nodeId,
+    type: input.type,
+    state: 'selected',
+    capabilityId: input.capabilityId,
+    lane: input.lane,
+    operation: input.operation,
+    risk: 'none',
+    sideEffects: [],
+    requiresConfirmation: false,
+    verification: {
+      strategy: 'none',
+      required: false,
+      requiredFields: [],
+      requiredArtifacts: [],
+      requiredArtifactCollections: [],
+      successStatuses: [],
+      failureStatuses: [],
+      successSignals: [],
+      limitations: [],
+    },
+    provenance: { source: 'builtin', provider: 'lumi-core', trust: 'core' },
+    executionRole: input.role,
+    ...(input.selectionGroup ? { selectionGroup: input.selectionGroup } : {}),
+  };
+}
+
 function buildRiskDecision(
   intent: NormalizedActionIntent,
   nodes: CapabilityNode[],
@@ -222,8 +262,22 @@ export function buildCapabilityExecutionPlan(
     && !forbidden.has(entry.toolName)
     && entry.executable
     && !entry.deprecated
-  ));
-  const nodes = eligible.map(entry => ({
+  )).sort((left, right) => {
+    const routeOrder = (entry: CapabilityManifestEntry): number => {
+      const routed = (input.execution.toolRoute?.toolNames || []).indexOf(entry.toolName);
+      if (routed >= 0) return routed;
+      const preferredIndex = (input.capabilityPlan.preferredTools || []).indexOf(entry.toolName);
+      return preferredIndex >= 0 ? 10_000 + preferredIndex : 20_000;
+    };
+    return routeOrder(left) - routeOrder(right) || left.toolName.localeCompare(right.toolName);
+  });
+  const candidateNodes: CapabilityNode[] = eligible.map((entry, index) => {
+    const selectionGroup = `group_${digest({
+      lane: entry.lane,
+      operation: entry.operation,
+      family: entry.family,
+    }).slice(0, 12)}`;
+    return {
     nodeId: makeNodeId(entry),
     type: nodeType(entry),
     state: 'candidate' as const,
@@ -253,14 +307,101 @@ export function buildCapabilityExecutionPlan(
       provider: entry.provenance.provider,
       trust: entry.trust,
     },
-  }));
+    executionRole: 'adapter' as const,
+    selectionGroup,
+    selectionRank: index,
+    };
+  });
+  if (input.capabilityPlan.lane === 'skill_workflow') {
+    const workflowCapabilityId = input.capabilityPlan.primary;
+    const workflowGroup = `group_${digest({ workflowCapabilityId }).slice(0, 12)}`;
+    candidateNodes.unshift({
+      nodeId: `workflow_${digest(workflowCapabilityId).slice(0, 16)}`,
+      type: 'skill',
+      state: 'candidate',
+      capabilityId: workflowCapabilityId,
+      lane: 'agents',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [],
+      requiresConfirmation: false,
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['status', 'verified'],
+        requiredArtifacts: [],
+        requiredArtifactCollections: [],
+        successStatuses: ['verified'],
+        failureStatuses: ['failed', 'blocked', 'unknown'],
+        successSignals: ['all selected adapter receipts verified'],
+        limitations: ['The workflow adapter cannot select intent, replace parameters, or declare completion.'],
+      },
+      provenance: { source: 'skill', provider: workflowCapabilityId, trust: 'official' },
+      executionRole: 'adapter',
+      selectionGroup: workflowGroup,
+      selectionRank: -1,
+    });
+  }
   const taskId = String(input.taskId || '').trim()
     || `task_${digest({ intent: input.intent, capabilityIds: input.capabilityPlan.capabilityIds }).slice(0, 24)}`;
   const planId = `plan_${digest({
     taskId,
     intent: input.intent,
-    nodes: nodes.map(node => node.capabilityId),
+    nodes: candidateNodes.map(node => node.capabilityId),
   }).slice(0, 24)}`;
+
+  const nodes: CapabilityNode[] = [];
+  const edges: ExecutionEdge[] = [];
+  const grouped = new Map<string, CapabilityNode[]>();
+  for (const node of candidateNodes) {
+    const groupId = node.selectionGroup!;
+    const group = grouped.get(groupId) || [];
+    group.push(node);
+    grouped.set(groupId, group);
+  }
+  for (const [groupId, candidates] of grouped) {
+    const lane = candidates[0].lane;
+    const operation = candidates[0].operation;
+    const selectorId = `select_${groupId}`;
+    const verifierId = `verify_${groupId}`;
+    nodes.push(syntheticNode({
+      nodeId: selectorId,
+      type: 'model',
+      role: 'planner',
+      capabilityId: `lumi.semantic_selector.${groupId}`,
+      lane,
+      operation,
+      selectionGroup: groupId,
+    }));
+    nodes.push(...candidates);
+    nodes.push(syntheticNode({
+      nodeId: verifierId,
+      type: 'judge',
+      role: 'verifier',
+      capabilityId: `lumi.receipt_verifier.${groupId}`,
+      lane,
+      operation,
+      selectionGroup: groupId,
+    }));
+    for (const candidate of candidates) {
+      edges.push({ from: selectorId, to: candidate.nodeId, condition: 'selected' });
+      edges.push({ from: candidate.nodeId, to: verifierId, condition: 'success' });
+    }
+  }
+  if (grouped.size > 0) {
+    const joinId = `join_${digest([...grouped.keys()]).slice(0, 12)}`;
+    nodes.push(syntheticNode({
+      nodeId: joinId,
+      type: 'join',
+      role: 'join',
+      capabilityId: 'lumi.verified_receipt_join',
+      lane: candidateNodes[0].lane,
+      operation: candidateNodes[0].operation,
+    }));
+    for (const groupId of grouped.keys()) {
+      edges.push({ from: `verify_${groupId}`, to: joinId, condition: 'verified' });
+    }
+  }
 
   return {
     schemaVersion: 1,
@@ -268,9 +409,9 @@ export function buildCapabilityExecutionPlan(
     taskId,
     intent: { ...input.intent },
     nodes,
-    edges: [],
+    edges,
     risk: buildRiskDecision(input.intent, nodes, taskId),
-    expectedEvidence: nodes.map(buildEvidence),
+    expectedEvidence: candidateNodes.map(buildEvidence),
     fallbackPolicy: buildFallbackPolicy(input.intent),
     contextRefs: Array.from(new Set(input.sourcePaths || []))
       .filter(Boolean)
@@ -278,6 +419,36 @@ export function buildCapabilityExecutionPlan(
     decisionAuthority: 'semantic_planner',
     scriptAuthority: 'adapter_only',
   };
+}
+
+export function authorizeCapabilityPlanTool(
+  plan: CapabilityExecutionPlan,
+  toolName: string,
+): { allowed: boolean; reason: string; node?: CapabilityNode } {
+  const node = plan.nodes.find(candidate => (
+    candidate.executionRole === 'adapter'
+    && candidate.toolName === toolName
+  ));
+  if (!node) {
+    return { allowed: false, reason: `Capability plan did not authorize adapter '${toolName}'.` };
+  }
+  const selectedEdge = plan.edges.some(edge => (
+    edge.to === node.nodeId && edge.condition === 'selected'
+  ));
+  const verificationEdge = plan.edges.some(edge => (
+    edge.from === node.nodeId && edge.condition === 'success'
+  ));
+  if (!selectedEdge || !verificationEdge) {
+    return {
+      allowed: false,
+      reason: `Capability adapter '${toolName}' is missing selection or receipt-verification graph edges.`,
+    };
+  }
+  const rollout = evaluateCapabilityRollout(plan, node);
+  if (!rollout.allowed) {
+    return { allowed: false, reason: rollout.reason, node };
+  }
+  return { allowed: true, reason: 'authorized_by_capability_plan', node };
 }
 
 /** Rebinds the pre-routing plan to the durable task created by the ledger. */
@@ -309,12 +480,14 @@ export function bindCapabilityExecutionPlanTask(
 
 export function formatCapabilityExecutionPlanPrompt(plan: CapabilityExecutionPlan): string {
   const candidates = plan.nodes
+    .filter(node => node.executionRole === 'adapter')
     .map(node => `${node.toolName || node.capabilityId} (${node.capabilityId}; ${node.operation}; verification=${node.verification.strategy})`)
     .join(', ');
   return [
     '## Capability Execution Plan',
     `Plan ${plan.planId}; task ${plan.taskId}; intent=${plan.intent.kind}/${plan.intent.operation}; sideEffect=${plan.risk.sideEffectClass}.`,
     `Eligible capability candidates: ${candidates || 'none'}. These are candidates, not instructions to execute all tools.`,
+    `Execution graph: ${plan.edges.length} conditional edge(s); each selection group chooses only the exact adapter needed, then receipt verification gates the final join.`,
     'Semantic planning owns intent, decomposition, and capability selection. Workflows and scripts are execution adapters only.',
     plan.risk.requiresConfirmation
       ? 'Bind confirmation to the selected tool, exact target, task id, and payload digest before execution.'

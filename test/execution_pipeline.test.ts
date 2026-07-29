@@ -39,8 +39,24 @@ describe('unified execution pipeline', () => {
     expect(pipeline.executionPlan.decisionAuthority).toBe('semantic_planner');
     expect(pipeline.executionPlan.scriptAuthority).toBe('adapter_only');
     expect(pipeline.executionPlan.nodes.length).toBeGreaterThan(0);
+    const adapterNodes = pipeline.executionPlan.nodes
+      .filter(node => node.executionRole === 'adapter');
     expect(pipeline.executionPlan.expectedEvidence.length)
-      .toBe(pipeline.executionPlan.nodes.length);
+      .toBe(adapterNodes.length);
+    expect(pipeline.executionPlan.edges.length).toBeGreaterThan(0);
+    expect(pipeline.executionPlan.nodes.some(node => node.executionRole === 'planner')).toBe(true);
+    expect(pipeline.executionPlan.nodes.some(node => node.executionRole === 'verifier')).toBe(true);
+    expect(pipeline.executionPlan.nodes.some(node => node.executionRole === 'join')).toBe(true);
+    for (const adapter of adapterNodes) {
+      expect(pipeline.executionPlan.edges).toContainEqual(expect.objectContaining({
+        to: adapter.nodeId,
+        condition: 'selected',
+      }));
+      expect(pipeline.executionPlan.edges).toContainEqual(expect.objectContaining({
+        from: adapter.nodeId,
+        condition: 'success',
+      }));
+    }
     expect(pipeline.capabilityPlan.promptOverlay).toContain('Capability Execution Plan');
     expect(pipeline.intentTrace.toolPolicy.allowedTools)
       .toEqual(pipeline.execution.toolPolicy.allowedTools);
@@ -130,5 +146,34 @@ describe('unified execution pipeline', () => {
       jitter: true,
       allowLegacyRoute: false,
     });
+  });
+
+  it('compiles a matched skill workflow as an adapter with declared tool candidates', () => {
+    const registry = createRegistry();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'pipeline-user',
+        text: 'Lumi, show me a visible demo of yourself',
+        channel: 'chat',
+        source: 'chat',
+        operationMode: 'assistant',
+        targetIsLumi: true,
+      },
+      registry,
+      source: 'chat',
+    });
+
+    expect(pipeline.turnIntent.boundary).toBe('skill_workflow');
+    expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
+      type: 'skill',
+      executionRole: 'adapter',
+      capabilityId: 'desktop-automation/self_intro_demo',
+    }));
+    for (const toolName of ['client_action', 'desktop_list_apps', 'desktop_open', 'desktop_active_window']) {
+      expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
+        toolName,
+        executionRole: 'adapter',
+      }));
+    }
   });
 });

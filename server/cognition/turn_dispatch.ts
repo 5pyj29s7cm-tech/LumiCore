@@ -30,7 +30,7 @@ export interface LumiTurnDispatch {
 }
 
 function classifyBoundary(flow: LumiTurnFlow): LumiTurnBoundary {
-  if (flow.channel === 'task') return 'task_center';
+  if (flow.channel === 'task' || flow.channel === 'scheduler' || flow.channel === 'agent') return 'task_center';
   if (flow.clientActionOnlyTurn) return 'client_action';
   if (flow.selfRepairTurn) return 'self_repair';
   if (flow.specialWorkflow) return 'skill_workflow';
@@ -63,7 +63,7 @@ function buildDispatchOverlay(dispatch: Omit<LumiTurnDispatch, 'promptOverlay'>)
   return [
     '## Lumi Unified Turn Dispatch',
     `Entry channel: ${dispatch.channel}. Source: ${dispatch.source || dispatch.channel}. Surface: ${dispatch.surface}. Boundary: ${dispatch.boundary}.`,
-    'Chat, voice, and task center are entrances into the same Lumi. Do not fork personality, memory, or task ownership by channel.',
+    'Chat, voice, task center, scheduler, and agent execution are entrances into the same Lumi. Do not fork personality, memory, or task ownership by channel.',
     boundaryRule(dispatch.boundary),
     'If the user switches from work to casual talk, follow the newest wording. If they resume work, bind it through the same task/capability graph.',
   ].join('\n');

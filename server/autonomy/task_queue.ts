@@ -2,6 +2,7 @@
  * Autonomous Task Queue — in-memory queue with DB persistence for Lumi's background work.
  */
 import { readDB, writeDB } from '../../db_layer';
+import type { PersistedCapabilityExecutionPlan } from '../conversation/action_ledger';
 
 export interface AutonomousTask {
   id: string;
@@ -28,6 +29,7 @@ export interface AutonomousTask {
   cancelRequestedAt?: string;
   recoveryCount?: number;
   lastRecoveredAt?: string;
+  executionPlan?: PersistedCapabilityExecutionPlan;
 }
 
 const MAX_QUEUE_SIZE = 20;
@@ -107,6 +109,17 @@ export function markRunning(id: string): AutonomousTask | null {
   if (!task) return null;
   task.status = 'running';
   task.startedAt = new Date().toISOString();
+  persist();
+  return task;
+}
+
+export function attachAutonomousExecutionPlan(
+  id: string,
+  plan: PersistedCapabilityExecutionPlan,
+): AutonomousTask | null {
+  const task = findTask(id);
+  if (!task) return null;
+  task.executionPlan = plan;
   persist();
   return task;
 }
