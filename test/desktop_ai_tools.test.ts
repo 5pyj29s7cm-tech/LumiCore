@@ -225,6 +225,7 @@ describe('desktop AI collaboration tools', () => {
       targets: ['codex'],
       openIfNeeded: false,
     }, {
+      userConfirmed: true,
       desktopRelay: async (name) => {
         calls.push(name);
         if (name === 'desktop_active_window') return JSON.stringify({ title: 'Notepad', process_name: 'notepad' });
@@ -360,6 +361,7 @@ describe('desktop AI collaboration tools', () => {
       initialWaitMs: 0,
       pollAttempts: 1,
     }, {
+      userConfirmed: true,
       desktopRelay: async (name, args) => {
         if (name === 'desktop_active_window') return JSON.stringify({ title: foreground, process_name: foreground });
         if (name === 'desktop_open') {

@@ -55,6 +55,82 @@ describe('Settings & Keys API', () => {
     expect(res.status).toBe(400);
   });
 
+  it('stores reasoning routing policy and exposes sanitized routing receipts', async () => {
+    const update = await fetch(`${url}/api/preferences/llm`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'lmstudio',
+        model: 'exact-local-model',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [
+          { provider: 'ollama', model: 'exact-ollama-model' },
+          { provider: 'openai', model: 'exact-cloud-model' },
+        ],
+        allowCloudFallback: false,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(update.status).toBe(200);
+    expect(await update.json()).toMatchObject({
+      schemaVersion: 2,
+      provider: 'lmstudio',
+      model: 'exact-local-model',
+      selectionMode: 'ordered_fallback',
+      allowCloudFallback: false,
+      fallbackCandidates: [
+        { provider: 'ollama', model: 'exact-ollama-model' },
+        { provider: 'openai', model: 'exact-cloud-model' },
+      ],
+    });
+
+    const { persistModelRoutingReceipt } = await import('../server/llm/model_routing_receipts');
+    persistModelRoutingReceipt({
+      userId: 'anonymous',
+      domain: 'personal',
+      orgId: '',
+      conversationId: 'settings-route-conversation',
+      requestId: 'settings-route-request',
+      interactionId: 'settings-route-interaction',
+      source: 'settings_test',
+      status: 'failed',
+      requestedProvider: 'lmstudio',
+      requestedModel: 'exact-local-model',
+      selectionMode: 'ordered_fallback',
+      selectedProvider: '',
+      selectedModel: '',
+      fallbackReason: 'provider_unreachable',
+      attempts: [{
+        provider: 'lmstudio',
+        model: 'exact-local-model',
+        status: 'failed',
+        reason: 'provider_unreachable',
+        errorDigest: 'only-a-digest-is-exposed',
+      }],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs: 12,
+    });
+
+    const response = await fetch(`${url}/api/preferences/llm/routing-receipts?limit=1&requestId=settings-route-request`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.receipts).toHaveLength(1);
+    expect(body.receipts[0]).toMatchObject({
+      requestedProvider: 'lmstudio',
+      requestedModel: 'exact-local-model',
+      fallbackReason: 'provider_unreachable',
+      conversationId: 'settings-route-conversation',
+      requestId: 'settings-route-request',
+      interactionId: 'settings-route-interaction',
+      source: 'settings_test',
+      attempts: [{ errorDigest: 'only-a-digest-is-exposed' }],
+    });
+    expect(JSON.stringify(body)).not.toContain('API key');
+  });
+
   it('stores image and video generation roles independently', async () => {
     const update = await fetch(`${url}/api/preferences/generation`, {
       method: 'PUT',

@@ -34,6 +34,7 @@ import {
   upsertUserRetrievalModelPreferences,
 } from "../llm/retrieval_model_preferences";
 import { getUserPreferredLLM, upsertUserPreferredLLM } from "../llm/user_preferences";
+import { listModelRoutingReceipts } from "../llm/model_routing_receipts";
 import { getVoicePreference, setVoicePreference, type VoicePreference } from "../config/voice_preference";
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from "../stt/adapter";
 import { getActiveProvider as getActiveTTSProvider } from "../tts/adapter";
@@ -44,16 +45,19 @@ import { getToolRuntimeMetrics } from "../runtime/tool_metrics";
 import { getCapabilityRuntimeMetrics } from "../runtime/capability_metrics";
 import { getCapabilityRolloutStage } from "../cognition/capability_rollout";
 import { getAdapterResilienceSnapshot } from "../tools/adapter_resilience";
-import { getLocalModelConfig, refreshLocalModelConfig } from "../llm/local_models";
+import { getLocalModelConfig, getLocalModelQueueSnapshot, refreshLocalModelConfig } from "../llm/local_models";
 import { generateConfiguredEmbedding } from "../llm/embedding_provider";
 import { rerankConfiguredDocuments } from "../llm/rerank_provider";
 import { queryWindowsGpuName } from "../adapters/host_probe";
 import { loadRuntimeBuildMetadata } from "../../shared/runtime_build_metadata";
 import {
   testLLMProviderConnection,
+  testLumiModelConfiguration,
   testVisionProviderConnection,
   type TestableModelRuntime,
 } from "../llm/model_configuration";
+import { getDesktopControlRuntimeSnapshot } from "../desktop/control_lease";
+import { listRegisteredProviders } from '../extensions/registry';
 
 export { testLLMProviderConnection, testVisionProviderConnection } from "../llm/model_configuration";
 
@@ -272,6 +276,20 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const capabilityMetrics = getCapabilityRuntimeMetrics();
       const ollama = getLocalModelConfig('ollama');
       const lmstudio = getLocalModelConfig('lmstudio');
+      const backgroundTasks = Array.isArray(db.backgroundDelegationTasks) ? db.backgroundDelegationTasks : [];
+      const autonomousTasks = Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [];
+      const externalAiSessions = Array.isArray(db.externalAiSessions) ? db.externalAiSessions : [];
+      const externalAiDispatches = Array.isArray(db.externalAiDispatches) ? db.externalAiDispatches : [];
+      const externalAiHistorySources = Array.isArray(db.externalAiHistorySources) ? db.externalAiHistorySources : [];
+      const externalAiHistorySyncJobs = Array.isArray(db.externalAiHistorySyncJobs) ? db.externalAiHistorySyncJobs : [];
+      const externalAiHistoryMessages = Array.isArray(db.externalAiHistoryMessages) ? db.externalAiHistoryMessages : [];
+      const extensionRevisions = Array.isArray(db.extensionRevisions) ? db.extensionRevisions : [];
+      const extensionReceipts = Array.isArray(db.extensionActivationReceipts) ? db.extensionActivationReceipts : [];
+      const countTaskStatuses = (tasks: any[]) => tasks.reduce((counts: Record<string, number>, task: any) => {
+        const status = String(task?.status || 'unknown');
+        counts[status] = (counts[status] || 0) + 1;
+        return counts;
+      }, {});
       res.json({
         status: isDbDirty() ? "degraded" : "ok",
         timestamp: new Date().toISOString(),
@@ -283,6 +301,15 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           dirty: isDbDirty(),
           actionTasks: (db.conversationActionTasks || []).length,
           actionReceipts: (db.conversationActionReceipts || []).length,
+          extensionRevisions: extensionRevisions.length,
+          extensionActivationReceipts: extensionReceipts.length,
+          backgroundDelegationTasks: backgroundTasks.length,
+          autonomousTasks: autonomousTasks.length,
+          externalAiSessions: externalAiSessions.length,
+          externalAiDispatches: externalAiDispatches.length,
+          externalAiHistorySources: externalAiHistorySources.length,
+          externalAiHistorySyncJobs: externalAiHistorySyncJobs.length,
+          externalAiHistoryMessages: externalAiHistoryMessages.length,
           functionalProbe: 'read_ok',
         },
         process: {
@@ -304,8 +331,22 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         adapterResilience: getAdapterResilienceSnapshot(),
         queues: {
           toolCallsInFlight: toolMetrics.totals.inFlight,
+          desktopControl: getDesktopControlRuntimeSnapshot(),
           voiceprint: getVoiceprintRuntimeStatus(),
           gptSovits: getGptSovitsQueueStatus(),
+          localModels: {
+            ollama: getLocalModelQueueSnapshot('ollama'),
+            lmstudio: getLocalModelQueueSnapshot('lmstudio'),
+          },
+          durableWork: {
+            backgroundDelegation: countTaskStatuses(backgroundTasks),
+            autonomy: countTaskStatuses(autonomousTasks),
+            externalAiSessions: countTaskStatuses(externalAiSessions),
+            externalAiDispatches: countTaskStatuses(externalAiDispatches),
+            externalAiHistorySources: countTaskStatuses(externalAiHistorySources),
+            externalAiHistorySyncJobs: countTaskStatuses(externalAiHistorySyncJobs),
+            extensions: countTaskStatuses(extensionRevisions),
+          },
         },
         supervisedRuntimes: {
           gptSovits: getGptSovitsRuntimeStatus(),
@@ -314,20 +355,33 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         functionalProbes: {
           databaseRead: true,
           registeredTools: toolRegistry.list().length,
+          extensionProviders: listRegisteredProviders().map(({ userId: _userId, ...provider }) => provider),
           mcp: mcpManager.getServerHealth(),
           localModels: {
             ollama: {
-              reachable: ollama.detected,
+              reachable: ollama.serviceReachable === true,
+              inferenceHealthy: ollama.inferenceHealthy === true,
+              healthStatus: ollama.healthStatus,
               baseUrl: ollama.baseUrl,
               modelCount: ollama.models.length,
               lastChecked: ollama.updatedAt,
+              lastInferenceAt: ollama.lastInferenceAt,
+              lastInferenceLatencyMs: ollama.lastInferenceLatencyMs,
+              consecutiveFailures: ollama.consecutiveFailures || 0,
+              nextRetryAt: ollama.nextRetryAt,
               error: ollama.lastError || '',
             },
             lmstudio: {
-              reachable: lmstudio.detected,
+              reachable: lmstudio.serviceReachable === true,
+              inferenceHealthy: lmstudio.inferenceHealthy === true,
+              healthStatus: lmstudio.healthStatus,
               baseUrl: lmstudio.baseUrl,
               modelCount: lmstudio.models.length,
               lastChecked: lmstudio.updatedAt,
+              lastInferenceAt: lmstudio.lastInferenceAt,
+              lastInferenceLatencyMs: lmstudio.lastInferenceLatencyMs,
+              consecutiveFailures: lmstudio.consecutiveFailures || 0,
+              nextRetryAt: lmstudio.nextRetryAt,
               error: lmstudio.lastError || '',
             },
           },
@@ -353,14 +407,17 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       lmstudio: getLocalModelConfig('lmstudio'),
     };
     const [ollama, lmstudio] = await Promise.all([
-      refreshLocalModelConfig('ollama', current.ollama.baseUrl, { timeoutMs: 2500 }),
-      refreshLocalModelConfig('lmstudio', current.lmstudio.baseUrl, { timeoutMs: 2500 }),
+      refreshLocalModelConfig('ollama', current.ollama.baseUrl, { timeoutMs: 2500, inferenceTimeoutMs: 20_000 }),
+      refreshLocalModelConfig('lmstudio', current.lmstudio.baseUrl, { timeoutMs: 2500, inferenceTimeoutMs: 20_000 }),
     ]);
     const status = ollama.detected || lmstudio.detected ? 'ok' : 'degraded';
     res.status(status === 'ok' ? 200 : 503).json({
       status,
       checkedAt: new Date().toISOString(),
-      providers: { ollama, lmstudio },
+      providers: {
+        ollama: { ...ollama, queue: getLocalModelQueueSnapshot('ollama') },
+        lmstudio: { ...lmstudio, queue: getLocalModelQueueSnapshot('lmstudio') },
+      },
     });
   });
 
@@ -491,12 +548,25 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         !!(process.env[envKey] && process.env[envKey]!.length > 0) || !!stored[storeKey];
       const ollamaConfig = getLocalModelConfig('ollama');
       const lmstudioConfig = getLocalModelConfig('lmstudio');
+      const extensionProviders = listRegisteredProviders().map(({ userId: _userId, ...provider }) => provider);
       const status = (provider: string, configured: boolean, model: string) => ({
         available: configured,
         configured,
         model,
         lastProbe: readProviderProbe(provider),
       });
+      const dynamicProviders = Object.fromEntries(extensionProviders.map(provider => [String(provider.id), {
+        available: provider.configured === true,
+        configured: provider.configured === true,
+        model: String(provider.defaultModel || ''),
+        local: provider.local === true,
+        extension: true,
+        version: provider.version,
+        models: provider.models,
+        compatibility: provider.compatibility,
+        manifestDigest: provider.manifestDigest,
+        signerFingerprint: provider.signerFingerprint,
+      }]));
       res.json({
         providers: {
           deepseek: status('deepseek', envOrStore('DEEPSEEK_API_KEY'), process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'),
@@ -511,6 +581,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           relay: status('relay', envOrStore('RELAY_API_KEY') && envOrStore('RELAY_BASE_URL'), process.env.RELAY_MODEL || 'openai-compatible'),
           ollama: status('ollama', ollamaConfig.detected, ollamaConfig.models[0] || 'local'),
           lmstudio: status('lmstudio', lmstudioConfig.detected, lmstudioConfig.models[0] || 'local'),
+          ...dynamicProviders,
         },
       });
     } catch (err: any) {
@@ -550,6 +621,17 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       }
       const configurationError = /not configured|not currently reachable|unsupported provider|valid model/i.test(message);
       res.status(configurationError ? 400 : 502).json({ ok: false, provider, model, error: message });
+    }
+  });
+
+  router.post("/llm/route/test", requireLocalRequest, async (req, res) => {
+    const uid = getUserIdFromRequest(req, jwtSecret);
+    try {
+      res.json(await testLumiModelConfiguration(uid, 'reasoning', llm));
+    } catch (err: any) {
+      const message = sanitizedProviderError(err);
+      const configurationError = /not configured|not currently reachable|unsupported provider|valid model/i.test(message);
+      res.status(configurationError ? 400 : 502).json({ ok: false, error: message });
     }
   });
 
@@ -635,6 +717,23 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       });
     } catch {
       res.json({ provider: '', model: '', models: {}, scope: 'lumi', organizationOverridesSupported: false });
+    }
+  });
+
+  router.get("/preferences/llm/routing-receipts", (req, res) => {
+    try {
+      const uid = getUserIdFromRequest(req, jwtSecret);
+      const requestedLimit = Number.parseInt(String(req.query.limit || '100'), 10);
+      const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
+      res.json({
+        receipts: listModelRoutingReceipts(uid, limit, {
+          conversationId: typeof req.query.conversationId === 'string' ? req.query.conversationId : undefined,
+          requestId: typeof req.query.requestId === 'string' ? req.query.requestId : undefined,
+          interactionId: typeof req.query.interactionId === 'string' ? req.query.interactionId : undefined,
+        }),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: sanitizedProviderError(err) });
     }
   });
 

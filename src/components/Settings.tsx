@@ -248,7 +248,7 @@ export function Settings({
         return <AIProvidersPage t={t} providerStatus={providerStatus} />;
       case 'reasoning-model':
       case 'model-routing':
-        return <ReasoningRoleSettings t={t} />;
+        return <ReasoningRoleSettings t={t} providerStatus={providerStatus} />;
       case 'external-connections':
         return <ExternalConnectionsPage t={t} initialTab={externalConnectionsTab} />;
       case 'tools':
@@ -737,6 +737,19 @@ async function runLLMConnectionTest(provider: string, model: string): Promise<{ 
     throw new Error(data.error || `Connection test failed (${response.status})`);
   }
   return { latencyMs: Number(data.latencyMs) || 0, model: data.model || model };
+}
+
+async function runConfiguredReasoningRouteTest(): Promise<{ latencyMs: number; model: string }> {
+  const response = await apiFetch('/api/llm/route/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok !== true) {
+    throw new Error(data.error || `Route test failed (${response.status})`);
+  }
+  return { latencyMs: Number(data.latencyMs) || 0, model: data.model || '' };
 }
 
 async function runVisionConnectionTest(provider: string, model: string): Promise<{ latencyMs: number; model: string }> {
@@ -2564,6 +2577,13 @@ interface ProviderRuntimeStatus {
   available: boolean;
   configured?: boolean;
   model: string;
+  extension?: boolean;
+  local?: boolean;
+  version?: string;
+  models?: Array<string | { id?: string; capabilities?: Record<string, boolean> }>;
+  compatibility?: { status?: string; checkedAt?: string; latencyMs?: number };
+  manifestDigest?: string;
+  signerFingerprint?: string;
   lastProbe?: {
     ok: boolean;
     testedAt: string;
@@ -2574,6 +2594,9 @@ interface ProviderRuntimeStatus {
 
 function AIProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
   const [scope, setScope] = useState<'cloud' | 'local'>('cloud');
+  const extensionProviders = Object.entries(providerStatus).filter(([, status]) => (
+    status.extension === true && (scope === 'local' ? status.local === true : status.local !== true)
+  ));
   return (
     <div className="space-y-6">
       <div className="border-b border-white/10 pb-4">
@@ -2596,6 +2619,32 @@ function AIProvidersPage({ t, providerStatus }: { t: any; providerStatus: Record
         </div>
       </div>
       {scope === 'cloud' ? <CloudProviderSettings t={t} providerStatus={providerStatus} /> : <LocalProviderSettings t={t} />}
+      {extensionProviders.length > 0 && (
+        <SettingsSection title="Signed extension Providers" icon={<Shield size={18} className="text-emerald-300" />}>
+          <div className="divide-y divide-white/10 border-y border-white/10">
+            {extensionProviders.map(([providerId, status]) => (
+              <div key={providerId} className="grid gap-2 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
+                    <span>{providerId}</span>
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">signed</span>
+                    {status.version && <span className="font-mono text-[10px] text-white/35">v{status.version}</span>}
+                  </div>
+                  <p className="mt-1 text-xs text-white/40">
+                    {status.model || 'No default model'} · {status.compatibility?.status || 'compatibility unknown'} · credentials {status.configured ? 'ready' : 'missing'}
+                  </p>
+                </div>
+                <span className={`text-xs font-medium ${status.available ? 'text-emerald-300' : 'text-amber-300'}`}>
+                  {status.available ? 'available' : 'unavailable'}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-white/35">
+            Installation, permission review, rollback, and disable operations use Lumi's confirmed extension registry and persistent receipts. Credentials are referenced from the local credential store and are never embedded in manifests.
+          </p>
+        </SettingsSection>
+      )}
     </div>
   );
 }
@@ -2616,32 +2665,78 @@ const REASONING_MODEL_OPTIONS: Record<string, string[]> = {
   auto: [],
 };
 
-function ReasoningRoleSettings({ t }: { t: any }) {
+function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
   const { aiConfig, updateAIConfig } = useApp();
   const [model, setModel] = useState(aiConfig.model);
+  const [fallbackText, setFallbackText] = useState(() => (
+    (aiConfig.fallbackCandidates || []).map(candidate => `${candidate.provider}/${candidate.model}`).join('\n')
+  ));
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState('');
 
   useEffect(() => {
     setModel(aiConfig.model);
+    setFallbackText((aiConfig.fallbackCandidates || []).map(candidate => `${candidate.provider}/${candidate.model}`).join('\n'));
     setTestMessage('');
-  }, [aiConfig.model, aiConfig.provider]);
+  }, [aiConfig.model, aiConfig.provider, aiConfig.fallbackCandidates]);
+
+  useEffect(() => {
+    const migration = aiConfig.legacyMigration;
+    if (!migration?.migratedAt || migration.entries.length === 0) return;
+    const noticeKey = `lumi_model_migration_notice_${migration.migratedAt}`;
+    if (localStorage.getItem(noticeKey) === 'shown') return;
+    const detail = migration.entries.map(entry => `${entry.provider}: ${entry.from} → ${entry.to}`).join(', ');
+    toast.info(`Legacy model aliases were migrated once: ${detail}`);
+    localStorage.setItem(noticeKey, 'shown');
+  }, [aiConfig.legacyMigration]);
+
+  const selectionMode = aiConfig.provider === 'auto' ? 'auto' : aiConfig.selectionMode;
+  const parseFallbackCandidates = () => fallbackText
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const separator = line.indexOf('/');
+      return separator > 0
+        ? { provider: line.slice(0, separator).trim(), model: line.slice(separator + 1).trim() }
+        : { provider: '', model: '' };
+    })
+    .filter(candidate => candidate.provider && candidate.model);
+
+  const saveReasoningRoute = () => {
+    updateAIConfig({
+      model: model.trim(),
+      selectionMode,
+      fallbackCandidates: selectionMode === 'ordered_fallback' || selectionMode === 'auto'
+        ? parseFallbackCandidates()
+        : [],
+      allowCloudFallback: aiConfig.allowCloudFallback,
+    });
+  };
 
   const configuredModel = (() => {
     try {
       const models = JSON.parse(localStorage.getItem('lumi_llm_models') || '{}');
-      return String(models[aiConfig.provider] || '');
+      return String(models[aiConfig.provider] || providerStatus[aiConfig.provider]?.model || '');
     } catch {
       return '';
     }
   })();
+  const extensionProviders = Object.entries(providerStatus).filter(([, status]) => status.extension === true);
+  const selectedExtensionModels = (providerStatus[aiConfig.provider]?.models || [])
+    .map(item => typeof item === 'string' ? item : String(item.id || ''))
+    .filter(Boolean);
+  const selectedExtensionUnavailable = aiConfig.provider.startsWith('ext_')
+    && !providerStatus[aiConfig.provider];
 
   const test = async () => {
     if (!aiConfig.provider || !model.trim()) return;
     setTesting(true);
     setTestMessage('');
     try {
-      const result = await runLLMConnectionTest(aiConfig.provider, model.trim());
+      const result = selectionMode === 'pinned'
+        ? await runLLMConnectionTest(aiConfig.provider, model.trim())
+        : await runConfiguredReasoningRouteTest();
       setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
     } catch (error: any) {
       setTestMessage(error?.message || uiMessage('settings.live-call-failed.cd19d46055'));
@@ -2657,7 +2752,13 @@ function ReasoningRoleSettings({ t }: { t: any }) {
           <span className="text-xs font-bold text-white/55">{t.primaryReasoningBrain || uiMessage('settings.primary-reasoning-brain.5bdd279d51')}</span>
           <select
             value={aiConfig.provider}
-            onChange={event => updateAIConfig({ provider: event.target.value })}
+            onChange={event => {
+              const provider = event.target.value;
+              updateAIConfig({
+                provider,
+                ...(providerStatus[provider]?.model ? { model: providerStatus[provider].model } : {}),
+              });
+            }}
             className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
           >
             <option value="deepseek">DeepSeek</option>
@@ -2673,22 +2774,76 @@ function ReasoningRoleSettings({ t }: { t: any }) {
             <option value="auto">Automatic (Local First)</option>
             <option value="ollama">Ollama Local</option>
             <option value="lmstudio">LM Studio Local</option>
+            {extensionProviders.map(([providerId, status]) => (
+              <option key={providerId} value={providerId}>
+                {providerId} (Signed{status.local ? ', Local' : ''})
+              </option>
+            ))}
+            {selectedExtensionUnavailable && (
+              <option value={aiConfig.provider}>{aiConfig.provider} (Unavailable signed Provider)</option>
+            )}
+          </select>
+        </label>
+        <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
+          <span className="text-xs font-bold text-white/55">Routing policy</span>
+          <select
+            value={selectionMode}
+            onChange={event => {
+              const next = event.target.value as 'pinned' | 'ordered_fallback' | 'auto';
+              if (next === 'auto') updateAIConfig({ provider: 'auto', selectionMode: 'auto' });
+              else updateAIConfig({
+                provider: aiConfig.provider === 'auto' ? 'deepseek' : aiConfig.provider,
+                selectionMode: next,
+              });
+            }}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
+          >
+            <option value="pinned">Pinned — never substitute</option>
+            <option value="ordered_fallback">Ordered fallback — user-defined order</option>
+            <option value="auto">Automatic — local first with visible receipts</option>
           </select>
         </label>
         <GenerationModelInput
           id={`reasoning-role-${aiConfig.provider}`}
           label={uiMessage('settings.model.44c0cd4289')}
           value={model}
-          options={[configuredModel, ...(REASONING_MODEL_OPTIONS[aiConfig.provider] || [])].filter(Boolean)}
+          options={[configuredModel, ...selectedExtensionModels, ...(REASONING_MODEL_OPTIONS[aiConfig.provider] || [])].filter(Boolean)}
           onChange={value => { setModel(value); setTestMessage(''); }}
         />
+        {(selectionMode === 'ordered_fallback' || selectionMode === 'auto') && (
+          <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)]">
+            <span className="pt-2 text-xs font-bold text-white/55">Fallback order</span>
+            <div className="space-y-2">
+              <textarea
+                value={fallbackText}
+                onChange={event => setFallbackText(event.target.value)}
+                placeholder={'ollama/qwen2.5:7b\nlmstudio/local-model\nopenai/gpt-4o-mini'}
+                rows={3}
+                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 font-mono text-xs text-white outline-none focus:border-celestial-saturn/45"
+              />
+              <label className="flex items-center gap-2 text-xs text-white/60">
+                <input
+                  type="checkbox"
+                  checked={aiConfig.allowCloudFallback}
+                  onChange={event => updateAIConfig({ allowCloudFallback: event.target.checked })}
+                />
+                Allow explicitly configured cloud fallback
+              </label>
+            </div>
+          </label>
+        )}
+        <p className="text-xs text-white/40">
+          {selectionMode === 'pinned'
+            ? 'Pinned mode fails explicitly if this exact provider/model is unavailable.'
+            : 'Every attempt and the model actually used are written to the local routing receipt ledger.'}
+        </p>
       </div>
       <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button onClick={test} disabled={testing || !model.trim()} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
           {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
           {uiMessage('settings.test.9408c1ff3a')}
         </Button>
-        <Button onClick={() => updateAIConfig({ model: model.trim() })} disabled={!model.trim() || model.trim() === aiConfig.model} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
+        <Button onClick={saveReasoningRoute} disabled={!model.trim()} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
           <Save size={15} className="mr-2" />
           {uiMessage('settings.save.ec8e6d5819')}
         </Button>
@@ -2825,8 +2980,8 @@ function LocalLLMProviderRow({
   }, [defaultUrl, endpoint]);
 
   useEffect(() => {
-    if (generationModels.length > 0 && !generationModels.includes(model)) {
-      persistModel(generationModels[0]);
+    if (generationModels.length > 0 && model.trim() && !generationModels.includes(model.trim())) {
+      setError(`Selected model "${model.trim()}" is not currently loaded. The selection was preserved; load that exact model or choose another one explicitly.`);
     }
   }, [generationModels.join('\u0000')]);
 
@@ -2925,7 +3080,7 @@ function LocalLLMProviderRow({
         <datalist id={`local-llm-models-${providerId}`}>
           {[...new Set([model, ...generationModels].filter(Boolean))].map(modelName => <option key={modelName} value={modelName} />)}
         </datalist>
-        <Button onClick={handleUse} disabled={!detected || !model.trim()} className="h-10 rounded-lg bg-celestial-saturn px-3 text-xs font-semibold text-black hover:bg-celestial-saturn/90 disabled:opacity-30">
+        <Button onClick={handleUse} disabled={!detected || !model.trim() || !generationModels.includes(model.trim())} className="h-10 rounded-lg bg-celestial-saturn px-3 text-xs font-semibold text-black hover:bg-celestial-saturn/90 disabled:opacity-30">
           {uiMessage('settings.use.1ec0c92474')}
         </Button>
         <Button onClick={handleTest} disabled={!detected || !model.trim() || testState === 'testing'} className="h-10 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-30">

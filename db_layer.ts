@@ -62,7 +62,33 @@ const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_action_tasks_user_status ON conversation_action_tasks(userId, status)`,
   `CREATE INDEX IF NOT EXISTS idx_action_receipts_task_created ON conversation_action_receipts(taskId, createdAt)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_idempotency ON conversation_action_receipts(taskId, idempotencyKey, toolName, outcome)`,
+  `CREATE INDEX IF NOT EXISTS idx_model_routing_user_completed ON model_routing_receipts(userId, completedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_model_routing_conversation_completed ON model_routing_receipts(conversationId, completedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_model_routing_request ON model_routing_receipts(requestId)`,
+  `CREATE INDEX IF NOT EXISTS idx_model_routing_selected ON model_routing_receipts(selectedProvider, selectedModel, completedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_background_tasks_user_status ON background_delegation_tasks(userId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_background_tasks_lease ON background_delegation_tasks(status, leaseExpiresAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_user_status ON autonomous_tasks(userId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_lease ON autonomous_tasks(status, leaseExpiresAt)`,
   `CREATE INDEX IF NOT EXISTS idx_external_commit_journal_task ON external_commit_journal(taskId, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_sessions_user_updated ON external_ai_sessions(userId, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_sessions_task ON external_ai_sessions(taskId, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_dispatches_session_status ON external_ai_dispatches(sessionId, status, updatedAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_dispatches_idempotency ON external_ai_dispatches(idempotencyKey)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_answers_session_received ON external_ai_answers(sessionId, receivedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_sources_user_status ON external_ai_history_sources(userId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_sources_scope ON external_ai_history_sources(userId, domain, orgId, sourceKind)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_jobs_source_status ON external_ai_history_sync_jobs(sourceId, status, updatedAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_history_conversations_identity ON external_ai_history_conversations(sourceId, externalConversationId)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_conversations_user_updated ON external_ai_history_conversations(userId, updatedAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_history_messages_identity ON external_ai_history_messages(sourceId, externalMessageId)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_messages_conversation_time ON external_ai_history_messages(conversationId, messageAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_history_attachments_identity ON external_ai_history_attachments(sourceId, externalAttachmentId)`,
+  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_attachments_message ON external_ai_history_attachments(messageId, updatedAt)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_extension_revisions_identity ON extension_revisions(extensionId, version)`,
+  `CREATE INDEX IF NOT EXISTS idx_extension_revisions_active ON extension_revisions(extensionId, status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_extension_publishers_status ON extension_publishers(status, updatedAt)`,
+  `CREATE INDEX IF NOT EXISTS idx_extension_receipts_extension_created ON extension_activation_receipts(extensionId, createdAt)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
   `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
   `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
@@ -404,6 +430,10 @@ function migrateSchema(): Promise<void> {
     db!.run("ALTER TABLE conversations ADD COLUMN lastSummaryMessageCount INTEGER DEFAULT -1", onAlter);
     db!.run("ALTER TABLE conversations ADD COLUMN actionContinuationState TEXT DEFAULT '{}'", onAlter);
     db!.run("ALTER TABLE conversation_action_tasks ADD COLUMN context TEXT NOT NULL DEFAULT '{}'", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN conversationId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN requestId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN interactionId TEXT NOT NULL DEFAULT ''", onAlter);
+    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN source TEXT NOT NULL DEFAULT ''", onAlter);
     // Canvas sessions: persisted workbench state with personal/work isolation
     db!.run(`CREATE TABLE IF NOT EXISTS canvas_sessions (
       id TEXT PRIMARY KEY,
@@ -619,6 +649,46 @@ function createTables(): Promise<void> {
         createdAt TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS model_routing_receipts (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        domain TEXT NOT NULL DEFAULT 'personal',
+        orgId TEXT NOT NULL DEFAULT '',
+        conversationId TEXT NOT NULL DEFAULT '',
+        requestId TEXT NOT NULL DEFAULT '',
+        interactionId TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        requestedProvider TEXT NOT NULL,
+        requestedModel TEXT NOT NULL,
+        selectionMode TEXT NOT NULL,
+        selectedProvider TEXT NOT NULL DEFAULT '',
+        selectedModel TEXT NOT NULL DEFAULT '',
+        fallbackReason TEXT NOT NULL DEFAULT '',
+        attempts TEXT NOT NULL DEFAULT '[]',
+        startedAt TEXT NOT NULL,
+        completedAt TEXT NOT NULL,
+        durationMs INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS background_delegation_tasks (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        leaseExpiresAt TEXT NOT NULL DEFAULT '',
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS autonomous_tasks (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        leaseExpiresAt TEXT NOT NULL DEFAULT '',
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
       CREATE TABLE IF NOT EXISTS external_commit_journal (
         idempotencyKey TEXT PRIMARY KEY,
         taskId TEXT DEFAULT '',
@@ -630,6 +700,125 @@ function createTables(): Promise<void> {
         claimToken TEXT NOT NULL,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_sessions (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        taskId TEXT NOT NULL DEFAULT '',
+        conversationId TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_dispatches (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        targetId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        routeKind TEXT NOT NULL,
+        idempotencyKey TEXT NOT NULL UNIQUE,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_answers (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        dispatchId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        targetId TEXT NOT NULL,
+        receivedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_history_sources (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        domain TEXT NOT NULL DEFAULT 'personal',
+        orgId TEXT NOT NULL DEFAULT '',
+        sourceKind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_history_sync_jobs (
+        id TEXT PRIMARY KEY,
+        sourceId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        nextCursor TEXT NOT NULL DEFAULT '',
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_history_conversations (
+        id TEXT PRIMARY KEY,
+        sourceId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        externalConversationId TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(sourceId, externalConversationId)
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_history_messages (
+        id TEXT PRIMARY KEY,
+        sourceId TEXT NOT NULL,
+        conversationId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        externalMessageId TEXT NOT NULL,
+        contentDigest TEXT NOT NULL,
+        messageAt TEXT NOT NULL DEFAULT '',
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(sourceId, externalMessageId)
+      );
+
+      CREATE TABLE IF NOT EXISTS external_ai_history_attachments (
+        id TEXT PRIMARY KEY,
+        sourceId TEXT NOT NULL,
+        messageId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        externalAttachmentId TEXT NOT NULL,
+        contentDigest TEXT NOT NULL DEFAULT '',
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(sourceId, externalAttachmentId)
+      );
+
+      CREATE TABLE IF NOT EXISTS extension_publishers (
+        fingerprint TEXT PRIMARY KEY,
+        publisherId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE TABLE IF NOT EXISTS extension_revisions (
+        id TEXT PRIMARY KEY,
+        extensionId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        version TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        manifestDigest TEXT NOT NULL,
+        signerFingerprint TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(extensionId, version)
+      );
+
+      CREATE TABLE IF NOT EXISTS extension_activation_receipts (
+        id TEXT PRIMARY KEY,
+        extensionId TEXT NOT NULL,
+        revisionId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
       );
 
       CREATE TABLE IF NOT EXISTS voice_profiles (
@@ -859,6 +1048,20 @@ async function loadMemoryDB(): Promise<void> {
   const conversationsRaw = await query<any>('SELECT * FROM conversations');
   const conversationActionTasks = await query<any>('SELECT * FROM conversation_action_tasks');
   const conversationActionReceipts = await query<any>('SELECT * FROM conversation_action_receipts');
+  const modelRoutingReceiptsRaw = await query<any>('SELECT * FROM model_routing_receipts');
+  const backgroundDelegationTasksRaw = await query<any>('SELECT * FROM background_delegation_tasks');
+  const autonomousTasksRaw = await query<any>('SELECT * FROM autonomous_tasks');
+  const externalAiSessionsRaw = await query<any>('SELECT * FROM external_ai_sessions');
+  const externalAiDispatchesRaw = await query<any>('SELECT * FROM external_ai_dispatches');
+  const externalAiAnswersRaw = await query<any>('SELECT * FROM external_ai_answers');
+  const externalAiHistorySourcesRaw = await query<any>('SELECT * FROM external_ai_history_sources');
+  const externalAiHistorySyncJobsRaw = await query<any>('SELECT * FROM external_ai_history_sync_jobs');
+  const externalAiHistoryConversationsRaw = await query<any>('SELECT * FROM external_ai_history_conversations');
+  const externalAiHistoryMessagesRaw = await query<any>('SELECT * FROM external_ai_history_messages');
+  const externalAiHistoryAttachmentsRaw = await query<any>('SELECT * FROM external_ai_history_attachments');
+  const extensionPublishersRaw = await query<any>('SELECT * FROM extension_publishers');
+  const extensionRevisionsRaw = await query<any>('SELECT * FROM extension_revisions');
+  const extensionActivationReceiptsRaw = await query<any>('SELECT * FROM extension_activation_receipts');
   const canvasSessionsRaw = await query<any>('SELECT * FROM canvas_sessions');
 
   // Load token usage
@@ -980,6 +1183,123 @@ async function loadMemoryDB(): Promise<void> {
     conversations,
     conversationActionTasks: conversationActionTasks || [],
     conversationActionReceipts: conversationActionReceipts || [],
+    modelRoutingReceipts: (modelRoutingReceiptsRaw || []).map((receipt: any) => ({
+      ...receipt,
+      attempts: (() => {
+        try { return JSON.parse(receipt.attempts || '[]'); } catch { return []; }
+      })(),
+    })),
+    backgroundDelegationTasks: (backgroundDelegationTasksRaw || []).flatMap((row: any) => {
+      try {
+        const task = JSON.parse(row.payload || '{}');
+        return task && typeof task === 'object' ? [{ ...task, id: row.id, userId: row.userId, status: row.status, leaseExpiresAt: row.leaseExpiresAt || '', updatedAt: row.updatedAt }] : [];
+      } catch { return []; }
+    }),
+    autonomousTasks: (autonomousTasksRaw || []).flatMap((row: any) => {
+      try {
+        const task = JSON.parse(row.payload || '{}');
+        return task && typeof task === 'object' ? [{ ...task, id: row.id, userId: row.userId, status: row.status, leaseExpiresAt: row.leaseExpiresAt || '', updatedAt: row.updatedAt }] : [];
+      } catch { return []; }
+    }),
+    externalAiSessions: (externalAiSessionsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, userId: row.userId, taskId: row.taskId || '', conversationId: row.conversationId || '', status: row.status, updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiDispatches: (externalAiDispatchesRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, sessionId: row.sessionId, userId: row.userId, targetId: row.targetId, status: row.status, routeKind: row.routeKind, idempotencyKey: row.idempotencyKey, updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiAnswers: (externalAiAnswersRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, sessionId: row.sessionId, dispatchId: row.dispatchId, userId: row.userId, targetId: row.targetId, receivedAt: row.receivedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiHistorySources: (externalAiHistorySourcesRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, userId: row.userId, domain: row.domain || 'personal', orgId: row.orgId || '', sourceKind: row.sourceKind, status: row.status, updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiHistorySyncJobs: (externalAiHistorySyncJobsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, sourceId: row.sourceId, userId: row.userId, status: row.status, nextCursor: row.nextCursor || '', updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiHistoryConversations: (externalAiHistoryConversationsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, sourceId: row.sourceId, userId: row.userId, externalConversationId: row.externalConversationId, updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiHistoryMessages: (externalAiHistoryMessagesRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, sourceId: row.sourceId, conversationId: row.conversationId, userId: row.userId, externalMessageId: row.externalMessageId, contentDigest: row.contentDigest, messageAt: row.messageAt || '', updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    externalAiHistoryAttachments: (externalAiHistoryAttachmentsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, sourceId: row.sourceId, messageId: row.messageId, userId: row.userId, externalAttachmentId: row.externalAttachmentId, contentDigest: row.contentDigest || '', updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    extensionPublishers: (extensionPublishersRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, fingerprint: row.fingerprint, publisherId: row.publisherId, status: row.status, updatedAt: row.updatedAt }]
+          : [];
+      } catch { return []; }
+    }),
+    extensionRevisions: (extensionRevisionsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{
+              ...payload,
+              id: row.id,
+              extensionId: row.extensionId,
+              userId: row.userId,
+              version: row.version,
+              kind: row.kind,
+              status: row.status,
+              manifestDigest: row.manifestDigest,
+              signerFingerprint: row.signerFingerprint,
+              updatedAt: row.updatedAt,
+            }]
+          : [];
+      } catch { return []; }
+    }),
+    extensionActivationReceipts: (extensionActivationReceiptsRaw || []).flatMap((row: any) => {
+      try {
+        const payload = JSON.parse(row.payload || '{}');
+        return payload && typeof payload === 'object'
+          ? [{ ...payload, id: row.id, extensionId: row.extensionId, revisionId: row.revisionId, status: row.status, createdAt: row.createdAt }]
+          : [];
+      } catch { return []; }
+    }),
     canvas_sessions: (canvasSessionsRaw || []).map((s: any) => ({ ...s, edges: s.edges || '[]', domain: s.domain || 'personal', orgId: s.orgId || '' })),
     settings: settings || [],
     systemFlags: systemFlags || {},
@@ -1176,29 +1496,42 @@ export function writeDB(data: any): void {
   scheduleDatabaseFlush(100);
 }
 
-/** Flush pending writes immediately — call before shutdown */
-export async function flushDB(): Promise<void> {
+async function flushDatabaseStrict(): Promise<void> {
   if (writeDebounceTimer) {
     clearTimeout(writeDebounceTimer);
     writeDebounceTimer = null;
   }
+  await writeLock;
+  if (persistedRevision < writeRevision || dbDirty) {
+    const targetRevision = writeRevision;
+    writeInFlight = true;
+    await persistMemoryDB();
+    persistedRevision = Math.max(persistedRevision, targetRevision);
+    dbDirty = persistedRevision < writeRevision;
+  }
+}
+
+/**
+ * Durability boundary for transactional registries. Unlike the normal
+ * best-effort flush, this propagates persistence failures so the caller can
+ * restore its prior in-memory/runtime state.
+ */
+export async function flushDBOrThrow(): Promise<void> {
   try {
-    await writeLock.catch((err) => {
-      console.error('[DB] Previous write failed before flush:', err);
-    });
-    if (persistedRevision < writeRevision || dbDirty) {
-      const targetRevision = writeRevision;
-      writeInFlight = true;
-      await persistMemoryDB();
-      persistedRevision = Math.max(persistedRevision, targetRevision);
-      dbDirty = persistedRevision < writeRevision;
-    }
-  } catch (err) {
-    dbDirty = true;
-    console.error('[DB] flushDB failed:', err);
+    await flushDatabaseStrict();
   } finally {
     writeInFlight = false;
     if (persistedRevision < writeRevision) scheduleDatabaseFlush(100);
+  }
+}
+
+/** Flush pending writes immediately — call before shutdown */
+export async function flushDB(): Promise<void> {
+  try {
+    await flushDBOrThrow();
+  } catch (err) {
+    dbDirty = true;
+    console.error('[DB] flushDB failed:', err);
   }
 }
 
@@ -1301,6 +1634,217 @@ async function persistMemoryDB(): Promise<void> {
       createSQL: `CREATE TABLE _temp_conversation_action_receipts (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, conversationId TEXT NOT NULL, turnId TEXT DEFAULT '', requestId TEXT DEFAULT '', idempotencyKey TEXT NOT NULL, toolName TEXT NOT NULL, targetIdentity TEXT DEFAULT '', inputDigest TEXT DEFAULT '', envelope TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL, createdAt TEXT NOT NULL)`,
       insertSQL: `INSERT INTO _temp_conversation_action_receipts (id, taskId, conversationId, turnId, requestId, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       rows: () => (memoryDB.conversationActionReceipts || []).map((r: any) => [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]),
+    },
+    {
+      name: 'model_routing_receipts',
+      createSQL: `CREATE TABLE _temp_model_routing_receipts (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', requestId TEXT NOT NULL DEFAULT '', interactionId TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, requestedProvider TEXT NOT NULL, requestedModel TEXT NOT NULL, selectionMode TEXT NOT NULL, selectedProvider TEXT NOT NULL DEFAULT '', selectedModel TEXT NOT NULL DEFAULT '', fallbackReason TEXT NOT NULL DEFAULT '', attempts TEXT NOT NULL DEFAULT '[]', startedAt TEXT NOT NULL, completedAt TEXT NOT NULL, durationMs INTEGER NOT NULL DEFAULT 0)`,
+      insertSQL: `INSERT INTO _temp_model_routing_receipts (id, userId, domain, orgId, conversationId, requestId, interactionId, source, status, requestedProvider, requestedModel, selectionMode, selectedProvider, selectedModel, fallbackReason, attempts, startedAt, completedAt, durationMs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.modelRoutingReceipts || []).map((receipt: any) => [
+        receipt.id,
+        receipt.userId || 'anonymous',
+        receipt.domain || 'personal',
+        receipt.orgId || '',
+        receipt.conversationId || '',
+        receipt.requestId || '',
+        receipt.interactionId || '',
+        receipt.source || '',
+        receipt.status || 'failed',
+        receipt.requestedProvider || '',
+        receipt.requestedModel || '',
+        receipt.selectionMode || 'pinned',
+        receipt.selectedProvider || '',
+        receipt.selectedModel || '',
+        receipt.fallbackReason || '',
+        JSON.stringify(Array.isArray(receipt.attempts) ? receipt.attempts : []),
+        receipt.startedAt,
+        receipt.completedAt,
+        Number(receipt.durationMs) || 0,
+      ]),
+    },
+    {
+      name: 'background_delegation_tasks',
+      createSQL: `CREATE TABLE _temp_background_delegation_tasks (id TEXT PRIMARY KEY, userId TEXT NOT NULL, status TEXT NOT NULL, leaseExpiresAt TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_background_delegation_tasks (id, userId, status, leaseExpiresAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.backgroundDelegationTasks || []).map((task: any) => [
+        task.id,
+        task.userId,
+        task.status || 'queued',
+        task.leaseExpiresAt || '',
+        task.updatedAt || task.createdAt || new Date().toISOString(),
+        JSON.stringify(task),
+      ]),
+    },
+    {
+      name: 'autonomous_tasks',
+      createSQL: `CREATE TABLE _temp_autonomous_tasks (id TEXT PRIMARY KEY, userId TEXT NOT NULL, status TEXT NOT NULL, leaseExpiresAt TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_autonomous_tasks (id, userId, status, leaseExpiresAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.autonomousTasks || []).map((task: any) => [
+        task.id,
+        task.userId,
+        task.status || 'pending',
+        task.leaseExpiresAt || '',
+        task.updatedAt || task.createdAt || new Date().toISOString(),
+        JSON.stringify(task),
+      ]),
+    },
+    {
+      name: 'external_ai_sessions',
+      createSQL: `CREATE TABLE _temp_external_ai_sessions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, taskId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_ai_sessions (id, userId, taskId, conversationId, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiSessions || []).map((session: any) => [
+        session.id,
+        session.userId,
+        session.taskId || '',
+        session.conversationId || '',
+        session.status || 'active',
+        session.updatedAt || session.createdAt || new Date().toISOString(),
+        JSON.stringify(session),
+      ]),
+    },
+    {
+      name: 'external_ai_dispatches',
+      createSQL: `CREATE TABLE _temp_external_ai_dispatches (id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, userId TEXT NOT NULL, targetId TEXT NOT NULL, status TEXT NOT NULL, routeKind TEXT NOT NULL, idempotencyKey TEXT NOT NULL UNIQUE, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_ai_dispatches (id, sessionId, userId, targetId, status, routeKind, idempotencyKey, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiDispatches || []).map((dispatch: any) => [
+        dispatch.id,
+        dispatch.sessionId,
+        dispatch.userId,
+        dispatch.targetId,
+        dispatch.status || 'planned',
+        dispatch.routeKind || 'desktop_visual',
+        dispatch.idempotencyKey,
+        dispatch.updatedAt || dispatch.createdAt || new Date().toISOString(),
+        JSON.stringify(dispatch),
+      ]),
+    },
+    {
+      name: 'external_ai_answers',
+      createSQL: `CREATE TABLE _temp_external_ai_answers (id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, dispatchId TEXT NOT NULL, userId TEXT NOT NULL, targetId TEXT NOT NULL, receivedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_ai_answers (id, sessionId, dispatchId, userId, targetId, receivedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiAnswers || []).map((answer: any) => [
+        answer.id,
+        answer.sessionId,
+        answer.dispatchId,
+        answer.userId,
+        answer.targetId,
+        answer.receivedAt || new Date().toISOString(),
+        JSON.stringify(answer),
+      ]),
+    },
+    {
+      name: 'external_ai_history_sources',
+      createSQL: `CREATE TABLE _temp_external_ai_history_sources (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', sourceKind TEXT NOT NULL, status TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_ai_history_sources (id, userId, domain, orgId, sourceKind, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiHistorySources || []).map((source: any) => [
+        source.id,
+        source.userId,
+        source.domain || 'personal',
+        source.orgId || '',
+        source.sourceKind,
+        source.status || 'active',
+        source.updatedAt || source.createdAt || new Date().toISOString(),
+        JSON.stringify(source),
+      ]),
+    },
+    {
+      name: 'external_ai_history_sync_jobs',
+      createSQL: `CREATE TABLE _temp_external_ai_history_sync_jobs (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, userId TEXT NOT NULL, status TEXT NOT NULL, nextCursor TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_external_ai_history_sync_jobs (id, sourceId, userId, status, nextCursor, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiHistorySyncJobs || []).map((job: any) => [
+        job.id,
+        job.sourceId,
+        job.userId,
+        job.status || 'pending',
+        job.nextCursor || '',
+        job.updatedAt || job.createdAt || new Date().toISOString(),
+        JSON.stringify(job),
+      ]),
+    },
+    {
+      name: 'external_ai_history_conversations',
+      createSQL: `CREATE TABLE _temp_external_ai_history_conversations (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, userId TEXT NOT NULL, externalConversationId TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(sourceId, externalConversationId))`,
+      insertSQL: `INSERT INTO _temp_external_ai_history_conversations (id, sourceId, userId, externalConversationId, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiHistoryConversations || []).map((conversation: any) => [
+        conversation.id,
+        conversation.sourceId,
+        conversation.userId,
+        conversation.externalConversationId,
+        conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+        JSON.stringify(conversation),
+      ]),
+    },
+    {
+      name: 'external_ai_history_messages',
+      createSQL: `CREATE TABLE _temp_external_ai_history_messages (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, conversationId TEXT NOT NULL, userId TEXT NOT NULL, externalMessageId TEXT NOT NULL, contentDigest TEXT NOT NULL, messageAt TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(sourceId, externalMessageId))`,
+      insertSQL: `INSERT INTO _temp_external_ai_history_messages (id, sourceId, conversationId, userId, externalMessageId, contentDigest, messageAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiHistoryMessages || []).map((message: any) => [
+        message.id,
+        message.sourceId,
+        message.conversationId,
+        message.userId,
+        message.externalMessageId,
+        message.contentDigest || '',
+        message.messageAt || '',
+        message.updatedAt || message.createdAt || new Date().toISOString(),
+        JSON.stringify(message),
+      ]),
+    },
+    {
+      name: 'external_ai_history_attachments',
+      createSQL: `CREATE TABLE _temp_external_ai_history_attachments (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, messageId TEXT NOT NULL, userId TEXT NOT NULL, externalAttachmentId TEXT NOT NULL, contentDigest TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(sourceId, externalAttachmentId))`,
+      insertSQL: `INSERT INTO _temp_external_ai_history_attachments (id, sourceId, messageId, userId, externalAttachmentId, contentDigest, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.externalAiHistoryAttachments || []).map((attachment: any) => [
+        attachment.id,
+        attachment.sourceId,
+        attachment.messageId,
+        attachment.userId,
+        attachment.externalAttachmentId,
+        attachment.contentDigest || '',
+        attachment.updatedAt || attachment.createdAt || new Date().toISOString(),
+        JSON.stringify(attachment),
+      ]),
+    },
+    {
+      name: 'extension_publishers',
+      createSQL: `CREATE TABLE _temp_extension_publishers (fingerprint TEXT PRIMARY KEY, publisherId TEXT NOT NULL, status TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_extension_publishers (fingerprint, publisherId, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.extensionPublishers || []).map((publisher: any) => [
+        publisher.fingerprint,
+        publisher.publisherId,
+        publisher.status || 'trusted',
+        publisher.updatedAt || publisher.createdAt || new Date().toISOString(),
+        JSON.stringify(publisher),
+      ]),
+    },
+    {
+      name: 'extension_revisions',
+      createSQL: `CREATE TABLE _temp_extension_revisions (id TEXT PRIMARY KEY, extensionId TEXT NOT NULL, userId TEXT NOT NULL, version TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, manifestDigest TEXT NOT NULL, signerFingerprint TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(extensionId, version))`,
+      insertSQL: `INSERT INTO _temp_extension_revisions (id, extensionId, userId, version, kind, status, manifestDigest, signerFingerprint, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.extensionRevisions || []).map((revision: any) => [
+        revision.id,
+        revision.extensionId,
+        revision.userId,
+        revision.version,
+        revision.kind || 'plugin',
+        revision.status || 'staged',
+        revision.manifestDigest,
+        revision.signerFingerprint,
+        revision.updatedAt || revision.createdAt || new Date().toISOString(),
+        JSON.stringify(revision),
+      ]),
+    },
+    {
+      name: 'extension_activation_receipts',
+      createSQL: `CREATE TABLE _temp_extension_activation_receipts (id TEXT PRIMARY KEY, extensionId TEXT NOT NULL, revisionId TEXT NOT NULL, status TEXT NOT NULL, createdAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
+      insertSQL: `INSERT INTO _temp_extension_activation_receipts (id, extensionId, revisionId, status, createdAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.extensionActivationReceipts || []).map((receipt: any) => [
+        receipt.id,
+        receipt.extensionId,
+        receipt.revisionId,
+        receipt.status || 'unknown',
+        receipt.createdAt || new Date().toISOString(),
+        JSON.stringify(receipt),
+      ]),
     },
     {
       name: 'canvas_sessions',

@@ -17,18 +17,26 @@ import {
   hasRelevantEvidenceTool,
   normalizePlannedToolScope,
 } from '../cognition/tool_planning';
+import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_preferences';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
 export interface LLMConfig {
-  provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
+  provider: string;
   model: string;
   maxTokens?: number;
   userId?: string;
   domain?: string;
   orgId?: string;
+  conversationId?: string;
+  requestId?: string;
+  interactionId?: string;
+  source?: string;
   responseFormat?: LLMResponseFormat;
   signal?: AbortSignal;
+  selectionMode?: UserLLMSelectionMode;
+  fallbackCandidates?: UserLLMFallbackCandidate[];
+  allowCloudFallback?: boolean;
 }
 
 export interface LLMResult {
@@ -40,6 +48,10 @@ export interface LLMResult {
 export interface LLMUsageRecord {
   provider: string;
   model: string;
+  requestedProvider?: string;
+  requestedModel?: string;
+  selectionMode?: UserLLMSelectionMode;
+  fallbackReason?: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -612,9 +624,15 @@ export async function runWithTools(
 
     // Collect usage from this LLM call
     if (response.usage) {
+      const actualProvider = response.routing?.selectedProvider || config.provider;
+      const actualModel = response.routing?.selectedModel || config.model;
       usageRecords.push({
-        provider: config.provider,
-        model: config.model,
+        provider: actualProvider,
+        model: actualModel,
+        requestedProvider: response.routing?.requestedProvider || config.provider,
+        requestedModel: response.routing?.requestedModel || config.model,
+        selectionMode: response.routing?.selectionMode || config.selectionMode || 'pinned',
+        fallbackReason: response.routing?.fallbackReason || '',
         promptTokens: response.usage.promptTokens,
         completionTokens: response.usage.completionTokens,
         totalTokens: response.usage.totalTokens,

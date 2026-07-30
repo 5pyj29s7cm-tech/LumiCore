@@ -106,7 +106,7 @@ describe('orchestration and replan tool policy', () => {
     );
     expect((
       chat.match(
-        /if \(isTerminalOrchestrationToolEvent\(record\)\)[\s\S]{0,1000}?if \(isDirectDesktopTool\(record\.name\)\) return;/g,
+        /if \(isTerminalOrchestrationToolEvent\(record\)\)[\s\S]{0,1800}?if \(isDirectDesktopTool\(record\.name\)\) return;/g,
       ) || []
     )).toHaveLength(2);
     expect(orchestrator).toContain('context.toolPolicy');

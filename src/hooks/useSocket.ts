@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { isTauriRuntime } from '@/services/apiBridge';
 import { socketService } from '@/services/socketService';
+import {
+  beginDesktopAutomationActivity,
+  endDesktopAutomationActivity,
+} from '@/services/desktopAutomationActivity';
 
 const isTauri = isTauriRuntime();
 let registeredSocket: Socket | null = null;
@@ -91,11 +95,14 @@ async function handleDesktopExec(socket: Socket, data: {
   const { correlationId, name, arguments: args } = data;
 
   if (name === 'client_action') {
+    beginDesktopAutomationActivity();
     try {
       const output = await dispatchClientAction(args);
       socket.emit(`tool:desktop_result:${correlationId}`, { output });
     } catch (err: any) {
       socket.emit(`tool:desktop_result:${correlationId}`, { error: err.message || String(err) });
+    } finally {
+      endDesktopAutomationActivity();
     }
     return;
   }
@@ -108,6 +115,7 @@ async function handleDesktopExec(socket: Socket, data: {
   }
 
   activeDesktopExecutions.add(correlationId);
+  beginDesktopAutomationActivity();
   try {
     // Dynamic import — @tauri-apps/api only exists in Tauri context
     const { invoke } = await import('@tauri-apps/api/core');
@@ -397,6 +405,7 @@ async function handleDesktopExec(socket: Socket, data: {
       socket.emit(`tool:desktop_result:${correlationId}`, { error: err.message || String(err) });
     }
   } finally {
+    endDesktopAutomationActivity();
     activeDesktopExecutions.delete(correlationId);
     cancelledDesktopExecutions.delete(correlationId);
   }

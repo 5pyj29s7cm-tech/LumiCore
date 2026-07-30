@@ -1,12 +1,16 @@
 import {
   cancelBackgroundTask,
   listBackgroundTasks,
+  requestPauseBackgroundTask,
   requestCancelBackgroundTask,
+  resumeBackgroundTask,
   type BackgroundDelegationTask,
 } from '../agents/background_tasks';
 import {
   cancelTask,
   getTaskQueue,
+  requestPauseAutonomousTask,
+  resumeAutonomousTask,
   type AutonomousTask,
 } from '../autonomy/task_queue';
 import {
@@ -28,7 +32,7 @@ export interface RuntimeWorkItem {
 
 export interface RuntimeWorkSnapshot {
   ok: true;
-  status: 'idle' | 'active';
+  status: 'idle' | 'active' | 'paused';
   activeCount: number;
   items: RuntimeWorkItem[];
   observedAt: string;
@@ -61,7 +65,7 @@ function autonomyItem(task: AutonomousTask): RuntimeWorkItem {
     kind: 'autonomy',
     title: task.title,
     status: task.status,
-    updatedAt: task.startedAt || task.createdAt,
+    updatedAt: task.updatedAt || task.startedAt || task.createdAt,
     cancellationRequested: Boolean(task.cancelRequestedAt),
   };
 }
@@ -89,7 +93,7 @@ export function getRuntimeWorkSnapshot(userId: string, kinds?: RuntimeWorkKind[]
   const items: RuntimeWorkItem[] = [];
   if (selected.has('delegation')) {
     items.push(...listBackgroundTasks(userId)
-      .filter(task => ['queued', 'running', 'cancelling'].includes(task.status))
+      .filter(task => ['queued', 'running', 'pausing', 'paused', 'cancelling'].includes(task.status))
       .map(delegationItem));
   }
   if (selected.has('autonomy')) {
@@ -101,10 +105,71 @@ export function getRuntimeWorkSnapshot(userId: string, kinds?: RuntimeWorkKind[]
     } catch {}
   }
   items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const activeCount = items.filter(item => item.status !== 'paused').length;
   return {
     ok: true,
-    status: items.length > 0 ? 'active' : 'idle',
-    activeCount: items.length,
+    status: activeCount > 0 ? 'active' : items.length > 0 ? 'paused' : 'idle',
+    activeCount,
+    items,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+export function pauseRuntimeWork(input: {
+  userId: string;
+  taskId?: string;
+  kinds?: RuntimeWorkKind[];
+}) {
+  const selected = normalizeKinds(input.kinds);
+  const before = getRuntimeWorkSnapshot(input.userId, [...selected]);
+  const matched = before.items.filter(item => (
+    (!input.taskId || item.id === input.taskId)
+    && item.status !== 'paused'
+    && (item.kind === 'delegation' || item.kind === 'autonomy')
+  ));
+  const items: RuntimeWorkItem[] = [];
+  for (const item of matched) {
+    const task = item.kind === 'delegation'
+      ? requestPauseBackgroundTask(item.id, input.userId)
+      : requestPauseAutonomousTask(item.id, input.userId);
+    if (task) items.push(item.kind === 'delegation' ? delegationItem(task as BackgroundDelegationTask) : autonomyItem(task as AutonomousTask));
+  }
+  const pausingCount = items.filter(item => item.status === 'pausing').length;
+  return {
+    ok: true as const,
+    status: matched.length === 0 ? 'idle' as const : pausingCount > 0 ? 'pausing' as const : 'paused' as const,
+    matchedCount: matched.length,
+    pausedCount: items.filter(item => item.status === 'paused').length,
+    pausingCount,
+    items,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+export function resumeRuntimeWork(input: {
+  userId: string;
+  taskId?: string;
+  kinds?: RuntimeWorkKind[];
+}) {
+  const selected = normalizeKinds(input.kinds);
+  const before = getRuntimeWorkSnapshot(input.userId, [...selected]);
+  const matched = before.items.filter(item => (
+    (!input.taskId || item.id === input.taskId)
+    && item.status === 'paused'
+    && (item.kind === 'delegation' || item.kind === 'autonomy')
+  ));
+  const items: RuntimeWorkItem[] = [];
+  for (const item of matched) {
+    const task = item.kind === 'delegation'
+      ? resumeBackgroundTask(item.id, input.userId)
+      : resumeAutonomousTask(item.id, input.userId);
+    if (task) items.push(item.kind === 'delegation' ? delegationItem(task as BackgroundDelegationTask) : autonomyItem(task as AutonomousTask));
+  }
+  return {
+    ok: true as const,
+    status: matched.length === 0 ? 'idle' as const : 'resumed' as const,
+    matchedCount: matched.length,
+    resumedCount: items.length,
     items,
     observedAt: new Date().toISOString(),
   };

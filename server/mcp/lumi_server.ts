@@ -71,10 +71,17 @@ export function createLumiMcpServer(llmGetters?: {
   const bc = broadcast || (() => {});
   const resolveMcpLLM = () => {
     const preferred = getScopedPreferredLLM('mcp_remote');
+    const providerOverride = String(process.env.LUMI_MCP_LLM_PROVIDER || '').trim();
+    const modelOverride = String(process.env.LUMI_MCP_LLM_MODEL || '').trim();
+    const overridden = Boolean(providerOverride || modelOverride);
     return {
-      provider: (process.env.LUMI_MCP_LLM_PROVIDER || preferred.provider) as any,
-      model: process.env.LUMI_MCP_LLM_MODEL || preferred.model,
+      provider: (providerOverride || preferred.provider) as any,
+      model: modelOverride || preferred.model,
       userId: 'mcp_remote',
+      selectionMode: overridden ? 'pinned' as const : preferred.selectionMode,
+      fallbackCandidates: overridden ? [] : preferred.fallbackCandidates,
+      allowCloudFallback: overridden ? false : preferred.allowCloudFallback,
+      source: 'mcp_remote',
     };
   };
   setOfficeBroadcast(bc);

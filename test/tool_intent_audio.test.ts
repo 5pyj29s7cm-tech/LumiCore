@@ -11,6 +11,15 @@ import {
 } from '../server/cognition/tool_intent';
 
 describe('audio transcription tool intent', () => {
+  it('enables tools for an external AI history action but not a capability question', () => {
+    const action = '读取 ChatGPT 里的聊天历史并同步新增消息';
+    const question = 'Lumi 可以读取外部 AI 里的聊天内容吗？';
+    expect(shouldAllowToolUseForTurn(action, 'chat', 'assistant')).toBe(true);
+    expect(traceToolIntentDecision(action, 'chat', 'assistant').matchedRules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'external-ai-history' }),
+    ]));
+    expect(shouldAllowToolUseForTurn(question, 'chat', 'assistant')).toBe(false);
+  });
   it('routes an explicit Lumi runtime mutation into the self-repair tool lane', () => {
     const text = '\u91cd\u542f\u540e\u7aef\u8fdb\u7a0b\u3002';
     expect(isInformationOnlyQuestion(text)).toBe(false);

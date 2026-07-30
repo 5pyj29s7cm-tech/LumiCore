@@ -39,6 +39,7 @@ import {
 } from '../runtime/capability_metrics';
 import { isStrictPrivacy } from '../config/privacy';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
+import type { UserLLMFallbackCandidate, UserLLMProvider, UserLLMSelectionMode } from '../llm/user_preferences';
 import { executeToolCall } from "../tools/execution_engine";
 import { routeToolsForTurn } from "../cognition/tool_router";
 import { hasExplicitTeamExecutionRequest } from "../cognition/tool_intent";
@@ -62,13 +63,20 @@ import {
   type ModelGraphPrivacy,
 } from './model_execution_graph';
 
-type LLMProvider = 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
+type LLMProvider = UserLLMProvider;
 type ScopedLLMConfig = {
   provider: LLMProvider;
   model: string;
   userId?: string;
   domain?: string;
   orgId?: string;
+  selectionMode?: UserLLMSelectionMode;
+  fallbackCandidates?: UserLLMFallbackCandidate[];
+  allowCloudFallback?: boolean;
+  conversationId?: string;
+  requestId?: string;
+  interactionId?: string;
+  source?: string;
 };
 
 export interface LlmGetters {
@@ -1018,6 +1026,13 @@ export async function decomposeTask(
         userId: config.userId || context.userId,
         domain: config.domain || context.domain,
         orgId: config.orgId || context.orgId,
+        selectionMode: config.selectionMode,
+        fallbackCandidates: config.fallbackCandidates,
+        allowCloudFallback: config.allowCloudFallback,
+        conversationId: config.conversationId,
+        requestId: config.requestId,
+        interactionId: config.interactionId,
+        source: config.source || 'orchestrator_decompose',
       },
       llmGetters.getDeepSeek,
       llmGetters.getGemini,
@@ -1034,7 +1049,14 @@ export async function decomposeTask(
     );
 
     if (context?.userId) {
-      recordTokenUsage(context.userId, config.provider, config.model, result.usage, `orch_decompose_${Date.now()}`, 'orchestrator');
+      recordTokenUsage(
+        context.userId,
+        result.routing?.selectedProvider || config.provider,
+        result.routing?.selectedModel || config.model,
+        result.usage,
+        `orch_decompose_${Date.now()}`,
+        'orchestrator',
+      );
     }
 
     // Parse JSON from the response (handle markdown code fences)
@@ -2033,6 +2055,13 @@ export async function aggregateWithLLM(
         userId,
         domain: llmConfig.domain || scope?.domain,
         orgId: llmConfig.orgId || scope?.orgId,
+        selectionMode: llmConfig.selectionMode,
+        fallbackCandidates: llmConfig.fallbackCandidates,
+        allowCloudFallback: llmConfig.allowCloudFallback,
+        conversationId: llmConfig.conversationId,
+        requestId: llmConfig.requestId,
+        interactionId: llmConfig.interactionId,
+        source: llmConfig.source || 'orchestrator_aggregate',
       },
       llmGetters.getDeepSeek,
       llmGetters.getGemini,
@@ -2048,7 +2077,14 @@ export async function aggregateWithLLM(
       llmGetters.getRelay,
     );
     if (userId) {
-      recordTokenUsage(userId, llmConfig.provider, llmConfig.model, result.usage, `orch_aggregate_${Date.now()}`, 'orchestrator');
+      recordTokenUsage(
+        userId,
+        result.routing?.selectedProvider || llmConfig.provider,
+        result.routing?.selectedModel || llmConfig.model,
+        result.usage,
+        `orch_aggregate_${Date.now()}`,
+        'orchestrator',
+      );
     }
     return result.text.trim();
   } catch (err) {

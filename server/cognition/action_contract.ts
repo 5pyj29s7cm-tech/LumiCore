@@ -22,6 +22,9 @@ export type LumiActionContractKind =
   | 'design_delivery'
   | 'stock_monitor'
   | 'task_control'
+  | 'external_ai_history'
+  | 'external_ai_collaboration'
+  | 'extension_registry'
   | 'legal_document'
   | 'desktop_operation'
   | 'artifact_work';
@@ -59,6 +62,9 @@ const ACTION_CAPABILITY_REQUIREMENTS: Partial<Record<LumiActionContractKind, Act
   design_delivery: [{ lanes: ['cad', 'media', 'office', 'files'], terms: ['design', 'cad', 'image', 'presentation', 'document'] }],
   stock_monitor: [{ lanes: ['industry', 'web', 'agents'], operations: ['observe', 'create'], terms: ['stock', 'market', 'quote', 'watch', 'workflow'] }],
   task_control: [{ lanes: ['system', 'agents'], operations: ['observe', 'mutate'], terms: ['runtime', 'task', 'work', 'status', 'cancel'] }],
+  external_ai_history: [{ lanes: ['agents'], operations: ['observe', 'create', 'mutate'], terms: ['external', 'ai', 'history', 'conversation', 'sync', 'authorization'] }],
+  external_ai_collaboration: [{ lanes: ['agents', 'web', 'desktop'], operations: ['communicate', 'observe'], terms: ['external', 'ai', 'collaboration', 'answer', 'session', 'route'] }],
+  extension_registry: [{ lanes: ['system'], operations: ['observe', 'test', 'mutate'], terms: ['extension', 'registry', 'provider', 'plugin', 'compatibility', 'rollback'] }],
   legal_document: [{ lanes: ['industry', 'web', 'office'], terms: ['legal', 'law', 'case', 'citation', 'court', 'document'] }],
   desktop_operation: [{ lanes: ['desktop'], operations: ['observe', 'mutate', 'test'], terms: ['desktop', 'window', 'application', 'native', 'screen', 'open'] }],
   artifact_work: [{ lanes: ['files', 'office', 'media'], operations: ['observe', 'create', 'mutate', 'test'], terms: ['file', 'document', 'artifact', 'create', 'verify'] }],
@@ -97,6 +103,25 @@ function unique(values: string[]): string[] {
 
 function matches(text: string, pattern: RegExp): boolean {
   return pattern.test(text);
+}
+
+function extensionRegistryToolForAction(text: string): string | null {
+  // i18n-allow: Multilingual signed-extension input recognition; not user-visible copy.
+  const subject = /(?:\bext_[a-z0-9_.-]+\b|\b(?:signed\s+)?(?:extension|plugin)\b|\bopenai[-\s]?compatible\s+provider\b|\bcustom\s+(?:model\s+)?provider\b|\bprovider\s+registry\b|(?:Lumi\s*)?(?:签名扩展|扩展插件|插件扩展|插件|扩展|OpenAI\s*兼容(?:模型|Provider|提供商)?|自定义(?:模型)?\s*Provider|Provider\s*注册表))/iu.test(text);
+  if (!subject) return null;
+  // i18n-allow: Multilingual signed-extension rollback input recognition; not user-visible copy.
+  if (/(?:回滚|恢复.{0,12}(?:版本|修订)|\brollback\b|\brevert\b)/iu.test(text)) return 'extension_registry_rollback';
+  // i18n-allow: Multilingual signed-extension disable input recognition; not user-visible copy.
+  if (/(?:停用|禁用|关闭|卸载|\bdisable\b|\bdeactivate\b|\buninstall\b)/iu.test(text)) return 'extension_registry_disable';
+  // i18n-allow: Multilingual signed-extension receipt input recognition; not user-visible copy.
+  if (/(?:回执|审计|记录|\breceipts?\b|\baudit\b)/iu.test(text)) return 'extension_registry_receipts';
+  // i18n-allow: Multilingual signed-extension compatibility input recognition; not user-visible copy.
+  if (/(?:测试|探测|健康检查|兼容性|\btest\b|\bprobe\b|\bhealth\s*check\b|\bcompatibility\b)/iu.test(text)) return 'extension_registry_test';
+  // i18n-allow: Multilingual signed-extension install input recognition; not user-visible copy.
+  if (/(?:安装|注册|接入|启用|激活|添加|\binstall\b|\bregister\b|\bactivate\b|\badd\b)/iu.test(text)) return 'extension_registry_install';
+  // i18n-allow: Multilingual signed-extension list input recognition; not user-visible copy.
+  if (/(?:列出|查看|显示|有哪些|清单|\blist\b|\bshow\b|\binspect\b)/iu.test(text)) return 'extension_registry_list';
+  return null;
 }
 
 const INJECTED_TASK_CONTEXT_RE = /(?:^|\r?\n)\s*##\s+(?:Current Turn Attachments|Recent action continuation context|Internal client-surface continuation context)\b/i;
@@ -216,6 +241,17 @@ export function requiresDesktopAiCollaboration(input: string): boolean {
   // i18n-allow: multilingual collaboration-action recognition; not user-visible copy.
   const hasCollaborationAction = /(?:问(?:一下|问)?|询问|发给|发送给|交给|跟|和|同).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(text);
   return hasAiSurface && hasCollaborationAction;
+}
+
+export function requiresExternalAiHistory(input: string): boolean {
+  const text = compact(extractPrimaryTaskText(input));
+  // i18n-allow: Multilingual external-AI history target recognition; not user-visible copy.
+  const hasExternalAiTarget = /(?:\b(?:ChatGPT|Claude|Gemini|DeepSeek|Kimi|Perplexity|Copilot|Cursor|Ollama|LM\s*Studio|external\s+AI|AI\s+(?:assistant|agent|app|chat))\b|外部\s*AI|AI\s*(?:助手|智能体|客户端|应用))/iu.test(text);
+  // i18n-allow: Multilingual external-AI history action recognition; not user-visible copy.
+  const hasHistoryAction = /(?:聊天(?:历史|记录|内容)|对话(?:历史|记录|内容)|历史(?:消息|会话)|同步.{0,24}(?:聊天|对话|历史)|导入.{0,24}(?:聊天|对话|历史)|授权.{0,24}(?:聊天|对话|历史)|读取.{0,24}(?:聊天|对话|历史|内容)|查看.{0,24}(?:聊天|对话|历史|内容)|\b(?:chat|conversation|message)\s+history\b|\b(?:sync|import|archive|authorize|read|view|search|query)\b.{0,48}\b(?:chat|conversation|message)\s+(?:history|content|archive)\b)/iu.test(text);
+  // i18n-allow: Multilingual external-AI submission exclusion; not user-visible copy.
+  const explicitNewSubmission = /(?:发给|发送给|交给|问问|询问|提问|让.{0,20}(?:回答|处理)|\b(?:ask|send\s+to|delegate|submit|prompt)\b)/iu.test(text);
+  return hasExternalAiTarget && hasHistoryAction && !explicitNewSubmission;
 }
 
 export function requiresDesktopAiAnswerCollection(input: string): boolean {
@@ -693,6 +729,27 @@ export function buildActionContract(input: string): LumiActionContract {
       caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
     });
   }
+  const extensionRegistryTool = extensionRegistryToolForAction(text);
+  if (extensionRegistryTool) {
+    const mutating = ['extension_registry_install', 'extension_registry_rollback', 'extension_registry_disable'].includes(extensionRegistryTool);
+    return withDefaults({
+      kind: 'extension_registry',
+      label: 'Signed extension and Provider registry',
+      coreAction: 'Operate Lumi\'s signed declarative extension registry through signature, permission, compatibility, and transactional activation controls.',
+      preparationIsNotCompletion: ['editing a manifest', 'saving a credential', 'probing an endpoint without a registry receipt', 'loading arbitrary extension code'],
+      requiredEvidence: [mutating
+        ? `${extensionRegistryTool} terminal receipt bound to the exact extension revision, manifest digest, signer fingerprint, and final activation state`
+        : `${extensionRegistryTool} read-only registry or compatibility receipt`],
+      preferredTools: [extensionRegistryTool],
+      verificationTools: extensionRegistryTool === 'extension_registry_install'
+        ? ['extension_registry_receipts', 'extension_registry_list']
+        : ['extension_registry_list'],
+      nextStep: mutating
+        ? 'Require exact confirmation, then verify the signed manifest and compatibility probe before changing the active revision.'
+        : 'Read or probe only the requested signed extension state and report its persistent receipt.',
+      caution: 'Never execute arbitrary plugin code, embed credentials in a manifest, widen signed permissions, or bypass the unified tool policy and receipt pipeline.',
+    });
+  }
   if (normalizedIntent.kind === 'status_query') return NONE_CONTRACT;
   if (isInformationOnlyQuestion(text)) return NONE_CONTRACT;
   // Blank AutoCAD creation has a dedicated verified COM path. It remains a
@@ -737,23 +794,64 @@ export function buildActionContract(input: string): LumiActionContract {
     return buildLegalDocumentContract();
   }
 
+  if (requiresExternalAiHistory(text)) {
+    // i18n-allow: Multilingual external-AI authorization intent recognition; not user-visible copy.
+    const wantsAuthorization = /(?:授权|注册|添加|连接).{0,28}(?:来源|历史|会话)|\b(?:authorize|register|add|connect)\b.{0,32}\b(?:source|history|session)\b/iu.test(text);
+    // i18n-allow: Multilingual external-AI revocation intent recognition; not user-visible copy.
+    const wantsRevocation = /(?:撤销|取消|禁用).{0,28}(?:授权|来源)|\b(?:revoke|disable|remove)\b.{0,32}\b(?:authorization|source)\b/iu.test(text);
+    // i18n-allow: Multilingual external-AI sync status intent recognition; not user-visible copy.
+    const wantsStatus = /(?:状态|进度|同步到哪)|\b(?:status|progress)\b/iu.test(text);
+    // i18n-allow: Multilingual external-AI history query intent recognition; not user-visible copy.
+    const wantsQuery = /(?:读取|查看|搜索|查询|总结).{0,32}(?:聊天|对话|历史|内容)|\b(?:read|view|search|query|summari[sz]e)\b/iu.test(text);
+    const preferredTools = wantsRevocation
+      ? ['external_ai_history_source_revoke', 'external_ai_history_status']
+      : wantsAuthorization
+        ? ['external_ai_history_source_register', 'external_ai_history_source_list']
+        : wantsStatus
+          ? ['external_ai_history_status', 'external_ai_history_source_list']
+          : wantsQuery
+            ? ['external_ai_history_query', 'external_ai_history_status', 'external_ai_history_sync', 'external_ai_history_source_list']
+            : ['external_ai_history_sync', 'external_ai_history_status', 'external_ai_history_source_list'];
+    return withDefaults({
+      kind: 'external_ai_history',
+      label: 'Authorized external AI history access',
+      coreAction: 'Read, synchronize, or manage only the external AI history source and scope explicitly authorized by this user in the current personal or organization domain.',
+      preparationIsNotCompletion: ['opening an AI app', 'seeing a conversation list without message evidence', 'using an unregistered session', 'reading only a process/window title', 'treating one visible viewport as complete history'],
+      requiredEvidence: [
+        wantsAuthorization
+          ? 'external_ai_history_source_register receipt with an immutable authorizationDigest'
+          : wantsRevocation
+            ? 'external_ai_history_source_revoke receipt with status=revoked'
+            : wantsStatus
+              ? 'external_ai_history_status receipt derived from the persistent source and job ledger'
+              : wantsQuery
+                ? 'external_ai_history_query receipt with message ids and sourceEvidence'
+                : 'external_ai_history_sync receipt with verified=true, a durable jobId/cursor, counts, completeness, and source limitations',
+      ],
+      preferredTools,
+      verificationTools: ['external_ai_history_status', 'external_ai_history_query'],
+      nextStep: 'Use an existing exact authorization source. If none exists, explain the missing source and request confirmation to register a connector, JSON export, authorized session, or desktop-visible source. Never submit a new prompt while fulfilling a history-read request.',
+      caution: 'Do not claim arbitrary account access. Credentials remain outside this ledger; scope expansion requires a new confirmation; desktop-visible extraction is partial, uses local vision first, and never scrolls or submits.',
+    });
+  }
+
   if (requiresDesktopAiCollaboration(text)) {
     const collectAnswer = requiresDesktopAiAnswerCollection(text);
     return withDefaults({
-      kind: 'desktop_operation',
-      label: 'Verified desktop AI collaboration',
-      coreAction: 'Send the requested question or task through the named desktop AI surface and, when requested, bring its visible answer back to Lumi.',
-      preparationIsNotCompletion: ['opening the AI app', 'focusing its window', 'pasting without submitting', 'claiming an answer from a screenshot that was not read'],
+      kind: 'external_ai_collaboration',
+      label: 'Verified external AI collaboration',
+      coreAction: 'Bind the request to one persistent collaboration session, select each target through the fixed API/MCP to CLI to structured-browser to desktop-visual route, and archive attributable answers.',
+      preparationIsNotCompletion: ['planning a route', 'opening an AI app', 'focusing its window', 'pasting without submitting', 'claiming an answer without an archived source receipt'],
       requiredEvidence: [
-        'desktop_ai_ask with submittedCount greater than zero or a desktop_ai_roundtable submission receipt',
-        ...(collectAnswer ? ['desktop_ai_collect_answer with status=collected and nonempty answerText, or desktop_ai_roundtable with collectedCount greater than zero'] : []),
+        'external_ai_collaborate receipt with verified=true, a persistent sessionId/taskId, and at least one attributable submitted or answered target dispatch',
+        ...(collectAnswer ? ['external_ai_collaborate or external_ai_collect_answers receipt with counts.answered greater than zero and source evidence'] : []),
       ],
-      preferredTools: ['desktop_ai_ask', 'desktop_ai_collect_answer', 'desktop_ai_roundtable', 'desktop_ai_list_targets'],
-      verificationTools: collectAnswer ? ['desktop_ai_collect_answer', 'desktop_ai_roundtable'] : ['desktop_ai_ask', 'desktop_ai_roundtable'],
+      preferredTools: ['external_ai_collaborate', 'external_ai_collect_answers', 'external_ai_session_status', 'external_ai_route_plan', 'desktop_ai_list_targets'],
+      verificationTools: collectAnswer ? ['external_ai_collect_answers', 'external_ai_session_status'] : ['external_ai_collaborate', 'external_ai_session_status'],
       nextStep: collectAnswer
-        ? 'Submit through desktop_ai_ask, then collect the visible answer; report pending, login, or vision blockers instead of inventing a response.'
-        : 'Submit through desktop_ai_ask and report the verified submission state.',
-      caution: 'A launched or focused AI window is not proof that a message was submitted or that an answer was collected.',
+        ? 'Use read-only external_ai_collect_answers on the existing session; report pending, unknown, login, or vision blockers without resending.'
+        : 'Stop on unknown outcome and report the persistent per-target state; never fall through to another route after a possibly submitted request.',
+      caution: 'External submission requires exact confirmation. A route plan, launched window, pressed shortcut, or unbound text is not proof of a provider answer.',
     });
   }
 
@@ -1824,29 +1922,84 @@ export function hasCoreActionEvidence(
     return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name))
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
+  if (contract.kind === 'external_ai_collaboration') {
+    const unifiedReceipts = successful.filter(record => /^(?:external_ai_collaborate|external_ai_collect_answers|external_ai_session_status)$/i.test(record.name));
+    const hasUnifiedSubmission = unifiedReceipts.some(record => {
+      const payload = parseRecordJson(record);
+      if (payload?.verified !== true && record.name === 'external_ai_collaborate') return false;
+      const dispatches = Array.isArray(payload?.results)
+        ? payload.results
+        : Array.isArray(payload?.dispatches)
+          ? payload.dispatches
+          : [];
+      return Boolean(compact(payload?.sessionId)) && dispatches.some((dispatch: any) => (
+        ['submitted', 'pending', 'answered'].includes(String(dispatch?.status || ''))
+      ));
+    });
+    const hasUnifiedAnswer = unifiedReceipts.some(record => {
+      const payload = parseRecordJson(record);
+      if (Number(payload?.counts?.answered || 0) <= 0) return false;
+      const answers = Array.isArray(payload?.answers) ? payload.answers : [];
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      return answers.some((answer: any) => Boolean(compact(answer?.answerText)) && Boolean(answer?.sourceEvidence || answer?.responseDigest))
+        || results.some((result: any) => (
+          result?.status === 'answered'
+          && Boolean(compact(result?.answerText))
+          && Boolean(result?.sourceEvidence || result?.responseDigest)
+        ));
+    });
+
+    // One-version compatibility: persisted pre-migration continuations may
+    // still finish through the old desktop adapters, but new plans never see
+    // those deprecated capabilities.
+    const hasLegacySubmission = successful.some(record => {
+      if (!/^(?:desktop_ai_ask|desktop_ai_roundtable)$/i.test(record.name)) return false;
+      const payload = parseRecordJson(record);
+      return record.name === 'desktop_ai_roundtable'
+        ? Number(payload?.ask?.submittedCount || 0) > 0
+        : payload?.ok === true && Number(payload?.submittedCount || 0) > 0;
+    });
+    const hasLegacyAnswer = successful.some(record => {
+      const payload = parseRecordJson(record);
+      return (record.name === 'desktop_ai_collect_answer'
+          && payload?.status === 'collected'
+          && Boolean(compact(payload?.answerText)))
+        || (record.name === 'desktop_ai_roundtable'
+          && payload?.ok === true
+          && Number(payload?.collectedCount || 0) > 0);
+    });
+    if (requiresDesktopAiAnswerCollection(taskText)) return hasUnifiedAnswer || hasLegacyAnswer;
+    return hasUnifiedSubmission || hasUnifiedAnswer || hasLegacySubmission || hasLegacyAnswer;
+  }
+  if (contract.kind === 'external_ai_history') {
+    return successful.some(record => {
+      const payload = parseRecordJson(record);
+      if (record.name === 'external_ai_history_source_register') {
+        return payload?.ok === true
+          && ['registered', 'already_registered'].includes(String(payload?.status || ''))
+          && Boolean(compact(payload?.authorizationDigest));
+      }
+      if (record.name === 'external_ai_history_source_revoke') {
+        return payload?.ok === true && payload?.status === 'revoked';
+      }
+      if (record.name === 'external_ai_history_sync') {
+        return payload?.verified === true
+          && ['completed', 'partial'].includes(String(payload?.status || ''))
+          && Boolean(compact(payload?.jobId));
+      }
+      if (record.name === 'external_ai_history_query') {
+        return payload?.ok === true && payload?.status === 'queried' && Array.isArray(payload?.messages);
+      }
+      if (record.name === 'external_ai_history_status') {
+        return payload?.ok === true && Boolean(payload?.source);
+      }
+      if (record.name === 'external_ai_history_source_list') {
+        return payload?.ok === true && payload?.status === 'listed' && Array.isArray(payload?.sources);
+      }
+      return false;
+    });
+  }
   if (contract.kind === 'desktop_operation') {
-    if (requiresDesktopAiCollaboration(taskText)) {
-      const submitted = successful.some(record => {
-        if (!/^(?:desktop_ai_ask|desktop_ai_roundtable)$/i.test(record.name)) return false;
-        const payload = parseRecordJson(record);
-        if (record.name === 'desktop_ai_roundtable') {
-          return Number(payload?.ask?.submittedCount || 0) > 0;
-        }
-        return payload?.ok === true && Number(payload?.submittedCount || 0) > 0;
-      });
-      if (!submitted) return false;
-      if (!requiresDesktopAiAnswerCollection(taskText)) return true;
-      return successful.some(record => {
-        const payload = parseRecordJson(record);
-        if (record.name === 'desktop_ai_collect_answer') {
-          return payload?.status === 'collected' && Boolean(compact(payload?.answerText));
-        }
-        if (record.name === 'desktop_ai_roundtable') {
-          return payload?.ok === true && Number(payload?.collectedCount || 0) > 0;
-        }
-        return false;
-      });
-    }
     const windowAction = requestedDesktopWindowAction(taskText);
     if (windowAction) {
       return successful.some(record => {

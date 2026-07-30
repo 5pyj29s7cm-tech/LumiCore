@@ -1,10 +1,26 @@
 import { ParsedToolCall, NormalizedLLMResponse } from '../tools/types';
 import { withCloudResilience } from '../cloud/resilience';
 import { isStrictPrivacy, requireLocalProvider } from '../config/privacy';
-import { getScopedPreferredLLM } from './user_preferences';
+import {
+  getScopedPreferredLLM,
+  type UserLLMFallbackCandidate,
+  type UserLLMSelectionMode,
+} from './user_preferences';
 import { getUserPreferredVision } from './vision_preferences';
 import { getUserPreferredWorldModel } from './world_preferences';
-import { ensureLocalModelReady, markLocalModelUnhealthy, type LocalModelProvider } from './local_models';
+import { ensureLocalModelReady, runLocalModelInference, type LocalModelProvider } from './local_models';
+import {
+  modelRoutingErrorDigest,
+  modelRoutingErrorReason,
+  persistModelRoutingReceipt,
+  type ModelRoutingTrace,
+} from './model_routing_receipts';
+import {
+  assertRegisteredProviderModel,
+  getRegisteredOpenAIClient,
+  isRegisteredOpenAICompatibleProvider,
+  isRegisteredProviderLocal,
+} from '../extensions/registry';
 
 export type MessageContent =
   | string
@@ -12,6 +28,29 @@ export type MessageContent =
   | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }>;
 
 export type LLMResponseFormat = 'json_object';
+
+export type ReasoningProvider = string;
+
+export interface LLMCallConfig {
+  provider: ReasoningProvider;
+  model: string;
+  maxTokens?: number;
+  userId?: string;
+  domain?: string;
+  orgId?: string;
+  conversationId?: string;
+  requestId?: string;
+  interactionId?: string;
+  source?: string;
+  responseFormat?: LLMResponseFormat;
+  signal?: AbortSignal;
+  role?: 'reasoning' | 'vision' | 'world';
+  selectionMode?: UserLLMSelectionMode;
+  fallbackCandidates?: UserLLMFallbackCandidate[];
+  allowCloudFallback?: boolean;
+  /** True only for a candidate compiled from the user's stored route policy. */
+  authorizedRoutingCandidate?: boolean;
+}
 
 export interface NormalizedMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -136,8 +175,43 @@ function isQwenVisionModel(model: string): boolean {
   return /(?:qwen.*vl|vl-|vl_|vision)/i.test(model || '');
 }
 
-function assertQwenAllowedByUserPrefs(config: { provider: string; model: string; userId?: string; domain?: string; orgId?: string; role?: 'reasoning' | 'vision' | 'world' }): void {
+function messagesNeedVision(messages: NormalizedMessage[]): boolean {
+  return messages.some(message => Array.isArray(message.content)
+    && message.content.some(part => part.type === 'image_url'));
+}
+
+function extensionProviderForCall(config: LLMCallConfig): boolean {
+  return isRegisteredOpenAICompatibleProvider(config.provider, config.userId);
+}
+
+function extensionProviderFailure(provider: string, error: unknown): Error {
+  const messages: string[] = [];
+  let current: any = error;
+  for (let depth = 0; current && depth < 6; depth += 1) {
+    const message = String(current?.message || current || '').trim();
+    if (message && !messages.includes(message)) messages.push(message);
+    current = current?.cause;
+  }
+  const detail = [...messages].reverse().find(message => !/^Connection error\.?$/i.test(message))
+    || messages[0]
+    || 'unknown provider error';
+  return new Error(`Extension provider ${provider} failed: ${detail}`, { cause: error });
+}
+
+function assertProviderAllowedByPrivacy(config: LLMCallConfig): void {
+  if (!isStrictPrivacy()) return;
+  if (extensionProviderForCall(config)) {
+    if (!isRegisteredProviderLocal(config.provider, config.userId)) {
+      throw new Error(`[Privacy] Strict mode active. Extension provider "${config.provider}" is not declared as a loopback-only local provider.`);
+    }
+    return;
+  }
+  requireLocalProvider(config.provider);
+}
+
+function assertQwenAllowedByUserPrefs(config: { provider: string; model: string; userId?: string; domain?: string; orgId?: string; role?: 'reasoning' | 'vision' | 'world'; authorizedRoutingCandidate?: boolean }): void {
   if (config.provider !== 'qwen') return;
+  if (config.authorizedRoutingCandidate === true) return;
 
   if (!config.userId) {
     throw new Error('Qwen model call blocked: missing user preference context. Pass userId so Lumi can respect the selected brain/vision provider.');
@@ -161,14 +235,7 @@ function assertQwenAllowedByUserPrefs(config: { provider: string; model: string;
   }
 }
 
-function autoDispatchPreference(config: {
-  model: string;
-  userId?: string;
-  domain?: string;
-  orgId?: string;
-  maxTokens?: number;
-  signal?: AbortSignal;
-}) {
+function autoDispatchPreference(config: LLMCallConfig) {
   const preferred = config.userId
     ? getScopedPreferredLLM(config.userId, { domain: config.domain, orgId: config.orgId })
     : null;
@@ -176,12 +243,18 @@ function autoDispatchPreference(config: {
     provider: preferred?.autoFallbackProvider || 'deepseek',
     model: preferred?.autoFallbackModel || preferred?.models?.deepseek || 'deepseek-v4-flash',
     localModel: config.model || preferred?.model,
+    requestedProvider: config.provider,
+    requestedModel: config.model,
+    selectionMode: 'auto' as const,
+    fallbackCandidates: config.fallbackCandidates || preferred?.fallbackCandidates || [],
     maxTokens: config.maxTokens,
     userId: config.userId,
     domain: config.domain,
     orgId: config.orgId,
     signal: config.signal,
-    allowCloudFallback: !isStrictPrivacy(),
+    allowCloudFallback: config.allowCloudFallback !== false
+      && preferred?.allowCloudFallback !== false
+      && !isStrictPrivacy(),
   };
 }
 
@@ -685,10 +758,132 @@ export function parseAnthropicResponse(rawResponse: any): NormalizedLLMResponse 
 
 // ── LLM Call Router ──
 
+function directRoutingTrace(config: LLMCallConfig, status: 'succeeded' | 'failed', error?: unknown): ModelRoutingTrace {
+  const reason = status === 'failed' ? modelRoutingErrorReason(error) : '';
+  return {
+    requestedProvider: config.provider,
+    requestedModel: config.model,
+    selectionMode: 'pinned',
+    selectedProvider: status === 'succeeded' ? config.provider : '',
+    selectedModel: status === 'succeeded' ? config.model : '',
+    fallbackReason: reason,
+    attempts: [{
+      provider: config.provider,
+      model: config.model,
+      status,
+      ...(reason ? { reason, errorDigest: modelRoutingErrorDigest(error) } : {}),
+    }],
+  };
+}
+
+function persistRoutingTrace(
+  config: LLMCallConfig,
+  trace: ModelRoutingTrace,
+  status: 'succeeded' | 'failed',
+  startedAtMs: number,
+): void {
+  try {
+    persistModelRoutingReceipt({
+      userId: config.userId || 'anonymous',
+      domain: config.domain || 'personal',
+      orgId: config.orgId || '',
+      conversationId: config.conversationId || '',
+      requestId: config.requestId || '',
+      interactionId: config.interactionId || '',
+      source: config.source || '',
+      status,
+      ...trace,
+      startedAt: new Date(startedAtMs).toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs: Math.max(0, Date.now() - startedAtMs),
+    });
+  } catch (error) {
+    // Production initializes the durable database before serving calls. Some
+    // isolated provider harnesses intentionally omit it; never replace a real
+    // model result with a fabricated receipt in that environment.
+    console.warn('[ModelRouting] Could not persist routing receipt:', (error as Error)?.message || error);
+  }
+}
+
+function resolvedSelectionMode(config: LLMCallConfig): UserLLMSelectionMode {
+  if (config.provider === 'auto') return 'auto';
+  if (config.selectionMode === 'ordered_fallback') return 'ordered_fallback';
+  return 'pinned';
+}
+
 export async function makeLLMCall(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
-  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; responseFormat?: LLMResponseFormat; role?: 'reasoning' | 'vision' | 'world' },  getDeepSeek: () => any,
+  config: LLMCallConfig,
+  getDeepSeek: () => any,
+  getGemini: () => any,
+  getOpenAI?: () => any,
+  getAnthropic?: () => any,
+  getQwen?: () => any,
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
+): Promise<NormalizedLLMResponse> {
+  const startedAt = Date.now();
+  const selectionMode = resolvedSelectionMode(config);
+  try {
+    let result: NormalizedLLMResponse;
+    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback') {
+      const { dispatchLLMCall } = await import('./dispatch');
+      const dispatchConfig = selectionMode === 'auto'
+        ? autoDispatchPreference({ ...config, selectionMode })
+        : {
+            ...config,
+            selectionMode,
+            requestedProvider: config.provider,
+            requestedModel: config.model,
+            allowCloudFallback: config.allowCloudFallback !== false && !isStrictPrivacy(),
+          };
+      result = await dispatchLLMCall(
+        messages,
+        toolDeclarations,
+        dispatchConfig,
+        autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
+      );
+    } else {
+      result = await makeLLMCallDirect(
+        messages,
+        toolDeclarations,
+        { ...config, selectionMode: 'pinned' },
+        getDeepSeek,
+        getGemini,
+        getOpenAI,
+        getAnthropic,
+        getQwen,
+        getOllama,
+        getLmStudio,
+        getArk,
+        getXiaomi,
+        getKimi,
+        getGlm,
+        getRelay,
+      );
+    }
+    const trace = result.routing || directRoutingTrace(config, 'succeeded');
+    persistRoutingTrace(config, trace, 'succeeded', startedAt);
+    return { ...result, routing: trace };
+  } catch (error) {
+    const trace = (error as any)?.routing as ModelRoutingTrace | undefined
+      || directRoutingTrace(config, 'failed', error);
+    persistRoutingTrace(config, trace, 'failed', startedAt);
+    throw error;
+  }
+}
+
+export async function makeLLMCallDirect(
+  messages: NormalizedMessage[],
+  toolDeclarations: ToolDeclaration[],
+  config: LLMCallConfig,
+  getDeepSeek: () => any,
   getGemini: () => any,
   getOpenAI?: () => any,
   getAnthropic?: () => any,
@@ -709,29 +904,28 @@ export async function makeLLMCall(
     ? Math.max(config.maxTokens || 8000, 4000)
     : config.maxTokens;
 
-  // Automatic routing is resolved once from the user's persisted local model
-  // and cloud fallback selections. This must run before the legacy privacy
-  // branch so no provider/model literal can override the selected brain.
   if (config.provider === 'auto') {
-    const { dispatchLLMCall } = await import('./dispatch');
-    const result = await dispatchLLMCall(
-      messages,
-      toolDeclarations,
-      autoDispatchPreference({ ...config, maxTokens }),
-      autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
-    );
-    return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
+    throw new Error('Automatic model routing must be resolved before direct provider execution');
   }
 
-  if (isStrictPrivacy()) {
-    requireLocalProvider(config.provider);
-  }
+  assertProviderAllowedByPrivacy(config);
 
   // OpenAI-compatible path: DeepSeek, Qwen, Ark, Ollama, LM Studio
-  if (config.provider === 'deepseek' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
-    const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
-    if (isLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
-    const client = config.provider === 'deepseek' ? getDeepSeek()
+  const extensionProvider = extensionProviderForCall(config);
+  if (extensionProvider || config.provider === 'deepseek' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
+    const supervisedLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
+    const isLocal = supervisedLocal || (extensionProvider && isRegisteredProviderLocal(config.provider, config.userId));
+    if (supervisedLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
+    if (extensionProvider) {
+      assertRegisteredProviderModel(config.provider, config.model, {
+        userId: config.userId,
+        needsVision: messagesNeedVision(messages),
+        needsTools: toolDeclarations.length > 0,
+        needsJson: config.responseFormat === 'json_object',
+      });
+    }
+    const client = extensionProvider ? getRegisteredOpenAIClient(config.provider, config.userId)
+      : config.provider === 'deepseek' ? getDeepSeek()
       : config.provider === 'qwen' ? getQwen?.()
       : config.provider === 'ark' ? getArk?.()
       : config.provider === 'lmstudio' ? getLmStudio?.()
@@ -760,19 +954,29 @@ export async function makeLLMCall(
       delete params.max_tokens;
     }
 
-    try {
-      const response = await withCloudResilience(
+    const execute = () => withCloudResilience(
         () => client.chat.completions.create(
           params,
-          isLocal ? { signal: AbortSignal.timeout(60_000) } : undefined,
+          isLocal
+            ? {
+                signal: config.signal
+                  ? AbortSignal.any([config.signal, AbortSignal.timeout(60_000)])
+                  : AbortSignal.timeout(60_000),
+              }
+            : config.signal ? { signal: config.signal } : undefined,
         ),
         { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
       );
-      return parseDeepSeekResponse(response);
+    let response: any;
+    try {
+      response = supervisedLocal
+        ? await runLocalModelInference(config.provider as LocalModelProvider, execute, { signal: config.signal })
+        : await execute();
     } catch (error) {
-      if (isLocal) markLocalModelUnhealthy(config.provider as LocalModelProvider, error);
+      if (extensionProvider) throw extensionProviderFailure(config.provider, error);
       throw error;
     }
+    return parseDeepSeekResponse(response);
   }
 
   if (config.provider === 'gemini') {
@@ -851,7 +1055,78 @@ function isReasoningModel(model: string): boolean {
 export async function makeLLMCallStreaming(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
-  config: { provider: 'deepseek' | 'gemini' | 'openai' | 'anthropic' | 'qwen' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto'; model: string; maxTokens?: number; userId?: string; domain?: string; orgId?: string; signal?: AbortSignal; role?: 'reasoning' | 'vision' | 'world' },
+  config: LLMCallConfig,
+  onChunk: StreamCallback,
+  getDeepSeek: () => any,
+  getGemini: () => any,
+  getOpenAI?: () => any,
+  getAnthropic?: () => any,
+  getQwen?: () => any,
+  getOllama?: () => any,
+  getLmStudio?: () => any,
+  getArk?: () => any,
+  getXiaomi?: () => any,
+  getKimi?: () => any,
+  getGlm?: () => any,
+  getRelay?: () => any,
+): Promise<NormalizedLLMResponse> {
+  const startedAt = Date.now();
+  const selectionMode = resolvedSelectionMode(config);
+  try {
+    let result: NormalizedLLMResponse;
+    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback') {
+      const { dispatchLLMCallStreaming } = await import('./dispatch');
+      const dispatchConfig = selectionMode === 'auto'
+        ? autoDispatchPreference({ ...config, selectionMode })
+        : {
+            ...config,
+            selectionMode,
+            requestedProvider: config.provider,
+            requestedModel: config.model,
+            allowCloudFallback: config.allowCloudFallback !== false && !isStrictPrivacy(),
+          };
+      result = await dispatchLLMCallStreaming(
+        messages,
+        toolDeclarations,
+        dispatchConfig,
+        onChunk,
+        autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
+      );
+    } else {
+      result = await makeLLMCallStreamingDirect(
+        messages,
+        toolDeclarations,
+        { ...config, selectionMode: 'pinned' },
+        onChunk,
+        getDeepSeek,
+        getGemini,
+        getOpenAI,
+        getAnthropic,
+        getQwen,
+        getOllama,
+        getLmStudio,
+        getArk,
+        getXiaomi,
+        getKimi,
+        getGlm,
+        getRelay,
+      );
+    }
+    const trace = result.routing || directRoutingTrace(config, 'succeeded');
+    persistRoutingTrace(config, trace, 'succeeded', startedAt);
+    return { ...result, routing: trace };
+  } catch (error) {
+    const trace = (error as any)?.routing as ModelRoutingTrace | undefined
+      || directRoutingTrace(config, 'failed', error);
+    persistRoutingTrace(config, trace, 'failed', startedAt);
+    throw error;
+  }
+}
+
+export async function makeLLMCallStreamingDirect(
+  messages: NormalizedMessage[],
+  toolDeclarations: ToolDeclaration[],
+  config: LLMCallConfig,
   onChunk: StreamCallback,
   getDeepSeek: () => any,
   getGemini: () => any,
@@ -869,9 +1144,7 @@ export async function makeLLMCallStreaming(
   assertQwenAllowedByUserPrefs(config);
 
   // ── Privacy gate ──
-  if (isStrictPrivacy() && config.provider !== 'auto') {
-    requireLocalProvider(config.provider);
-  }
+  if (config.provider !== 'auto') assertProviderAllowedByPrivacy(config);
 
   // Reasoning models need high token budget
   const maxTokens = isReasoningModel(config.model)
@@ -880,22 +1153,26 @@ export async function makeLLMCallStreaming(
 
   // ── Auto/hybrid dispatch: local Ollama → cloud DeepSeek fallback ──
   if (config.provider === 'auto') {
-    const { dispatchLLMCallStreaming } = await import('./dispatch');
-    const result = await dispatchLLMCallStreaming(
-      messages,
-      toolDeclarations,
-      autoDispatchPreference({ ...config, maxTokens }),
-      onChunk,
-      autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
-    );
-    return { text: result.text, toolCalls: result.toolCalls, usage: result.usage };
+    throw new Error('Automatic model routing must be resolved before direct provider execution');
   }
 
   // ── DeepSeek / OpenAI / Qwen / Ark / Ollama / LM Studio (OpenAI-compatible streaming) ──
-  if (config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
-    const isLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
-    if (isLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
-    const client = config.provider === 'deepseek' ? getDeepSeek()
+  const extensionProvider = extensionProviderForCall(config);
+  if (extensionProvider || config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
+    const supervisedLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
+    const isLocal = supervisedLocal || (extensionProvider && isRegisteredProviderLocal(config.provider, config.userId));
+    if (supervisedLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
+    if (extensionProvider) {
+      assertRegisteredProviderModel(config.provider, config.model, {
+        userId: config.userId,
+        needsVision: messagesNeedVision(messages),
+        needsTools: toolDeclarations.length > 0,
+        needsJson: config.responseFormat === 'json_object',
+        needsStreaming: true,
+      });
+    }
+    const client = extensionProvider ? getRegisteredOpenAIClient(config.provider, config.userId)
+      : config.provider === 'deepseek' ? getDeepSeek()
       : config.provider === 'openai' ? getOpenAI?.()
       : config.provider === 'qwen' ? getQwen?.()
       : config.provider === 'ark' ? getArk?.()
@@ -925,73 +1202,76 @@ export async function makeLLMCallStreaming(
     }
     params.stream = true;
 
-    let stream: any;
-    try {
+    const executeStream = async (): Promise<NormalizedLLMResponse> => {
       const localSignal = isLocal
         ? config.signal
           ? AbortSignal.any([config.signal, AbortSignal.timeout(60_000)])
           : AbortSignal.timeout(60_000)
         : config.signal;
-      stream = await withCloudResilience(
+      const stream: any = await withCloudResilience(
         () => client.chat.completions.create(params, { signal: localSignal }),
         { provider: config.provider, model: config.model, maxRetries: isLocal ? 1 : undefined },
       );
-    } catch (error) {
-      if (isLocal) markLocalModelUnhealthy(config.provider as LocalModelProvider, error);
-      throw error;
-    }
-    const accumulatedText: string[] = [];
-    const accumulatedReasoning: string[] = [];
-    const toolCallAccumulators: Map<number, { id: string; name: string; args: string }> = new Map();
-    const legacyProtocolFilter = createLegacyProtocolChunkFilter(onChunk);
-    let streamUsage: any = undefined;
+      const accumulatedText: string[] = [];
+      const accumulatedReasoning: string[] = [];
+      const toolCallAccumulators: Map<number, { id: string; name: string; args: string }> = new Map();
+      const legacyProtocolFilter = createLegacyProtocolChunkFilter(onChunk);
+      let streamUsage: any = undefined;
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices?.[0]?.delta;
-      if (delta) {
-        if (delta.content) {
-          accumulatedText.push(delta.content);
-          legacyProtocolFilter.emit(delta.content);
-        }
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta) {
+          if (delta.content) {
+            accumulatedText.push(delta.content);
+            legacyProtocolFilter.emit(delta.content);
+          }
 
-        if (delta.reasoning_content) {
-          accumulatedReasoning.push(delta.reasoning_content);
-        }
+          if (delta.reasoning_content) {
+            accumulatedReasoning.push(delta.reasoning_content);
+          }
 
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index ?? 0;
-            if (!toolCallAccumulators.has(idx)) {
-              toolCallAccumulators.set(idx, { id: tc.id || '', name: tc.function?.name || '', args: '' });
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              if (!toolCallAccumulators.has(idx)) {
+                toolCallAccumulators.set(idx, { id: tc.id || '', name: tc.function?.name || '', args: '' });
+              }
+              const acc = toolCallAccumulators.get(idx)!;
+              if (tc.id) acc.id = tc.id;
+              if (tc.function?.name) acc.name = tc.function.name;
+              if (tc.function?.arguments) acc.args += tc.function.arguments;
             }
-            const acc = toolCallAccumulators.get(idx)!;
-            if (tc.id) acc.id = tc.id;
-            if (tc.function?.name) acc.name = tc.function.name;
-            if (tc.function?.arguments) acc.args += tc.function.arguments;
           }
         }
+        if (chunk.usage) streamUsage = chunk.usage;
       }
-      if (chunk.usage) streamUsage = chunk.usage;
-    }
-    legacyProtocolFilter.flush();
+      legacyProtocolFilter.flush();
 
-    const usage = extractUsage({ usage: streamUsage });
-
-    const text = accumulatedText.length > 0 ? accumulatedText.join('') : null;
-    const reasoningContent = accumulatedReasoning.length > 0 ? accumulatedReasoning.join('') : null;
-    if (toolCallAccumulators.size > 0) {
-      const toolCalls: ParsedToolCall[] = [...toolCallAccumulators.values()].map(acc => {
-        let args: Record<string, any> = {};
-        try { args = JSON.parse(acc.args || '{}'); } catch { /* ignore parse errors */ }
-        return { id: acc.id, name: acc.name, arguments: args };
-      });
-      return { text, toolCalls, reasoningContent, usage };
+      const usage = extractUsage({ usage: streamUsage });
+      const text = accumulatedText.length > 0 ? accumulatedText.join('') : null;
+      const reasoningContent = accumulatedReasoning.length > 0 ? accumulatedReasoning.join('') : null;
+      if (toolCallAccumulators.size > 0) {
+        const toolCalls: ParsedToolCall[] = [...toolCallAccumulators.values()].map(acc => {
+          let args: Record<string, any> = {};
+          try { args = JSON.parse(acc.args || '{}'); } catch { /* ignore parse errors */ }
+          return { id: acc.id, name: acc.name, arguments: args };
+        });
+        return { text, toolCalls, reasoningContent, usage };
+      }
+      const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
+      if (legacyToolCalls) {
+        return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage };
+      }
+      return { text, toolCalls: null, reasoningContent, usage };
+    };
+    try {
+      return supervisedLocal
+        ? await runLocalModelInference(config.provider as LocalModelProvider, executeStream, { signal: config.signal })
+        : await executeStream();
+    } catch (error) {
+      if (extensionProvider) throw extensionProviderFailure(config.provider, error);
+      throw error;
     }
-    const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
-    if (legacyToolCalls) {
-      return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage };
-    }
-    return { text, toolCalls: null, reasoningContent, usage };
   }
 
   // ── Gemini streaming ──

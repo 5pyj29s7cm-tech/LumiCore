@@ -62,6 +62,184 @@ afterAll(async () => {
 });
 
 describe('reasoning model switching stability', () => {
+  it('migrates legacy aliases once while preserving literal schema-v2 model ids', async () => {
+    const { readDB, writeDB } = await import('../db_layer');
+    const prefs = await import('../server/llm/user_preferences');
+    const legacyUser = 'legacy-model-route-user';
+    const legacyKey = `llm_prefs_${legacyUser}`;
+    const db = readDB();
+    db.settings = (db.settings || []).filter((setting: any) => setting.key !== legacyKey);
+    db.settings.push({
+      key: legacyKey,
+      value: JSON.stringify({
+        provider: 'deepseek',
+        models: { deepseek: 'deepseek-chat' },
+        autoFallbackProvider: 'deepseek',
+        autoFallbackModel: 'deepseek-chat',
+      }),
+    });
+    writeDB(db);
+
+    const migrated = prefs.getUserPreferredLLM(legacyUser);
+    expect(migrated).toMatchObject({
+      schemaVersion: 2,
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      selectionMode: 'pinned',
+    });
+    expect(migrated.legacyMigration?.entries).toContainEqual({
+      provider: 'deepseek',
+      from: 'deepseek-chat',
+      to: 'deepseek-v4-flash',
+    });
+    const firstMigrationAt = migrated.legacyMigration?.migratedAt;
+    const stored = JSON.parse((readDB().settings || []).find((setting: any) => setting.key === legacyKey).value);
+    expect(stored.schemaVersion).toBe(2);
+    expect(prefs.getUserPreferredLLM(legacyUser).legacyMigration?.migratedAt).toBe(firstMigrationAt);
+
+    const literal = prefs.upsertUserPreferredLLM('literal-model-route-user', {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      selectionMode: 'pinned',
+    });
+    expect(literal.model).toBe('deepseek-chat');
+  });
+
+  it('never substitutes a fallback when the selected model is pinned', async () => {
+    const providers = await import('../server/llm/providers');
+    const receipts = await import('../server/llm/model_routing_receipts');
+    let fallbackCalls = 0;
+    const openAIClient = {
+      chat: { completions: { create: async () => {
+        fallbackCalls += 1;
+        return { choices: [{ message: { role: 'assistant', content: 'unexpected fallback' } }] };
+      } } },
+    };
+
+    await expect(providers.makeLLMCall(
+      [{ role: 'user', content: 'stay pinned' }],
+      [],
+      {
+        provider: 'gemini',
+        model: 'missing-primary',
+        userId: 'pinned-route-user',
+        selectionMode: 'pinned',
+        fallbackCandidates: [{ provider: 'openai', model: 'must-not-run' }],
+        allowCloudFallback: true,
+      },
+      () => null,
+      () => null,
+      () => openAIClient,
+    )).rejects.toThrow(/Gemini not configured/);
+    expect(fallbackCalls).toBe(0);
+    expect(receipts.listModelRoutingReceipts('pinned-route-user', 1)[0]).toMatchObject({
+      status: 'failed',
+      requestedProvider: 'gemini',
+      requestedModel: 'missing-primary',
+      selectionMode: 'pinned',
+      selectedProvider: '',
+    });
+  });
+
+  it('uses ordered fallbacks exactly and records the model that actually answered', async () => {
+    const providers = await import('../server/llm/providers');
+    const receipts = await import('../server/llm/model_routing_receipts');
+    const openAIModels: string[] = [];
+    const openAIClient = {
+      chat: { completions: { create: async (request: any) => {
+        openAIModels.push(String(request.model || ''));
+        return { choices: [{ message: { role: 'assistant', content: `selected:${request.model}` } }] };
+      } } },
+    };
+
+    const result = await providers.makeLLMCall(
+      [{ role: 'user', content: 'follow the route' }],
+      [],
+      {
+        provider: 'gemini',
+        model: 'primary-gemini',
+        userId: 'ordered-route-user',
+        conversationId: 'ordered-route-conversation',
+        requestId: 'ordered-route-request',
+        interactionId: 'ordered-route-interaction',
+        source: 'chat',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [
+          { provider: 'anthropic', model: 'second-anthropic' },
+          { provider: 'openai', model: 'third-openai' },
+        ],
+        allowCloudFallback: true,
+      },
+      () => null,
+      () => null,
+      () => openAIClient,
+      () => null,
+    );
+
+    expect(result.text).toBe('selected:third-openai');
+    expect(openAIModels).toEqual(['third-openai']);
+    expect(result.routing).toMatchObject({
+      requestedProvider: 'gemini',
+      requestedModel: 'primary-gemini',
+      selectionMode: 'ordered_fallback',
+      selectedProvider: 'openai',
+      selectedModel: 'third-openai',
+    });
+    expect(result.routing?.attempts.map(attempt => `${attempt.provider}/${attempt.model}:${attempt.status}`)).toEqual([
+      'gemini/primary-gemini:failed',
+      'anthropic/second-anthropic:failed',
+      'openai/third-openai:succeeded',
+    ]);
+    const receipt = receipts.listModelRoutingReceipts('ordered-route-user', 1)[0];
+    expect(receipt).toMatchObject({
+      status: 'succeeded',
+      selectedProvider: 'openai',
+      selectedModel: 'third-openai',
+      conversationId: 'ordered-route-conversation',
+      requestId: 'ordered-route-request',
+      interactionId: 'ordered-route-interaction',
+      source: 'chat',
+    });
+    expect(receipt.attempts).toEqual(result.routing?.attempts);
+    const { flushDB, querySQL } = await import('../db_layer');
+    await flushDB();
+    const persisted = await querySQL<any>(
+      'SELECT selectedProvider, selectedModel, attempts FROM model_routing_receipts WHERE id = ?',
+      [receipt.id],
+    );
+    expect(persisted[0]).toMatchObject({ selectedProvider: 'openai', selectedModel: 'third-openai' });
+    expect(JSON.parse(persisted[0].attempts)).toEqual(receipt.attempts);
+  });
+
+  it('does not block an explicitly selected cloud primary when cloud fallback is disabled', async () => {
+    const providers = await import('../server/llm/providers');
+    const openAIClient = {
+      chat: { completions: { create: async (request: any) => ({
+        choices: [{ message: { role: 'assistant', content: `primary:${request.model}` } }],
+      }) } },
+    };
+    const result = await providers.makeLLMCall(
+      [{ role: 'user', content: 'primary only' }],
+      [],
+      {
+        provider: 'openai',
+        model: 'explicit-cloud-primary',
+        userId: 'primary-cloud-route-user',
+        selectionMode: 'ordered_fallback',
+        fallbackCandidates: [{ provider: 'anthropic', model: 'blocked-cloud-fallback' }],
+        allowCloudFallback: false,
+      },
+      () => null,
+      () => null,
+      () => openAIClient,
+      () => null,
+    );
+    expect(result.text).toBe('primary:explicit-cloud-primary');
+    expect(result.routing?.attempts).toEqual([
+      { provider: 'openai', model: 'explicit-cloud-primary', status: 'succeeded' },
+    ]);
+  });
+
   it('uses the exact selected LM Studio model without restarting the runtime client', async () => {
     const local = await import('../server/llm/local_models');
     const prefs = await import('../server/llm/user_preferences');
@@ -158,6 +336,11 @@ describe('reasoning model switching stability', () => {
     expect(local.getLocalModelConfig('lmstudio').detected).toBe(false);
 
     await listen(port);
+    const reconnectState = local.getLocalModelConfig('lmstudio');
+    local.saveLocalModelConfig('lmstudio', {
+      ...reconnectState,
+      nextRetryAt: new Date(Date.now() - 1).toISOString(),
+    });
     prefs.upsertUserPreferredLLM('auto-user', { provider: 'lmstudio', model: 'lm-beta' });
     const recovered = await providers.makeLLMCall(
       [{ role: 'user', content: 'recovered' }], [], prefs.getUserPreferredLLMConfig('auto-user'),
@@ -181,19 +364,28 @@ describe('reasoning model switching stability', () => {
     expect(task).toContain('let activeModel = userLLMPrefs.model');
     expect(task).not.toMatch(/activeModel\s*=\s*isComplex/);
     expect(task).not.toContain('Model auto-selected');
+    for (const source of [chat, voice, task]) {
+      expect(source).toContain('const reasoningRoutePolicy = {');
+      expect(source).toContain('selectionMode: userLLMPrefs.selectionMode');
+      expect(source).toContain('fallbackCandidates: userLLMPrefs.fallbackCandidates');
+      expect(source).toContain('allowCloudFallback: userLLMPrefs.allowCloudFallback');
+      expect(source).toMatch(/(?:makeLLMCall(?:Streaming)?|runWithTools)\([\s\S]{0,1600}\.\.\.reasoningRoutePolicy/);
+    }
   });
 
   it('keeps auxiliary runtimes and frontend persistence free of hidden model overrides', async () => {
     const fs = await import('node:fs/promises');
-    const [mcp, narrative, generator, appContext] = await Promise.all([
+    const [mcp, narrative, generator, appContext, settings] = await Promise.all([
       fs.readFile('server/mcp/lumi_server.ts', 'utf8'),
       fs.readFile('server/memory/narrative.ts', 'utf8'),
       fs.readFile('server/skills/generator.ts', 'utf8'),
       fs.readFile('src/contexts/AppContext.tsx', 'utf8'),
+      fs.readFile('src/components/Settings.tsx', 'utf8'),
     ]);
     expect(mcp).not.toMatch(/model:\s*['"]deepseek-v4-(?:flash|pro)['"]/);
     expect(narrative).not.toMatch(/provider:\s*['"]deepseek['"]/);
     expect(generator).toContain('request.model || preferred.model');
+    expect(settings).not.toContain('persistModel(generationModels[0])');
     const updateStart = appContext.indexOf('const updateAIConfig');
     const updateEnd = appContext.indexOf('const updateVisionConfig', updateStart);
     expect(appContext.slice(updateStart, updateEnd)).not.toContain('setAiConfig(prev =>');

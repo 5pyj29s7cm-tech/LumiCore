@@ -143,8 +143,9 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     `turn boundary=${input.dispatch.boundary}`,
     `channel=${input.dispatch.channel}`,
   ];
+  const actionContract = buildActionContract(text);
 
-  if (input.dispatch.boundary === 'client_action') {
+  if (input.dispatch.boundary === 'client_action' && actionContract.kind !== 'external_ai_history') {
     return {
       lane: 'client_surface',
       primary: 'Lumi client state/action',
@@ -220,7 +221,6 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
         };
   }
 
-  const actionContract = buildActionContract(text);
   if (routeHas(input, 'sleep_dream') || routeHasTool(input, /^lumi_sleep_/)) {
     return {
       lane: 'internal_memory',
@@ -248,11 +248,19 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
-  if (asksForDesktopAiCollaboration(text) && (routeHas(input, 'external_control') || routeHasTool(input, /^desktop_ai_/))) {
+  if (actionContract.kind === 'external_ai_history' && routeHasTool(input, /^external_ai_history_/)) {
     return {
-      lane: 'desktop_control',
-      primary: 'desktop AI collaboration',
-      reasons: [...reasons, 'the user wants Lumi to ask local desktop AI apps and collect their answers'],
+      lane: 'external_tool',
+      primary: 'authorized external AI history synchronization and local query',
+      reasons: [...reasons, 'the user wants history access through an exact confirmed source, bounded read scopes, durable cursors, and source evidence'],
+    };
+  }
+
+  if (asksForDesktopAiCollaboration(text) && (routeHas(input, 'external_control') || routeHasTool(input, /^(?:external_ai_|desktop_ai_)/))) {
+    return {
+      lane: 'external_tool',
+      primary: 'persistent external AI collaboration',
+      reasons: [...reasons, 'the user wants Lumi to coordinate external AI targets through the fixed API/MCP, CLI, structured-browser, then desktop-visual route'],
     };
   }
 
@@ -359,6 +367,12 @@ function laneRule(selection: Pick<LumiCapabilitySelection, 'lane'>, text = ''): 
     case 'web_or_account':
       return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
     case 'external_tool':
+      if (buildActionContract(text).kind === 'external_ai_history') {
+        return 'Use only external_ai_history_* tools. Reuse an exact confirmed source, enforce its conversation/content/attachment scopes, persist every page cursor and source receipt, and query the local synchronized archive. Never submit a new prompt. If only desktop-visible access exists, prefer a healthy local vision model, capture the current viewport without scrolling, and report partial_visible completeness.';
+      }
+      if (asksForDesktopAiCollaboration(text)) {
+        return 'Use external_ai_collaborate as the only new submission entry. Preserve its task/session binding, exact confirmation, idempotency key, fixed API/MCP to CLI to structured-browser to desktop-visual priority, and source receipts. Use external_ai_collect_answers only for read-only follow-up; never resend after an unknown result.';
+      }
       return 'Use the selected external tools as Lumi hands, keep ownership of the result, and verify before final claims.';
     case 'blocked_no_tools':
     default:

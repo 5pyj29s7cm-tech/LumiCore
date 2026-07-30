@@ -27,10 +27,8 @@ const ARTIFACT_ACTION_PATTERNS: RegExp[] = [
 ];
 
 const DIRECT_DESKTOP_PATTERNS: RegExp[] = [
-  /\bdesktop_ai_(?:ask|roundtable|collect_answer)\b/i,
   /\bcad_prepare_autocad_operations\b/i,
   /\bmcp_cad-drafting_autocad_playback_file\b/i,
-  /\b(?:ask|send|collect|compare|summari[sz]e|use)\b.*\b(?:desktop\s+AI|work\s*buddy|codex|chatgpt|claude|gemini|deep\s*seek|kimi|doubao|qwen|lm\s*studio)\b/i,
   /\b(use|control|operate|take over|drive)\b.*\b(mouse|keyboard|cursor|desktop|screen|computer|autocad|cad\s*software|sketchup|librecad|zwcad|gstarcad)\b/i,
   /\b(open|launch|start)\b.*\b(autocad|cad\s*software|sketchup|librecad|zwcad|gstarcad)\b/i,
   /\b(?:draw|draft|execute|play\s*back|playback)\b.*\b(?:in|inside|through|with)\s+(?:autocad|cad)\b/i,
@@ -40,7 +38,6 @@ const DIRECT_DESKTOP_PATTERNS: RegExp[] = [
   /(?:\u6253\u5f00|\u542f\u52a8|\u8fdb\u5165).*(?:CAD\u8f6f\u4ef6|AutoCAD|\u6d69\u8fb0CAD|\u4e2d\u671bCAD|SketchUp|LibreCAD)/u,
   /(?:\u5728\u684c\u9762|\u684c\u9762\u4e0a).*(?:\u5b8c\u6210|\u753b|\u7ed8\u5236|\u5904\u7406|\u64cd\u4f5c)/u,
   /(?:\u4e00\u6b65\u4e00\u6b65|\u4e00\u7b14\u4e00\u7b14).*(?:\u753b|\u64cd\u4f5c|CAD)/u,
-  /(?:\u8be2\u95ee|\u53d1\u7ed9|\u6536\u96c6|\u62ff\u56de|\u6c47\u603b|\u603b\u7ed3|\u534f\u540c).*(?:\u684c\u9762\s*AI|WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|\u8c46\u5305|\u901a\u4e49|Qwen|LM\s*Studio)/iu,
 ];
 
 const DESKTOP_LOCATION_ONLY_PATTERNS: RegExp[] = [

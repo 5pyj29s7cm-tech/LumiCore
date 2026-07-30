@@ -1,10 +1,20 @@
-import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from './providers';
+import {
+  NormalizedMessage,
+  makeLLMCallDirect,
+  StreamCallback,
+} from './providers';
 import { NormalizedLLMResponse } from '../tools/types';
 import {
-  markLocalModelUnhealthy,
   resolveAutoLocalModelCandidates,
-  type LocalModelProvider,
 } from './local_models';
+import {
+  modelRoutingErrorDigest,
+  modelRoutingErrorReason,
+  type ModelRouteAttempt,
+  type ModelRoutingTrace,
+} from './model_routing_receipts';
+import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_preferences';
+import { isRegisteredProviderLocal } from '../extensions/registry';
 
 export interface DispatchConfig {
   /** Explicit cloud fallback selected by the user. Never `auto`. */
@@ -18,6 +28,10 @@ export interface DispatchConfig {
   orgId?: string;
   signal?: AbortSignal;
   allowCloudFallback?: boolean;
+  selectionMode?: UserLLMSelectionMode;
+  fallbackCandidates?: UserLLMFallbackCandidate[];
+  requestedProvider?: string;
+  requestedModel?: string;
 }
 
 export interface LLMGetters {
@@ -37,6 +51,11 @@ export interface LLMGetters {
   isLmStudioAvailable?: () => boolean;
 }
 
+export interface DispatchedLLMResponse extends NormalizedLLMResponse {
+  tier: 'local' | 'cloud';
+  routing: ModelRoutingTrace;
+}
+
 function callArguments(config: DispatchConfig, provider: string, model: string) {
   return {
     provider: provider as any,
@@ -45,6 +64,10 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
     userId: config.userId,
     domain: config.domain,
     orgId: config.orgId,
+    selectionMode: 'pinned' as const,
+    fallbackCandidates: [],
+    allowCloudFallback: false,
+    authorizedRoutingCandidate: true,
   };
 }
 
@@ -71,30 +94,147 @@ async function tryLocal(
   toolDeclarations: any[],
   config: DispatchConfig,
   getters: LLMGetters,
-): Promise<NormalizedLLMResponse | null> {
+): Promise<{ result: NormalizedLLMResponse | null; attempts: ModelRouteAttempt[]; selected?: { provider: string; model: string } }> {
   const candidates = await resolveAutoLocalModelCandidates(config.localModel);
-  const selected = candidates.filter((candidate, index, all) => (
-    all.findIndex(item => item.provider === candidate.provider) === index
-  ));
+  const selected = candidates.slice(0, 8);
+  const attempts: ModelRouteAttempt[] = [];
 
   for (const candidate of selected) {
     const getter = candidate.provider === 'ollama' ? getters.getOllama : getters.getLmStudio;
-    if (!getter?.()) continue;
+    if (!getter?.()) {
+      attempts.push({ provider: candidate.provider, model: candidate.model, status: 'skipped', reason: 'runtime_client_unavailable' });
+      continue;
+    }
     try {
-      const result = await makeLLMCall(
+      const result = await makeLLMCallDirect(
         messages,
         toolDeclarations,
         callArguments(config, candidate.provider, candidate.model),
         ...getterArguments(getters),
       );
-      if (result.text || result.toolCalls) return result;
+      if (result.text || result.toolCalls) {
+        attempts.push({ provider: candidate.provider, model: candidate.model, status: 'succeeded' });
+        return { result, attempts, selected: { provider: candidate.provider, model: candidate.model } };
+      }
+      attempts.push({ provider: candidate.provider, model: candidate.model, status: 'failed', reason: 'empty_response' });
       console.log(`[Dispatch] ${candidate.provider}/${candidate.model} returned an empty response`);
     } catch (error: any) {
-      markLocalModelUnhealthy(candidate.provider as LocalModelProvider, error);
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        status: 'failed',
+        reason: modelRoutingErrorReason(error),
+        errorDigest: modelRoutingErrorDigest(error),
+      });
       console.log(`[Dispatch] ${candidate.provider}/${candidate.model} failed (${error?.message || error})`);
     }
   }
-  return null;
+  return { result: null, attempts };
+}
+
+function routingTrace(input: {
+  config: DispatchConfig;
+  selectedProvider?: string;
+  selectedModel?: string;
+  fallbackReason?: string;
+  attempts: ModelRouteAttempt[];
+}): ModelRoutingTrace {
+  return {
+    requestedProvider: String(input.config.requestedProvider || input.config.provider || ''),
+    requestedModel: String(input.config.requestedModel || input.config.localModel || input.config.model || ''),
+    selectionMode: input.config.selectionMode || 'auto',
+    selectedProvider: String(input.selectedProvider || ''),
+    selectedModel: String(input.selectedModel || ''),
+    fallbackReason: String(input.fallbackReason || ''),
+    attempts: input.attempts.map(attempt => ({ ...attempt })),
+  };
+}
+
+export class ModelRoutingDispatchError extends Error {
+  readonly routing: ModelRoutingTrace;
+
+  constructor(message: string, routing: ModelRoutingTrace) {
+    super(message);
+    this.name = 'ModelRoutingDispatchError';
+    this.routing = routing;
+  }
+}
+
+function orderedCandidates(config: DispatchConfig): Array<{ provider: string; model: string }> {
+  const raw = [
+    { provider: config.provider, model: config.model },
+    ...(config.fallbackCandidates || []),
+  ];
+  const unique = new Map<string, { provider: string; model: string }>();
+  for (const candidate of raw) {
+    const provider = String(candidate.provider || '').trim();
+    const model = String(candidate.model || '').trim();
+    if (!provider || provider === 'auto' || !model) continue;
+    const key = `${provider}\u0000${model}`;
+    if (!unique.has(key)) unique.set(key, { provider, model });
+  }
+  return [...unique.values()].slice(0, 9);
+}
+
+function isLocalProvider(provider: string, userId?: string): boolean {
+  return provider === 'ollama' || provider === 'lmstudio' || isRegisteredProviderLocal(provider, userId);
+}
+
+function lastFailedReason(attempts: ModelRouteAttempt[]): string {
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    if (attempts[index].status === 'failed') return attempts[index].reason || 'candidate_failed';
+  }
+  return '';
+}
+
+async function dispatchOrderedCall(
+  messages: NormalizedMessage[],
+  toolDeclarations: any[],
+  config: DispatchConfig,
+  getters: LLMGetters,
+): Promise<DispatchedLLMResponse> {
+  const candidates = orderedCandidates(config);
+  const attempts: ModelRouteAttempt[] = [];
+  let lastError: unknown = new Error('No configured model candidate is available');
+  for (const [index, candidate] of candidates.entries()) {
+    // `allowCloudFallback` governs fallback candidates, not the primary model
+    // the user explicitly selected. Strict privacy is still enforced inside
+    // the direct provider adapter for every cloud call.
+    if (index > 0 && config.allowCloudFallback === false && !isLocalProvider(candidate.provider, config.userId)) {
+      attempts.push({ ...candidate, status: 'skipped', reason: 'privacy_policy_blocked' });
+      continue;
+    }
+    try {
+      const result = await makeLLMCallDirect(
+        messages,
+        toolDeclarations,
+        callArguments(config, candidate.provider, candidate.model),
+        ...getterArguments(getters),
+      );
+      attempts.push({ ...candidate, status: 'succeeded' });
+      return {
+        ...result,
+        tier: isLocalProvider(candidate.provider, config.userId) ? 'local' : 'cloud',
+        routing: routingTrace({
+          config,
+          selectedProvider: candidate.provider,
+          selectedModel: candidate.model,
+          fallbackReason: index === 0 ? '' : lastFailedReason(attempts.slice(0, -1)) || 'primary_failed',
+          attempts,
+        }),
+      };
+    } catch (error) {
+      lastError = error;
+      attempts.push({
+        ...candidate,
+        status: 'failed',
+        reason: modelRoutingErrorReason(error),
+        errorDigest: modelRoutingErrorDigest(error),
+      });
+    }
+  }
+  const trace = routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(lastError) });
+  throw new ModelRoutingDispatchError(String((lastError as any)?.message || lastError), trace);
 }
 
 function exactCloudFallback(config: DispatchConfig): { provider: string; model: string } {
@@ -111,22 +251,73 @@ export async function dispatchLLMCall(
   toolDeclarations: any[],
   config: DispatchConfig,
   getters: LLMGetters,
-): Promise<{ text: string | null; toolCalls: any[] | null; tier: 'local' | 'cloud'; usage?: any }> {
-  const localResult = await tryLocal(messages, toolDeclarations, config, getters);
-  if (localResult) return { ...localResult, tier: 'local' };
+): Promise<DispatchedLLMResponse> {
+  if (config.selectionMode === 'ordered_fallback') {
+    return dispatchOrderedCall(messages, toolDeclarations, config, getters);
+  }
+  const local = await tryLocal(messages, toolDeclarations, config, getters);
+  if (local.result && local.selected) {
+    return {
+      ...local.result,
+      tier: 'local',
+      routing: routingTrace({
+        config,
+        selectedProvider: local.selected.provider,
+        selectedModel: local.selected.model,
+        attempts: local.attempts,
+      }),
+    };
+  }
   if (config.allowCloudFallback === false) {
-    throw new Error('[Privacy] Strict mode: no healthy local LLM/model is available. Start Ollama or LM Studio and load the selected model.');
+    const error = new Error('[Privacy] Strict mode: no healthy local LLM/model is available. Start Ollama or LM Studio and load the selected model.');
+    throw new ModelRoutingDispatchError(error.message, routingTrace({
+      config,
+      attempts: local.attempts,
+      fallbackReason: 'privacy_policy_blocked',
+    }));
   }
 
-  const fallback = exactCloudFallback(config);
-  console.log(`[Dispatch] Routing to configured cloud fallback: ${fallback.provider}/${fallback.model}`);
-  const cloudResult = await makeLLMCall(
-    messages,
-    toolDeclarations,
-    callArguments(config, fallback.provider, fallback.model),
-    ...getterArguments(getters),
+  const cloudCandidates = orderedCandidates({
+    ...config,
+    ...exactCloudFallback(config),
+  }).filter(candidate => !isLocalProvider(candidate.provider, config.userId));
+  const attempts = [...local.attempts];
+  let lastError: unknown = new Error('No cloud fallback is configured');
+  for (const fallback of cloudCandidates) {
+    console.log(`[Dispatch] Routing to configured cloud fallback: ${fallback.provider}/${fallback.model}`);
+    try {
+      const cloudResult = await makeLLMCallDirect(
+        messages,
+        toolDeclarations,
+        callArguments(config, fallback.provider, fallback.model),
+        ...getterArguments(getters),
+      );
+      attempts.push({ ...fallback, status: 'succeeded' });
+      return {
+        ...cloudResult,
+        tier: 'cloud',
+        routing: routingTrace({
+          config,
+          selectedProvider: fallback.provider,
+          selectedModel: fallback.model,
+          fallbackReason: lastFailedReason(local.attempts) || 'no_healthy_local_model',
+          attempts,
+        }),
+      };
+    } catch (error) {
+      lastError = error;
+      attempts.push({
+        ...fallback,
+        status: 'failed',
+        reason: modelRoutingErrorReason(error),
+        errorDigest: modelRoutingErrorDigest(error),
+      });
+    }
+  }
+  throw new ModelRoutingDispatchError(
+    String((lastError as any)?.message || lastError),
+    routingTrace({ config, attempts, fallbackReason: modelRoutingErrorReason(lastError) }),
   );
-  return { ...cloudResult, tier: 'cloud' };
 }
 
 export async function dispatchLLMCallStreaming(
@@ -135,24 +326,11 @@ export async function dispatchLLMCallStreaming(
   config: DispatchConfig,
   onChunk: StreamCallback,
   getters: LLMGetters,
-): Promise<{ text: string | null; toolCalls: any[] | null; tier: 'local' | 'cloud'; usage?: any }> {
-  const localResult = await tryLocal(messages, toolDeclarations, config, getters);
-  if (localResult) {
-    if (localResult.text) onChunk(localResult.text);
-    return { ...localResult, tier: 'local' };
-  }
-  if (config.allowCloudFallback === false) {
-    throw new Error('[Privacy] Strict mode: no healthy local LLM/model is available. Start Ollama or LM Studio and load the selected model.');
-  }
-
-  const fallback = exactCloudFallback(config);
-  console.log(`[Dispatch] Routing stream to configured cloud fallback: ${fallback.provider}/${fallback.model}`);
-  const cloudResult = await makeLLMCallStreaming(
-    messages,
-    toolDeclarations,
-    { ...callArguments(config, fallback.provider, fallback.model), signal: config.signal },
-    onChunk,
-    ...getterArguments(getters),
-  );
-  return { ...cloudResult, tier: 'cloud' };
+): Promise<DispatchedLLMResponse> {
+  // Fallback decisions must happen before user-visible chunks are emitted.
+  // Otherwise a provider that fails mid-stream could leak a partial answer and
+  // the next candidate would append a duplicate or contradictory answer.
+  const result = await dispatchLLMCall(messages, toolDeclarations, config, getters);
+  if (result.text) onChunk(result.text);
+  return result;
 }

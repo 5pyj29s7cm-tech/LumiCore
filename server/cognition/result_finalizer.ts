@@ -40,6 +40,7 @@ import {
 } from './action_contract';
 import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_EXTERNAL_AI_MESSAGES } from '../regions/packs/cn/external_ai_messages';
 import { coalesceToolExecutionRecords } from './task_execution_ledger';
 import {
   hasContinuousStockWatchIntent,
@@ -1028,6 +1029,221 @@ function formatGroundedBlankAutoCadDocumentResult(
   };
 }
 
+function formatExternalAiCollaborationResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    !item.error
+    && /^(?:external_ai_collaborate|external_ai_collect_answers|external_ai_session_status)$/i.test(String(item.name || ''))
+    && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(record.result || ''));
+  } catch {
+    return null;
+  }
+  const sessionId = String(parsed?.sessionId || parsed?.session?.id || '').trim();
+  if (!sessionId) return null;
+  const dispatches = Array.isArray(parsed?.results)
+    ? parsed.results
+    : Array.isArray(parsed?.dispatches)
+      ? parsed.dispatches
+      : [];
+  const answers = Array.isArray(parsed?.answers) ? parsed.answers : [];
+  const answerByDispatch = new Map(answers.map((answer: any) => [String(answer?.dispatchId || ''), answer]));
+  const answerByTarget = new Map(answers.map((answer: any) => [String(answer?.targetId || ''), answer]));
+  const answeredCount = Number(parsed?.counts?.answered || dispatches.filter((item: any) => item?.status === 'answered').length);
+  const pendingCount = Number(parsed?.counts?.pending || dispatches.filter((item: any) => ['submitted', 'pending', 'unknown', 'submitting'].includes(String(item?.status || ''))).length);
+  const blockedCount = Number(parsed?.counts?.blocked || dispatches.filter((item: any) => item?.status === 'blocked').length);
+  const failedCount = Number(parsed?.counts?.failed || dispatches.filter((item: any) => item?.status === 'failed').length);
+  const lateCount = Number(parsed?.counts?.lateAnswers || answers.filter((answer: any) => answer?.late === true).length);
+  const status = String(parsed?.status || parsed?.session?.status || 'waiting');
+  const zh = isChineseText(resultTaskText(input));
+  const lines = [
+    zh
+      ? CN_EXTERNAL_AI_MESSAGES.sessionStatus(status, sessionId)
+      : `External AI collaboration: ${status} (session ${sessionId})`,
+  ];
+
+  for (const dispatch of dispatches) {
+    const targetId = String(dispatch?.targetId || 'unknown');
+    const targetLabel = String(dispatch?.targetLabel || targetId);
+    const answer = answerByDispatch.get(String(dispatch?.id || '')) as any
+      || answerByTarget.get(targetId) as any
+      || null;
+    const answerText = String(answer?.answerText || dispatch?.answerText || '').trim();
+    const evidence = answer?.sourceEvidence || dispatch?.sourceEvidence || {};
+    const route = String(evidence?.routeKind || dispatch?.routeKind || 'unknown');
+    const source = [evidence?.provider, evidence?.model, evidence?.toolName]
+      .map((value: unknown) => String(value || '').trim())
+      .filter(Boolean)
+      .join('/');
+    const sourceLabel = source ? `${route}:${source}` : route;
+    const dispatchStatus = String(dispatch?.status || (answerText ? 'answered' : 'unknown'));
+    const late = answer?.late === true ? (zh ? CN_EXTERNAL_AI_MESSAGES.lateArchiveSuffix : ', late receipt archived') : '';
+    if (dispatchStatus === 'answered' && answerText) {
+      lines.push(zh
+        ? CN_EXTERNAL_AI_MESSAGES.answeredTarget(targetLabel, sourceLabel, late, answerText.slice(0, 1600))
+        : `- ${targetLabel}: answered; source ${sourceLabel}${late}\n  ${answerText.slice(0, 1600)}`);
+      continue;
+    }
+    const detail = String(dispatch?.blocker || dispatch?.error || '').trim();
+    lines.push(zh
+      ? CN_EXTERNAL_AI_MESSAGES.targetState(targetLabel, dispatchStatus, sourceLabel, detail)
+      : `- ${targetLabel}: ${dispatchStatus}; source ${sourceLabel}${detail ? `; ${detail}` : ''}`);
+  }
+
+  lines.push(zh
+    ? CN_EXTERNAL_AI_MESSAGES.summary({
+        answered: answeredCount,
+        pending: pendingCount,
+        blocked: blockedCount,
+        failed: failedCount,
+        late: lateCount,
+      })
+    : `Summary: ${answeredCount} answered, ${pendingCount} pending/unknown, ${blockedCount} blocked, ${failedCount} failed${lateCount ? `, ${lateCount} late archived` : ''}. Unanswered targets are not represented as complete and are not automatically resent through another route.`);
+
+  return {
+    text: lines.join('\n'),
+    blocked: answeredCount === 0,
+    reason: `Grounded external AI collaboration receipt: status=${status}; session=${sessionId}.`,
+  };
+}
+
+function formatExternalAiHistoryResult(
+  input: LumiResultFinalizerInput,
+): LumiResultFinalizerResult | null {
+  const record = [...(input.toolRecords || [])].reverse().find(item => (
+    !item.error
+    && /^external_ai_history_(?:source_register|source_list|source_revoke|sync|status|query)$/i.test(String(item.name || ''))
+    && String(item.result || '').trim()
+  ));
+  if (!record) return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(String(record.result || ''));
+  } catch {
+    return null;
+  }
+  const zh = isChineseText(resultTaskText(input));
+  const sourceId = String(parsed?.sourceId || parsed?.source?.id || '').trim();
+  const targetId = String(parsed?.targetId || parsed?.source?.targetId || 'unknown').trim();
+  const status = String(parsed?.status || 'unknown').trim();
+
+  if (record.name === 'external_ai_history_sync') {
+    const jobId = String(parsed?.jobId || '').trim();
+    if (!sourceId || !jobId || parsed?.verified !== true) return null;
+    const counts = parsed?.counts || {};
+    const completeness = String(parsed?.completeness || 'unknown');
+    const nextCursor = String(parsed?.nextCursor || '');
+    const limitations = Array.isArray(parsed?.limitations)
+      ? parsed.limitations.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const detail = String(parsed?.error || parsed?.blocker || '').trim();
+    const lines = zh
+      ? [
+          CN_EXTERNAL_AI_MESSAGES.historySyncStatus(targetId, status, String(parsed?.sourceKind || 'unknown'), jobId),
+          CN_EXTERNAL_AI_MESSAGES.historyCounts(
+            Number(counts.inserted || 0), Number(counts.updated || 0), Number(counts.skipped || 0),
+            Number(counts.conflicted || 0), Number(counts.attachments || 0), Number(parsed?.pageCount || 0),
+          ),
+          CN_EXTERNAL_AI_MESSAGES.historyCompleteness(completeness, nextCursor),
+          detail ? CN_EXTERNAL_AI_MESSAGES.historyBlocker(detail) : '',
+          limitations.length ? CN_EXTERNAL_AI_MESSAGES.historyLimitations(limitations.join('；')) : '',
+        ]
+      : [
+          `External AI history sync: ${status}; target ${targetId}; source ${String(parsed?.sourceKind || 'unknown')}; job ${jobId}.`,
+          `Receipt: ${Number(counts.inserted || 0)} inserted, ${Number(counts.updated || 0)} updated, ${Number(counts.skipped || 0)} deduplicated, ${Number(counts.conflicted || 0)} conflicts, ${Number(counts.attachments || 0)} attachments, ${Number(parsed?.pageCount || 0)} pages.`,
+          `Completeness: ${completeness}${nextCursor ? `; resume cursor ${nextCursor}` : ''}.`,
+          detail ? `Not completed: ${detail}` : '',
+          limitations.length ? `Limitations: ${limitations.join('; ')}` : '',
+        ];
+    return {
+      text: lines.filter(Boolean).join('\n'),
+      blocked: ['blocked', 'failed'].includes(status),
+      reason: `Grounded external AI history sync receipt: status=${status}; source=${sourceId}; job=${jobId}.`,
+    };
+  }
+
+  if (record.name === 'external_ai_history_query') {
+    if (parsed?.ok !== true || status !== 'queried' || !sourceId || !Array.isArray(parsed?.messages)) return null;
+    const messages = parsed.messages.slice(-50);
+    const completeness = String(parsed?.completeness || 'source_bounded');
+    const lines = [
+      zh
+        ? CN_EXTERNAL_AI_MESSAGES.historyQueryHeader(targetId, messages.length, completeness)
+        : `Read ${messages.length} locally synchronized message(s) from ${targetId}; completeness: ${completeness}.`,
+      ...messages.map((message: any) => {
+        const role = String(message?.role || 'unknown');
+        const messageId = String(message?.sourceExternalMessageId || message?.externalMessageId || 'derived');
+        const content = String(message?.content || '').trim().slice(0, 1_600);
+        return zh
+          ? CN_EXTERNAL_AI_MESSAGES.historyMessage(role, content, messageId)
+          : `- ${role} (${messageId}): ${content}`;
+      }),
+    ];
+    const limitations = Array.isArray(parsed?.limitations)
+      ? parsed.limitations.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : [];
+    if (limitations.length) lines.push(zh
+      ? CN_EXTERNAL_AI_MESSAGES.historyLimitations(limitations.join('；'))
+      : `Limitations: ${limitations.join('; ')}`);
+    return {
+      text: lines.join('\n'),
+      blocked: false,
+      reason: `Grounded external AI history query receipt: source=${sourceId}; messages=${messages.length}.`,
+    };
+  }
+
+  if (record.name === 'external_ai_history_source_list') {
+    if (parsed?.ok !== true || !Array.isArray(parsed?.sources)) return null;
+    const lines = parsed.sources.map((source: any) => {
+      const itemStatus = String(source?.status || 'unknown');
+      const itemId = String(source?.id || 'unknown');
+      const itemTarget = String(source?.targetId || 'unknown');
+      return zh
+        ? CN_EXTERNAL_AI_MESSAGES.historySourceState(itemStatus, itemId, itemTarget)
+        : `External AI history source: ${itemStatus}; target ${itemTarget}; source id ${itemId}.`;
+    });
+    return {
+      text: lines.length ? lines.join('\n') : (zh ? CN_EXTERNAL_AI_MESSAGES.historyNoSources : 'No external AI history source is authorized in this scope.'),
+      blocked: false,
+      reason: 'Grounded external AI history source list receipt.',
+    };
+  }
+
+  if (record.name === 'external_ai_history_status') {
+    if (parsed?.ok !== true || !parsed?.source) return null;
+    const counts = parsed?.counts || {};
+    const base = zh
+      ? CN_EXTERNAL_AI_MESSAGES.historySourceState(status, sourceId, targetId)
+      : `External AI history source: ${status}; target ${targetId}; source id ${sourceId}.`;
+    const countLine = zh
+      ? CN_EXTERNAL_AI_MESSAGES.historyLedgerCounts(
+          Number(counts.conversations || 0), Number(counts.messages || 0),
+          Number(counts.attachments || 0), Number(counts.jobs || 0),
+        )
+      : `Local ledger: ${Number(counts.conversations || 0)} conversations, ${Number(counts.messages || 0)} messages, ${Number(counts.attachments || 0)} attachments, ${Number(counts.jobs || 0)} sync jobs.`;
+    return { text: `${base}\n${countLine}`, blocked: false, reason: `Grounded external AI history status receipt: source=${sourceId}.` };
+  }
+
+  if (record.name === 'external_ai_history_source_register' || record.name === 'external_ai_history_source_revoke') {
+    if (parsed?.ok !== true || !sourceId) return null;
+    const state = record.name.endsWith('revoke') ? 'revoked' : status;
+    return {
+      text: zh
+        ? CN_EXTERNAL_AI_MESSAGES.historySourceState(state, sourceId, targetId)
+        : `External AI history source: ${state}; target ${targetId}; source id ${sourceId}.`,
+      blocked: false,
+      reason: `Grounded external AI history authorization receipt: status=${state}; source=${sourceId}.`,
+    };
+  }
+  return null;
+}
+
 function formatDesktopAiRoundtableResult(input: LumiResultFinalizerInput): string | null {
   const record = [...(input.toolRecords || [])].reverse().find(item => (
     !item.error && /^desktop_ai_roundtable$/i.test(String(item.name || '')) && String(item.result || '').trim()
@@ -1271,6 +1487,10 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (groundedArtifact) return groundedArtifact;
   const groundedCadGeometry = formatGroundedCadGeometryExtractionResult(input);
   if (groundedCadGeometry) return groundedCadGeometry;
+  const groundedExternalAiHistory = formatExternalAiHistoryResult(input);
+  if (groundedExternalAiHistory) return groundedExternalAiHistory;
+  const groundedExternalAi = formatExternalAiCollaborationResult(input);
+  if (groundedExternalAi) return groundedExternalAi;
   const groundedDesktopAi = formatDesktopAiRoundtableResult(input);
   if (groundedDesktopAi) {
     return {

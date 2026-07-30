@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deviceRegistry } from '../server/devices';
+import {
+  getDesktopControlQueueLength,
+  resetDesktopControlLeasesForTests,
+} from '../server/desktop/control_lease';
 import {
   createDesktopRelay,
   desktopRelayRoomForUser,
@@ -33,6 +37,10 @@ function mockIo(sockets: Record<string, any> = {}, rooms: Record<string, string[
 }
 
 describe('desktop relay routing', () => {
+  afterEach(() => {
+    resetDesktopControlLeasesForTests();
+  });
+
   it('allows native semantic UI adapters only in a proven co-located desktop runtime', () => {
     expect(isCoLocatedNativeDesktopRuntime('win32', { LUMI_DESKTOP: '1' })).toBe(true);
     expect(isCoLocatedNativeDesktopRuntime('darwin', { LUMI_DESKTOP: '1' })).toBe(true);
@@ -88,7 +96,7 @@ describe('desktop relay routing', () => {
     });
 
     const promise = relay('desktop_active_window', {});
-    expect(sent).toHaveLength(1);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].target).toBe('desktop');
     expect(sent[0].event).toBe('tool:desktop_exec');
     expect(sent[0].payload.name).toBe('desktop_active_window');
@@ -125,7 +133,7 @@ describe('desktop relay routing', () => {
     const relay = createDesktopRelay({ io, userId, source: 'task', timeoutMs: 1000 });
 
     const promise = relay('desktop_keyboard_type', { text: 'hello' });
-    expect(sent).toHaveLength(1);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].event).toBe('tool:desktop_exec');
 
     const selectedSocketId = sent[0].target === 'one' ? 'sock_desktop_b1' : 'sock_desktop_b2';
@@ -167,7 +175,7 @@ describe('desktop relay routing', () => {
     });
 
     const promise = relay('desktop_active_window', {});
-    expect(sent).toHaveLength(1);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].target).toBe('org-a');
     expect(handleDesktopRelayResult(sent[0].payload.correlationId, { output: 'org-window' }, 'scope_org_socket')).toBe(true);
     await expect(promise).resolves.toBe('org-window');
@@ -194,6 +202,7 @@ describe('desktop relay routing', () => {
     });
 
     const promise = relay('desktop_keyboard_type', { text: 'do not finish' });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].event).toBe('tool:desktop_exec');
     controller.abort();
     await expect(promise).rejects.toThrow(/cancelled/i);
@@ -238,6 +247,7 @@ describe('desktop relay routing', () => {
     });
 
     const promise = relay('desktop_keyboard_type', { text: 'must stop on disconnect' });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].event).toBe('tool:desktop_exec');
     const correlationId = sent[0].payload.correlationId;
     expect(disconnectHandlers.size).toBe(1);
@@ -248,5 +258,101 @@ describe('desktop relay routing', () => {
     expect(disconnectHandlers.size).toBe(0);
     expect(getPendingDesktopRelayCount()).toBe(0);
     expect(handleDesktopRelayResult(correlationId, { output: 'late success' }, 'scope_disconnect_desktop')).toBe(false);
+  });
+
+  it('holds one lease across a task and does not interleave a second foreground task', async () => {
+    const userId = `relay_lease_${Date.now()}`;
+    const sent: any[] = [];
+    const desktopSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    const socketId = `relay_lease_socket_${Date.now()}`;
+    deviceRegistry.register(userId, socketId, {
+      name: 'Lease Desktop', type: 'desktop', deviceFingerprint: userId,
+    });
+    const { io } = mockIo({ [socketId]: desktopSocket });
+    const firstRelay = createDesktopRelay({
+      io, userId, source: 'chat', taskId: 'chat-turn-a', timeoutMs: 1000,
+    });
+    const secondRelay = createDesktopRelay({
+      io, userId, source: 'task', taskId: 'task-turn-b', timeoutMs: 1000,
+    });
+
+    const firstCall = firstRelay('desktop_active_window');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(handleDesktopRelayResult(
+      sent[0].payload.correlationId,
+      { output: '{"title":"WPS","processName":"wps.exe"}' },
+      socketId,
+    )).toBe(true);
+    await expect(firstCall).resolves.toContain('WPS');
+    expect(firstRelay.getControlLease()?.windowBinding).toMatchObject({
+      title: 'WPS', processName: 'wps.exe',
+    });
+
+    const secondCall = secondRelay('desktop_keyboard_type', { text: 'queued' });
+    await vi.waitFor(() => expect(getDesktopControlQueueLength(userId)).toBe(1));
+    expect(sent).toHaveLength(1);
+
+    firstRelay.releaseControlLease('chat_complete');
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(handleDesktopRelayResult(
+      sent[1].payload.correlationId,
+      { output: 'typed' },
+      socketId,
+    )).toBe(true);
+    await expect(secondCall).resolves.toBe('typed');
+    secondRelay.releaseControlLease('task_complete');
+  });
+
+  it('lets voice preempt autonomous work and prevents the paused relay from continuing', async () => {
+    const userId = `relay_preempt_${Date.now()}`;
+    const sent: any[] = [];
+    const pauses: string[] = [];
+    const desktopSocket = {
+      connected: true,
+      emit: (event: string, payload: any) => sent.push({ event, payload }),
+    };
+    const socketId = `relay_preempt_socket_${Date.now()}`;
+    deviceRegistry.register(userId, socketId, {
+      name: 'Preempt Desktop', type: 'desktop', deviceFingerprint: userId,
+    });
+    const { io } = mockIo({ [socketId]: desktopSocket });
+    const autonomousRelay = createDesktopRelay({
+      io,
+      userId,
+      source: 'autonomous',
+      taskId: 'autonomous-task',
+      timeoutMs: 1000,
+      onControlPaused: reason => pauses.push(reason),
+    });
+    const voiceRelay = createDesktopRelay({
+      io, userId, source: 'voice', taskId: 'voice-turn', timeoutMs: 1000,
+    });
+
+    const autonomousCall = autonomousRelay('desktop_active_window');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(handleDesktopRelayResult(
+      sent[0].payload.correlationId,
+      { output: '{"title":"Draft","processName":"wps.exe"}' },
+      socketId,
+    )).toBe(true);
+    await autonomousCall;
+
+    const voiceCall = voiceRelay('desktop_active_window');
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(pauses).toEqual(['desktop_control_preempted_by_voice']);
+    await expect(autonomousRelay('desktop_keyboard_type', { text: 'must not run' }))
+      .rejects.toThrow(/desktop control is paused/i);
+    expect(sent).toHaveLength(2);
+
+    expect(handleDesktopRelayResult(
+      sent[1].payload.correlationId,
+      { output: '{"title":"Lumi","processName":"lumi.exe"}' },
+      socketId,
+    )).toBe(true);
+    await voiceCall;
+    voiceRelay.releaseControlLease('voice_complete');
   });
 });

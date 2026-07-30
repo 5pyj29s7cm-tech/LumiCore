@@ -7,6 +7,7 @@
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { PersonalityConfig, PersonalityVector } from '../personality/types';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
+import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from '../llm/user_preferences';
 
 // ── Types ──
 
@@ -216,7 +217,14 @@ type LLMGetters = {
   getKimi?: () => any;
   getGlm?: () => any;
   getRelay?: () => any;
-  preferredConfig?: { provider: string; model: string; userId: string };
+  preferredConfig?: {
+    provider: string;
+    model: string;
+    userId: string;
+    selectionMode?: UserLLMSelectionMode;
+    fallbackCandidates?: UserLLMFallbackCandidate[];
+    allowCloudFallback?: boolean;
+  };
 };
 
 async function callDistillLLM(
@@ -236,6 +244,10 @@ async function callDistillLLM(
       provider: selectedProvider as any,
       model: selectedModel,
       userId: llmGetters.preferredConfig?.userId,
+      selectionMode: llmGetters.preferredConfig?.selectionMode,
+      fallbackCandidates: llmGetters.preferredConfig?.fallbackCandidates,
+      allowCloudFallback: llmGetters.preferredConfig?.allowCloudFallback,
+      source: 'personality_distillation',
       maxTokens: 3000,
     },
     llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
@@ -580,7 +592,14 @@ export async function distillPersona(options: DistillOptions, llmGetters: LLMGet
   const preferred = getScopedPreferredLLM(userId);
   const configuredGetters: LLMGetters = {
     ...llmGetters,
-    preferredConfig: { provider: preferred.provider, model: preferred.model, userId },
+    preferredConfig: {
+      provider: preferred.provider,
+      model: preferred.model,
+      userId,
+      selectionMode: preferred.selectionMode,
+      fallbackCandidates: preferred.fallbackCandidates,
+      allowCloudFallback: preferred.allowCloudFallback,
+    },
   };
 
   // Merge audio transcript into chat log for richer distillation

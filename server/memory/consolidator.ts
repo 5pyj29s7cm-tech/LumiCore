@@ -2,6 +2,7 @@ import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getUnconsolidatedEpisodic, markConsolidated, addMemory, queryMemories } from './store';
 import { Memory, MemoryPerspective } from './types';
 import { readDB } from '../../db_layer';
+import type { UserLLMProvider } from '../llm/user_preferences';
 
 interface ConsolidateResult {
   content: string;
@@ -86,7 +87,7 @@ JSON output:`;
 
 export interface ConsolidationContext {
   userId: string;
-  provider: 'deepseek' | 'qwen' | 'openai' | 'gemini' | 'anthropic' | 'ark' | 'ollama' | 'lmstudio' | 'xiaomi' | 'kimi' | 'glm' | 'relay' | 'auto';
+  provider: UserLLMProvider;
   model: string;
   domain?: string;
   orgId?: string;

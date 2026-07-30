@@ -293,6 +293,8 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
 }
 
 export function isInformationOnlyQuestion(text: string): boolean {
+  if (isExternalAiHistoryCapabilityQuestion(text)) return true;
+  if (isExternalAiHistoryActionRequest(text)) return false;
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
   if (/(?:我问你)?(?:刚刚|刚才|之前|上一轮|上一次).{0,80}(?:干了什么|做了什么|操作了什么|打开.{0,24}干了什么|为什么.{0,40}(?:打开|操作|执行|回复))/u.test(text)) return true;
   if (/^(?:为什么|为何|怎么).{0,80}(?:没有|没|未能|不能).{0,40}(?:打开|启动|运行|执行|发送)/u.test(text)) return true; // i18n-allow: input recognition
@@ -309,6 +311,26 @@ export function isInformationOnlyQuestion(text: string): boolean {
     /(?:\u53ef\u4ee5|\u80fd|\u53ef\u4e0d\u53ef\u4ee5|\u80fd\u4e0d\u80fd|\u662f\u5426\u53ef\u4ee5|\u662f\u5426\u80fd|\u4f1a\u4e0d\u4f1a).{0,48}(?:\u53d1\u9001|\u53d1|\u8f6c\u53d1|\u4f20\u8f93|\u4f20|\u5206\u4eab|\u4e0b\u8f7d|\u5bfc\u51fa|\u8fdb\u5165|\u8bbf\u95ee|\u8fde\u63a5|\u63a5\u5165).{0,48}(?:\u5417|\u4e48|\u561b|\u5462|[\uff1f?])$/u,
     /\b(?:can|could|would)\s+(?:you|lumi|it)\b[^?]{0,160}\?|\b(?:is\s+it\s+possible|are\s+you\s+able)\b[^?]{0,160}\??$/i,
   ].some((pattern) => pattern.test(text));
+}
+
+function isExternalAiHistoryCapabilityQuestion(text: string): boolean {
+  const normalized = String(text || '').trim();
+  // i18n-allow: Multilingual external-AI history target recognition; not user-visible copy.
+  const hasTarget = /(?:\b(?:ChatGPT|Claude|Gemini|DeepSeek|Kimi|Perplexity|Copilot|Cursor|Ollama|LM\s*Studio|external\s+AI|AI\s+(?:assistant|agent|app|chat))\b|外部\s*AI|AI\s*(?:助手|智能体|客户端|应用))/iu.test(normalized);
+  // i18n-allow: Multilingual external-AI history subject recognition; not user-visible copy.
+  const hasHistorySubject = /(?:聊天|对话|会话|消息).{0,20}(?:历史|记录|内容)|(?:历史|记录|内容).{0,20}(?:聊天|对话|会话|消息)|\b(?:chat|conversation|message)\s+(?:history|content|archive)\b/iu.test(normalized);
+  // i18n-allow: Multilingual capability-question recognition; not user-visible copy.
+  const capabilityQuestion = /(?:能不能|能否|是否可以|是否能|支持吗|会不会)|(?:可以|能).{0,80}(?:吗|么|嘛|呢|[？?])$|\b(?:can|could|are\s+you\s+able|is\s+it\s+possible)\b/iu.test(normalized);
+  return hasTarget && hasHistorySubject && capabilityQuestion;
+}
+
+function isExternalAiHistoryActionRequest(text: string): boolean {
+  const normalized = String(text || '').trim();
+  // i18n-allow: Multilingual external-AI history target recognition; not user-visible copy.
+  const hasTarget = /(?:\b(?:ChatGPT|Claude|Gemini|DeepSeek|Kimi|Perplexity|Copilot|Cursor|Ollama|LM\s*Studio|external\s+AI|AI\s+(?:assistant|agent|app|chat))\b|外部\s*AI|AI\s*(?:助手|智能体|客户端|应用))/iu.test(normalized);
+  // i18n-allow: Multilingual external-AI history action recognition; not user-visible copy.
+  const hasAction = /(?:同步|导入|归档|授权|注册|添加|撤销|读取|查看|搜索|查询|总结).{0,40}(?:聊天|对话|历史|内容|来源)|(?:聊天|对话|历史).{0,40}(?:同步|导入|归档|授权|注册|读取|查看|搜索|查询|总结)|\b(?:sync|import|archive|authorize|register|revoke|read|view|search|query)\b.{0,48}\b(?:chat|conversation|message)\s+(?:history|content|archive|source)\b/iu.test(normalized);
+  return hasTarget && hasAction && !isExternalAiHistoryCapabilityQuestion(normalized);
 }
 
 function matchesIntentGrammar(text: string, rules: IntentGrammarRule[]): boolean {
@@ -355,7 +377,9 @@ function hasExternalDesktopOrTeamExecutionIntent(text: string): boolean {
 export function hasExplicitToolIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (isExternalAiHistoryActionRequest(normalized)) return true;
   const canonical = normalizeActionIntent(normalized);
+  if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized);
   if (canonical.kind === 'messaging_read' || canonical.kind === 'messaging_send') return true;
   if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
   if (isInformationOnlyQuestion(normalized)) return false;
@@ -366,6 +390,7 @@ export function hasExplicitToolIntent(text: string): boolean {
 export function hasClientActionIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (isExternalAiHistoryActionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
   if (isInformationOnlyQuestion(normalized)) return false;
@@ -380,6 +405,7 @@ export function hasClientActionIntent(text: string): boolean {
 export function hasClientActionOnlyIntent(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
+  if (isExternalAiHistoryActionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
   if (isInformationOnlyQuestion(normalized)) return false;
@@ -426,13 +452,14 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   if (requestedMode) pushRule(matchedRules, 'client_action', `operation-mode-request:${requestedMode}`);
 
   const clientStateInspectionRequest = normalized ? CLIENT_STATE_INSPECTION_REQUEST.test(normalized) : false;
+  const externalAiHistoryAction = normalized ? isExternalAiHistoryActionRequest(normalized) : false;
   const correctionOrExplanation = normalized
     ? canonical.kind === 'correction_explanation' || isUserCorrectionOrExplanationQuestion(normalized)
     : false;
   const informationOnlyQuestion = normalized
     ? correctionOrExplanation
       || canonical.kind === 'status_query'
-      || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest)
+      || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest && !externalAiHistoryAction)
     : false;
   const externalDesktopOrTeamExecution = normalized
     ? hasExternalDesktopOrTeamExecutionIntent(normalized)
@@ -447,11 +474,13 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const matchedStructuredToolRules = !informationOnlyQuestion && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_TOOL_INTENT_RULES)
     : [];
-  const structuredToolRules = canonical.kind === 'messaging_read'
-    ? ['messaging-read']
-    : canonical.kind === 'messaging_send'
-      ? ['messaging-send']
-      : matchedStructuredToolRules;
+  const structuredToolRules = externalAiHistoryAction
+    ? ['external-ai-history']
+    : canonical.kind === 'messaging_read'
+      ? ['messaging-read']
+      : canonical.kind === 'messaging_send'
+        ? ['messaging-send']
+        : matchedStructuredToolRules;
   const legacyToolRules = !informationOnlyQuestion && normalized
     ? matchPatternRuleNames(normalized, TOOL_INTENT_PATTERNS, 'tool-pattern')
     : [];

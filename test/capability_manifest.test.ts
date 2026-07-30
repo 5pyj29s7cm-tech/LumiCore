@@ -86,6 +86,41 @@ describe('runtime capability manifest', () => {
       .rejects.toThrow(/forbidden/i);
   });
 
+  it('exposes only the persistent external AI entry points to new model plans', () => {
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+
+    const declarations = registry.getToolDeclarationsForPolicy().map(item => item.function.name);
+    expect(declarations).toEqual(expect.arrayContaining([
+      'external_ai_route_plan',
+      'external_ai_collaborate',
+      'external_ai_collect_answers',
+      'external_ai_session_status',
+    ]));
+    expect(declarations).not.toEqual(expect.arrayContaining([
+      'desktop_ai_ask',
+      'desktop_ai_roundtable',
+      'desktop_ai_collect_answer',
+    ]));
+
+    const manifest = registry.getCapabilityManifest();
+    expect(manifest.find(entry => entry.toolName === 'desktop_ai_ask')).toMatchObject({
+      deprecated: true,
+      executable: false,
+      replacedBy: 'external-ai.collaboration.execute',
+    });
+    expect(manifest.find(entry => entry.toolName === 'desktop_ai_roundtable')).toMatchObject({
+      deprecated: true,
+      executable: false,
+      replacedBy: 'external-ai.collaboration.execute',
+    });
+    expect(manifest.find(entry => entry.toolName === 'desktop_ai_collect_answer')).toMatchObject({
+      deprecated: true,
+      executable: false,
+      replacedBy: 'external-ai.answers.collect',
+    });
+  });
+
   it('records skill ownership and treats undeclared side effects conservatively', () => {
     const registry = new ToolRegistry();
     registry.register({

@@ -3297,9 +3297,30 @@ export function DesktopUI({
       recordBackgroundTaskStep(task);
     };
 
+    const onDesktopControlState = (data: any) => {
+      const id = `desktop-control-${String(data?.leaseId || data?.taskId || 'current')}`;
+      const status = String(data?.status || '');
+      if (status === 'released' || status === 'expired') {
+        toast.dismiss(id);
+        return;
+      }
+      if (status === 'paused') {
+        toast.warning('Lumi paused desktop control because user activity or a higher-priority task was detected.', { id, duration: 6000 });
+        return;
+      }
+      if (status === 'waiting') {
+        toast('Desktop control is waiting for the current owner to finish.', { id, duration: 4000 });
+        return;
+      }
+      if (status === 'active') {
+        toast('Lumi is controlling the desktop for the active task.', { id, duration: 2500 });
+      }
+    };
+
     socket.on('agent:status', onStatus);
     socket.on('agent:delegation', onDelegation);
     socket.on('agent:background_task_update', onBackgroundTaskUpdate);
+    socket.on('agent:desktop_control_state', onDesktopControlState);
     socket.on('agent:tool_call', onToolCall);
     socket.on('agent:tool', onToolCall);
     socket.on('agent:response', onResponse);
@@ -3375,6 +3396,7 @@ export function DesktopUI({
       socket.off('agent:status', onStatus);
       socket.off('agent:delegation', onDelegation);
       socket.off('agent:background_task_update', onBackgroundTaskUpdate);
+      socket.off('agent:desktop_control_state', onDesktopControlState);
       socket.off('agent:tool_call', onToolCall);
       socket.off('agent:tool', onToolCall);
       socket.off('agent:response', onResponse);

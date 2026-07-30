@@ -1,6 +1,12 @@
 import { readDB, writeDB } from '../../db_layer';
+import {
+  getRegisteredProviderDefaultModel,
+  isExtensionProviderId,
+  isRegisteredOpenAICompatibleProvider,
+  isRegisteredProviderLocal,
+} from '../extensions/registry';
 
-export type UserLLMProvider =
+export type BuiltinUserLLMProvider =
   | 'deepseek'
   | 'qwen'
   | 'openai'
@@ -15,18 +21,37 @@ export type UserLLMProvider =
   | 'lmstudio'
   | 'auto';
 
+export type UserLLMProvider = BuiltinUserLLMProvider | `ext_${string}`;
+
 export type CloudUserLLMProvider = Exclude<UserLLMProvider, 'ollama' | 'lmstudio' | 'auto'>;
 
+export type UserLLMSelectionMode = 'pinned' | 'ordered_fallback' | 'auto';
+
+export interface UserLLMFallbackCandidate {
+  provider: Exclude<UserLLMProvider, 'auto'>;
+  model: string;
+}
+
+export interface UserLLMLegacyMigration {
+  migratedAt: string;
+  entries: Array<{ provider: string; from: string; to: string }>;
+}
+
 export interface UserLLMPrefs {
+  schemaVersion: 2;
   provider: UserLLMProvider;
   model: string;
   models: Record<string, string>;
+  selectionMode: UserLLMSelectionMode;
+  fallbackCandidates: UserLLMFallbackCandidate[];
+  allowCloudFallback: boolean;
   autoFallbackProvider: CloudUserLLMProvider;
   autoFallbackModel: string;
+  legacyMigration?: UserLLMLegacyMigration;
   source: 'personal';
 }
 
-export const DEFAULT_MODELS: Record<UserLLMProvider, string> = {
+export const DEFAULT_MODELS: Record<BuiltinUserLLMProvider, string> = {
   deepseek: 'deepseek-v4-flash',
   qwen: 'qwen-plus',
   openai: 'gpt-4o',
@@ -42,7 +67,7 @@ export const DEFAULT_MODELS: Record<UserLLMProvider, string> = {
   auto: 'qwen2.5:7b',
 };
 
-const VALID_PROVIDERS = new Set<UserLLMProvider>([
+const VALID_PROVIDERS = new Set<BuiltinUserLLMProvider>([
   'deepseek',
   'qwen',
   'openai',
@@ -62,13 +87,28 @@ const CLOUD_PROVIDERS = new Set<CloudUserLLMProvider>([
 ]);
 
 function normalizeProvider(value: unknown): UserLLMProvider {
-  return typeof value === 'string' && VALID_PROVIDERS.has(value as UserLLMProvider)
+  return typeof value === 'string' && (VALID_PROVIDERS.has(value as BuiltinUserLLMProvider) || isExtensionProviderId(value))
     ? value as UserLLMProvider
     : 'deepseek';
 }
 
-export function isUserLLMProvider(value: unknown): value is UserLLMProvider {
-  return typeof value === 'string' && VALID_PROVIDERS.has(value as UserLLMProvider);
+export function isUserLLMProvider(value: unknown, userId?: string): value is UserLLMProvider {
+  return typeof value === 'string' && (
+    VALID_PROVIDERS.has(value as BuiltinUserLLMProvider)
+    || isRegisteredOpenAICompatibleProvider(value, userId)
+  );
+}
+
+export function getDefaultModelForProvider(provider: UserLLMProvider, userId?: string): string {
+  return (DEFAULT_MODELS as Record<string, string>)[provider]
+    || getRegisteredProviderDefaultModel(provider, userId)
+    || '';
+}
+
+export function isCloudLLMProvider(provider: UserLLMProvider, userId?: string): provider is CloudUserLLMProvider {
+  if (CLOUD_PROVIDERS.has(provider as CloudUserLLMProvider)) return true;
+  return isRegisteredOpenAICompatibleProvider(provider, userId)
+    && !isRegisteredProviderLocal(provider, userId);
 }
 
 function normalizeModels(value: unknown): Record<string, string> {
@@ -78,8 +118,27 @@ function normalizeModels(value: unknown): Record<string, string> {
     .map(([provider, model]) => [provider, String(model).trim().slice(0, 200)]));
 }
 
+function normalizeSelectionMode(value: unknown, provider: UserLLMProvider): UserLLMSelectionMode {
+  if (provider === 'auto') return 'auto';
+  return value === 'ordered_fallback' ? 'ordered_fallback' : 'pinned';
+}
+
+function normalizeFallbackCandidates(value: unknown): UserLLMFallbackCandidate[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Map<string, UserLLMFallbackCandidate>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const provider = String((item as any).provider || '').trim() as UserLLMProvider;
+    const model = String((item as any).model || '').trim().slice(0, 200);
+    if (!provider || provider === 'auto' || (!VALID_PROVIDERS.has(provider as BuiltinUserLLMProvider) && !isExtensionProviderId(provider)) || !model) continue;
+    const key = `${provider}\u0000${model}`;
+    if (!unique.has(key)) unique.set(key, { provider, model });
+  }
+  return [...unique.values()].slice(0, 8);
+}
+
 function normalizeCloudFallback(value: unknown): CloudUserLLMProvider {
-  return typeof value === 'string' && CLOUD_PROVIDERS.has(value as CloudUserLLMProvider)
+  return typeof value === 'string' && (CLOUD_PROVIDERS.has(value as CloudUserLLMProvider) || isExtensionProviderId(value))
     ? value as CloudUserLLMProvider
     : 'deepseek';
 }
@@ -93,38 +152,91 @@ function parsePrefsRow(key: string): any {
   return null;
 }
 
-function normalizeLegacyModel(provider: UserLLMProvider, model: string): string {
+function migrateLegacyModel(provider: UserLLMProvider, model: string): string {
   if (provider === 'deepseek' && model === 'deepseek-chat') return 'deepseek-v4-flash';
   if (provider === 'deepseek' && model === 'deepseek-reasoner') return 'deepseek-v4-pro';
   if (provider === 'xiaomi' && model === 'xiaomi-chat') return 'mimo-v2.5-pro';
   return model;
 }
 
-function resolvePrefs(raw: any): UserLLMPrefs {
+function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
   const provider = normalizeProvider(raw?.provider);
   const rawModels = normalizeModels(raw?.models);
-  const model = normalizeLegacyModel(provider, rawModels[provider] || DEFAULT_MODELS[provider]);
-  const models = { ...rawModels, [provider]: model };
-  const autoFallbackProvider = CLOUD_PROVIDERS.has(provider as CloudUserLLMProvider)
+  const isLegacySchema = Number(raw?.schemaVersion || 0) < 2;
+  const migrationEntries: UserLLMLegacyMigration['entries'] = [];
+  const migratedModels = Object.fromEntries(Object.entries(rawModels).map(([candidateProvider, candidateModel]) => {
+    const normalizedProvider = normalizeProvider(candidateProvider);
+    const migrated = isLegacySchema ? migrateLegacyModel(normalizedProvider, candidateModel) : candidateModel;
+    if (migrated !== candidateModel) {
+      migrationEntries.push({ provider: normalizedProvider, from: candidateModel, to: migrated });
+    }
+    return [candidateProvider, migrated];
+  }));
+  const model = migratedModels[provider] || getDefaultModelForProvider(provider, userId);
+  const models = { ...migratedModels, [provider]: model };
+  const autoFallbackProvider = isCloudLLMProvider(provider, userId)
     ? provider as CloudUserLLMProvider
     : normalizeCloudFallback(raw?.autoFallbackProvider);
-  const autoFallbackModel = normalizeLegacyModel(
-    autoFallbackProvider,
-    String(raw?.autoFallbackModel || models[autoFallbackProvider] || DEFAULT_MODELS[autoFallbackProvider]),
-  );
+  const rawAutoFallbackModel = String(raw?.autoFallbackModel || models[autoFallbackProvider] || getDefaultModelForProvider(autoFallbackProvider, userId));
+  const autoFallbackModel = isLegacySchema
+    ? migrateLegacyModel(autoFallbackProvider, rawAutoFallbackModel)
+    : rawAutoFallbackModel;
+  if (autoFallbackModel !== rawAutoFallbackModel) {
+    migrationEntries.push({ provider: autoFallbackProvider, from: rawAutoFallbackModel, to: autoFallbackModel });
+  }
   models[autoFallbackProvider] = autoFallbackModel;
+  const legacyMigration = raw?.legacyMigration && typeof raw.legacyMigration === 'object'
+    ? raw.legacyMigration as UserLLMLegacyMigration
+    : migrationEntries.length > 0
+      ? { migratedAt: new Date().toISOString(), entries: migrationEntries }
+      : undefined;
   return {
+    schemaVersion: 2,
     provider,
     model,
     models,
+    selectionMode: normalizeSelectionMode(raw?.selectionMode, provider),
+    fallbackCandidates: normalizeFallbackCandidates(raw?.fallbackCandidates),
+    allowCloudFallback: raw?.allowCloudFallback !== false,
     autoFallbackProvider,
     autoFallbackModel,
+    ...(legacyMigration ? { legacyMigration } : {}),
     source: 'personal',
   };
 }
 
+function persistResolvedPrefs(userId: string, prefs: UserLLMPrefs, updatedAt?: string): void {
+  const db = readDB();
+  const key = `llm_prefs_${userId || 'anonymous'}`;
+  const payload = {
+    schemaVersion: 2,
+    provider: prefs.provider,
+    models: prefs.models,
+    selectionMode: prefs.selectionMode,
+    fallbackCandidates: prefs.fallbackCandidates,
+    allowCloudFallback: prefs.allowCloudFallback,
+    autoFallbackProvider: prefs.autoFallbackProvider,
+    autoFallbackModel: prefs.autoFallbackModel,
+    ...(prefs.legacyMigration ? { legacyMigration: prefs.legacyMigration } : {}),
+    updatedAt: updatedAt || new Date().toISOString(),
+  };
+  if (!db.settings) (db as any).settings = [];
+  const index = (db.settings || []).findIndex((setting: any) => setting.key === key);
+  if (index >= 0) db.settings[index].value = JSON.stringify(payload);
+  else db.settings.push({ key, value: JSON.stringify(payload) });
+  writeDB(db);
+}
+
 export function getUserPreferredLLM(userId: string): UserLLMPrefs {
-  return resolvePrefs(parsePrefsRow(`llm_prefs_${userId}`));
+  const uid = userId || 'anonymous';
+  const raw = parsePrefsRow(`llm_prefs_${uid}`);
+  const resolved = resolvePrefs(raw, uid);
+  // Legacy aliases are migrated exactly once. New schema writes preserve the
+  // user's literal model id, including ids that happen to match old aliases.
+  if (raw && Number(raw.schemaVersion || 0) < 2) {
+    persistResolvedPrefs(uid, resolved, raw.updatedAt);
+  }
+  return resolved;
 }
 
 export function upsertUserPreferredLLM(
@@ -133,52 +245,72 @@ export function upsertUserPreferredLLM(
     provider?: string;
     model?: string;
     models?: Record<string, string>;
+    selectionMode?: string;
+    fallbackCandidates?: Array<{ provider?: string; model?: string }>;
+    allowCloudFallback?: boolean;
     autoFallbackProvider?: string;
     autoFallbackModel?: string;
   },
 ): UserLLMPrefs {
-  if (!isUserLLMProvider(input.provider)) throw new Error(`Unsupported reasoning provider: ${input.provider || ''}`);
-  const current = getUserPreferredLLM(userId || 'anonymous');
+  const uid = userId || 'anonymous';
+  if (!isUserLLMProvider(input.provider, uid)) throw new Error(`Unsupported reasoning provider: ${input.provider || ''}`);
+  const current = getUserPreferredLLM(uid);
   const provider = input.provider;
   const models = {
     ...current.models,
     ...normalizeModels(input.models),
   };
-  const requestedModel = String(input.model || models[provider] || DEFAULT_MODELS[provider]).trim().slice(0, 200);
+  // Schema v2 treats model ids as opaque user choices. Compatibility aliases
+  // are only rewritten while reading a pre-v2 row above.
+  const requestedModel = String(input.model || models[provider] || getDefaultModelForProvider(provider, uid)).trim().slice(0, 200);
   if (!requestedModel) throw new Error('A reasoning model name is required');
   models[provider] = requestedModel;
   const requestedFallback = input.autoFallbackProvider
     ? normalizeCloudFallback(input.autoFallbackProvider)
     : null;
+  if (requestedFallback && !isCloudLLMProvider(requestedFallback, uid)) {
+    throw new Error(`Automatic fallback provider must be an active cloud provider: ${requestedFallback}`);
+  }
   const autoFallbackProvider = requestedFallback
-    || (CLOUD_PROVIDERS.has(provider as CloudUserLLMProvider)
+    || (isCloudLLMProvider(provider, uid)
       ? provider as CloudUserLLMProvider
-      : provider === 'auto' && CLOUD_PROVIDERS.has(current.provider as CloudUserLLMProvider)
+      : provider === 'auto' && isCloudLLMProvider(current.provider, uid)
         ? current.provider as CloudUserLLMProvider
         : current.autoFallbackProvider);
   const autoFallbackModel = String(
     input.autoFallbackModel
     || models[autoFallbackProvider]
     || current.autoFallbackModel
-    || DEFAULT_MODELS[autoFallbackProvider],
+    || getDefaultModelForProvider(autoFallbackProvider, uid),
   ).trim().slice(0, 200);
   if (!autoFallbackModel) throw new Error('An automatic-mode fallback model is required');
   models[autoFallbackProvider] = autoFallbackModel;
+  const selectionMode = normalizeSelectionMode(input.selectionMode || current.selectionMode, provider);
+  const fallbackCandidates = input.fallbackCandidates === undefined
+    ? current.fallbackCandidates
+    : normalizeFallbackCandidates(input.fallbackCandidates);
+  if (input.fallbackCandidates !== undefined) {
+    const unavailable = fallbackCandidates.find(candidate => !isUserLLMProvider(candidate.provider, uid));
+    if (unavailable) throw new Error(`Fallback provider is not active: ${unavailable.provider}`);
+  }
+  const allowCloudFallback = input.allowCloudFallback === undefined
+    ? current.allowCloudFallback
+    : input.allowCloudFallback === true;
   const payload = {
+    schemaVersion: 2,
     provider,
     models,
+    selectionMode,
+    fallbackCandidates,
+    allowCloudFallback,
     autoFallbackProvider,
     autoFallbackModel,
+    ...(current.legacyMigration ? { legacyMigration: current.legacyMigration } : {}),
     updatedAt: new Date().toISOString(),
   };
-  const db = readDB();
-  const key = `llm_prefs_${userId || 'anonymous'}`;
-  if (!db.settings) (db as any).settings = [];
-  const index = (db.settings || []).findIndex((setting: any) => setting.key === key);
-  if (index >= 0) db.settings[index].value = JSON.stringify(payload);
-  else db.settings.push({ key, value: JSON.stringify(payload) });
-  writeDB(db);
-  return resolvePrefs(payload);
+  const resolved = resolvePrefs(payload, uid);
+  persistResolvedPrefs(uid, resolved, payload.updatedAt);
+  return resolved;
 }
 
 export function getScopedPreferredLLM(
@@ -191,12 +323,25 @@ export function getScopedPreferredLLM(
 export function getUserPreferredLLMConfig(
   userId: string,
   options: { maxTokens?: number; domain?: string; orgId?: string } = {},
-): { provider: UserLLMProvider; model: string; userId: string; maxTokens?: number; domain?: string; orgId?: string } {
+): {
+  provider: UserLLMProvider;
+  model: string;
+  userId: string;
+  selectionMode: UserLLMSelectionMode;
+  fallbackCandidates: UserLLMFallbackCandidate[];
+  allowCloudFallback: boolean;
+  maxTokens?: number;
+  domain?: string;
+  orgId?: string;
+} {
   const pref = getScopedPreferredLLM(userId, { domain: options.domain, orgId: options.orgId });
   return {
     provider: pref.provider,
     model: pref.model,
     userId,
+    selectionMode: pref.selectionMode,
+    fallbackCandidates: pref.fallbackCandidates.map(candidate => ({ ...candidate })),
+    allowCloudFallback: pref.allowCloudFallback,
     ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
     ...(options.domain ? { domain: options.domain } : {}),
     ...(options.orgId ? { orgId: options.orgId } : {}),

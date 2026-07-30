@@ -133,6 +133,52 @@ describe('Lumi model configuration tools', () => {
     expect(create).toHaveBeenCalledOnce();
   });
 
+  it('tests the effective ordered reasoning route and reports the answering model', async () => {
+    const registry = createRegistry();
+    const create = vi.fn(async (request: any) => ({
+      choices: [{ message: { content: `OK:${request.model}` } }],
+    }));
+    const result = JSON.parse(await registry.execute('model_configuration_update', {
+      role: 'reasoning',
+      provider: 'gemini',
+      model: 'missing-gemini-primary',
+      selectionMode: 'ordered_fallback',
+      fallbackCandidates: [{ provider: 'openai', model: 'verified-openai-fallback' }],
+      allowCloudFallback: true,
+    }, {
+      userId: 'model-config-routed-test-user',
+      llmGetters: {
+        getDeepSeek: () => null,
+        getGemini: () => null,
+        getOpenAI: () => ({ chat: { completions: { create } } }),
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      saved: true,
+      verified: true,
+      updated: {
+        configuration: {
+          provider: 'gemini',
+          model: 'missing-gemini-primary',
+          selectionMode: 'ordered_fallback',
+          fallbackCandidates: [{ provider: 'openai', model: 'verified-openai-fallback' }],
+        },
+      },
+      test: {
+        ok: true,
+        requestedProvider: 'gemini',
+        requestedModel: 'missing-gemini-primary',
+        provider: 'openai',
+        model: 'verified-openai-fallback',
+        selectionMode: 'ordered_fallback',
+        verification: 'live_routed_model_call',
+      },
+    });
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it('does not report a saved model as verified when its live test fails', async () => {
     const registry = createRegistry();
     const result = JSON.parse(await registry.execute('model_configuration_update', {

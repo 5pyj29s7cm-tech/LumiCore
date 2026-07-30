@@ -4,13 +4,18 @@
  */
 import {
   attachAutonomousExecutionPlan,
+  checkpointAutonomousTask,
   dequeue,
   markRunning,
   markCompleted,
   markFailed,
   markCancelled,
   getRunningTask,
+  heartbeatAutonomousTask,
   isTaskCancellationRequested,
+  isTaskPauseRequested,
+  markPaused,
+  requestPauseAutonomousTask,
 } from './task_queue';
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
 import { runWithTools } from '../llm/adapter';
@@ -347,7 +352,14 @@ export async function executeNextAutonomousTask(
 
   const running = markRunning(task.id);
   if (!running) return { executed: false };
+  if (!running.leaseId) return { executed: false, taskId: task.id, result: 'Task lease was not created' };
+  const leaseHeartbeat = setInterval(() => {
+    const renewed = heartbeatAutonomousTask(task.id, running.leaseId!);
+    if (!renewed) clearInterval(leaseHeartbeat);
+  }, 20_000);
+  if (typeof (leaseHeartbeat as any).unref === 'function') (leaseHeartbeat as any).unref();
   markLinkedPlanRunning(running);
+  let releaseDesktopControlLease = () => undefined;
 
   io.to(`user:${task.userId}:personal`).emit('autonomous:task_started', {
     taskId: task.id,
@@ -366,13 +378,22 @@ export async function executeNextAutonomousTask(
       domain: 'personal',
       orgId: '',
       source: 'autonomous',
+      taskId: task.id,
+      onControlPaused: () => {
+        requestPauseAutonomousTask(task.id, task.userId);
+      },
     });
+    releaseDesktopControlLease = () => desktopRelay.releaseControlLease('autonomous_task_complete');
 
     const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations);
     attachAutonomousExecutionPlan(
       running.id,
       sanitizeCapabilityExecutionPlan(executionPipeline.executionPlan, new Date().toISOString()),
     );
+    checkpointAutonomousTask(running.id, {
+      phase: 'planned',
+      detail: `Capability plan persisted for attempt ${running.attempt || 1}`,
+    }, running.leaseId);
     if (executionPipeline.executionPlan.risk.sideEffectClass === 'external_commit') {
       throw new Error('Autonomous external commit blocked: an action-time immutable user confirmation is required.');
     }
@@ -386,7 +407,9 @@ export async function executeNextAutonomousTask(
       actionIntent: task.description,
       routedTaskText: executionPipeline.turnIntent.flow.routeText,
       toolPolicy,
-      isCancelled: () => isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId),
+      isCancelled: () => isTaskCancellationRequested(task.id, task.userId)
+        || isTaskPauseRequested(task.id, task.userId)
+        || isRealtimeUserActive(task.userId),
       autonomous: true,
       source: 'autonomous',
     };
@@ -409,7 +432,17 @@ export async function executeNextAutonomousTask(
       messages,
       toolRegistry,
       getUserPreferredLLMConfig(task.userId, { maxTokens: 2000 }),
-      (record) => upsertToolLedger(toolLedger, record),
+      (record) => {
+        upsertToolLedger(toolLedger, record);
+        if (record.result !== undefined || record.error !== undefined) {
+          checkpointAutonomousTask(running.id, {
+            phase: 'tool_execution',
+            iteration: toolLedger.length,
+            receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+            detail: `${toolLedger.length} terminal tool call(s) observed`,
+          }, running.leaseId);
+        }
+      },
       maxIterations,
       getters.getDeepSeek, getters.getGemini,
       getters.getOpenAI || (() => null),
@@ -427,6 +460,15 @@ export async function executeNextAutonomousTask(
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
     recordAutonomousTokens(task.userId, tokensUsed);
 
+    if (isTaskPauseRequested(task.id, task.userId)) {
+      markPaused(task.id);
+      io.to(`user:${task.userId}:personal`).emit('autonomous:task_paused', {
+        taskId: task.id,
+        title: task.title,
+        timestamp: new Date().toISOString(),
+      });
+      return { executed: true, taskId: task.id, result: 'Paused' };
+    }
     if (isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId)) {
       const reason = isRealtimeUserActive(task.userId)
         ? 'Cancelled because a live user voice session took priority'
@@ -448,6 +490,11 @@ export async function executeNextAutonomousTask(
     );
     if (!outcome.verified) {
       const failureReason = outcome.reason || 'Autonomous completion could not be verified.';
+      checkpointAutonomousTask(task.id, {
+        phase: 'failed_verification',
+        receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+        detail: failureReason,
+      }, running.leaseId);
       markFailed(task.id, failureReason);
       markLinkedPlanFailed(task, failureReason);
       io.to(`user:${task.userId}:personal`).emit('autonomous:task_failed', {
@@ -471,6 +518,11 @@ export async function executeNextAutonomousTask(
     }
 
     const summary = outcome.text;
+    checkpointAutonomousTask(task.id, {
+      phase: 'verified',
+      receiptIds: toolLedger.map(item => item.id).filter((id): id is string => Boolean(id)),
+      detail: outcome.reason || 'Completion verified',
+    }, running.leaseId);
     markCompleted(task.id, summary, toolCallCount, tokensUsed, {
       finalized: true,
       blocked: false,
@@ -496,6 +548,15 @@ export async function executeNextAutonomousTask(
     return { executed: true, taskId: task.id, result: summary };
   } catch (err: any) {
     const errorMsg = err.message || 'Unknown error';
+    if (isTaskPauseRequested(task.id, task.userId)) {
+      markPaused(task.id);
+      io.to(`user:${task.userId}:personal`).emit('autonomous:task_paused', {
+        taskId: task.id,
+        title: task.title,
+        timestamp: new Date().toISOString(),
+      });
+      return { executed: true, taskId: task.id, result: 'Paused' };
+    }
     if (isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId)) {
       const reason = isRealtimeUserActive(task.userId)
         ? 'Cancelled because a live user voice session took priority'
@@ -509,6 +570,10 @@ export async function executeNextAutonomousTask(
       });
       return { executed: true, taskId: task.id, result: 'Cancelled by user' };
     }
+    checkpointAutonomousTask(task.id, {
+      phase: 'failed',
+      detail: errorMsg,
+    }, running.leaseId);
     markFailed(task.id, errorMsg);
     markLinkedPlanFailed(task, errorMsg);
 
@@ -521,5 +586,7 @@ export async function executeNextAutonomousTask(
 
     console.warn(`[AutoExecutor] Task "${task.title}" failed:`, errorMsg);
     return { executed: true, taskId: task.id, result: `Failed: ${errorMsg}` };
+  } finally {
+    releaseDesktopControlLease();
   }
 }

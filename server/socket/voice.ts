@@ -1211,6 +1211,7 @@ async function processVoiceInput(
   const voiceScope = { domain: session.domain, orgId: session.orgId };
   const confirmationScope = {
     source: 'voice',
+    taskId: requestId,
     domain: voiceScope.domain,
     orgId: voiceScope.orgId,
     channelId: socket.id,
@@ -1611,12 +1612,23 @@ async function processVoiceInput(
   const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
   const voiceModel = userLLMPrefs.model;
+  const reasoningRoutePolicy = {
+    selectionMode: userLLMPrefs.selectionMode,
+    fallbackCandidates: userLLMPrefs.fallbackCandidates,
+    allowCloudFallback: userLLMPrefs.allowCloudFallback,
+    conversationId: conversationTurn.conversation.id,
+    requestId,
+    interactionId: requestId,
+    source: 'voice',
+  };
   const scheduleVoiceSummary = (conversationId: string) => {
     scheduleConversationSummary({
-      conversationId,
       userId: session.userId,
       provider,
       model: voiceModel,
+      ...reasoningRoutePolicy,
+      conversationId,
+      source: 'voice_summary',
       domain: voiceScope.domain,
       orgId: voiceScope.orgId,
       llmGetters,
@@ -1779,6 +1791,7 @@ async function processVoiceInput(
     domain: voiceScope.domain,
     orgId: voiceScope.orgId,
     source: 'voice',
+    taskId: requestId,
     requestSocket: socket,
     emitToolLifecycle,
     formatResultForLifecycle: formatToolResultForUi,
@@ -1832,7 +1845,8 @@ async function processVoiceInput(
 
   const toolContext = {
     userId: session.userId,
-    taskId: actionTaskExecution.state?.taskId,
+    taskId: actionTaskExecution.state?.taskId || requestId,
+    conversationId: conversationTurn.conversation.id,
     turnId: requestId,
     requestId,
     domain: voiceScope.domain,
@@ -2250,6 +2264,7 @@ async function processVoiceInput(
           domain: voiceScope.domain,
           orgId: voiceScope.orgId,
           signal: pipelineAbort.signal,
+          ...reasoningRoutePolicy,
         },
         record => {
           if (!record?.name) return;
@@ -2916,11 +2931,11 @@ async function processVoiceInput(
       const result = await makeLLMCall(
         [{ role: 'system', content: prompt }, { role: 'user', content: userText }],
         [],
-        { provider, model: classifierModel, userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, maxTokens: 60 },
+        { provider, model: classifierModel, userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, maxTokens: 60, ...reasoningRoutePolicy },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
         llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
-      recordTokenUsage(session.userId, provider, classifierModel, result.usage, `voice_cls_${Date.now()}`, 'voice');
+      recordTokenUsage(session.userId, result.routing?.selectedProvider || provider, result.routing?.selectedModel || classifierModel, result.usage, `voice_cls_${Date.now()}`, 'voice');
       return result.text || '{"category":"unknown","confidence":0.5,"entities":{}}';
     };
 
@@ -3034,7 +3049,7 @@ async function processVoiceInput(
             resumeNodeReceipts: voiceModelRecovery?.receipts,
             isCancelled: () => pipelineAbort?.signal.aborted ?? false,
           },
-          { provider, model: effectiveModel },
+          { provider, model: effectiveModel, ...reasoningRoutePolicy },
           llmGetters,
           exposeAgentWork && !deferCompletionSpeech
             ? (msg) => {
@@ -3126,7 +3141,7 @@ async function processVoiceInput(
       const streamResult = await makeLLMCallStreaming(
         messages as NormalizedMessage[],
         toolDeclarations,
-        { provider, model: effectiveModel, userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, signal: pipelineAbort?.signal },
+        { provider, model: effectiveModel, userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, signal: pipelineAbort?.signal, ...reasoningRoutePolicy },
         (chunk: string) => {
           responseText += chunk;
           if (!deferCompletionSpeech) {
@@ -3160,7 +3175,7 @@ async function processVoiceInput(
       });
 
       // Record token usage for this streaming call
-      recordTokenUsage(session.userId, provider, effectiveModel, streamResult.usage, `voice_stream_${Date.now()}`, 'voice');
+      recordTokenUsage(session.userId, streamResult.routing?.selectedProvider || provider, streamResult.routing?.selectedModel || effectiveModel, streamResult.usage, `voice_stream_${Date.now()}`, 'voice');
 
       if (plannedToolCalls.length === 0) {
         if (
@@ -3389,6 +3404,7 @@ async function processVoiceInput(
       }
     }
   } finally {
+    desktopRelay.releaseControlLease('voice_turn_complete');
     // An older aborted pipeline must never clear the state/controllers that
     // already belong to a newer barge-in turn.
     if (session.pipelineAbortController === pipelineAbort) {

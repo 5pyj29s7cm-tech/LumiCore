@@ -160,16 +160,18 @@ describe('desktop execution stability policy', () => {
 
   it('keeps chat, voice, and task sockets on the shared desktop stability path', () => {
     const root = process.cwd();
-    const sources = [
-      readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
-    ];
+    const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const taskSource = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
+    const sources = [chatSource, voiceSource, taskSource];
 
     for (const source of sources) {
       expect(source).toContain('buildDesktopExecutionStabilityPolicy');
       expect(source).toContain('agent:desktop_execution_policy');
       expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
     }
+    expect(chatSource).toMatch(/source:\s*'chat',[\s\S]{0,160}taskId:\s*requestId/);
+    expect(voiceSource).toMatch(/source:\s*'voice',[\s\S]{0,160}taskId:\s*requestId/);
+    expect(taskSource).toMatch(/source:\s*'task',[\s\S]{0,160}taskId:\s*requestId/);
   });
 });

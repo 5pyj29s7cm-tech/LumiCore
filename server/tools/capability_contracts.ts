@@ -16,6 +16,10 @@ export interface CapabilityContractInput {
   risk: Exclude<CapabilityRisk, 'none'>;
   sideEffects: CapabilitySideEffect[];
   verification: CapabilityVerification;
+  /** Keep old callable ids available for persisted continuations without exposing them to new plans. */
+  deprecated?: boolean;
+  /** Stable capability id that owns all new planning and execution. */
+  replacedBy?: string;
 }
 
 export interface CapabilityEvidenceInput {
@@ -40,6 +44,8 @@ export function capabilityContract(input: CapabilityContractInput): ToolCapabili
     risk: input.risk,
     sideEffects: input.sideEffects,
     verification: input.verification,
+    ...(input.deprecated === true ? { deprecated: true } : {}),
+    ...(input.replacedBy ? { replacedBy: input.replacedBy } : {}),
   };
 }
 

@@ -39,12 +39,15 @@ import { registerWorkProductTools } from './work_product_tools';
 import { registerAuthorityResearchTools } from './authority_research_tools';
 import { registerWorkTakeoverTools } from './work_takeover_tools';
 import { registerDesktopAiTools } from './desktop_ai_tools';
+import { registerExternalAiCollaborationTools } from './external_ai_collaboration_tools';
+import { registerExternalAiHistoryTools } from './external_ai_history_tools';
 import { registerMessagingTools } from './messaging_tools';
 import { registerModelConfigurationTools } from './model_configuration_tools';
 import { registerDesktopWechatWatchTools } from './desktop_wechat_watch_tools';
 import { registerNetworkDiagnosticTools } from './network_diagnostic_tools';
 import { registerRuntimeWorkTools } from './runtime_work_tools';
 import { registerCadWorkflowTools } from './cad_workflow_tools';
+import { registerExtensionRegistryTools } from './extension_registry_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
@@ -98,10 +101,13 @@ export function registerAllTools(
   registerAuthorityResearchTools(registry);
   registerWorkTakeoverTools(registry);
   registerDesktopAiTools(registry);
+  registerExternalAiCollaborationTools(registry);
+  registerExternalAiHistoryTools(registry);
   registerMessagingTools(registry);
   registerDesktopWechatWatchTools(registry);
   registerNetworkDiagnosticTools(registry);
   registerRuntimeWorkTools(registry);
+  registerExtensionRegistryTools(registry);
   if (llmGetters) {
     setSkillLLMGetters(llmGetters);
   }

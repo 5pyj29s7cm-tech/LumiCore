@@ -389,6 +389,10 @@ function resolveTargets(value: unknown, customTargets: DesktopAiTarget[] = []): 
   return resolved;
 }
 
+export function isDesktopAiTargetRegistered(value: unknown, userId = 'anonymous'): boolean {
+  return resolveTargets([value], storedTargetsFromDb(userId)).length > 0;
+}
+
 function parseJson(raw: string): any {
   try { return JSON.parse(raw); } catch { return raw; }
 }
@@ -801,7 +805,7 @@ async function focusTarget(
   };
 }
 
-async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): Promise<string> {
+export async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const question = String(args.question || args.prompt || args.message || '').trim();
   if (!question) throw new Error('question is required.');
   const desktopRelay = requireDesktopRelay(context);
@@ -927,7 +931,7 @@ async function desktopAiAsk(args: Record<string, any>, context?: ToolContext): P
   }, null, 2);
 }
 
-async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolContext): Promise<string> {
+export async function desktopAiCollectAnswer(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const desktopRelay = requireDesktopRelay(context);
   const customTargets = runtimeTargetsFromContext(args, context);
   const { targets } = await resolveExecutionTargets(args.targets || args.target, customTargets, desktopRelay);
@@ -1294,7 +1298,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ai_ask',
-    description: 'Ask one or more local desktop AI apps such as WorkBuddy and Codex the same question through their real desktop windows. It opens/focuses each target, writes the question to the clipboard, pastes it, and optionally presses the submit shortcut. Use when the user asks Lumi to send a question to other AI apps on this computer.',
+    description: 'Deprecated low-level desktop compatibility adapter. New external-AI requests must use external_ai_collaborate so API/MCP, CLI, structured browser, and desktop visual routes share one persistent idempotent session.',
     parameters: {
       type: 'object',
       properties: {
@@ -1315,7 +1319,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
     },
     handler: desktopAiAsk,
     permission: 'user',
-    securityLevel: 'safe',
+    securityLevel: 'confirm',
     capability: capabilityContract({
       id: 'desktop-ai.question.prepare-or-submit',
       family: 'desktop-ai',
@@ -1337,6 +1341,8 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
         successSignals: ['target remained foreground while the question was pasted', 'submission is explicitly unverified until visible answer evidence is collected'],
         limitations: ['submitted_unverified proves only that the shortcut was pressed; it does not prove provider receipt or answer generation.'],
       },
+      deprecated: true,
+      replacedBy: 'external-ai.collaboration.execute',
     }),
     evidence: capabilityEvidence({
       id: 'desktop-ai.question.prepare-or-submit',
@@ -1348,7 +1354,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ai_roundtable',
-    description: 'Ask multiple desktop AI targets the same question, wait for their visible responses, collect each answer with screenshot vision evidence, and return a structured synthesis input for Lumi. Use this when the user wants WorkBuddy, Codex, or other desktop/web AI answers brought back and summarized together.',
+    description: 'Deprecated low-level desktop roundtable compatibility adapter. New multi-AI work must use external_ai_collaborate and external_ai_collect_answers for fixed route priority, durable binding, and source evidence.',
     parameters: {
       type: 'object',
       properties: {
@@ -1366,7 +1372,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
     },
     handler: desktopAiRoundtable,
     permission: 'user',
-    securityLevel: 'safe',
+    securityLevel: 'confirm',
     capability: capabilityContract({
       id: 'desktop-ai.roundtable.run',
       family: 'desktop-ai',
@@ -1387,6 +1393,8 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
         successSignals: ['collected answers include visible-screen evidence', 'waiting state remains explicit and cannot be summarized as completed'],
         limitations: ['A waiting_for_answers receipt is a resumable pause, not a completed roundtable.', 'Visible answers may be partial when content is off-screen.'],
       },
+      deprecated: true,
+      replacedBy: 'external-ai.collaboration.execute',
     }),
     evidence: capabilityEvidence({
       id: 'desktop-ai.roundtable.run',
@@ -1398,7 +1406,7 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ai_collect_answer',
-    description: 'Collect the visible answer from a local desktop AI app such as WorkBuddy or Codex using screenshot vision evidence. Use after desktop_ai_ask when the user wants the answers brought back and summarized.',
+    description: 'Deprecated low-level desktop answer reader retained for persisted continuations. New work must use external_ai_collect_answers with a bound collaboration session.',
     parameters: {
       type: 'object',
       properties: {
@@ -1418,5 +1426,30 @@ export function registerDesktopAiTools(registry: ToolRegistry): void {
     handler: desktopAiCollectAnswer,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'desktop-ai.answer.collect',
+      family: 'desktop-ai',
+      lane: 'desktop',
+      operation: 'observe',
+      risk: 'medium',
+      sideEffects: [{ type: 'desktop_control', scope: 'one existing desktop AI response window', reversible: true }],
+      verification: {
+        strategy: 'visual',
+        required: true,
+        requiredFields: ['status', 'target', 'answerText'],
+        successStatuses: ['collected', 'pending'],
+        failureStatuses: ['blocked', 'needs_vision_setup', 'failed'],
+        successSignals: ['visible response text is attributed to the requested target'],
+        limitations: ['Visible response text can be incomplete when content is off-screen.'],
+      },
+      deprecated: true,
+      replacedBy: 'external-ai.answers.collect',
+    }),
+    evidence: capabilityEvidence({
+      id: 'desktop-ai.answer.collect',
+      operation: 'observe',
+      subjectArgument: 'target',
+      limitations: ['This compatibility reader does not create or bind a collaboration session.'],
+    }),
   });
 }

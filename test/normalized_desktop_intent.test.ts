@@ -24,4 +24,26 @@ describe('normalized desktop intent priority', () => {
       sideEffectClass: 'none',
     });
   });
+
+  it('keeps external AI history in its own read-only lane', () => {
+    expect(normalizeActionIntent('读取 ChatGPT 里的聊天历史并同步新增消息')).toMatchObject({
+      kind: 'external_ai_history',
+      operation: 'read',
+      target: 'ChatGPT',
+      sideEffectClass: 'none',
+      rule: 'external-ai-history-read',
+    });
+    expect(normalizeActionIntent('Lumi 可以读取外部 AI 里的聊天内容吗？')).toMatchObject({
+      kind: 'external_ai_history',
+      operation: 'read',
+      target: 'external_ai',
+      sideEffectClass: 'none',
+    });
+  });
+
+  it('does not turn a fresh external AI prompt into history access', () => {
+    expect(normalizeActionIntent('问问 ChatGPT 并让它回答聊天历史应该怎么迁移')).not.toMatchObject({
+      kind: 'external_ai_history',
+    });
+  });
 });

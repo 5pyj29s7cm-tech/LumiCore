@@ -11,6 +11,7 @@ import { executeToolCall } from '../tools/execution_engine';
 import { routeToolsForTurn } from '../cognition/tool_router';
 import type { ToolPolicy } from '../personality/types';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from '../llm/user_preferences';
 
 export interface ChainerPlan {
   goal: string;
@@ -35,6 +36,29 @@ interface LlmGetters {
   getOpenAI: () => any;
   getAnthropic: () => any;
   getQwen: () => any;
+  getOllama?: () => any;
+  getLmStudio?: () => any;
+  getArk?: () => any;
+  getXiaomi?: () => any;
+  getKimi?: () => any;
+  getGlm?: () => any;
+  getRelay?: () => any;
+}
+
+interface ChainerLLMConfig {
+  userId: string;
+  provider: string;
+  model: string;
+  selectionMode?: UserLLMSelectionMode;
+  fallbackCandidates?: UserLLMFallbackCandidate[];
+  allowCloudFallback?: boolean;
+  conversationId?: string;
+  requestId?: string;
+  interactionId?: string;
+  source?: string;
+  desktopRelay?: (tool: string, args: Record<string, any>) => Promise<string>;
+  context?: ToolContext;
+  onTool?: (record: ToolExecutionRecord) => void;
 }
 
 export function filterChainerToolNamesByPolicy(
@@ -256,7 +280,7 @@ function extractWeChatMessage(userTask: string): string {
 export function buildForegroundWeChatSendArgs(userTask: string): Record<string, any> | null {
   const text = String(userTask || '');
   const normalizedIntent = normalizeActionIntent(text);
-  if (['messaging_read', 'correction_explanation', 'status_query', 'client_navigation', 'client_state'].includes(normalizedIntent.kind)) return null;
+  if (['external_ai_history', 'messaging_read', 'correction_explanation', 'status_query', 'client_navigation', 'client_state'].includes(normalizedIntent.kind)) return null;
   if (isNonCommandWeChatStatement(text)) return null;
   const inquiry = extractWeChatInquiry(text);
   if (normalizedIntent.kind !== 'messaging_send' && !inquiry) return null;
@@ -327,9 +351,7 @@ function buildDeterministicPlan(userTask: string, availableTools: Array<{ name: 
 async function planTask(
   userTask: string,
   availableTools: Array<{ name: string; description: string; parameters: Record<string, any> }>,
-  provider: string,
-  model: string,
-  userId: string,
+  config: ChainerLLMConfig,
   llmGetters: LlmGetters,
 ): Promise<ChainerPlan> {
   const toolListText = availableTools
@@ -350,8 +372,23 @@ async function planTask(
     const result = await makeLLMCall(
       messages,
       [],
-      { provider: provider as any, model, userId, maxTokens: 1500 },
+      {
+        provider: config.provider as any,
+        model: config.model,
+        userId: config.userId,
+        domain: config.context?.domain,
+        orgId: config.context?.orgId,
+        selectionMode: config.selectionMode,
+        fallbackCandidates: config.fallbackCandidates,
+        allowCloudFallback: config.allowCloudFallback,
+        conversationId: config.conversationId,
+        requestId: config.requestId,
+        interactionId: config.interactionId,
+        source: config.source || 'nl_chainer_plan',
+        maxTokens: 1500,
+      },
       llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+      llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
     );
 
     const text = result.text || '';
@@ -519,14 +556,7 @@ function buildSimpleSummary(results: Array<{ step: number; tool: string; output:
 
 export async function runNLChainer(
   userTask: string,
-  config: {
-    userId: string;
-    provider: string;
-    model: string;
-    desktopRelay?: (tool: string, args: Record<string, any>) => Promise<string>;
-    context?: ToolContext;
-    onTool?: (record: ToolExecutionRecord) => void;
-  },
+  config: ChainerLLMConfig,
   llmGetters: LlmGetters,
   onStep?: (step: number, total: number, description: string) => void,
 ): Promise<ChainerResult> {
@@ -567,7 +597,7 @@ export async function runNLChainer(
 
   // Phase 1: Plan
   const plan = buildDeterministicPlan(userTask, availableTools) ||
-    await planTask(userTask, availableTools, config.provider, config.model, config.userId, llmGetters);
+    await planTask(userTask, availableTools, config, llmGetters);
 
   // If plan failed to produce steps, return empty
   if (plan.steps.length === 0) {
@@ -596,8 +626,23 @@ If no suitable alternative exists, output: { "toolName": "" }`;
       const result = await makeLLMCall(
         [{ role: 'user', content: prompt }],
         [],
-        { provider: config.provider as any, model: config.model, userId: config.userId, maxTokens: 400 },
+        {
+          provider: config.provider as any,
+          model: config.model,
+          userId: config.userId,
+          domain: config.context?.domain,
+          orgId: config.context?.orgId,
+          selectionMode: config.selectionMode,
+          fallbackCandidates: config.fallbackCandidates,
+          allowCloudFallback: config.allowCloudFallback,
+          conversationId: config.conversationId,
+          requestId: config.requestId,
+          interactionId: config.interactionId,
+          source: config.source || 'nl_chainer_replan',
+          maxTokens: 400,
+        },
         llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
       );
       const jsonMatch = result.text?.match(/\{[\s\S]*\}/);
       if (jsonMatch) {

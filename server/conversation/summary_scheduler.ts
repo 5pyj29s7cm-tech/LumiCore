@@ -8,6 +8,7 @@ import {
 } from './manager';
 import { isGuardGeneratedConversationRecord } from './guard_history';
 import { buildEvidenceGroundedSummaryTranscript } from './summary_grounding';
+import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from '../llm/user_preferences';
 
 export interface ConversationSummaryLlmGetters {
   getDeepSeek: () => any;
@@ -29,6 +30,12 @@ export interface ConversationSummaryScheduleInput {
   userId: string;
   provider: string;
   model: string;
+  selectionMode?: UserLLMSelectionMode;
+  fallbackCandidates?: UserLLMFallbackCandidate[];
+  allowCloudFallback?: boolean;
+  requestId?: string;
+  interactionId?: string;
+  source?: string;
   domain: string;
   orgId?: string;
   llmGetters?: ConversationSummaryLlmGetters;
@@ -70,6 +77,13 @@ async function generateSummaryWithLlm(
       userId: input.userId,
       domain: input.domain,
       orgId: input.orgId,
+      conversationId: input.conversationId,
+      requestId: input.requestId,
+      interactionId: input.interactionId,
+      source: input.source || 'conversation_summary',
+      selectionMode: input.selectionMode,
+      fallbackCandidates: input.fallbackCandidates,
+      allowCloudFallback: input.allowCloudFallback,
     },
     getters.getDeepSeek,
     getters.getGemini,

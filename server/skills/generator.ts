@@ -11,6 +11,7 @@ import { createHash } from 'crypto';
 import { exec } from 'child_process';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
+import type { UserLLMProvider } from '../llm/user_preferences';
 import { WorkflowRecord, WorkflowStep } from './worklog';
 import { mcpManager, SKILLS_DIR } from '../mcp/client';
 import { getDataPath } from '../config/data_path';
@@ -24,7 +25,7 @@ export interface SkillGenerateRequest {
   /** Existing workflows to learn from */
   workflows?: WorkflowRecord[];
   /** LLM provider to use */
-  provider?: 'deepseek' | 'qwen' | 'openai' | 'gemini' | 'anthropic';
+  provider?: UserLLMProvider;
   model?: string;
   userId?: string;
 }
@@ -232,13 +233,23 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
   const preferred = getScopedPreferredLLM(request.userId || 'skill_gen');
   const provider = request.provider || preferred.provider;
   const model = request.model || preferred.model;
+  const explicitModelOverride = Boolean(request.provider || request.model);
+  const routeConfig = {
+    provider,
+    model,
+    userId: request.userId || 'skill_gen',
+    selectionMode: explicitModelOverride ? 'pinned' as const : preferred.selectionMode,
+    fallbackCandidates: explicitModelOverride ? [] : preferred.fallbackCandidates,
+    allowCloudFallback: explicitModelOverride ? false : preferred.allowCloudFallback,
+    source: 'skill_generator',
+  };
   let generatedSkillStagingDir = '';
 
   try {
     const response = await makeLLMCall(
       messages,
       [],
-      { provider, model, maxTokens: 2048, userId: request.userId || 'skill_gen' },
+      { ...routeConfig, maxTokens: 2048 },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -275,8 +286,9 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
         try {
           const convResponse = await makeLLMCall(
             conversionMessages, [],
-            { provider, model, maxTokens: 2048, userId: request.userId || 'skill_gen' },
+            { ...routeConfig, maxTokens: 2048 },
             getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+            getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
           );
           const convText = convResponse.text || '';
           const convJson = convText.match(/\{[\s\S]*\}/);
@@ -409,8 +421,9 @@ Return ONLY a JSON object with "handlerCode" (the fixed code body).`;
         ];
         const retryResponse = await makeLLMCall(
           retryMessages, [],
-          { provider, model, maxTokens: 2048, userId: request.userId || 'skill_gen' },
+          { ...routeConfig, maxTokens: 2048 },
           getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+          getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
         );
 
         const retryText = retryResponse.text || '';

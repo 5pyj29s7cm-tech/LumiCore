@@ -1,3 +1,5 @@
+import type { ModelRoutingTrace } from '../llm/model_routing_receipts';
+
 export type ToolPermission = 'public' | 'user' | 'admin' | 'system';
 
 /** Security classification per tool — inspired by Claude Code's tier system */
@@ -189,6 +191,7 @@ export interface ToolContext {
   userId?: string;
   /** Durable execution correlation shared by task, confirmation and receipt ledgers. */
   taskId?: string;
+  conversationId?: string;
   turnId?: string;
   requestId?: string;
   idempotencyKey?: string;
@@ -320,6 +323,8 @@ export interface NormalizedLLMResponse {
   toolCalls: ParsedToolCall[] | null;
   reasoningContent?: string | null;
   usage?: LLMUsage;
+  /** Exact model route used for this call, including explicit fallback evidence. */
+  routing?: ModelRoutingTrace;
 }
 
 export interface ToolExecutionRecord {

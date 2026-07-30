@@ -28,6 +28,16 @@ const declarations = [
   'desktop_ai_roundtable',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
+  'external_ai_route_plan',
+  'external_ai_collaborate',
+  'external_ai_collect_answers',
+  'external_ai_session_status',
+  'external_ai_history_source_register',
+  'external_ai_history_source_list',
+  'external_ai_history_source_revoke',
+  'external_ai_history_sync',
+  'external_ai_history_status',
+  'external_ai_history_query',
   'desktop_mouse_click_at',
   'desktop_cursor_glow_show',
   'desktop_cursor_glow_update',
@@ -325,17 +335,17 @@ describe('Lumi capability selection', () => {
     expect(execution.toolRoute?.toolNames).not.toContain('cad_generate_dxf');
   });
 
-  it('keeps desktop AI roundtables in the foreground desktop session', async () => {
+  it('routes legacy desktop AI wording into the unified external collaboration lane', async () => {
     const { dispatch, selection } = await selectCapability({
       userId: 'capability_selection_desktop_ai_roundtable_user',
       text: 'Use desktop_ai_roundtable with ChatGPT and Claude, collect their visible answers, then summarize them.',
       operationMode: 'assistant',
     });
 
-    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
-    expect(dispatch.flow.executionGovernance.delegationIntent).toBe('foreground_owned');
-    expect(selection.lane).toBe('desktop_control');
-    expect(selection.preferredTools).toContain('desktop_ai_roundtable');
+    expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(false);
+    expect(selection.lane).toBe('external_tool');
+    expect(selection.preferredTools).toContain('external_ai_collaborate');
+    expect(selection.preferredTools).not.toContain('desktop_ai_roundtable');
   });
 
   it('selects artifact work for reports and local files', async () => {
@@ -442,16 +452,99 @@ describe('Lumi capability selection', () => {
       operationMode: 'assistant',
     });
 
-    expect(selection.lane).toBe('desktop_control');
+    expect(selection.lane).toBe('external_tool');
     expect(selection.preferredTools.slice(0, 6)).toEqual(expect.arrayContaining([
+      'external_ai_collaborate',
+      'external_ai_collect_answers',
+      'external_ai_session_status',
+      'external_ai_route_plan',
       'desktop_ai_list_targets',
-      'desktop_ai_discovery_plan',
-      'desktop_ai_ask',
-      'desktop_ai_collect_answer',
     ]));
-    expect(execution.toolRoute?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
+    expect(execution.toolRoute?.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(
       execution.toolRoute?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
     );
+    expect(execution.toolRoute?.toolNames).not.toEqual(expect.arrayContaining([
+      'desktop_ai_ask',
+      'desktop_ai_roundtable',
+      'desktop_ai_collect_answer',
+    ]));
+  });
+
+  it('keeps chat, voice, and task external-AI routes on the same unified submission tools', async () => {
+    const text = 'Ask ChatGPT and Claude for independent answers, then collect and compare them.';
+    const routes = await Promise.all((['chat', 'voice', 'task'] as const).map(async channel => {
+      const { execution } = await selectCapability({
+        userId: `capability_selection_external_ai_${channel}`,
+        text,
+        channel,
+        operationMode: 'assistant',
+      });
+      return (execution.toolRoute?.toolNames || []).filter(name => (
+        name.startsWith('external_ai_') || /^desktop_ai_(?:ask|roundtable|collect_answer)$/.test(name)
+      ));
+    }));
+
+    for (const route of routes) {
+      expect(route).toEqual(expect.arrayContaining([
+        'external_ai_collaborate',
+        'external_ai_collect_answers',
+        'external_ai_session_status',
+        'external_ai_route_plan',
+      ]));
+      expect(route).not.toEqual(expect.arrayContaining([
+        'desktop_ai_ask',
+        'desktop_ai_roundtable',
+        'desktop_ai_collect_answer',
+      ]));
+    }
+  });
+
+  it('keeps external AI history on read-only authorization tools instead of collaboration submission', async () => {
+    const { selection, execution } = await selectCapability({
+      userId: 'capability_selection_external_ai_history',
+      text: '查看 ChatGPT 的聊天历史并同步最新内容',
+      operationMode: 'assistant',
+    });
+
+    expect(selection.lane).toBe('external_tool');
+    expect(selection.primary).toMatch(/authorized external AI history/i);
+    expect(selection.preferredTools).toEqual(expect.arrayContaining([
+      'external_ai_history_query',
+      'external_ai_history_sync',
+      'external_ai_history_status',
+    ]));
+    expect(selection.preferredTools).not.toContain('external_ai_collaborate');
+    expect(execution.toolRoute?.forbiddenToolNames).toContain('external_ai_collaborate');
+    expect(selection.promptOverlay).toContain('Never submit a new prompt');
+  });
+
+  it('keeps chat, voice, and task external-AI history routes identical and read-only', async () => {
+    const text = '读取 ChatGPT 的聊天历史并同步新增消息';
+    const routes = await Promise.all((['chat', 'voice', 'task'] as const).map(async channel => {
+      const { execution } = await selectCapability({
+        userId: `capability_selection_external_ai_history_${channel}`,
+        text,
+        channel,
+        operationMode: 'assistant',
+      });
+      return {
+        tools: (execution.toolRoute?.toolNames || []).filter(name => name.startsWith('external_ai_')),
+        forbidden: (execution.toolRoute?.forbiddenToolNames || []).filter(name => (
+          name.startsWith('external_ai_') || /^desktop_ai_(?:ask|roundtable|collect_answer)$/.test(name)
+        )),
+      };
+    }));
+
+    expect(routes[1]).toEqual(routes[0]);
+    expect(routes[2]).toEqual(routes[0]);
+    expect(routes[0].tools).toEqual(expect.arrayContaining([
+      'external_ai_history_query',
+      'external_ai_history_sync',
+      'external_ai_history_status',
+      'external_ai_history_source_list',
+    ]));
+    expect(routes[0].tools).not.toContain('external_ai_collaborate');
+    expect(routes[0].forbidden).toContain('external_ai_collaborate');
   });
 
   it('selects browser/account work for saved-login dashboards', async () => {

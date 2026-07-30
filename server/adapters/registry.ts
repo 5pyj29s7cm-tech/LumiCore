@@ -10,6 +10,7 @@ import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
 import { toolRegistry } from '../tools/registry';
 import { selectManifestCapabilities } from '../tools/capability_projection';
+import { listRegisteredProviders } from '../extensions/registry';
 
 export type AdapterStatus =
   | 'ready'
@@ -124,6 +125,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
   const gate = getGateConfig(userId);
   const skillStats = getSkillStats();
   const externalToolbox = getExternalToolboxStatus();
+  const extensionProviders = listRegisteredProviders(userId);
   const stateAgeSeconds = getStateAgeSeconds(state);
   const hasState = Boolean(state);
   const staleState = stateAgeSeconds != null && stateAgeSeconds > 120;
@@ -627,15 +629,27 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'Current workflow can generate Dynamo scripts and room schedules for reviewed Revit/BIM modeling and can open the handoff files or a detected Dynamo/Revit entry point. Native RVT production output still needs a confirmed adapter or Revit automation environment.',
     },
     {
+      id: 'ai.extension_registry',
+      label: 'Signed Provider and Tool Extensions',
+      category: 'ai',
+      status: extensionProviders.length > 0 ? 'available' : 'ready',
+      actions: ['extension_registry_list', 'extension_registry_install', 'extension_registry_test', 'extension_registry_rollback', 'extension_registry_disable', 'extension_registry_receipts', 'model_configuration_update', 'model_configuration_test'],
+      surfaces: ['signed extension registry', 'OpenAI-compatible providers', 'sandboxed HTTP tool adapters'],
+      requiresConfirmation: true,
+      diagnostics: [`activeProviders=${extensionProviders.length}`],
+      safety: 'Only Ed25519-signed declarative manifests are accepted. Exact origins, credential references, SSRF checks, timeouts, byte and concurrency budgets, compatibility probes, external-commit confirmation, idempotency, and persistent receipts remain mandatory.',
+      notes: 'Extensions add declared Provider models or HTTP tools without loading arbitrary JavaScript, Python, shell, filesystem, desktop, or installer code. Activation and rollback are transactional; disabled selections remain visible and fail explicitly rather than silently switching models.',
+    },
+    {
       id: 'ai.external_agents',
       label: 'External AI and Agent Tools',
       category: 'ai',
       status: skillStats.connected > 0 ? 'available' : 'requires_setup',
-      actions: ['desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_register_target', 'desktop_ai_roundtable', 'desktop_ai_ask', 'desktop_ai_collect_answer', 'external_app_list_adapters', 'adapter_registry_list', 'capability_research', 'computer_use'],
+      actions: ['external_ai_route_plan', 'external_ai_collaborate', 'external_ai_collect_answers', 'external_ai_session_status', 'external_ai_history_source_register', 'external_ai_history_source_list', 'external_ai_history_source_revoke', 'external_ai_history_sync', 'external_ai_history_status', 'external_ai_history_query', 'desktop_ai_list_targets', 'desktop_ai_discovery_plan', 'desktop_ai_register_target', 'external_app_list_adapters', 'adapter_registry_list', 'capability_research'],
       surfaces: ['MCP', 'browser', 'files', 'clipboard', 'local AI apps', 'WorkBuddy', 'Codex desktop', 'ChatGPT', 'Claude', 'Gemini', 'DeepSeek', 'Kimi', 'Cursor/Copilot', 'local AI runtimes'],
-      requiresConfirmation: false,
+      requiresConfirmation: true,
       setup: skillStats.connected > 0 ? [] : ['Connect a specific AI app, MCP server, browser account, or file workflow before delegating real work.'],
-      notes: 'Lumi can research, draft adapters, ask desktop AI apps and browser AI surfaces such as WorkBuddy, Codex, ChatGPT, Claude, Gemini, DeepSeek, Kimi, Cursor/Copilot, and local AI runtimes through real windows, collect visible answers with screenshot/vision evidence, and coordinate connected AI apps without per-tool permission popups. desktop_ai_roundtable sends one question to multiple targets, collects each verified visible answer, and returns a synthesis input; pressing submit alone remains unverified. Missing targets should be handled as public-source discovery candidates with desktop_ai_discovery_plan, then registered after confirmation with desktop_ai_register_target so they become reusable catalog entries instead of one-off scripts. API/MCP/CLI integrations are preferred when available; installing or running untrusted third-party code remains a hard boundary.',
+      notes: 'Lumi coordinates connected AI targets through external_ai_collaborate, which binds the user task and conversation to a persistent session and chooses API/MCP, healthy CLI, structured browser, then desktop visual control in that fixed order. Each target has an idempotent dispatch and independent source receipt; uncertain submissions stop without fallback resend, and late answers are archived. external_ai_collect_answers is read-only for existing sessions. External AI history uses a separate authorization ledger and external_ai_history_* tools: exact connectors, local JSON exports, authorized-session adapters, or a single visible viewport only; scoped pagination, stable ids, incremental deduplication, attachments, restart checkpoints, and source evidence are preserved. Desktop-visible extraction prefers local vision, does not scroll or submit, and remains partial_visible. Arbitrary account history is unavailable without a confirmed source. Desktop AI target discovery and registration remain available, while old desktop submit/roundtable calls are compatibility-only. Installing or running untrusted third-party code remains a hard boundary.',
     },
     {
       id: 'ai.nano_banana',
@@ -678,13 +692,13 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       label: 'Settings, Providers, and Permissions',
       category: 'system',
       status: 'ready',
-      actions: ['open_settings', 'open_settings(section=llm)', 'open_settings(section=voice)', 'open_settings(section=vision)'],
+      actions: ['open_settings', 'open_settings(section=llm)', 'open_settings(section=voice)', 'open_settings(section=vision)', 'extension_registry_list', 'extension_registry_receipts'],
       surfaces: ['Settings', 'LLM providers', 'Vision Services', 'Voice Services', 'Autonomy'],
       diagnostics: [
         state?.permissions ? `permissions=${Object.keys(state.permissions).length}` : 'permissions=unknown',
         'externalAutomationGate=removed',
       ],
-      notes: 'Provider selection is authoritative. Fallbacks should be visible and user-informed, not silent.',
+      notes: 'Provider selection is authoritative. Built-in and active signed extension Providers use the same pinned/fallback routing receipts. Disabled or unavailable custom Providers are reported explicitly; fallbacks are visible and user-informed, never silent.',
     },
   ];
 

@@ -224,22 +224,26 @@ describe('systematic naturalness regressions', () => {
     expect(requiresDesktopAiCollaboration(text)).toBe(true);
     expect(requiresDesktopAiAnswerCollection(text)).toBe(true);
     const contract = buildActionContract(text);
-    expect(contract.label).toBe('Verified desktop AI collaboration');
+    expect(contract.label).toBe('Verified external AI collaboration');
     expect(hasCoreActionEvidence(contract, [{
       name: 'desktop_open',
       arguments: { target: 'ChatGPT' },
       result: '{"ok":true}',
     }], text)).toBe(false);
     const submitted = {
-      name: 'desktop_ai_ask',
+      name: 'external_ai_collaborate',
       arguments: { question: '你怎么看？', targets: ['chatgpt'] },
-      result: '{"ok":true,"submittedCount":1}',
+      result: '{"ok":true,"verified":true,"sessionId":"session-1","counts":{"submitted":1,"answered":0},"results":[{"targetId":"chatgpt","status":"submitted"}]}',
     };
     expect(hasCoreActionEvidence(contract, [submitted], text)).toBe(false);
     expect(hasCoreActionEvidence(contract, [submitted, {
-      name: 'desktop_ai_collect_answer',
-      arguments: { target: 'chatgpt' },
+      name: 'external_ai_collect_answers',
+      arguments: { sessionId: 'session-1' },
       result: '{"status":"collected","answerText":"这是可见回答。"}',
+    }, {
+      name: 'external_ai_collect_answers',
+      arguments: { sessionId: 'session-1' },
+      result: '{"ok":true,"verified":true,"sessionId":"session-1","counts":{"answered":1},"answers":[{"targetId":"chatgpt","answerText":"visible answer","sourceEvidence":{"route":"api"}}]}',
     }], text)).toBe(true);
   });
 

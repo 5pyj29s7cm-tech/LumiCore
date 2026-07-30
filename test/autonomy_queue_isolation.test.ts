@@ -2,15 +2,38 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 import {
   cancelTask,
+  checkpointAutonomousTask,
+  claimAutonomousTask,
   enqueue,
   getTaskQueue,
   isTaskCancellationRequested,
   markCancelled,
   markRunning,
+  requestPauseAutonomousTask,
   recoverPersistedTask,
+  resetAutonomousTaskQueueForTest,
+  resumeAutonomousTask,
 } from '../server/autonomy/task_queue';
 
 describe('Autonomous task queue isolation', () => {
+  it('enforces one lease and supports checkpointed pause/resume', () => {
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
+    const userId = `queue-lease-${Date.now()}`;
+    const task = enqueue({ userId, title: 'Leased', description: 'Leased', source: 'user_request', priority: 5, mode: 'analysis' })!;
+    const claimed = claimAutonomousTask(task.id, { leaseId: 'autonomy-lease-a', owner: 'worker-a' })!;
+    expect(claimed).toMatchObject({ status: 'running', leaseId: 'autonomy-lease-a', attempt: 1 });
+    expect(claimAutonomousTask(task.id, { leaseId: 'autonomy-lease-b' })).toBeNull();
+    expect(checkpointAutonomousTask(task.id, { phase: 'tool_loop', iteration: 2 }, claimed.leaseId)?.checkpoint)
+      .toMatchObject({ phase: 'tool_loop', iteration: 2 });
+    expect(requestPauseAutonomousTask(task.id, userId)?.status).toBe('pausing');
+    const recovered = recoverPersistedTask(getTaskQueue(userId)[0], '2026-07-30T00:00:00.000Z');
+    expect(recovered.status).toBe('paused');
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
+    const pending = enqueue({ userId, title: 'Pending pause', description: 'Pending pause', source: 'user_request', priority: 5, mode: 'analysis' })!;
+    expect(requestPauseAutonomousTask(pending.id, userId)?.status).toBe('paused');
+    expect(resumeAutonomousTask(pending.id, userId)?.status).toBe('pending');
+  });
+
   it('lists and cancels tasks only for the owning user', () => {
     const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const userA = `queue-a-${suffix}`;

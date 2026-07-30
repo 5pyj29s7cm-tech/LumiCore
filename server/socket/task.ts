@@ -304,7 +304,12 @@ export function registerTaskHandler(
     }
     const taskLease = taskExecutionQueue.reserve(executionKey, requestId);
     const taskAbortController = taskLease.controller;
-    const releaseTask = () => taskLease.release();
+    let releaseDesktopControlLease: (() => void) | null = null;
+    const releaseTask = () => {
+      releaseDesktopControlLease?.();
+      releaseDesktopControlLease = null;
+      taskLease.release();
+    };
 
     if (previous) {
       try {
@@ -333,6 +338,7 @@ export function registerTaskHandler(
     const taskStateKey = scopedEmotionalStateKey(uid, taskScope);
     const confirmationScope = {
       source: 'task',
+      taskId: requestId,
       domain: taskScope.domain,
       orgId: taskScope.orgId,
       channelId: socket.id,
@@ -395,6 +401,15 @@ export function registerTaskHandler(
     const userLLMPrefs = getScopedPreferredLLM(uid, taskScope);
     let activeProvider = userLLMPrefs.provider || 'deepseek';
     let activeModel = userLLMPrefs.model;
+    const reasoningRoutePolicy = {
+      selectionMode: userLLMPrefs.selectionMode,
+      fallbackCandidates: userLLMPrefs.fallbackCandidates,
+      allowCloudFallback: userLLMPrefs.allowCloudFallback,
+      conversationId: convForHistory.id,
+      requestId,
+      interactionId,
+      source: 'task',
+    };
 
     // ── Load persisted conversation history (survives page reload) ──
     const executionPipeline = buildLumiExecutionPipeline({
@@ -554,10 +569,12 @@ export function registerTaskHandler(
       domain: taskScope.domain,
       orgId: taskScope.orgId,
       source: 'task',
+      taskId: requestId,
       requestSocket: socket,
       cancelOnRequestSocketDisconnect: false,
       signal: taskAbortController.signal,
     });
+    releaseDesktopControlLease = () => desktopRelay.releaseControlLease('task_turn_complete');
     const persistTaskLearning = (
       assistantText: string,
       options: {
@@ -682,6 +699,10 @@ export function registerTaskHandler(
         arguments: confirmedArgs,
         context: {
           userId: uid,
+          taskId: actionTaskExecution.state?.taskId || requestId,
+          conversationId: convForHistory.id,
+          turnId: requestId,
+          requestId,
           domain: taskScope.domain,
           orgId: taskScope.orgId,
           desktopRelay,
@@ -736,6 +757,7 @@ export function registerTaskHandler(
             domain: taskScope.domain,
             orgId: taskScope.orgId,
             signal: taskAbortController.signal,
+            ...reasoningRoutePolicy,
           },
           record => {
             emitAgent("agent:tool_call", {
@@ -922,7 +944,7 @@ export function registerTaskHandler(
           if (availableAgents.length >= 1) {
             try {
               emitAgent("agent:status", { status: "thinking", agentName: exposeAgentWork ? "Lumi Orchestrator" : personality.name, phase: exposeAgentWork ? 'orchestrator' : 'background' });
-              const scopedLlmConfig = { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal };
+              const scopedLlmConfig = { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy };
               const subTasks = await decomposeTask(data.text, scopedLlmConfig, orchestrationContext, llmGetters);
               if (exposeAgentWork && !deferTaskModelOutput) emitTask("task:chunk", { text: `[Orchestrator] Decomposed into ${subTasks.length} sub-tasks\n`, agentName: "Lumi" });
 
@@ -1049,7 +1071,7 @@ export function registerTaskHandler(
       const result = await runWithTools(
         messages,
         toolRegistry,
-        { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal },
+        { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy },
         (record) => {
           emitAgent("agent:tool_call", {
             name: record.name,
@@ -1069,7 +1091,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
+        { userId: uid, taskId: actionTaskExecution.state?.taskId || requestId, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: routedTaskText, routedTaskText, toolPolicy: executionDecision.toolPolicy, desktopExecutionTracker, isCancelled: () => taskLease.signal.aborted, llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,

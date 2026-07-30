@@ -110,14 +110,20 @@ import { executeSkillWorkflowAdapter } from "../skills/workflow_registry";
 import { isLatestUserTurn, markLatestUserTurn } from "../agents/background_delivery";
 import {
   cancelBackgroundTask,
+  checkpointBackgroundTask,
   completeBackgroundTask,
   failBackgroundTask,
   getBackgroundTask,
+  heartbeatBackgroundTask,
   incrementBackgroundTaskToolCalls,
   isBackgroundTaskCancellationRequested,
+  isBackgroundTaskPauseRequested,
   markBackgroundTaskRunning,
+  pauseBackgroundTask,
   registerBackgroundTask,
   requestCancelBackgroundTask,
+  requestPauseBackgroundTask,
+  resumeBackgroundTask,
 } from "../agents/background_tasks";
 import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, runNLChainer, shouldChainTask } from "../agents/nl_chainer";
 import { autoInstallForTask } from "../agents/auto_installer";
@@ -948,6 +954,24 @@ export function registerChatHandler(
     });
   });
 
+  const updateBackgroundTaskState = (
+    data: { taskId?: string },
+    operation: 'pause' | 'resume',
+  ) => {
+    const uid = userIdFn(socket);
+    const taskId = typeof data?.taskId === 'string' ? data.taskId : '';
+    const task = taskId
+      ? operation === 'pause'
+        ? requestPauseBackgroundTask(taskId, uid)
+        : resumeBackgroundTask(taskId, uid)
+      : null;
+    socket.emit("agent:background_task_update", task
+      ? { taskId: task.id, task, source: 'background_delegation' }
+      : { taskId, error: `Background task not found or not ${operation === 'pause' ? 'pausable' : 'resumable'}`, source: 'background_delegation' });
+  };
+  socket.on("agent:background_pause", (data: { taskId?: string }) => updateBackgroundTaskState(data, 'pause'));
+  socket.on("agent:background_resume", (data: { taskId?: string }) => updateBackgroundTaskState(data, 'resume'));
+
   socket.on("agent:chat", async (
     data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
@@ -1149,7 +1173,12 @@ export function registerChatHandler(
     }
     const sessionLease = chatExecutionQueue.reserve(sessionKey, requestId);
     const abortController = sessionLease.controller;
-    const releaseChatSession = () => sessionLease.release();
+    let releaseDesktopControlLease: (() => void) | null = null;
+    const releaseChatSession = () => {
+      releaseDesktopControlLease?.();
+      releaseDesktopControlLease = null;
+      sessionLease.release();
+    };
 
     if (previousSession) {
       try {
@@ -1615,6 +1644,7 @@ export function registerChatHandler(
         domain: resolvedDomain,
         orgId: resolvedOrgId,
         source: 'chat',
+        taskId: requestId,
         requestSocket: socket,
         emitToolLifecycle,
         formatResultForLifecycle: formatToolResultForUi,
@@ -1623,6 +1653,7 @@ export function registerChatHandler(
         cancelOnRequestSocketDisconnect: false,
         signal: abortController.signal,
       });
+      releaseDesktopControlLease = () => desktopRelay.releaseControlLease('chat_turn_complete');
 
       let pendingConfirmationCreatedThisTurn: ReturnType<typeof recordPendingConfirmation> | null = null;
       const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
@@ -2003,6 +2034,15 @@ export function registerChatHandler(
       const userLLMPrefs = getScopedPreferredLLM(uid, { domain: resolvedDomain, orgId: resolvedOrgId });
       let activeProvider = userLLMPrefs.provider || 'deepseek';
       let activeModel = userLLMPrefs.model;
+      const reasoningRoutePolicy = {
+        selectionMode: userLLMPrefs.selectionMode,
+        fallbackCandidates: userLLMPrefs.fallbackCandidates,
+        allowCloudFallback: userLLMPrefs.allowCloudFallback,
+        conversationId: conversationId || '',
+        requestId,
+        interactionId,
+        source: 'chat',
+      };
 
       // Hybrid dispatch is opt-in only; do not change providers unless the user chose auto.
       if (llmGetters.isOllamaAvailable() && userLLMPrefs.provider === 'auto') {
@@ -2013,10 +2053,12 @@ export function registerChatHandler(
 
       const scheduleChatSummary = (targetConversationId: string) => {
         scheduleConversationSummary({
-          conversationId: targetConversationId,
           userId: uid,
           provider: activeProvider,
           model: activeModel,
+          ...reasoningRoutePolicy,
+          conversationId: targetConversationId,
+          source: 'chat_summary',
           domain: resolvedDomain,
           orgId: resolvedOrgId,
           llmGetters,
@@ -2113,6 +2155,7 @@ export function registerChatHandler(
               domain: resolvedDomain,
               orgId: resolvedOrgId,
               signal: abortController.signal,
+              ...reasoningRoutePolicy,
             },
             record => {
               if (!record?.name || isDirectDesktopTool(record.name)) return;
@@ -2133,6 +2176,10 @@ export function registerChatHandler(
             undefined,
             {
               userId: uid,
+              taskId: actionTaskExecution.state?.taskId || requestId,
+              conversationId: conversation.id,
+              turnId: requestId,
+              requestId,
               domain: resolvedDomain,
               orgId: resolvedOrgId,
               desktopRelay,
@@ -2496,7 +2543,7 @@ export function registerChatHandler(
         const result = await makeLLMCall(
           messages,
           [],
-          { provider: activeProvider, model: activeModel, userId: uid, maxTokens: 60, domain: resolvedDomain, orgId: resolvedOrgId },
+          { provider: activeProvider, model: activeModel, userId: uid, maxTokens: 60, domain: resolvedDomain, orgId: resolvedOrgId, ...reasoningRoutePolicy },
           llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
           llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
         );
@@ -2505,6 +2552,10 @@ export function registerChatHandler(
 
       const cognitionToolContext: ToolContext = {
         userId: uid,
+        taskId: actionTaskExecution.state?.taskId || requestId,
+        conversationId: conversation.id,
+        turnId: requestId,
+        requestId,
         domain: resolvedDomain,
         orgId: resolvedOrgId,
         desktopRelay,
@@ -2969,6 +3020,23 @@ export function registerChatHandler(
               name: agent.name,
               category: agent.category,
             })),
+            context: {
+              conversationId: conversationId || '',
+              conversationAgentId,
+              personalityId,
+              domain: resolvedDomain,
+              orgId: resolvedOrgId,
+              sourceRequestId: requestId,
+              interactionId,
+              actionTaskId: actionTaskExecution.state?.taskId,
+              provider: activeProvider,
+              model: activeModel,
+              selectionMode: reasoningRoutePolicy.selectionMode,
+              fallbackCandidates: reasoningRoutePolicy.fallbackCandidates,
+              allowCloudFallback: reasoningRoutePolicy.allowCloudFallback,
+              forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
+              toolPolicy: routedToolPolicy,
+            },
           });
           const backgroundTaskId = backgroundTask.id;
           const workerNames = backgroundTask.workerNames.slice(0, 3);
@@ -3073,6 +3141,20 @@ export function registerChatHandler(
               try {
                 const runningTask = markBackgroundTaskRunning(backgroundTaskId);
                 if (runningTask) emitTaskUpdate(runningTask);
+                if (!runningTask || runningTask.status !== 'running' || !runningTask.leaseId) {
+                  throw new Error('Background task lease could not be acquired.');
+                }
+                checkpointBackgroundTask(backgroundTaskId, {
+                  phase: 'orchestrating',
+                  detail: `Started attempt ${runningTask.attempt}`,
+                }, runningTask.leaseId);
+                const backgroundLeaseHeartbeat = setInterval(() => {
+                  const renewed = heartbeatBackgroundTask(backgroundTaskId, runningTask.leaseId!);
+                  if (!renewed) clearInterval(backgroundLeaseHeartbeat);
+                }, 15_000);
+                if (typeof (backgroundLeaseHeartbeat as any).unref === 'function') {
+                  (backgroundLeaseHeartbeat as any).unref();
+                }
                 emitBackground("agent:status", {
                   status: "thinking",
                   agentName: "Lumi Orchestrator",
@@ -3100,9 +3182,10 @@ export function registerChatHandler(
                     resumeNodeReceipts: backgroundModelRecovery?.receipts,
                     availableAgentIds: backgroundTask.workers.map(worker => worker.id),
                     forceOrchestration: delegationDecision.reason === 'explicit_background_preference',
-                    isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId),
+                    isCancelled: () => isBackgroundTaskCancellationRequested(backgroundTaskId)
+                      || isBackgroundTaskPauseRequested(backgroundTaskId),
                   },
-                  { provider: activeProvider as any, model: activeModel },
+                  { provider: activeProvider as any, model: activeModel, ...reasoningRoutePolicy },
                   llmGetters,
                   undefined,
                   (record, meta) => {
@@ -3117,6 +3200,11 @@ export function registerChatHandler(
                     }
                     if (record.result !== undefined || record.error !== undefined) {
                       const updatedTask = incrementBackgroundTaskToolCalls(backgroundTaskId);
+                      checkpointBackgroundTask(backgroundTaskId, {
+                        phase: 'tool_execution',
+                        receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
+                        detail: `${backgroundToolRecords.length} terminal tool call(s) observed`,
+                      }, runningTask.leaseId);
                       if (updatedTask) emitTaskUpdate(updatedTask);
                     }
                     // Direct desktop relays already emit their own start/result lifecycle.
@@ -3166,6 +3254,11 @@ export function registerChatHandler(
                 });
                 const backgroundBlocked = finalizedBackground.blocked;
                 const completionText = finalizedBackground.text;
+                checkpointBackgroundTask(backgroundTaskId, {
+                  phase: backgroundBlocked ? 'failed_verification' : 'verified',
+                  receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
+                  detail: finalizedBackground.reason || 'Completion verified',
+                }, runningTask.leaseId);
                 const terminalTask = backgroundBlocked
                   ? failBackgroundTask(
                       backgroundTaskId,
@@ -3248,6 +3341,12 @@ export function registerChatHandler(
                 }
               } catch (bgErr: any) {
                 const bgMessage = bgErr?.message || String(bgErr);
+                if (isBackgroundTaskPauseRequested(backgroundTaskId)) {
+                  const pausedTask = pauseBackgroundTask(backgroundTaskId);
+                  if (pausedTask) emitTaskUpdate(pausedTask);
+                  emitBackground("agent:status", { status: "idle", agentName: personality.name, phase: 'background' });
+                  return;
+                }
                 if (isBackgroundTaskCancellationRequested(backgroundTaskId) || /cancelled|canceled/i.test(bgMessage)) {
                   const cancelledTask = cancelBackgroundTask(backgroundTaskId);
                   if (cancelledTask) emitTaskUpdate(cancelledTask);
@@ -3272,6 +3371,12 @@ export function registerChatHandler(
                   return;
                 }
                 const errorText = formatBackgroundDelegationFailure(bgErr, /[\u3400-\u9fff]/u.test(visibleUserText));
+                const currentTask = getBackgroundTask(backgroundTaskId, uid);
+                checkpointBackgroundTask(backgroundTaskId, {
+                  phase: 'failed',
+                  receiptIds: backgroundToolRecords.map(item => item.id).filter((id): id is string => Boolean(id)),
+                  detail: bgMessage,
+                }, currentTask?.leaseId);
                 const failedTask = failBackgroundTask(backgroundTaskId, errorText);
                 if (failedTask) emitTaskUpdate(failedTask);
                 const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0
@@ -3363,7 +3468,7 @@ export function registerChatHandler(
               desktopExecutionTracker,
               resumeNodeReceipts: foregroundModelRecovery?.receipts,
             },
-            { provider: activeProvider, model: activeModel },
+            { provider: activeProvider, model: activeModel, ...reasoningRoutePolicy },
             llmGetters,
             exposeAgentWork && !deferCompletionStream
               ? (msg) => emitAgent("agent:chunk", { text: msg, agentName: "Lumi" })
@@ -3448,6 +3553,7 @@ export function registerChatHandler(
               userId: uid,
               provider: activeProvider,
               model: activeModel,
+              ...reasoningRoutePolicy,
               desktopRelay,
               context: {
                 userId: uid,
@@ -3553,7 +3659,7 @@ export function registerChatHandler(
             const response = await makeLLMCallStreaming(
               messages,
               [],
-              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal },
+              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal, ...reasoningRoutePolicy },
               onChunk,
               llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
               llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
@@ -3562,7 +3668,7 @@ export function registerChatHandler(
             responseText = response.text || streamChunks.join('') || '';
             llmWasCalled = true;
             if (response.usage) {
-              recordTokenUsage(uid, activeProvider, activeModel, {
+              recordTokenUsage(uid, response.routing?.selectedProvider || activeProvider, response.routing?.selectedModel || activeModel, {
                 promptTokens: response.usage.promptTokens,
                 completionTokens: response.usage.completionTokens,
                 totalTokens: response.usage.totalTokens,
@@ -3571,7 +3677,7 @@ export function registerChatHandler(
             const totalUsage = response.usage?.totalTokens || 0;
             socket.emit('token:usage_update', {
               userId: uid,
-              provider: activeProvider,
+              provider: response.routing?.selectedProvider || activeProvider,
               totalTokens: totalUsage,
               mode: 'chat',
               timestamp: new Date().toISOString(),
@@ -3584,7 +3690,7 @@ export function registerChatHandler(
           const result = await runWithTools(
             messages,
             toolRegistry,
-            { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId },
+            { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, ...reasoningRoutePolicy },
             isSanctuary ? undefined : (record) => {
               allToolRecords.push(record);
               if (isDirectDesktopTool(record.name)) return;
@@ -3604,6 +3710,10 @@ export function registerChatHandler(
             onChunk,
             {
               userId: uid,
+              taskId: actionTaskExecution.state?.taskId || requestId,
+              conversationId: conversation.id,
+              turnId: requestId,
+              requestId,
               domain: resolvedDomain,
               orgId: resolvedOrgId,
               desktopRelay,
@@ -3783,7 +3893,7 @@ export function registerChatHandler(
                 },
               ],
               [],
-              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, maxTokens: 300 },
+              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, maxTokens: 300, ...reasoningRoutePolicy },
               llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
               llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
             );

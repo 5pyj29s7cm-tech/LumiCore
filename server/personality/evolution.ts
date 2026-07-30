@@ -20,14 +20,6 @@ import { NormalizedMessage, makeLLMCall } from '../llm/providers';
 import { readDB } from '../../db_layer';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
 
-const DEFAULT_MODELS: Record<string, string> = {
-  deepseek: 'deepseek-v4-flash',
-  qwen: 'qwen-plus',
-  openai: 'gpt-4o',
-  gemini: 'gemini-2.0-flash',
-  anthropic: 'claude-sonnet-4-6',
-};
-
 export interface PersonalityLearningScope {
   domain?: 'personal' | 'work';
   orgId?: string;
@@ -217,48 +209,30 @@ ${memoryTexts}`;
       { role: 'user', content: synthesisPrompt },
     ];
 
-    // Build provider order from user's LLM prefs: active provider first, then explicitly configured fallbacks.
+    // Use the same persisted route policy as every other Lumi inference. This
+    // subsystem must not invent a second fallback order from whichever API
+    // keys or historical model entries happen to exist.
     const prefs = getScopedPreferredLLM(userId, { domain, orgId });
-    const activeProvider = prefs.provider || '';
-    const userModels = prefs.models || {};
-
-    const VALID_PROVIDERS = ['deepseek', 'qwen', 'gemini', 'openai', 'anthropic'] as const;
-    type ValidProvider = typeof VALID_PROVIDERS[number];
-    const candidates: { provider: ValidProvider; model: string }[] = [];
-    if (activeProvider && VALID_PROVIDERS.includes(activeProvider as ValidProvider)) {
-      const ap = activeProvider as ValidProvider;
-      candidates.push({
-        provider: ap,
-        model: userModels[ap] || DEFAULT_MODELS[ap] || '',
-      });
-    }
-    // Do not silently fall back to every available API key. Only providers the user saved
-    // as model preferences are treated as intended fallbacks.
-    for (const p of VALID_PROVIDERS) {
-      if (p === activeProvider) continue;
-      if (!Object.prototype.hasOwnProperty.call(userModels, p)) continue;
-      candidates.push({
-        provider: p,
-        model: userModels[p],
-      });
-    }
-
-    let result: { text?: string } = { text: '' };
-    let succeeded = false;
-    for (const { provider, model } of candidates) {
-      if (!model) continue;
-      try {
-        result = await makeLLMCall(
-          messages, [], { provider, model },
-          getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-        );
-        succeeded = true;
-        break;
-      } catch {
-        continue;
-      }
-    }
-    if (!succeeded) return null;
+    const result = await makeLLMCall(
+      messages,
+      [],
+      {
+        provider: prefs.provider,
+        model: prefs.model,
+        userId,
+        domain,
+        orgId,
+        selectionMode: prefs.selectionMode,
+        fallbackCandidates: prefs.fallbackCandidates,
+        allowCloudFallback: prefs.allowCloudFallback,
+        source: 'personality_evolution',
+      },
+      getDeepSeek,
+      getGemini,
+      getOpenAI,
+      getAnthropic,
+      getQwen,
+    );
 
     let text = result.text || '';
     // Strip markdown code fences if present

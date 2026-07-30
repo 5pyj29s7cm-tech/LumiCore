@@ -57,7 +57,7 @@ export function inferCapabilityLane(toolName: string, family: string): Capabilit
   if (/(?:file|directory|path_|filesystem|grep)/.test(value)) return 'files';
   if (/(?:knowledge|embedding|indexing)/.test(value)) return 'knowledge';
   if (/(?:memory|sleep|dream|personality)/.test(value)) return 'memory';
-  if (/(?:agent|skill|capability|self_extension|work_takeover|external_control|adapter|hermes|autonomy|workflow)/.test(value)) return 'agents';
+  if (/(?:agent|skill|capability|self_extension|work_takeover|external_control|external_ai|adapter|hermes|autonomy|workflow)/.test(value)) return 'agents';
   if (/(?:system|runtime|health|process|network|usage|diagnostic)/.test(value)) return 'system';
   return 'general';
 }

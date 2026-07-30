@@ -1,4 +1,10 @@
-import { cancelRuntimeWork, getRuntimeWorkSnapshot, type RuntimeWorkKind } from '../../runtime/work_control';
+import {
+  cancelRuntimeWork,
+  getRuntimeWorkSnapshot,
+  pauseRuntimeWork,
+  resumeRuntimeWork,
+  type RuntimeWorkKind,
+} from '../../runtime/work_control';
 import { ToolRegistry } from '../registry';
 
 function kindsFromArgs(value: unknown): RuntimeWorkKind[] | undefined {
@@ -86,6 +92,84 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       operation: 'mutate',
       assurance: 'verified',
       subjectArgument: 'kinds',
+    },
+  });
+
+  registry.register({
+    name: 'runtime_work_pause',
+    description: 'Pause checkpoint-capable delegated or autonomous Lumi work without discarding its task identity, execution checkpoint, or receipts. Use only when the user explicitly asks to pause or temporarily suspend work.',
+    // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
+    routingHints: ['\u6682\u505c\u540e\u53f0\u4efb\u52a1', '\u5148\u505c\u4e00\u4e0b', 'pause background work', 'suspend current task'],
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Optional exact runtime task id. Omit to pause all matching checkpoint-capable work.' },
+        kinds: { type: 'array', items: { type: 'string', enum: ['delegation', 'autonomy'] } },
+      },
+      required: [],
+    },
+    handler: async (args, context) => JSON.stringify(pauseRuntimeWork({
+      userId: context?.userId || 'anonymous',
+      taskId: args.taskId ? String(args.taskId) : undefined,
+      kinds: kindsFromArgs(args.kinds),
+    }), null, 2),
+    permission: 'user',
+    securityLevel: 'safe',
+    capability: {
+      id: 'runtime.work.pause',
+      family: 'runtime_work',
+      lane: 'agents',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'local_write', scope: 'active Lumi task state', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'matchedCount', 'pausedCount', 'pausingCount'],
+        requiredValues: { ok: true },
+        successStatuses: ['idle', 'paused'],
+        successSignals: ['matched work is paused or no matching active work exists'],
+        limitations: ['A pausing receipt is provisional until the active executor reaches a checkpoint and acknowledges pause.'],
+      },
+    },
+  });
+
+  registry.register({
+    name: 'runtime_work_resume',
+    description: 'Resume paused delegated or autonomous Lumi work from its durable checkpoint and existing receipt ledger. Use only when the user explicitly asks to continue paused work.',
+    // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
+    routingHints: ['\u7ee7\u7eed\u540e\u53f0\u4efb\u52a1', '\u6062\u590d\u4efb\u52a1', 'resume background work', 'continue paused task'],
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Optional exact runtime task id. Omit to resume all matching paused work.' },
+        kinds: { type: 'array', items: { type: 'string', enum: ['delegation', 'autonomy'] } },
+      },
+      required: [],
+    },
+    handler: async (args, context) => JSON.stringify(resumeRuntimeWork({
+      userId: context?.userId || 'anonymous',
+      taskId: args.taskId ? String(args.taskId) : undefined,
+      kinds: kindsFromArgs(args.kinds),
+    }), null, 2),
+    permission: 'user',
+    securityLevel: 'safe',
+    capability: {
+      id: 'runtime.work.resume',
+      family: 'runtime_work',
+      lane: 'agents',
+      operation: 'mutate',
+      risk: 'low',
+      sideEffects: [{ type: 'local_write', scope: 'paused Lumi task state', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt',
+        required: true,
+        requiredFields: ['ok', 'status', 'matchedCount', 'resumedCount'],
+        requiredValues: { ok: true },
+        successStatuses: ['idle', 'resumed'],
+        successSignals: ['matched paused work is queued for durable execution'],
+        limitations: ['Resumed means queued from the retained checkpoint; completion still requires a later verified task receipt.'],
+      },
     },
   });
 }

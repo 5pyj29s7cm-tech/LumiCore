@@ -88,7 +88,7 @@ function externalCommitInputDigest(name: string, args: Record<string, any>): str
 }
 
 function persistedExternalCommitReplay(result: string, idempotencyKey: string): string {
-  const safeKeys = /^(?:sent|submitted|published|verified|verificationStatus|verificationMethod|verificationConfidence|verificationReason|providerReceipt|messageId|submissionId|publicationId|paymentId|signatureId|status|targetMatched|conversationVerified|contactVerified|sendAttempted|completedAt|timestamp)$/i;
+  const safeKeys = /^(?:sent|submitted|published|verified|verificationStatus|verificationMethod|verificationConfidence|verificationReason|providerReceipt|messageId|submissionId|publicationId|paymentId|signatureId|status|targetMatched|conversationVerified|contactVerified|sendAttempted|sessionId|taskId|questionDigest|counts|routePriority|reconciled|completedAt|timestamp)$/i;
   try {
     const parsed = JSON.parse(result || '{}');
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -157,8 +157,8 @@ export function getToolExecutionTimeoutMs(name: string): number {
   if (/^cad_prepare_autocad_operations$/i.test(name)) return 5 * 60_000;
   if (/^(web_login_|url_fetch_logged_in)/i.test(name)) return 5 * 60_000;
   if (name === 'legal_refresh_authoritative_sources') return 3 * 60_000;
-  if (name === 'desktop_ai_roundtable') return 15 * 60_000;
-  if (/^(wechat_|desktop_ai_)/i.test(name)) return 3 * 60_000;
+  if (name === 'desktop_ai_roundtable' || name === 'external_ai_collaborate') return 15 * 60_000;
+  if (/^(wechat_|desktop_ai_|external_ai_)/i.test(name)) return 3 * 60_000;
   if (/^(work_takeover_|capability_gap_autofix|generate_skill|install_skill)/i.test(name)) return 10 * 60_000;
   if (/^desktop_/i.test(name)) return 90_000;
   if (/^floorplan_extract_geometry$/i.test(name)) return 10 * 60_000;

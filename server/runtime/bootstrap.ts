@@ -16,6 +16,12 @@ import { recoverOrphanedConversationActionExecutions } from "../conversation/man
 import { stopGptSovitsRuntime } from "../tts/gptsovits_runtime";
 import { stopVoiceprintRuntime } from "../biometrics/voiceprint_provider";
 import { resolveSystemExplorationWorker } from "./system_exploration_worker";
+import { hydrateBackgroundTasksFromDb } from "../agents/background_tasks";
+import { hydrateAutonomousTasksFromDb } from "../autonomy/task_queue";
+import { startDurableBackgroundTaskSupervisor } from "../agents/background_task_supervisor";
+import { recoverInterruptedExternalAiCollaborations } from "../agents/external_ai_collaboration";
+import { recoverInterruptedExternalAiHistorySyncs } from "../agents/external_ai_history_sync";
+import { hydrateActiveExtensions } from "../extensions/registry";
 
 interface BootstrapContext {
   server: any;
@@ -32,6 +38,8 @@ interface BootstrapContext {
 }
 
 let firstBootExplorationWorker: ChildProcess | null = null;
+let backgroundTaskSupervisor: ReturnType<typeof startDurableBackgroundTaskSupervisor> | null = null;
+let backgroundTaskSupervisorStartupTimer: ReturnType<typeof setTimeout> | null = null;
 
 function isValidSystemSnapshot(value: unknown): value is SystemSnapshot {
   const snapshot = value as Partial<SystemSnapshot> | null;
@@ -135,6 +143,21 @@ export async function bootstrap(ctx: BootstrapContext) {
   try {
     await ensureDatabaseInitialized();
     console.log('Database initialized successfully');
+    const recoveredBackgroundTasks = hydrateBackgroundTasksFromDb(true);
+    const recoveredAutonomousTasks = hydrateAutonomousTasksFromDb(true);
+    const recoveredExternalAiDispatches = recoverInterruptedExternalAiCollaborations();
+    const recoveredExternalAiHistorySyncs = recoverInterruptedExternalAiHistorySyncs();
+    if (recoveredBackgroundTasks > 0 || recoveredAutonomousTasks > 0) {
+      console.warn(
+        `[Bootstrap] Recovered durable work leases: delegation=${recoveredBackgroundTasks}, autonomy=${recoveredAutonomousTasks}`,
+      );
+    }
+    if (recoveredExternalAiDispatches > 0) {
+      console.warn(`[Bootstrap] Stopped ${recoveredExternalAiDispatches} interrupted external AI dispatch(es) without resending.`);
+    }
+    if (recoveredExternalAiHistorySyncs > 0) {
+      console.warn(`[Bootstrap] Recovered ${recoveredExternalAiHistorySyncs} external AI history sync(s) at their last durable cursor.`);
+    }
     const recoveredTasks = recoverOrphanedConversationActionExecutions();
     if (recoveredTasks > 0) {
       console.warn(`[Bootstrap] Recovered ${recoveredTasks} orphaned conversation task lease(s)`);
@@ -181,15 +204,50 @@ export async function bootstrap(ctx: BootstrapContext) {
   // Register all agent tools
   registerAllTools(toolRegistry, { getDeepSeek: llm.getDeepSeek, getGemini: llm.getGemini, getOpenAI: llm.getOpenAI, getAnthropic: llm.getAnthropic, getQwen: llm.getQwen });
   console.log(`[Tools] Registered ${toolRegistry.list().length} built-in tools`);
+  const extensionHydration = await hydrateActiveExtensions(toolRegistry);
+  if (extensionHydration.activated > 0 || extensionHydration.failed > 0) {
+    console.log(`[Extensions] Active=${extensionHydration.activated}, boot-failed=${extensionHydration.failed}`);
+  }
+  for (const error of extensionHydration.errors) console.warn(`[Extensions] ${error}`);
+  const startBackgroundSupervisor = () => {
+    if (backgroundTaskSupervisor) return;
+    if (backgroundTaskSupervisorStartupTimer) {
+      clearTimeout(backgroundTaskSupervisorStartupTimer);
+      backgroundTaskSupervisorStartupTimer = null;
+    }
+    backgroundTaskSupervisor = startDurableBackgroundTaskSupervisor({
+      io,
+      llmGetters: {
+        getDeepSeek: llm.getDeepSeek,
+        getGemini: llm.getGemini,
+        getOpenAI: llm.getOpenAI,
+        getAnthropic: llm.getAnthropic,
+        getQwen: llm.getQwen,
+        getOllama: llm.getOllama,
+        getLmStudio: llm.getLmStudio,
+        getArk: llm.getArk,
+        getXiaomi: llm.getXiaomi,
+        getKimi: llm.getKimi,
+        getGlm: llm.getGlm,
+        getRelay: llm.getRelay,
+      },
+    });
+  };
 
-  // Register MCP tools (non-blocking)
+  // Recovered work starts only after MCP discovery settles, so a task that
+  // depended on an MCP/CAD tool is not failed merely because startup discovery
+  // was still in flight.
   registerMCPTools(io).then(mcpTools => {
     if (mcpTools.length > 0) {
       console.log(`[MCP] Registered ${mcpTools.length} MCP tools (total: ${toolRegistry.list().length})`);
     }
   }).catch(err => {
     console.warn('[MCP] Tool registration warning:', err.message);
-  });
+  }).finally(startBackgroundSupervisor);
+  backgroundTaskSupervisorStartupTimer = setTimeout(startBackgroundSupervisor, 15_000);
+  if (typeof (backgroundTaskSupervisorStartupTimer as any).unref === 'function') {
+    (backgroundTaskSupervisorStartupTimer as any).unref();
+  }
 
   // GPT-SoVITS is supervised and started on first synthesis request. Keeping
   // the multi-gigabyte model resident while voice is idle is no longer the
@@ -266,6 +324,12 @@ export async function bootstrap(ctx: BootstrapContext) {
       firstBootExplorationWorker = null;
     }
     scheduler.stop();
+    if (backgroundTaskSupervisorStartupTimer) {
+      clearTimeout(backgroundTaskSupervisorStartupTimer);
+      backgroundTaskSupervisorStartupTimer = null;
+    }
+    backgroundTaskSupervisor?.stop();
+    backgroundTaskSupervisor = null;
     try {
       await stopMessagingConnections();
       console.log('[Messaging] Long connections stopped');

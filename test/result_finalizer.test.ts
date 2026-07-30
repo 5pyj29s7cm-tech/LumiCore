@@ -964,6 +964,126 @@ describe('Lumi result finalizer', () => {
     expect(result.text).not.toContain('not installed or running');
   });
 
+  it('grounds external AI collaboration in the persistent per-target source receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: 'Ask ChatGPT and Claude, collect their answers, and compare them.',
+      responseText: 'Both models completed successfully and agreed.',
+      toolRecords: [{
+        name: 'external_ai_collaborate',
+        arguments: { question: 'Compare A and B.', targets: ['chatgpt', 'claude'] },
+        result: JSON.stringify({
+          verified: true,
+          status: 'partial',
+          sessionId: 'external-ai-session-grounded',
+          taskId: 'task-grounded',
+          counts: { targets: 2, answered: 1, pending: 1, blocked: 0, failed: 0, lateAnswers: 0 },
+          results: [
+            {
+              id: 'dispatch-chatgpt',
+              targetId: 'chatgpt',
+              targetLabel: 'ChatGPT',
+              status: 'answered',
+              answerText: 'Approach A has lower operational risk.',
+              sourceEvidence: {
+                routeKind: 'api',
+                provider: 'openai',
+                model: 'gpt-test',
+                responseDigest: 'digest-chatgpt',
+              },
+            },
+            {
+              id: 'dispatch-claude',
+              targetId: 'claude',
+              targetLabel: 'Claude',
+              status: 'unknown',
+              error: 'Timed out after a possible external submission; resend stopped.',
+              sourceEvidence: { routeKind: 'mcp', toolName: 'mcp_claude_ask' },
+            },
+          ],
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('external-ai-session-grounded');
+    expect(result.text).toContain('ChatGPT: answered; source api:openai/gpt-test');
+    expect(result.text).toContain('Approach A has lower operational risk.');
+    expect(result.text).toContain('Claude: unknown; source mcp:mcp_claude_ask');
+    expect(result.text).toContain('1 answered, 1 pending/unknown');
+    expect(result.text).toContain('not automatically resent');
+    expect(result.text).not.toContain('Both models completed successfully');
+  });
+
+  it('grounds external AI history status in the persistent sync receipt instead of model narration', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: 'Sync the ChatGPT chat history from the authorized source.',
+      responseText: 'Everything in the account was imported completely.',
+      toolRecords: [{
+        name: 'external_ai_history_sync',
+        arguments: { sourceId: 'history-source-1' },
+        result: JSON.stringify({
+          ok: true,
+          verified: true,
+          verificationStatus: 'verified',
+          status: 'partial',
+          sourceId: 'history-source-1',
+          jobId: 'history-job-1',
+          authorizationDigest: 'authorization-digest',
+          sourceKind: 'desktop_visible',
+          targetId: 'chatgpt',
+          counts: { inserted: 4, updated: 1, skipped: 2, conflicted: 1, attachments: 0 },
+          pageCount: 1,
+          nextCursor: '',
+          completeness: 'partial_visible',
+          limitations: ['Only the current visible viewport was read; no automatic scrolling occurred.'],
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.reason).toContain('history-job-1');
+    expect(result.text).toContain('External AI history sync: partial');
+    expect(result.text).toContain('Completeness: partial_visible');
+    expect(result.text).toContain('no automatic scrolling');
+    expect(result.text).not.toContain('Everything in the account');
+  });
+
+  it('renders only locally archived external AI history messages with their stable ids', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({
+      taskText: 'Read the ChatGPT conversation history from the authorized archive.',
+      responseText: 'There were no messages.',
+      toolRecords: [{
+        name: 'external_ai_history_query',
+        arguments: { sourceId: 'history-source-2' },
+        result: JSON.stringify({
+          ok: true,
+          status: 'queried',
+          sourceId: 'history-source-2',
+          sourceKind: 'export',
+          targetId: 'chatgpt',
+          conversations: [],
+          messages: [{ role: 'assistant', sourceExternalMessageId: 'message-42', content: 'Grounded archived answer.' }],
+          attachments: [],
+          count: 1,
+          completeness: 'source_bounded',
+          limitations: ['Results are limited to synchronized pages.'],
+        }),
+      }],
+      source: 'chat',
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain('message-42');
+    expect(result.text).toContain('Grounded archived answer.');
+    expect(result.text).toContain('source_bounded');
+    expect(result.text).not.toContain('There were no messages.');
+  });
+
   it('does not treat a CAD folder workflow as visible AutoCAD completion evidence', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
 

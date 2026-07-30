@@ -36,6 +36,13 @@ interface AIConfig {
   provider: string;
   model: string;
   apiKey: string;
+  selectionMode: 'pinned' | 'ordered_fallback' | 'auto';
+  fallbackCandidates: Array<{ provider: string; model: string }>;
+  allowCloudFallback: boolean;
+  legacyMigration?: {
+    migratedAt: string;
+    entries: Array<{ provider: string; from: string; to: string }>;
+  };
 }
 
 interface VisionConfig {
@@ -186,11 +193,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [aiConfig, setAiConfig] = useState<AIConfig>(() => {
     const saved = localStorage.getItem('lumi_ai_config');
-    if (!saved) return { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: '' };
+    if (!saved) return {
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      apiKey: '',
+      selectionMode: 'pinned',
+      fallbackCandidates: [],
+      allowCloudFallback: true,
+    };
     try {
-      return { ...JSON.parse(saved), apiKey: '' };
+      const parsed = JSON.parse(saved);
+      return {
+        ...parsed,
+        apiKey: '',
+        selectionMode: parsed.provider === 'auto'
+          ? 'auto'
+          : parsed.selectionMode === 'ordered_fallback' ? 'ordered_fallback' : 'pinned',
+        fallbackCandidates: Array.isArray(parsed.fallbackCandidates) ? parsed.fallbackCandidates : [],
+        allowCloudFallback: parsed.allowCloudFallback !== false,
+      };
     } catch {
-      return { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: '' };
+      return {
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        apiKey: '',
+        selectionMode: 'pinned',
+        fallbackCandidates: [],
+        allowCloudFallback: true,
+      };
     }
   });
   const modelPreferenceRequestRef = React.useRef(0);
@@ -222,6 +252,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ...previous,
             provider: reasoning.provider,
             model: reasoning.model || reasoning.models?.[reasoning.provider] || previous.model,
+            selectionMode: reasoning.selectionMode || (reasoning.provider === 'auto' ? 'auto' : 'pinned'),
+            fallbackCandidates: Array.isArray(reasoning.fallbackCandidates) ? reasoning.fallbackCandidates : [],
+            allowCloudFallback: reasoning.allowCloudFallback !== false,
+            ...(reasoning.legacyMigration ? { legacyMigration: reasoning.legacyMigration } : {}),
             apiKey: '',
           };
           localStorage.setItem('lumi_ai_config', JSON.stringify(next));
@@ -502,6 +536,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         provider: updated.provider || previous.provider,
         model: updated.model,
         models: allModels,
+        selectionMode: updated.selectionMode,
+        fallbackCandidates: updated.fallbackCandidates,
+        allowCloudFallback: updated.allowCloudFallback,
       }),
       credentials: 'include',
     }).then(async response => {
@@ -512,6 +549,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...updated,
         provider: confirmed.provider || updated.provider,
         model: confirmed.model || updated.model,
+        selectionMode: confirmed.selectionMode || updated.selectionMode,
+        fallbackCandidates: Array.isArray(confirmed.fallbackCandidates)
+          ? confirmed.fallbackCandidates
+          : updated.fallbackCandidates,
+        allowCloudFallback: confirmed.allowCloudFallback !== false,
+        ...(confirmed.legacyMigration ? { legacyMigration: confirmed.legacyMigration } : {}),
         apiKey: '',
       };
       aiConfigRef.current = synchronized;

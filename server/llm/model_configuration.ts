@@ -1,4 +1,9 @@
 import { loadKeys } from '../config/keys';
+import {
+  getRegisteredProviderDefaultModel,
+  isRegisteredOpenAICompatibleProvider,
+  listRegisteredProviders,
+} from '../extensions/registry';
 import { getVoicePreference, setVoicePreference } from '../config/voice_preference';
 import { getActiveSTTProvider, getActiveStreamingSTTProvider } from '../stt/adapter';
 import { getActiveProvider as getActiveTTSProvider } from '../tts/adapter';
@@ -13,6 +18,7 @@ import {
   upsertUserPreferredGenerationModels,
 } from './generation_preferences';
 import { ensureLocalModelReady, getLocalModelConfig } from './local_models';
+import { makeLLMCall } from './providers';
 import { rerankConfiguredDocuments } from './rerank_provider';
 import {
   DEFAULT_EMBEDDING_MODELS,
@@ -25,6 +31,7 @@ import {
 } from './retrieval_model_preferences';
 import {
   DEFAULT_MODELS,
+  getDefaultModelForProvider,
   getUserPreferredLLM,
   isUserLLMProvider,
   upsertUserPreferredLLM,
@@ -64,6 +71,9 @@ export interface ModelConfigurationUpdate {
   fallbackModel?: string;
   enabled?: boolean;
   topN?: number;
+  selectionMode?: 'pinned' | 'ordered_fallback' | 'auto';
+  fallbackCandidates?: Array<{ provider: string; model: string }>;
+  allowCloudFallback?: boolean;
 }
 
 export interface TestableModelRuntime {
@@ -111,10 +121,13 @@ function cleanModel(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 200) : '';
 }
 
-function providerConfigured(provider: string): boolean {
+function providerConfigured(provider: string, userId?: string): boolean {
   if (provider === 'auto' || provider === 'inherit_vision') return true;
   if (provider === 'ollama' || provider === 'lmstudio') return getLocalModelConfig(provider).detected;
   if (provider === 'local-whisper' || provider === 'local-cosyvoice' || provider === 'gptsovits') return true;
+  if (isRegisteredOpenAICompatibleProvider(provider, userId)) {
+    return listRegisteredProviders(userId).some(item => item.id === provider && item.configured === true);
+  }
   const keys = loadKeys();
   return (PROVIDER_KEY_NAMES[provider] || []).some(name => Boolean(process.env[name] || keys[name]));
 }
@@ -141,7 +154,13 @@ function allRoleConfigurations(userId: string): Record<LumiModelRole, Record<str
   const activeTts = getActiveTTSProvider({ requireHealthy: true });
 
   return {
-    reasoning: roleSelection(reasoning.provider, reasoning.model),
+    reasoning: roleSelection(reasoning.provider, reasoning.model, {
+      configured: providerConfigured(reasoning.provider, userId),
+      selectionMode: reasoning.selectionMode,
+      fallbackCandidates: reasoning.fallbackCandidates,
+      allowCloudFallback: reasoning.allowCloudFallback,
+      legacyMigration: reasoning.legacyMigration,
+    }),
     vision: roleSelection(vision.provider, vision.model),
     world: roleSelection(world.provider, world.model, {
       effectiveProvider: resolvedWorld.provider,
@@ -151,7 +170,7 @@ function allRoleConfigurations(userId: string): Record<LumiModelRole, Record<str
     }),
     image_generation: roleSelection(generation.image.provider, generation.image.model, {
       configured: generation.image.provider === 'auto'
-        ? ['openai', 'qwen', 'siliconflow'].some(providerConfigured)
+        ? ['openai', 'qwen', 'siliconflow'].some(provider => providerConfigured(provider))
         : providerConfigured(generation.image.provider),
     }),
     video_generation: roleSelection(generation.video.provider, generation.video.model),
@@ -202,9 +221,18 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
   if (input.role === 'reasoning') {
     const current = getUserPreferredLLM(uid);
     const provider = input.provider || current.provider;
-    const model = cleanModel(input.model) || current.models[provider] || (DEFAULT_MODELS as Record<string, string>)[provider];
-    if (!isUserLLMProvider(provider)) throw new Error(`Unsupported reasoning provider: ${provider}`);
-    upsertUserPreferredLLM(uid, { provider, model, models: { ...current.models, [provider]: model } });
+    if (!isUserLLMProvider(provider, uid)) throw new Error(`Unsupported reasoning provider: ${provider}`);
+    const model = cleanModel(input.model) || current.models[provider] || getDefaultModelForProvider(provider, uid);
+    upsertUserPreferredLLM(uid, {
+      provider,
+      model,
+      models: { ...current.models, [provider]: model },
+      selectionMode: input.selectionMode || current.selectionMode,
+      fallbackCandidates: input.fallbackCandidates || current.fallbackCandidates,
+      allowCloudFallback: input.allowCloudFallback === undefined
+        ? current.allowCloudFallback
+        : input.allowCloudFallback,
+    });
   } else if (input.role === 'vision') {
     const current = getUserPreferredVision(uid);
     const provider = input.provider || current.provider;
@@ -308,12 +336,14 @@ export async function testLLMProviderConnection(
   provider: string,
   requestedModel: string | undefined,
   llm: TestableModelRuntime,
+  userId = 'anonymous',
 ): Promise<{ ok: true; provider: string; model: string; latencyMs: number }> {
-  if (!TESTABLE_LLM_PROVIDERS.has(provider)) throw new Error(`Unsupported provider: ${provider}`);
+  const extensionProvider = isRegisteredOpenAICompatibleProvider(provider, userId);
+  if (!TESTABLE_LLM_PROVIDERS.has(provider) && !extensionProvider) throw new Error(`Unsupported provider: ${provider}`);
   const localConfig = provider === 'ollama' || provider === 'lmstudio'
     ? getLocalModelConfig(provider)
     : null;
-  let model = String(requestedModel || localConfig?.models.find(modelName => !/(?:embed|whisper|rerank)/i.test(modelName)) || (DEFAULT_MODELS as Record<string, string>)[provider] || '').trim();
+  let model = String(requestedModel || localConfig?.models.find(modelName => !/(?:embed|whisper|rerank)/i.test(modelName)) || getRegisteredProviderDefaultModel(provider, userId) || (DEFAULT_MODELS as Record<string, string>)[provider] || '').trim();
   if (!model || model.length > 200) throw new Error('A valid model name is required');
 
   const startedAt = Date.now();
@@ -321,7 +351,25 @@ export async function testLLMProviderConnection(
     const selection = await ensureLocalModelReady(provider, requestedModel, { force: true, timeoutMs: 8_000 });
     model = selection.model;
   }
-  if (provider === 'gemini') {
+  if (extensionProvider) {
+    await withConnectionTestTimeout(makeLLMCall(
+      [{ role: 'user', content: 'Reply with only OK.' }],
+      [],
+      { provider, model, userId, selectionMode: 'pinned', maxTokens: 8 },
+      llm.getDeepSeek || (() => null),
+      llm.getGemini || (() => null),
+      llm.getOpenAI,
+      llm.getAnthropic,
+      llm.getQwen,
+      llm.getOllama,
+      llm.getLmStudio,
+      llm.getArk,
+      llm.getXiaomi,
+      llm.getKimi,
+      llm.getGlm,
+      llm.getRelay,
+    ), 20_000);
+  } else if (provider === 'gemini') {
     const client = llm.getGemini?.();
     if (!client) throw new Error('Gemini is not configured');
     const instance = client.getGenerativeModel({ model });
@@ -416,7 +464,47 @@ export async function testLumiModelConfiguration(
   const startedAt = Date.now();
 
   if (role === 'reasoning') {
-    return testLLMProviderConnection(String(config.provider), String(config.model), llm);
+    const preference = getUserPreferredLLM(uid);
+    if (preference.selectionMode !== 'pinned') {
+      const result = await makeLLMCall(
+        [{ role: 'user', content: 'Reply with only OK.' }],
+        [],
+        {
+          provider: preference.provider,
+          model: preference.model,
+          userId: uid,
+          selectionMode: preference.selectionMode,
+          fallbackCandidates: preference.fallbackCandidates,
+          allowCloudFallback: preference.allowCloudFallback,
+          maxTokens: 8,
+        },
+        llm.getDeepSeek || (() => null),
+        llm.getGemini || (() => null),
+        llm.getOpenAI,
+        llm.getAnthropic,
+        llm.getQwen,
+        llm.getOllama,
+        llm.getLmStudio,
+        llm.getArk,
+        llm.getXiaomi,
+        llm.getKimi,
+        llm.getGlm,
+        llm.getRelay,
+      );
+      return {
+        ok: true,
+        requestedProvider: preference.provider,
+        requestedModel: preference.model,
+        provider: result.routing?.selectedProvider || preference.provider,
+        model: result.routing?.selectedModel || preference.model,
+        selectionMode: preference.selectionMode,
+        fallbackReason: result.routing?.fallbackReason || '',
+        attempts: result.routing?.attempts || [],
+        latencyMs: Date.now() - startedAt,
+        verification: 'live_routed_model_call',
+      };
+    }
+    return testLLMProviderConnection(String(config.provider), String(config.model), llm, uid);
   }
   if (role === 'vision' || role === 'world') {
     const provider = role === 'world' ? String(config.effectiveProvider) : String(config.provider);

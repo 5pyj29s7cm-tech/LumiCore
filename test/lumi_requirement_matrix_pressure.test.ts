@@ -263,15 +263,21 @@ describe('Lumi requirement matrix pressure', () => {
     });
 
     expect(result.dispatch.boundary).toBe('tool_action');
-    expect(result.selection.lane).toBe('desktop_control');
+    expect(result.selection.lane).toBe('external_tool');
     expect(result.route?.categories).toContain('external_control');
     expect(result.route?.toolNames.slice(0, 8)).toEqual(expect.arrayContaining([
+      'external_ai_collaborate',
+      'external_ai_collect_answers',
+      'external_ai_session_status',
+      'external_ai_route_plan',
       'desktop_ai_list_targets',
-      'desktop_ai_discovery_plan',
+    ]));
+    expect(result.route?.toolNames).not.toEqual(expect.arrayContaining([
       'desktop_ai_ask',
+      'desktop_ai_roundtable',
       'desktop_ai_collect_answer',
     ]));
-    expect(result.route?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
+    expect(result.route?.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(
       result.route?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
     );
   });

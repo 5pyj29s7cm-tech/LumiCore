@@ -108,6 +108,27 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
           type: 'number',
           description: 'Rerank-only number of candidates to retain, from 1 to 50.',
         },
+        selectionMode: {
+          type: 'string',
+          enum: ['pinned', 'ordered_fallback', 'auto'],
+          description: 'Reasoning-only routing policy. pinned never substitutes; ordered_fallback uses only the supplied ordered candidates; auto uses local-first routing with explicit receipts.',
+        },
+        fallbackCandidates: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              provider: { type: 'string' },
+              model: { type: 'string' },
+            },
+            required: ['provider', 'model'],
+          },
+          description: 'Reasoning-only ordered fallback list. No candidate is inferred outside this list.',
+        },
+        allowCloudFallback: {
+          type: 'boolean',
+          description: 'Reasoning-only control for whether an explicit cloud candidate may be used after local failure.',
+        },
         testAfterUpdate: {
           type: 'boolean',
           description: 'Run a live or adapter-level verification after saving. Defaults to true.',
@@ -125,6 +146,9 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
         fallbackModel: args.fallbackModel,
         enabled: args.enabled,
         topN: args.topN,
+        selectionMode: args.selectionMode,
+        fallbackCandidates: args.fallbackCandidates,
+        allowCloudFallback: args.allowCloudFallback,
       });
       const client = await refreshConnectedClient(context, [role]);
       let test: Record<string, unknown> | null = null;

@@ -15,7 +15,6 @@ import {
 import { mcpManager } from '../../mcp/client';
 import type { ToolContext } from '../types';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
-import { getScopedPreferredLLM } from '../../llm/user_preferences';
 
 // Module-level LLM getters, set during registration
 let _llmGetters: {
@@ -56,18 +55,11 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
     throw new Error('A specific skill description is required.');
   }
 
-  const preferred = getScopedPreferredLLM(context?.userId || 'skill_gen', {
-    domain: context?.domain,
-    orgId: context?.orgId,
-  });
-  const provider = (args.provider as string) || preferred.provider;
-  const model = (args.model as string) || preferred.model;
-
   const result = await generateSkill(
     {
       description,
-      provider: provider as any,
-      model,
+      ...(args.provider ? { provider: args.provider as any } : {}),
+      ...(args.model ? { model: String(args.model) } : {}),
       userId: context?.userId || 'skill_gen',
     },
     _llmGetters.getDeepSeek,

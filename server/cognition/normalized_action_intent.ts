@@ -1,5 +1,6 @@
 export type NormalizedActionIntentKind =
   | 'none'
+  | 'external_ai_history'
   | 'messaging_read'
   | 'messaging_send'
   | 'public_publish'
@@ -153,6 +154,35 @@ function clientNavigation(text: string): NormalizedActionIntent | null {
     confidence: 0.99,
     rule: `client-surface:${surface.target}`,
     clientAction: surface.action,
+  };
+}
+
+function externalAiHistoryRead(text: string): NormalizedActionIntent | null {
+  // This is a distinct read lane. It must win before generic messaging so an
+  // authorized ChatGPT/Claude history request can never become a WeChat read.
+  // i18n-allow: Multilingual external-AI history input recognition; not user-visible copy.
+  const providerMatch = text.match(/\b(ChatGPT|Claude|Gemini|DeepSeek|Kimi|Perplexity|Copilot|Cursor|Ollama|LM\s*Studio)\b/iu);
+  // i18n-allow: Multilingual external-AI target input recognition; not user-visible copy.
+  const hasExternalAiTarget = Boolean(providerMatch)
+    || /\b(?:external\s+AI|AI\s+(?:assistant|agent|app|chat))\b|外部\s*AI|AI\s*(?:助手|智能体|客户端|应用)/iu.test(text); // i18n-allow: Multilingual external-AI target input recognition.
+  // i18n-allow: Multilingual external-AI history action input recognition; not user-visible copy.
+  const hasHistoryAction = /(?:聊天(?:历史|记录|内容)|对话(?:历史|记录|内容)|历史(?:消息|会话)|(?:同步|导入|归档|授权|注册|添加|撤销|读取|查看|搜索|查询|总结).{0,40}(?:聊天|对话|历史|内容|来源)|(?:聊天|对话|历史).{0,40}(?:同步|导入|归档|授权|注册|读取|查看|搜索|查询|总结)|\b(?:chat|conversation|message)\s+(?:history|content|archive|source)\b|\b(?:sync|import|archive|authorize|register|revoke|read|view|search|query)\b.{0,48}\b(?:chat|conversation|message)\s+(?:history|content|archive|source)\b)/iu.test(text);
+  // A fresh prompt to another model belongs to the collaboration lane, even
+  // when the requested prompt happens to mention history or conversations.
+  // i18n-allow: Multilingual external-AI submission exclusion; not user-visible copy.
+  const explicitNewSubmission = /(?:发给|发送给|交给|问问|询问|提问|让.{0,20}(?:回答|处理))|\b(?:ask|send\s+to|delegate|submit|prompt)\b/iu.test(text);
+  if (!hasExternalAiTarget || !hasHistoryAction || explicitNewSubmission) return null;
+
+  return {
+    kind: 'external_ai_history',
+    operation: 'read',
+    subject: 'user',
+    target: providerMatch?.[1]?.replace(/\s+/g, ' ').trim() || 'external_ai',
+    payload: text,
+    sideEffectClass: 'none',
+    relation: 'new',
+    confidence: 0.96,
+    rule: 'external-ai-history-read',
   };
 }
 
@@ -312,11 +342,13 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
   if (!text) return { ...EMPTY_INTENT };
 
   // Order is a safety invariant. Later action-shaped words cannot override a
-  // correction, status query, client-native route, or inbound read.
+  // correction, status query, client-native route, external-AI read, or
+  // inbound message read.
   const priority = [
     correctionOrExplanation(text),
     statusQuery(text),
     clientNavigation(text),
+    externalAiHistoryRead(text),
     inboundMessageRead(text),
     outgoingMessageSend(text),
     genericExternalCommit(text),

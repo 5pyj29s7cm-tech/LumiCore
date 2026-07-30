@@ -766,7 +766,7 @@ function toolsForLayer(layer: DesktopControlLayer, family: DesktopApplicationFam
   if (family === 'cad') return ['cad_prepare_autocad_operations', 'cad_draw_floorplan_in_autocad', 'mcp_cad-drafting_autocad_new_document', 'mcp_cad-drafting_autocad_playback_file'];
   if (family === 'office') return ['wps_create_document_with_text', 'desktop_ui_snapshot', 'desktop_ui_type'];
   if (family === 'messaging') return ['wechat_read_recent_chat', 'wechat_send_message'];
-  if (family === 'desktop_ai') return ['desktop_ai_ask', 'desktop_ai_roundtable'];
+  if (family === 'desktop_ai') return ['external_ai_collaborate', 'external_ai_collect_answers', 'external_ai_session_status'];
   return [];
 }
 

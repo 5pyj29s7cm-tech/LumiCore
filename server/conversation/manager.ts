@@ -839,7 +839,7 @@ export function addMessage(msg: {
         const pendingNormalizedIntent = normalizeActionIntent(pending.userText);
         const pendingExpectsExecution = pendingFollowupIntent === 'execute'
           || (pendingContract.applies && pendingContract.kind !== 'none')
-          || ['client_navigation', 'client_state', 'messaging_read'].includes(pendingNormalizedIntent.kind);
+          || ['client_navigation', 'client_state', 'external_ai_history', 'messaging_read'].includes(pendingNormalizedIntent.kind);
         const pendingAgeMs = Date.now() - new Date(pending.updatedAt).getTime();
         if (
           pendingExpectsExecution

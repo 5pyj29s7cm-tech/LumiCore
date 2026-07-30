@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isExtensionProviderId, isRegisteredProviderLocal } from '../extensions/registry';
 
 export type ModelGraphNodeType =
   | 'model'
@@ -132,6 +133,7 @@ const REASONING_PROVIDERS = new Set([
 export function modelCandidateLocality(provider: string): ModelCandidate['locality'] {
   const normalized = String(provider || '').trim().toLowerCase();
   if (LOCAL_PROVIDERS.has(normalized)) return 'local';
+  if (isExtensionProviderId(normalized) && isRegisteredProviderLocal(normalized)) return 'local';
   if (normalized.startsWith('external:')) return 'external_runtime';
   if (!normalized || normalized === 'auto') return 'unknown';
   return 'remote';
@@ -161,7 +163,7 @@ function cleanCandidate(
   const record = value as Record<string, unknown>;
   const provider = String(record.provider || '').trim().toLowerCase();
   const model = String(record.model || '').trim().slice(0, 200);
-  if (!REASONING_PROVIDERS.has(provider) || !model) return null;
+  if ((!REASONING_PROVIDERS.has(provider) && !isExtensionProviderId(provider)) || !model) return null;
   const requestedPriority = Number(record.priority);
   return {
     provider,

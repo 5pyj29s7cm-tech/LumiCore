@@ -13,6 +13,7 @@ import {
   buildActionContract,
   isSimpleDesktopOpenRequest,
   requestsBlankAutoCadDocument,
+  requiresExternalAiHistory,
   requiresCurrentAppUiMutation,
   requiresCadGeometryExtractionOnly,
   requiresVisibleAutoCadExecution,
@@ -85,7 +86,7 @@ const MANIFEST_TERMS_BY_GROUP: Partial<Record<string, RegExp>> = {
   design: /cad|autocad|dxf|dwg|floorplan|design|image|video|ocr|drawing|render/i,
   code: /code|git|test|type.?check|command|python/i,
   skills: /skill|mcp|agent|adapter|capability|client.*state|manifest|external.control/i,
-  externalControl: /desktop|computer|browser|playwright|external.control|native.ui|accessibility|adapter/i,
+  externalControl: /desktop|computer|browser|playwright|external.control|external.?ai|collaboration|native.ui|accessibility|adapter/i,
   workTakeover: /work.?takeover|task|self.?extension|capability/i,
   autonomy: /autonomy|workflow/i,
   sleepDream: /sleep|dream|memory/i,
@@ -169,6 +170,7 @@ function isMessagingRead(text: string): boolean {
 }
 
 function isDesktopAiCollaboration(text: string): boolean {
+  if (requiresExternalAiHistory(text)) return false;
   return /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM Studio|Cherry Studio|AnythingLLM|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
     || /(?:问|发给|发送给|交给|询问)[\s\S]{0,80}(?:AI|模型|agent|智能体)/iu.test(text)
     || /(?:AI|模型|agent|智能体)[\s\S]{0,80}(?:回答|结果|总结|对比|汇总)/iu.test(text);
@@ -316,12 +318,12 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   if (isDesktopAiCollaboration(text)) {
     const wantsCollectedComparison = /(?:\u603b\u7ed3|\u6c47\u603b|\u5bf9\u6bd4|\u90fd\u62ff\u56de\u6765|\u6240\u6709\u56de\u7b54|summari[sz]e|compare|collect\s+all|all\s+answers)/iu.test(text);
     priorities.push(
+      'external_ai_collaborate',
+      ...(wantsCollectedComparison ? ['external_ai_collect_answers'] : []),
+      'external_ai_session_status',
+      'external_ai_route_plan',
       'desktop_ai_list_targets',
       'desktop_ai_discovery_plan',
-      ...(wantsCollectedComparison ? ['desktop_ai_roundtable'] : []),
-      'desktop_ai_ask',
-      'desktop_ai_collect_answer',
-      ...(!wantsCollectedComparison ? ['desktop_ai_roundtable'] : []),
       'desktop_ai_register_target',
       'desktop_open',
       'desktop_active_window',
@@ -684,6 +686,7 @@ export function routeToolsForTurn(
     actionContract.kind === 'desktop_operation'
     && isSimpleDesktopOpenRequest(text)
     && !isDirectAutocadOperationsPlayback(text);
+  const extensionRegistryOnly = actionContract.kind === 'extension_registry';
   const forbiddenToolNames = new Set<string>();
 
   if (!currentAppEdit) {
@@ -764,6 +767,30 @@ export function routeToolsForTurn(
     reasons.push('explicit open request requires the same launch tool used by the deterministic fast path');
   }
 
+  if (actionContract.kind === 'external_ai_collaboration' && !currentAppEdit) {
+    for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
+    if (!categories.includes('external_control')) categories.push('external_control');
+    reasons.push('external AI collaboration uses one persistent route-priority and receipt pipeline');
+    if (available.has('external_ai_collaborate')) {
+      for (const legacy of ['desktop_ai_ask', 'desktop_ai_roundtable', 'desktop_ai_collect_answer']) {
+        selected.delete(legacy);
+        forbiddenToolNames.add(legacy);
+      }
+      reasons.push('deprecated desktop AI submit/read shortcuts are hidden from new plans');
+    }
+  }
+
+  if (actionContract.kind === 'external_ai_history' && !currentAppEdit) {
+    for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
+    if (!categories.includes('external_control')) categories.push('external_control');
+    reasons.push('external AI history uses only the persistent authorization, synchronization, and local query pipeline');
+    for (const submitTool of ['external_ai_collaborate', 'desktop_ai_ask', 'desktop_ai_roundtable']) {
+      selected.delete(submitTool);
+      forbiddenToolNames.add(submitTool);
+    }
+    reasons.push('history reads hard-forbid every external AI prompt-submission entry');
+  }
+
   if (simpleDesktopOpen && !currentAppEdit) {
     selected.clear();
     for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
@@ -783,6 +810,18 @@ export function routeToolsForTurn(
     addIfAvailable(selected, available, 'runtime_work_status');
     categories.push('task_control');
     reasons.push('runtime work status and cancellation use the unified task ledger');
+  }
+
+  if (extensionRegistryOnly) {
+    selected.clear();
+    for (const name of [...actionContract.preferredTools, ...actionContract.verificationTools]) {
+      addIfAvailable(selected, available, name);
+    }
+    categories.splice(0, categories.length, 'extension_registry');
+    reasons.splice(0, reasons.length, 'signed extension and Provider operations use only the transactional registry and its persistent receipts');
+    for (const name of availableNames) {
+      if (!selected.has(name)) forbiddenToolNames.add(name);
+    }
   }
 
   if (categories.length === 0 && text) {
@@ -921,6 +960,7 @@ export function routeToolsForTurn(
     hardAllowlist: desktopObservationOnly
       || simpleDesktopOpen
       || cadGeometryExtractionOnly
+      || extensionRegistryOnly
       || selected.has('cad_draw_floorplan_in_autocad')
       || undefined,
     forbiddenToolNames: forbiddenToolNames.size > 0
@@ -932,6 +972,8 @@ export function routeToolsForTurn(
       ? Math.max(2, selected.size)
       : desktopObservationOnly
       ? desktopObservationToolNames.length + 1
+      : extensionRegistryOnly
+      ? Math.max(2, selected.size)
       : undefined,
   };
 }
@@ -978,6 +1020,8 @@ export function formatToolRouteForPrompt(route: ToolRoute): string {
         ? 'This route is a hard allowlist for launching or focusing the exact requested target and verifying the resulting window/process. Do not start unrelated work inside the application.'
         : route.categories.includes('desktop_observation')
         ? 'This route is a hard allowlist for read-only desktop observation. Call only the selected window/directory observation tools. Do not write files or substitute list_directory, search_files, grep_files, filesystem MCP, shell, or Python tools.'
+        : route.categories.includes('extension_registry')
+        ? 'This route is a hard allowlist for the signed extension registry. Do not substitute skill generation, package installation, shell execution, or arbitrary plugin code.'
         : 'This route is a hard allowlist. Do not generate files, prepare CAD operations, open or operate AutoCAD, or substitute any filesystem MCP, shell, or Python fallback.'
       : '',
   ].filter(Boolean).join('\n');

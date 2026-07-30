@@ -64,6 +64,16 @@ const DECLARATIONS = [
   'desktop_ai_roundtable',
   'desktop_ai_ask',
   'desktop_ai_collect_answer',
+  'external_ai_route_plan',
+  'external_ai_collaborate',
+  'external_ai_collect_answers',
+  'external_ai_session_status',
+  'external_ai_history_source_register',
+  'external_ai_history_source_list',
+  'external_ai_history_source_revoke',
+  'external_ai_history_sync',
+  'external_ai_history_status',
+  'external_ai_history_query',
   'ocr_screen',
   'desktop_mouse_click_at',
   'desktop_cursor_glow_show',
@@ -454,7 +464,7 @@ describe('tool router', () => {
     ]));
   });
 
-  it('routes desktop AI collaboration to the WorkBuddy/Codex handoff tools first', () => {
+  it('routes external AI collaboration through the persistent unified pipeline', () => {
     const route = routeToolsForTurn(
       '把这个问题发给 WorkBuddy、Codex、ChatGPT 和 Claude，再把其它 AI 的回答拿回来总结',
       DECLARATIONS,
@@ -462,15 +472,49 @@ describe('tool router', () => {
 
     expect(route.categories).toContain('external_control');
     expect(route.toolNames).toEqual(expect.arrayContaining([
+      'external_ai_collaborate',
+      'external_ai_collect_answers',
+      'external_ai_session_status',
+      'external_ai_route_plan',
       'desktop_ai_list_targets',
       'desktop_ai_discovery_plan',
-      'desktop_ai_ask',
-      'desktop_ai_collect_answer',
       'desktop_open',
       'desktop_capture_screen',
       'computer_use',
     ]));
-    expect(route.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(route.toolNames.indexOf('computer_use'));
+    expect(route.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(route.toolNames.indexOf('computer_use'));
+    expect(route.toolNames).not.toEqual(expect.arrayContaining([
+      'desktop_ai_ask',
+      'desktop_ai_roundtable',
+      'desktop_ai_collect_answer',
+    ]));
+    expect(route.forbiddenToolNames).toEqual(expect.arrayContaining([
+      'desktop_ai_ask',
+      'desktop_ai_roundtable',
+      'desktop_ai_collect_answer',
+    ]));
+  });
+
+  it('routes external AI history reads through authorization tools and hard-forbids prompt submission', () => {
+    const route = routeToolsForTurn(
+      '读取 ChatGPT 里的聊天历史，并同步新增消息',
+      DECLARATIONS,
+    );
+
+    expect(route.categories).toContain('external_control');
+    expect(route.toolNames).toEqual(expect.arrayContaining([
+      'external_ai_history_query',
+      'external_ai_history_status',
+      'external_ai_history_sync',
+      'external_ai_history_source_list',
+    ]));
+    expect(route.toolNames).not.toContain('external_ai_collaborate');
+    expect(route.toolNames).not.toContain('desktop_ai_ask');
+    expect(route.forbiddenToolNames).toEqual(expect.arrayContaining([
+      'external_ai_collaborate',
+      'desktop_ai_ask',
+      'desktop_ai_roundtable',
+    ]));
   });
 
   it('routes spoken bid and asset-tracing requests through legal tools', () => {

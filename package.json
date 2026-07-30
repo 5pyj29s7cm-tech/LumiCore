@@ -16,6 +16,7 @@
     "build:mobile": "vite build --mode mobile",
     "build:frontends": "vite build --mode all",
     "docs:capability-stats": "tsx scripts/write-capability-stats.ts",
+    "extension:sign": "tsx scripts/sign-lumi-extension.ts",
     "build:server": "npm run docs:capability-stats && node scripts/build-server.mjs",
     "prepare:node": "node scripts/download-node-binary.mjs",
     "prepare:desktop": "node scripts/prepare-desktop-resources.mjs",

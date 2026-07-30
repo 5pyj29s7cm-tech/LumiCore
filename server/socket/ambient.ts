@@ -5,6 +5,7 @@ import { detectClipboardChange } from "../context/clipboard_monitor";
 import { processActivityEvent } from "../context/proactive_triggers";
 import { reportIdleState } from "../autonomy/safety_gate";
 import { getTaskHistory } from "../autonomy/task_queue";
+import { reportDesktopUserActivity } from "../desktop/control_lease";
 
 const ambientNoise = new Map<string, { rms: number; lastUpdate: string }>();
 
@@ -131,6 +132,19 @@ export function registerAmbientHandlers(socket: Socket, getUserId: (s: Socket) =
         }
       }
     }
+  }));
+
+  socket.on("desktop:user_activity", guard((data: { kind?: string; observedAt?: string }) => {
+    const uid = getUserId(socket);
+    if (!uid || socket.data?.lumiDeviceType !== 'desktop') return;
+    const paused = reportDesktopUserActivity(uid);
+    socket.emit('desktop:user_activity_ack', {
+      ok: true,
+      kind: String(data?.kind || 'physical_input'),
+      observedAt: String(data?.observedAt || new Date().toISOString()),
+      pausedTaskId: paused?.taskId || '',
+      pausedLeaseId: paused?.leaseId || '',
+    });
   }));
 
   socket.on("ambient:noise_level", guard((data: { rms: number; isSpeaking: boolean; callState: string; timestamp: string }) => {

@@ -136,7 +136,21 @@ describe('SQLite persistence indexes', () => {
       'idx_org_kb_articles_org_category',
       'idx_action_tasks_conversation_updated',
       'idx_action_receipts_idempotency',
+      'idx_background_tasks_user_status',
+      'idx_autonomous_tasks_user_status',
       'idx_external_commit_journal_task',
+      'idx_external_ai_sessions_user_updated',
+      'idx_external_ai_dispatches_idempotency',
+      'idx_external_ai_answers_session_received',
+      'idx_external_ai_history_sources_user_status',
+      'idx_external_ai_history_jobs_source_status',
+      'idx_external_ai_history_conversations_identity',
+      'idx_external_ai_history_messages_identity',
+      'idx_external_ai_history_attachments_identity',
+      'idx_extension_revisions_identity',
+      'idx_extension_revisions_active',
+      'idx_extension_publishers_status',
+      'idx_extension_receipts_extension_created',
     ]));
   });
 

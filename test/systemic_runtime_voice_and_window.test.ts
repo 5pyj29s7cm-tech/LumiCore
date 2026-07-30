@@ -15,7 +15,7 @@ import { matchQuickCommand } from '../server/cognition/quick_commands';
 import { routeToolsForTurn } from '../server/cognition/tool_router';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { registerBackgroundTask, resetBackgroundTasksForTest } from '../server/agents/background_tasks';
-import { cancelRuntimeWork, getRuntimeWorkSnapshot } from '../server/runtime/work_control';
+import { cancelRuntimeWork, getRuntimeWorkSnapshot, pauseRuntimeWork, resumeRuntimeWork } from '../server/runtime/work_control';
 import type { ToolExecutionRecord } from '../server/tools/types';
 
 function declaration(name: string, description = name) {
@@ -72,6 +72,27 @@ describe('systemic runtime work control', () => {
     expect(result).toMatchObject({ ok: true, status: 'cancelled', matchedCount: 1, cancelledCount: 1 });
     expect(getRuntimeWorkSnapshot(userId).activeCount).toBe(0);
     resetBackgroundTasksForTest();
+  });
+
+  it('pauses and resumes queued work with exact ledger receipts', () => {
+    resetBackgroundTasksForTest({ markHydrated: true });
+    const userId = 'runtime-work-pause-test';
+    const task = registerBackgroundTask({ userId, title: 'pause test', prompt: 'test' });
+    expect(pauseRuntimeWork({ userId, taskId: task.id, kinds: ['delegation'] })).toMatchObject({
+      ok: true,
+      status: 'paused',
+      matchedCount: 1,
+      pausedCount: 1,
+    });
+    expect(getRuntimeWorkSnapshot(userId)).toMatchObject({ status: 'paused', activeCount: 0 });
+    expect(resumeRuntimeWork({ userId, taskId: task.id, kinds: ['delegation'] })).toMatchObject({
+      ok: true,
+      status: 'resumed',
+      matchedCount: 1,
+      resumedCount: 1,
+    });
+    expect(getRuntimeWorkSnapshot(userId)).toMatchObject({ status: 'active', activeCount: 1 });
+    resetBackgroundTasksForTest({ markHydrated: true });
   });
 
   it('keeps internal routing and evidence vocabulary out of user-visible failures', () => {

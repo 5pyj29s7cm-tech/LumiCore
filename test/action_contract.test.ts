@@ -15,9 +15,25 @@ import {
   requiresAutoCadMcpPlayback,
   requiresAuthenticatedWebResult,
   requiresVisibleAutoCadExecution,
+  requiresExternalAiHistory,
 } from '../server/cognition/action_contract';
 
 describe('Lumi action contract', () => {
+  it('separates authorized external AI history reads from new external AI submissions', () => {
+    const text = '读取 ChatGPT 里的聊天历史并同步新增消息';
+    const contract = buildActionContract(text);
+    expect(requiresExternalAiHistory(text)).toBe(true);
+    expect(contract.kind).toBe('external_ai_history');
+    expect(contract.preferredTools).toEqual(expect.arrayContaining([
+      'external_ai_history_query',
+      'external_ai_history_sync',
+      'external_ai_history_status',
+    ]));
+    expect(contract.preferredTools).not.toContain('external_ai_collaborate');
+
+    const collaboration = buildActionContract('Ask ChatGPT and Claude for independent answers, then collect and compare them.');
+    expect(collaboration.kind).toBe('external_ai_collaboration');
+  });
   it('treats editing inside the current app as a desktop action contract', () => {
     const contract = buildActionContract('\u5728\u8fd9\u91cc\u9762\u5199\u4e00\u7bc7\u68c0\u8ba8\u4e66\u7ed9\u6211');
 

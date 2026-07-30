@@ -185,14 +185,20 @@ describe('Lumi core integrity pressure', () => {
       channel: 'chat',
       operationMode: 'assistant',
     });
-    expect(externalAi.selection.lane).toBe('desktop_control');
+    expect(externalAi.selection.lane).toBe('external_tool');
     expect(externalAi.selection.preferredTools.slice(0, 8)).toEqual(expect.arrayContaining([
+      'external_ai_collaborate',
+      'external_ai_collect_answers',
+      'external_ai_session_status',
+      'external_ai_route_plan',
       'desktop_ai_list_targets',
-      'desktop_ai_discovery_plan',
+    ]));
+    expect(externalAi.execution.toolRoute?.toolNames).not.toEqual(expect.arrayContaining([
       'desktop_ai_ask',
+      'desktop_ai_roundtable',
       'desktop_ai_collect_answer',
     ]));
-    expect(externalAi.execution.toolRoute?.toolNames.indexOf('desktop_ai_ask')).toBeLessThan(
+    expect(externalAi.execution.toolRoute?.toolNames.indexOf('external_ai_collaborate')).toBeLessThan(
       externalAi.execution.toolRoute?.toolNames.indexOf('computer_use') ?? Number.POSITIVE_INFINITY,
     );
 

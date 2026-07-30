@@ -46,10 +46,18 @@ describe('adapter registry external toolbox awareness', () => {
       expect(nanoBanana?.status).toBe('requires_setup');
       expect(nanoBanana?.surfaces).toEqual(expect.arrayContaining(['Google AI Studio', 'Gemini app']));
       expect(externalAi?.actions).toEqual(expect.arrayContaining([
+        'external_ai_route_plan',
+        'external_ai_collaborate',
+        'external_ai_collect_answers',
+        'external_ai_session_status',
         'desktop_ai_list_targets',
+      ]));
+      expect(externalAi?.actions).not.toEqual(expect.arrayContaining([
         'desktop_ai_ask',
+        'desktop_ai_roundtable',
         'desktop_ai_collect_answer',
       ]));
+      expect(externalAi?.requiresConfirmation).toBe(true);
       expect(externalAi?.surfaces).toEqual(expect.arrayContaining(['WorkBuddy', 'Codex desktop', 'ChatGPT', 'Claude', 'local AI runtimes']));
       expect(drafting?.actions).toContain('mcp_cad-drafting_cad_renovation_folder_workflow');
     } finally {
