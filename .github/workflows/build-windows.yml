@@ -1,6 +1,18 @@
 name: Build Windows Installer
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-windows.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/**'
+      - 'server/**'
+      - 'shared/**'
+      - 'src/**'
+      - 'src-tauri/**'
   workflow_dispatch:
     inputs:
       channel:
@@ -27,7 +39,7 @@ concurrency:
 
 jobs:
   build-windows:
-    name: Windows ${{ inputs.channel }} candidate
+    name: Windows ${{ inputs.channel || 'internal' }} candidate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -80,7 +92,7 @@ jobs:
 
       - name: Prepare desktop resources for Rust release check
         env:
-          LUMI_RELEASE_CHANNEL: ${{ inputs.channel }}
+          LUMI_RELEASE_CHANNEL: ${{ inputs.channel || 'internal' }}
           LUMI_DESKTOP_WITH_LOCAL_VOICE: ${{ inputs.include_local_voice == 'true' && '1' || '0' }}
         run: npm run build:desktop
       - uses: dtolnay/rust-toolchain@stable
@@ -95,7 +107,7 @@ jobs:
       - name: Build Windows installer
         shell: pwsh
         env:
-          LUMI_RELEASE_CHANNEL: ${{ inputs.channel }}
+          LUMI_RELEASE_CHANNEL: ${{ inputs.channel || 'internal' }}
           LUMI_DESKTOP_WITH_LOCAL_VOICE: ${{ inputs.include_local_voice == 'true' && '1' || '0' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.channel == 'public' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.channel == 'public' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
@@ -148,7 +160,7 @@ jobs:
       - name: Upload tested candidate (never creates a public Release)
         uses: actions/upload-artifact@v7
         with:
-          name: lumi-os-windows-${{ inputs.channel }}-${{ github.sha }}
+          name: lumi-os-windows-${{ inputs.channel || 'internal' }}-${{ github.sha }}
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.sig
